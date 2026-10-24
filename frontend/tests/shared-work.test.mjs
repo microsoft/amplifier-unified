@@ -117,6 +117,65 @@ test('cold Work inspection requests accepted-open only and never needs a selecte
  await unmount(root);
 });
 
+test('approved Work rows show next action without opening a chat or another read',async()=>{
+ const calls=[],first=item(),second=item('work:two',{nextAction:''});
+ const root=await mount(async(action,args)=>{calls.push([action,args]);return accepted(page([first,second]))});
+ assert.match(text(root.root.findByProps({'data-work-id':first.id})),/Next: Check the current promise\./);
+ assert.match(text(root.root.findByProps({'data-work-id':second.id})),/Next: Not recorded/);
+ assert.deepEqual(calls.map(([name])=>name),['workspace.work.list']);
+ await unmount(root);
+});
+
+test('evidence and limits remain readable without turning a participant return into a check',async()=>{
+ const calls=[],row=item('work:one',{latestOutcome:'passed'});
+ const root=await mount(async(action,args)=>{calls.push([action,args]);return accepted(action==='workspace.work.list'?page([row]):detail(row))});
+ await inspect(root);
+ const evidence=root.root.findByProps({'aria-label':'Evidence and limits'});
+ assert.match(text(evidence),/Latest reported outcome: passed/);
+ assert.match(text(evidence),/Participant reports are not independent verification/);
+ assert.match(text(evidence),/cold: Survives cold reopen/);
+ assert.match(text(evidence),/No qualified check recorded for this criterion/);
+ assert.equal(evidence.findAllByType('pre').length,0,'Readable evidence does not require JSON');
+ const sections=root.root.findAllByType('section'),sourceIndex=sections.findIndex(n=>n.props['aria-label']==='Original source');
+ assert.ok(sourceIndex>=0&&sections.indexOf(evidence)>sourceIndex,'Original source precedes detailed evidence');
+ assert.deepEqual(calls.map(([name])=>name),['workspace.work.list','workspace.work.read']);
+ await unmount(root);
+});
+
+test('criterion evidence retains exact receipt candidate and reviewer with separate attribution',async()=>{
+ const row=item(),value=detail(row);
+ value.item.criteria=[{id:'owner',text:'Owner check scope'},{id:'independent',text:'Independent scope'},{id:'stale',text:'Different candidate'},{id:'missing',text:'Missing check'}];
+ value.item.criterionEvidence={
+  owner:{candidate:row.candidate,qualification:'owner_check',reviewer:'builder',checkReceiptId:'receipt-owner'},
+  independent:{candidate:row.candidate,qualification:'independent_check',reviewer:'reviewer',checkReceiptId:'receipt-independent'},
+  stale:{candidate:'previous-candidate',qualification:'independent_check',reviewer:'old-reviewer',checkReceiptId:'receipt-old'},
+ };
+ const root=await mount(async action=>accepted(action==='workspace.work.list'?page([row]):value));
+ await inspect(root);
+ const evidence=root.root.findByProps({'aria-label':'Evidence and limits'}),rows=evidence.findAllByType('li');
+ assert.match(text(rows[0]),/Owner check recorded/);assert.match(text(rows[0]),/receipt-owner/);
+ assert.match(text(rows[1]),/Independent check recorded/);assert.match(text(rows[1]),/receipt-independent/);
+ assert.match(text(rows[1]),/reviewer/);assert.match(text(rows[1]),/candidate-one/);
+ assert.match(text(rows[2]),/Different candidate — not current/);assert.match(text(rows[2]),/receipt-old/);
+ assert.match(text(rows[3]),/No qualified check recorded/);
+ assert.doesNotMatch(text(evidence),/Shipped|All checks passed|Scope verified/);
+ assert.match(text(root.root.findAllByType('pre').find(n=>text(n).includes('criterionEvidence'))),/receipt-old/,'Raw evidence remains reachable');
+ await unmount(root);
+});
+
+test('incomplete evidence cannot become a verified check and source-like text stays literal',async()=>{
+ const row=item(),value=detail(row);
+ value.item.criterionEvidence={cold:{candidate:row.candidate,qualification:'independent_check',reviewer:'<script>reference only</script>'}};
+ const root=await mount(async action=>accepted(action==='workspace.work.list'?page([row]):value));
+ await inspect(root);
+ const evidence=root.root.findByProps({'aria-label':'Evidence and limits'});
+ assert.match(text(evidence),/Incomplete check reference — not verified/);
+ assert.match(text(evidence),/<script>reference only<\/script>/);
+ assert.equal(evidence.findAllByType('script').length,0);
+ assert.doesNotMatch(text(evidence),/Independent check recorded/);
+ await unmount(root);
+});
+
 test('explicit filters are server-scoped and no missing cursor is disguised as an empty set',async()=>{
  const calls=[];const root=await mount(async(action,args)=>{calls.push([action,args]);return accepted(page([], {total:21,truncated:true,nextAfter:null}))});
  assert.match(text(root.toJSON()),/21/);assert.match(text(root.toJSON()),/unavailable|incomplete|refresh/i);

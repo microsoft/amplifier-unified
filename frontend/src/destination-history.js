@@ -5,6 +5,7 @@ const text=value=>typeof value==='string'?value.slice(0,LABEL_LIMIT):'';
 const id=value=>typeof value==='string'&&value.length>0&&value.length<=200?value:null;
 const tabs=new Set(['chats','work','files','details']);
 export const sameDestination=(a,b)=>!!a&&!!b&&a.kind===b.kind&&(a.id||null)===(b.id||null);
+export const destinationKey=entry=>JSON.stringify([entry.kind,entry.id||null]);
 const sameRoute=(a,b)=>a===null&&b===null||sameDestination(a,b)&&(a.tab||null)===(b.tab||null);
 
 export function destination(state){
@@ -37,15 +38,16 @@ function cleanEntry(row){
 }
 
 export function createDestinationHistory({storage=()=>globalThis.sessionStorage,key=()=>crypto.randomUUID(),changed=()=>{}}={}){
-  let scope=null,entries=[],cursor=-1,detached=false,current=null,pending=null,loaded=false,memoryOnly=false,lastPublished=null,observed=null;
+  let scope=null,entries=[],recent=[],cursor=-1,detached=false,current=null,pending=null,loaded=false,memoryOnly=false,lastPublished=null,observed=null;
   const retiredScopes=new Set();
-  const snapshot=()=>({entries:entries.map(row=>({...row})),cursor,detached,pending:!!pending,ready:!!scope,memoryOnly,
+  const snapshot=()=>({entries:entries.map(row=>({...row})),recent:recent.map(row=>({...row})),cursor,detached,pending:!!pending,ready:!!scope,memoryOnly,
+    current:!detached&&entries[cursor]?{...entries[cursor]}:null,
     backKey:scope&&!pending?entries[detached?cursor:cursor-1]?.key||null:null,
     forwardKey:scope&&!pending?entries[cursor+1]?.key||null:null});
   const persist=()=>{
     if(!scope)return;
     try{
-      const value=JSON.stringify({version:1,scope,entries,cursor});
+      const value=JSON.stringify({version:1,scope,entries,cursor,recent});
       if(new TextEncoder().encode(value).length>MAX_BYTES)throw Error('History too large');
       storage().setItem(STORAGE_KEY,value);
     }catch{memoryOnly=true}
@@ -57,7 +59,7 @@ export function createDestinationHistory({storage=()=>globalThis.sessionStorage,
   };
   const restore=nextScope=>{
     pending?.resolve(false);
-    entries=[];cursor=-1;detached=false;pending=null;current=null;loaded=false;scope=nextScope;observed=null;
+    entries=[];recent=[];cursor=-1;detached=false;pending=null;current=null;loaded=false;scope=nextScope;observed=null;
     try{
       const raw=storage().getItem(STORAGE_KEY);
       if(!raw)return;
@@ -67,11 +69,17 @@ export function createDestinationHistory({storage=()=>globalThis.sessionStorage,
       const rows=value.entries.map(cleanEntry);
       if(rows.some(row=>!row)||new Set(rows.map(row=>row.key)).size!==rows.length||!Number.isInteger(value.cursor)||value.cursor< -1||value.cursor>=rows.length||(rows.length>0&&value.cursor<0))throw Error('Invalid history');
       entries=rows;cursor=value.cursor;
+      // Old trails have no activation order. Seed from their last recorded
+      // occurrence, then confirmed navigation (including traversal) owns MRU.
+      const savedRecent=Array.isArray(value.recent)&&value.recent.length<=MAX_ENTRIES?value.recent.map(cleanEntry):null;
+      const candidates=savedRecent?.every(Boolean)?savedRecent:[...rows].reverse();
+      const seen=new Set();
+      recent=candidates.filter(row=>{const identity=destinationKey(row);if(seen.has(identity))return false;seen.add(identity);return true});
     }catch{try{storage().removeItem(STORAGE_KEY)}catch{memoryOnly=true}}
   };
   const refreshLabels=state=>{
     // Only already-projected metadata. Absence from a bounded page is not deletion.
-    entries=entries.map(row=>{
+    const refresh=row=>{
       if(row.kind==='chat'){
         const session=state.sessions?.find(item=>item.id===row.id);
         if(!session)return row;
@@ -80,22 +88,27 @@ export function createDestinationHistory({storage=()=>globalThis.sessionStorage,
       }
       if(row.kind==='workspace')return {...row,label:text(state.workspaces?.find(item=>item.id===row.id)?.name)||row.label};
       return row;
-    });
+    };
+    entries=entries.map(refresh);recent=recent.map(refresh);
+  };
+  const remember=entry=>{
+    recent=[{...entry},...recent.filter(row=>!sameDestination(row,entry))].slice(0,MAX_ENTRIES);
   };
   const record=route=>{
     current=route;
     if(!route){detached=true;return}
     if(!detached&&sameDestination(entries[cursor],route)){
-      entries[cursor]={...entries[cursor],...route};return;
+      entries[cursor]={...entries[cursor],...route};remember(entries[cursor]);return;
     }
     // Explicitly selecting the current saved destination from New chat reconnects
     // to that visit; it is not a second copy and does not discard Forward.
     if(detached&&sameDestination(entries[cursor],route)){
-      entries[cursor]={...entries[cursor],...route};detached=false;return;
+      entries[cursor]={...entries[cursor],...route};detached=false;remember(entries[cursor]);return;
     }
     entries=entries.slice(0,cursor+1);entries.push({...route,key:key()});
     if(entries.length>MAX_ENTRIES)entries.shift();
     cursor=entries.length-1;detached=false;
+    remember(entries[cursor]);
   };
   const settle=confirmed=>{
     const attempt=pending;pending=null;
@@ -111,9 +124,13 @@ export function createDestinationHistory({storage=()=>globalThis.sessionStorage,
     if(!eligible.length)return null;
     const match=eligible.findIndex(frame=>sameRoute(frame.route,entry));
     if(match<0)return settle(false);
-    const index=entries.findIndex(row=>row.key===pending.key);
-    if(index<0)return settle(false);
-    cursor=index;detached=false;current=eligible[match].route;entries[cursor]={...entries[cursor],...current};
+    if(pending.mode==='place')record(eligible[match].route);
+    else{
+      const index=entries.findIndex(row=>row.key===pending.key);
+      if(index<0)return settle(false);
+      cursor=index;detached=false;current=eligible[match].route;entries[cursor]={...entries[cursor],...current};
+      remember(entries[cursor]);
+    }
     for(const frame of eligible.slice(match+1)){
       if(frame.baseline){current=frame.route;detached=!sameDestination(entries[cursor],current)}
       else if(!sameRoute(current,frame.route))record(frame.route);
@@ -163,6 +180,18 @@ export function createDestinationHistory({storage=()=>globalThis.sessionStorage,
       pending={key:visitKey,entry:{...entry},frames:[],resolve,receipt:null};
       publish();return {...entry,confirmed};
     },
+    beginRecent(placeKey,selected=null,expectedScope=scope){
+      if(!scope||expectedScope!==scope||pending)return null;
+      const available=recent.find(row=>destinationKey(row)===placeKey);
+      // Preserve the selected tab through the navigation queue; a preceding
+      // visit can refresh this same place before our command gets to execute.
+      const entry=selected?cleanEntry(selected):available;
+      if(!available||!entry||destinationKey(entry)!==placeKey)return null;
+      if(!entry||!detached&&sameRoute(entries[cursor],entry))return null;
+      let resolve;const confirmed=new Promise(done=>{resolve=done});
+      pending={mode:'place',entry:{...entry},frames:[],resolve,receipt:null};
+      publish();return {...entry,confirmed};
+    },
     finish(receipt){
       if(!pending)return false;
       if(receipt?.accepted!==true||!Number.isInteger(receipt.stateRevision)||typeof receipt.hostInstanceId!=='string')return settle(false);
@@ -174,7 +203,7 @@ export function createDestinationHistory({storage=()=>globalThis.sessionStorage,
       if(scope&&nextScope===scope)return;
       if(scope)retiredScopes.add(scope);
       pending?.resolve(false);
-      scope=null;entries=[];cursor=-1;current=null;pending=null;loaded=false;detached=false;observed=null;
+      scope=null;entries=[];recent=[];cursor=-1;current=null;pending=null;loaded=false;detached=false;observed=null;
       try{storage().removeItem(STORAGE_KEY)}catch{memoryOnly=true}
       lastPublished=null;publish();
     },

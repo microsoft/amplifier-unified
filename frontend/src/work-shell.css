@@ -4,7 +4,7 @@
 #amp-one.a-approachable-shell .a-nav-rail{padding:10px 8px 0;inset:0 auto 0 0}
 #amp-one.a-approachable-shell .a-nav-head{height:36px;gap:5px;padding:0 2px}
 #amp-one.a-approachable-shell .a-sidebar-modes{display:flex;flex-direction:row;flex:none;min-height:40px;margin-bottom:8px;gap:3px}
-#amp-one.a-approachable-shell .a-sidebar-organizations{display:flex;flex:1;min-width:0;gap:3px}
+#amp-one.a-approachable-shell .a-sidebar-organizations{display:flex;flex:1;min-width:0;gap:3px;background:var(--a-bg);border-radius:8px;box-shadow:inset 0 0 0 1px var(--a-line)}
 #amp-one.a-approachable-shell .a-sidebar-organizations>button{flex:1;justify-content:center;font-size:var(--a-text-sm,13px);min-height:36px;padding:6px 8px;background:none;border:1px solid transparent;border-radius:7px;color:var(--a-muted)}
 #amp-one.a-approachable-shell .a-sidebar-organizations>button[aria-pressed=true]{background:var(--a-surface);border-color:var(--a-line);color:var(--a-ink);font-weight:600}
 #amp-one.a-approachable-shell .a-sidebar-modes button:focus-visible{outline:2px solid var(--a-accent);outline-offset:1px}
@@ -39,12 +39,12 @@
 #amp-one.a-approachable-shell .a-work-footer>.a-work-menu{margin-left:auto}
 #amp-one.a-approachable-shell .a-conversation{position:relative;justify-content:flex-start;box-shadow:none}
 #amp-one.a-approachable-shell .a-work-header{flex:none;display:flex;align-items:center;min-height:48px;padding:6px 4px;gap:12px;width:100%;box-sizing:border-box;background:var(--a-chrome-bg,var(--a-bg));color:var(--a-chrome-ink,var(--a-ink))}
-#amp-one.a-approachable-shell .a-work-brand{flex:none;padding-right:12px;border-right:1px solid var(--a-line)}
+#amp-one.a-approachable-shell .a-work-brand{flex:none;padding:0 12px 0 0;border:0;border-right:1px solid var(--a-line);background:none;color:inherit;text-align:left}
 #amp-one.a-approachable-shell .a-work-brand img{width:22px;height:22px}
+#amp-one.a-approachable-shell .a-site-navigation{display:flex;align-items:center;flex:none;gap:4px}
 #amp-one.a-approachable-shell .a-work-heading{display:flex;align-items:center;gap:8px;min-width:0;flex:1;font-size:14px}
 #amp-one.a-approachable-shell .a-work-heading>strong{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:550}
 #amp-one.a-approachable-shell .a-work-crumb{display:flex;gap:7px;align-items:center;max-width:35%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--a-muted);background:none;border:0;padding:0}
-#amp-one.a-approachable-shell .a-work-home-crumb{flex:none;max-width:none;min-width:44px;min-height:36px;justify-content:center;gap:7px;background:var(--a-surface);border:1px solid var(--a-line);border-radius:7px;padding:6px 10px;color:var(--a-ink)}
 #amp-one.a-approachable-shell .a-work-heading svg{width:16px;flex-shrink:0}
 #amp-one.a-approachable-shell .a-work-header-actions{display:flex;align-items:center;margin-left:auto;flex:none;gap:4px}
 #amp-one.a-approachable-shell .a-work-menu{position:relative}
@@ -63,7 +63,7 @@
 @media(pointer:coarse),(max-width:760px){
  #amp-one.a-approachable-shell .a-destination-history>.a-icon{width:44px;min-width:44px;height:44px}
  #amp-one.a-approachable-shell .a-work-header{gap:4px}
- #amp-one.a-approachable-shell .a-work-heading .a-work-crumb:not(.a-work-home-crumb),#amp-one.a-approachable-shell .a-work-heading>.a-work-crumb+svg{display:none}
+ #amp-one.a-approachable-shell .a-work-heading .a-work-crumb,#amp-one.a-approachable-shell .a-work-heading>.a-work-crumb+svg{display:none}
 }
 #amp-one.a-approachable-shell .a-work-menu-items{position:absolute;right:0;top:calc(100% + 8px);z-index:85;padding:7px;min-width:220px;border:1px solid var(--a-line);border-radius:12px;background:var(--a-surface);box-shadow:0 12px 36px #0003;color:var(--a-ink)}
 #amp-one.a-approachable-shell .a-work-menu-items>button{display:flex;align-items:center;justify-content:flex-start;gap:11px;width:100%;padding:11px 10px;text-align:left;background:none;border:0;border-radius:7px;font-size:14px;color:inherit}
@@ -134,20 +134,23 @@
 @media(max-width:760px){
  #amp-one.a-approachable-shell{padding:0}
  #amp-one.a-approachable-shell .a-work-header{min-height:56px;padding:6px 8px;gap:4px;flex-wrap:wrap}
- #amp-one.a-approachable-shell .a-work-heading{order:1;flex:1 0 100%;min-height:32px}
- #amp-one.a-approachable-shell .a-work-heading>.a-work-home-crumb{display:flex}
+ #amp-one.a-approachable-shell .a-work-heading{order:1;flex:1 0 100%;min-height:44px}
  #amp-one.a-approachable-shell .a-work-heading>strong{flex:1;min-width:0}
  #amp-one.a-approachable-shell .a-destination-menu{position:fixed;left:8px;right:8px;top:var(--a-navigation-top,104px);width:auto;max-width:none;box-sizing:border-box}
- #amp-one.a-approachable-shell .a-work-crumb:not(.a-work-home-crumb),#amp-one.a-approachable-shell .a-work-crumb:not(.a-work-home-crumb)+svg,#amp-one.a-approachable-shell .a-work-brand{display:none}
+ #amp-one.a-approachable-shell .a-work-crumb,#amp-one.a-approachable-shell .a-work-crumb+svg,#amp-one.a-approachable-shell .a-work-brand{display:none}
  #amp-one.a-approachable-shell[data-work-surface=home] .a-work-brand{display:flex;border:0;padding-right:0}
- /* Keep Home and the chat title usable without spending phone width on a separator. */
- #amp-one.a-approachable-shell .a-work-home-crumb+svg{display:none}
  #amp-one.a-approachable-shell .a-work-browser{padding:24px 16px}
  #amp-one.a-approachable-shell .a-work-browser-heading{flex-direction:column;gap:16px}
  #amp-one.a-approachable-shell .a-new-chat-setup h2{font-size:25px}
  #amp-one.a-approachable-shell .a-composer{width:calc(100% - 20px);padding:10px}
  #amp-one.a-approachable-shell .a-work-dialog{padding:18px}
  #amp-one.a-approachable-shell .a-messages{padding:20px 16px}
+}
+/* On the smallest phones, keep site navigation on top and let the existing
+   chat actions share the title row instead of creating a third header row. */
+@media(max-width:360px){
+ #amp-one.a-approachable-shell .a-work-heading{flex-basis:calc(100% - 96px)}
+ #amp-one.a-approachable-shell .a-work-header-actions{order:1}
 }
 #amp-one.a-approachable-shell .a-quiet-sidebar .a-navigation-age{display:none}
 #amp-one.a-approachable-shell .a-pinned-chats .a-nav-chat-label>small,#amp-one.a-approachable-shell .a-pinned-chats .a-navigation-age,#amp-one.a-approachable-shell .a-pinned-drag .a-nav-chat-label>small,#amp-one.a-approachable-shell .a-pinned-drag .a-navigation-age{display:none}
@@ -179,7 +182,6 @@
 @media(max-width:760px),(pointer:coarse){
  #amp-one.a-approachable-shell{--a-work-row-height:44px}
  #amp-one.a-approachable-shell .a-work-header .a-icon{width:44px;height:44px}
- #amp-one.a-approachable-shell .a-work-home-crumb{min-height:44px}
 }
 
 /* Persistent controls occupy space above the viewer; they never cover content. */
@@ -237,7 +239,10 @@
 #amp-one .a-canvas-version-shortcut{white-space:nowrap;flex:0 0 auto;font-size:12px}
 #amp-one .a-canvas-unsaved{margin:0;padding:6px 14px;color:var(--a-muted);font-size:12px}
 
-.a-chat-jump{height:0;position:relative;z-index:5;display:flex;justify-content:center}.a-chat-jump button{position:absolute;bottom:12px;box-shadow:0 2px 8px #0003;border-radius:24px}
+/* Only mounted while away from latest. Give the control its own compact row
+   outside the scrollable transcript, rather than covering readable messages. */
+.a-chat-jump{flex:none;display:flex;justify-content:center;padding:4px 12px}
+.a-chat-jump button{position:static;box-shadow:0 2px 8px #0003;border-radius:24px}
 /* Ownership isolation must not trap composer popups below chat navigation. */
 #amp-one .a-composer{z-index:7}
 

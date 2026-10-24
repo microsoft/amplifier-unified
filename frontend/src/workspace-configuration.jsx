@@ -1,4 +1,4 @@
-import React from 'react';
+import React,{useLayoutEffect} from 'react';
 import {createPortal} from 'react-dom';
 import {ConfigurationBoundary} from './configuration-scope';
 import {AIConnections} from './ai-connections';
@@ -7,19 +7,33 @@ import {RegistrySettings} from './registry';
 import {SettingsPageContext} from './settings-ui';
 import {SettingsDraftProvider,useSettingsDrafts,useGuardedSettingsDraft} from './settings-drafts';
 
-function GuardedWorkspaceSettings({state,act,children}){
+function GuardedWorkspaceSettings({state,restore,children}){
  const defaults={workSurface:'chat',workWorkspaceId:null,workWorkspaceTab:'chats',workWorkspaceSettings:null,panel:null,settingsCanvas:false};
  const requested=Object.fromEntries(Object.entries(defaults).map(([key,value])=>[key,state.view?.[key]??value]));
- const view=useGuardedSettingsDraft(requested,JSON.stringify(requested),patch=>act('view.update',{patch}));
+ const view=useGuardedSettingsDraft(requested,JSON.stringify(requested),restore);
  return children({...state,view:{...state.view,...view}});
 }
 
 // This owner stays mounted above workspace/tab navigation, preserving private
 // inputs while an external navigation request waits for the user's decision.
-export function WorkspaceSettingsBoundary({state,act,children}){
+export function WorkspaceSettingsBoundary({state,act,dispatch,navigationRef,children}){
  const drafts=useSettingsDrafts();
+ useLayoutEffect(()=>{
+  if(!navigationRef)return;
+  const leaving=(action,args={})=>{
+   if(action==='shell.command')return leaving(args.action,args.args);
+   if(['session.select','session.draft','session.create','workspace.select','settings.open'].includes(action))return true;
+   return action==='view.update'&&['workSurface','workWorkspaceId','workWorkspaceTab','workWorkspaceSettings','panel','settingsCanvas'].some(key=>Object.hasOwn(args.patch||{},key)&&args.patch[key]!==state.view?.[key]);
+  };
+  const guard={hasUnsaved:drafts.hasUnsaved,confirmClose:drafts.confirmClose,leaving};
+  navigationRef.current=guard;
+  return()=>{if(navigationRef.current===guard)navigationRef.current=null};
+ });
+ // External shared navigation still uses the retained editor's recovery path.
+ // Its already-decided restoration must not reopen the pre-dispatch prompt.
+ const restore=patch=>dispatch('view.update',{patch},{workspaceSettingsConfirmed:true});
  return <SettingsDraftProvider value={drafts.context}>
-  <GuardedWorkspaceSettings state={state} act={act}>{children}</GuardedWorkspaceSettings>
+  <GuardedWorkspaceSettings state={state} restore={restore}>{children}</GuardedWorkspaceSettings>
   {drafts.dialog&&createPortal(drafts.dialog,document.getElementById('amp-one'))}
  </SettingsDraftProvider>;
 }

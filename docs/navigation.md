@@ -29,12 +29,27 @@ not a separate saved return target.
 ### Explicit Back/Forward history
 
 Header Back and Forward traverse this tab's last 30 visited destinations:
-Home, saved chats, workspace pages, All workspaces and Search chats. The History button
-opens one list; mouse/pen holding an arrow for 450 ms opens the same list without
-also navigating. Touch uses the visible 44 px button. Keyboard users can open
-the list with Enter or Arrow Down, move with arrows/Home/End, and dismiss with
-Escape. Header Home remains available on wide touch screens as well as narrow
-screens and mouse/keyboard clients. This is explicit navigation, not restoration of the removed remembered-
+Home, saved chats, workspace pages, All workspaces and Search chats. Mouse/pen
+holding an arrow for 450 ms opens that direction's chronological steps, nearest
+first, without also navigating. Repeated visits keep their individual keys.
+Arrow Down or the context menu opens the same steps; touch retains ordinary
+tap behavior rather than long-press navigation. Menus support arrows/Home/End
+and Escape with focus returning to their opener.
+
+The familiar history icon opens **Recent places**: at most 30 distinct
+destinations ordered by latest confirmed visit, including Back/Forward traversal.
+Identity is destination kind plus stable ID, not its title; same-name chats stay
+separate. A workspace has one recent entry with its latest visited tab. Selecting
+a recent place performs normal guarded navigation, not a jump to an arbitrary
+old visit. Renames refresh known labels without changing recency. An older saved
+trail seeds the list from its latest recorded occurrences; it has no timestamps
+from which to reconstruct earlier traversal order.
+
+The Amplifier brand and icon-only header Home use the existing Home action.
+Home is site-level navigation beside the arrows, including the top row on narrow
+screens, not a breadcrumb ancestor. Workspace/chat context stays in the breadcrumb.
+Browse/Status shares a selection track without changing sidebar organization
+semantics or the New chat control. This is explicit navigation, not restoration of the removed remembered-
 chat banner or Escape-to-chat behavior; native browser Back/Forward is unchanged.
 
 Entries contain only typed IDs, bounded labels, workspace tabs and visit keys.
@@ -56,7 +71,7 @@ unconfirmed navigation keeps the trail; errors remain visible and nothing is
 automatically retried or replaced with a fallback. An unavailable entry can be
 retried explicitly; absence from a bounded catalog page is not deletion.
 
-The trail lives in origin/tab-scoped `sessionStorage`, not the host database or
+The trail and bounded recent-place projection live in origin/tab-scoped `sessionStorage`, not the host database or
 agent state. Reload retains it; a duplicate tab gets an independent copy.
 Restoration requires an opaque scope derived from the authenticated sign-in,
 process owner and host data identity. A new sign-in/root/secret starts a new
@@ -64,7 +79,7 @@ trail. A 401 clears the current trail and rejects late old-scope frames.
 An already-open stream cannot detect a removed/expired cookie until an
 authenticated request or reconnect observes it; the app has no logout endpoint.
 This is presentation isolation, not protection against other same-origin script
-or physical access to the browser. If storage fails, the History menu explains
+or physical access to the browser. If storage fails, the navigation menus explain
 that retention lasts only while this page stays open.
 
 Focused checks (run against the candidate in an owned isolated environment):

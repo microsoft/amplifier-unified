@@ -79,10 +79,46 @@ async def test_native_removal_keeps_admitted_owner_unavailable(service):
     assert service.directory.observation_revision['navigation'] != before
 
 
-async def test_live_merge_updates_real_names_once_and_keeps_busy_activity_stable(tmp_path, app_factory):
+@pytest.mark.parametrize('bounded', [False, True], ids=['default-slice', 'one-step'])
+async def test_live_merge_updates_real_names_once_and_keeps_busy_activity_stable(
+        tmp_path, app_factory, monkeypatch, record_property, bounded):
     directory = native_session(tmp_path / 'native', 'busy-chat')
     app = app_factory()
-    await app.history.refresh()
+    if bounded:
+        # Watcher hints are optional; a forced refresh still does bounded work.
+        monkeypatch.setattr(app.history.index, '_invalidations', lambda: (True, set()))
+        app.history.index._recovery_budget = 1
+
+    async def refresh_pass(label):
+        observations = []
+        try:
+            for _ in range(16):
+                await app.history.refresh()
+                discovery = app.state['sharedHistory']
+                catalog = app.history.index._catalog.get(directory.parent.parent.name, 'busy-chat')
+                live = next((row for row in app._state['sessions']
+                             if row.get('nativeIdentity') == 'busy-chat'), {})
+                observations.append({
+                    'phase': discovery['reconciliation']['phase'],
+                    'steps': app.history.last_scan['reconciliation']['steps'],
+                    'error': discovery['error'],
+                    'catalogName': (catalog or {}).get('name'),
+                    'catalogRevision': (catalog or {}).get('nameRevision'),
+                    'liveTitle': live.get('title'),
+                    'liveRevision': live.get('nativeNameRevision'),
+                    'navigationGeneration': app.directory.observation_revision['navigation'][2],
+                })
+                assert discovery['error'] is None, observations
+                if observations[-1]['phase'] == 'complete':
+                    assert app.history.index._recovery is None, observations
+                    return observations
+            pytest.fail(f'Native fixture did not finish bounded reconciliation: {observations}')
+        finally:
+            record_property(label, json.dumps(observations))
+
+    # Finish earlier work before changing canonical metadata. Otherwise the
+    # next forced refresh can merely finish a pass that already read revision 1.
+    await refresh_pass('initial')
     row = app._session('busy-chat')
     row.update(status='working', navigationActivityAt=1, draft='Keep this unsent draft')
     row.pop('nativeAvailable', None)
@@ -93,18 +129,29 @@ async def test_live_merge_updates_real_names_once_and_keeps_busy_activity_stable
         before = app.directory.observation_revision['navigation'][2]
         metadata.update(name=f'Changed title {revision}', name_revision=revision)
         metadata_path.write_text(json.dumps(metadata))
-        await app.history.refresh()
-        assert row['title'] == f'Changed title {revision}'
+        observations = await refresh_pass(f'rename-{revision}')
+        assert observations[-1]['catalogName'] == f'Changed title {revision}', observations
+        assert observations[-1]['catalogRevision'] == revision, observations
+        assert row['title'] == f'Changed title {revision}', ('live-title-after-complete', observations)
+        assert row['nativeNameRevision'] == revision, observations
         assert row['navigationActivityAt'] == 1
-        assert app.directory.observation_revision['navigation'][2] == before + 1
+        assert row['status'] == 'working'
+        assert row['draft'] == 'Keep this unsent draft'
+        assert app.directory.observation_revision['navigation'][2] == before + 1, observations
+        if bounded:
+            assert any(item['phase'] == 'running' for item in observations), observations
         settled = app.directory.observation_revision['navigation'][2]
-        await app.history.refresh()
+        await refresh_pass(f'unchanged-{revision}')
         assert app.directory.observation_revision['navigation'][2] == settled
 
     # Recovery of an admitted unavailable owner still comes from the live merge.
     row.update(nativeAvailable=False, historyReadOnlyReason='Files were unavailable')
     app._save_changes(sessions={row['id']})
-    await app.history.refresh()
+    await refresh_pass('availability-recovery')
     assert row['nativeAvailable'] is True
     assert row.get('historyReadOnlyReason') is None
     assert row['navigationActivityAt'] == 1
+    assert row['title'] == 'Changed title 2'
+    assert row['nativeNameRevision'] == 2
+    assert row['status'] == 'working'
+    assert row['draft'] == 'Keep this unsent draft'

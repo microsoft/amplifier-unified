@@ -31,15 +31,35 @@ try{
  const act=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const info=async()=>(await page.request.get(`http://127.0.0.1:${port}/api/fixture/info`)).json();
  const home=page.locator('.a-adaptive-home'),sidebar=page.locator('#workspace-navigation');
+ const siteNavigation=page.getByRole('navigation',{name:'Site navigation',exact:true});
+ const homeButton=siteNavigation.getByRole('button',{name:'Home',exact:true});
+ const brand=page.getByRole('button',{name:'Amplifier Home',exact:true});
+ const sidebarView=sidebar.getByRole('group',{name:'Sidebar view',exact:true});
+ const newChat=sidebar.getByRole('button',{name:'New chat',exact:true});
+ const newChatStyle=()=>newChat.evaluate(node=>{
+  const box=node.getBoundingClientRect(),style=getComputedStyle(node);
+  return {x:box.x,y:box.y,width:box.width,height:box.height,padding:style.padding,background:style.backgroundColor,color:style.color,font:style.font,borderRadius:style.borderRadius};
+ });
  const choose=mode=>home.getByRole('group',{name:'Work view'}).getByRole('button',{name:mode,exact:true}).click();
- const switchTo=mode=>sidebar.getByRole('group',{name:'Sidebar view'}).getByRole('button',{name:mode,exact:true}).click();
+ const switchTo=mode=>sidebarView.getByRole('button',{name:mode,exact:true}).click();
  const ready=()=>expect(home.locator('.a-home-filters')).toBeVisible();
- const goHome=async()=>{await page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('button',{name:'Home',exact:true}).click();await ready()};
+ const goHome=async()=>{await homeButton.click();await ready()};
  const settled=()=>expect.poll(async()=>Object.keys((await shell()).navigationResourcePending||{}).length).toBe(0);
  await page.goto(`http://127.0.0.1:${port}`);await ready();await choose('Brief');
  await page.getByRole('button',{name:'Open navigation',exact:true}).click();
  await switchTo('Status');await settled();
  const before=await info(),selected=(await state()).selectedSessionId;
+ await expect(brand).toBeVisible();await expect(homeButton).toHaveAttribute('aria-current','page');
+ assert.equal(await brand.evaluate(node=>node.tagName),'BUTTON');
+ assert.equal(await homeButton.evaluate(node=>node.tagName),'BUTTON');
+ await expect(homeButton).toHaveText('');
+ const homeStyle=await homeButton.evaluate(node=>{const style=getComputedStyle(node);return {background:style.backgroundColor,border:style.borderWidth}});
+ assert.deepEqual(homeStyle,{background:'rgba(0, 0, 0, 0)',border:'0px'},'Home uses the existing unboxed icon treatment');
+ const initialNewChatStyle=await newChatStyle();
+ const track=await sidebarView.evaluate(node=>{const style=getComputedStyle(node),box=node.getBoundingClientRect();return {background:style.backgroundColor,outline:style.boxShadow,radius:parseFloat(style.borderRadius),bottom:box.bottom}});
+ assert.notEqual(track.background,'rgba(0, 0, 0, 0)');assert.notEqual(track.outline,'none');assert.ok(track.radius>0);
+ assert.ok(initialNewChatStyle.y>=track.bottom,'New chat remains below the sidebar switch');
+ await expect(sidebarView.getByRole('button')).toHaveCount(2);
  for(const label of ['New chat','Search chats'])await expect(sidebar.getByRole('button',{name:label,exact:true})).toBeVisible();
  assert.equal(await page.locator('header #navigation-toggle').count(),1);
  assert.equal(await sidebar.getByRole('button',{name:'Close navigation',exact:true}).count(),0);
@@ -64,7 +84,16 @@ try{
  }));
  const statusStyle=await rowStyle();assert.equal(statusStyle.location,'none');
  await switchTo('Browse');await settled();
+ await expect(sidebarView.getByRole('button',{name:'Browse',exact:true})).toHaveAttribute('aria-pressed','true');
+ await expect(sidebarView.getByRole('button',{name:'Status',exact:true})).toHaveAttribute('aria-pressed','false');
+ assert.deepEqual(await newChatStyle(),initialNewChatStyle);
+ await sidebarView.getByRole('button',{name:'Status',exact:true}).focus();await page.keyboard.press('Space');await settled();
+ await expect(sidebarView.getByRole('button',{name:'Status',exact:true})).toHaveAttribute('aria-pressed','true');
+ await expect(sidebarView.getByRole('button',{name:'Browse',exact:true})).toHaveAttribute('aria-pressed','false');
+ assert.deepEqual(await newChatStyle(),initialNewChatStyle);
+ await switchTo('Browse');await settled();
  assert.deepEqual(await rowStyle(),statusStyle);
+ report.checks.push('Browse/Status share one visual track and keep native pressed-button keyboard behavior; New chat geometry and appearance remain stable between modes');
  for(const mode of ['Browse','Status']){
   await switchTo(mode);await settled();
   await act('settings.update',{patch:{workspaces:{showPaths:true}}});await settled();
@@ -130,6 +159,21 @@ try{
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});await expect(composer).toBeVisible();
  await composer.fill('Keep my draft through both sidebar views');
  const chosen=(await state()).selectedSessionId;
+ const breadcrumb=page.getByRole('navigation',{name:'Breadcrumb',exact:true});
+ await expect(breadcrumb.getByRole('button',{name:'Home',exact:true})).toHaveCount(0);
+ const current=await state(),workspace=current.workspaces.find(row=>row.id===current.selectedWorkspaceId);
+ assert.ok(workspace,'The selected fixture chat has a workspace breadcrumb');
+ await expect(breadcrumb.getByRole('button',{name:workspace.name,exact:true})).toBeVisible();
+ await expect(breadcrumb.locator('[aria-current=page]')).toHaveText(current.sessions.find(row=>row.id===chosen).title);
+ for(const [control,key] of [[brand,'Enter'],[brand,'Space'],[homeButton,'Enter']]){
+  await control.focus();await page.keyboard.press(key);await ready();
+  await expect(homeButton).toHaveAttribute('aria-current','page');
+  assert.equal((await state()).selectedSessionId,chosen);
+  assert.equal((await state()).view.navExpanded,false);
+  await sidebar.locator(`[data-session-id="${chosen}"] .a-nav-chat-select`).click();
+  await expect(composer).toContainText('Keep my draft through both sidebar views');
+ }
+ report.checks.push('Brand is a native Amplifier Home button; Enter/Space and site Home preserve the selected chat/draft; Breadcrumb keeps workspace and title, not Home');
  await switchTo('Browse');await switchTo('Status');await settled();await goHome();
  await expect(sidebar.locator('.a-nav-chat-select[aria-current=page]')).toHaveCount(0);
  await expect(page.locator('header')).not.toContainText('Home');
@@ -154,6 +198,16 @@ try{
  await expect(page.getByRole('searchbox',{name:'Search chats',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Open navigation',exact:true}).click();
  await switchTo('Status');await settled();await sidebar.locator('.a-nav-chat-select').first().click();await expect(sidebar).toBeHidden();await expect(composer).toBeVisible();
+ for(const width of [320,390,820]){
+  await page.setViewportSize({width,height:900});await expect(homeButton).toBeVisible();
+  const toggleBox=await page.locator('#navigation-toggle').boundingBox(),homeBox=await homeButton.boundingBox(),titleBox=await breadcrumb.locator('[aria-current=page]').boundingBox();
+  assert.ok(Math.abs(homeBox.y+homeBox.height/2-toggleBox.y-toggleBox.height/2)<1,'Home stays on the site-navigation row');
+  assert.ok(titleBox.width>0,'The destination title retains readable space');
+  if(width<=760)assert.ok(titleBox.y>=homeBox.y+homeBox.height,'The title stays below site navigation on phones');
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  if(width===320)await page.screenshot({path:join(output,'phone-320-chat-header.png')});
+ }
+ await page.setViewportSize({width:390,height:844});
  await page.getByRole('button',{name:'Open navigation',exact:true}).click();
  await sidebar.getByRole('button',{name:'New chat',exact:true}).click();await expect(sidebar).toBeHidden();await expect(composer).toBeVisible();
  await goHome();await choose('Brief');

@@ -33,7 +33,7 @@ try{
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const act=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const ready=async()=>{await expect(page.locator('.a-home-filters')).toBeVisible();await expect(page.locator('.a-adaptive-home')).not.toContainText('Loading your work…')};
- const home=async()=>{await page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('button',{name:'Home',exact:true}).click();await ready()};
+ const home=async()=>{await page.getByRole('navigation',{name:'Site navigation'}).getByRole('button',{name:'Home',exact:true}).click();await ready()};
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  await page.goto(url);await ready();
  await expect(page.locator('.a-work-heading')).toHaveCount(0);

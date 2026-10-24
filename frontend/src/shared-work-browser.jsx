@@ -75,6 +75,26 @@ function Facts({item}){
   <dt>Cleanup</dt><dd>{resources.length?'Owner reports only — not independently verified.':'Unknown — not recorded.'}</dd>
  </dl>;
 }
+function Evidence({item}){
+ const checks=item.criterionEvidence||{};
+ return <section aria-label="Evidence and limits" className="a-shared-evidence"><h3>Evidence and limits</h3>
+  <p>Latest reported outcome: {words(item.latestOutcome||'not_reported')}. Participant reports are not independent verification.</p>
+  <p className="a-caption">References apply to this observed promise and candidate. Receipt association is not semantic correctness, human acceptance or shipment. Earlier reports remain in history.</p>
+  {item.criteria?.length?<ul>{item.criteria.map(criterion=>{
+   const check=checks[criterion.id];
+   const complete=check&&['candidate','reviewer','checkReceiptId'].every(key=>typeof check[key]==='string'&&check[key].trim());
+   const label=!check?'No qualified check recorded for this criterion.'
+    :!complete?'Incomplete check reference — not verified.'
+    :check.candidate!==item.candidate?'Different candidate — not current.'
+    :check.qualification==='independent_check'?'Independent check recorded.'
+    :check.qualification==='owner_check'?'Owner check recorded — not independent.'
+    :'Unclassified evidence — not verified.';
+   return <li key={criterion.id}><strong>{criterion.id}: {criterion.text}</strong><p>{label}</p>
+    {check&&<dl className="a-shared-meta"><dt>Candidate</dt><dd>{check.candidate||'Not recorded'}</dd><dt>Recorded by</dt><dd>{check.reviewer||'Not recorded'}</dd><dt>Check receipt</dt><dd>{check.checkReceiptId||'Not recorded'}</dd></dl>}
+   </li>;
+  })}</ul>:<p>No acceptance criteria recorded. This does not establish verification.</p>}
+ </section>;
+}
 function EventFacts({event}){
  return <><p>Event {event.id} · sequence {event.sequence} · promise {event.promiseRevision} · {when(event.recordedAt)} · {event.actor?.origin||'unknown'} / {event.actor?.sessionId||'unknown'}</p>
   {event.changedFields?.length>0&&<p>Changed: {event.changedFields.join(', ')}</p>}
@@ -157,6 +177,7 @@ function WorkDetail({workspaceId,id,summary,dispatch,onOpenChat,onBack,enabled,f
    {value.originalSource&&<><Source source={value.originalSource} label="Original source"/>{value.originalSource.truncated&&<button type="button" className="a-soft" disabled={read.busy||!enabled||value.originalSource.nextOffset==null} onClick={more}>Read more source</button>}</>}
    {item.deliveryReport&&<section><h3>Publication report</h3><p>{item.deliveryReport.report}</p><p>Reported by {item.deliveryReport.reportedBy} · {when(item.deliveryReport.recordedAt)} · promise {item.deliveryReport.promiseRevision} · candidate {item.deliveryReport.candidate}</p><p>{item.deliveryReport.destination}</p><ul>{item.deliveryReport.references?.map(ref=><li key={ref}>{ref}</li>)}</ul><p>Participant attribution; not host-observed delivery or independent verification.</p></section>}
    {!!item.resources?.length&&<section><h3>Reported resources</h3><p>Explicit owner reports only; no resource census or teardown implied.</p><ul>{item.resources.map((r,i)=><li key={r.resourceId+':'+i}>{r.resourceId} · {r.kind} · {words(r.reportedState)} · reported by {r.ownerSessionId} · {when(r.recordedAt)}<p>{r.evidenceReference}</p><small>{r.attribution}; independently verified: {String(r.independentlyVerified)}</small></li>)}</ul></section>}
+   <Evidence item={item}/>
    <details><summary>Current links and criterion evidence</summary><pre>{json({links:item.links,criterionEvidence:item.criterionEvidence})}</pre></details>
    <History key={id} workspaceId={workspaceId} id={id} dispatch={dispatch} enabled={enabled}/>
    <section><h3>Related chats</h3><p>Inspection does not change your conversation. Opening a chat uses the existing draft and dirty-view guards.</p>{chats.map(sid=><button type="button" className="a-soft" key={sid} aria-label={'Open chat: '+sid} disabled={!onOpenChat||navigation.busy} onClick={()=>open(sid)}>Open chat · {sid}</button>)}{navigation.error&&<p role="alert">{navigation.error}</p>}</section>
@@ -230,7 +251,7 @@ function WorkList({workspace,dispatch,onOpenChat,hostInstanceId=''}){
    <button type="button" className="a-link" disabled={busy||!visible} onClick={reload}>Refresh work</button><ReadStatus busy={busy} error={error} data={page}/>
    {error&&saved.after&&<button type="button" className="a-link" disabled={busy||!visible} onClick={()=>{invalidate();persist({...savedRef.current,after:null,previous:[]})}}>Restart Work pages</button>}
    {page&&<><p className="a-caption">{page.total} matching records · workspace revision {page.version} · observed {when(page.observedAt)}</p>
-    <ul className="a-shared-items">{page.items.map(row=><li key={row.id}><button ref={node=>{if(node)buttons.current.set(row.id,node);else buttons.current.delete(row.id)}} type="button" data-work-id={row.id} aria-pressed={saved.selected===row.id} onClick={()=>inspect(row)}><strong>{row.title}</strong><span>{row.attentionReasons?.length?row.attentionReasons.map(words).join(' · '):words(row.commitment)+' · '+words(row.disposition)}</span><small>Record {row.revision} · promise {row.promiseRevision}</small></button><small>Owner {row.ownerSessionId} · {row.ownerObservation?.activityObserved?words(row.ownerObservation.status):row.ownerObservation?.available?'Activity not observed':'Owner unavailable — reconciliation needed'}. Activity is not completion.</small></li>)}</ul>
+    <ul className="a-shared-items">{page.items.map(row=><li key={row.id}><button ref={node=>{if(node)buttons.current.set(row.id,node);else buttons.current.delete(row.id)}} type="button" data-work-id={row.id} aria-pressed={saved.selected===row.id} onClick={()=>inspect(row)}><strong>{row.title}</strong><span>{row.attentionReasons?.length?row.attentionReasons.map(words).join(' · '):words(row.commitment)+' · '+words(row.disposition)}</span><small>Record {row.revision} · promise {row.promiseRevision}</small><span className="a-shared-next"><strong>Next:</strong> {row.nextAction||'Not recorded'}</span></button><small>Owner {row.ownerSessionId} · {row.ownerObservation?.activityObserved?words(row.ownerObservation.status):row.ownerObservation?.available?'Activity not observed':'Owner unavailable — reconciliation needed'}. Activity is not completion.</small></li>)}</ul>
     {!page.items.length&&page.total===0&&!page.truncated&&!error&&<p>No matching recorded work.</p>}
     <PageLimit page={page} label="Work list"/>
     <div className="a-shared-actions"><button type="button" className="a-soft" disabled={busy||!visible||!saved.previous.length} onClick={()=>{invalidate();persist({...savedRef.current,after:saved.previous.at(-1),previous:saved.previous.slice(0,-1)})}}>Previous work</button>
