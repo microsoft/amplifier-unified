@@ -98,6 +98,10 @@ class PerformanceDiagnostics:
             value = stats.get(key)
             if type(value) in (int, float) and 0 <= value < float('inf'):
                 row[key] = round(value, 2)
+        from .history_projection_failure import sanitize_failure
+        failure = sanitize_failure(result.get('failure'))
+        if failure is not None:
+            row['failure'] = failure
         with self.lock:
             self.shell_queries.append(row)
 
@@ -127,7 +131,8 @@ class PerformanceDiagnostics:
                     'slowOperations': [dict(row) for row in self.slow],
                     'eventLoopDelays': [dict(row) for row in self.lag],
                     'historyProjectionFailures': [dict(row) for row in self.projection_failures],
-                    'shellQueries': [dict(row) for row in self.shell_queries],
+                    'shellQueries': [{**row, **({'failure': dict(row['failure'])}
+                                      if 'failure' in row else {})} for row in self.shell_queries],
                     'shellResourceRebuilds': {'total': self.resource_rebuild_counts['total'],
                         'byReason': dict(self.resource_rebuild_counts['byReason']),
                         'byResource': dict(self.resource_rebuild_counts['byResource']),
