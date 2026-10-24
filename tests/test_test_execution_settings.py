@@ -152,13 +152,17 @@ def test_long_guest_deadline_matches_public_schema():
     payload['timeoutSeconds'] = profiles.MAX_SECONDS + 1
     with pytest.raises(ValueError): guest.bound(payload)
 
-async def test_historical_direct_environment_keeps_sixty_second_default(app, backend):
+async def test_historical_direct_environment_keeps_sixty_second_default(app, backend, monkeypatch):
+    # This checks historical timeout semantics, not contention with the queue's
+    # reservation maintenance. Keep real settings/dispatch and capacity checks.
+    monkeypatch.setattr(app.test_queue, 'start', lambda: None)
     first = (await start(app))['resource']
     row = environments.get(app.data_dir, scope(app)['sessionId'], first['id'])
     row = environments.save(app.data_dir, row, timingRequest=None)
     await save(app, profiles={'linux-python': {'defaultTimeoutSeconds': 1200, 'maxTimeoutSeconds': 1800}})
     result = await act(app, 'execute', environments.public(app.data_dir, row), 'legacy-check', command='true')
-    assert result['request']['state'] == 'completed'
+    assert result['request']['state'] == 'completed', result
+    assert [action for action, _ in backend] == ['prepare', 'start', 'execute'], backend
     assert backend[-1][1]['timeoutSeconds'] == 60
 
 

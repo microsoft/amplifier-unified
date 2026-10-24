@@ -49,6 +49,22 @@ async def test_only_changed_provider_configuration_is_refetched(tmp_path,monkeyp
     await cache.close()
 
 
+def catalogs_ready(entries,expected):
+    errors={identity:row for identity,row in entries.items() if row.get('phase')=='error'}
+    assert not errors,{'catalogErrors':errors,'expectedKeys':expected}
+    return set(entries)==set(expected) and all(
+        entries[identity].get('sharedCatalogKey')==key and entries[identity]['phase']=='ready'
+        for identity,key in expected.items())
+
+
+async def wait_catalogs(service,expected):
+    for _ in range(100):
+        entries=service.state.get('setup',{}).get('providerCatalogs',{})
+        if catalogs_ready(entries,expected):return
+        await asyncio.sleep(.01)
+    pytest.fail(f'Catalogs did not finish for {expected}: {entries}')
+
+
 async def test_startup_warms_all_providers_and_reuses_catalogs(tmp_path,monkeypatch):
     from amplifier_web.server import create_app
     monkeypatch.setenv('CATALOG_TEST_KEY','fixture');settings(tmp_path)
@@ -63,19 +79,82 @@ async def test_startup_warms_all_providers_and_reuses_catalogs(tmp_path,monkeypa
     app=await create_app(tmp_path,workspace=tmp_path,runtime=Runtime(),voice=False,background_updates=False)
     service=app['service']
     try:
-        async def settled():
-            for _ in range(100):
-                entries=service.state.get('setup',{}).get('providerCatalogs',{})
-                if len(entries)==2 and all(row['phase']=='ready' for row in entries.values()):return
-                await asyncio.sleep(.01)
-            pytest.fail('Catalogs did not finish')
-        await settled();assert calls=={'0':1,'1':1}
+        manager=SetupManager(tmp_path,catalog=service.management.provider_catalog)
+        old={identity:manager.catalog_key({'id':identity},str(tmp_path)) for identity in ('0','1')}
+        await wait_catalogs(service,old);assert calls=={'0':1,'1':1}
         await service.management.command('providers.list',{})
         await asyncio.sleep(.03);assert calls=={'0':1,'1':1}
-        await service.management.command('providers.save',{'id':'0','module':'provider-openai','config':{'default_model':'changed'}})
-        await settled();await asyncio.sleep(.03)
+        save_id='catalog-save'
+        await service.management.command('providers.save',{'id':'0','module':'provider-openai','config':{'default_model':'changed'}},command_id=save_id)
+        receipt=service.state['managementResults'][save_id]
+        assert receipt=={'phase':'ready','error':None},receipt
+        expected={identity:manager.catalog_key({'id':identity},str(tmp_path)) for identity in old}
+        assert expected['0']!=old['0'] and expected['1']==old['1']
+        # Save acknowledgement can precede its background refresh. Old ready
+        # rows are not evidence for the newly saved provider configuration.
+        await wait_catalogs(service,expected)
         assert calls=={'0':2,'1':1}
     finally:await service.close()
+
+
+@pytest.mark.parametrize('refresh_fails',[False,True],ids=['delayed-ready','refresh-error'])
+async def test_catalog_wait_requires_new_identity_and_rejects_refresh_error(tmp_path,monkeypatch,refresh_fails):
+    from amplifier_web.server import create_app
+    from amplifier_web.management import Management
+    monkeypatch.setenv('CATALOG_TEST_KEY','fixture');settings(tmp_path)
+    calls=Counter();hold_refresh=False;warm_task=None
+    warm_entered,warm_release=asyncio.Event(),asyncio.Event()
+    probe_entered,probe_release=asyncio.Event(),asyncio.Event()
+    original=Management.warm_providers
+    async def warm(self,manager,workspace,**kwargs):
+        nonlocal warm_task
+        if hold_refresh:
+            warm_task=asyncio.current_task();warm_entered.set()
+            await warm_release.wait()
+        return await original(self,manager,workspace,**kwargs)
+    monkeypatch.setattr(Management,'warm_providers',warm)
+    async def probe(self,action,args,workspace):
+        calls[args['id']]+=1
+        if args['id']=='0' and calls['0']==2:
+            probe_entered.set();await probe_release.wait()
+            if refresh_fails:raise ValueError('Controlled catalog refresh failure')
+        return {'models':[{'id':'model-'+args['id']}],'modelsProviderId':args['id']}
+    monkeypatch.setattr(SetupManager,'probe',probe)
+    class Runtime:
+        async def close(self):pass
+    app=await create_app(tmp_path,workspace=tmp_path,runtime=Runtime(),voice=False,background_updates=False)
+    service=app['service']
+    try:
+        manager=SetupManager(tmp_path,catalog=service.management.provider_catalog)
+        old={identity:manager.catalog_key({'id':identity},str(tmp_path)) for identity in ('0','1')}
+        await wait_catalogs(service,old);assert calls=={'0':1,'1':1}
+        hold_refresh=True
+        await service.management.command('providers.save',{'id':'0','module':'provider-openai','config':{'default_model':'changed'}},command_id='delayed-save')
+        receipt=service.state['managementResults']['delayed-save']
+        assert receipt=={'phase':'ready','error':None},receipt
+        expected={identity:manager.catalog_key({'id':identity},str(tmp_path)) for identity in old}
+        assert expected['0']!=old['0'] and expected['1']==old['1']
+        await asyncio.wait_for(warm_entered.wait(),1)
+        entries=service.state['setup']['providerCatalogs']
+        # The former generic-ready predicate passes here despite stale identity.
+        assert len(entries)==2 and all(row['phase']=='ready' for row in entries.values())
+        assert catalogs_ready(entries,old) and not catalogs_ready(entries,expected)
+        assert calls=={'0':1,'1':1}
+        warm_release.set();await asyncio.wait_for(probe_entered.wait(),1)
+        entries=service.state['setup']['providerCatalogs']
+        assert entries['0']['sharedCatalogKey']==expected['0'] and entries['0']['phase']=='working'
+        assert entries['1']['sharedCatalogKey']==old['1'] and entries['1']['phase']=='ready'
+        assert calls=={'0':2,'1':1} and not catalogs_ready(entries,expected)
+        probe_release.set();await asyncio.wait_for(asyncio.shield(warm_task),1)
+        if refresh_fails:
+            with pytest.raises(AssertionError,match='catalogErrors'):
+                await wait_catalogs(service,expected)
+            assert service.state['setup']['providerCatalogs']['0']['phase']=='error'
+        else:
+            await wait_catalogs(service,expected)
+        assert calls=={'0':2,'1':1}
+    finally:
+        warm_release.set();probe_release.set();await service.close()
 
 
 async def test_remount_reuses_unchanged_provider_catalogs(tmp_path):
