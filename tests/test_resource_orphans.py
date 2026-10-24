@@ -192,10 +192,10 @@ async def test_maintenance_commit_gate_cursor_and_backup_deferral(app_factory,mo
     for i in range(260):
         files.put(app.db,{'orphan-maintenance':i});app.db.rollback()
     calls=[]
-    original=storage_migration._finish
-    def finish(*args):
-        calls.append(1);return original(*args)
-    monkeypatch.setattr(storage_migration,'_finish',finish)
+    original=storage_migration._prune
+    def prune(*args, **kwargs):
+        calls.append(1);return original(*args, **kwargs)
+    monkeypatch.setattr(storage_migration,'_prune',prune)
     app.backup_in_progress=True
     app._last_storage_sweep=0
     storage_migration.maintenance(app)
