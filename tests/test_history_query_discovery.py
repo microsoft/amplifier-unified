@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from amplifier_web.service import AppService
+from amplifier_web.service import ACTION_DEFINITIONS, AppService
 
 
 @pytest.mark.parametrize("action", ["list", "search", "read"])
@@ -83,3 +83,98 @@ async def test_coverage_and_errors_survive_without_samples(diagnostics, complete
         assert result["discovery"]["issuesOmitted"] is False
     finally:
         await app.close()
+
+
+@pytest.fixture
+async def alias_history(tmp_path, monkeypatch):
+    (tmp_path / "one").mkdir()
+    (tmp_path / "two").mkdir()
+    app = AppService(tmp_path / "app", workspace=tmp_path)
+    try:
+        rows = [app._new_session({"title": f"Chat {i}", "workspace": str(tmp_path / space)})
+                for i, space in enumerate(("one", "one", "one", "two"))]
+        for row in rows:
+            row["messages"] = [{"id": f"message-{i}", "role": "user", "text": f"Saved text {i}"}
+                               for i in range(3)]
+        app.state["sessions"] = rows
+        app.state["selectedSessionId"] = rows[0]["id"]
+        app.state["view"]["draft"] = "Unsent draft"
+        app._publish()
+        await app.history.refresh()
+
+        async def refreshed(*, force=False):
+            assert force is False
+
+        monkeypatch.setattr(app.history, "refresh", refreshed)
+        app.state["sharedHistory"] = {"loading": False, "error": None, "issueCount": 838,
+            "reconciliation": {"phase": "complete"},
+            "issues": [{"path": f"synthetic/{i}", "error": "Unavailable metadata"} for i in range(100)]}
+        yield app, rows
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize("action", ["history.list", "history.shared.list", "history.shared.view"])
+async def test_alias_can_follow_its_discovery_hint_without_changing_scope_or_page(alias_history, action):
+    app, rows = alias_history
+    owner, other = rows[0], rows[-1]
+    before = copy.deepcopy(app.state)
+    args = {"offset": 1, "limit": 1}
+    if action.endswith(".view"):
+        args.update(id=owner["id"], workspace=owner["workspace"])
+
+    async def dispatch(values):
+        return (await app.app_bridge("dispatch", {"action": action, "args": values}, owner["id"]))["result"]
+
+    compact = await dispatch(args)
+    assert compact["complete"] is False and compact["scope"] == "workspace"
+    assert compact["next_offset"] == 2
+    assert "issues" not in compact["discovery"]
+    assert compact["discovery"]["issueCount"] == 838
+    assert compact["discovery"]["issueSamplesAvailable"] == 100
+    # Follow the exact recovery advertised by this alias, through real validation
+    # and dispatch. Merely testing query_history directly misses this boundary.
+    assert "include_discovery_issues=true" in compact["discovery"]["detailsHint"]
+    detailed = await dispatch({**args, "include_discovery_issues": True})
+    assert detailed["complete"] is False
+    assert detailed["discovery"]["issueCount"] == 838
+    assert detailed["discovery"]["issues"] == before["sharedHistory"]["issues"]
+    assert len(detailed["discovery"]["issues"]) == 100
+    assert detailed["discovery"]["issuesOmitted"] is False
+    assert {k: v for k, v in detailed.items() if k != "discovery"} == {
+        k: v for k, v in compact.items() if k != "discovery"}
+    assert await dispatch({**args, "include_discovery_issues": False}) == compact
+    assert ACTION_DEFINITIONS[action][1]["properties"]["include_discovery_issues"]["type"] == "boolean"
+
+    if action.endswith(".view"):
+        foreign = {"id": other["id"], "workspace": other["workspace"], "limit": 1}
+        for opt_in in (False, True):
+            with pytest.raises(ValueError, match="scope"):
+                await dispatch({**foreign, "include_discovery_issues": opt_in})
+        assert (await dispatch({**foreign, "scope": "all", "include_discovery_issues": True}))["session"]["id"] == other["id"]
+    else:
+        own = await dispatch({"limit": 50, "include_discovery_issues": True})
+        all_rows = await dispatch({"scope": "all", "limit": 50, "include_discovery_issues": True})
+        assert {row["id"] for row in own["items"]} == {row["id"] for row in rows[:-1]}
+        assert {row["id"] for row in all_rows["items"]} == {row["id"] for row in rows}
+    assert app.state == before
+    detailed["discovery"]["issues"][0]["error"] = "Caller mutation"
+    assert app.state == before
+
+
+@pytest.mark.parametrize("opt_in", [False, True])
+async def test_requested_history_errors_remain_separate_from_global_samples(alias_history, monkeypatch, opt_in):
+    import amplifier_web.history_query as history
+    app, rows = alias_history
+    owner = rows[0]
+
+    def unavailable(session):
+        raise ValueError("Synthetic requested history failure")
+
+    monkeypatch.setattr(history, "_rows", unavailable)
+    result = await app.app_bridge("history", {"action": "search", "query": "not present",
+        "include_discovery_issues": opt_in}, owner["id"])
+    assert result["complete"] is False
+    assert {row["session_id"] for row in result["errors"]} == {row["id"] for row in rows[:-1]}
+    assert result["discovery"]["issueCount"] == 838
+    assert ("issues" in result["discovery"]) is opt_in

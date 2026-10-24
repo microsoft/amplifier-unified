@@ -19,6 +19,9 @@ are omitted. Detailed samples are opt-in with `include_discovery_issues: true`
 (the index retains at most 100); `issuesOmitted` and `detailsHint` make that
 omission explicit. This changes no discovery work, scope, paging or saved state.
 Search failures for the requested sessions still appear in `errors`.
+The `history.list`, `history.shared.list` and `history.shared.view` action aliases
+accept the same optional flag and forward it to the canonical history query,
+so their returned recovery hint can be followed without changing route or scope.
 
 | Route | Scope and retained checks |
 | --- | --- |
