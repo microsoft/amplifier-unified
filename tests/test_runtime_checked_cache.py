@@ -177,6 +177,10 @@ async def test_source_guard_reports_only_mismatch_field_names(tmp_path, monkeypa
 
 BACKEND = """
 from pathlib import Path
+import base64
+import csv
+import hashlib
+import io
 import tomllib
 import zipfile
 
@@ -191,7 +195,15 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
                        'Metadata-Version: 2.3\\nName: ' + info['name'] + '\\nVersion: ' + version + '\\n')
         wheel.writestr(dist + '.dist-info/WHEEL',
                        'Wheel-Version: 1.0\\nRoot-Is-Purelib: true\\nTag: py3-none-any\\n')
-        wheel.writestr(dist + '.dist-info/RECORD', '')
+        # Installers need every payload entry to remove old-version metadata.
+        record = io.StringIO(newline='')
+        writer = csv.writer(record, lineterminator='\\n')
+        for member in wheel.namelist():
+            payload = wheel.read(member)
+            digest = base64.urlsafe_b64encode(hashlib.sha256(payload).digest()).rstrip(b'=').decode()
+            writer.writerow((member, 'sha256=' + digest, len(payload)))
+        writer.writerow((dist + '.dist-info/RECORD', '', ''))
+        wheel.writestr(dist + '.dist-info/RECORD', record.getvalue())
     return filename
 build_editable = build_wheel
 """
