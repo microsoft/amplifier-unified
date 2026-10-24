@@ -22,6 +22,9 @@ const observePage=(page,client)=>{
 };
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const output=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/amplifier-shared-work';
+// Capture the unchanged source once for the approved-design comparison. This
+// mode is evidence collection only, never the corrected fidelity verdict.
+const fidelityBaseline=process.env.AMPLIFIER_TEST_FIDELITY_BASELINE==='1';
 await mkdir(output,{recursive:true});
 const installed=process.env.AMPLIFIER_TEST_INSTALLED==='1';
 const coldTaskRequested=process.env.AMPLIFIER_TEST_COLD_TASK==='1';
@@ -158,6 +161,15 @@ try {
  assert.ok(!found.has(manifest.proposal.id));assert.ok(!found.has(manifest.closed.id));
  await work.getByRole('searchbox',{name:'Find work'}).fill('Retain the original promise');
  const row=work.locator(`[data-work-id="${manifest.target.id}"]`);
+ await expect(row).toBeVisible();
+ if(!fidelityBaseline)await expect(row).toContainText('Next: '+manifest.target.nextAction);
+ for(const width of [1440,390,320]){
+  await page.setViewportSize({width,height:1000});
+  await row.scrollIntoViewIfNeeded();
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Work list fits '+width);
+  await page.screenshot({path:path.join(output,`fidelity-list-${width}.png`)});
+ }
+ await page.setViewportSize({width:1440,height:1000});
  await row.focus();await page.keyboard.press('Enter');
  const detail=work.getByRole('article',{name:'Work details'});
  await expect(detail).toBeVisible();
@@ -169,6 +181,21 @@ try {
  await expect(detail.getByText('Reported published',{exact:true})).toBeVisible();
  await expect(detail.getByText('Participant reports publication; no host-observed delivery or independent verification.',{exact:true})).toBeVisible();
  await expect(detail.getByText(/Independent checks passed|Cleanup complete|Shipped/)).toHaveCount(0);
+ const evidence=detail.getByRole('region',{name:'Evidence and limits',exact:true});
+ if(!fidelityBaseline){
+  await expect(evidence).toBeVisible();
+  await expect(evidence).toContainText('Latest reported outcome: unknown');
+  await expect(evidence).toContainText('Participant reports are not independent verification');
+  await expect(evidence.getByText('No qualified check recorded for this criterion.',{exact:true})).toHaveCount(manifest.target.criteria?.length||2);
+  await expect(evidence.locator('pre')).toHaveCount(0);
+ }
+ for(const width of [1440,390,320]){
+  await page.setViewportSize({width,height:1000});
+  await (fidelityBaseline?detail.getByText('Current links and criterion evidence',{exact:true}):evidence).scrollIntoViewIfNeeded();
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Evidence fits '+width);
+  await page.screenshot({path:path.join(output,`fidelity-evidence-${width}.png`)});
+ }
+ await page.setViewportSize({width:1440,height:1000});
  const source=detail.getByRole('region',{name:'Original source'});
  for(let index=0;index<20&&!((await source.innerText()).includes('ORIGINAL-END'));index++) {
   const previous=await source.locator('blockquote').textContent();
@@ -413,7 +440,7 @@ try {
  await bounded(peer.close(),actionTimeoutMs,'Peer page close');
  await bounded(page.close(),actionTimeoutMs,'Primary page close');
  observer.assertHealthy();
- result={status:'passed',sourceFixture:!installed,installedWheel:!!installedIdentity,installedIdentity,launchOptions:launch,
+ result={status:'passed',fidelity:{mode:fidelityBaseline?'before-change-capture':'approved-gap-check',nextAction:!fidelityBaseline,readableEvidence:!fidelityBaseline},sourceFixture:!installed,installedWheel:!!installedIdentity,installedIdentity,launchOptions:launch,
   homeEntry:{via:'ordinary Continue chat',sessionId:manifest.ownerSessionId,selectionActions:entrySelects.length,
    surface:'chat',runtimeCallbackCounts:entryObservation.runtimeCallbackCounts},
   coldServiceReopen:{seedPid:seed.pid,reopenedPid:fixture.pid,readHydrationCalls:observation.coldReadCalls},
