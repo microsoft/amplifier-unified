@@ -27,6 +27,23 @@ from amplifier_web.server import create_app
 from test_service import Runtime
 
 
+def test_shell_query_failure_keeps_errno_without_private_fields_or_aliases():
+    diagnostics = PerformanceDiagnostics()
+    facts = {'stage': 'spool_setup', 'exceptionType': 'OSError', 'errno': 28,
+             'path': '/private/spool', 'message': 'private user data', 'residentBytes': True}
+    diagnostics.record_shell_query('chats', 'recent', 1, 2, {'failure': facts}, accepted=False)
+    facts['errno'] = 999
+    snapshot = diagnostics.snapshot()
+    failure = snapshot['shellQueries'][0]['failure']
+    assert failure['stage'] == 'spool_setup' and failure['errno'] == 28
+    assert failure['residentBytes'] is None and 'private' not in json.dumps(snapshot)
+    failure['errno'] = 777
+    assert diagnostics.snapshot()['shellQueries'][0]['failure']['errno'] == 28
+    diagnostics.record_shell_query('chats', 'recent', 1, 2,
+                                   {'failure': {'stage': 'private path'}}, accepted=False)
+    assert 'failure' not in diagnostics.snapshot()['shellQueries'][-1]
+
+
 def test_bounded_detached_timings_on_errors(monkeypatch):
     clock = [0.0]
     monkeypatch.setattr('amplifier_web.performance_diagnostics.time.monotonic', lambda: clock[0])

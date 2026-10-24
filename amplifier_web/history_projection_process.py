@@ -21,7 +21,7 @@ from .history_projection_worker import (
     DESCRIPTOR_LIMIT, INPUT_LIMIT, MEMORY_LIMIT, OUTPUT_LIMIT, source_receipt,
 )
 
-from .history_projection_failure import sanitize_failure
+from .history_projection_failure import capture_failure, sanitize_failure
 
 REASONS = frozenset({'queue_full', 'input_limit', 'output_limit', 'spool_limit',
     'memory_limit', 'timeout', 'worker_stopped', 'source_changed', 'closed', 'worker_failed'})
@@ -88,7 +88,16 @@ class ProcessProjector:
     async def _home(self):
         if self._root_task is None:
             self._root_task = asyncio.create_task(asyncio.to_thread(self._make_root))
-        self._root = await asyncio.shield(self._root_task)
+        task = self._root_task
+        try:
+            self._root = await asyncio.shield(task)
+        except Exception:
+            # A full filesystem must not poison every later explicit read.
+            # Another waiter may already have started a replacement allocation.
+            # Cancellation leaves the still-running thread owned by close().
+            if self._root_task is task:
+                self._root_task = None
+            raise
         return self._root
 
     def _encode(self, path, inputs):
@@ -161,7 +170,10 @@ class ProcessProjector:
         token = None
         owner = False
         try:
-            root = await self._home()
+            try:
+                root = await self._home()
+            except OSError as exc:
+                return retry('worker_failed', capture_failure('spool_setup', exc))
             identity = uuid.uuid4().hex
             path = root / (identity + '.input')
             size, digest = await _blocking(self._encode, path, inputs)
@@ -340,5 +352,10 @@ class ProcessProjector:
             await asyncio.gather(*tuple(self._tasks), return_exceptions=True)
         await self._retire()
         if self._root_task is not None:
-            root = await self._home()
+            # Cleanup never allocates storage. A failed allocation owns no
+            # spool; its original read already reported the failure.
+            try:
+                root = await asyncio.shield(self._root_task)
+            except OSError:
+                return
             await _blocking(shutil.rmtree, root, True)
