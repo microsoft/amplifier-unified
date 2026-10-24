@@ -2423,7 +2423,7 @@
     {
       "id": "delta.peer-preview",
       "sourceCommit": "e0155b968c38b5bd8940e827d9e0d07bcb6991b1",
-      "reason": "Give grouped incoming peer messages and read-only source preview an automatic ordinary-path smoke owner.",
+      "reason": "Give grouped incoming peer messages and read-only source preview an automatic ordinary-path smoke owner, including additive positive narrow-header and removed-invoker focus regressions from PR1182.",
       "workflowsAdded": [
         {
           "id": "conversation.peer-preview",
@@ -2443,12 +2443,16 @@
             "Preview source chat, load earlier pages and refresh without reordering or losing place",
             "Return to the original chat with unsent text and attachment retained",
             "Attempt preview during dirty Canvas/Settings transitions; cancel and preserve the current owner",
-            "Repeat at narrow widths and verify no runtime starts or page reload"
+            "Repeat at narrow widths and verify no runtime starts or page reload",
+            "Read a long source title at 320/390px in neutral, keyboard-focus and hover states with a separately reachable Close",
+            "Revoke the source so its invoker disappears; dismiss with Escape/Close and retain exact originating-message focus and parent editor selection"
           ],
           "expectedResults": [
             "Grouping preserves exact content and reliable sender attribution.",
             "Preview is bounded and read-only; source rows retain formatting and ordering.",
-            "Drafts, selected chat, dirty editors and renderer leases remain intact."
+            "Drafts, selected chat, dirty editors and renderer leases remain intact.",
+            "Long title, Read only, Close and toolbar do not overlap; Close remains at least 44px and tooltip presentation does not obscure source identity.",
+            "Explicit dismissal after invoker removal returns to the originating disclosure rather than BODY, while successful Open chat keeps its selected destination."
           ],
           "variants": [
             "desktop-pointer",
@@ -2464,6 +2468,14 @@
               "relation": "Automatic peer-preview owner for grouped formatting, paging, copy, draft and dirty-owner continuity"
             },
             {
+              "path": "frontend/tests/peer-preview-header-browser.mjs",
+              "relation": "Automatic default positive 320/390px header geometry, neutral/focus/hover, tooltip, Close hit-target and parent continuity regression"
+            },
+            {
+              "path": "frontend/tests/peer-preview-focus-browser.mjs",
+              "relation": "Automatic real revoked-invoker Escape/Close focus regression with retained thread/editor state and separate guarded Open chat"
+            },
+            {
               "path": "tests/test_peer_preview.py",
               "relation": "Canonical source authorization, exact delivery receipts and bounded pagination"
             },
@@ -2473,7 +2485,8 @@
             }
           ],
           "limits": [
-            "Synthetic source smoke; no live-history scale or provider-latency claim."
+            "Synthetic source smoke; no live-history scale or provider-latency claim.",
+            "Header measurement-only and expected-failure style-restoration modes remain manual qualification, not automatic positive coverage. Registration is not a new runtime or visual pass."
           ]
         }
       ],

@@ -1043,6 +1043,29 @@ synthetic-runtime limits. Fixed manual Composer and Peer lanes additionally
 qualify installed wheels and negative controls; they do not replace these
 automatic ordinary-path owners.
 
+### Peer narrow-header and dismissal regression ownership (October 24)
+
+PR #1182 adds the default positive `peer-preview-header` and
+`peer-preview-focus` journeys to the existing automatic extended source plan and
+`delta.peer-preview`. Distinct `AMPLIFIER_PROOF_DIR` paths retain their geometry,
+focus results, screenshots and failures. The original `peer-preview`, all newer
+feature owners and the frozen 65-scenario inventory hash remain unchanged.
+
+The header owner checks long titles at 320/390px with neutral, focus and real
+hover states: title/status containment, toolbar separation, a reachable 44px
+Close control, tooltip non-obstruction and parent continuity. The focus owner
+uses genuine fixture revocation to remove the invoker, then checks explicit
+Escape/Close return to the exact originating disclosure, editor selection and
+reading position, and separate successful Open chat behavior.
+
+`PEER_HEADER_MEASURE_ONLY` and `PEER_HEADER_NEGATIVE` remain manual
+qualification modes. They are not set in the automatic plan. The predecessor
+measurement retained two failing 320px states before real hover was intercepted;
+unreached 390px and continuity assertions remain unrun. Registering the corrected
+positive owners neither turns that failure into a pass nor claims current
+rendered acceptance. No new publication gate or broad browser run is required
+for this additive registration.
+
 ## Immutable multi-quote integration (October 22)
 
 The additive `multi-quote` source journey uses the existing automatic browser
