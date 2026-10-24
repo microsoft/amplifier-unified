@@ -1,14 +1,152 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {chromium,expect} from '@playwright/test';
 
+// Opt-in, exact-card diagnostics for #1176. Observe the real requests and native
+// intersection callback; never dispatch, fetch another body, scroll or retry.
+async function traceQuestionPreview(page,review,check,output){
+ const target={questionId:review.question.id,questionContentRevision:review.question.contentRevision||1,resourceId:review.markdown.id,version:1};
+ const trace={schemaVersion:1,target,events:[],snapshots:[],diagnosticErrors:[],dropped:0};
+ const requests=new Map(),pending=new Set(),views=new Set();
+ const capture=async(label,read)=>{
+  let timer;
+  try{return await Promise.race([read(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Diagnostic read exceeded 1500ms')),1500)})])}
+  catch(error){trace.diagnosticErrors.push({stage:label,error:String(error.message).slice(0,500)})}
+  finally{clearTimeout(timer)}
+ };
+ const digest=text=>createHash('sha256').update(text).digest('hex');
+ const scalar=value=>typeof value==='string'?value.slice(0,300):typeof value==='boolean'||typeof value==='number'||value===null?value:undefined;
+ const fields=['id','sessionId','resourceId','resourceRevision','viewId','generation','version','selectedVersion','latestVersion','revision','kind','renderer','available','dirty','presentation','presentationRequest','questionId','questionContentRevision','previewId','fingerprint','contractFingerprint','renderIdentity','status','code'];
+ const pick=value=>Object.fromEntries(fields.filter(key=>scalar(value?.[key])!==undefined).map(key=>[key,scalar(value[key])]));
+ const reports=value=>Object.fromEntries(Object.entries(value||{}).slice(0,12).map(([key,row])=>[key,{status:row?.status,message:String(row?.message||'').slice(0,300)}]));
+ const observeRequest=request=>{
+  const url=new URL(request.url());let action,args,commandId;
+  if(url.pathname==='/api/actions'){
+   let raw;try{raw=request.postDataJSON()}catch{return}
+   const body=raw?.action==='shell.command'?raw.args:raw;
+   action=body?.action;args=body?.args;commandId=body?.id||raw?.id;
+   if(!action?.startsWith('canvas.')||!(args?.id===target.resourceId||args?.resourceId===target.resourceId||args?.viewId))return;
+  }else if(/^\/api\/canvas\/views\/[^/]+\/resource$/.test(url.pathname)&&url.searchParams.get('resourceId')===target.resourceId){
+   action='resource.GET';args=Object.fromEntries(url.searchParams);
+  }else return;
+  if(trace.events.length>=64){trace.dropped++;return}
+  const row={at:Date.now(),action,commandId:scalar(commandId),args:pick(args),status:'requested',
+   exactResource:args?.id===target.resourceId||args?.resourceId===target.resourceId};
+  trace.events.push(row);requests.set(request,row);
+ };
+ const observeResponse=response=>{
+  const row=requests.get(response.request());if(!row)return;
+  row.httpStatus=response.status();row.responseAt=Date.now();row.status='response-received';
+  const task=(async()=>{
+   try{
+    const body=await response.json();row.status='body-read';row.bodyReadAt=Date.now();row.accepted=scalar(body.accepted);
+    row.code=scalar(body.code);row.error=typeof body.error==='string'?body.error.slice(0,500):undefined;
+    row.result=pick(body.result||body);
+    if(row.exactResource&&row.result.viewId)views.add(row.result.viewId);
+    row.renderReports=reports((body.result||body).renderReports);
+    if(row.action==='resource.GET'){
+     const content=body.content;
+     row.body={contentPresent:typeof content==='string',contentResourcePresent:!!body.contentResource,
+      contentBytes:typeof content==='string'?Buffer.byteLength(content):null,
+      contentSha256:typeof content==='string'?digest(content):null,
+      pinnedV1:typeof content==='string'&&content.includes('Pinned document v1'),
+      latestV2:typeof content==='string'&&content.includes('Latest document v2')};
+    }
+   }catch(error){row.status='body-unavailable';row.bodyError=String(error.message).slice(0,300)}
+  })();
+  pending.add(task);task.finally(()=>pending.delete(task));
+ };
+ const observeFailure=request=>{const row=requests.get(request);if(row){row.status='request-failed';row.failedAt=Date.now();row.failure=scalar(request.failure()?.errorText)}};
+ const observePageError=error=>{if(trace.diagnosticErrors.length<12)trace.diagnosticErrors.push({pageError:String(error.message).slice(0,500)})};
+ page.on('request',observeRequest);page.on('response',observeResponse);page.on('requestfailed',observeFailure);page.on('pageerror',observePageError);
+ await capture('install-observer',()=>page.evaluate(target=>{
+  const Native=window.IntersectionObserver,events=[];
+  const bounds=rect=>rect&&({x:rect.x,y:rect.y,width:rect.width,height:rect.height});
+  class Observed extends Native{
+   constructor(callback,options){
+    super((entries,observer)=>{
+     for(const entry of entries){
+      if(entry.target.getAttribute('data-full-artifact-preview')!==target.resourceId||entry.target.closest('[data-question-id]')?.dataset.questionId!==target.questionId)continue;
+      if(events.length<32)events.push({at:performance.timeOrigin+entry.time,time:entry.time,version:entry.target.dataset.artifactVersion,isIntersecting:entry.isIntersecting,
+       intersectionRatio:entry.intersectionRatio,rootMargin:observer.rootMargin,
+       target:bounds(entry.boundingClientRect),intersection:bounds(entry.intersectionRect),root:bounds(entry.rootBounds)});
+     }
+     callback.call(observer,entries,observer);
+    },options);
+   }
+  }
+  window.IntersectionObserver=Observed;
+  window.__questionPreviewTrace={events,restore(){if(window.IntersectionObserver===Observed)window.IntersectionObserver=Native;delete window.__questionPreviewTrace}};
+ },target));
+ const snapshot=async label=>{
+  const value=await page.evaluate(target=>{
+   const state=window.amplifier.getState(),workspace=state.canvasWorkspace||{};
+   const q=document.querySelector(`[data-question-id="${target.questionId}"]`),card=q?.querySelector('.a-compact-artifact');
+   const body=card?.querySelector('[data-full-artifact-preview]'),toggle=card?.querySelector('button[aria-expanded]');
+   const keys=['id','resourceId','resourceRevision','viewId','generation','selectedVersion','latestVersion','revision','renderer','kind','available','dirty','presentation','questionId','questionContentRevision','fingerprint','contractFingerprint','renderIdentity','_presentationDisposed','open'];
+   const scalar=value=>typeof value==='string'?value.slice(0,300):typeof value==='boolean'||typeof value==='number'||value===null?value:undefined;
+   const pick=row=>Object.fromEntries(keys.filter(key=>scalar(row?.[key])!==undefined).map(key=>[key,scalar(row[key])]));
+   const bounds=node=>{if(!node)return null;const b=node.getBoundingClientRect();return{x:b.x,y:b.y,width:b.width,height:b.height}};
+   const reports=rows=>Object.fromEntries(Object.entries(rows||{}).slice(0,12).map(([key,row])=>[key,{status:row?.status,message:String(row?.message||'').slice(0,300)}]));
+   const ancestors=[];for(let node=body||card;node&&ancestors.length<12;node=node.parentElement){
+    const style=getComputedStyle(node);ancestors.push({tag:node.tagName,className:String(node.className).slice(0,300),rect:bounds(node),scrollTop:node.scrollTop,
+     scrollHeight:node.scrollHeight,clientHeight:node.clientHeight,overflowX:style.overflowX,overflowY:style.overflowY,display:style.display,visibility:style.visibility});
+   }
+   return {at:Date.now(),timeOrigin:performance.timeOrigin,viewport:{width:innerWidth,height:innerHeight},selectedSessionId:state.selectedSessionId,
+    presentation:(workspace.presentations||[]).filter(row=>row.id===target.resourceId).slice(0,8).map(pick),
+    primary:pick(state.canvas),views:(workspace.views||[]).filter(row=>row.resourceId===target.resourceId).slice(0,8).map(row=>({
+     ...pick(row),source:scalar(row.view?.source),renderReports:reports(row.renderReports),choices:(row.choices||[]).slice(0,12).map(choice=>({id:scalar(choice.id)}))})),
+    card:{count:document.querySelectorAll(`[data-question-id="${target.questionId}"]`).length,rect:bounds(card),expanded:toggle?.getAttribute('aria-expanded'),
+     previewPresent:!!body,artifactId:body?.dataset.fullArtifactPreview,version:body?.dataset.artifactVersion,
+     placeholder:card?.querySelector('.a-inline-artifact-placeholder')?.textContent?.slice(0,300),
+     notices:[...card?.querySelectorAll('.a-compact-artifact-notice,.a-inline-artifact-notice')||[]].slice(0,4).map(node=>node.textContent.slice(0,500)),
+     rendererBodyPresent:!!body?.querySelector('.a-inline-artifact-body'),pinnedHeadingPresent:[...body?.querySelectorAll('h1,h2,h3')||[]].some(node=>node.textContent==='Pinned document v1')},
+    draftLength:q?.querySelector('textarea')?.value.length,
+    focus:{tag:document.activeElement?.tagName,insideQuestion:!!q?.contains(document.activeElement)},
+    ancestors,intersections:window.__questionPreviewTrace?.events||[]};
+  },target);
+  const saved={label,...value};trace.snapshots.push(saved);
+  const fixture=await check({timeout:1500}),question=fixture.questions.find(row=>row.id===target.questionId);
+  value.fixture={question:question?{id:question.id,revision:question.revision,contentRevision:question.contentRevision,status:question.status,
+   answerPresent:!!question.answer,artifacts:(question.artifacts||[]).slice(0,4).map(row=>({id:row.id,version:row.version}))}:null,
+   sentCount:fixture.sent.length,inputIds:fixture.sent.slice(0,16).map(row=>row.inputId),networkAttempts:fixture.networkAttempts,selectedSessionId:fixture.selectedSessionId};
+  saved.fixture=value.fixture;
+  for(const view of value.views)views.add(view.viewId);
+ };
+ await capture('before-click',()=>snapshot('before-click'));
+ let finished=false;
+ return async error=>{
+  if(finished)return;finished=true;
+  try{
+   trace.assertionFinishedAt=Date.now();trace.outcome=error?'assertion-failed':'pinned-v1-visible';trace.assertionError=error?String(error.message).slice(0,2000):undefined;
+   await capture('after-assertion',()=>snapshot('after-assertion'));
+   // Settle only response bodies already observed; no new request or action.
+   await capture('response-bodies',()=>Promise.allSettled([...pending]));
+   trace.pendingResponseBodies=pending.size;
+   const observed=trace.events;
+   trace.events=observed.filter(row=>row.exactResource||views.has(row.args.viewId));
+   trace.unmatchedViewEvents=observed.length-trace.events.length;
+   for(const row of trace.events)row.bodyReadAfterAssertion=!!row.bodyReadAt&&row.bodyReadAt>trace.assertionFinishedAt;
+   if(output){
+    await capture('write-trace',()=>writeFile(join(output,'question-preview-trace.json'),JSON.stringify(trace,null,2)+'\n'));
+    await capture('screenshot',()=>page.screenshot({path:join(output,'question-preview-trace.png'),timeout:1500}));
+    await capture('write-final-trace',()=>writeFile(join(output,'question-preview-trace.json'),JSON.stringify(trace,null,2)+'\n'));
+   }else console.log('QUESTION-PREVIEW-TRACE '+JSON.stringify(trace));
+  }finally{
+   page.off('request',observeRequest);page.off('response',observeResponse);page.off('requestfailed',observeFailure);page.off('pageerror',observePageError);
+   await capture('restore-observer',()=>page.evaluate(()=>window.__questionPreviewTrace?.restore()));
+  }
+ };
+}
+
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[process.env.AMPLIFIER_QUESTIONS_FIXTURE||fileURLToPath(new URL('../../tests/fixtures/questions_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
-let browser;
+let browser,finishPreviewTrace;
 const output=process.env.AMPLIFIER_QUESTIONS_OUTPUT,layoutChecks=[];
 if(output)await mkdir(output,{recursive:true});
 try{
@@ -79,7 +217,7 @@ try{
   await page.getByRole('button',{name:'Close panel',exact:true}).click();
   await saved;await expect(page.getByRole('dialog')).toHaveCount(0);
  };
- const check=async()=>await (await page.request.get(ready.url+'/fixture/check')).json();
+ const check=async options=>await (await page.request.get(ready.url+'/fixture/check',options)).json();
  await page.goto(ready.url);await showFixtureConversation(page);
  await expect(card(ready.required)).toBeVisible();
  const uniqueQuestions=async()=>{for(const id of [ready.required,ready.optional,ready.skipped])await expect(card(id)).toHaveCount(1)};
@@ -233,9 +371,11 @@ try{
    return route.continue();
   });
  }
+ if(process.env.AMPLIFIER_QUESTIONS_PREVIEW_TRACE==='1')finishPreviewTrace=await traceQuestionPreview(page,review,check,output).catch(error=>console.error('Preview diagnostic setup failed:',error.message));
  await first.getByRole('button',{name:/^Preview here:/}).click();
  await first.locator('[data-full-artifact-preview]').scrollIntoViewIfNeeded();
  await expect(first.getByRole('heading',{name:'Pinned document v1'})).toBeVisible();
+ if(finishPreviewTrace){await finishPreviewTrace().catch(error=>console.error('Preview diagnostic failed:',error.message));finishPreviewTrace=null}
  await expect(first.getByRole('heading',{name:'Latest document v2'})).toHaveCount(0);
  await expect(q.getByRole('textbox')).toHaveValue(answerDraft);
  await first.getByRole('button',{name:/^Open in Canvas:/}).click();
@@ -382,4 +522,7 @@ try{
  }
  assert.deepEqual(errors,[]);
  console.log('Durable questions browser passed: unique cards alongside handoff updates and reload, reconnect, explicit required/optional UI, option and free-text answers, cancellation, duplicate rejection, preserved draft, shared voice provenance, mobile layout.');
+}catch(error){
+ if(finishPreviewTrace)await finishPreviewTrace(error).catch(diagnostic=>console.error('Preview diagnostic failed:',diagnostic.message));
+ throw error;
 }finally{if(output){await mkdir(output,{recursive:true});await writeFile(join(output,'layout-checks.json'),JSON.stringify(layoutChecks,null,2)+'\n')}await browser?.close();fixture.kill()}
