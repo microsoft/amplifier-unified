@@ -158,6 +158,9 @@ async def test_source_guard_reports_only_mismatch_field_names(tmp_path, monkeypa
         'url': URL, 'ref': 'main', 'revision': 'a' * 40, 'subdirectory': ''}}))
     project = tmp_path / 'worker'; project.mkdir()
     (project / 'uv.lock').write_text('version=1')
+    (project / 'pyproject.toml').write_text(
+        '[project]\nname = "fixture-runtime"\nversion = "0.0.0"\n'
+        'dependencies = ["fixture-foundation"]\n')
     graph = [{'name': 'fixture-foundation', 'version': '1', 'directUrl': {
         'url': 'file:///private/path', 'dir_info': {}}, 'cacheSource': {
             'url': URL, 'ref': 'main', 'revision': 'b' * 40,
