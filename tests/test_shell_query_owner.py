@@ -1,8 +1,10 @@
 """Cold directory reads must not own the host loop or command lock."""
 import asyncio
+import errno
 from copy import deepcopy
 from pathlib import Path
 import sys
+import threading
 import time
 
 import pytest
@@ -295,6 +297,53 @@ async def test_returning_demand_waits_for_its_retiring_query_without_retry(servi
         assert service.performance_diagnostics.counters.get('shell.query.retry', 0) == 0
     finally:
         release_close.set()
+
+
+@pytest.mark.parametrize('resource', ['recentNavigation', 'workStatusIdle'])
+async def test_returning_demand_recovers_after_failed_spool_allocation(service, resource):
+    owner = prepare(service)
+    entered, release = threading.Event(), threading.Event()
+    projectors = []
+
+    class FailedAllocation(ProcessProjector):
+        def _make_root(self):
+            entered.set()
+            assert release.wait(5)
+            raise OSError(errno.ENOSPC, 'private spool path')
+
+    def factory(home, **kwargs):
+        kind = FailedAllocation if not projectors else ProcessProjector
+        projector = kind(home, **kwargs)
+        projectors.append(projector)
+        return projector
+
+    owner.queries.factory = factory
+    try:
+        snapshot(service, wanted=(resource,))
+        async with asyncio.timeout(5):
+            while not entered.is_set():
+                await asyncio.sleep(.001)
+        snapshot(service, wanted=(), demand=2)
+        retiring = owner.queries.retiring
+        assert retiring is not None
+        snapshot(service, wanted=(resource,), demand=3)
+        assert len(projectors) == 1 and projectors[0]._process is None
+        release.set()
+        await asyncio.wait_for(asyncio.shield(retiring), 5)
+        result = await settle(service, wanted=(resource,), demand=3)
+        page = result['instances']['chats']['resources'][resource]['value'][resource]
+        assert page['total'] == 2 and len(projectors) == 2
+        assert not owner.queries.failures and owner.queries.retiring is None
+        failures = [row['failure'] for row in service.performance_diagnostics.snapshot()['shellQueries']
+                    if 'failure' in row]
+        assert len(failures) == 1
+        assert failures[0]['stage'] == 'spool_setup' and failures[0]['errno'] == errno.ENOSPC
+        process, spool = projectors[1]._process, projectors[1]._root
+        await owner.close()
+        assert process.returncode == 0 and not spool.exists()
+        assert not list(service.data_dir.glob('projection-spool-*'))
+    finally:
+        release.set()
 
 
 @pytest.mark.parametrize('resource', ['recentNavigation', 'workStatusIdle'])
