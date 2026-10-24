@@ -214,7 +214,7 @@ async def test_unavailable_native_store_keeps_index_and_reports_incomplete(app, 
     (directory / 'transcript.jsonl').write_text(json.dumps({'role': 'user', 'content': 'Keep me'})+'\n')
     await app.history.refresh()
     (home / 'projects').rename(home / 'temporarily-unavailable')
-    result = await app.app_bridge('history', {'action': 'list'}, 'native-history')
+    result = await app.app_bridge('history', {'action': 'list', 'include_discovery_issues': True}, 'native-history')
     assert not result['complete']
     assert result['discovery']['issues'][0]['kind'] == 'unavailable-root'
     assert result['items'][0]['id'] == 'native-history'
@@ -222,7 +222,7 @@ async def test_unavailable_native_store_keeps_index_and_reports_incomplete(app, 
         await app.app_bridge('history', {'action': 'read', 'session_id': 'native-history'}, 'native-history')
     (home / 'temporarily-unavailable').rename(home / 'projects')
     for _ in range(10):
-        recovered = await app.app_bridge('history', {'action': 'list'}, 'native-history')
+        recovered = await app.app_bridge('history', {'action': 'list', 'include_discovery_issues': True}, 'native-history')
         if recovered['complete']:
             break
     assert recovered['complete'] and not recovered['discovery']['issues']
