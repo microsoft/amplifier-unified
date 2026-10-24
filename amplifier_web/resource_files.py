@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
 import hashlib
+from itertools import islice
 import json
 import os
 import re
@@ -561,11 +562,12 @@ def collect(db, state):
     return prune_marked(db, marked)
 
 
-def prune_marked(db, marked):
+def prune_marked(db, marked, *, limit=None):
     """Prune using a mark computed under the same caller-owned writer lock."""
     if not db.in_transaction:
         raise ValueError('Resource pruning requires writer exclusion.')
-    stale = [row[0] for row in db.execute('SELECT id FROM state_resources') if row[0] not in marked]
+    candidates = (row[0] for row in db.execute('SELECT id FROM state_resources') if row[0] not in marked)
+    stale = list(candidates if limit is None else islice(candidates, limit))
     db.executemany('DELETE FROM state_resources WHERE id=?', ((identity,) for identity in stale))
     # Files are deleted only after the caller commits the pruned references.
     return stale
@@ -586,6 +588,31 @@ def remove_files(db, identities):
                     (directory / (identity + '.json')).unlink(missing_ok=True)
         finally:
             db.rollback()  # only a lock; no data changes in this transaction
+
+
+async def remove_files_async(db, identities):
+    """Recheck re-adoption on the owner; settle bounded file work before unlock."""
+    if db.in_transaction:
+        raise ValueError('Commit index pruning before removing resource files.')
+    directory = root(db)
+    if directory is None or not identities:
+        return
+    db.execute('BEGIN IMMEDIATE')
+    try:
+        paths = []
+        for identity in identities:
+            if not re.fullmatch('[a-f0-9]{64}', identity):
+                raise ValueError('Invalid resource identity.')
+            if not db.execute('SELECT 1 FROM state_resources WHERE id=?', (identity,)).fetchone():
+                paths.append(directory / (identity + '.json'))
+
+        def unlink():
+            for path in paths:
+                path.unlink(missing_ok=True)
+
+        await settle_worker(unlink)
+    finally:
+        db.rollback()
 
 
 def sweep_unindexed(db, state, iterator=None, *, limit=128):
