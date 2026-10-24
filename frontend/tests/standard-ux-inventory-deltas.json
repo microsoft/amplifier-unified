@@ -2382,12 +2382,17 @@
             "Inspect idle and expanded input at desktop and phone widths across detail/theme choices",
             "Write multiline text, paste quotes and attach/remove files without sending",
             "Open model/reasoning/bundle options; close with keyboard and retain focus/draft",
-            "Reload with a retained draft and verify long-input actions stay reachable"
+            "Reload with a retained draft and verify long-input actions stay reachable",
+            "Open Add and invoke Ctrl/Cmd+, without an intervening pointer dismissal; close Settings with Escape",
+            "Repeat with unsaved Settings: Keep settings open, then Discard changes; also dismiss Add normally with Escape"
           ],
           "expectedResults": [
             "Idle field remains compact with usable touch targets and no horizontal overflow.",
             "IME composition and Shift+Enter do not send; private input stays out of ordinary readback.",
-            "Options remain usable without losing unsent text or attachments."
+            "Options remain usable without losing unsent text or attachments.",
+            "Keyboard-opened Settings owns focus and Escape; the background Add menu disappears without taking focus back.",
+            "Keep settings open preserves its unsaved value; accepted Settings close and ordinary Add dismissal return focus to the persistent Add trigger.",
+            "The composer draft is retained and navigation invokes no send, attachment-add, provider-save or access-change action."
           ],
           "variants": [
             "desktop-pointer",
@@ -2408,13 +2413,18 @@
               "relation": "Existing automatic Public readiness composer-options owner; choices, invalid controls and keyboard/focus continuity"
             },
             {
+              "path": "frontend/tests/composer-panel-ownership-browser.mjs",
+              "relation": "Additive automatic Composer owner for the keyboard Settings regression introduced at 2db7f630fffdef34aa081e90f37563a82efd16ab; retains result.json, keyboard-settings-1280.png, keyboard-settings-390.png and failure.png when applicable under output/browser-checks/composer-panel-ownership. Registration is not a passing result."
+            },
+            {
               "path": "scripts/compact_composer_checks.py",
               "relation": "Separate fixed manual source/installed-wheel and adjacent regression qualification"
             }
           ],
           "limits": [
             "Synthetic source smoke; no live provider, physical keyboard or native audio claim.",
-            "Separate immutable quote-node behavior remains independently owned."
+            "Separate immutable quote-node behavior remains independently owned.",
+            "Keyboard Settings coverage uses synthetic Linux/Mac navigator branches at 1280/390px, not physical macOS keyboard qualification; combined runtime/package qualification remains with Releases."
           ]
         }
       ],

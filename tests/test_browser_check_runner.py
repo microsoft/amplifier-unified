@@ -283,6 +283,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'shared-work': {'AMPLIFIER_TEST_COLD_TASK': '1', 'AMPLIFIER_TEST_OUTPUT': '{root}/output/browser-checks/shared-work'},
         'model-capacity-settings': {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/model-capacity-settings'},
         'compact-composer': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/compact-composer'},
+        'composer-panel-ownership': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/composer-panel-ownership'},
         'peer-preview': {'AMPLIFIER_PROOF_DIR': '{root}/output/browser-checks/peer-preview'},
         'canvas-chrome': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/canvas-chrome'},
         'multi-quote': {'AMPLIFIER_PROOF_DIR': '{root}/output/browser-checks/multi-quote'},
@@ -307,7 +308,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 123
+    assert len(original) == 65 and len(rows) == 124
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -369,7 +370,7 @@ def test_compact_composer_peer_preview_and_artifact_keep_automatic_inventory_own
     plan = json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())
     ledger = json.loads((ROOT / 'frontend/tests/standard-ux-inventory-deltas.json').read_text())
     owners = {
-        'delta.compact-composer': {'compact-composer'},
+        'delta.compact-composer': {'compact-composer', 'composer-panel-ownership'},
         'delta.peer-preview': {'peer-preview'},
         'delta.canvas-chrome': {'canvas-chrome'},
         'delta.multi-quote': {'multi-quote'},
@@ -384,6 +385,18 @@ def test_compact_composer_peer_preview_and_artifact_keep_automatic_inventory_own
             assert row['command'] == ['node', f'tests/{name}-browser.mjs']
             assert 'AMPLIFIER_TEST_PACKAGE_ROOT' not in row.get('env', {})
             assert any(f'/output/browser-checks/{name}' in value for value in row['env'].values())
+    # Register the maintained keyboard regression with its existing evidence
+    # writer, not a duplicate journey or a claim that runtime checks passed.
+    keyboard_path = 'frontend/tests/composer-panel-ownership-browser.mjs'
+    keyboard = (ROOT / keyboard_path).read_text()
+    assert "process.env.AMPLIFIER_TEST_ARTIFACTS||" in keyboard
+    assert "output+'/result.json'" in keyboard
+    assert '${output}/keyboard-settings-${width}.png' in keyboard
+    assert "output+'/failure.png'" in keyboard
+    assert sum('{root}/output/browser-checks/composer-panel-ownership' in row.get('env', {}).values()
+               for row in plan['scenarios']) == 1
+    assert sum(test['path'] == keyboard_path for delta in ledger['changes']
+               for flow in delta.get('workflowsAdded', []) for test in flow.get('existingTests', [])) == 1
     # Canvas chrome joins the plan, rather than replacing dirty-editor coverage.
     canvas, = [row for row in plan['scenarios'] if row['id'] == 'canvas-chrome']
     assert canvas['env'] == {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/canvas-chrome'}
@@ -567,7 +580,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     # New source journeys are automatic; their manual lanes add installed and
     # negative-control proof without replacing any existing ordinary owner.
     feature_additions = {f'tests/{name}-browser.mjs' for name in
-                         ('compact-composer', 'peer-preview', 'canvas-chrome', 'multi-quote', 'artifact-one-surface', 'delegate-work-stream')}
+                         ('compact-composer', 'composer-panel-ownership', 'peer-preview', 'canvas-chrome', 'multi-quote', 'artifact-one-surface', 'delegate-work-stream')}
     voice_additions = {f'tests/{name}-browser.mjs' for name in
                        ('chat-scroll-call-boundaries', 'semantic-settings', 'history-refresh', 'voice-work-message')}
     assert voice_additions <= extended_scripts - readiness_scripts
@@ -580,8 +593,8 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert all(sum(row['command'] == ['node', name] for row in plan['scenarios']) == 1
                for name in feature_additions)
     assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience, pin_reorder, approval, dormant, shared_work} - feature_additions - voice_additions) == 146
-    assert len((readiness_scripts | extended_scripts) - {shared_work, 'tests/delegate-work-stream-browser.mjs'} - voice_additions) == 160
-    assert len(readiness_scripts | extended_scripts) == 166
+    assert len((readiness_scripts | extended_scripts) - {shared_work, 'tests/delegate-work-stream-browser.mjs'} - voice_additions) == 161
+    assert len(readiness_scripts | extended_scripts) == 167
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']
