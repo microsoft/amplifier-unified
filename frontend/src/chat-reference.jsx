@@ -5,7 +5,7 @@ import './chat-reference.css';
 
 const referenceFields=new Set([
  'id','sessionId','messageId','version','revision','targetSessionId',
- 'title','workspace','archived','available',
+ 'title','originalTitle','workspace','archived','available',
 ]);
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const text=(value,limit)=>typeof value==='string'&&value.trim().length>0&&
@@ -27,7 +27,7 @@ export function validateChatReferenceMetadata(value,sessionId,messageId){
    !Number.isSafeInteger(item.version)||item.version<1||
    !Number.isSafeInteger(item.revision)||item.revision<1)
    malformed('invalid or duplicate identity, source, version or revision');
-  if(!text(item.title,200)||!text(item.workspace,200)||
+  if(!text(item.title,200)||!text(item.originalTitle,200)||!text(item.workspace,200)||
    typeof item.archived!=='boolean'||typeof item.available!=='boolean')
    malformed('invalid labels or availability');
   ids.add(item.id);
@@ -36,7 +36,7 @@ export function validateChatReferenceMetadata(value,sessionId,messageId){
 }
 
 function ChatReferenceCard({item,sessionId,messageId,revision,blocked,dispatch}){
- const helpId=useId(),errorId=useId(),button=useRef(null),mounted=useRef(false);
+ const helpId=useId(),errorId=useId(),renameId=useId(),button=useRef(null),mounted=useRef(false);
  const opening=useRef(false),request=useRef(null),returnFocus=useRef(null);
  const [pending,setPending]=useState(false),[error,setError]=useState('');
  const scope=JSON.stringify([sessionId,messageId,revision]);
@@ -106,12 +106,13 @@ function ChatReferenceCard({item,sessionId,messageId,revision,blocked,dispatch})
 
  const action=item.archived?'Open archived chat':'Open chat';
  const disabled=blocked||pending||!item.available;
+ const renamed=item.available&&item.originalTitle!==item.title;
  return <div className="a-chat-reference" data-chat-reference-id={item.id}>
   <button ref={button} type="button" className="a-chat-reference-button"
    data-action="session.select" disabled={!item.available} aria-disabled={disabled||undefined}
    aria-busy={pending||undefined} data-operation-pending={pending||undefined}
    aria-label={`${item.available?action:'Chat unavailable'}: ${item.title} · ${item.workspace}`}
-   aria-describedby={`${helpId}${error?` ${errorId}`:''}`} onClick={openChat}>
+   aria-describedby={`${helpId}${renamed?` ${renameId}`:''}${error?` ${errorId}`:''}`} onClick={openChat}>
    <MessageSquare className="a-chat-reference-icon" aria-hidden="true"/>
    <span className="a-chat-reference-copy">
     <span className="a-chat-reference-action">{!item.available?'Chat unavailable':pending?'Opening chat…':action}</span>
@@ -125,6 +126,9 @@ function ChatReferenceCard({item,sessionId,messageId,revision,blocked,dispatch})
     item.archived?'Opens here for viewing. The chat stays archived; no message is sent or work started.':
      'Opens here. Does not send a message or start work.'}
   </p>
+  {renamed&&<p id={renameId} className="a-chat-reference-help a-chat-reference-original">
+   Originally shared as “<bdi>{item.originalTitle}</bdi>”. Same chat, current title.
+  </p>}
   {error&&<p id={errorId} className="a-chat-reference-error" role="alert">{error}</p>}
  </div>;
 }

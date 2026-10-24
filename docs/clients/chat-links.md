@@ -60,6 +60,11 @@ targets, forbidden targets, rebinding, dismissal and stale in-flight results.
 is ambiguous). The host saves a typed relationship in the existing output
 registry. The card uses the destination's current title and workspace; authors
 cannot supply HTML, URLs, labels, client IDs or arbitrary actions.
+When the current title differs from the host-saved original title, the card shows
+an inert “Originally shared as …” note. The original label remains unchanged
+across later renames. Successful card navigation focuses the exact destination's
+heading without opening the composer keyboard; cancelled navigation keeps focus
+with the source card.
 
 Publication never navigates. **Open chat** is an explicit same-document browser
 click through the ordinary guarded `session.select` dispatcher, carrying the

@@ -340,7 +340,11 @@ function App(){
    if(chatReference&&result.accepted===true)requestAnimationFrame(()=>{
     if(meta.chatReferenceIntent!==archiveRevision.current||latest.current?.selectedSessionId!==args.id)return;
     const messages=root.current?.querySelector('[data-part="messages"]');
-    if(messages?.dataset.sessionId===args.id){messages.setAttribute('tabindex','-1');messages.focus({preventScroll:true})}
+    if(messages?.dataset.sessionId!==args.id)return;
+    if(args.chatReference){
+     const heading=root.current?.querySelector('[data-part="session-heading"]');
+     if(heading?.dataset.sessionId===args.id)heading.focus({preventScroll:true});
+    }else{messages.setAttribute('tabindex','-1');messages.focus({preventScroll:true})}
    });
    if(!handledActionResults.current.has(result)){handledActionResults.current.add(result);handleEffects(result.effects)}
    return result;

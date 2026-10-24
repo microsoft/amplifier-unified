@@ -139,6 +139,7 @@ class ChatReferences:
             'messageId': message_id or record['origin']['messageId'],
             'targetSessionId': record['target']['id'],
             'title': title, 'workspace': workspace, 'available': available,
+            'originalTitle': label(record['title'], 'Untitled chat'),
             'archived': bool(target and target['id'] in archived),
         }
 
