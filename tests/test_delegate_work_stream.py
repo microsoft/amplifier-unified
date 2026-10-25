@@ -17,7 +17,7 @@ from amplifier_web.session_projection import stored_execution
 from test_work_windows import FakeProjector, fixture
 
 
-def trace_windows(monkeypatch):
+def trace_windows(monkeypatch, path):
     """Bounded metadata-only evidence for the formerly intermittent cold page."""
     from amplifier_web.work_windows import WorkWindows, source_identity
     from amplifier_web.cold_display import raw
@@ -26,11 +26,14 @@ def trace_windows(monkeypatch):
         if len(records) >= 160:
             return
         owner = windows._owner(identity) if identity else None
+        stat = path.stat()
         records.append({'event': kind, 'epoch': windows.epochs.get(identity),
                         'revision': windows.service._state.get('revision'),
                         'source': source_identity(owner) if owner is not None else None,
                         'coldExecution': raw(owner).get('_coldFields', {}).get('execution') if owner is not None else None,
                         'residentExecution': 'execution' in raw(owner) if owner is not None else None,
+                        'sourceStamp': [stat.st_dev, stat.st_ino, stat.st_size,
+                                        stat.st_mtime_ns, stat.st_ctime_ns],
                         **extra})
     invalidate, check, read = WorkWindows.invalidate, WorkWindows._check_current, WorkWindows.read
     def traced_invalidate(windows, identities=None, **kwargs):
@@ -46,7 +49,9 @@ def trace_windows(monkeypatch):
         except ValueError as error:
             note('rejected', windows, identity, capturedFence=fence,
                  sameOwner=windows._owner(identity) is owner,
-                 capturedSource=source, error=str(error))
+                 capturedSource=source, error=str(error),
+                 guard=[f'{Path(frame.filename).name}:{frame.name}:{frame.lineno}'
+                        for frame in traceback.extract_tb(error.__traceback__)])
             raise
     async def traced_read(windows, identity, before=None, **kwargs):
         note('read', windows, identity, older=bool(before))
@@ -139,21 +144,21 @@ def exchanges(rows):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('trailing_tools,mode,settled_startup', [
+@pytest.mark.parametrize('trailing_tools,mode,controlled_publication', [
     (count, mode, False) for count in (0, 140)
     for mode in ('resident', 'persisted-projection', 'service-reopen')
 ] + [(140, 'service-reopen', True)], ids=[
     f'{size}-{mode}' for size in ('recent', 'paged')
     for mode in ('resident', 'persisted-projection', 'service-reopen')
-] + ['paged-service-reopen-settled-publication'])
+] + ['paged-service-reopen-controlled-publication'])
 async def test_registered_browser_reads_recorded_delegate_exchange_without_body_injection(
-        authenticated_client, tmp_path, monkeypatch, mode, trailing_tools, settled_startup):
+        authenticated_client, tmp_path, monkeypatch, mode, trailing_tools, controlled_publication):
     from amplifier_web.server import create_app
     from amplifier_web.work_windows import WorkWindows
     from test_service import Runtime
 
     _, source, path, _ = fixture(tmp_path, monkeypatch, count=0)
-    trace = trace_windows(monkeypatch) if mode == 'service-reopen' and trailing_tools else None
+    trace = trace_windows(monkeypatch, path) if mode == 'service-reopen' and trailing_tools else None
     async def open_app():
         return await create_app(tmp_path / 'web', workspace=tmp_path, runtime=Runtime(),
                                 voice=False, background_updates=False, preload_providers=False)
@@ -212,7 +217,10 @@ async def test_registered_browser_reads_recorded_delegate_exchange_without_body_
     service.clients.attach('exchange-browser')
     client = await authenticated_client(app)
     client.session.headers['X-Amplifier-Client'] = 'exchange-browser'
-    if settled_startup:
+    if mode == 'service-reopen':
+        # Startup catalog reconciliation can publish even with update polling
+        # disabled. Finish that real barrier before expecting a stable read.
+        # A separate controlled-publication case below retains the race guard.
         await service.history.refresh(force=True)
     original = service._session
     before = copy.deepcopy(session['execution'])
@@ -223,23 +231,30 @@ async def test_registered_browser_reads_recorded_delegate_exchange_without_body_
 
     monkeypatch.setattr(service, '_session', bounded)
     try:
-        if settled_startup:
+        if controlled_publication:
             # Compare completed startup plus one controlled publication, not a
             # longer sleep or a silent retry of an intermittently rejected read.
             entered, release = asyncio.Event(), asyncio.Event()
+            first = await windows.read(identity)
+            assert first['before'], 'Controlled rejection must exercise an older page'
             project = windows.projector.project
             async def held(inputs, *, key):
                 entered.set()
                 await release.wait()
                 return await project(inputs, key=key)
             windows.projector.project = held
-            pending = asyncio.create_task(windows.read(identity))
+            pending = asyncio.create_task(windows.read(identity, first['before']))
             try:
                 await asyncio.wait_for(entered.wait(), 5)
-                service._publish_changes(sessions={identity}, detail_only=True)
+                service._publish_full(reason='Controlled catalog publication during older Work read')
                 release.set()
                 with pytest.raises(ValueError, match='requested conversation changed'):
                     await pending
+                rejected = [item for item in trace if item['event'] == 'rejected'][-1]
+                assert rejected['sameOwner']
+                assert rejected['capturedSource'] == rejected['source']
+                assert rejected['capturedFence'] != rejected['epoch']
+                assert len({tuple(item['sourceStamp']) for item in trace}) == 1
             finally:
                 release.set()
                 await asyncio.gather(pending, return_exceptions=True)
@@ -385,4 +400,4 @@ async def test_registered_browser_reads_recorded_delegate_exchange_without_body_
         if trace is not None:
             destination = Path(os.environ.get('AMPLIFIER_TEST_OUTPUT_DIR', str(tmp_path)))
             destination.mkdir(parents=True, exist_ok=True)
-            (destination / f'delegate-paged-reopen-{"settled" if settled_startup else "concurrent"}-trace.json').write_text(json.dumps(trace, indent=2))
+            (destination / f'delegate-paged-reopen-{"controlled" if controlled_publication else "settled"}-trace.json').write_text(json.dumps(trace, indent=2))
