@@ -235,7 +235,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     # Deliberate coverage changes must update this migration oracle explicitly.
     additions = {
         "assignment-adoption": {},
-        "delegate-work-stream": {},
+        "delegate-work-stream": {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/delegate-work-stream'},
         "request-cancellation": {},
         'diagram-navigation': {'DIAGRAM_EVIDENCE': '{root}/output/browser-checks/diagram-navigation/report.json'},
         'chat-shortcuts': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/chat-shortcuts'},
