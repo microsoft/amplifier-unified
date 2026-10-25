@@ -9,17 +9,53 @@ import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {chromium, expect} from '@playwright/test';
 import {mkdirSync,writeFileSync} from 'node:fs';
+import {join} from 'node:path';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
+const output=process.env.AMPLIFIER_TEST_OUTPUT_DIR||join(root,'test-results');
+mkdirSync(output,{recursive:true});
+const artifact=name=>join(output,name);
 const mobileOnly=process.argv.includes('--mobile-only');
 const desktop={width:1280,height:1000},mobile={width:390,height:844};
 const viewports=mobileOnly?[['mobile',mobile]]:[['desktop',desktop],['mobile',mobile],['small',{width:320,height:844}]];
 const navigationEntries=[];
 const layoutChecks=[],apiFailures=[],responseReads=[],transitionChecks=[];
+const lookupEvents=[],lookupRequests=new Map();
+const nodeEvidence=node=>node?{
+  id:node.id,kind:node.kind,toolCallId:node.toolCallId,toolObservationId:node.toolObservationId,
+  detailVersion:node.detailVersion,toolDetail:node.toolDetail,contentAvailability:node.contentAvailability,
+  delegateRequestDetail:node.delegateRequestDetail,delegateResponseDetail:node.delegateResponseDetail,
+  requestChars:node.delegateRequest?.length,responseChars:node.delegateResponse?.length,
+  exchange:node.exchange?nodeEvidence({...node.exchange,exchange:undefined}):undefined
+}:null;
+const saveLookups=()=>writeFileSync(artifact('delegate-work-stream-lookups.json'),JSON.stringify(lookupEvents,null,2));
 let scene='stream';
 function observeApi(page,origin) {
+  page.on('request',request=>{
+    const url=new URL(request.url());
+    if(scene!=='observer'||url.origin!==origin||!['/api/conversation/detail','/api/conversation/work-sync'].includes(url.pathname)||lookupEvents.length>=300)return;
+    const row={sequence:lookupEvents.length,at:Date.now(),scene,method:request.method(),
+      path:url.pathname,query:Object.fromEntries(url.searchParams),client:request.headers()['x-amplifier-client']};
+    if(url.pathname.endsWith('work-sync'))row.input=request.postDataJSON();
+    lookupRequests.set(request,row);lookupEvents.push(row);
+  });
+  page.on('requestfailed',request=>{
+    const row=lookupRequests.get(request);
+    if(row){row.cancelledOrFailed=request.failure();saveLookups()}
+  });
   page.on('response',response=>{
+    const tracked=lookupRequests.get(response.request());
+    if(tracked) {
+      tracked.status=response.status();
+      responseReads.push(response.json().then(body=>{
+        tracked.result={lookupKey:body.lookupKey,before:body.before,error:body.error,coverage:body.coverage,
+          revision:body.revision,group:body.group,order:body.order,item:nodeEvidence(body.item),
+          items:body.items?.filter(n=>n.toolCallId==='observer-delegate'||n.exchange).map(nodeEvidence),
+          valueChars:typeof body.value==='string'?body.value.length:undefined,nextOffset:body.nextOffset};
+        saveLookups();
+      },error=>{tracked.readError=error.message;saveLookups()}));
+    }
     const url=new URL(response.url());
     if(url.origin!==origin||!url.pathname.startsWith('/api/')||response.status()<400)return;
     const record={scene,method:response.request().method(),path:url.pathname+url.search,status:response.status()};
@@ -29,7 +65,7 @@ function observeApi(page,origin) {
 }
 async function cleanScene(page) {
   await Promise.all(responseReads);
-  writeFileSync(root+'test-results/delegate-work-stream-api-failures.json',JSON.stringify(apiFailures,null,2));
+  writeFileSync(artifact('delegate-work-stream-api-failures.json'),JSON.stringify(apiFailures,null,2));
   await expect(page.getByText(/Invalid request: This message is no longer available/)).toHaveCount(0);
   assert.deepEqual(apiFailures,[],'Normal scene must not issue rejected API requests');
 }
@@ -65,7 +101,7 @@ function visibleWorkGeometry(work) {
 async function checkWorkLayout(page,work,label) {
   const measured=await work.evaluate(visibleWorkGeometry);
   layoutChecks.push({label,viewport:page.viewportSize(),...measured});
-  writeFileSync(root+'test-results/delegate-work-stream-layout.json',JSON.stringify(layoutChecks,null,2));
+  writeFileSync(artifact('delegate-work-stream-layout.json'),JSON.stringify(layoutChecks,null,2));
   assert.ok(measured.hits.length,'Visible Work glyphs must actually be sampled');
   assert.deepEqual(measured.problems,[],label+': visible Work text is readable');
   if(measured.jump) {
@@ -150,7 +186,7 @@ async function enterStreamConversation(page,expectedSessionId,stage) {
   assert.equal(after,selected,'Closing navigation must not select another chat');
   navigationEntries.push({stage,viewport:page.viewportSize(),selectedBefore:selected,
     selectedAfter:after,narrow,closed,navigationHidden:await navigation.isHidden()});
-  writeFileSync(root+'test-results/delegate-work-stream-navigation-entry.json',JSON.stringify(navigationEntries,null,2));
+  writeFileSync(artifact('delegate-work-stream-navigation-entry.json'),JSON.stringify(navigationEntries,null,2));
 }
 // Word ranges detect the one-letter-per-line regression that an element box
 // inside the viewport cannot detect. Hit tests also reject floating overlays.
@@ -243,7 +279,7 @@ const fixture = spawn(process.env.AMPLIFIER_TEST_PYTHON || root + '.venv/bin/pyt
   {stdio: ['ignore', 'pipe', 'inherit']});
 let browser,context,page,diagnosticOwner,restoredOwnerStyle,lastOwnerMeasurement;
 const ownerDiagnostics=[];
-const saveOwnerDiagnostics=()=>writeFileSync(root+'test-results/delegate-work-stream-owner-diagnostics.json',
+const saveOwnerDiagnostics=()=>writeFileSync(artifact('delegate-work-stream-owner-diagnostics.json'),
   JSON.stringify({scope:'synthetic fixture only; frame samples are not proof of settled layout',
     samples:ownerDiagnostics,lastPoll:lastOwnerMeasurement??null},null,2));
 const recordOwnerDiagnostics=async(stage,{recenter=false,frames=false}={})=>{
@@ -320,7 +356,6 @@ try {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   observeApi(page,url);
-  mkdirSync(root + 'test-results', {recursive: true});
   for (const [name, viewport] of viewports) {
     await page.setViewportSize(viewport);
     await page.goto(url);
@@ -427,13 +462,13 @@ try {
         return lastOwnerMeasurement.problems;
       }).toEqual([]);
       saveOwnerDiagnostics();
-      writeFileSync(root+'test-results/delegate-work-stream-negative-controls.json',JSON.stringify({split,covered},null,2));
-      await page.screenshot({path:root+'test-results/delegate-work-stream-mobile-owner.png'});
+      writeFileSync(artifact('delegate-work-stream-negative-controls.json'),JSON.stringify({split,covered},null,2));
+      await page.screenshot({path:artifact('delegate-work-stream-mobile-owner.png')});
     }
-    writeFileSync(root+`test-results/delegate-work-stream-${name}-readability.json`,JSON.stringify(readability,null,2));
+    writeFileSync(artifact(`delegate-work-stream-${name}-readability.json`),JSON.stringify(readability,null,2));
     await work.scrollIntoViewIfNeeded();
     await checkWorkLayout(page,work,`stream-${name}-saved-position`);
-    await page.screenshot({path: root + `test-results/delegate-work-stream-${name}.png`, fullPage: true});
+    await page.screenshot({path:artifact(`delegate-work-stream-${name}.png`), fullPage: true});
     await checkLatest(page,work,`stream-${name}-latest`);
     await cleanScene(page);
   }
@@ -454,7 +489,8 @@ try {
       query:new URL(request.url()).searchParams,client:request.headers()['x-amplifier-client']});
   });
   // Install the request observer before first navigation and canonical reads.
-  await control({op:'delegate-observer',instruction,reply,olderRecords:true});
+  const observerSetup=await control({op:'delegate-observer',instruction,reply,olderRecords:true});
+  writeFileSync(artifact('delegate-work-stream-capture.json'),JSON.stringify(observerSetup.delegateCapture,null,2));
   await page.setViewportSize(mobileOnly?mobile:desktop);
   await page.goto(url);
   await enterStreamConversation(page,alpha,'observer');
@@ -469,6 +505,12 @@ try {
   await earlier.click();
   await expect(observed.getByRole('region',{name:'Request',exact:true})).toContainText('OBSERVER REQUEST café');
   await expect(observed.getByRole('region',{name:'Reply',exact:true})).toContainText('OBSERVER REPLY');
+  await Promise.all(responseReads);
+  const continued=lookupEvents.find(row=>row.query.part==='tool'&&row.query.before);
+  assert.ok(continued,'Ordinary older click must send a bounded continuation');
+  assert.ok(lookupEvents.some(row=>row.sequence<continued.sequence&&
+    row.result?.lookupKey===continued.query.lookupKey&&row.result?.before===continued.query.before),
+    'Older lookup must use the exact accepted lookupKey and before pair');
   await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{
     writeText:async text=>{window.copied=text}
   }}));
@@ -507,7 +549,7 @@ try {
   const removedBody=await removed.json();
   transitionChecks.push({from:'observer',to:'nested',removedMessageId:'observer-question',
     request:removed.url,status:removed.status,body:removedBody});
-  writeFileSync(root+'test-results/delegate-work-stream-transitions.json',JSON.stringify(transitionChecks,null,2));
+  writeFileSync(artifact('delegate-work-stream-transitions.json'),JSON.stringify(transitionChecks,null,2));
   assert.equal(removed.status,400);
   assert.match(removedBody.error,/This message is no longer available/);
   page=await context.newPage();
@@ -523,7 +565,7 @@ try {
     await expect(request).toContainText('NESTED REQUEST');
     await expect(reply).toContainText('NESTED REPLY');
     await request.scrollIntoViewIfNeeded();
-    await page.screenshot({path:root+`test-results/delegate-work-stream-attribution-${name}.png`});
+    await page.screenshot({path:artifact(`delegate-work-stream-attribution-${name}.png`)});
     await expect(request.locator('header')).toContainText('Worker (owner unavailable) → Delegate');
     await expect(reply.locator('header')).toContainText('Delegate → Worker (owner unavailable)');
     await expect(request.locator('header')).not.toContainText('Main chat');
@@ -536,7 +578,7 @@ try {
     await request.scrollIntoViewIfNeeded();
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Nested attribution must not overflow');
     await checkWorkLayout(page,work,`nested-${name}-saved-position`);
-    await page.screenshot({path:root+`test-results/delegate-work-stream-attribution-${name}.png`});
+    await page.screenshot({path:artifact(`delegate-work-stream-attribution-${name}.png`)});
     await checkLatest(page,work,`nested-${name}-latest`);
     await toggle.click();
     await expect(request).toBeHidden();await expect(reply).toBeHidden();
@@ -549,7 +591,8 @@ try {
   console.log('PASS: synthetic interleaving/layout/actor attribution plus registered-browser stamped-observer long exchange reads; NOT cold-turn association or real-provider acceptance.');
 } catch(error) {
   await Promise.all(responseReads);
-  writeFileSync(root+'test-results/delegate-work-stream-api-failures.json',JSON.stringify(apiFailures,null,2));
+  saveLookups();
+  writeFileSync(artifact('delegate-work-stream-api-failures.json'),JSON.stringify(apiFailures,null,2));
   if(page&&!page.isClosed()) {
     // Do not recenter, hide overlays, or change styles to obtain failure evidence.
     if(diagnosticOwner)await recordOwnerDiagnostics('failure').catch(diagnosticError=>{
@@ -557,7 +600,7 @@ try {
       saveOwnerDiagnostics();
       console.error('Owner diagnostic capture failed:',diagnosticError.message);
     });
-    await page.screenshot({path:root+'test-results/delegate-work-stream-failure.png'}).catch(()=>{});
+    await page.screenshot({path:artifact('delegate-work-stream-failure.png')}).catch(()=>{});
   }
   throw error;
 } finally {
