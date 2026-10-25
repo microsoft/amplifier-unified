@@ -1,4 +1,5 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {prepareCanvasReaderInput} from './canvas-reader-input.mjs';
 // Production HTML sandbox and genuine decoder/playback, without a model call.
 // Tiny VP8 fixture: ffmpeg -f lavfi -i testsrc=size=64x48:rate=10 -t 1
 // -c:v libvpx -pix_fmt yuv420p -an tiny.webm. Audio is one second of silent PCM.
@@ -62,10 +63,14 @@ try{
    const state=window.amplifier?.getState();
    return state?.client?.id===clientId&&state.revision>=revision&&state.canvas?.renderReports?.preview?.status==='ready';
   },{revision:receipt.revision,clientId:response.request().headers()['x-amplifier-client']});
+  const details=page.getByRole('region',{name:'Canvas details',exact:true});
+  if(!await details.isVisible())await page.getByRole('button',{name:'Canvas details',exact:true}).click();
   await expect(page.getByText('Isolated HTML preview',{exact:true})).toBeVisible();
   const frame=page.frames().find(frame=>frame.url().includes('/document'));
   assert.ok(frame,'HTML document must be mounted');
   await expect.poll(()=>frame.evaluate(()=>[...document.querySelectorAll('video,audio')].filter(m=>m.readyState>=2&&!m.error&&m.duration>0).length)).toBe(4);
+  await prepareCanvasReaderInput(page,{target:frame.getByRole('button',{name:'Play all',exact:true}),
+   label:previousPlayback++?'media-reloaded':'media-initial',outputDir,expectCovered:true});
   await frame.getByRole('button',{name:'Play all',exact:true}).click();
   await expect.poll(()=>frame.evaluate(()=>[...document.querySelectorAll('video,audio')].every(m=>m.currentTime>.05))).toBe(true);
   await frame.getByRole('button',{name:'Pause all',exact:true}).click();
@@ -75,6 +80,7 @@ try{
   assert.equal(await frame.evaluate(()=>{try{void parent.document.body;return false}catch{return true}}),true,'Sandbox remains opaque to parent application');
   return frame;
  }
+ let previousPlayback=0;
  await expect.poll(()=>page.frames().some(frame=>frame.url().includes('/document'))).toBe(true);
  const frame=await checkPlayback(ready);
  await frame.evaluate(()=>{
