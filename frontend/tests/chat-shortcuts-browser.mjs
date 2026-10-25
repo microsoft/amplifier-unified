@@ -1,4 +1,5 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {prepareCanvasReaderInput} from './canvas-reader-input.mjs';
 // Real sidebar and guarded selection; browser-reserved keys remain untouched.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -136,6 +137,7 @@ try{
  assert.equal(validation.status,'passed',JSON.stringify(validation));
  await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(digest);
  const editor=page.locator('[data-canvas-view="primary"]').getByLabel('Shortcut unsaved edit');
+ await prepareCanvasReaderInput(page,{target:editor,label:'shortcut-editor',outputDir:out,expectCovered:true});
  await editor.fill('LOCAL UNSAVED CANVAS EDIT');
  const canvasView=async()=>(await act('canvas.views.inspect',{})).result.views.find(view=>view.viewId==='primary');
  await expect.poll(async()=>(await canvasView()).dirty).toBe(true);

@@ -1,4 +1,5 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {prepareCanvasReaderInput} from './canvas-reader-input.mjs';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -118,6 +119,9 @@ try{
   const content=kind==='mermaid'?'flowchart TD\n'+Array.from({length:10},(_,i)=>`N${i}[Step ${i}] --> N${i+1}[Step ${i+1}]`).join('\n'):'digraph { '+Array.from({length:10},(_,i)=>`n${i}->n${i+1};`).join(' ')+' }';
   const artifact=(await act('canvas.show',{kind,content,title:kind+' navigation'})).result;
   const stage=page.locator('[data-canvas-view="primary"] .a-diagram-stage'),img=stage.locator('img');
+  await expect(img).toBeVisible();
+  await prepareCanvasReaderInput(page,{target:stage,label:kind+'-pan',
+   outputDir:process.env.AMPLIFIER_TEST_ARTIFACTS||root+'output/browser-checks/diagram-navigation',expectCovered:kind==='mermaid'});
   const undersize=process.env.DIAGRAM_UNDERSIZED_STAGE==='1';
   const {box,picture,body}=await readyLayout(artifact,kind,content,{undersize});
   record(kind,'fit uses available pane height',box.height>=body.height*.75,{stageHeight:box.height,paneHeight:body.height});

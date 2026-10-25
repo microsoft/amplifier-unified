@@ -88,7 +88,8 @@ async def main():
                 # A read-only oracle: do not publish a frame or rebuild usage.
                 async with service.lock:
                     return web.json_response({'sessions':[{key:copy.deepcopy(row.get(key)) for key in ('id','messages','execution')} for row in service._state['sessions']],
-                        'runtimeStarts':service.runtime.starts,'runtimeSends':service.runtime.sends})
+                        'runtimeStarts':service.runtime.starts,'runtimeSends':service.runtime.sends,
+                        'delegateCapture':getattr(service,'fixture_delegate_capture',None)})
             if op == 'agent-bridge':
                 try:
                     result = await service.app_bridge(args['operation'], args.get('args', {}), args['sessionId'])
@@ -521,12 +522,31 @@ async def main():
                     for index in range(MAX_ITEMS):
                         log_hook(aid,'tool:post',{'tool_call_id':f'observer-later-{index}',
                             'tool_name':'unrelated','result':'Later saved observation'})
-                    await service.event_log_view.windows.read(aid)
                 for event in emitted:
                     normalized=normalize_event(event,aid)
                     if normalized:
                         await service.on_runtime_event(*normalized)
                 row['execution']['turns'][0].update(phase='completed',endedAt=time.time())
+                if args.get('olderRecords') is True:
+                    # The replay above queues additional diagnostic capture.
+                    # Mint the signed page only after that setup is durable.
+                    from amplifier_web.event_log_view import event_path
+                    def stamp():
+                        info=event_path(row,aid).stat()
+                        return {'device':str(info.st_dev),'inode':str(info.st_ino),
+                            'size':info.st_size,'mtimeNs':str(info.st_mtime_ns),'ctimeNs':str(info.st_ctime_ns)}
+                    before_flush=stamp()
+                    queued=len(service.diagnostics.pending)
+                    await service.diagnostics.flush()
+                    assert not service.diagnostics.storage_error
+                    after_flush=stamp()
+                    await service.event_log_view.windows.read(aid)
+                    service.fixture_delegate_capture={
+                        'beforeFlush':before_flush,'afterFlush':after_flush,
+                        'queuedBeforeFlush':queued,'queuedAfterFlush':len(service.diagnostics.pending),
+                        'observations':[{'id':node['id'],'toolCallId':node.get('toolCallId'),
+                            'toolObservationId':node.get('toolObservationId')}
+                            for node in row['execution']['nodes'] if node.get('kind')=='tool']}
                 assert all('input' not in node and 'output' not in node for node in row['execution']['nodes'])
             elif op=='inspection':
                 from amplifier_web.execution import ensure_turn
@@ -620,6 +640,7 @@ async def main():
             service._publish()
             return web.json_response({'alpha':aid,'beta':bid,'revision':service.state['revision'], 'state':service.get_state(),
                 'runtimeStarts':service.runtime.starts,'runtimeSends':service.runtime.sends,
+                'delegateCapture':getattr(service,'fixture_delegate_capture',None),
                 'runtimeStops':service.runtime.stops,'workerStops':service.runtime.worker_stops,'runtimeControls':service.runtime.controls,
                 'retainedSessions':len(service.state['sessions']),
                 'retainedMessages':sum(len(row.get('messages',[])) for row in service.state['sessions']),
