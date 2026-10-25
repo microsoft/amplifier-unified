@@ -299,7 +299,36 @@ try{
  const streamingChunks=async()=>((await pane.innerText()).match(/More streaming content\./g)||[]).length;
  const grow=async()=>{const chunks=await streamingChunks();await page.evaluate(()=>fetch('/api/fixture/grow',{method:'POST'}));await expect.poll(streamingChunks).toBe(chunks+25)};
  await grow();await grow();await grow();await page.waitForTimeout(300);
- await page.waitForFunction(()=>{const pane=document.querySelector('.a-messages'),user=[...pane.querySelectorAll('.a-user')].at(-1);return Math.abs(user.getBoundingClientRect().bottom-pane.getBoundingClientRect().top-16)<3});
+ let replyAnchorPassed=false;
+ try{
+  await page.waitForFunction(()=>{const pane=document.querySelector('.a-messages'),user=[...pane.querySelectorAll('.a-user')].at(-1);return Math.abs(user.getBoundingClientRect().bottom-pane.getBoundingClientRect().top-16)<3});
+  replyAnchorPassed=true;
+ }finally{
+  // One read-only post-assertion snapshot, not another positioning attempt or a
+  // reconstruction of the last poll. Diagnostic failure cannot mask the oracle.
+  try{
+   const geometry=await page.evaluate(({inputId,canonicalId})=>{
+    const panes=[...document.querySelectorAll('.a-messages')],pane=panes[0];
+    if(!pane)return {paneCount:0};
+    const rect=pane.getBoundingClientRect(),top=pane.scrollTop,max=Math.max(0,pane.scrollHeight-pane.clientHeight);
+    const rows=[...pane.querySelectorAll('[data-message-id]')],users=[...pane.querySelectorAll('.a-user')];
+    const canonical=rows.filter(node=>node.dataset.messageId===canonicalId&&node.dataset.inputId===inputId);
+    const candidates=rows.filter(node=>node.dataset.inputId===inputId||node.dataset.messageId===inputId),last=users.at(-1);
+    const measure=node=>{
+     if(!node)return null;const r=node.getBoundingClientRect();
+     return {messageId:node.dataset.messageId,inputId:node.dataset.inputId,top:r.top,bottom:r.bottom,
+      error:r.bottom-rect.top-16,requestedTop:Math.max(0,top+r.bottom-rect.top-16)};
+    };
+    return {inputId,canonicalId,paneCount:panes.length,paneSessionId:pane.dataset.sessionId,
+     selectedSessionId:window.amplifier.getState().selectedSessionId,paneTop:rect.top,paneBottom:rect.bottom,
+     scrollTop:top,scrollHeight:pane.scrollHeight,clientHeight:pane.clientHeight,maxScrollTop:max,remaining:max-top,
+     canonicalCount:canonical.length,controllerCandidateCount:candidates.length,
+     lastIsCanonical:!!last&&last===canonical[0],controllerIsCanonical:!!candidates[0]&&candidates[0]===canonical[0],
+     canonical:measure(canonical[0]),controllerCandidate:measure(candidates[0]),assertionNode:measure(last)};
+   },{inputId:sent.inputId,canonicalId:sent.canonicalId});
+   console.log('SCROLL-REPLY-ANCHOR-BOUNDARY',JSON.stringify({passed:replyAnchorPassed,geometry}));
+  }catch(error){console.error('SCROLL-REPLY-ANCHOR-EVIDENCE-GAP',error.name)}
+ }
  const replyStart=await readingPosition();
  await grow();await page.waitForTimeout(300);
  await checkReading(replyStart,'streaming should stop following at the submitted message');
