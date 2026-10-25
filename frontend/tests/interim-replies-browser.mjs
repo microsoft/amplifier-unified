@@ -71,13 +71,20 @@ try{
  const detailGeneration=detailSession.fixtureGeneration;
  const detailProgress=detailSession.messages.filter(row=>row.role==='assistant');
  assert.equal(detailProgress.length,2);
- await page.getByRole('textbox',{name:'Message Amplifier'}).focus();
- const detailFinish=await control({op:'interim-finish'});
- const detailFinal=detailFinish.state.sessions.find(row=>row.id===started.alpha).messages.find(row=>row.text==='The final next step.');
- await expect(page.locator(`[data-message-id="${detailFinal.id}"]`)).toBeAttached();
- await page.locator('.a-messages').evaluate(el=>{el.scrollTop=0});
- await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight});
- await expect(group).toHaveCount(1);
+ await observeInterimTransition(detailGeneration,detailSession.messages.map(row=>row.id));
+ let detailFinal;
+ try{
+  await page.getByRole('textbox',{name:'Message Amplifier'}).focus();
+  const detailFinish=await control({op:'interim-finish'});
+  detailFinal=detailFinish.state.sessions.find(row=>row.id===started.alpha).messages.find(row=>row.text==='The final next step.');
+  await expect(page.locator(`[data-message-id="${detailFinal.id}"]`)).toBeAttached();
+  await page.locator('.a-messages').evaluate(el=>{el.scrollTop=0});
+  await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight});
+  await expect(group).toHaveCount(1);
+ }finally{
+  try{console.log('INTERIM-DETAILED-TERMINAL',JSON.stringify(await page.evaluate(()=>window.interimTransitionEvidence.finish())))}
+  catch(error){console.error('INTERIM-DETAILED-EVIDENCE-GAP',error.name)}
+ }
  await control({op:'interim-saved-view'});
  const reloadNavigation=[];
  const observeNavigation=request=>{
@@ -149,6 +156,7 @@ try{
  // Observe this transition without changing scroll/focus, response qualification,
  // rendering or the reading guard. getSelection returns its original result once;
  // its samples include the synchronous reading-predicate boundary.
+ async function observeInterimTransition(generationId,messageIds){
  await page.evaluate(({sessionId,generationId,messageIds})=>{
   const original=document.getSelection,descriptor=Object.getOwnPropertyDescriptor(document,'getSelection');
   const rows=[],gaps=[],limit=96;let dropped=0,busy=false,last='';
@@ -163,7 +171,8 @@ try{
      focusInside:!!pane?.contains(document.activeElement),selectionInside:!!(selection&&!selection.isCollapsed&&pane?.contains(selection.anchorNode)),
      messages:messages.slice(0,8).map(m=>({id:m.id,generationId:m.generationId,role:m.role,partial:!!m.partial,streaming:!!m.streaming,observation:!!m.observation,
       response:m.response?{version:m.response.version,status:m.response.status,phase:m.response.phase,generationId:m.response.generationId,finalMessageIds:m.response.finalMessageIds}:null,
-      mounted:!!pane?.querySelector(`[data-message-id="${CSS.escape(m.id)}"]`)})),
+      mounted:!!pane?.querySelector(`[data-message-id="${CSS.escape(m.id)}"]`),
+      rect:rect(pane?.querySelector(`[data-message-id="${CSS.escape(m.id)}"]`))})),
      groups:[...document.querySelectorAll('[data-interim-group]')].slice(0,4).map(g=>({id:g.getAttribute('data-interim-group'),messages:[...g.querySelectorAll('[data-message-id]')].slice(0,8).map(m=>m.dataset.messageId)}))};
     const signature=JSON.stringify(row);if(signature===last)return;last=signature;
     if(rows.length<limit)rows.push(row);else dropped++;
@@ -181,7 +190,9 @@ try{
    if(descriptor)Object.defineProperty(document,'getSelection',descriptor);else delete document.getSelection;
    delete window.interimTransitionEvidence;return {generationId,messageIds,rows,dropped,gaps};
   }};
- },{sessionId:started.alpha,generationId:restartGeneration,messageIds:restartMessages.map(row=>row.id)});
+ },{sessionId:started.alpha,generationId,messageIds});
+ }
+ await observeInterimTransition(restartGeneration,restartMessages.map(row=>row.id));
  await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight;document.activeElement?.blur()});
  let restartFailure;
  try{

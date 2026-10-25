@@ -25,11 +25,16 @@ def observe_ack(phase, input_id, session_id, **facts):
  except Exception:pass
 class ScrollRuntime(fixture.ChatRuntime):
  async def send(self, session, text, input_id, emit):
+  self.sent.append({'sessionId':session['id'],'text':text,'inputId':input_id})
   observe_ack('runtime-entered',input_id,session['id'])
   await emit('runtime.status', {'sessionId':session['id'], 'status':'working'})
   observe_ack('working-returned',input_id,session['id'],status=session.get('status'))
-  observe_ack('waiting-unreleased-event',input_id,session['id'])
-  await asyncio.Event().wait()
+  # Work stays controlled by /grow. send acknowledges admission, not completion.
+  await emit('runtime.status', {'sessionId':session['id'], 'status':'working',
+   'event':'input.delivered','inputId':input_id})
+  observe_ack('input-delivered-returned',input_id,session['id'],status=session.get('status'))
+  observe_ack('ack-returning',input_id,session['id'],accepted=True)
+  return {'accepted':True,'inputId':input_id}
 fixture.fixture.Runtime=ScrollRuntime
 async def main():
  with tempfile.TemporaryDirectory(prefix='amplifier-scroll-ui-') as home:
@@ -69,6 +74,15 @@ async def main():
 asyncio.run(main())
 `],{stdio:['ignore','pipe','pipe']});
 let fixtureLog='',fixtureOutput='';const fixtureAcks=[],sendTrace=[],transports=[];
+const acceptedCanonical=(messages,inputId)=>messages.length===1&&messages[0].role==='user'&&
+ messages[0].inputId===inputId&&messages[0].id!==inputId&&messages[0].delivery==='accepted';
+const heldSendRoutes=new Map();let routeAbortFailed=false;
+const abortHeldSend=async route=>{
+ if(!heldSendRoutes.has(route))return;
+ const inputId=heldSendRoutes.get(route);heldSendRoutes.delete(route);
+ try{await route.abort('failed');sendTrace.push({phase:'aborted',inputId})}
+ catch(error){routeAbortFailed=true;sendTrace.push({phase:'abort-gap',inputId,errorClass:error.name})}
+};
 fixture.stderr.on('data',chunk=>{fixtureLog+=chunk});
 fixture.stdout.on('data',chunk=>{
  fixtureOutput+=chunk;
@@ -81,7 +95,7 @@ const fixtureReady=new Promise((resolve,reject)=>{
  let text='';fixture.stdout.on('data',chunk=>{text+=chunk;const line=text.split('\n').find(row=>row.startsWith('{"port":'));if(line)resolve(JSON.parse(line).port)});
  fixture.once('exit',code=>reject(new Error(`Scroll fixture exited ${code}: ${fixtureLog}`)));
 });
-let vite,browser,page;
+let vite,browser,page,primaryFailure;
 try{
  const port=await Promise.race([fixtureReady,new Promise((_,reject)=>setTimeout(()=>reject(new Error('Scroll fixture did not start')),15000).unref())]);
  const target=`http://127.0.0.1:${port}`;
@@ -205,21 +219,24 @@ try{
  await input.fill(Array.from({length:7},(_,i)=>`New multiline message ${i+1}`).join('\n'));
  assert.ok((await input.boundingBox()).height>=175);
  await scrollBack();
- // SSE delivers the visible message before the send request resolves. The old
- // implementation enabled follow-bottom only after that response, too late.
+ // Streamed canonical acceptance must precede the delayed HTTP receipt.
+ let submittedInputId;
  let settleSend;const sendSettled=new Promise(resolve=>{settleSend=resolve});
  await page.route('**/api/actions',async route=>{
   if(route.request().postDataJSON()?.action!=='conversation.send')return route.continue();
   const body=route.request().postDataJSON(),inputId=body.id;
   sendTrace.push({phase:'intercepted',inputId,sessionId:body.args.sessionId});
+  heldSendRoutes.set(route,inputId);
   try{
+   assert.equal(submittedInputId,undefined,'One conversation.send request, without replay');
+   submittedInputId=inputId;assert.equal(body.args.sessionId,sessionId);
    try{await page.evaluate(({inputId,sessionId})=>{
     const rows=[],gaps=[];let last='';
     const sample=()=>{
      try{
      const state=window.amplifier.getState(),session=state.sessions.find(s=>s.id===sessionId);
      const canonical=(session?.messages||[]).filter(m=>m.inputId===inputId&&!m.optimistic);
-     const row={inputId,sessionId,messages:canonical.map(m=>({id:m.id,inputId:m.inputId,delivery:m.delivery?.status,
+     const row={inputId,sessionId,messages:canonical.map(m=>({id:m.id,inputId:m.inputId,role:m.role,delivery:m.delivery?.status,
       mounted:!!document.querySelector(`[data-message-id="${CSS.escape(m.id)}"]`)})),status:session?.status};
      const key=JSON.stringify(row);if(key!==last&&rows.length<24){last=key;rows.push(row)}
      }catch(error){if(gaps.length<4)gaps.push(error.name)}
@@ -229,11 +246,33 @@ try{
    },{inputId,sessionId:body.args.sessionId})}
    catch(error){sendTrace.push({phase:'observer-gap',inputId,errorClass:error.name})}
    const response=await route.fetch();
-   sendTrace.push({phase:'fetched',inputId,httpStatus:response.status()});
+   const receipt=await response.json();
+   sendTrace.push({phase:'fetched',inputId,httpStatus:response.status(),accepted:receipt.accepted,delivery:receipt.delivery,
+    receiptInputId:receipt.inputId,receiptSessionId:receipt.sessionId});
+   assert.equal(response.status(),200);assert.equal(receipt.accepted,true);assert.equal(receipt.delivery,'accepted');
+   assert.equal(receipt.inputId,inputId);assert.equal(receipt.sessionId,sessionId);
    await new Promise(resolve=>setTimeout(resolve,450));
-   await route.fulfill({response});sendTrace.push({phase:'released',inputId});settleSend({inputId});
+   const beforeReceipt=await page.evaluate(({inputId,sessionId})=>{
+    const state=window.amplifier.getState(),session=state.sessions.find(s=>s.id===sessionId);
+    return {status:session?.status,messages:(session?.messages||[]).filter(m=>m.inputId===inputId).map(m=>({
+     id:m.id,inputId:m.inputId,role:m.role,delivery:m.delivery?.status,
+     mounted:!!document.querySelector(`.a-user[data-message-id="${CSS.escape(m.id)}"][data-input-id="${CSS.escape(inputId)}"]`)}))};
+   },{inputId,sessionId});
+   sendTrace.push({phase:'canonical-before-http-release',inputId,...beforeReceipt});
+   assert.equal(acceptedCanonical(beforeReceipt.messages,inputId),true,'Canonical accepted input precedes HTTP receipt');
+   assert.equal(beforeReceipt.messages[0].mounted,true);assert.equal(beforeReceipt.status,'working');
+   const canonical=beforeReceipt.messages[0];
+   assert.equal(acceptedCanonical([{...canonical,delivery:'sending'}],inputId),false,'Sending is not acknowledged');
+   assert.equal(acceptedCanonical([{...canonical,id:inputId}],inputId),false,'Optimistic row is not canonical');
+   assert.equal(acceptedCanonical([canonical],'another-input'),false,'Wrong input cannot qualify');
+   assert.equal(acceptedCanonical([canonical,canonical],inputId),false,'Duplicate canonical rows cannot qualify');
+   await route.fulfill({response});heldSendRoutes.delete(route);
+   sendTrace.push({phase:'released',inputId});settleSend({inputId,canonicalId:canonical.id});
   }catch(error){
-   sendTrace.push({phase:'fetch-error',inputId,errorClass:error.name});settleSend({error});
+   sendTrace.push({phase:'send-error',inputId,errorClass:error.name});
+   // Unrouting an unsettled mutation can forward it. Abort, never continue.
+   await abortHeldSend(route);
+   settleSend({error});
   }
  });
  await page.getByRole('button',{name:'Send message',exact:true}).click();
@@ -241,14 +280,19 @@ try{
  await expect.poll(()=>readComposerDraft(input)).toBe('');
  await atBottom();
  const sent=await sendSettled;if(sent.error)throw sent.error;
- // The receipt replaces the optimistic row. Read all geometry in one frame
- // and wait for the submitted row to remain visible through that replacement.
- await expect.poll(()=>page.evaluate(()=>{
-  const row=[...document.querySelectorAll('.a-user')].at(-1);
-  if(!row?.textContent.includes('New multiline message'))return false;
+ assert.equal(sendTrace.filter(row=>row.phase==='intercepted').length,1);
+ assert.equal(fixtureAcks.filter(row=>row.phase==='runtime-entered'&&row.inputId===sent.inputId).length,1);
+ await expect.poll(()=>fixtureAcks.filter(row=>row.phase==='request-returned'&&row.inputId===sent.inputId).length).toBe(1);
+ assert.equal(fixtureAcks.filter(row=>row.phase==='ack-returning'&&row.inputId===sent.inputId).length,1);
+ assert.equal(sendTrace.some(row=>row.phase==='observer-gap'),false);
+ // The streamed canonical row stays visible through HTTP receipt delivery.
+ await expect.poll(()=>page.evaluate(({inputId,canonicalId})=>{
+  const rows=[...document.querySelectorAll(`.a-user[data-input-id="${CSS.escape(inputId)}"]`)];
+  if(rows.length!==1||rows[0].dataset.messageId!==canonicalId)return false;
+  const row=rows[0];
   const message=row.getBoundingClientRect(),composer=document.querySelector('.a-composer').getBoundingClientRect(),pane=document.querySelector('.a-messages').getBoundingClientRect();
   return message.bottom<=composer.top&&message.top>=pane.top;
- })).toBe(true);
+ },{inputId:sent.inputId,canonicalId:sent.canonicalId})).toBe(true);
 
  // The response may grow, but the start stays visible once there is enough
  // content to position the submitted message near the top of the viewport.
@@ -349,11 +393,24 @@ try{
  assert.deepEqual(errors,[]);
  console.log('Streaming reading positions:',JSON.stringify(readingChecks));
  console.log('Chat navigator tooltip removal, visible turns, preview placement/resize and scroll browser checks passed: delayed send receipt, reply start anchoring, jump button, streaming scrollback, draft preservation and reading position on chat switch/reload.');
-}finally{
+}catch(error){primaryFailure=error;throw error}
+finally{
+ for(const route of [...heldSendRoutes.keys()])await abortHeldSend(route);
  try{
   const sse=await page?.evaluate(()=>{const evidence=window.scrollAckEvidence;if(!evidence)return null;
    evidence.sample();evidence.unsubscribe();delete window.scrollAckEvidence;return {rows:evidence.rows,gaps:evidence.gaps}});
   console.log('SCROLL-SEND-ACK-EVIDENCE',JSON.stringify({requests:sendTrace,fixture:fixtureAcks,transports,stream:sse}));
  }catch(error){console.error('SCROLL-SEND-ACK-EVIDENCE-GAP',error.name)}
- await page?.unrouteAll({behavior:'ignoreErrors'});await browser?.close();await vite?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}
+ const cleanupErrors=[];
+ const clean=async(phase,action)=>{try{await action()}catch(error){cleanupErrors.push({phase,error});}};
+ // An unsuccessful abort is not permission to continue the held request.
+ if(!routeAbortFailed)await clean('unroute',()=>page?.unrouteAll({behavior:'ignoreErrors'}));
+ await clean('browser-close',()=>browser?.close());
+ await clean('vite-close',()=>vite?.close());
+ await clean('fixture-exit',async()=>{if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit')}});
+ try{console.log('SCROLL-CLEANUP',JSON.stringify({routeAbortFailed,errors:cleanupErrors.map(({phase,error})=>({phase,errorClass:error.name}))}))}catch{}
+ if(!primaryFailure){
+  if(routeAbortFailed)throw Error('Held send route abort was not confirmed');
+  if(cleanupErrors.length)throw cleanupErrors[0].error;
+ }
 }
