@@ -1,6 +1,7 @@
 import {openChatAdvancedPage} from './browser-chat-pages.mjs';
 import {openSettingsDialog,openSettingsPage,openPhoneNotificationSettings,settingsToolObservations} from './browser-settings.mjs';
 import {settingsSections} from '../src/settings-navigation.js';
+import {createSettingsReloadObservation} from './settings-reload-observation.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -10,7 +11,7 @@ import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const evidence=process.env.AMPLIFIER_TEST_OUTPUT||join(tmpdir(),'amplifier-settings-mobile');await mkdir(evidence,{recursive:true});
 const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/settings_collections_server.py',import.meta.url))]);
-let browser,page,stderr='';fixture.stderr.on('data',data=>stderr+=data);
+let browser,page,reloadObservation,stderr='';fixture.stderr.on('data',data=>stderr+=data);
 try{
  const base=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Fixture timed out: '+stderr)),60000);fixture.stdout.on('data',data=>{const match=String(data).match(/http:\/\/127\.0\.0\.1:\d+/);if(match){clearTimeout(timer);resolve(match[0]);}});fixture.on('exit',code=>reject(new Error('Fixture exited '+code+': '+stderr)));});
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
@@ -105,9 +106,20 @@ try{
    assert.ok(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'Horizontal overflow: '+width+' '+destination);
   }
  }
- await page.setViewportSize({width:390,height:844});await openSettingsPage(page,'providers');await providers.locator('[data-collection-id=two]>button').click();assert.equal(await page.locator('#provider-key').inputValue(),'mobile-private-never-share');
- const historyLength=await page.evaluate(()=>history.length);page.once('dialog',dialog=>dialog.accept());await page.reload();await route('providers/detail');assert.equal(await page.evaluate(()=>history.length),historyLength);
- await back();await route('providers');await back();await route('advanced');await back();await route('index');
+ reloadObservation=await createSettingsReloadObservation(page,evidence);
+ await reloadObservation.confirmed({
+  open:async()=>{await page.setViewportSize({width:390,height:844});await openSettingsPage(page,'providers')},
+  select:async()=>{await providers.locator('[data-collection-id=two]>button').click();assert.equal(await page.locator('#provider-key').inputValue(),'mobile-private-never-share')},
+ });
+ await route('providers/detail');
+ // An optimistic detail is not a saved route. Keep immediate-reload coverage
+ // with a real request held before HTTP forwarding, then retire it by abort only.
+ await reloadObservation.pending({
+  back:async()=>{await back();await route('providers')},
+  select:()=>providers.locator('[data-collection-id=two]>button').click(),
+ });
+ await reloadObservation.save();reloadObservation.dispose();
+ await route('providers');await back();await route('advanced');await back();await route('index');
  await page.getByRole('button',{name:'Close settings',exact:true}).click();await page.getByRole('button',{name:'Discard changes',exact:true}).click();await expect(root).toHaveCount(0);assert.equal(await page.evaluate(()=>history.state?.amplifierSettings),undefined);await openSettingsDialog(page);await route('index');await page.evaluate(()=>history.back());await expect(root).toHaveCount(0);
  // Conversation modules now belong to the selected chat's public Model & tools page.
  const closeNavigation=page.getByRole('button',{name:'Close navigation',exact:true});
@@ -117,5 +129,5 @@ try{
  await page.getByRole('dialog',{name:'Model & tools',exact:true}).getByRole('button',{name:'Load configuration',exact:true}).click();
  await expect(page.getByRole('searchbox',{name:'Filter loaded modules',exact:true})).toBeVisible();await expect(page.getByRole('checkbox',{name:'Enable context-simple',exact:true})).toBeChecked();await expect(page.getByRole('checkbox',{name:'Enable context-simple',exact:true})).toBeDisabled();await page.screenshot({path:join(evidence,'settings-mobile-modules.png')});
  assert.deepEqual(errors,[]);console.log('Mobile Settings: index, browser Back/Forward, private drafts, nested routing, footer actions, ordering, catalog selection and all destinations at 5 widths passed.');
-}catch(error){if(page)await page.screenshot({path:join(evidence,'settings-mobile-failure.png')});throw error;}
-finally{await browser?.close();fixture.kill('SIGTERM');}
+}catch(error){if(reloadObservation)try{await reloadObservation.save(error)}catch{console.error('[settings-reload:evidence-write-failed]')}if(page)await page.screenshot({path:join(evidence,'settings-mobile-failure.png')});throw error;}
+finally{reloadObservation?.dispose();await browser?.close();fixture.kill('SIGTERM');}

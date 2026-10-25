@@ -26,6 +26,24 @@ test('opening settings loads saved configuration and keeps subsequent edits duri
  await renderAct(async()=>root.unmount());
 });
 
+test('first provider hydration preserves private-only unfinished JSON without publishing it',async()=>{
+ const calls=[],dispatch=async(name,args)=>{calls.push({name,args});return {accepted:true}};
+ const unfinished='{"synthetic-private-edit":';
+ let state={view:{providerEditor:{id:'',module:'',config:'{}',advanced:true,detailOpen:true,dirty:false}},setup:{}},root;
+ const render=()=>React.createElement(ProviderSettings,{state,act:dispatch});
+ await renderAct(async()=>{root=create(render())});
+ try{
+  await renderAct(async()=>root.root.findByProps({id:'provider-config'}).props.onChange({target:{value:unfinished}}));
+  const callsBefore=calls.length;
+  state={...state,setup:{providersLoadedAt:Date.now()/1000+1,providers:[{id:'one',module:'provider-test',config:{model:'first'}}]}};
+  await renderAct(async()=>root.update(render()));
+  assert.equal(root.root.findByProps({id:'provider-config'}).props.value,unfinished,'private-only JSON survives delayed initial hydration');
+  assert.equal(root.root.findByProps({id:'provider-id'}).props.value,'','Hydration cannot select a saved provider over an unfinished new one');
+  assert.equal(calls.slice(callsBefore).filter(call=>call.name==='view.update').length,0);
+  assert.equal(JSON.stringify(calls).includes(unfinished),false);
+ }finally{await renderAct(async()=>root.unmount())}
+});
+
 test('native choice edits persist in the save action; model checks have immediate progress',async()=>{
  const calls=[];let resolveModels;
  const dispatch=(name,args)=>{calls.push({name,args});return name==='providers.models'?new Promise(resolve=>{resolveModels=resolve}):Promise.resolve({accepted:true})};

@@ -6,13 +6,14 @@ import {mkdir,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import {destinationCommand} from '../src/destination-history.js';
+import {observeSettingsProviderPreservation,privateWorkspaceText} from './settings-provider-preservation.mjs';
 import {chromium,expect} from '@playwright/test';
 const out=process.env.AMPLIFIER_TEST_OUTPUT;
 if(!out)throw Error('Set AMPLIFIER_TEST_OUTPUT to an owned evidence directory.');
 const launch={headless:true,...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{}),
  ...(process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}:{})};
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url)),'--chat-controls','--navigation-history'],{stdio:['ignore','pipe','inherit']});
-let browser,page,scenarioFailure,settingsDiagnostic;
+let browser,page,scenarioFailure,settingsDiagnostic,providerDiagnostic;
 // Observation only: no dispatch replacement, state mutation, retry or changed assertion.
 function observeSettingsClose(page){
  const started=performance.now(),events=[],requests=new WeakMap();
@@ -690,38 +691,54 @@ try{
  // Workspace settings has its own private editor registry. Local navigation
  // must consult it before the host changes the route or history branches.
  await headerHome.click();
+ const providerClient=(await state()).client;
+ providerDiagnostic=observeSettingsProviderPreservation(page,{workspaceId:workspace.id,
+  clientId:providerClient.id,hostInstanceId:providerClient.hostInstanceId,gate:gate()});
+ await providerDiagnostic.start();
  await action('view.update',{patch:{workSurface:'workspace',workWorkspaceId:workspace.id,workWorkspaceTab:'details',workWorkspaceSettings:'providers'}});
+ await providerDiagnostic.waitForHeld(1);
  await action('session.select',{id:b});await back.click();
  await expect.poll(async()=>(await state()).view.workSurface).toBe('workspace');
  const workspaceSettings=page.getByRole('region',{name:'Workspace configuration'});
  await expect(workspaceSettings).toBeVisible();
+ // The provider-read queue serializes the returning mount behind this first
+ // held read. Do not wait for that queued request before releasing its predecessor.
+ // Neither can pre-hydrate this editor before the private edit and Keep decision.
  await workspaceSettings.getByRole('button',{name:'Add provider',exact:true}).click();
  await workspaceSettings.getByRole('button',{name:'Show advanced configuration',exact:true}).click();
  const workspaceEdit=workspaceSettings.locator('[id$="provider-config"]');
- await workspaceEdit.fill('{"unsaved-workspace-navigation":');
+ await workspaceEdit.fill(privateWorkspaceText);
+ await providerDiagnostic.bind();
  const workspaceDirtyTrail=await saved(),workspaceCommands=[];
  assert.ok(workspaceDirtyTrail.cursor<workspaceDirtyTrail.entries.length-1,'Retain a real Forward branch');
  const recordWorkspaceCommand=request=>{
   if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')workspaceCommands.push(request.postDataJSON());
  };
  page.on('request',recordWorkspaceCommand);
+ let cancelledWorkspaceRoutes=0;
  for(const trigger of [
   ()=>back.click(),()=>forward.click(),
   async()=>{await menu.click();await placeRow(page,{kind:'home'}).click()},
   ()=>headerHome.click(),()=>page.getByRole('button',{name:'Amplifier Home',exact:true}).click(),
   ()=>page.getByRole('group',{name:'Workspace view',exact:true}).getByRole('button',{name:'Files',exact:true}).click(),
  ]){
+  await providerDiagnostic.mark(cancelledWorkspaceRoutes===0?'before-first-back':'before-trigger-'+cancelledWorkspaceRoutes);
   await trigger();
   const prompt=page.getByRole('alertdialog',{name:'Unsaved settings changes',exact:true});
   await expect(prompt).toBeVisible();
   assert.equal((await state()).view.workSurface,'workspace','Prompt must precede shared navigation');
   assert.deepEqual(await saved(),workspaceDirtyTrail,'Prompt must precede trail/MRU mutation');
+  await providerDiagnostic.mark('prompt-'+cancelledWorkspaceRoutes);
   await prompt.getByRole('button',{name:'Keep settings open',exact:true}).click();
   await expect(prompt).toHaveCount(0);
+  await providerDiagnostic.mark('after-keep-'+cancelledWorkspaceRoutes);
+  if(cancelledWorkspaceRoutes===0)await providerDiagnostic.releaseAndVerify();
   await expect(workspaceEdit).toHaveValue('{"unsaved-workspace-navigation":');
   assert.deepEqual(await saved(),workspaceDirtyTrail,'Cancellation retains visit keys/cursor/Forward/MRU');
+  cancelledWorkspaceRoutes++;
  }
  assert.equal(workspaceCommands.some(command=>['session.select','session.draft','workspace.select'].includes(command.action)||command.action==='view.update'&&['workSurface','workWorkspaceTab'].some(key=>Object.hasOwn(command.args.patch||{},key))),false,'Cancelled local navigation never reached the host');
+ await providerDiagnostic.save('six-cancellations-before-deliberate-discard',path.join(out,'settings-provider-preservation.json'));
  await menu.click();await placeRow(page,{kind:'home'}).click();
  await page.getByRole('alertdialog').getByRole('button',{name:'Discard changes',exact:true}).click();
  await expect.poll(async()=>(await state()).view.workSurface).toBe('home');
@@ -878,6 +895,8 @@ try{
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({status:'passed',checks:['confirmed traversal recency','repeated directional visits and unique Recent places','normal Recent forward branching','same-title and renamed identities','draft and attachment retention','detached New chat','Home filters','canonical card acceptance and rejection','workspace tabs','file preview','trail and Recent reload','traversal and Recent rejection','ordered navigation','optimistic isolation','Back supersedes archive','raw archive unchanged','dirty Canvas and Settings for both menus','keyboard and mouse/pen hold','1440/390/360 light/dark long-name layout','unchanged New chat dimensions','1024 coarse-pointer Home, native brand, touch-hold exclusion and hide negative','All workspaces label','no runtime start or input'],pageErrors:errors}));
 }catch(error){scenarioFailure=error;throw error}finally{
+ if(providerDiagnostic)try{await providerDiagnostic.save(scenarioFailure?'failure-before-teardown':'completed-before-teardown',path.join(out,'settings-provider-preservation.json'))}
+ catch(error){console.error('Provider preservation diagnostic retention failed:',error.name)}
  if(settingsDiagnostic)try{await settingsDiagnostic.save(scenarioFailure?'failure-before-teardown':'completed-before-teardown')}
  catch(error){console.error('Settings diagnostic retention failed:',error.name)}
  for(const release of pendingGates)release();
