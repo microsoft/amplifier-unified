@@ -25,8 +25,18 @@ const listPatch=row=>row.patch?.settingsExpanded?.includes('providers')&&row.pat
 const marker=stage=>'[settings-reload:'+stage+']';
 async function boundedRead(promise){
  let timer;
- try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Diagnostic body read unavailable')),2000)})])}
+ try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Diagnostic operation unavailable')),2000)})])}
  finally{clearTimeout(timer)}
+}
+async function boundedJSON(response){
+ const limit=524288;
+ if(Number(response.headers()['content-length'])>limit)throw Error('Diagnostic body exceeds limit');
+ // Playwright buffers body() before returning it. This bounds parsing, not
+ // streaming acquisition memory; missing/incorrect Content-Length remains a limit.
+ let bytes;
+ try{bytes=await boundedRead(response.body())}catch{throw Error('Diagnostic body unavailable')}
+ if(bytes.length>limit)throw Error('Diagnostic body exceeds limit');
+ try{return JSON.parse(bytes.toString('utf8'))}catch{throw Error('Diagnostic JSON unavailable')}
 }
 function assertProviderRoute(state,detail,stage){
  const message=marker(stage),view=state.view;
@@ -89,7 +99,8 @@ function installReloadObservation(){
 }
 
 export async function createSettingsReloadObservation(page,directory){
- const evidence={version:1,commands:[],attachments:[],documents:[],confirmed:{},pending:{},dropped:0};
+ const evidence={version:1,commands:[],attachments:[],documents:[],confirmed:{},pending:{},cleanup:[],dropped:0,
+  limits:{responseBytes:524288,operationDeadlineMs:2000,bodyAcquisition:'Content-Length checked when present; Playwright body() buffers before actual-size check. No hard streaming-memory bound.',privateBodiesRetained:false}};
  const requests=new WeakMap(),responses=new WeakMap(),reading=new Set();
  let sequence=0,stage='installed',disposed=false;
  const root=page.locator('.a-settings-experience');
@@ -114,7 +125,7 @@ export async function createSettingsReloadObservation(page,directory){
   const work=(async()=>{
    row.httpStatus=response.status();
    try{
-    const receipt=await boundedRead(response.json());
+    const receipt=await boundedJSON(response);
     row.receipt={accepted:receipt.accepted,revision:receipt.revision,stateRevision:receipt.stateRevision,
      hostInstanceId:receipt.hostInstanceId,...(receipt.clientId?{clientId:receipt.clientId}:{})};
    }catch{row.receiptUnreadable=true}
@@ -169,12 +180,20 @@ export async function createSettingsReloadObservation(page,directory){
   // explicit: a global GET or optimistic window.amplifier.getState is not proof.
   const response=await page.request.get(new URL('/api/state',page.url()).href,{
    headers:{'X-Amplifier-Client':clientId,'X-Amplifier-State-Transport':'delta-v1'}});
+  let primary;
   try{
    assert.equal(response.ok(),true,marker(label)+' state GET rejected');
-   const value=stateSummary(await response.json());
+   const value=stateSummary(await boundedJSON(response));
    assert.equal(value.clientId,clientId,marker(label)+' wrong state GET client');
    return value;
-  }finally{await response.dispose()}
+  }catch(error){primary=error;throw error}
+  finally{
+   try{await boundedRead(response.dispose());evidence.cleanup.push({stage:label,operation:'state-response-dispose',status:'completed'})}
+   catch{
+    evidence.cleanup.push({stage:label,operation:'state-response-dispose',status:'unavailable',primaryPreserved:!!primary});
+    if(!primary)throw Error(marker(label)+' state response cleanup unavailable');
+   }
+  }
  }
  function assertConfirmed(state,row,label){
   assert.equal(state.hostInstanceId,row.receipt.hostInstanceId,marker(label)+' host changed');
@@ -258,7 +277,7 @@ export async function createSettingsReloadObservation(page,directory){
    record.listState=await readClient(identity.clientId,stage);
    assertConfirmed(record.listState,record.listCommand,stage);
    assertProviderRoute(record.listState,false,stage);
-   let abortHeld;
+   let abortHeld,primary;
    const abortGate=new Promise(resolve=>{abortHeld=resolve}),held=[],tasks=[];
    const handler=route=>{
     // Do not depend on Playwright's request-event/route-callback ordering to
@@ -289,8 +308,17 @@ export async function createSettingsReloadObservation(page,directory){
     assertConfirmed(record.oldClient,record.listCommand,stage);
     assertProviderRoute(record.oldClient,false,stage+':last-confirmed-list');
     await reload(record,record.before,record.oldClient,false,3);
-   }finally{
-    abortHeld();await Promise.all(tasks);await page.unroute('**/api/actions',handler);
+   }catch(error){primary=error;throw error}
+   finally{
+    abortHeld();let cleanupFailed=false;
+    for(const [operation,perform] of [
+     ['abort-held-writes',async()=>{await Promise.all(tasks);if(held.some(entry=>entry.abortOutcome!=='aborted'))throw Error('Abort outcome unavailable')}],
+     ['remove-route-handler',()=>page.unroute('**/api/actions',handler)],
+    ]){
+     try{await boundedRead(perform());evidence.cleanup.push({stage,operation,status:'completed'})}
+     catch{cleanupFailed=true;evidence.cleanup.push({stage,operation,status:'unavailable',primaryPreserved:!!primary})}
+    }
+    if(cleanupFailed&&!primary)throw Error(marker(stage)+' pending write cleanup unavailable');
    }
    stage='pending:retired';
    record.oldClientAfter=await readClient(identity.clientId,stage);
