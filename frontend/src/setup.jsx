@@ -69,12 +69,15 @@ export function ProviderSettings({state,session,act,navigate=()=>{}}){
   editDraft({...next,connections:drafts,selectionKey:key,detailOpen:true,order:null});
  };
 
+ const hasPrivateDraft=!!apiKey||configText!==draft.config||Object.values(privateDrafts.current).some(item=>item.apiKey);
  useEffect(()=>{
   if(initialized.current||!providers.length||!setup.providersLoadedAt||setup.providersLoadedAt<loadStarted.current||setup.providersWorkspace!==session?.workspace&&session?.workspace)return;
   initialized.current=true;
   // Hydrate a persisted selection once, while preserving a deliberately unsaved draft.
   const provider=providers.find(row=>row.id===draft.id)||(!draft.id&&!draft.module?providers[0]:null);
-  if(provider&&!draft.dirty){editDraft({id:provider.id,selectionKey:provider.id,module:provider.module,source:provider.source||'',config:pretty(provider.config||{}),model:provider.config?.default_model||provider.config?.model||'',effort:provider.config?.reasoning_effort||'',authMode:chatGPTMode(provider.config?.auth_mode),credentialMode:provider.credential?.hasStoredKey||(!provider.credential&&provider.credentialsConfigured)?'private':'environment',envVar:provider.credential?.envVar||'',dirty:false});}
+  // Invalid JSON and keys exist only in this mounted editor. A delayed list
+  // response is not permission to replace them, even when shared dirty is false.
+  if(provider&&!draft.dirty&&!hasPrivateDraft){editDraft({id:provider.id,selectionKey:provider.id,module:provider.module,source:provider.source||'',config:pretty(provider.config||{}),model:provider.config?.default_model||provider.config?.model||'',effort:provider.config?.reasoning_effort||'',authMode:chatGPTMode(provider.config?.auth_mode),credentialMode:provider.credential?.hasStoredKey||(!provider.credential&&provider.credentialsConfigured)?'private':'environment',envVar:provider.credential?.envVar||'',dirty:false});}
  },[setup.providersLoadedAt]);
  const adoptedLogin=useRef('');
  useEffect(()=>{
@@ -96,7 +99,6 @@ export function ProviderSettings({state,session,act,navigate=()=>{}}){
  const fields=providerFields(metadata,{...config,default_model:draft.model,model:draft.model}).filter(field=>draft.module!=='provider-openai-chatgpt'||field.id!=='auth_mode');
  const updateConfig=(field,value)=>{const next={...config};if(value==='')delete next[field];else next[field]=value;setConfigText(pretty(next));edit({config:pretty(next),dirty:true,...(field==='reasoning_effort'?{effort:value}: {})})};
  const save=async()=>{const result=await run('providers.save',{...(draft.id?{id:draft.id}:{}),module:draft.module.trim(),...(draft.source.trim()?{source:draft.source.trim()}:{}),config:{...config,...(draft.model?{default_model:draft.model}:{})},scope,...(usesKey&&keyMode==='environment'&&envVar?{apiKeyEnv:envVar}:apiKey&&keyMode==='private'?{apiKey}:{})});if(!result)return};
- const hasPrivateDraft=!!apiKey||configText!==draft.config||Object.values(privateDrafts.current).some(item=>item.apiKey);
  const unsaved=!!draft.dirty||hasPrivateDraft||Object.values(draft.connections||{}).some(item=>item?.dirty);
  useSettingsDraft('providers',{label:'Provider configuration',dirty:unsaved,
   review:()=>{navigate('providers');const other=Object.entries(draft.connections||{}).find(([,item])=>item?.dirty);if(!draft.dirty&&!hasPrivateDraft&&other)choose(providers.find(provider=>provider.id===other[0])||null);else editDraft({detailOpen:true})},
