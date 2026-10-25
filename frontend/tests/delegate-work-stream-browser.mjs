@@ -11,6 +11,7 @@ import {chromium, expect} from '@playwright/test';
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {delegateStreamDiagnostics} from './delegate-stream-diagnostics.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const output=process.env.AMPLIFIER_TEST_OUTPUT_DIR||join(root,'test-results');
@@ -20,7 +21,8 @@ const mobileOnly=process.argv.includes('--mobile-only');
 const desktop={width:1280,height:1000},mobile={width:390,height:844};
 const viewports=mobileOnly?[['mobile',mobile]]:[['desktop',desktop],['mobile',mobile],['small',{width:320,height:844}]];
 const navigationEntries=[];
-const layoutChecks=[],apiFailures=[],responseReads=[],transitionChecks=[];
+const layoutChecks=[],apiFailures=[],transitionChecks=[];
+const diagnostics=delegateStreamDiagnostics();
 const lookupEvents=[],lookupRequests=new Map();
 const nodeEvidence=node=>node?{
   id:node.id,kind:node.kind,toolCallId:node.toolCallId,toolObservationId:node.toolObservationId,
@@ -32,40 +34,46 @@ const nodeEvidence=node=>node?{
 const saveLookups=()=>writeFileSync(artifact('delegate-work-stream-lookups.json'),JSON.stringify(lookupEvents,null,2));
 let scene='stream';
 function observeApi(page,origin) {
-  page.on('request',request=>{
+  page.on('request',diagnostics.listen('lookup request metadata',request=>{
     const url=new URL(request.url());
     if(scene!=='observer'||url.origin!==origin||!['/api/conversation/detail','/api/conversation/work-sync'].includes(url.pathname)||lookupEvents.length>=300)return;
     const row={sequence:lookupEvents.length,at:Date.now(),scene,method:request.method(),
       path:url.pathname,query:Object.fromEntries(url.searchParams),client:request.headers()['x-amplifier-client']};
     if(url.pathname.endsWith('work-sync'))row.input=request.postDataJSON();
     lookupRequests.set(request,row);lookupEvents.push(row);
-  });
-  page.on('requestfailed',request=>{
+  }));
+  page.on('requestfailed',diagnostics.listen('lookup request failure',request=>{
     const row=lookupRequests.get(request);
     if(row){row.cancelledOrFailed=request.failure();saveLookups()}
-  });
-  page.on('response',response=>{
+  }));
+  page.on('response',diagnostics.listen('lookup response metadata',response=>{
     const tracked=lookupRequests.get(response.request());
     if(tracked) {
       tracked.status=response.status();
-      responseReads.push(response.json().then(body=>{
+      diagnostics.track('lookup response body/evidence',async()=>{
+        let body;
+        try{body=await response.json()}catch(error){tracked.readError=String(error);throw error}
         tracked.result={lookupKey:body.lookupKey,before:body.before,error:body.error,coverage:body.coverage,
           revision:body.revision,group:body.group,order:body.order,item:nodeEvidence(body.item),
           items:body.items?.filter(n=>n.toolCallId==='observer-delegate'||n.exchange).map(nodeEvidence),
           valueChars:typeof body.value==='string'?body.value.length:undefined,nextOffset:body.nextOffset};
         saveLookups();
-      },error=>{tracked.readError=error.message;saveLookups()}));
+      });
     }
     const url=new URL(response.url());
     if(url.origin!==origin||!url.pathname.startsWith('/api/')||response.status()<400)return;
     const record={scene,method:response.request().method(),path:url.pathname+url.search,status:response.status()};
     apiFailures.push(record);
-    responseReads.push(response.text().then(body=>{record.body=body.slice(0,2000)},error=>{record.bodyError=error.message}));
-  });
+    diagnostics.track('failed API response body',async()=>{
+      try{record.body=(await response.text()).slice(0,2000)}
+      catch(error){record.bodyError=String(error);throw error}
+    });
+  }));
 }
 async function cleanScene(page) {
-  await Promise.all(responseReads);
-  writeFileSync(artifact('delegate-work-stream-api-failures.json'),JSON.stringify(apiFailures,null,2));
+  await diagnostics.collect();
+  await diagnostics.attempt('API failure report',()=>writeFileSync(
+    artifact('delegate-work-stream-api-failures.json'),JSON.stringify(apiFailures,null,2)));
   await expect(page.getByText(/Invalid request: This message is no longer available/)).toHaveCount(0);
   assert.deepEqual(apiFailures,[],'Normal scene must not issue rejected API requests');
 }
@@ -277,7 +285,7 @@ function measureOwner(element,probe) {
 }
 const fixture = spawn(process.env.AMPLIFIER_TEST_PYTHON || root + '.venv/bin/python', ['-u', root + 'tests/fixtures/browser_detail_server.py', root],
   {stdio: ['ignore', 'pipe', 'inherit']});
-let browser,context,page,diagnosticOwner,restoredOwnerStyle,lastOwnerMeasurement;
+let browser,context,page,diagnosticOwner,restoredOwnerStyle,lastOwnerMeasurement,primaryFailure;
 const ownerDiagnostics=[];
 const saveOwnerDiagnostics=()=>writeFileSync(artifact('delegate-work-stream-owner-diagnostics.json'),
   JSON.stringify({scope:'synthetic fixture only; frame samples are not proof of settled layout',
@@ -505,7 +513,7 @@ try {
   await earlier.click();
   await expect(observed.getByRole('region',{name:'Request',exact:true})).toContainText('OBSERVER REQUEST café');
   await expect(observed.getByRole('region',{name:'Reply',exact:true})).toContainText('OBSERVER REPLY');
-  await Promise.all(responseReads);
+  await diagnostics.collect();
   const continued=lookupEvents.find(row=>row.query.part==='tool'&&row.query.before);
   assert.ok(continued,'Ordinary older click must send a bounded continuation');
   assert.ok(lookupEvents.some(row=>row.sequence<continued.sequence&&
@@ -588,22 +596,24 @@ try {
   const inspection = await control({op: 'inspect-work-source'});
   assert.equal(inspection.runtimeStarts, 0);
   assert.equal(inspection.runtimeSends, 0);
-  console.log('PASS: synthetic interleaving/layout/actor attribution plus registered-browser stamped-observer long exchange reads; NOT cold-turn association or real-provider acceptance.');
 } catch(error) {
-  await Promise.all(responseReads);
-  saveLookups();
-  writeFileSync(artifact('delegate-work-stream-api-failures.json'),JSON.stringify(apiFailures,null,2));
-  if(page&&!page.isClosed()) {
+  primaryFailure={error};
+  await diagnostics.attempt('failure owner capture',async()=>{
     // Do not recenter, hide overlays, or change styles to obtain failure evidence.
-    if(diagnosticOwner)await recordOwnerDiagnostics('failure').catch(diagnosticError=>{
-      ownerDiagnostics.push({stage:'failure',diagnosticError:diagnosticError.message});
-      saveOwnerDiagnostics();
-      console.error('Owner diagnostic capture failed:',diagnosticError.message);
-    });
-    await page.screenshot({path:artifact('delegate-work-stream-failure.png')}).catch(()=>{});
-  }
-  throw error;
+    if(page&&!page.isClosed()&&diagnosticOwner)await recordOwnerDiagnostics('failure');
+  });
+  await diagnostics.attempt('failure screenshot',async()=>{
+    if(page&&!page.isClosed())await page.screenshot({path:artifact('delegate-work-stream-failure.png')});
+  });
 } finally {
-  await browser?.close();
-  fixture.kill();
+  await diagnostics.finish(primaryFailure,{
+    cleanup:[['browser close',()=>browser?.close()],['fixture stop',()=>fixture.kill()]],
+    writes:[
+      ['lookup report',saveLookups],
+      ['API failure report',()=>writeFileSync(artifact('delegate-work-stream-api-failures.json'),JSON.stringify(apiFailures,null,2))],
+      ['owner report',saveOwnerDiagnostics]
+    ],
+    report:value=>writeFileSync(artifact('delegate-work-stream-diagnostic-errors.json'),JSON.stringify(value,null,2))
+  });
 }
+console.log('PASS: synthetic interleaving/layout/actor attribution plus registered-browser stamped-observer long exchange reads; NOT cold-turn association or real-provider acceptance.');

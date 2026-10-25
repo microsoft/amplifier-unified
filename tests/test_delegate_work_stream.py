@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sys
 import traceback
 from types import SimpleNamespace
 
@@ -15,6 +16,114 @@ from amplifier_web.execution_events import ExecutionEvents
 from amplifier_web.runtime import normalize_event
 from amplifier_web.session_projection import stored_execution
 from test_work_windows import FakeProjector, fixture
+
+
+def finish_delegate_trace(primary, restore, trace, destination):
+    """Attempt restoration and trace writing independently; never mask a test error."""
+    failures = []
+    try:
+        restore()
+    except BaseException as error:
+        failures.append(('restore session lookup', error))
+    if trace is not None:
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(json.dumps(trace, indent=2))
+        except BaseException as error:
+            failures.append(('write delegate trace', error))
+    if failures:
+        terminal = primary if primary is not None else failures[0][1]
+        for stage, error in failures:
+            # Notes are visible in pytest while the original assertion, identity
+            # and traceback remain primary. A write-only failure still raises.
+            try:
+                detail = str(error)[:2000]
+            except BaseException:
+                detail = '(error message unavailable)'
+            note = f'Secondary delegate diagnostic failure ({stage}): {type(error).__name__}: {detail}'
+            try:
+                terminal.add_note(note)
+            except BaseException:
+                # Even a malformed __notes__ or failed reporter must not become
+                # the terminal exception. stderr is the best-effort fallback.
+                try:
+                    print(note, file=sys.stderr)
+                except BaseException:
+                    pass
+        if primary is None:
+            raise terminal
+
+
+@pytest.mark.parametrize('stage', ['mkdir', 'write', 'restore'])
+@pytest.mark.parametrize('has_primary', [False, True], ids=['otherwise-passing', 'primary-assertion'])
+def test_trace_diagnostic_faults_preserve_primary(tmp_path, monkeypatch, stage, has_primary):
+    destination = tmp_path / 'trace-evidence' / 'trace.json'
+    primary = AssertionError('original exchange assertion')
+    secondary = OSError('injected ' + stage + ' failure')
+    restored = []
+    mkdir, write_text = Path.mkdir, Path.write_text
+
+    def failing_mkdir(path, *args, **kwargs):
+        if stage == 'mkdir' and path == destination.parent:
+            raise secondary
+        return mkdir(path, *args, **kwargs)
+
+    def failing_write(path, *args, **kwargs):
+        if stage == 'write' and path == destination:
+            raise secondary
+        return write_text(path, *args, **kwargs)
+
+    def restore():
+        restored.append(True)
+        if stage == 'restore':
+            raise secondary
+
+    monkeypatch.setattr(Path, 'mkdir', failing_mkdir)
+    monkeypatch.setattr(Path, 'write_text', failing_write)
+    expected = primary if has_primary else secondary
+    with pytest.raises(type(expected)) as caught:
+        try:
+            if has_primary:
+                raise primary
+        finally:
+            finish_delegate_trace(sys.exception(), restore, [{'event': 'probe'}], destination)
+    assert caught.value is expected
+    assert restored == [True]
+    assert any('injected ' + stage + ' failure' in note for note in expected.__notes__)
+    if stage == 'restore':
+        assert json.loads(destination.read_text()) == [{'event': 'probe'}]
+
+
+def test_trace_diagnostics_write_without_manufacturing_failure(tmp_path):
+    destination = tmp_path / 'evidence' / 'trace.json'
+    restored = []
+    finish_delegate_trace(None, lambda: restored.append(True), [], destination)
+    assert restored == [True]
+    assert json.loads(destination.read_text()) == []
+
+
+@pytest.mark.parametrize('has_primary', [False, True])
+def test_trace_diagnostic_reporting_cannot_replace_primary(tmp_path, monkeypatch, capsys, has_primary):
+    class UnprintableError(OSError):
+        def __str__(self):
+            raise RuntimeError('formatting failed')
+
+    primary, secondary = AssertionError('original'), UnprintableError()
+    expected = primary if has_primary else secondary
+    expected.__notes__ = 7  # add_note itself raises; stderr must expose the failure.
+    def fail_write(*args, **kwargs):
+        raise secondary
+    monkeypatch.setattr(Path, 'write_text', fail_write)
+    with pytest.raises(type(expected)) as caught:
+        try:
+            if has_primary:
+                raise primary
+        finally:
+            finish_delegate_trace(sys.exception(), lambda: None, [], tmp_path / 'trace.json')
+    assert caught.value is expected
+    assert 'UnprintableError: (error message unavailable)' in capsys.readouterr().err
+    # Leave pytest a well-formed exception if a later probe assertion fails.
+    del expected.__notes__
 
 
 def trace_windows(monkeypatch, path):
@@ -396,8 +505,7 @@ async def test_registered_browser_reads_recorded_delegate_exchange_without_body_
         assert session['execution'] == before
         assert hashlib.sha256(path.read_bytes()).hexdigest() == source_hash
     finally:
-        monkeypatch.setattr(service, '_session', original)
-        if trace is not None:
-            destination = Path(os.environ.get('AMPLIFIER_TEST_OUTPUT_DIR', str(tmp_path)))
-            destination.mkdir(parents=True, exist_ok=True)
-            (destination / f'delegate-paged-reopen-{"controlled" if controlled_publication else "settled"}-trace.json').write_text(json.dumps(trace, indent=2))
+        destination = Path(os.environ.get('AMPLIFIER_TEST_OUTPUT_DIR', str(tmp_path)))
+        finish_delegate_trace(sys.exception(),
+                              lambda: monkeypatch.setattr(service, '_session', original),
+                              trace, destination / f'delegate-paged-reopen-{"controlled" if controlled_publication else "settled"}-trace.json')
