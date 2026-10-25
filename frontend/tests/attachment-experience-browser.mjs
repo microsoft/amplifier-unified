@@ -196,7 +196,11 @@ try{
 }catch(error){primary??=error;report.error=error.stack}
 finally{
  try{await finishFixture({label:'Attachment experience',close:[['Chromium',()=>browser?.close()]],stop:async()=>{report.fixtureExit=await stop()}})}catch(e){report.cleanupError=e.stack;primary??=e}
- report.complete=true;report.passed=!primary&&report.cases.every(x=>x.status==='passed')&&report.fixtureExit?.code===0;report.stderr=stderr;await save();
+ report.complete=true;report.passed=!primary&&report.cases.every(x=>x.status==='passed')&&report.fixtureExit?.code===0;report.stderr=stderr;
+ try{await save()}catch(error){
+  report.passed=false;
+  primary=primary?new AggregateError([primary,error],'Attachment failure and final report write failure',{cause:primary}):error;
+ }
 }
 if(!report.passed)throw primary||Error('Attachment experience checks incomplete');
 console.log('Attachment experience: all focused browser cases passed; emulated mobile, no physical gesture/screen-reader claim.');
