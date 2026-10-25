@@ -193,10 +193,36 @@ try{
  },{sessionId:started.alpha,generationId,messageIds});
  }
  await observeInterimTransition(restartGeneration,restartMessages.map(row=>row.id));
- await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight;document.activeElement?.blur()});
  let restartFailure;
  try{
-  await control({op:'interim-finish'});await expect(group).toHaveCount(1);
+  // The nonreading completion case needs the final tail to exist before its
+  // one scroll. Otherwise final insertion itself moves the reader >80px away.
+  const staged=await control({op:'interim-finals',generationId:restartGeneration});
+  const stagedMessages=staged.state.sessions.find(row=>row.id===started.alpha).messages;
+  const previousIds=new Set(restartMessages.map(row=>row.id));
+  const finalMessages=stagedMessages.filter(row=>row.generationId===restartGeneration&&!previousIds.has(row.id));
+  assert.equal(finalMessages.length,2);
+  assert.deepEqual(finalMessages.map(row=>row.text),['The final conclusion.','The final next step.']);
+  for(const message of finalMessages)await expect(page.locator(`[data-message-id="${message.id}"]`)).toBeAttached();
+  await expect(group,'Final prose alone cannot qualify completed interim work').toHaveCount(0);
+  await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight;document.activeElement?.blur()});
+  const beforeCompletion=await page.evaluate(({sid,generationId,ids})=>{
+   const pane=document.querySelector('.a-messages'),selection=document.getSelection();
+   const messages=window.amplifier.getState().sessions.find(row=>row.id===sid)?.messages||[];
+   return {distance:pane.scrollHeight-pane.scrollTop-pane.clientHeight,focusInside:pane.contains(document.activeElement),
+    selectionInside:!!(selection&&!selection.isCollapsed&&pane.contains(selection.anchorNode)),
+    messageIds:messages.filter(row=>ids.includes(row.id)).map(row=>row.id),
+    qualified:messages.some(row=>row.generationId===generationId&&row.response?.status==='completed')};
+  },{sid:started.alpha,generationId:restartGeneration,ids:finalMessages.map(row=>row.id)});
+  console.log('INTERIM-RESTART-PRECOMPLETION',JSON.stringify(beforeCompletion));
+  assert.deepEqual(beforeCompletion.messageIds,finalMessages.map(row=>row.id));
+  assert.equal(beforeCompletion.qualified,false);
+  assert.ok(beforeCompletion.distance<=80,'Nonreading completion requires the rendered final tail in view');
+  assert.equal(beforeCompletion.focusInside,false);assert.equal(beforeCompletion.selectionInside,false);
+  const finished=await control({op:'interim-finish'});
+  assert.deepEqual(finished.state.sessions.find(row=>row.id===started.alpha).messages.map(row=>row.id),
+   stagedMessages.map(row=>row.id),'Completion must not append the staged final messages again');
+  await expect(group).toHaveCount(1);
  }catch(error){restartFailure=error}
  finally{
   try{console.log('INTERIM-RESTART-TERMINAL',JSON.stringify(await page.evaluate(()=>window.interimTransitionEvidence.finish())))}

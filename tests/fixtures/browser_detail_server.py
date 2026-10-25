@@ -195,16 +195,27 @@ async def main():
                             'startedAt':now+index*2+.1,'endedAt':now+index*2+1,'input':{'file_path':'sample.txt'},'output':'Checked.'})
                 if args.get('long'):
                     row['messages'][1]['text'] += '\n\n' + ('A retained progress paragraph.\n\n'*100)
-            elif op=='interim-finish':
+            elif op in {'interim-finals','interim-finish'}:
                 row=service._session(aid);generation=row['fixtureGeneration'];input_id=row['fixtureInputId']
-                for index,text in enumerate(['The final conclusion.','The final next step.'],10):
-                    await service.on_runtime_event('assistant.message',{'sessionId':aid,'inputId':input_id,
-                        'generationId':generation,'text':text,'runtimeMessage':{'sequence':index}})
-                await service.on_runtime_event('runtime.generation',{'sessionId':aid,'rootSessionId':aid,
-                    'event':'generation.finished','generation_id':generation,'input_ids':[input_id],
-                    'text':'The final conclusion.The final next step.','active_job_ids':[],
-                    'finalMessageRefs':{'version':1,'generationId':generation,'sequences':[10,11]}})
-                await service.on_runtime_event('runtime.status',{'sessionId':aid,'status':'idle'})
+                staged=row.get('fixtureStagedFinalGeneration')==generation
+                if op=='interim-finals' and (args.get('generationId')!=generation or staged):
+                    raise web.HTTPConflict(text='Final messages require the current unstaged fixture generation.')
+                # A runtime may deliver its final messages before it reports the
+                # generation complete. Stage them once so a reading test can bind
+                # its pre-completion position to the actual rendered tail.
+                if not staged:
+                    for index,text in enumerate(['The final conclusion.','The final next step.'],10):
+                        await service.on_runtime_event('assistant.message',{'sessionId':aid,'inputId':input_id,
+                            'generationId':generation,'text':text,'runtimeMessage':{'sequence':index}})
+                if op=='interim-finals':
+                    row['fixtureStagedFinalGeneration']=generation
+                else:
+                    row.pop('fixtureStagedFinalGeneration',None)
+                    await service.on_runtime_event('runtime.generation',{'sessionId':aid,'rootSessionId':aid,
+                        'event':'generation.finished','generation_id':generation,'input_ids':[input_id],
+                        'text':'The final conclusion.The final next step.','active_job_ids':[],
+                        'finalMessageRefs':{'version':1,'generationId':generation,'sequences':[10,11]}})
+                    await service.on_runtime_event('runtime.status',{'sessionId':aid,'status':'idle'})
             elif op=='interim-saved-view':
                 from amplifier_web.session_projection import stored_execution
                 row=service._session(aid)
