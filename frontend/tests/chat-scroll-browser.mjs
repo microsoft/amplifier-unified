@@ -96,6 +96,18 @@ const fixtureReady=new Promise((resolve,reject)=>{
  fixture.once('exit',code=>reject(new Error(`Scroll fixture exited ${code}: ${fixtureLog}`)));
 });
 let vite,browser,page,primaryFailure;
+// Read-only observation is armed before send setup, so the first failed wait
+// cannot prevent capture. No diagnostic call changes scroll or schedules a frame.
+const markScrollFlow=async phase=>{
+ try{await page.evaluate(phase=>window.scrollFlowEvidence?.mark(phase),phase)}
+ catch(error){try{console.error('SCROLL-FLOW-EVIDENCE-GAP',phase,error.name)}catch{}}
+};
+const finishScrollFlow=async outcome=>{
+ try{
+  const evidence=await page?.evaluate(outcome=>window.scrollFlowEvidence?.finish(outcome),outcome);
+  if(evidence)console.log('SCROLL-SEND-TO-ANCHOR',JSON.stringify(evidence));
+ }catch(error){try{console.error('SCROLL-FLOW-EVIDENCE-GAP','finish',error.name)}catch{}}
+};
 try{
  const port=await Promise.race([fixtureReady,new Promise((_,reject)=>setTimeout(()=>reject(new Error('Scroll fixture did not start')),15000).unref())]);
  const target=`http://127.0.0.1:${port}`;
@@ -216,9 +228,109 @@ try{
  await page.evaluate(()=>document.querySelector('#amp-one').dataset.interfaceDetail='standard');
  await page.getByRole('button',{name:'Jump to latest messages'}).click();await atBottom();
  const sessionId=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
+ try{await page.evaluate(sessionId=>{
+  const pane=document.querySelector('.a-messages'),rows=[],marks=[],gaps=[],counts={};
+  const limits={rowsPerSegment:40,captureAttemptsPerSegment:80,marks:32,frameCallbacksPerSegment:40,gaps:4};
+  const rowCounts={setup:0,send:0,growth:0},frameCalls={setup:0,send:0,growth:0},frameSkips={setup:0,send:0,growth:0};
+  const captureAttempts={setup:0,send:0,growth:0},captureSkips={setup:0,send:0,growth:0};
+  let segment='setup',inputId=null,canonicalId=null,active=true,busy=false,last='',sequence=0,dropped=0,markDrops=0;
+  const originalFrame=window.requestAnimationFrame,frameDescriptor=Object.getOwnPropertyDescriptor(window,'requestAnimationFrame');
+  const removals=[];let observer,resize,unsubscribe;
+  const gap=error=>{if(gaps.length<limits.gaps)gaps.push(error.name)};
+  const region=node=>node===pane?'pane':pane?.contains(node)?'transcript':node?.closest?.('.a-composer')?'composer':'other';
+  const rect=node=>{if(!node)return null;const r=node.getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height,width:r.width}};
+  const capture=(reason,event=null,mark=false,terminal=false)=>{
+   if(!active||busy)return;busy=true;
+   try{
+    counts[reason]=(counts[reason]||0)+1;
+    // Bound measurement work before state/DOM reads, including duplicate rows.
+    // Milestones have their own budget with one slot reserved for final failure.
+    if(mark){
+     if(marks.length>=limits.marks-(terminal?0:1)){markDrops++;return}
+    }else{
+     if(captureAttempts[segment]>=limits.captureAttemptsPerSegment){captureSkips[segment]++;return}
+     captureAttempts[segment]++;
+    }
+    const state=window.amplifier.getState(),session=state.sessions?.find(row=>row.id===sessionId);
+    const messages=inputId?(session?.messages||[]).filter(row=>row.inputId===inputId):[];
+    const canonical=messages.filter(row=>row.role==='user'&&row.id!==inputId);
+    canonicalId=canonical.length===1?canonical[0].id:null;
+    const nodes=[...pane.querySelectorAll('[data-message-id]')],users=[...pane.querySelectorAll('.a-user')];
+    const targets=inputId?nodes.filter(node=>node.dataset.inputId===inputId||node.dataset.messageId===inputId):[];
+    const owned=canonicalId?nodes.filter(node=>node.dataset.messageId===canonicalId&&node.dataset.inputId===inputId):[];
+    const paneRect=rect(pane),top=pane.scrollTop,max=Math.max(0,pane.scrollHeight-pane.clientHeight);
+    const measure=node=>node?{messageId:node.dataset.messageId,inputId:node.dataset.inputId,rect:rect(node),
+     anchorError:node.getBoundingClientRect().bottom-paneRect.top-16,
+     requestedTop:Math.max(0,top+node.getBoundingClientRect().bottom-paneRect.top-16)}:null;
+    const snapshot={sessionId,selectedSessionId:state.selectedSessionId,paneSessionId:pane.dataset.sessionId,inputId,canonicalId,
+     pane:paneRect,composer:rect(document.querySelector('.a-composer')),editor:rect(document.querySelector('.a-composer [role="textbox"]')),
+     scroll:{top,height:pane.scrollHeight,client:pane.clientHeight,max,remaining:max-top},
+     state:{status:session?.status,historyOffset:session?.sharedHistoryOffset,historyLoading:session?.historyLoading,
+      windowMode:session?.messageWindow?.mode,workStatus:session?.workProjection?.status,navigationPending:!!state.navigationPending},
+     canonicalCount:canonical.length,messages:messages.slice(0,3).map(row=>({id:row.id,inputId:row.inputId,role:row.role,delivery:row.delivery?.status})),
+     targetCount:targets.length,ownedCount:owned.length,lastIsOwned:!!users.at(-1)&&users.at(-1)===owned[0],
+     targetIsOwned:!!targets[0]&&targets[0]===owned[0],canonical:measure(owned[0]),controllerTarget:measure(targets[0]),
+     lastUser:measure(users.at(-1)),focusedRegion:region(document.activeElement)};
+    const signature=JSON.stringify(snapshot);
+    if(!mark&&!event&&signature===last)return;last=signature;
+    const record={sequence:++sequence,at:performance.now(),segment,reason,event,snapshot};
+    if(mark){if(marks.length<limits.marks)marks.push(record);else markDrops++}
+    else if(rowCounts[segment]<limits.rowsPerSegment){rows.push(record);rowCounts[segment]++}else dropped++;
+   }catch(error){gap(error)}finally{busy=false}
+  };
+  const restore=()=>{
+   for(const cleanup of [()=>observer?.disconnect(),()=>resize?.disconnect(),()=>unsubscribe?.(),...removals,()=>{
+    if(window.requestAnimationFrame===observedFrame){
+     if(frameDescriptor)Object.defineProperty(window,'requestAnimationFrame',frameDescriptor);else delete window.requestAnimationFrame;
+    }else gap({name:'FrameWrapperReplaced'});
+   }])try{cleanup()}catch(error){gap(error)}
+  };
+  function observedFrame(callback,...args){
+   if(typeof callback!=='function')return Reflect.apply(originalFrame,this,[callback,...args]);
+   return Reflect.apply(originalFrame,this,[function(...values){
+    const inspect=active&&frameCalls[segment]++<limits.frameCallbacksPerSegment;
+    if(active&&!inspect)frameSkips[segment]++;
+    if(inspect)capture('raf-before');
+    try{return Reflect.apply(callback,this,values)}
+    finally{if(inspect)capture('raf-after')}
+   },...args]);
+  }
+  try{
+   if(!pane)throw Error('MissingPane');
+   window.requestAnimationFrame=observedFrame;
+   observer=new MutationObserver(()=>capture('dom-commit'));
+   observer.observe(document.querySelector('.a-conversation')||pane,{subtree:true,childList:true,characterData:true,attributes:true});
+   resize=new ResizeObserver(()=>capture('resize'));resize.observe(pane);
+   const composer=document.querySelector('.a-composer');if(composer)resize.observe(composer);
+   for(const type of ['scroll','wheel','touchstart','touchmove','keydown','focusin','focusout','click']){
+    const target=type==='scroll'?pane:document;
+    const handler=event=>capture(type,{trusted:event.isTrusted,region:region(event.target),
+     ...(type==='wheel'?{deltaY:Math.sign(event.deltaY),deltaX:Math.sign(event.deltaX)}:{}),
+     ...(type==='keydown'?{navigationKey:['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)}:{})});
+    target.addEventListener(type,handler,{capture:true,passive:true});
+    removals.push(()=>target.removeEventListener(type,handler,{capture:true}));
+   }
+   unsubscribe=window.amplifier.subscribe(()=>capture('state'));
+   window.scrollFlowEvidence={mark(phase){
+     if(phase==='before-send-click'){segment='send';last=''}
+     if(phase==='before-three-grow'){segment='growth';last=''}
+     capture(phase,null,true);
+    },bind(id){inputId=id;capture('request-bound',null,true)},
+    finish(outcome){capture('finished-'+outcome,null,true,true);active=false;
+     try{restore()}catch(error){gap(error)}
+     delete window.scrollFlowEvidence;
+     return {outcome,limits,counts,rows,marks,dropped,markDrops,captureAttempts,captureSkips,frameCalls,frameSkips,gaps,
+      controllerIntent:'unobserved: following/submitted/ready/restore are private; targets are source-rule candidates only',
+      timing:'synchronous read-only observation adds overhead; only callbacks actually requested by the page are wrapped'};
+    }};
+   capture('before-fill',null,true);
+  }catch(error){active=false;try{restore()}catch(restoreError){gap(restoreError)}throw error}
+ },sessionId)}catch(error){try{console.error('SCROLL-FLOW-EVIDENCE-GAP','arm',error.name)}catch{}}
  await input.fill(Array.from({length:7},(_,i)=>`New multiline message ${i+1}`).join('\n'));
+ await markScrollFlow('after-fill');
  assert.ok((await input.boundingBox()).height>=175);
  await scrollBack();
+ await markScrollFlow('after-scrollback');
  // Streamed canonical acceptance must precede the delayed HTTP receipt.
  let submittedInputId;
  let settleSend;const sendSettled=new Promise(resolve=>{settleSend=resolve});
@@ -231,6 +343,7 @@ try{
    assert.equal(submittedInputId,undefined,'One conversation.send request, without replay');
    submittedInputId=inputId;assert.equal(body.args.sessionId,sessionId);
    try{await page.evaluate(({inputId,sessionId})=>{
+    window.scrollFlowEvidence?.bind(inputId);
     const rows=[],gaps=[];let last='';
     const sample=()=>{
      try{
@@ -246,6 +359,7 @@ try{
    },{inputId,sessionId:body.args.sessionId})}
    catch(error){sendTrace.push({phase:'observer-gap',inputId,errorClass:error.name})}
    const response=await route.fetch();
+   await markScrollFlow('upstream-fetched');
    const receipt=await response.json();
    sendTrace.push({phase:'fetched',inputId,httpStatus:response.status(),accepted:receipt.accepted,delivery:receipt.delivery,
     receiptInputId:receipt.inputId,receiptSessionId:receipt.sessionId});
@@ -253,6 +367,7 @@ try{
    assert.equal(receipt.inputId,inputId);assert.equal(receipt.sessionId,sessionId);
    await new Promise(resolve=>setTimeout(resolve,450));
    const beforeReceipt=await page.evaluate(({inputId,sessionId})=>{
+    window.scrollFlowEvidence?.mark('before-http-release');
     const state=window.amplifier.getState(),session=state.sessions.find(s=>s.id===sessionId);
     return {status:session?.status,messages:(session?.messages||[]).filter(m=>m.inputId===inputId).map(m=>({
      id:m.id,inputId:m.inputId,role:m.role,delivery:m.delivery?.status,
@@ -267,6 +382,7 @@ try{
    assert.equal(acceptedCanonical([canonical],'another-input'),false,'Wrong input cannot qualify');
    assert.equal(acceptedCanonical([canonical,canonical],inputId),false,'Duplicate canonical rows cannot qualify');
    await route.fulfill({response});heldSendRoutes.delete(route);
+   await markScrollFlow('http-released');
    sendTrace.push({phase:'released',inputId});settleSend({inputId,canonicalId:canonical.id});
   }catch(error){
    sendTrace.push({phase:'send-error',inputId,errorClass:error.name});
@@ -275,10 +391,14 @@ try{
    settleSend({error});
   }
  });
+ await markScrollFlow('before-send-click');
  await page.getByRole('button',{name:'Send message',exact:true}).click();
+ await markScrollFlow('after-send-click');
  await page.waitForFunction(()=>document.querySelector('.a-user:last-of-type')?.textContent.includes('New multiline message')||[...document.querySelectorAll('.a-user')].at(-1)?.textContent.includes('New multiline message'));
  await expect.poll(()=>readComposerDraft(input)).toBe('');
+ await markScrollFlow('draft-cleared-before-bottom');
  await atBottom();
+ await markScrollFlow('bottom-passed');
  const sent=await sendSettled;if(sent.error)throw sent.error;
  assert.equal(sendTrace.filter(row=>row.phase==='intercepted').length,1);
  assert.equal(fixtureAcks.filter(row=>row.phase==='runtime-entered'&&row.inputId===sent.inputId).length,1);
@@ -293,12 +413,17 @@ try{
   const message=row.getBoundingClientRect(),composer=document.querySelector('.a-composer').getBoundingClientRect(),pane=document.querySelector('.a-messages').getBoundingClientRect();
   return message.bottom<=composer.top&&message.top>=pane.top;
  },{inputId:sent.inputId,canonicalId:sent.canonicalId})).toBe(true);
+ await markScrollFlow('canonical-geometry-passed');
 
  // The response may grow, but the start stays visible once there is enough
  // content to position the submitted message near the top of the viewport.
  const streamingChunks=async()=>((await pane.innerText()).match(/More streaming content\./g)||[]).length;
  const grow=async()=>{const chunks=await streamingChunks();await page.evaluate(()=>fetch('/api/fixture/grow',{method:'POST'}));await expect.poll(streamingChunks).toBe(chunks+25)};
- await grow();await grow();await grow();await page.waitForTimeout(300);
+ await markScrollFlow('before-three-grow');
+ await grow();await markScrollFlow('after-grow-one');
+ await grow();await markScrollFlow('after-grow-two');
+ await grow();await markScrollFlow('after-grow-three');await page.waitForTimeout(300);
+ await markScrollFlow('before-anchor');
  let replyAnchorPassed=false;
  try{
   await page.waitForFunction(()=>{const pane=document.querySelector('.a-messages'),user=[...pane.querySelectorAll('.a-user')].at(-1);return Math.abs(user.getBoundingClientRect().bottom-pane.getBoundingClientRect().top-16)<3});
@@ -329,6 +454,7 @@ try{
    console.log('SCROLL-REPLY-ANCHOR-BOUNDARY',JSON.stringify({passed:replyAnchorPassed,geometry}));
   }catch(error){console.error('SCROLL-REPLY-ANCHOR-EVIDENCE-GAP',error.name)}
  }
+ await finishScrollFlow('anchor-passed');
  const replyStart=await readingPosition();
  await grow();await page.waitForTimeout(300);
  await checkReading(replyStart,'streaming should stop following at the submitted message');
@@ -424,6 +550,7 @@ try{
  console.log('Chat navigator tooltip removal, visible turns, preview placement/resize and scroll browser checks passed: delayed send receipt, reply start anchoring, jump button, streaming scrollback, draft preservation and reading position on chat switch/reload.');
 }catch(error){primaryFailure=error;throw error}
 finally{
+ await finishScrollFlow(primaryFailure?'failed':'scenario-passed');
  for(const route of [...heldSendRoutes.keys()])await abortHeldSend(route);
  try{
   const sse=await page?.evaluate(()=>{const evidence=window.scrollAckEvidence;if(!evidence)return null;
