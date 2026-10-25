@@ -16,15 +16,39 @@ from pathlib import Path
 from aiohttp import web
 sys.path.insert(0, ${JSON.stringify(fileURLToPath(new URL('../../tests/fixtures',import.meta.url)))})
 import chat_ui_server as fixture
+ack_rows=[]
+def observe_ack(phase, input_id, session_id, **facts):
+ try:
+  if len(ack_rows)<32:
+   row={'phase':phase,'inputId':input_id,'sessionId':session_id,**facts}
+   ack_rows.append(row);print('SCROLL-FIXTURE-ACK '+json.dumps(row),flush=True)
+ except Exception:pass
 class ScrollRuntime(fixture.ChatRuntime):
  async def send(self, session, text, input_id, emit):
+  observe_ack('runtime-entered',input_id,session['id'])
   await emit('runtime.status', {'sessionId':session['id'], 'status':'working'})
+  observe_ack('working-returned',input_id,session['id'],status=session.get('status'))
+  observe_ack('waiting-unreleased-event',input_id,session['id'])
   await asyncio.Event().wait()
 fixture.fixture.Runtime=ScrollRuntime
 async def main():
  with tempfile.TemporaryDirectory(prefix='amplifier-scroll-ui-') as home:
   app=await fixture.fixture.main(Path(home))
   service=app['service']
+  @web.middleware
+  async def observe_send(request,handler):
+   if request.path!='/api/actions' or request.method!='POST':return await handler(request)
+   body=await request.json()
+   if body.get('action')!='conversation.send':return await handler(request)
+   input_id=body.get('id');sid=body.get('args',{}).get('sessionId')
+   observe_ack('request-entered',input_id,sid)
+   try:
+    response=await handler(request)
+   except BaseException as error:
+    observe_ack('request-error',input_id,sid,errorClass=type(error).__name__);raise
+   observe_ack('request-returned',input_id,sid,httpStatus=response.status)
+   return response
+  app.middlewares.append(observe_send)
   session=service.state['sessions'][0]
   session['messages']=[{'id':f'history-{i}', 'role':'user' if i%2==0 else 'assistant', 'text':f'History {i}\\n\\n'+('A useful paragraph. '*35), 'createdAt':i+1} for i in range(30)]
   async def grow(request):
@@ -44,7 +68,15 @@ async def main():
   finally:await runner.cleanup()
 asyncio.run(main())
 `],{stdio:['ignore','pipe','pipe']});
-let fixtureLog='';fixture.stderr.on('data',chunk=>{fixtureLog+=chunk});
+let fixtureLog='',fixtureOutput='';const fixtureAcks=[],sendTrace=[],transports=[];
+fixture.stderr.on('data',chunk=>{fixtureLog+=chunk});
+fixture.stdout.on('data',chunk=>{
+ fixtureOutput+=chunk;
+ const lines=fixtureOutput.split('\n');fixtureOutput=lines.pop();
+ for(const line of lines)if(line.startsWith('SCROLL-FIXTURE-ACK ')&&fixtureAcks.length<32){
+  try{fixtureAcks.push(JSON.parse(line.slice('SCROLL-FIXTURE-ACK '.length)))}catch{}
+ }
+});
 const fixtureReady=new Promise((resolve,reject)=>{
  let text='';fixture.stdout.on('data',chunk=>{text+=chunk;const line=text.split('\n').find(row=>row.startsWith('{"port":'));if(line)resolve(JSON.parse(line).port)});
  fixture.once('exit',code=>reject(new Error(`Scroll fixture exited ${code}: ${fixtureLog}`)));
@@ -58,6 +90,9 @@ try{
  browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});const errors=[];
  page.on('pageerror',error=>errors.push(error.message));
+ page.on('websocket',socket=>{if(transports.length<4)transports.push({kind:'websocket',path:new URL(socket.url()).pathname})});
+ page.on('response',response=>{if(response.headers()['content-type']?.includes('text/event-stream')&&transports.length<4)
+  transports.push({kind:'eventsource',path:new URL(response.url()).pathname})});
  const requests=[];page.on('request',request=>requests.push(new URL(request.url()).pathname));
  await page.goto(vite.resolvedUrls.local[0]);await showFixtureConversation(page);await page.waitForSelector('#amp-one');
  const pane=page.locator('.a-messages'),input=page.getByRole('textbox',{name:'Message Amplifier'});
@@ -172,14 +207,40 @@ try{
  await scrollBack();
  // SSE delivers the visible message before the send request resolves. The old
  // implementation enabled follow-bottom only after that response, too late.
+ let settleSend;const sendSettled=new Promise(resolve=>{settleSend=resolve});
  await page.route('**/api/actions',async route=>{
   if(route.request().postDataJSON()?.action!=='conversation.send')return route.continue();
-  const response=await route.fetch();await new Promise(resolve=>setTimeout(resolve,450));await route.fulfill({response});
+  const body=route.request().postDataJSON(),inputId=body.id;
+  sendTrace.push({phase:'intercepted',inputId,sessionId:body.args.sessionId});
+  try{
+   try{await page.evaluate(({inputId,sessionId})=>{
+    const rows=[],gaps=[];let last='';
+    const sample=()=>{
+     try{
+     const state=window.amplifier.getState(),session=state.sessions.find(s=>s.id===sessionId);
+     const canonical=(session?.messages||[]).filter(m=>m.inputId===inputId&&!m.optimistic);
+     const row={inputId,sessionId,messages:canonical.map(m=>({id:m.id,inputId:m.inputId,delivery:m.delivery?.status,
+      mounted:!!document.querySelector(`[data-message-id="${CSS.escape(m.id)}"]`)})),status:session?.status};
+     const key=JSON.stringify(row);if(key!==last&&rows.length<24){last=key;rows.push(row)}
+     }catch(error){if(gaps.length<4)gaps.push(error.name)}
+    };
+    const unsubscribe=window.amplifier.subscribe(sample);sample();
+    window.scrollAckEvidence={rows,gaps,sample,unsubscribe};
+   },{inputId,sessionId:body.args.sessionId})}
+   catch(error){sendTrace.push({phase:'observer-gap',inputId,errorClass:error.name})}
+   const response=await route.fetch();
+   sendTrace.push({phase:'fetched',inputId,httpStatus:response.status()});
+   await new Promise(resolve=>setTimeout(resolve,450));
+   await route.fulfill({response});sendTrace.push({phase:'released',inputId});settleSend({inputId});
+  }catch(error){
+   sendTrace.push({phase:'fetch-error',inputId,errorClass:error.name});settleSend({error});
+  }
  });
  await page.getByRole('button',{name:'Send message',exact:true}).click();
  await page.waitForFunction(()=>document.querySelector('.a-user:last-of-type')?.textContent.includes('New multiline message')||[...document.querySelectorAll('.a-user')].at(-1)?.textContent.includes('New multiline message'));
  await expect.poll(()=>readComposerDraft(input)).toBe('');
  await atBottom();
+ const sent=await sendSettled;if(sent.error)throw sent.error;
  // The receipt replaces the optimistic row. Read all geometry in one frame
  // and wait for the submitted row to remain visible through that replacement.
  await expect.poll(()=>page.evaluate(()=>{
@@ -289,5 +350,10 @@ try{
  console.log('Streaming reading positions:',JSON.stringify(readingChecks));
  console.log('Chat navigator tooltip removal, visible turns, preview placement/resize and scroll browser checks passed: delayed send receipt, reply start anchoring, jump button, streaming scrollback, draft preservation and reading position on chat switch/reload.');
 }finally{
+ try{
+  const sse=await page?.evaluate(()=>{const evidence=window.scrollAckEvidence;if(!evidence)return null;
+   evidence.sample();evidence.unsubscribe();delete window.scrollAckEvidence;return {rows:evidence.rows,gaps:evidence.gaps}});
+  console.log('SCROLL-SEND-ACK-EVIDENCE',JSON.stringify({requests:sendTrace,fixture:fixtureAcks,transports,stream:sse}));
+ }catch(error){console.error('SCROLL-SEND-ACK-EVIDENCE-GAP',error.name)}
  await page?.unrouteAll({behavior:'ignoreErrors'});await browser?.close();await vite?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}
 }
