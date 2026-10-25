@@ -1,4 +1,5 @@
 import {spawn} from 'node:child_process';
+import {prepareCanvasReaderInput,recordCanvasInputFailure} from './canvas-reader-input.mjs';
 import {fileURLToPath} from 'node:url';
 import {mkdir} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
@@ -11,7 +12,7 @@ const output=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/archive-feedback';
 await mkdir(output,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'/.venv/bin/python',[root+'/tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
 const stopFixture=ownFixture(fixture,{label:'Archive feedback fixture'});
-let browser,release,releaseNavigation,failure;
+let browser,page,release,releaseNavigation,failure;
 try{
  const url=await new Promise((resolve,reject)=>{
   let text='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out')),20000);
@@ -20,7 +21,7 @@ try{
  });
  browser=await chromium.launch({headless:true,args:JSON.parse(process.env.AMPLIFIER_CHROMIUM_ARGS||'[]')});
  const context=await browser.newContext({viewport:{width:1200,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
- const page=await context.newPage(),peer=await context.newPage(),errors=[];
+ page=await context.newPage();const peer=await context.newPage(),errors=[];
  for(const p of [page,peer]){p.on('pageerror',e=>errors.push(e.message));await p.goto(url);await p.waitForFunction(()=>window.amplifier?.dispatch)}
  const action=(name,args={},p=page)=>p.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
@@ -83,6 +84,7 @@ try{
  const qualification=(await action('shell.packages.validate',{digest})).result;assert.equal(qualification.status,'passed',JSON.stringify(qualification));
  await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(digest);
  const canvasEdit=page.locator('[data-canvas-view="primary"]').getByLabel('Unsaved archive edit');
+ await prepareCanvasReaderInput(page,{target:canvasEdit,label:'archive-editor',outputDir:output,expectCovered:true});
  await canvasEdit.fill('UNSAVED CANVAS ARCHIVE INPUT');
  const inspectViews=async()=>(await action('canvas.views.inspect')).result.views;
  await expect.poll(async()=>(await inspectViews()).find(v=>v.viewId==='primary')?.dirty).toBe(true);
@@ -181,7 +183,7 @@ try{
  assert.deepEqual(after.started,before.started);assert.deepEqual(after.stopped,before.stopped);assert.deepEqual(after.sent,before.sent);
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({passed:true,archiveCalls,restoreCalls,pending:true,workspaceAndManagedDestination:true,undo:true,explicitRejection:true,http200Rejection:true,unknownOutcome:true,roundtripRace:true,queuedNavigationRace:true,stalledNavigationUndo:true,unsavedCanvasRetained:true,unsavedSettingsRetained:true,noncurrentRow:true,rawApiUnchanged:true,peerUnchanged:true,draftAndAttachmentPreserved:true,narrow:true,noRuntimeLifecycleChanges:true}));
-}catch(error){failure=error;throw error}
+}catch(error){failure=await recordCanvasInputFailure(page,error,{outputDir:output,label:'archive'});throw failure}
 finally{
  release?.();releaseNavigation?.();
  await finishFixture({label:'Archive feedback fixture',close:[['Archive feedback browser',()=>browser?.close()]],stop:stopFixture,originalError:failure});

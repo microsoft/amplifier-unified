@@ -1,4 +1,5 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {prepareCanvasReaderInput,recordCanvasInputFailure} from './canvas-reader-input.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {mkdir,mkdtemp,writeFile,rm} from 'node:fs/promises';
@@ -41,12 +42,12 @@ const attack=`<script>parent.parent.postMessage({jsonrpc:'2.0',id:'forged',metho
 const html=`<!doctype html><html><body><h1>Independent counter</h1><output id="count">0</output><button id="add">Add one</button><button id="media">Read media</button><output id="resource"></output><input aria-label="Unsaved tool draft"><p id="isolation"></p><iframe sandbox="allow-scripts" srcdoc="${attack.replaceAll('&','&amp;').replaceAll('"','&quot;')}"></iframe><script type="module">${built.outputFiles[0].text.replaceAll('</script','<\\/script')}</script></body></html>`;
 await writeFile(join(temp,'app.html'),html);
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/canvas_mcp_ui_server.py',import.meta.url)),join(temp,'app.html')],{stdio:'inherit'});
-let browser;
+let browser,page,failure;
 try{
  for(let i=0;i<150;i++){try{if((await fetch('http://127.0.0.1:8967/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
  browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1450,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
- const page=await context.newPage(),errors=[];page.on('pageerror',e=>{errors.push(e.message);console.log('PAGE ERROR',e.message)});page.on('console',msg=>{if(msg.type()==='error')console.log('CONSOLE',msg.text().slice(0,700))});
+ page=await context.newPage();const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.log('PAGE ERROR',e.message)});page.on('console',msg=>{if(msg.type()==='error')console.log('CONSOLE',msg.text().slice(0,700))});
  await page.addInitScript(()=>{
   let dark=true;
   const listeners=new Set();
@@ -159,7 +160,29 @@ try{
  await page.mouse.move(500,400);
  await page.waitForFunction(()=>document.querySelector('.a-canvas-panel').getBoundingClientRect().width===innerWidth);
  assert.equal(await frame.locator('body').getAttribute('data-live-marker'),'same-frame');
- const frameBox=await page.locator('.a-canvas-html').boundingBox();assert.equal(frameBox.x,0);assert.equal(frameBox.width,1450);const chrome=await page.locator('.a-canvas-chrome').boundingBox();assert.equal(frameBox.y,chrome.y+chrome.height,'The live tool begins immediately below Canvas controls');
+ await expect(page.locator('.a-canvas-artifact-toolbar')).toBeVisible();
+ const geometry=await page.locator('#workspace-canvas').evaluate(panel=>{
+  const rect=selector=>{const r=panel.querySelector(selector).getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.bottom}};
+  return {viewport:{width:innerWidth,height:innerHeight},detailsHidden:panel.querySelector('#canvas-options').hidden,
+   readerInert:panel.querySelector('.a-canvas-reader').inert,chrome:rect('.a-canvas-chrome'),
+   toolbar:rect('.a-canvas-artifact-toolbar'),reader:rect('.a-canvas-reader'),body:rect('.a-canvas-body'),frame:rect('.a-canvas-html')};
+ });
+ const assertFrameBoundary=g=>{
+  assert.equal(g.detailsHidden,true);assert.equal(g.readerInert,false);
+  assert.equal(g.frame.x,0);assert.equal(g.frame.width,1450);
+  assert.equal(g.reader.y,g.chrome.bottom);assert.equal(g.toolbar.y,g.reader.y);
+  assert.equal(g.frame.y,g.toolbar.bottom,'LIVE_TOOL_BOUNDARY begins immediately below the visible artifact toolbar');
+  assert.deepEqual(g.frame,g.body,'The live iframe fills the reader body');
+  assert.equal(g.body.bottom,g.reader.bottom);assert.equal(g.reader.bottom,g.viewport.height);
+  assert.ok(g.frame.height>=250,'The focused live tool retains usable vertical space');
+ };
+ await writeFile(join(evidence,'focused-live-tool-geometry.json'),JSON.stringify(geometry,null,2));
+ assertFrameBoundary(geometry);
+ await page.screenshot({path:join(evidence,'focused-live-tool-geometry.png')});
+ // The obsolete nav-only boundary is rejected by this same adjacency oracle.
+ const obsolete={...geometry,frame:{...geometry.frame,y:geometry.chrome.bottom}};
+ assert.throws(()=>assertFrameBoundary(obsolete),/LIVE_TOOL_BOUNDARY/);
+ await writeFile(join(evidence,'focused-live-tool-boundary-negative.json'),JSON.stringify({geometry:obsolete,rejected:true},null,2));
  await action('view.update',{patch:{canvasFocused:false}});
  assert.equal(await frame.locator('body').getAttribute('data-live-marker'),'same-frame');
  assert.equal((await operations()).length,operationCount);
@@ -194,6 +217,9 @@ try{
  await page.getByRole('button',{name:'Canvas details',exact:true}).click();
  await frame.locator('#count').filter({hasText:/^5$/}).waitFor();
  await page.screenshot({path:join(evidence,'canvas.png')});
+ await prepareCanvasReaderInput(page,{target:frame.getByRole('button',{name:'Add one',exact:true}),label:'smart-tools-stale-config',outputDir:evidence});
+ assert.equal(await frame.locator('body').getAttribute('data-live-marker'),'same-frame');
+ assert.equal((await operations()).filter(o=>o.target?.name==='counter_add').length,2,'Closing Details does not replay tool work');
  // A saved view cannot silently acquire a replacement server configuration.
  await action('smartTools.configure',{id:'counter',name:'Changed counter',command:'invalid-command',args:[]});
  await expect.poll(async()=>(await observations()).servers.find(s=>s.id==='counter')?.command).toBe('invalid-command');
@@ -203,4 +229,9 @@ try{
  await frame.locator('#resource').filter({hasText:'configuration changed'}).waitFor();
  assert.deepEqual(errors.filter(e=>!e.includes('configuration changed')),[]);
  console.log('MCP Apps browser passed: official SDK handshake, shared tool actions and view state, sandbox isolation, nested-message rejection, durable reopen without mutation replay, stale-config denial.');
-}finally{await browser?.close();fixture.kill();await rm(temp,{recursive:true,force:true})}
+}catch(error){failure=await recordCanvasInputFailure(page,error,{outputDir:evidence,label:'smart-tools'});throw failure}
+finally{
+ const cleanup=[];
+ for(const close of [()=>browser?.close(),async()=>fixture.kill(),()=>rm(temp,{recursive:true,force:true})])try{await close()}catch(error){cleanup.push(error)}
+ if(cleanup.length)throw new AggregateError([...(failure?[failure]:[]),...cleanup],'Smart Tools cleanup failure',{cause:failure||cleanup[0]});
+}

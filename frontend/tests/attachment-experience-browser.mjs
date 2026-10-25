@@ -1,3 +1,4 @@
+import {prepareCanvasReaderInput,recordCanvasInputFailure} from './canvas-reader-input.mjs';
 // Real host + built bundled client. Synthetic file data and runtime only.
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
@@ -93,6 +94,7 @@ try{
  });
  await run('decode-error-identity-reload-and-dirty-canvas',async()=>{
   const {context,page}=await contextFor({width:1280,height:900},'light');
+  let failure;
   try{
    const aBytes=await png(page,640,480),bBytes=await png(page,32,24),a=await upload(page,'decode-a.png',aBytes),b=await upload(page,'decode-b.png',bBytes);
    // Delay the real decode boundary, not a fabricated host projection.
@@ -111,10 +113,13 @@ try{
    const manifest={id:'example.attachment-dirty',label:'Attachment dirty check',version:'1.0.0',apiVersion:'1.0',profile:'trusted-native-renderer-v1',stateSchema:'canvas-view-v1',resourceKinds:['markdown'],capabilities:['canvas.resource.read','canvas.view.update']};
    const source='export default ({React})=>function Editor({host}){const [text,setText]=React.useState("");return React.createElement("label",null,"Unsaved attachment-test edit",React.createElement("input",{value:text,onChange:e=>{setText(e.target.value);host.setDirty(true)}}))}';
    const digest=(await call(page,'shell.packages.stage',{manifest,source})).result.digest;assert.equal((await call(page,'shell.packages.validate',{digest})).result.status,'passed');
-   await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(digest);const editor=page.getByLabel('Unsaved attachment-test edit');await editor.fill('Keep unsaved Canvas edit');await expect.poll(async()=>(await call(page,'canvas.views.inspect')).result.views.find(v=>v.viewId==='primary')?.dirty).toBe(true);
+   await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(digest);const editor=page.getByLabel('Unsaved attachment-test edit');
+   await prepareCanvasReaderInput(page,{target:editor,label:'attachment-editor',outputDir:out,expectCovered:true});
+   await editor.fill('Keep unsaved Canvas edit');await expect.poll(async()=>(await call(page,'canvas.views.inspect')).result.views.find(v=>v.viewId==='primary')?.dirty).toBe(true);
    const before=(await call(page,'canvas.views.inspect')).result.views,opener=await open(page,'decode-a.png');await close(page,opener);await expect(editor).toHaveValue('Keep unsaved Canvas edit');assert.deepEqual((await call(page,'canvas.views.inspect')).result.views,before);
    await drops(page,'[data-canvas-view="primary"]',[{name:'not-chat.png',base64:bBytes.toString('base64')}]);assert.equal((await inspect(page)).attachments[(await state(page)).selectedSessionId].length,2,'Canvas is not an attachment target');
-  }finally{await bounded(context.close(),10000,'Close identity context')}
+  }catch(error){failure=await recordCanvasInputFailure(page,error,{outputDir:out,label:'attachment-identity'});throw failure}
+  finally{try{await bounded(context.close(),10000,'Close identity context')}catch(error){throw failure?new AggregateError([failure,error],'Attachment failure and context cleanup',{cause:failure}):error}}
  });
  await run('whole-chat-drop-and-owner',async()=>{
   const {context,page}=await contextFor({width:1280,height:900},'light');
