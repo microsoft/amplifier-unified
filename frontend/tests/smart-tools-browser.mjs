@@ -213,12 +213,21 @@ try{
  await page.evaluate(()=>window.setSystemTheme(false));
  await reopen;
  await frame.locator('body[data-theme="light"]').waitFor();
- // Current Canvas details expand beside the mounted live view.
- await page.getByRole('button',{name:'Canvas details',exact:true}).click();
  await frame.locator('#count').filter({hasText:/^5$/}).waitFor();
- await page.screenshot({path:join(evidence,'canvas.png')});
- await prepareCanvasReaderInput(page,{target:frame.getByRole('button',{name:'Add one',exact:true}),label:'smart-tools-stale-config',outputDir:evidence});
- assert.equal(await frame.locator('body').getAttribute('data-live-marker'),'same-frame');
+ // Explicit selection can mount a new saved document. Bind this Details
+ // round trip to that current document, not a marker from before selection.
+ const reopenedBody=await frame.locator('body').elementHandle();assert.ok(reopenedBody);
+ try{
+  await page.getByRole('button',{name:'Canvas details',exact:true}).click();
+  await frame.locator('#count').filter({hasText:/^5$/}).waitFor();
+  await page.screenshot({path:join(evidence,'canvas.png')});
+  await prepareCanvasReaderInput(page,{target:frame.getByRole('button',{name:'Add one',exact:true}),label:'smart-tools-stale-config',outputDir:evidence});
+  const sameBody=await frame.locator('body').evaluate((el,original)=>el===original,reopenedBody);
+  const count=await frame.locator('#count').textContent();
+  await writeFile(join(evidence,'reopened-details-identity.json'),JSON.stringify({sameBody,count},null,2));
+  assert.equal(sameBody,true,'Details open/close retains the currently reopened tool document');
+  assert.equal(count,'5','Details open/close retains the shared counter');
+ }finally{await reopenedBody.dispose()}
  assert.equal((await operations()).filter(o=>o.target?.name==='counter_add').length,2,'Closing Details does not replay tool work');
  // A saved view cannot silently acquire a replacement server configuration.
  await action('smartTools.configure',{id:'counter',name:'Changed counter',command:'invalid-command',args:[]});
