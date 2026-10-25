@@ -23,6 +23,11 @@ function patchSummary(patch={}){
 const detailPatch=row=>row.patch?.providerEditor?.id==='two'&&row.patch.providerEditor.detailOpen;
 const listPatch=row=>row.patch?.settingsExpanded?.includes('providers')&&row.patch.providerEditor?.detailOpen===false;
 const marker=stage=>'[settings-reload:'+stage+']';
+async function boundedRead(promise){
+ let timer;
+ try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Diagnostic body read unavailable')),2000)})])}
+ finally{clearTimeout(timer)}
+}
 function assertProviderRoute(state,detail,stage){
  const message=marker(stage),view=state.view;
  assert.equal(view.panel,'settings',message+' panel');
@@ -109,7 +114,7 @@ export async function createSettingsReloadObservation(page,directory){
   const work=(async()=>{
    row.httpStatus=response.status();
    try{
-    const receipt=await response.json();
+    const receipt=await boundedRead(response.json());
     row.receipt={accepted:receipt.accepted,revision:receipt.revision,stateRevision:receipt.stateRevision,
      hostInstanceId:receipt.hostInstanceId,...(receipt.clientId?{clientId:receipt.clientId}:{})};
    }catch{row.receiptUnreadable=true}

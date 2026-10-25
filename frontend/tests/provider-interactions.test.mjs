@@ -33,14 +33,14 @@ test('first provider hydration preserves private-only unfinished JSON without pu
  const render=()=>React.createElement(ProviderSettings,{state,act:dispatch});
  await renderAct(async()=>{root=create(render())});
  try{
-  await renderAct(async()=>root.root.findByProps({id:'provider-config'}).props.onChange({target:{value:unfinished}}));
   const callsBefore=calls.length;
+  await renderAct(async()=>root.root.findByProps({id:'provider-config'}).props.onChange({target:{value:unfinished}}));
   state={...state,setup:{providersLoadedAt:Date.now()/1000+1,providers:[{id:'one',module:'provider-test',config:{model:'first'}}]}};
   await renderAct(async()=>root.update(render()));
   assert.equal(root.root.findByProps({id:'provider-config'}).props.value,unfinished,'private-only JSON survives delayed initial hydration');
   assert.equal(root.root.findByProps({id:'provider-id'}).props.value,'','Hydration cannot select a saved provider over an unfinished new one');
   assert.equal(calls.slice(callsBefore).filter(call=>call.name==='view.update').length,0);
-  assert.equal(JSON.stringify(calls).includes(unfinished),false);
+  assert.equal(JSON.stringify(calls).includes('synthetic-private-edit'),false);
  }finally{await renderAct(async()=>root.unmount())}
 });
 

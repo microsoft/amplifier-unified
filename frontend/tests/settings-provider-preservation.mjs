@@ -53,6 +53,8 @@ export function observeSettingsProviderPreservation(page,{workspaceId,clientId,h
    record('providers-list-held',{id:token(command.id),configurationTarget:target(args.configurationTarget)});
    await gate.wait;
   }
+  // Teardown retires a held read rather than allowing it to land after failure.
+  if(stopped){try{await route.abort()}catch{};return}
   await route.continue();
  };
  const mark=label=>bounded(page.evaluate(label=>window.__settingsProviderPreservation.mark(label),label));
@@ -80,7 +82,7 @@ export function observeSettingsProviderPreservation(page,{workspaceId,clientId,h
      return {atMs:performance.now()-started,revision:s.revision,clientId:token(s.client?.id),hostInstanceId:token(s.client?.hostInstanceId),
       selectedSessionId:token(s.selectedSessionId),selectedWorkspaceId:token(s.selectedWorkspaceId),
       route:{workSurface:token(view.workSurface),workspaceId:token(view.workWorkspaceId),tab:token(view.workWorkspaceTab),settings:token(view.workWorkspaceSettings)},
-      draft:{dirty:typeof draft?.dirty==='boolean'?draft.dirty:null,id:draft?.id===''?'':token(draft?.id),
+      draft:{dirty:!!draft?.dirty,dirtyPresent:Object.hasOwn(draft||{},'dirty'),id:draft?.id===''?'':token(draft?.id),
        selectionKey:draft?.selectionKey===''?'':token(draft?.selectionKey),privateEqualsShared:!!node&&node.value===draft?.config,
        sharedContainsPrivate:typeof draft?.config==='string'&&draft.config.includes('unsaved-workspace-navigation')},
       privateEqualsExpected:!!node&&node.value===privateText,editorId:identity(node),providerSectionId:identity(root),
@@ -185,7 +187,7 @@ export function observeSettingsProviderPreservation(page,{workspaceId,clientId,h
    try{observation=await bounded(page.evaluate(label=>window.__settingsProviderPreservation?.finish(label),label))||observation}
    catch{record('final-observation-unavailable')}
    try{await bounded(Promise.all([...pending]))}catch{record('pending-receipts-unavailable')}
-   stopped=true;page.off('request',requested);page.off('response',responded);
+   stopped=true;gate.release();page.off('request',requested);page.off('response',responded);
    await writeFile(outputPath,JSON.stringify({schema:1,label,oracle,held,heldCount,released,receipts:[...receipts.values()],events,dropped,privateTextSent,observation,
     limits:{maxEvents:96,maxSnapshots:96,pinnedCheckpoints:7,maxHeldCommands:8,incidentalReceiptReads:24,concurrentIncidentalReceiptReads:4,reservedReceiptReads:8,
      receiptBytes:524288,receiptAcquisition:'Content-Length when present; actual size checked after acquisition',

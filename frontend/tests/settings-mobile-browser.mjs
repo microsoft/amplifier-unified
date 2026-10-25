@@ -10,7 +10,7 @@ import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const evidence=process.env.AMPLIFIER_TEST_OUTPUT||join(tmpdir(),'amplifier-settings-mobile');await mkdir(evidence,{recursive:true});
-const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/settings_collections_server.py',import.meta.url))]);
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/settings_collections_server.py',import.meta.url))]);
 let browser,page,reloadObservation,stderr='';fixture.stderr.on('data',data=>stderr+=data);
 try{
  const base=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Fixture timed out: '+stderr)),60000);fixture.stdout.on('data',data=>{const match=String(data).match(/http:\/\/127\.0\.0\.1:\d+/);if(match){clearTimeout(timer);resolve(match[0]);}});fixture.on('exit',code=>reject(new Error('Fixture exited '+code+': '+stderr)));});
