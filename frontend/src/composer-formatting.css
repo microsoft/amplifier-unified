@@ -10,3 +10,13 @@
 #amp-one .a-composer-link label{display:grid;gap:4px}
 #amp-one .a-composer-link input{width:100%;box-sizing:border-box;font:inherit;padding:8px;border:1px solid var(--a-line,#777);border-radius:6px;color:inherit;background:var(--a-soft,#444)}
 #amp-one .a-composer-link p{font-size:13px;margin:0}
+#amp-one .a-composer-format button:disabled{opacity:.4;cursor:default}
+#amp-one .a-composer-format{max-height:calc(100dvh - 16px);overflow:auto}
+#amp-one .a-markdown-composer .a-composer-table{border-collapse:collapse;width:100%;table-layout:fixed;margin:8px 0}
+#amp-one .a-composer-table th,#amp-one .a-composer-table td{border:1px solid var(--a-line);padding:6px;overflow-wrap:anywhere;white-space:pre-wrap}
+#amp-one .a-markdown-composer li[data-task]{list-style:none}
+#amp-one .a-markdown-composer li[data-task]::marker{content:''}
+#amp-one .a-markdown-composer li[data-task]::before{content:'☐';float:left;margin-left:-1.3em}
+#amp-one .a-markdown-composer li[data-task=true]::before{content:'☑'}
+#amp-one .a-markdown-composer .a-composer-markdown-source{border:1px dashed var(--a-line);white-space:pre-wrap;overflow-wrap:anywhere}
+#amp-one .a-markdown-composer .a-composer-markdown-source::before{content:'Markdown source · preserved literally';display:block;font:12px system-ui;color:var(--a-muted);margin-bottom:6px;user-select:none}

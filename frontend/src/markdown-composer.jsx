@@ -1,10 +1,9 @@
 import React,{useLayoutEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
-import {toggleMark} from 'prosemirror-commands';
-import {Link,Bold,Italic} from 'lucide-react';
+import {Link,Bold,Italic,Code,Strikethrough} from 'lucide-react';
 import 'prosemirror-view/style/prosemirror.css';
 import {EditorView} from 'prosemirror-view';
-import {composerState,composerMarkdown,composerDocument,insertQuote,composerNewline,pasteMarkdown,composerClipboard,composerFormat,formatComposerBlock,setComposerLink,moveComposerBoundary} from './markdown-composer.js';
+import {composerState,composerMarkdown,composerDocument,composerSendDocument,insertQuote,composerEnter,pasteMarkdown,composerClipboard,composerFormat,formatComposerBlock,setComposerLink,moveComposerBoundary,composerSelectionEditable,toggleComposerMark} from './markdown-composer.js';
 import {quoteNodeView,refreshQuoteControls} from './composer-quote-view.js';
 import {clipboardPaste} from './clipboard-paste';
 import {resizeComposer,observeComposerLayout} from './composer';
@@ -16,7 +15,7 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
  const insertionMode=useRef('caret');
  const [selection,setSelection]=useState(null),[linkOpen,setLinkOpen]=useState(false),[link,setLink]=useState(''),[linkError,setLinkError]=useState('');
  const openLink=()=>{
-  const view=editor.current;if(!view||view.state.selection.empty)return;
+  const view=editor.current;if(!view||view.state.selection.empty||!composerSelectionEditable(view.state)||view.state.selection.$from.parent.type.spec.code)return;
   let href='';view.state.doc.nodesBetween(view.state.selection.from,view.state.selection.to,node=>{const mark=node.marks.find(mark=>mark.type.name==='link');if(mark)href=mark.attrs.href;});
   setLink(href);setLinkError('');setLinkOpen(true);
  };
@@ -39,11 +38,13 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
     if(!editable()||view.composing||event.isComposing||event.keyCode===229)return false;
     if(moveComposerBoundary(view,event)){event.preventDefault();return true;}
     if(event.key==='Escape'&&!view.state.selection.empty){dismissed.current=view.state.selection.from+':'+view.state.selection.to;setSelection(null);setLinkOpen(false);return true;}
+    if(event.altKey&&event.key==='F10'&&!view.state.selection.empty){
+     event.preventDefault();refresh.current();requestAnimationFrame(()=>toolbar.current?.querySelector('button:not(:disabled),select')?.focus());return true;
+    }
     if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='k'&&!view.state.selection.empty){event.preventDefault();openLink();return true;}
     if(event.key==='Enter'){
      event.preventDefault();
-     if(event.shiftKey||event.ctrlKey)composerNewline(view.state,view.dispatch,view);
-     else latest.current.onSend();
+     if(!composerEnter(view,{continueWriting:event.shiftKey||event.ctrlKey,exit:event.altKey}))latest.current.onSend();
      return true;
     }
     return false;
@@ -55,10 +56,15 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
     keydown(view,event){return view.composing||event.isComposing||event.keyCode===229;},
     beforeinput(view,event){
      // Virtual keyboards may emit beforeinput without a usable keydown.
-     if(editable()&&!view.composing&&!event.isComposing&&event.inputType==='insertParagraph'){
-      event.preventDefault();latest.current.onSend();return true;
+     if(editable()&&!view.composing&&!event.isComposing&&['insertParagraph','insertLineBreak'].includes(event.inputType)){
+      event.preventDefault();if(!composerEnter(view,{continueWriting:event.inputType==='insertLineBreak'}))latest.current.onSend();return true;
      }
      return false;
+    },
+    contextmenu(){
+     // Keep native copy/paste/spelling. Our same selection toolbar remains
+     // available after the native menu closes; Alt+F10 focuses it directly.
+     refresh.current();return false;
     },
     paste(view,event){
      if(!editable()||latest.current.pasteDisabled){event.preventDefault();return true;}
@@ -73,6 +79,7 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
      if(event.dataTransfer?.files.length){event.preventDefault();event.stopPropagation();latest.current.onFiles([...event.dataTransfer.files]);return true;}
      // External text drops follow the same plain-text/Markdown policy as paste.
      if(!view.dragging&&event.dataTransfer?.getData('text/plain')){event.preventDefault();pasteMarkdown(view,event.dataTransfer.getData('text/plain'));return true;}
+     if(!view.dragging&&event.dataTransfer?.getData('text/html')){event.preventDefault();pasteMarkdown(view,event.dataTransfer.getData('text/html'));return true;}
      return false;
     },
    },
@@ -84,7 +91,7 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
   if(quoteApi)quoteApi.current={
    capture:()=>({doc:view.state.doc,mode:insertionMode.current,pos:usedCaret&&insertionMode.current==='caret'?view.state.selection.to:view.state.doc.content.size}),
    insert:(quote,target)=>{if(!alive||!editable())throw Error('The composer changed. Add the quote again.');insertQuote(view,quote,target);usedCaret=true;},
-   document:()=>composerDocument(view.state.doc,!!publishedDocument.current),
+   document:()=>composerSendDocument(view.state.doc,!!publishedDocument.current),
    append:text=>{if(!alive||!editable()||view.composing)throw Error('Finish the current edit before dictating.');if(text)view.dispatch(view.state.tr.insertText(text,view.state.doc.content.size-1));},
   };
   refreshQuoteControls(view);
@@ -92,7 +99,7 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
   const update=()=>{
    const {from,to,empty}=view.state.selection,key=from+':'+to;
    const focused=view.hasFocus()||toolbar.current?.contains(document.activeElement);
-   if(empty||!editable()||!focused||dismissed.current===key){setSelection(null);if(empty||!focused)setLinkOpen(false);return;}
+   if(empty||!editable()||!focused||!composerSelectionEditable(view.state)||dismissed.current===key){setSelection(null);if(empty||!focused)setLinkOpen(false);return;}
    const a=view.coordsAtPos(from),b=view.coordsAtPos(to),bounds=view.dom.getBoundingClientRect();
    if(b.bottom<bounds.top||a.top>bounds.bottom){setSelection(null);return;}
    setSelection({...composerFormat(view.state),left:Math.max(8,Math.min(Math.max(a.left,bounds.left),window.innerWidth-Math.min(330,window.innerWidth-16)-8)),top:Math.max(8,Math.min(Math.max(a.top,bounds.top)-52,window.innerHeight-160))});
@@ -119,15 +126,19 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
   refresh.current();
  },[value,documentValue,disabled,readOnly]);
  const dismiss=()=>{const view=editor.current;dismissed.current=view.state.selection.from+':'+view.state.selection.to;setSelection(null);setLinkOpen(false);view.focus();};
- const mark=name=>{const view=editor.current;toggleMark(view.state.schema.marks[name])(view.state,view.dispatch);view.focus();};
+ const mark=name=>toggleComposerMark(editor.current,name);
  return <><div className="a-markdown-composer-host" ref={host}/>{documentValue&&<label className="a-caption">Add quotes <select aria-label="Quote insertion" defaultValue="caret" onChange={event=>{insertionMode.current=event.target.value;}}><option value="caret">At remembered caret</option><option value="append">At end</option></select></label>}{selection&&!disabled&&!readOnly&&createPortal(
   <div className="a-composer-format" ref={toolbar} style={{left:selection.left,top:selection.top}} onKeyDown={event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();dismiss();}}}>
    <div role="toolbar" aria-label="Format selected text" className="a-composer-format-row">
-    <button type="button" aria-label="Link" title="Link (Ctrl/⌘ K)" aria-pressed={selection.link} onMouseDown={e=>e.preventDefault()} onClick={openLink}><Link size={18}/></button>
-    <button type="button" aria-label="Bold" title="Bold (Ctrl/⌘ B)" aria-pressed={selection.bold} onMouseDown={e=>e.preventDefault()} onClick={()=>mark('strong')}><Bold size={18}/></button>
-    <button type="button" aria-label="Italic" title="Italic (Ctrl/⌘ I)" aria-pressed={selection.italic} onMouseDown={e=>e.preventDefault()} onClick={()=>mark('em')}><Italic size={18}/></button>
+    <button type="button" aria-label="Link" disabled={selection.literal} title="Link (Ctrl/⌘ K)" aria-pressed={selection.link} onMouseDown={e=>e.preventDefault()} onClick={openLink}><Link size={18}/></button>
+    <button type="button" aria-label="Bold" disabled={selection.literal} title="Bold (Ctrl/⌘ B)" aria-pressed={selection.bold} onMouseDown={e=>e.preventDefault()} onClick={()=>mark('strong')}><Bold size={18}/></button>
+    <button type="button" aria-label="Italic" disabled={selection.literal} title="Italic (Ctrl/⌘ I)" aria-pressed={selection.italic} onMouseDown={e=>e.preventDefault()} onClick={()=>mark('em')}><Italic size={18}/></button>
+    <button type="button" aria-label="Inline code" disabled={selection.literal} title="Inline code (Ctrl/⌘ `)" aria-pressed={selection.code} onMouseDown={e=>e.preventDefault()} onClick={()=>mark('code')}><Code size={18}/></button>
+    <button type="button" aria-label="Strikethrough" disabled={selection.literal} title="Strikethrough (Ctrl/⌘ Shift X)" aria-pressed={selection.strike} onMouseDown={e=>e.preventDefault()} onClick={()=>mark('strike')}><Strikethrough size={18}/></button>
     <select aria-label="Text style" value={selection.block} onChange={e=>formatComposerBlock(editor.current,e.target.value)}>
-     <option value="text">Text</option><option value="h1">Heading 1</option><option value="h2">Heading 2</option><option value="h3">Heading 3</option><option value="ordered_list">Numbered list</option><option value="bullet_list">Bulleted list</option>
+     {selection.block==='table'?<option value="table" disabled>Table</option>:<>
+      <option value="text">Text</option><option value="h1">Heading 1</option><option value="h2">Heading 2</option><option value="h3">Heading 3</option><option value="h4">Heading 4</option><option value="h5">Heading 5</option><option value="h6">Heading 6</option><option value="ordered_list">Numbered list</option><option value="bullet_list">Bulleted list</option><option value="task_list">Task list</option><option value="blockquote">Block quote</option><option value="code_block">Code block</option>
+     </>}<option value="markdown_source">Markdown source</option>
     </select>
    </div>
    {linkOpen&&<form className="a-composer-link" onSubmit={e=>{e.preventDefault();e.stopPropagation();if(setComposerLink(editor.current,link)){setLinkOpen(false);setLinkError('');}else setLinkError('Use an http, https, mailto, or relative link.');}}>

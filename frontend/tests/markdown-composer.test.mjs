@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {composerState,composerMarkdown,parseComposer,composerNewline,composerClipboard} from '../src/markdown-composer.js';
+import {composerState,composerMarkdown,parseComposer,composerNewline,composerClipboard,composerEnter,composerDocument,composerSendDocument,insertQuote,changeQuote,toggleComposerMark} from '../src/markdown-composer.js';
+import {undo,redo} from 'prosemirror-history';
 function editor(){const view={state:composerState(''),composing:false};view.dispatch=tr=>{view.state=view.state.apply(tr)};return view;}
 function type(view,text){for(const char of text){const {from,to}=view.state.selection;const handled=view.state.plugins.some(plugin=>plugin.props.handleTextInput?.(view,from,to,char,()=>view.state.tr.insertText(char)));if(!handled)view.dispatch(view.state.tr.insertText(char));}}
 test('closing Markdown marks format immediately and stop the mark at the cursor',()=>{
@@ -66,4 +67,163 @@ test('link edits are undoable, preserve labels and reject unsafe schemes',()=>{
 test('select all converts list types without nesting',()=>{
  const view={state:composerState('1. **one**'),focus(){}};view.dispatch=tr=>{view.state=view.state.apply(tr)};view.dispatch(view.state.tr.setSelection(new AllSelection(view.state.doc)));
  formatComposerBlock(view,'bullet_list');assert.equal(view.state.doc.firstChild.firstChild.firstChild.type.name,'paragraph');assert.equal(view.state.doc.textContent,'one');
+});
+
+test('Enter opens bare/language/tilde fences and preserves indentation without sending',()=>{
+ for(const opener of ['```','```js','```c++','~~~python']){
+  const view=editor();type(view,opener);
+  assert.equal(view.state.doc.firstChild.type.name,'paragraph');
+  assert.equal(composerEnter(view),true);
+  assert.equal(view.state.doc.firstChild.type.name,'code_block');
+  assert.equal(view.state.doc.firstChild.attrs.params,opener.slice(3));
+  type(view,'  **literal**');assert.equal(composerEnter(view),true);type(view,'next');
+  assert.equal(view.state.doc.textContent,'  **literal**\n  next');
+  assert.equal(view.state.doc.firstChild.firstChild.marks.length,0);
+  assert.equal(composerEnter(view,{exit:true}),true);
+  assert.equal(view.state.selection.$from.parent.type.name,'paragraph');
+  type(view,'outside');assert.equal(composerEnter(view),false,'normal Enter remains Send outside code');
+ }
+});
+test('fence conversion is undoable, literal backticks and IME do not trigger it',()=>{
+ const view=editor();type(view,'```js');
+ composerEnter(view);assert.ok(undo(view.state,view.dispatch));
+ assert.equal(view.state.doc.firstChild.type.name,'paragraph');assert.equal(view.state.doc.textContent,'```js');
+ assert.ok(redo(view.state,view.dispatch));assert.equal(view.state.doc.firstChild.type.name,'code_block');
+ for(const value of ['literal ```','\\```','`inline`','```bad`info']){
+  const literal=editor();type(literal,value);assert.equal(composerEnter(literal),false,value);
+ }
+ const ime=editor();type(ime,'```');ime.composing=true;assert.equal(composerEnter(ime),false);
+});
+
+const gfmCases=[
+ ['paragraphs and soft/hard breaks','First\nsecond  \nthird\n\nlast','paragraph'],
+ ['ATX headings','# One\n\n###### Six','heading'],
+ ['setext headings','Title\n=====','heading'],
+ ['emphasis and strong','*one* **two** _three_ __four__','paragraph'],
+ ['strikethrough','~~removed~~','paragraph'],
+ ['multi-backtick inline code','`` a ` b ``','paragraph'],
+ ['fenced language and indented code','~~~js extra\n  const x = 1;\n~~~\n\n    indented','code_block'],
+ ['nested blockquote','> Outer\n>\n> > Inner','blockquote'],
+ ['nested lists','1. One\n   - nested\n     - deep\n2. Two','ordered_list'],
+ ['nested task lists','- [x] Done\n  - [ ] Nested\n- [ ] Next','bullet_list'],
+ ['table alignment and inline formatting','| Left | Right |\n| :--- | ---: |\n| **bold** | `code` |','table'],
+ ['escaped pipes in tables','| A | B |\n| --- | --- |\n| a\\|b | `c\\|d` |','table'],
+ ['autolinks','www.example.com and person@example.com and <https://example.com/a>','paragraph'],
+ ['links with title','[label](https://example.com "title")','paragraph'],
+ ['images with literal formatted alt','![**alt**](https://example.com/image.png "image")','paragraph'],
+ ['entities and escapes','&copy; &amp; \\*literal\\* \\[text\\]','paragraph'],
+ ['thematic breaks','---\n\n***','horizontal_rule'],
+];
+for(const [name,input,kind] of gfmCases)test('GFM coverage: '+name,()=>{
+ const doc=parseComposer(input);assert.equal(doc.firstChild.type.name,kind,'must be rich, not an unobserved fallback');
+ assert.ok(parseComposer(composerMarkdown(doc)).eq(doc),'semantic roundtrip');
+});
+test('GFM structures retain task state, strike marks, alignment and table text',()=>{
+ const tasks=parseComposer('- [x] Done\n- [ ] Next').firstChild;
+ assert.equal(tasks.child(0).attrs.checked,true);assert.equal(tasks.child(1).attrs.checked,false);
+ assert.equal(parseComposer('~~removed~~').firstChild.firstChild.marks[0].type.name,'strike');
+ const table=parseComposer('| a | b |\n| :--- | ---: |\n| 1 | 2 |').firstChild;
+ assert.equal(table.firstChild.child(0).attrs.align,'left');assert.equal(table.firstChild.child(1).attrs.align,'right');
+ assert.equal(table.child(1).textContent,'12');
+ assert.equal(parseComposer('- \\[x] literal').firstChild.firstChild.attrs.checked,null);
+});
+test('table continuation exits without splitting cells or losing later columns',()=>{
+ const view={state:composerState('| A | B |\n| --- | --- |\n| left | right |')};view.dispatch=tr=>view.state=view.state.apply(tr);
+ let pos;view.state.doc.descendants((node,p)=>{if(node.isText&&node.text==='left')pos=p+2;});
+ view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc,pos)));
+ const table=view.state.doc.firstChild;
+ composerEnter(view,{continueWriting:true});
+ assert.ok(view.state.doc.firstChild.eq(table));assert.equal(view.state.selection.$from.parent.type.name,'paragraph');
+ assert.ok(parseComposer(composerMarkdown(view.state.doc)).firstChild.eq(table));
+});
+test('fences inside tasks retain a leading task paragraph and valid Markdown',()=>{
+ for(const boundary of ['enter','space']){
+  const view=editor();type(view,'- [ ] ```js');
+  if(boundary==='space')type(view,' ');else composerEnter(view);
+  type(view,'code');
+  const item=view.state.doc.firstChild.firstChild;
+  assert.equal(item.attrs.checked,false);assert.equal(item.child(0).type.name,'paragraph');
+  assert.equal(item.child(1).type.name,'code_block');
+  assert.ok(parseComposer(composerMarkdown(view.state.doc)).eq(view.state.doc));
+ }
+ assert.equal(parseComposer('Use `<div>` and `$x$` here').firstChild.type.name,'paragraph');
+});
+test('typed tasks continue unchecked; strike and selected commands are undoable',()=>{
+ const view=editor();view.focus=()=>{};type(view,'- [x] Done');
+ assert.equal(view.state.doc.firstChild.firstChild.attrs.checked,true);
+ composerNewline(view.state,view.dispatch);type(view,'Next');
+ assert.equal(view.state.doc.firstChild.child(1).attrs.checked,false);
+ const strike=editor();type(strike,'~~gone~~');assert.equal(strike.state.doc.firstChild.firstChild.marks[0].type.name,'strike');
+ const selected={state:composerState('selected'),focus(){}};selected.dispatch=tr=>selected.state=selected.state.apply(tr);
+ selected.dispatch(selected.state.tr.setSelection(TextSelection.create(selected.state.doc,1,9)));
+ toggleComposerMark(selected,'code');assert.equal(composerMarkdown(selected.state.doc),'`selected`');
+ assert.ok(undo(selected.state,selected.dispatch));assert.equal(composerMarkdown(selected.state.doc),'selected');
+ for(const kind of ['code_block','blockquote','task_list']){
+  const before=selected.state.doc;formatComposerBlock(selected,kind);
+  assert.notDeepEqual(selected.state.doc.toJSON(),before.toJSON());
+  assert.ok(undo(selected.state,selected.dispatch));assert.ok(selected.state.doc.eq(before),'one Undo reverses '+kind);
+ }
+});
+
+const rawCases=[
+ ['reference links and image definitions','Before [label][id] ![alt][id]\n\n[id]: https://example.com "Title"\n\nAfter'],
+ ['footnotes','Before[^note]\n\n[^note]: footnote\n    continued\n\nAfter'],
+ ['alerts','> [!NOTE]\n> Keep this **alert**\n\nAfter'],
+ ['math','Before $x_1$ and $$y$$\n\nAfter'],
+ ['raw HTML','<details>\n<summary>Literal</summary>\n<script>alert(1)</script>\n</details>'],
+ ['CRLF and Unicode','Before\r\n\r\n[^n]: café e\u0301 東京\t\r\n\r\nAfter\r\n'],
+];
+for(const [name,input] of rawCases)test('lossless source: '+name,()=>{
+ const view={state:composerState(input)};view.dispatch=tr=>view.state=view.state.apply(tr);
+ assert.equal(view.state.doc.firstChild.type.name,'markdown_source');
+ assert.equal(composerMarkdown(view.state.doc),input);
+ view.dispatch(view.state.tr.insertText('Changed ',1));
+ const expected='Changed '+input;
+ for(let cycle=0;cycle<2;cycle++){
+  view.state=composerState(composerMarkdown(view.state.doc),composerDocument(view.state.doc));
+  assert.equal(composerMarkdown(view.state.doc),expected);
+ }
+ assert.equal(view.state.doc.firstChild.type.spec.toDOM(view.state.doc.firstChild)[0],'pre');
+});
+test('website notation remains source, with no account lookup or executable image',()=>{
+ const source='@someone #123 :smile: https://example.com/issues/1';
+ assert.equal(parseComposer(source).textContent,source);
+ for(const text of ['[bad](javascript:alert)','[bad](data:text/html,bad)','[bad](vbscript:bad)']){
+  const doc=parseComposer(text);let links=0;doc.descendants(node=>{links+=node.marks.filter(m=>m.type.name==='link').length});assert.equal(links,0);
+ }
+});
+test('GFM commentary uses existing text-only wire segments around immutable quotes',()=>{
+ const view={state:composerState('~~Before~~\n\n- [x] Task'),composing:false};view.dispatch=tr=>view.state=view.state.apply(tr);
+ const quote={id:'source',sessionId:'synthetic',messageId:'source',speaker:'Amplifier',origin:'assistant',role:'assistant',excerpt:'verbatim',spans:[{start:0,end:8}],sourceDigest:'a'.repeat(64)};
+ insertQuote(view,quote,{doc:view.state.doc,pos:view.state.doc.content.size});
+ const document=composerSendDocument(view.state.doc),quoted=document.segments.find(part=>part.type==='quote');
+ assert.deepEqual(quoted.quote,quote);
+ assert.equal(document.segments[0].content,undefined);assert.equal(document.segments[1].content,undefined);
+ for(let cycle=0;cycle<2;cycle++){
+  view.state=composerState(composerMarkdown(view.state.doc),composerDocument(view.state.doc));
+  assert.deepEqual(composerSendDocument(view.state.doc),document);
+ }
+ changeQuote(view,quoted.instanceId,0);assert.equal(composerMarkdown(view.state.doc).includes('verbatim'),false);
+ assert.match(composerMarkdown(view.state.doc),/~~Before~~/);assert.match(composerMarkdown(view.state.doc),/\[x\] Task/);
+});
+
+// These two are required acceptance controls, not optional skips. They expose
+// the remaining draft-checkpoint contract dependency until it is resolved.
+test('source-mode checkpoint retains Enter semantics after two reloads',()=>{
+ const view={state:composerState('hello'),focus(){}};view.dispatch=tr=>view.state=view.state.apply(tr);
+ view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc,1,6)));
+ formatComposerBlock(view,'markdown_source');
+ for(let cycle=0;cycle<2;cycle++){
+  view.state=composerState(composerMarkdown(view.state.doc),composerDocument(view.state.doc));
+  assert.equal(view.state.doc.firstChild.type.name,'markdown_source','explicit source mode must survive reload');
+  assert.equal(composerEnter(view),true,'Enter must still not send');
+ }
+});
+test('quoted struck commentary retains exact split whitespace through reload',()=>{
+ const view={state:composerState('~~Before~~ after'),composing:false};view.dispatch=tr=>view.state=view.state.apply(tr);
+ const quote={id:'source',sessionId:'synthetic',messageId:'source',speaker:'Amplifier',origin:'assistant',role:'assistant',excerpt:'verbatim',spans:[{start:0,end:8}],sourceDigest:'a'.repeat(64)};
+ insertQuote(view,quote,{doc:view.state.doc,pos:8});
+ const before=view.state.doc,document=composerDocument(before);
+ view.state=composerState(composerMarkdown(before),document);
+ assert.ok(view.state.doc.eq(before),'split commentary whitespace and marks must not be discarded');
 });

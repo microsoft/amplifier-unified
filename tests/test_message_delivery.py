@@ -117,6 +117,185 @@ def post_receipt(app, identity):
     return json.loads(app.db.execute('SELECT receipt FROM commands WHERE id=?', (identity,)).fetchone()[0])
 
 
+@pytest.mark.parametrize('text', [
+    '    print("indented")\n    return 1\n',
+    'First line  \nSecond line  ',
+    '\n\n```python\n    print("fenced")\n\n```\n\n',
+    '\n  caf\u00e9 e\u0301 \u6771\u4eac  \n\n',
+    '\r\n```text\r\n    literal\r\n```\r\n',
+    'Ordinary message',
+], ids=['indented-code', 'hard-break', 'fence-blank-lines', 'unicode', 'crlf', 'ordinary'])
+async def test_send_preserves_exact_text_in_message_storage_and_runtime_payload(held_post, text):
+    """Service/storage boundary only; the synthetic runtime does not mount the native loop."""
+    from amplifier_web.session_projection import view_path
+    app, runtime, _ = held_post
+    root = app._session()
+    identity = 'exact-text'
+    args = {'sessionId': root['id'], 'text': text}
+    original_args = copy.deepcopy(args)
+    app.state['view']['draft'] = text
+    runtime.expect(identity)
+    runtime.release[identity].set()
+
+    receipt = await app.dispatch('conversation.send', args, command_id=identity)
+
+    assert receipt['accepted'] and receipt['delivery'] == 'accepted'
+    assert args == original_args
+    assert runtime.sent == [(root['id'], text, identity)]
+    assert len(root['messages']) == 1
+    message = root['messages'][0]
+    assert message['text'] == text and message['inputId'] == identity
+    assert message['delivery']['status'] == 'accepted'
+    saved = json.loads(view_path(app.data_dir, root).read_text())
+    assert saved['messages'][0]['text'] == text
+    assert app.state['view']['draft'] == ''
+
+    duplicate = await app.dispatch('conversation.send', args, command_id=identity)
+    assert duplicate['duplicate'] and duplicate['delivery'] == 'accepted'
+    # Even a whitespace-only payload change must retain the original fingerprint fence.
+    with pytest.raises(AppError, match='different contents'):
+        await app.dispatch('conversation.send', {**args, 'text': text + ' '}, command_id=identity)
+    assert runtime.sent == [(root['id'], text, identity)] and len(root['messages']) == 1
+
+
+@pytest.mark.parametrize('text', ['', '   ', '\t\r\n \n', '\u00a0\u2003'],
+                         ids=['empty', 'spaces', 'tabs-newlines', 'unicode-space'])
+async def test_send_rejects_blank_text_without_consuming_draft_or_unrequested_attachment(held_post, text):
+    app, runtime, _ = held_post
+    root = app._session()
+    app.state['view']['draft'] = text
+    await app.dispatch('attachment.add', {'sessionId': root['id'], 'name': 'unsent.txt', 'base64': 'aGVsbG8='})
+    attachments = copy.deepcopy(app.clients.attachments(root))
+    before = copy.deepcopy(root)
+
+    with pytest.raises(AppError, match='Enter a message or attach a file'):
+        await app.dispatch('conversation.send', {'sessionId': root['id'], 'text': text},
+                           command_id='blank-text')
+
+    assert root == before and not runtime.sent
+    assert app.state['view']['draft'] == text
+    assert app.clients.attachments(root) == attachments
+    assert app.db.execute('SELECT receipt FROM commands WHERE id=?', ('blank-text',)).fetchone() is None
+
+
+@pytest.mark.parametrize('text', ['', ' \t\r\n'], ids=['empty', 'whitespace'])
+async def test_send_blank_text_with_attachment_retains_existing_fallback(held_post, text):
+    app, runtime, _ = held_post
+    root = app._session()
+    await app.dispatch('attachment.add', {'sessionId': root['id'], 'name': 'reference.txt', 'base64': 'aGVsbG8='})
+    attachment = copy.deepcopy(app.clients.attachments(root)[0])
+    identity = 'attachment-only'
+    runtime.expect(identity)
+    runtime.release[identity].set()
+
+    receipt = await app.dispatch('conversation.send', {
+        'sessionId': root['id'], 'text': text, 'attachmentIds': [attachment['id']]},
+        command_id=identity)
+
+    expected = 'Please review the attached files.'
+    assert receipt['delivery'] == 'accepted'
+    assert runtime.sent == [(root['id'], expected, identity)]
+    assert root['messages'][0]['text'] == expected
+    assert root['messages'][0]['attachments'] == [attachment]
+    assert app.clients.attachments(root) == []
+
+
+@pytest.mark.parametrize('guard', ['generation', 'configuration-revision', 'configuration-busy', 'file-access'])
+async def test_send_exact_text_still_obeys_pre_admission_guards(held_post, guard):
+    app, runtime, _ = held_post
+    root = app._session()
+    text = '    guarded code  \n\n'
+    args = {'sessionId': root['id'], 'text': text}
+    if guard == 'generation':
+        args['expectedGenerationId'] = 'ended-generation'
+    elif guard == 'configuration-revision':
+        args['expectedConfigurationRevision'] = root.get('nextMessageRevision', 0) + 1
+    elif guard == 'configuration-busy':
+        root['configurationBusy'] = True
+    else:
+        root['fileAccessPending'] = {'status': 'pending'}
+    app.state['view']['draft'] = text
+    before = copy.deepcopy(root)
+
+    with pytest.raises(AppError) as exc:
+        await app.dispatch('conversation.send', args, command_id='guarded-text')
+
+    assert exc.value.status == 409
+    assert root == before and not runtime.sent
+    assert app.state['view']['draft'] == text
+    assert app.db.execute('SELECT receipt FROM commands WHERE id=?', ('guarded-text',)).fetchone() is None
+
+
+@pytest.mark.parametrize('preserve_draft', [False, True], ids=['legacy-draft', 'browser-draft'])
+@pytest.mark.parametrize('outcome', ['accepted', 'unknown'])
+async def test_send_exact_text_delayed_receipts_preserve_draft_ownership_and_never_replay(
+        held_post, preserve_draft, outcome):
+    from amplifier_web.runtime import RuntimeOperationPending
+    app, runtime, _ = held_post
+    root = app._session()
+    sid, identity = root['id'], 'delayed-text'
+    text = '    caf\u00e9  \n\n'
+    args = {'sessionId': sid, 'text': text, 'preserveDraft': preserve_draft}
+    app.clients.attach('sender')
+    app.clients.attach('other')
+    with app.clients.bind('other'):
+        await app.dispatch('view.update', {'patch': {'draft': 'Other browser draft'}})
+        await app.dispatch('attachment.add', {'sessionId': sid, 'name': 'other.txt', 'base64': 'aGVsbG8='})
+        other_attachments = copy.deepcopy(app.clients.attachments(root))
+    with app.clients.bind('sender'):
+        await app.dispatch('view.update', {'patch': {'draft': text}})
+        await app.dispatch('attachment.add', {'sessionId': sid, 'name': 'sent.txt', 'base64': 'aGVsbG8='})
+        submitted_attachment = copy.deepcopy(app.clients.attachments(root)[0])
+        args['attachmentIds'] = [submitted_attachment['id']]
+        task = await start_post(app, runtime, identity, outcome, **args)
+    try:
+        assert root['messages'][0]['text'] == text
+        assert root['messages'][0]['delivery']['status'] == 'sending'
+        with app.clients.bind('sender'):
+            # A modern browser may have retyped the identical text after submit.
+            newer_text = text if preserve_draft else 'Newer draft  \n'
+            await app.dispatch('view.update', {'patch': {'draft': newer_text}})
+            await app.dispatch('attachment.add', {'sessionId': sid, 'name': 'newer.txt', 'base64': 'aGVsbG8='})
+            newer_attachment = copy.deepcopy(app.clients.attachments(root)[-1])
+        with app.clients.bind('other'):
+            duplicate = await app.dispatch('conversation.send', args, command_id=identity)
+        assert duplicate['duplicate'] and duplicate['delivery'] == 'sending'
+        assert runtime.sent == [(sid, text, identity)] and len(root['messages']) == 1
+        runtime.release[identity].set()
+        if outcome == 'unknown':
+            with pytest.raises(RuntimeOperationPending):
+                await task
+            assert root['messages'][0]['delivery']['status'] == 'unknown'
+            with app.clients.bind('sender'):
+                assert app.clients.attachments(root) == [submitted_attachment, newer_attachment]
+            checked = await app.dispatch('conversation.delivery', {'sessionId': sid, 'inputId': identity})
+            assert checked['result']['delivery'] == 'unknown'
+            cached = await app.dispatch('conversation.send', args, command_id=identity)
+            assert cached['duplicate'] and cached['delivery'] == 'unknown'
+        else:
+            assert (await task)['delivery'] == 'accepted'
+
+        # Late/duplicate evidence reconciles this input, never submits it again.
+        for _ in range(2):
+            await app.on_runtime_event('runtime.delivery', {
+                'sessionId': sid, 'inputId': identity, 'delivery': 'accepted'})
+        with app.clients.bind('other'):
+            cached = await app.dispatch('conversation.send', args, command_id=identity)
+            assert cached['duplicate'] and cached['delivery'] == 'accepted'
+            assert app.clients.attachments(root) == other_attachments
+            assert app.state['view']['draft'] == 'Other browser draft'
+        with app.clients.bind('sender'):
+            assert app.clients.attachments(root) == [newer_attachment]
+            assert app.state['view']['draft'] == newer_text
+        assert runtime.sent == [(sid, text, identity)] and len(root['messages']) == 1
+        assert root['messages'][0]['text'] == text
+        assert root['messages'][0]['delivery']['status'] == 'accepted'
+        assert root['messages'][0]['attachments'] == [submitted_attachment]
+    finally:
+        runtime.release[identity].set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 @pytest.mark.parametrize('pending', [None, False, True])
 async def test_rejected_ui_post_restores_exact_presence_and_draft_references(held_post, pending):
     from amplifier_web.chat_navigation import navigation_activity

@@ -2,9 +2,13 @@ import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
+import {mkdirSync,writeFileSync} from 'node:fs';
+import {join} from 'node:path';
 import {chromium,expect} from '@playwright/test';
 const root=fileURLToPath(new URL('../../',import.meta.url));
-const fixture=spawn(root+'.venv/bin/python',['-u',root+'tests/fixtures/browser_detail_server.py',root],{stdio:['ignore','pipe','inherit']});
+const output=process.env.AMPLIFIER_TEST_OUTPUT||process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp';
+mkdirSync(output,{recursive:true});
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/browser_detail_server.py',root],{stdio:['ignore','pipe','inherit']});
 let browser;
 try{
  const port=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exit '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const row=JSON.parse(line);if(row.port){clearTimeout(timer);resolve(row.port)}}catch{}})});
@@ -74,7 +78,7 @@ try{
     await composerPresentation({...presentation,scheme});await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',scheme);
     await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState().effectiveComposition.presentation.scheme)).toBe(scheme);
     await input.focus();await input.press('Control+a');await expect(bar).toBeVisible();
-    await bar.getByRole('button',{name:'Italic',exact:true}).focus();await page.keyboard.press('Tab');
+    await bar.getByRole('button',{name:'Strikethrough',exact:true}).focus();await page.keyboard.press('Tab');
     const evidence=await selectorEvidence(bar,`${label} ${scheme}`,{focused:true});paints.push(evidence.palette);
     if(label==='390px'){assert.equal(evidence.pageOverflow,false);const popup=evidence.current.popup;assert.ok(popup.x>=0&&popup.x+popup.width<=390)}
     assert.equal(await draft(),before,'Theme/focus checks preserve the unsent draft');assert.equal(sends.length,sent,'Theme/focus checks never send');
@@ -97,15 +101,49 @@ try{
  // External/agent draft changes render without replaying them as user edits.
  await action('view.update',{patch:{draft:'## From an agent\n\nKeep **this**.'},sessionId:alpha});await expect(input.locator('h2')).toHaveText('From an agent');await expect(input.locator('strong')).toHaveText('this');
  await clear();await input.pressSequentially('```js ');await input.pressSequentially('const text = "**literal**";');await input.press('Control+Enter');await input.pressSequentially('// next');await expect(input.locator('pre code')).toContainText('**literal**');await expect(input.locator('strong')).toHaveCount(0);
+ // The opener is completed by ordinary Enter, not only a trailing space.
+ await clear();await input.pressSequentially('```python');await input.press('Enter');
+ await expect(input.locator('pre code')).toHaveCount(1);assert.equal(sends.length,0);
+ await input.pressSequentially('  print("**literal**")');await input.press('Enter');await input.pressSequentially('next');
+ await expect(input.locator('pre code')).toHaveText('  print("**literal**")\n  next');
+ assert.equal(sends.length,0,'Enter inside code never sends');
+ await input.press('Alt+Enter');await input.pressSequentially('Outside code');
+ await expect(input.locator(':scope > p')).toHaveText('Outside code');assert.equal(sends.length,0);
+ await clear();await input.pressSequentially('```');await input.press('Enter');await input.press('Control+z');
+ await expect(input.locator('pre')).toHaveCount(0);await expect(input).toHaveText('```');
+ await input.press('Control+Shift+z');await expect(input.locator('pre')).toHaveCount(1);
+ await input.press('Backspace');await expect(input.locator('pre')).toHaveCount(0);
+ await clear();await input.pressSequentially('```');await input.evaluate(el=>el.dispatchEvent(new InputEvent('beforeinput',{inputType:'insertParagraph',bubbles:true,cancelable:true})));
+ await expect(input.locator('pre')).toHaveCount(1);assert.equal(sends.length,0,'virtual-keyboard fence boundary does not send');
  await clear();await paste('Hello **from paste**\n\n- A\n- B');await expect(input.locator('strong')).toHaveText('from paste');await expect(input.locator('li')).toHaveCount(2);
  await clear();await paste('<script>alert(1)</script>');await expect(input.locator('script')).toHaveCount(0);await expect(input).toHaveText('<script>alert(1)</script>');
+ await clear();await input.evaluate(el=>{const dataTransfer=new DataTransfer();dataTransfer.setData('text/html','<a href="javascript:alert(1)">unsafe</a>');el.dispatchEvent(new DragEvent('drop',{dataTransfer,bubbles:true,cancelable:true}));});
+ await expect(input.locator('a')).toHaveCount(0);await expect(input).toHaveText('<a href="javascript:alert(1)">unsafe</a>');
+ const gfm='~~Before~~\n\n- [x] Done\n  - [ ] Nested\n\n| A | B |\n| :--- | ---: |\n| **bold** | `code` |';
+ await clear();await paste(gfm);
+ await expect(input.locator('s')).toHaveText('Before');await expect(input.locator('li[data-task]')).toHaveCount(2);await expect(input.locator('table th')).toHaveCount(2);
+ const richDraft=await draft();assert.match(richDraft,/~~Before~~/);assert.match(richDraft,/\[x\] Done/);
+ await action('session.select',{id:beta});await clear();await input.pressSequentially('Private other chat');
+ await action('session.select',{id:alpha});await expect.poll(draft).toBe(richDraft);await page.reload();await input.waitFor();await expect(input.locator('table th')).toHaveCount(2);
+ await expect.poll(draft).toBe(richDraft);
+ // Unsupported website syntax/reference definitions remain editable raw source.
+ const raw='Before[^n]\n\n[^n]: café e\u0301 東京\n    literal continuation\n\n> [!NOTE]\n> **Do not rewrite**\n\nAfter';
+ await clear();await paste(raw);await expect(input.locator('.a-composer-markdown-source')).toHaveCount(1);await expect.poll(draft).toBe(raw);
+ await input.press('Control+End');await input.pressSequentially(' edited');
+ for(let cycle=0;cycle<2;cycle++){await action('session.select',{id:beta});await expect.poll(draft).toBe('Private other chat');await action('session.select',{id:alpha});await page.reload();await input.waitFor();await expect.poll(draft).toBe(raw+' edited');}
  // Selection toolbar preserves the selected range while controls receive focus.
  await clear();await input.pressSequentially('Selected words');await input.press('Control+a');
  const bar=page.getByRole('toolbar',{name:'Format selected text'});await expect(bar).toBeVisible();
+ const contextPrevented=await input.evaluate(el=>{const event=new MouseEvent('contextmenu',{bubbles:true,cancelable:true});el.dispatchEvent(event);return event.defaultPrevented;});
+ assert.equal(contextPrevented,false,'native browser copy/paste/spelling menu stays available');
+ await input.press('Alt+F10');await expect(bar.getByRole('button',{name:'Link',exact:true})).toBeFocused();await page.keyboard.press('Escape');await expect(input).toBeFocused();
+ await input.press('Control+a');await expect(bar).toBeVisible();
  await selectorThemes(bar,'desktop');
  assert.equal(await draft(),'Selected words');assert.equal(sends.length,0);
  await bar.getByRole('button',{name:'Bold',exact:true}).click();await expect(input.locator('strong')).toHaveText('Selected words');
  await bar.getByRole('button',{name:'Italic',exact:true}).click();await expect(input.locator('em')).toHaveText('Selected words');
+ await bar.getByRole('button',{name:'Strikethrough',exact:true}).click();await expect(input.locator('s')).toHaveText('Selected words');
+ await input.press('Control+z');await expect(input.locator('s')).toHaveCount(0);await expect(input.locator('strong')).toHaveText('Selected words');
  for(const [value,tag] of [['h1','h1'],['h2','h2'],['h3','h3'],['ordered_list','ol li'],['bullet_list','ul li'],['text','p']]){
   await bar.getByLabel('Text style').selectOption(value);await expect(input.locator(tag)).toHaveText('Selected words');
   await selectorEvidence(bar,`block ${value}`);await expect(input.locator('strong')).toHaveText('Selected words');await expect(input.locator('em')).toHaveText('Selected words');assert.equal(sends.length,0);
@@ -117,9 +155,9 @@ try{
  await clear();await paste('https://example.com/raw and [Label](https://example.com/labeled)');await expect(input.locator('a')).toHaveCount(2);
  await clear();await input.pressSequentially('[Typed](https://example.com/typed) https://example.com/raw ');await expect(input.locator('a')).toHaveCount(2);
  await input.press('Control+a');await expect(bar).toBeVisible();await page.setViewportSize({width:390,height:844});await input.press('Control+a');await expect(bar).toBeVisible();
- await expect.poll(async()=>{const rect=await bar.boundingBox();return !!rect&&rect.x>=0&&rect.x+rect.width<=390}).toBe(true);await page.screenshot({path:'/tmp/selection-toolbar-mobile.png'});
+ await expect.poll(async()=>{const rect=await bar.boundingBox();return !!rect&&rect.x>=0&&rect.x+rect.width<=390}).toBe(true);await page.screenshot({path:join(output,'selection-toolbar-mobile.png')});
  await selectorThemes(bar,'390px');
- await page.setViewportSize({width:1280,height:900});await page.screenshot({path:'/tmp/selection-toolbar-desktop.png'});await page.evaluate(()=>{document.querySelector('#amp-one').style.colorScheme='dark'});await input.press('Control+a');await expect(bar).toBeVisible();await page.screenshot({path:'/tmp/selection-toolbar-dark.png'});
+ await page.setViewportSize({width:1280,height:900});await page.screenshot({path:join(output,'selection-toolbar-desktop.png')});await page.evaluate(()=>{document.querySelector('#amp-one').style.colorScheme='dark'});await input.press('Control+a');await expect(bar).toBeVisible();await page.screenshot({path:join(output,'selection-toolbar-dark.png')});
  await clear();await input.pressSequentially('Keep this prompt');await paste('Diagnostics\n'.repeat(1000));await expect(page.locator('.a-attachment')).toContainText('Pasted text');await expect(input).toHaveText('Keep this prompt');
  await page.getByRole('button',{name:'Remove Pasted text.txt',exact:true}).click();
  // Image and Markdown image pastes do not leak remote requests.
@@ -129,8 +167,11 @@ try{
  await expect(page.locator('.a-attachment')).toHaveCount(1);await page.getByRole('button',{name:'Remove clipboard.png',exact:true}).click();
  await clear();await input.pressSequentially('Do not send during composition');await input.evaluate(el=>{el.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',keyCode:229,isComposing:true,bubbles:true,cancelable:true}));el.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:''}));});assert.equal(sends.length,0);
  await clear();await input.pressSequentially('Send **formatted**');await input.press('Enter');await expect.poll(()=>sends.length).toBe(1);assert.equal(sends[0].args.text,'Send **formatted**');await expect(input).toHaveText('');await expect(page.locator('.a-user strong').last()).toHaveText('formatted');await expect(page.locator('.a-assistant').last()).toContainText('Synthetic reply.');
+ await paste(raw);await page.locator('[data-part="composer-primary-action"]').click();await expect.poll(()=>sends.length).toBe(2);
+ assert.equal(sends[1].args.text,raw);await expect(input).toHaveText('');await expect(page.locator('.a-assistant').last()).toContainText('Synthetic reply.');
  await input.pressSequentially('# A live composer');await input.press('Shift+Enter');await input.pressSequentially('**Bold** and _emphasis_');await input.press('Shift+Enter');await input.pressSequentially('* First item');await input.press('Control+Enter');await input.pressSequentially('Second item');
- await page.screenshot({path:'/tmp/unified-markdown-composer-desktop.png'});
- await page.setViewportSize({width:390,height:844});await expect.poll(async()=>(await input.boundingBox()).width).toBeGreaterThan(300);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.ok((await input.boundingBox()).height<=180);await page.screenshot({path:'/tmp/unified-markdown-composer-mobile.png'});
+ await page.screenshot({path:join(output,'unified-markdown-composer-desktop.png')});
+ await page.setViewportSize({width:390,height:844});await expect.poll(async()=>(await input.boundingBox()).width).toBeGreaterThan(300);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.ok((await input.boundingBox()).height<=180);await page.screenshot({path:join(output,'unified-markdown-composer-mobile.png')});
+ writeFileSync(join(output,'markdown-composer.json'),JSON.stringify({status:'passed',checks:['typed-fence-enter','literal-code-indent-exit','fence-undo-redo-backspace','virtual-keyboard-boundary','gfm-rich-paste','raw-extension-source','two-reload-cycles','other-chat-retention','native-context-menu','keyboard-toolbar','selected-strike-undo','inert-html-drop','raw-send','attachments','IME','desktop-mobile'],sends:sends.map(send=>send.args.text),pageErrors:errors,serverErrors},null,2));
  assert.deepEqual(serverErrors,[]);assert.deepEqual(errors,[]);console.log('Markdown composer passed: live formatting, undo/redo, headings/lists and exit, draft switch/reload/agent update, literal code, Markdown and large paste, safe HTML, IME guard, Markdown send, desktop/mobile.');
 }finally{await browser?.close();fixture.kill()}

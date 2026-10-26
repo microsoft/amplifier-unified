@@ -312,6 +312,33 @@ async def test_snapshot_validation_and_forged_metadata(app):
     assert sent['replyTo']['segments'][0]['quote'] == first
 
 
+async def test_send_quote_only_document_keeps_exact_projection_and_validation(app):
+    from amplifier_web.message_interactions import document_text
+    from amplifier_web.service import AppError
+    first = await snapshot(app)
+    sid = target(app)['sessionId']
+    submitted = document(reference(first, 'only'))
+    args = {'sessionId': sid, 'text': '', 'document': submitted}
+    before = copy.deepcopy(app._session()['messages'])
+    invalid = document(reference({'id': 'missing'}, 'only'))
+    for changes in [
+        {'document': invalid},
+        {'document': document({'type': 'reference', 'text': 'forged'})},
+        {'replyId': first['id']},  # Legacy reply and structured document cannot mix.
+    ]:
+        with pytest.raises(AppError):
+            await call(app, 'conversation.send', {**args, **changes})
+    assert app._session()['messages'] == before and not app.runtime.sent
+
+    receipt = await call(app, 'conversation.send', args, command_id='quote-only')
+    duplicate = await call(app, 'conversation.send', args, command_id='quote-only')
+    assert receipt['delivery'] == 'accepted' and duplicate['duplicate']
+    expected = document_text(submitted)
+    row = next(m for m in app._session()['messages'] if m.get('inputId') == 'quote-only' and m['role'] == 'user')
+    assert row['text'] == expected and row['replyTo']['segments'] == submitted['segments']
+    assert app.runtime.sent == [(sid, expected, 'quote-only')]
+
+
 async def test_private_structured_draft_reopen_and_two_chats(app):
     quote = await snapshot(app)
     sid = target(app)['sessionId']

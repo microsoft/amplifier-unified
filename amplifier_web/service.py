@@ -3242,7 +3242,9 @@ class AppService:
                 # into new work under a policy that is awaiting replacement.
                 allow_next_turn = args.get('allowNextTurn') is True and not session.get('fileAccessPending')
                 target_generation = steering_target(session, args.get('expectedGenerationId'), allow_next_turn)
-                text = args["text"].strip()
+                # Whitespace can carry Markdown meaning; validate blank input
+                # separately without changing the saved or delivered message.
+                text = args["text"]
                 from .message_interactions import resolve_quote, resolve_document, document_text
                 quote = resolve_quote(session, args.get("replyId"))
                 if args.get('document') is not None:
@@ -3255,8 +3257,10 @@ class AppService:
                 available={row['id']:row for row in self.clients.attachments(session)}
                 if any(identity not in available for identity in requested):raise AppError('An attachment is no longer in this draft. Refresh and retry.')
                 attachments=[available[identity] for identity in requested]
-                if not text and not attachments:raise AppError("Enter a message or attach a file.")
-                text=text or 'Please review the attached files.'
+                if not text.strip():
+                    if not attachments:
+                        raise AppError("Enter a message or attach a file.")
+                    text = 'Please review the attached files.'
                 if not self.runtime:
                     raise AppError("The Amplifier runtime is unavailable.")
                 input_id = command_id or str(uuid.uuid4())
