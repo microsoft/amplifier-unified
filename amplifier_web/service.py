@@ -3459,6 +3459,8 @@ class AppService:
                 if 'draft' in patch:
                     if not isinstance(patch['draft'], str):
                         raise AppError('Draft must be text.')
+                    if client_id is None and patch.get('draftDocument') is not None:
+                        raise AppError('Attach a client to save an editor checkpoint.')
                     target = args.get('sessionId', self.state.get('selectedSessionId'))
                     if client_id is not None:
                         if target is not None:
@@ -3466,9 +3468,8 @@ class AppService:
                         from .message_interactions import resolve_document
                         rich = patch.pop('draftDocument', ...)
                         if rich is not None and rich is not ...:
-                            if target is None:
-                                raise AppError('Quotes require their current conversation.')
-                            rich = resolve_document(self._session(target), rich)
+                            rich = resolve_document(self._session(target) if target is not None else None,
+                                                    rich, draft=True)
                         self.clients.draft(target, patch.pop('draft'), rich)
                     elif target:
                         self._session(target, hydrate=False)['draft'] = patch['draft']

@@ -131,6 +131,13 @@ try{
  await clear();await paste(raw);await expect(input.locator('.a-composer-markdown-source')).toHaveCount(1);await expect.poll(draft).toBe(raw);
  await input.press('Control+End');await input.pressSequentially(' edited');
  for(let cycle=0;cycle<2;cycle++){await action('session.select',{id:beta});await expect.poll(draft).toBe('Private other chat');await action('session.select',{id:alpha});await page.reload();await input.waitFor();await expect.poll(draft).toBe(raw+' edited');}
+ await clear();await input.pressSequentially('Source mode');await input.press('Control+a');
+ await page.getByRole('toolbar',{name:'Format selected text'}).getByLabel('Text style').selectOption('markdown_source');
+ for(let cycle=0;cycle<2;cycle++){
+  await action('session.select',{id:beta});await expect.poll(draft).toBe('Private other chat');await action('session.select',{id:alpha});
+  await page.reload();await input.waitFor();await expect(input.locator('.a-composer-markdown-source')).toHaveCount(1);
+  await input.press('Control+End');await input.press('Enter');assert.equal(sends.length,0);
+ }
  // Selection toolbar preserves the selected range while controls receive focus.
  await clear();await input.pressSequentially('Selected words');await input.press('Control+a');
  const bar=page.getByRole('toolbar',{name:'Format selected text'});await expect(bar).toBeVisible();
@@ -172,6 +179,7 @@ try{
  await input.pressSequentially('# A live composer');await input.press('Shift+Enter');await input.pressSequentially('**Bold** and _emphasis_');await input.press('Shift+Enter');await input.pressSequentially('* First item');await input.press('Control+Enter');await input.pressSequentially('Second item');
  await page.screenshot({path:join(output,'unified-markdown-composer-desktop.png')});
  await page.setViewportSize({width:390,height:844});await expect.poll(async()=>(await input.boundingBox()).width).toBeGreaterThan(300);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.ok((await input.boundingBox()).height<=180);await page.screenshot({path:join(output,'unified-markdown-composer-mobile.png')});
- writeFileSync(join(output,'markdown-composer.json'),JSON.stringify({status:'passed',checks:['typed-fence-enter','literal-code-indent-exit','fence-undo-redo-backspace','virtual-keyboard-boundary','gfm-rich-paste','raw-extension-source','two-reload-cycles','other-chat-retention','native-context-menu','keyboard-toolbar','selected-strike-undo','inert-html-drop','raw-send','attachments','IME','desktop-mobile'],sends:sends.map(send=>send.args.text),pageErrors:errors,serverErrors},null,2));
- assert.deepEqual(serverErrors,[]);assert.deepEqual(errors,[]);console.log('Markdown composer passed: live formatting, undo/redo, headings/lists and exit, draft switch/reload/agent update, literal code, Markdown and large paste, safe HTML, IME guard, Markdown send, desktop/mobile.');
+ assert.deepEqual(serverErrors,[]);assert.deepEqual(errors,[]);
+ writeFileSync(join(output,'markdown-composer.json'),JSON.stringify({status:'passed',checks:['typed-fence-enter','literal-code-indent-exit','fence-undo-redo-backspace','virtual-keyboard-boundary','gfm-rich-paste','raw-extension-source','two-reload-cycles','explicit-source-mode-reload-enter','other-chat-retention','native-context-menu','keyboard-toolbar','selected-strike-undo','inert-html-drop','raw-send','attachments','IME','desktop-mobile'],sends:sends.map(send=>send.args.text),pageErrors:errors,serverErrors},null,2));
+ console.log('Markdown composer passed: live formatting, undo/redo, headings/lists and exit, draft switch/reload/agent update, literal code, Markdown and large paste, safe HTML, IME guard, Markdown send, desktop/mobile.');
 }finally{await browser?.close();fixture.kill()}

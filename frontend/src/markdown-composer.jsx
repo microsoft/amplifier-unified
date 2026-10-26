@@ -127,7 +127,7 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
  },[value,documentValue,disabled,readOnly]);
  const dismiss=()=>{const view=editor.current;dismissed.current=view.state.selection.from+':'+view.state.selection.to;setSelection(null);setLinkOpen(false);view.focus();};
  const mark=name=>toggleComposerMark(editor.current,name);
- return <><div className="a-markdown-composer-host" ref={host}/>{documentValue&&<label className="a-caption">Add quotes <select aria-label="Quote insertion" defaultValue="caret" onChange={event=>{insertionMode.current=event.target.value;}}><option value="caret">At remembered caret</option><option value="append">At end</option></select></label>}{selection&&!disabled&&!readOnly&&createPortal(
+ return <><div className="a-markdown-composer-host" ref={host}/>{documentValue?.segments?.some(part=>part.type==='quote')&&<label className="a-caption">Add quotes <select aria-label="Quote insertion" defaultValue="caret" onChange={event=>{insertionMode.current=event.target.value;}}><option value="caret">At remembered caret</option><option value="append">At end</option></select></label>}{selection&&!disabled&&!readOnly&&createPortal(
   <div className="a-composer-format" ref={toolbar} style={{left:selection.left,top:selection.top}} onKeyDown={event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();dismiss();}}}>
    <div role="toolbar" aria-label="Format selected text" className="a-composer-format-row">
     <button type="button" aria-label="Link" disabled={selection.literal} title="Link (Ctrl/⌘ K)" aria-pressed={selection.link} onMouseDown={e=>e.preventDefault()} onClick={openLink}><Link size={18}/></button>

@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import json
+import re
 
 QUOTE_LIMIT = 4000
 REACTIONS = ['👍', '❤️', '😂', '🎉', '😮', '😢', '👎', '✅']
@@ -240,13 +241,117 @@ def _commentary_content(content):
     return copy.deepcopy(content)
 
 
-def resolve_document(session, document):
-    """Resolve source IDs, never accept client-supplied quoted text or attribution."""
+def _draft_commentary_content(content):
+    """Validate a lossless, inert editor checkpoint, not a send-time document."""
+    from .service import AppError
+    blocks = {'paragraph', 'blockquote', 'horizontal_rule', 'heading', 'code_block',
+              'ordered_list', 'bullet_list', 'table', 'markdown_source'}
+    inline = {'text', 'image', 'hard_break'}
+    children_for = {
+        'paragraph': inline, 'heading': inline, 'table_cell': inline,
+        'blockquote': blocks, 'list_item': blocks,
+        'ordered_list': {'list_item'}, 'bullet_list': {'list_item'},
+        'table': {'table_row'}, 'table_row': {'table_cell'},
+        'code_block': {'text'}, 'markdown_source': {'text'},
+    }
+    attrs_for = {
+        'heading': {'level'}, 'code_block': {'params'},
+        'ordered_list': {'order', 'tight'}, 'bullet_list': {'tight'},
+        'list_item': {'checked'}, 'image': {'src', 'alt', 'title'},
+        'table_cell': {'header', 'align'},
+    }
+    count = 0
+
+    def url(value):
+        # Validate without rewriting the saved value. Relative references and
+        # ordinary web/mail links are inert data; executable/local schemes are not.
+        if (not isinstance(value, str) or len(value) > 400000
+                or any(ord(char) < 32 or ord(char) == 127 for char in value)
+                or '\\' in value):
+            raise AppError('Invalid commentary URL.')
+        scheme = re.match(r'^([a-z][a-z0-9+.-]*):', value.lstrip(), re.I)
+        if (scheme and scheme[1].lower() not in {'http', 'https', 'mailto', 'tel', 'ftp'}
+                or not scheme and ':' in re.split(r'[/#?]', value, maxsplit=1)[0]):
+            raise AppError('Invalid commentary URL.')
+
+    def visit(node, allowed, depth=0, literal=False):
+        nonlocal count
+        count += 1
+        if (not isinstance(node, dict) or not isinstance(node.get('type'), str)
+                or node['type'] not in allowed
+                or set(node) - {'type', 'attrs', 'content', 'marks', 'text'}
+                or depth > 32 or count > 10000):
+            raise AppError('Invalid commentary editor content.')
+        kind = node['type']
+        if kind == 'text':
+            if not isinstance(node.get('text'), str) or not node['text']:
+                raise AppError('Invalid commentary text.')
+        elif 'text' in node:
+            raise AppError('Invalid commentary text.')
+        attrs = node.get('attrs', {})
+        if not isinstance(attrs, dict) or set(attrs) - attrs_for.get(kind, set()):
+            raise AppError('Invalid commentary attributes.')
+        for key, value in attrs.items():
+            if key == 'level':
+                valid = type(value) is int and 1 <= value <= 6
+            elif key == 'order':
+                valid = type(value) is int and 0 <= value <= 999999999
+            elif key in {'tight', 'header'}:
+                valid = type(value) is bool
+            elif key == 'checked':
+                valid = value is None or type(value) is bool
+            elif key == 'align':
+                valid = value is None or isinstance(value, str) and value in {'left', 'center', 'right'}
+            elif key in {'alt', 'title'}:
+                valid = value is None or isinstance(value, str)
+            else:
+                valid = isinstance(value, str)
+            if not valid:
+                raise AppError('Invalid commentary attributes.')
+        if kind == 'image':
+            url(attrs.get('src'))
+        marks = node.get('marks', [])
+        if not isinstance(marks, list) or len(marks) > 5 or marks and (kind not in inline or literal):
+            raise AppError('Invalid commentary marks.')
+        seen = set()
+        for mark in marks:
+            if (not isinstance(mark, dict) or not isinstance(mark.get('type'), str)
+                    or mark['type'] not in {'em', 'strong', 'code', 'link', 'strike'}
+                    or mark['type'] in seen or set(mark) - {'type', 'attrs'}):
+                raise AppError('Invalid commentary mark.')
+            seen.add(mark['type'])
+            mark_attrs = mark.get('attrs', {})
+            allowed_attrs = {'href', 'title'} if mark['type'] == 'link' else set()
+            if (not isinstance(mark_attrs, dict) or set(mark_attrs) - allowed_attrs
+                    or any(not isinstance(value, (str, type(None))) for value in mark_attrs.values())):
+                raise AppError('Invalid commentary link.')
+            if mark['type'] == 'link':
+                url(mark_attrs.get('href'))
+        children = node.get('content', [])
+        if (not isinstance(children, list) or kind not in children_for and 'content' in node
+                or len(children) > 10000 - count):
+            raise AppError('Invalid commentary children.')
+        if kind in {'blockquote', 'list_item', 'ordered_list', 'bullet_list', 'table', 'table_row'} and not children:
+            raise AppError('Invalid commentary children.')
+        for child in children:
+            visit(child, children_for[kind], depth + 1, kind in {'code_block', 'markdown_source'})
+        if kind == 'list_item' and children[0]['type'] != 'paragraph':
+            raise AppError('Invalid commentary list item.')
+
+    visit(content, blocks)
+    if len(json.dumps(content, ensure_ascii=False)) > 400000:
+        raise AppError('Commentary editor content is too long.')
+    return copy.deepcopy(content)
+
+
+def resolve_document(session, document, *, draft=False):
+    """Resolve canonical quotes; expanded editor JSON is private draft-only."""
     from .service import AppError
     if document is None:
         return None
     if (not isinstance(document, dict) or set(document) != {'version', 'segments'}
             or document['version'] != 1 or not isinstance(document['segments'], list)
+            or draft and type(document['version']) is not int
             or not 1 <= len(document['segments']) <= 1000):
         raise AppError('Invalid quoted document.')
     result, instances, total, text_size, content_size = [], set(), 0, 0, 0
@@ -254,24 +359,35 @@ def resolve_document(session, document):
         if not isinstance(segment, dict):
             raise AppError('Invalid quoted document segment.')
         if segment.get('type') == 'text' and isinstance(segment.get('text'), str):
+            if draft and set(segment) - {'type', 'text', 'content'}:
+                raise AppError('Invalid commentary segment.')
             text_size += len(segment['text'])
             editor = {}
             if 'content' in segment:
-                editor = {'content': _commentary_content(segment['content'])}
+                validate = _draft_commentary_content if draft else _commentary_content
+                editor = {'content': validate(segment['content'])}
                 content_size += len(json.dumps(editor['content'], ensure_ascii=False))
                 if content_size > 400000:
                     raise AppError('Commentary editor content is too long.')
             result.append({'type': 'text', 'text': segment['text'], **editor})
         elif segment.get('type') == 'quote':
+            if session is None:
+                raise AppError('Quotes require their current conversation.', 409)
+            if draft and set(segment) - {'type', 'instanceId', 'quote'}:
+                raise AppError('Invalid quoted document segment.')
             identity = segment.get('instanceId')
             if (not isinstance(identity, str) or not 1 <= len(identity) <= 100
                     or identity in instances or len(instances) >= 12):
                 raise AppError('Choose at most 12 distinct quote instances.')
             instances.add(identity)
             supplied = segment.get('quote')
+            if draft and (not isinstance(supplied, dict) or not isinstance(supplied.get('id'), str)):
+                raise AppError('Choose an exact saved quote again.', 409)
             quote = resolve_quote(session, supplied.get('id') if isinstance(supplied, dict) else '')
             if not quote or quote.get('kind') not in {'whole', 'passage'}:
                 raise AppError('Choose an exact saved quote again.', 409)
+            if draft and set(supplied) - set(quote):
+                raise AppError('Invalid quoted document attributes.')
             total += len(quote['excerpt'])
             result.append({'type': 'quote', 'instanceId': identity, 'quote': quote})
         else:

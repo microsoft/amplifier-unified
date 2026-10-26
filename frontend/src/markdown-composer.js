@@ -118,22 +118,30 @@ function commentaryContent(node){
  return {...node,...(node.attrs?{attrs}:{}),...(content?{content}:{})};
 }
 export function composerDocument(doc,preserveCommentary=false){
- const segments=[];let quoted=false;
+ const segments=[];let quoted=false,source=false;
  doc.forEach(node=>{
   if(node.type.name==='reference'){quoted=true;segments.push({type:'quote',instanceId:node.attrs.instanceId,quote:node.attrs.quote});}
   else {
-   const content=commentaryContent(node.toJSON());
-   segments.push({type:'text',text:composerMarkdown(composerSchema.nodes.doc.create(null,node)),...(content?{content}:{})});
+   if(node.type.name==='markdown_source')source=true;
+   segments.push({type:'text',text:composerMarkdown(composerSchema.nodes.doc.create(null,node)),content:node.toJSON()});
   }
  });
  // Markdown is the readable projection, not an exact editor checkpoint. Keep
  // structured commentary even after the last quote is removed if reparsing
  // would change it (for example, a split paragraph's trailing space).
- return quoted||preserveCommentary&&!parseComposer(composerMarkdown(doc)).eq(doc)?{version:1,segments}:null;
+ return quoted||source||preserveCommentary&&!parseComposer(composerMarkdown(doc)).eq(doc)?{version:1,segments}:null;
 }
-// The existing draft/send contract already
-// supports text-only commentary; do not widen the host's attributed-node guard.
-export const composerSendDocument=composerDocument;
+// Private draft checkpoints are lossless editor state. Send keeps the existing
+// attributed-document contract: new syntax travels as literal commentary text,
+// never as a different kind of reference or a widened send-time schema.
+export function composerSendDocument(doc,preserveCommentary=false){
+ const document=composerDocument(doc,preserveCommentary);
+ return document?{...document,segments:document.segments.map(part=>{
+  if(part.type!=='text')return part;
+  const content=commentaryContent(part.content);
+  return {type:'text',text:part.text,...(content?{content}:{})};
+ })}:null;
+}
 export function parseDocument(text,document){
  if(!document?.segments)return parseComposer(text);
  const nodes=[];
