@@ -32,6 +32,13 @@ async def test_only_bootstrap_paths_are_anonymous_and_control_bearer_protects_ap
     assert 'data-platform="android" open' in setup_body
     assert "Mozilla/5.0" not in setup_body
     assert "attacker.example" not in setup_body
+    linux_setup = await client.get("/setup", headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Edg/150"})
+    assert linux_setup.status == 200
+    linux_body = await linux_setup.text()
+    assert 'data-platform="linux" open' in linux_body
+    assert 'ca_file="$HOME/Downloads/amplifier-unified-ca (1).crt"' in linux_body
+    assert "ca_dest=/usr/local/share/ca-certificates/amplifier-unified-ca.crt" in linux_body
+    assert "OS success is not proof of browser success" in linux_body
     assert not (tmp_path / "config" / "tls").exists()
     login = await client.get("/login")
     assert login.status == 200 and "csrf" in (await login.text())
