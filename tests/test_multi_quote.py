@@ -493,7 +493,7 @@ async def test_draft_checkpoint_roundtrip_reload_clone_and_chat_isolation(app, n
     await call(app, 'session.create', {'title': 'Other checkpoint chat'})
     other = app.clients.records['one']['selectedSessionId']
     assert other != owner
-    await call(app, 'view.update', {'patch': {'draft': 'Other chat'}})
+    await call(app, 'view.update', {'patch': {'draft': 'Other chat', 'draftDocument': None}})
     # A delayed nonquote checkpoint must retain its explicit original target.
     await call(app, 'view.update', {'sessionId': owner, 'patch': {'draft': raw, 'draftDocument': value}})
     assert app.clients.records['one']['view']['draft'] == 'Other chat'
@@ -537,13 +537,13 @@ async def test_draft_checkpoint_host_restart_retains_exact_private_document(app,
     finally:
         await restored.close()
 
-async def test_new_chat_checkpoint_moves_with_text_and_does_not_resurrect(app):
+async def test_new_chat_checkpoint_moves_with_text_and_does_not_resurrect(app, tmp_path):
     await call(app, 'session.draft', {})
     text = 'hello'
     value = document({**words(text), 'content': {'type': 'markdown_source',
                      'content': [{'type': 'text', 'text': text}]}})
     await call(app, 'view.update', {'sessionId': None, 'patch': {'draft': text, 'draftDocument': value}})
-    await call(app, 'session.create', {'fromDraft': True, 'title': 'Checkpoint creation'})
+    await call(app, 'session.create', {'fromDraft': True, 'title': 'Checkpoint creation', 'workspace': str(tmp_path)})
     record = app.clients.records['one']
     sid = record['selectedSessionId']
     assert record['drafts'][sid] == text
