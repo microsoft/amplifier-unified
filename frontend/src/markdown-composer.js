@@ -368,6 +368,11 @@ function besideQuote(state,direction){
  const boundary=state.doc.resolve(direction<0?$from.before():$from.after());
  return (direction<0?boundary.nodeBefore:boundary.nodeAfter)?.type.name==='reference';
 }
+export function emptyComposerCode(state,dispatch){
+ const {empty,$from}=state.selection;
+ if(!empty||$from.parent.content.size||!$from.parent.type.spec.code)return false;
+ return setBlockType(composerSchema.nodes.paragraph)(state,tr=>dispatch?.(closeHistory(tr)));
+}
 export function composerState(text,document){
  const {marks,nodes}=composerSchema;
  return EditorState.create({schema:composerSchema,doc:parseDocument(text,document),plugins:[
@@ -390,7 +395,7 @@ export function composerState(text,document){
    'Mod-z':undo,'Shift-Mod-z':redo,'Mod-y':redo,
    'Mod-b':(state,dispatch,view)=>toggleComposerMark(view,'strong'),'Mod-i':(state,dispatch,view)=>toggleComposerMark(view,'em'),'Mod-`':(state,dispatch,view)=>toggleComposerMark(view,'code'),
    'Mod-Shift-x':(state,dispatch,view)=>toggleComposerMark(view,'strike'),
-   'Backspace':chainCommands(state=>besideQuote(state,-1),undoInputRule,(state,dispatch)=>state.selection.empty&&state.selection.$from.parentOffset===0&&liftListItem(nodes.list_item)(state,dispatch)),
+   'Backspace':chainCommands(state=>besideQuote(state,-1),undoInputRule,emptyComposerCode,(state,dispatch)=>state.selection.empty&&state.selection.$from.parentOffset===0&&liftListItem(nodes.list_item)(state,dispatch)),
    'Delete':state=>besideQuote(state,1),
    'Tab':sinkListItem(nodes.list_item),'Shift-Tab':liftListItem(nodes.list_item),
   }),keymap(baseKeymap),

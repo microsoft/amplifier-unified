@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {composerState,composerMarkdown,parseComposer,composerNewline,composerClipboard,composerEnter,composerDocument,composerSendDocument,insertQuote,changeQuote,toggleComposerMark} from '../src/markdown-composer.js';
+import {composerState,composerMarkdown,parseComposer,composerNewline,composerClipboard,composerEnter,composerDocument,composerSendDocument,insertQuote,changeQuote,toggleComposerMark,emptyComposerCode} from '../src/markdown-composer.js';
 import {undo,redo} from 'prosemirror-history';
 function editor(){const view={state:composerState(''),composing:false};view.dispatch=tr=>{view.state=view.state.apply(tr)};return view;}
 function type(view,text){for(const char of text){const {from,to}=view.state.selection;const handled=view.state.plugins.some(plugin=>plugin.props.handleTextInput?.(view,from,to,char,()=>view.state.tr.insertText(char)));if(!handled)view.dispatch(view.state.tr.insertText(char));}}
@@ -89,6 +89,8 @@ test('fence conversion is undoable, literal backticks and IME do not trigger it'
  composerEnter(view);assert.ok(undo(view.state,view.dispatch));
  assert.equal(view.state.doc.firstChild.type.name,'paragraph');assert.equal(view.state.doc.textContent,'```js');
  assert.ok(redo(view.state,view.dispatch));assert.equal(view.state.doc.firstChild.type.name,'code_block');
+ assert.ok(emptyComposerCode(view.state,view.dispatch));assert.equal(view.state.doc.firstChild.type.name,'paragraph');
+ assert.ok(undo(view.state,view.dispatch));assert.equal(view.state.doc.firstChild.type.name,'code_block');
  for(const value of ['literal ```','\\```','`inline`','```bad`info']){
   const literal=editor();type(literal,value);assert.equal(composerEnter(literal),false,value);
  }
