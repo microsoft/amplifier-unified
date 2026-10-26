@@ -2958,7 +2958,8 @@ class AppService:
                     self.state["view"]["draft"] = ""
                     if client_id is not None and (previous_scope[0] is None or args.get('fromDraft')):
                         drafts = self.clients.record().setdefault("drafts", {})
-                        self.clients.draft(session["id"], drafts.pop("", ""))
+                        documents = self.clients.record().setdefault("draftDocuments", {})
+                        self.clients.draft(session["id"], drafts.pop("", ""), documents.pop("", None))
                         attachments = self.clients.record().setdefault('attachments', {})
                         attachments[session['id']] = attachments.pop('', [])
                         self.clients.bind_attachment_draft(session['id'])

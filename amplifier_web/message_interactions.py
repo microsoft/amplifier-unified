@@ -335,8 +335,6 @@ def _draft_commentary_content(content):
             raise AppError('Invalid commentary children.')
         for child in children:
             visit(child, children_for[kind], depth + 1, kind in {'code_block', 'markdown_source'})
-        if kind == 'list_item' and children[0]['type'] != 'paragraph':
-            raise AppError('Invalid commentary list item.')
 
     visit(content, blocks)
     if len(json.dumps(content, ensure_ascii=False)) > 400000:

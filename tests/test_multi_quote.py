@@ -537,6 +537,25 @@ async def test_draft_checkpoint_host_restart_retains_exact_private_document(app,
     finally:
         await restored.close()
 
+async def test_new_chat_checkpoint_moves_with_text_and_does_not_resurrect(app):
+    await call(app, 'session.draft', {})
+    text = 'hello'
+    value = document({**words(text), 'content': {'type': 'markdown_source',
+                     'content': [{'type': 'text', 'text': text}]}})
+    await call(app, 'view.update', {'sessionId': None, 'patch': {'draft': text, 'draftDocument': value}})
+    await call(app, 'session.create', {'fromDraft': True, 'title': 'Checkpoint creation'})
+    record = app.clients.records['one']
+    sid = record['selectedSessionId']
+    assert record['drafts'][sid] == text
+    assert record['draftDocuments'][sid] == value
+    assert '' not in record['draftDocuments']
+    await call(app, 'session.draft', {})
+    assert record['view']['draft'] == ''
+    assert record['view'].get('draftDocument') is None
+    await call(app, 'session.select', {'id': sid})
+    assert record['view']['draftDocument'] == value
+    assert not app.runtime.sent
+
 
 async def test_draft_checkpoint_quotes_still_resolve_only_in_owning_current_chat(app):
     from amplifier_web.message_interactions import resolve_document
@@ -658,7 +677,6 @@ def invalid_checkpoints():
         {**paragraph, 'attrs': {'style': 'color:red'}},
         {**paragraph, 'attrs': {'checked': True}},
         {'type': 'ordered_list', 'content': [paragraph]},
-        {'type': 'bullet_list', 'content': [{'type': 'list_item', 'content': [{'type': 'horizontal_rule'}]}]},
         {'type': 'heading', 'attrs': {'level': True}},
         {'type': 'heading', 'attrs': {'level': 7}},
         {'type': 'code_block', 'attrs': {'params': {}}},

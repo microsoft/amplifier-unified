@@ -35,6 +35,11 @@ export const composerSchema=new Schema({nodes:markdownSchema.spec.nodes.update('
 // Give the composer its own tokenizer; raw web links and labeled Markdown
 // links share the parser's URL validation without changing other consumers.
 const tokenizer=new defaultMarkdownParser.tokenizer.constructor('commonmark',{html:false,linkify:true}).enable(['linkify','strikethrough','table']);
+// Match the bounded draft checkpoint policy. Unsupported URL schemes remain
+// literal source rather than producing a rich node that autosave cannot accept.
+const checkpointUrl=value=>typeof value==='string'&&!/[\u0000-\u001f\u007f\\]/.test(value)&&(!/^[^/#?]*:/.test(value)||/^(?:https?|mailto|tel|ftp):/i.test(value.trimStart()));
+const markdownLinkAllowed=tokenizer.validateLink.bind(tokenizer);
+tokenizer.validateLink=value=>checkpointUrl(value)&&markdownLinkAllowed(value);
 // Task markers are a small GFM addition to the existing tokenizer, not another
 // Markdown parser. Only the first inline token of a list item is eligible.
 tokenizer.core.ruler.after('inline','composer_tasks',state=>{
@@ -92,7 +97,7 @@ export function parseComposer(text){
   const extension=/\[\^[^\]]+\]|\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]|\$\$|(?<!\\)\$[^\n$]+\$|<\/?[A-Za-z][\w-]*(?:\s[^>]*|\/?)>|<!--/;
   let unsupported=false;
   doc.descendants(node=>{if(node.type.spec.code||node.marks.some(mark=>mark.type.spec.code))return false;if(node.isText&&extension.test(node.text))unsupported=true;});
-  if(Object.keys(env.references||{}).length||unsupported||text.includes('\r')||/^---\n[\s\S]*?\n---(?:\n|$)/.test(text))return sourceDocument(text);
+  if(Object.keys(env.references||{}).length||unsupported||text.includes('\r')||/^---\n[^\n]+:[^\n]*(?:\n[\s\S]*?)?\n---(?:\n|$)/.test(text))return sourceDocument(text);
   // Unknown syntax must never disappear because a serializer cannot express it.
   // Preserve instead of silently accepting a lossy parse/serialize cycle.
   const markdown=composerMarkdown(doc);
@@ -213,6 +218,10 @@ function fenceTransaction(state,params){
  const firstListParagraph=$from.depth>1&&$from.node(-1).type===composerSchema.nodes.list_item&&$from.index(-1)===0;
  const replacement=firstListParagraph?[composerSchema.nodes.paragraph.create(),code]:code;
  const tr=state.tr.replaceWith(pos,$from.after(),replacement);
+ if(firstListParagraph){
+  const list=$from.node(-2);
+  tr.setNodeMarkup($from.before(-2),null,{...list.attrs,tight:false});
+ }
  return tr.setSelection(TextSelection.create(tr.doc,pos+(firstListParagraph?3:1)));
 }
 export function composerRules(){

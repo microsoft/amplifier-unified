@@ -59,6 +59,7 @@ def main():
             raise RuntimeError('Prepared interpreter/browser readiness failed')
         units = run('composer-units', ['node', '--test', 'frontend/tests/markdown-composer.test.mjs', 'frontend/tests/multi-quote.test.mjs', 'frontend/tests/markdown.test.mjs', 'frontend/tests/draft-journal.test.mjs'])
         units &= run('send-quote-units', [sys.executable, '-m', 'pytest', '-q', 'tests/test_message_delivery.py', 'tests/test_multi_quote.py'], timeout=240)
+        units &= run('checkpoint-boundary', ['node', 'frontend/tests/markdown-checkpoint-boundary.mjs'])
         units &= run('candidate-control', ['node', 'frontend/tests/markdown-gfm-falsifier.mjs'])
         baseline = ROOT / 'frontend/tests/fixtures-markdown-composer-baseline.txt'
         assert digest(baseline) == BASE_HASH, 'Wrong negative-control source'
