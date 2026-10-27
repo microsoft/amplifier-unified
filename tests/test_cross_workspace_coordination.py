@@ -301,11 +301,23 @@ async def test_typed_result_retained_file_exact_read_and_adjacent_request(cross_
     previous_file = copy.deepcopy(await artifact(app, source, reference))
     previous_return = copy.deepcopy(app.collaboration.receipt(continuation_id))
 
+    # Force the CI interleaving: real catalog discovery sees the first native
+    # transcript before admitting the next exchange. Never disable discovery or
+    # clear an unavailable flag to make a malformed fixture usable.
+    for _ in range(20):
+        await app.history.refresh()
+        if "workspaceAvailable" in target:
+            break
+    else:
+        pytest.fail("Discovery never classified the saved native fixture")
+    assert Path(target["workspace"]).is_dir()
+    assert Path(target["workingDirectory"]).is_dir()
     await app.on_runtime_event("runtime.status", {"sessionId": target["id"], "status": "idle"})
     second_file, second_reference = exact_file(
         target, name="next-report.txt", content=b"Exact second candidate bytes\n",
     )
     second_declaration = await begin_reply(app, "adjacent-request", [second_reference])
+    assert target["workspaceAvailable"] is True
     adjacent = app.collaboration.receipt("adjacent-request")
     assert adjacent["delivery"] == "accepted" and adjacent["admission"]["accepted"] is True
     assert adjacent["sourceGenerationId"] == "source-after-first-return"

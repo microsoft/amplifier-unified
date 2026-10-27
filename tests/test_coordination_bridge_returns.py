@@ -117,10 +117,18 @@ async def measure_pair(app, source, response, raw, record_property, label):
 
 async def checkpoint_terminal(app, target, request, **patch):
     """Small real saved native row with qualified host terminal evidence."""
+    from amplifier_web.session_files import project_slug
+
     text = "Candidate retained"
-    target.update(nativeProject="fixture", nativeIdentity=target["id"])
+    target.update(nativeProject=project_slug(target["workspace"]), nativeIdentity=target["id"])
     path = directory(target)
     path.mkdir(parents=True, exist_ok=True)
+    # Discovery can run between exchanges. An arbitrary "fixture" project with
+    # no matching workspace metadata is correctly classified as unavailable.
+    (path / "metadata.json").write_text(json.dumps({
+        "session_id": target["id"], "working_dir": target["workspace"],
+        "bundle": target["bundle"],
+    }), encoding="utf-8")
     rows = [
         {"role": "user", "content": "Check the interface dependency",
          "metadata": {"amplifier_input": {"version": 1, "kind": "user", "id": request}}},
