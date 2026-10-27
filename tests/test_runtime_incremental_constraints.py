@@ -1,7 +1,7 @@
-"""Incremental ROOT + SIBLING qualification with an optional source constraint.
+"""Incremental ROOT + SIBLING qualification with optional/workspace constraints.
 
 Run only in the managed Linux/Python 3.13 guest. Real Foundation prepares and
-installs seven synthetic distributions into a disposable target interpreter;
+installs nine synthetic distributions into a disposable target interpreter;
 fixture-foundation never replaces amplifier-foundation in the test interpreter.
 The profile-probe adapter does not mount a conversation or call a provider.
 """
@@ -25,7 +25,7 @@ from test_runtime_checked_cache import BACKEND, Diagnostics, git
 
 
 URLS = {name: 'https://example.invalid/incremental-' + name
-        for name in ('foundation', 'recipes', 'memory', 'skills', 'provider')}
+        for name in ('foundation', 'recipes', 'memory', 'skills', 'provider', 'browser')}
 FOUNDATION = 'fixture-foundation'
 PROVIDER = 'fixture-provider'
 REQUIREMENT = FOUNDATION + ' @ git+' + URLS['foundation'] + '@main'
@@ -37,7 +37,11 @@ PACKAGES = {
     'fixture-memory-hook': ('memory', 'modules/memory-hook'),
     'fixture-skills': ('skills', ''),
     PROVIDER: ('provider', ''),
+    'fixture-browser': ('browser', ''),
+    'fixture-tool-browser': ('browser', 'modules/tool-browser'),
 }
+CONSTRAINT_TARGETS = (FOUNDATION, 'fixture-recipes', 'fixture-memory',
+                      'fixture-browser', 'fixture-tool-browser')
 BASELINE = 'a' * 32
 # The minimal backend must preserve real dependency metadata as well as RECORD.
 # Same-version revisions differ in an installed payload, not merely cache JSON.
@@ -89,8 +93,18 @@ def assert_installed(project, commits):
     for name, (repository, _) in PACKAGES.items():
         if repository in {'recipes', 'memory'}:
             assert REQUIREMENT in distributions[name].requires
-            if PACKAGES[name][1]:
+            if repository == 'memory' and PACKAGES[name][1]:
                 assert 'fixture-' + repository + ' @ git+' + URLS[repository] + '@main' in distributions[name].requires
+    recipes_root = 'fixture-recipes @ git+' + URLS['recipes'] + '@main'
+    recipes_child = distributions['fixture-recipes-tool']
+    assert recipes_child.metadata.get_all('Provides-Extra') == ['runner']
+    assert recipes_child.requires == [REQUIREMENT, recipes_root + "; extra == 'runner'"]
+    assert recipes_root not in recipes_child.requires  # No required root edge.
+    browser = distributions['fixture-browser']
+    assert browser.metadata.get_all('Provides-Extra') == ['mcp', 'convert']
+    assert not browser.requires  # Workspace dev membership is not a runtime edge.
+    assert distributions['fixture-tool-browser'].requires == [
+        'fixture-browser @ git+' + URLS['browser'] + '@main']
     assert distributions['fixture-skills'].metadata.get_all('Provides-Extra') == ['remote-sources']
     assert distributions['fixture-skills'].requires == [
         "fixture-foundation; extra == 'remote-sources'"]
@@ -151,12 +165,21 @@ async def incremental_sources(tmp_path, monkeypatch, request):
             path = root / subdirectory
             path.mkdir(parents=True, exist_ok=True)
             dependencies = [REQUIREMENT] if owner in {'recipes', 'memory'} else []
-            if subdirectory and owner in {'recipes', 'memory'}:
+            if subdirectory and owner in {'memory', 'browser'}:
                 dependencies.append('fixture-' + owner + ' @ git+' + URLS[owner] + '@main')
             content = ('[project]\nname=' + json.dumps(name) + '\nversion="0.1.0"\n'
                        'dependencies=' + json.dumps(dependencies) + '\n')
+            if subdirectory and owner == 'recipes':
+                content += ('[project.optional-dependencies]\nrunner=' +
+                            json.dumps(['fixture-recipes @ git+' + URLS['recipes'] + '@main']) + '\n')
             if subdirectory and owner in {'recipes', 'memory'}:
                 content += '[tool.uv.sources]\nfixture-' + owner + '={path="../..",editable=true}\n'
+            if owner == 'browser' and not subdirectory:
+                content += (
+                    '[project.optional-dependencies]\nmcp=[]\nconvert=[]\n'
+                    '[dependency-groups]\ndev=["fixture-browser[mcp,convert]","fixture-tool-browser"]\n'
+                    '[tool.uv.sources]\nfixture-browser={workspace=true}\nfixture-tool-browser={workspace=true}\n'
+                    '[tool.uv.workspace]\nmembers=[".","modules/tool-browser"]\n')
             if repository == 'skills':
                 optional = {'git': URLS['foundation'], 'branch': 'main'}
                 if kind == 'pin':
@@ -213,25 +236,29 @@ async def incremental_sources(tmp_path, monkeypatch, request):
             shutil.copytree(previous / 'foundation', stage / 'foundation')
         return stage
 
-    async def collect(stage, project, overrides, *, optional_only=False, reverse=False):
+    async def collect(stage, project, overrides, *, only=None, reverse=False):
         target.project = project
         config = HostConfig(stage, stage, {}, stage / 'foundation', shared, global_only=True)
         cache = config.registry_home / 'cache'
         collector = reconciliation.Collector()
         roots = {}
-        for repository in (('skills',) if optional_only else URLS):
+        assert only in {None, 'skills', 'browser'}
+        for repository in ((only,) if only else URLS):
             reference = 'git+' + URLS[repository] + '@main'
             roots[repository] = (await SimpleSourceResolver(cache_dir=cache).resolve(reference)).active_path
             collector.observe(reference, config)
-        if optional_only:
-            bundle = Bundle(name='fixture', base_path=roots['skills'],
-                            tools=[{'module': 'skills-fixture', 'source': str(roots['skills'])}])
-            expected = {'fixture-skills': roots['skills']}
+        if only:
+            # Select only this root, not its optional dependencies or workspace
+            # members. The manifest alone must never create a batch selection.
+            bundle = Bundle(name='fixture', base_path=roots[only],
+                            tools=[{'module': only + '-fixture', 'source': str(roots[only])}])
+            expected = {'fixture-' + only: roots[only]}
         else:
             tools = [
                 {'module': 'foundation-fixture', 'source': str(roots['foundation'])},
                 {'module': 'skills-fixture', 'source': str(roots['skills'])},
                 {'module': 'recipes-fixture', 'source': str(roots['recipes'] / 'modules/recipes-tool')},
+                {'module': 'browser-fixture', 'source': str(roots['browser'] / 'modules/tool-browser')},
             ]
             bundle = Bundle(name='fixture', base_path=roots['foundation'],
                 source_base_paths=dict(reversed(list(roots.items()))) if reverse else roots,
@@ -260,7 +287,11 @@ async def incremental_sources(tmp_path, monkeypatch, request):
 
 
 async def test_optional_main_constraint_survives_two_provider_only_updates(incremental_sources, monkeypatch):
-    """Old code must reach authored-constraint/ProtectedRuntimeSource, not setup failure."""
+    """All five constraint shapes must clear two actual incremental validations.
+
+    This extends the topology; the earlier retained old-code red belongs to its
+    exact fixture revision and is not re-established by editing this test.
+    """
     from amplifier_web import bundles, update_sources
     c = incremental_sources
     # Establish an already qualified installation, independently of the guard
@@ -268,7 +299,7 @@ async def test_optional_main_constraint_survives_two_provider_only_updates(incre
     baseline = c.make_stage(BASELINE)
     project, overrides = await c.empty_project(baseline)
     initial = await c.collect(baseline, project, overrides)
-    assert await initial.batch.install() == {'sources': 7, 'packages': 7, 'resolverTransactions': 1}
+    assert await initial.batch.install() == {'sources': 9, 'packages': 9, 'resolverTransactions': 1}
     assert_installed(project, c.commits)
     final = await qualification.freeze(c.manager, BASELINE, project)
     qualification.verify_recorded(final, baseline)
@@ -323,8 +354,10 @@ async def test_optional_main_constraint_survives_two_provider_only_updates(incre
             checked = json.loads(Path(args[args.index('--checked-sources') + 1]).read_text())
             selected = await alignment.checked_batch_sources(entry.batch, entry.collector, entry.config, checked)
             alignment.verify_checked_selection(checked, selected, exact=True)
+            assert {name: selected['packages'][name]['status'] for name in CONSTRAINT_TARGETS} == dict.fromkeys(
+                CONSTRAINT_TARGETS, 'selected')
             state.events.append('install')
-            assert await entry.batch.install() == {'sources': 7, 'packages': 7, 'resolverTransactions': 1}
+            assert await entry.batch.install() == {'sources': 9, 'packages': 9, 'resolverTransactions': 1}
             assert_installed(project, c.commits)
         return ''
     monkeypatch.setattr(updates, 'process', adapter)
@@ -357,16 +390,16 @@ async def test_optional_main_constraint_survives_two_provider_only_updates(incre
         try:
             await updates.UpdateManager.validate(c.manager, stage, generation)
         except environments.ProtectedRuntimeSource as error:
-            # Preserve the precise old-code discriminator before re-raising it.
+            # Report a surviving topology blocker without masking its identity.
             # Runtime sync has occurred; the Foundation batch has NOT installed.
             facts = error.diagnostic_facts
-            assert facts['errorType'] == 'ValueError' and facts['package'] == FOUNDATION
+            assert facts['errorType'] == 'ValueError' and facts['package'] in CONSTRAINT_TARGETS
             assert facts['reason'] in {'protected-runtime-source', 'runtime-source-constraint'}
             assert state.events == ['collect'] and len(state.collections) == 1
             entry = state.collections[0]
-            assert entry.report['packages'][FOUNDATION] == {'status': 'authored-constraint'}
+            assert entry.report['packages'][facts['package']] == {'status': 'authored-constraint'}
             assert all(entry.report['packages'][name]['status'] in {'selected', 'authored-constraint'}
-                       for name in PACKAGES if name != FOUNDATION)
+                       for name in PACKAGES)
             assert not entry.batch.installed and entry.batch.report()['resolverTransactions'] == 0
             assert qualification.installed_graph(entry.project) == entry.graph
             assert not (stage / 'runtime-installed.json').exists()
@@ -380,7 +413,12 @@ async def test_optional_main_constraint_survives_two_provider_only_updates(incre
         assert first.batch.report()['resolverTransactions'] == 0
         assert fresh.batch.report()['resolverTransactions'] == 1
         for entry in state.collections:
-            assert entry.report['packages'][FOUNDATION]['status'] == 'selected'
+            assert {name: entry.report['packages'][name]['status'] for name in CONSTRAINT_TARGETS} == dict.fromkeys(
+                CONSTRAINT_TARGETS, 'selected')
+            for name in CONSTRAINT_TARGETS:
+                repository, subdirectory = PACKAGES[name]
+                assert entry.report['batchPaths'][name] == str(entry.roots[repository] / subdirectory)
+                assert entry.report['packages'][name]['revision'] == c.commits[repository]
             assert entry.report['packages'][FOUNDATION]['revision'] == foundation_policy['revision']
             assert {name: row['status'] for name, row in entry.report['packages'].items()} == dict.fromkeys(PACKAGES, 'selected')
         assert first.report['packages'][PROVIDER]['revision'] == provider_revisions[-2]
@@ -420,8 +458,8 @@ async def test_optional_incompatible_source_refuses_before_batch_install(increme
     start = len(c.commands)
     with pytest.raises(environments.ProtectedRuntimeSource) as caught:
         await alignment.align_checked_sources(c.manager, stage, selection=entry.report)
-    # Keep these behavioral controls usable on old source too. Exact wording of
-    # the newly distinguished constraint diagnostic has its own focused tests.
+    # These controls must refuse Foundation's incompatible choice, not an
+    # unrelated topology blocker. Diagnostic wording has separate focused tests.
     facts = caught.value.diagnostic_facts
     assert facts['errorType'] == 'ValueError' and facts['package'] == FOUNDATION
     assert facts['reason'] in {'protected-runtime-source', 'runtime-source-constraint'}
@@ -437,9 +475,21 @@ async def test_compatible_optional_source_does_not_select_foundation(incremental
     c = incremental_sources
     stage = c.make_stage('e' * 32)
     project, overrides = await c.empty_project(stage)
-    entry = await c.collect(stage, project, overrides, optional_only=True)
+    entry = await c.collect(stage, project, overrides, only='skills')
     assert set(entry.batch.names) == {'fixture-skills'}
     assert set(entry.report['packages']) == {'fixture-skills'}
     assert entry.report['packages']['fixture-skills']['status'] == 'selected'
     assert FOUNDATION not in entry.report['packages']
+    assert not entry.batch.installed and qualification.installed_graph(project) == []
+
+
+async def test_workspace_membership_does_not_select_browser_child(incremental_sources):
+    c = incremental_sources
+    stage = c.make_stage('f' * 32)
+    project, overrides = await c.empty_project(stage)
+    entry = await c.collect(stage, project, overrides, only='browser')
+    assert set(entry.batch.names) == {'fixture-browser'}
+    assert set(entry.report['packages']) == {'fixture-browser'}
+    assert entry.report['packages']['fixture-browser']['status'] == 'selected'
+    assert 'fixture-tool-browser' not in entry.report['packages']
     assert not entry.batch.installed and qualification.installed_graph(project) == []

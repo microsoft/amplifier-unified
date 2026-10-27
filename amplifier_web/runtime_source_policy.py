@@ -124,6 +124,9 @@ def _declaration_evidence(content, *, prepared_local_sources=()):
                 conditional=bool(set(entry) - {'git', 'branch', 'rev', 'tag', 'subdirectory'}))
     for name in conditional_names & restrictions.keys():
         restrict(name, None)
+    if {'dependencies', 'optional-dependencies'} & set(data.get('project', {}).get('dynamic', [])):
+        for name in list(restrictions):
+            restrict(name, None)  # Build-generated requirements have not been proved here.
     return found, eligible, restrictions
 
 

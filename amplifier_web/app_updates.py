@@ -255,7 +255,7 @@ async def check():
             'detail':('This installation is newer than the latest published release. Updates follow published releases, not the main branch.' if ahead
                       else 'A newer application release is available; installation restarts the host when idle.' if version>current
                       else 'Newer application components are available; installation restarts the host when idle.' if refresh_components
-                      else 'The latest published application release and checked components are installed.')}
+                      else 'The latest published application release is installed.')}
     except (ValueError,KeyError,RuntimeError,TimeoutError):
         return {**base,'status':'check_failed','detail':'No accessible published release was found. Check your network connection and release availability.'}
 

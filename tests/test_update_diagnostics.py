@@ -486,11 +486,13 @@ async def test_authored_constraint_has_specific_sanitized_guidance(tmp_path):
             await manager.diagnostics.run('ecosystem-source-preflight', fail)
         exported = event(manager.diagnostics.state['lastFailure'])
         assert exported['reason'] == 'runtime-source-constraint'
+        assert exported['errorType'] == 'ProtectedRuntimeSource'
         assert exported['package'] == 'amplifier-foundation'
         assert 'does not establish local edits' in failure_guidance(exported)
         assert 'private' not in json.dumps(exported)
         probe = probe_record(PROBE_PREFIX + json.dumps(probe_failure(caught.value, 'prepare')))
         assert probe['reason'] == 'runtime-source-constraint'
+        assert probe['errorType'] == 'ProtectedRuntimeSource'
         assert probe['package'] == 'amplifier-foundation'
         assert 'private' not in json.dumps(probe)
     finally:

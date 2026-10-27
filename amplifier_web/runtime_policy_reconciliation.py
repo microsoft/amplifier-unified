@@ -258,9 +258,10 @@ class Collector:
 def selected_sibling_dev_sources(content, source, root, selected):
     """Ignore only a proven selected sibling's local, dev-only uv source.
 
-    Optional, conditional, Git, external, unselected and resolver constraints
-    remain protective. This does not select a package or authorize a new ref.
-    Foundation's batch installs these exact paths with --no-sources.
+    A workspace self/member reference also needs exact membership, package and
+    extra names. Optional, conditional, Git, external, unselected and resolver
+    constraints remain protective. This does not select a package or authorize
+    a new ref. Foundation installs these exact paths with --no-sources.
     """
     from packaging.requirements import Requirement, InvalidRequirement
     from .runtime_environment import package_name
@@ -289,32 +290,62 @@ def selected_sibling_dev_sources(content, source, root, selected):
         return set()
     protected_names = {package_name(value.name) for value in parsed}
     result = set()
-    for name, entry in uv.get('sources', {}).items():
+    sources = uv.get('sources', {})
+    aliases = [package_name(name) for name in sources]
+    for name, entry in sources.items():
         name = package_name(name)
-        if (name not in selected or name in protected_names or not isinstance(entry, dict)
-                or set(entry) - {'path', 'editable'} or entry.get('editable') is not True
-                or not isinstance(entry.get('path'), str) or Path(entry['path']).is_absolute()):
+        if (aliases.count(name) != 1 or name not in selected
+                or name in protected_names or not isinstance(entry, dict)):
+            continue
+        workspace = entry == {'workspace': True}
+        if workspace:
+            # Only exact, explicitly listed members of this repository's root
+            # workspace. Globs/exclusions and external or nested workspaces are
+            # not inferred from an installed path.
+            members = uv.get('workspace', {}).get('members', [])
+            if (source != root or uv.get('workspace', {}).get('exclude')
+                    or not isinstance(members, list) or not members
+                    or any(not isinstance(member, str) or Path(member).is_absolute()
+                           or '..' in Path(member).parts or any(c in member for c in '*?[')
+                           for member in members)):
+                continue
+            target = Path(selected[name]).resolve()
+            if target not in {(root / member).resolve() for member in members}:
+                continue
+        else:
+            if (set(entry) != {'path', 'editable'} or entry['editable'] is not True
+                    or not isinstance(entry['path'], str) or Path(entry['path']).is_absolute()):
+                continue
+            target = (source / entry['path']).resolve()
+        target_root = next((path for path in (target, *target.parents) if (path / '.git').exists()), None)
+        if (target != Path(selected[name]).resolve() or not target.is_relative_to(root)
+                or target_root != root or (target == source and not workspace)):
+            continue
+        target_manifest = target / 'pyproject.toml'
+        if target_manifest.is_symlink() or not target_manifest.is_file():
+            continue
+        target_project = tomllib.loads(target_manifest.read_text()).get('project', {})
+        if package_name(target_project.get('name', '')) != name or target_project.get('dynamic'):
             continue
         declarations = [requirement(value) for value in dev]
         matching = [value for value in declarations if value and package_name(value.name) == name]
         if (not matching or any(value is None for value in declarations)
-                or any(value.url or value.marker or value.extras or value.specifier for value in matching)):
+                or any(value.url or value.marker or value.specifier
+                       or (value.extras and (not workspace or
+                           not value.extras <= set(target_project.get('optional-dependencies', {}))))
+                       for value in matching)):
             continue
-        target = (source / entry['path']).resolve()
-        # Containment alone can include a nested, independently owned checkout.
-        target_root = next((path for path in (target, *target.parents) if (path / '.git').exists()), None)
-        if (target == Path(selected[name]).resolve() and target != source
-                and target.is_relative_to(root) and target_root == root):
-            result.add(name)
+        result.add(name)
     return result
 
 
 def selected_runtime_sibling_sources(content, source, root, metadata, selected):
     """Prove a local uv development mapping denotes the selected Git sibling.
 
-    Runtime direct Git requirements remain restrictions. Only the redundant
-    local tool.uv.sources entry is excluded from the --no-sources batch policy.
-    An ordinary local source, fork, pin or conditional mapping cannot qualify.
+    Runtime and optional direct Git requirements remain restrictions. Only the
+    redundant local tool.uv.sources entry is excluded from the --no-sources
+    batch policy. Optional requirements never select a package. An ordinary
+    local source, fork, pin or conditional mapping cannot qualify.
     """
     from packaging.requirements import Requirement, InvalidRequirement
     from .runtime_environment import package_name
@@ -325,7 +356,10 @@ def selected_runtime_sibling_sources(content, source, root, metadata, selected):
     if project.get('dynamic'):
         return set()
     requirements = {}
-    for value in project.get('dependencies', []):
+    values = list(project.get('dependencies', []))
+    for group in project.get('optional-dependencies', {}).values():
+        values.extend(group)
+    for value in values:
         try:
             requirement = Requirement(value)
         except (InvalidRequirement, TypeError):
@@ -343,7 +377,14 @@ def selected_runtime_sibling_sources(content, source, root, metadata, selected):
             continue
         target = (source / entry['path']).resolve()
         target_root = next((path for path in (target, *target.parents) if (path / '.git').exists()), None)
-        if target != Path(selected[name]).resolve() or target_root != root:
+        if (target != Path(selected[name]).resolve() or target_root != root
+                or not target.is_relative_to(root)):
+            continue
+        target_manifest = target / 'pyproject.toml'
+        if target_manifest.is_symlink() or not target_manifest.is_file():
+            continue
+        target_project = tomllib.loads(target_manifest.read_text()).get('project', {})
+        if package_name(target_project.get('name', '')) != name or target_project.get('dynamic'):
             continue
         subdir = '' if target == root else target.relative_to(root).as_posix()
         valid = True
