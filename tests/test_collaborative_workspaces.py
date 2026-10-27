@@ -700,7 +700,7 @@ async def test_grant_free_input_does_not_remove_ordinary_tool_approval(app):
     assert not app.collaboration.current(source["id"])["grants"]
 
 
-@pytest.mark.parametrize("forgery", ["old", "terminal", "child", "missing", "scope", "internal"])
+@pytest.mark.parametrize("forgery", ["old", "terminal", "child", "missing", "internal"])
 async def test_agent_send_rejects_foreign_or_noncurrent_root_binding(app, forgery):
     source, target = app.state["sessions"]
     args = {"sessionId": target["id"], "text": "Forged", "mode": "notify"}
@@ -714,8 +714,6 @@ async def test_agent_send_rejects_foreign_or_noncurrent_root_binding(app, forger
         binding["_runtimeSessionId"] = "child"
     elif forgery == "missing":
         binding.pop("_runtimeSessionId")
-    elif forgery == "scope":
-        target["workspace"] = "/different-workspace"
     else:
         target["sessionKind"] = "internal"
     with pytest.raises(AppError):

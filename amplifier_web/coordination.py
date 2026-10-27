@@ -9,6 +9,7 @@ import uuid
 from amplifier_operations.coordination import ChangeSignal, delivery
 from .owned_history import SCOPE, selected, require, metadata as scope_metadata
 from .task_binding import continuation_epoch
+from .peer_scope import descriptor
 
 ACTIVE = {"working", "running", "starting", "ready", "queued", "pending", "stopping"}
 ATTENTION = {"error", "failed", "interrupted", "cancelled", "stopped"}
@@ -26,7 +27,7 @@ def definitions():
             "waitMs": {"type": "integer", "minimum": 0, "maximum": 60000},
             "maxBytes": {"type": "integer", "minimum": 4096, "maximum": 65536},
         }, ["targets"])),
-        "coordination.followup": ("Send an explicit follow-up to this conversation or an active persistent worker, keeping the selected conversation and draft. Agent writes are limited to the calling conversation's workers.", schema({**target, "text": string(100000)}, ["sessionId", "text"])),
+        "coordination.followup": ("Send an explicit follow-up without changing selection or drafts. Agent messages to other registered roots use attributed coordination admission, including across workspaces; worker writes stay limited to the caller's own workers.", schema({**target, "text": string(100000)}, ["sessionId", "text"])),
         "coordination.interrupt": ("Request interruption of an explicit conversation or worker. A request does not prove cancellation or undo effects.", schema(target, ["sessionId"])),
     }
 
@@ -142,7 +143,6 @@ class Coordination:
                 offset=offset, limit=limit + 1)
         more = len(sessions) > limit
         sessions = sessions[:limit]
-        caller_workspace = owner.get("workspace") if caller else None
         include_workers = args.get("includeWorkers", not bool(caller))
         residents = {row['id']: row for row in self.service.state['sessions']}
         items = []
@@ -169,13 +169,15 @@ class Coordination:
                 item = self.snapshot(target, include_results=False, session=session, task=task,
                                      live=session['id'] in residents)
                 if not target.get("workerId"):
-                    item.update(workspace=session.get("workspace"), collaboration=session.get("collaboration"))
+                    details = descriptor(session)
+                    item.update(workspace=session.get("workspace"), collaboration=session.get("collaboration"),
+                                location=details['location'], workspaceLabel=details['workspaceLabel'])
                 if caller and session["id"] != caller:
-                    permitted = session.get("workspace") == caller_workspace and not target.get("workerId")
+                    permitted = session.get('sessionKind', 'root') == 'root' and not target.get("workerId")
                     modes = ["notify", "queue"]
                     if self.service.collaboration.can_steer(session):
                         modes.append("steer")
-                    item.update(canFollowup=permitted, canInterrupt=False,
+                    item.update(canMessage=permitted, canFollowup=permitted, canInterrupt=False,
                                 peerActions=[{"modes": modes}] if permitted else [])
                 # Discovery needs the interruption revision, not the full
                 # wait fingerprint's unbounded pending approval/question lists.

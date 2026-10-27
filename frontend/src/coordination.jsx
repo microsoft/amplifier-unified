@@ -175,7 +175,9 @@ export function RelatedWork({dispatch,sessionId,session,onOpenChat,expectedWorks
  useEffect(()=>{setInspected({});setOriginal(null);setContext({requests:[]});setItems([]);setNext(null);setError('');refresh().catch(error=>{if(visit.current===current)setError(error.message)});const current=visit.current;return()=>{visit.current++}},[sessionId,expectedWorkspace]);
  const more=async()=>{const current=visit.current;try{const response=await dispatch('coordination.list',{workspace:context.workspace,offset:next,limit:20,includeWorkers:false},{feedback:false});if(current!==visit.current)return;setItems(previous=>[...new Map([...previous,...response.result.items].map(row=>[row.target.sessionId,row])).values()]);setNext(response.result.nextOffset??null)}catch(error){if(current===visit.current)setError(error.message)}};
  const inspectResult=async requestId=>{const current=visit.current;try{const value=await dispatch('coordination.result',{requestId},{feedback:false});if(current!==visit.current)return;setInspected(previous=>({...previous,[requestId]:value.result}))}catch(error){if(current===visit.current)setError(error.message)}};
- const reveal=async(sid,messageId)=>{const current=visit.current;try{const response=await dispatch('coordination.read',{sessionId:sid,messageId,textLimit:4000},{feedback:false});if(current!==visit.current)return;setOriginal(response.result.message)}catch(error){if(current===visit.current)setError(error.message)}};
+ // Only exact messages linked by these requests use the broader owned-history read.
+ // Workspace discovery and awareness keep their existing scope.
+ const reveal=async(sid,messageId)=>{const current=visit.current;try{const response=await dispatch('coordination.read',{sessionId:sid,messageId,scope:'all',textLimit:4000},{feedback:false});if(current!==visit.current)return;setOriginal(response.result.message)}catch(error){if(current===visit.current)setError(error.message)}};
  const openArtifact=async(requestId,reference,responseRevision)=>{
   const [path,expectedSha256]=reference.split(/@sha256:/);
   try{const value=await dispatch('canvas.openFile',{sessionId,workspace:context.workspace,path,expectedSha256,referenceRequestId:requestId,...(responseRevision?{referenceResponseRevision:responseRevision}:{})});if(value.result?.status!=='opened')setError(value.result?.message||'The referenced artifact is unavailable.')}catch(error){setError(error.message)}
@@ -189,7 +191,10 @@ export function RelatedWork({dispatch,sessionId,session,onOpenChat,expectedWorks
  };
  const memberLabels=Object.fromEntries(items.map(row=>[row.target.sessionId,row.title||'Untitled chat']));
  memberLabels[sessionId]=session?.title||memberLabels[sessionId]||'This chat';
- const name=sid=>memberLabels[sid]||'Related chat';
+ const requestName=row=>{
+  const outgoing=row.senderSessionId===sessionId,sid=outgoing?row.target.sessionId:row.senderSessionId,recorded=outgoing?row.target:row.sender;
+  return memberLabels[sid]||(recorded?.sessionId===sid?[recorded.title||'Untitled chat',recorded.workspaceLabel].filter(Boolean).join(' · '):'Related chat');
+ };
  const attention=items.filter(row=>row.attention);
  const showSection=name=>{const target=sectionRef.current?.querySelector('[data-review-target="'+name+'"]');if(target){target.open=true;target.scrollIntoView?.({block:'nearest'})}};
  return <section ref={sectionRef} className="a-coordination-related" aria-label="Workspace work overview" inert={refreshing}>
@@ -202,7 +207,7 @@ export function RelatedWork({dispatch,sessionId,session,onOpenChat,expectedWorks
   <section aria-label="Attention and requests"><h3>Attention and requests</h3>
    {attention.map(row=><p key={row.target.sessionId}><strong>{row.title||'Untitled chat'}</strong> · {labels[row.status]||row.status}{!['error','interrupted','cancelled','stopped'].includes(row.status)&&' · Needs attention'}</p>)}
    {!attention.length&&!context.requests.length&&<p>No attention requests in the loaded workspace page or this chat’s recent requests.</p>}
-   {context.requests.slice(0,8).map(row=>{const response=[row.response,row.terminalOutcome].filter(Boolean).sort((a,b)=>(b.outcomeRevision||0)-(a.outcomeRevision||0))[0];return <p key={row.requestId}><strong>{name(row.senderSessionId===sessionId?row.target.sessionId:row.senderSessionId)}</strong> · {row.senderSessionId===sessionId?'Request sent':'Request received'} · {response?(response.outcome==='success'?(response.qualified?'Completed with terminal evidence':'Success reported; not qualified'):response.outcome?.replaceAll('_',' ')||response.status):(['accepted','applied','submitting'].includes(row.delivery)?'Awaiting a result':row.delivery)}</p>})}
+   {context.requests.slice(0,8).map(row=>{const response=[row.response,row.terminalOutcome].filter(Boolean).sort((a,b)=>(b.outcomeRevision||0)-(a.outcomeRevision||0))[0];return <p key={row.requestId}><strong>{requestName(row)}</strong> · {row.senderSessionId===sessionId?'Request sent':'Request received'} · {response?(response.outcome==='success'?(response.qualified?'Completed with terminal evidence':'Success reported; not qualified'):response.outcome?.replaceAll('_',' ')||response.status):(['accepted','applied','submitting'].includes(row.delivery)?'Awaiting a result':row.delivery)}</p>})}
    <p className="a-caption">{context.requests.length>8?`${context.requests.length} recent requests retained; showing the latest eight. `:''}Recent requests are limited to this chat. A question or deferral keeps the request open; a failed or unknown result is not success.</p>
   </section>
   <AssignmentControls key={'assignment:'+sessionId} dispatch={dispatch} sessionId={sessionId} memberLabels={memberLabels}/>
@@ -216,7 +221,7 @@ export function RelatedWork({dispatch,sessionId,session,onOpenChat,expectedWorks
   <p className="a-caption">Inspect retained evidence explicitly. Qualification links a report to a completed turn; inspect artifacts independently.</p>
   {original&&<article aria-label="Original message"><strong>{original.role} · {original.sessionId}</strong><p style={{whiteSpace:'pre-wrap'}}>{original.text}</p>{original.truncated&&<small>Bounded excerpt; original retained.</small>}<button className="a-link" onClick={()=>setOriginal(null)}>Close original message</button></article>}
   {context.requests.map(row=>{const result=inspected[row.requestId],receipt=result?.receipt||row,response=[receipt.response,receipt.terminalOutcome].filter(Boolean).sort((a,b)=>(b.outcomeRevision||0)-(a.outcomeRevision||0))[0];return <article key={row.requestId} data-request-id={row.requestId}>
-   <small>{row.senderSessionId===sessionId?'Sent to':'Received from'} {name(row.senderSessionId===sessionId?row.target.sessionId:row.senderSessionId)} · {row.delivery}</small><details><summary>Request identity</summary><code>{row.requestId}</code></details>
+   <small>{row.senderSessionId===sessionId?'Sent to':'Received from'} {requestName(row)} · {row.delivery}</small><details><summary>Request identity</summary><code>{row.requestId}</code></details>
    <button className="a-link" onClick={()=>inspectResult(row.requestId)}>Inspect exact result</button>
    <button className="a-link" onClick={()=>reveal(row.target.sessionId,row.messageId)}>Open submitted message</button>
    <RequestCancellation dispatch={dispatch} sessionId={sessionId} request={receipt} onChanged={refresh}/>

@@ -32,7 +32,7 @@ so their returned recovery hint can be followed without changing route or scope.
 | `recall.search/read` | Shared selector, with the existing additional task scope. Search references include the chosen scope; source reads require it again and verify the indexed source revision. Search results recheck registered scope after index I/O. |
 | Agent `history.list`, `history.shared.list/view` | Resolve through the same passive registered-history query and bounded result/pagination shape. Human legacy/shared-history UI keeps its existing explicit library browser. |
 | Agent `session.inspect/history/titlePreview`, `message.copy`, `conversation.delivery`, `history.export` | Shared scope check before domain work and at the service mutation boundary. Existing availability, ownership, export and client-transport checks still apply. |
-| `coordination.result` | Accepts the declared scope but retains the exact request participant and saved workspace checks even with all. A successful read is neither an artifact-library grant nor a new task instruction. |
+| `coordination.result` | Accepts the declared scope but retains the exact request participant and each endpoint's saved location checks even with all. A cross-workspace request does not grant an unrelated reader access. A successful read is neither an artifact-library grant nor a new task instruction. |
 | `outputs.*` and image resources | Existing caller-owned output library and exact identity/hash checks. All does not authorize reading a peer's library. Request artifact references remain references, not a broader library capability. |
 | Attached per-session HTTP | Authenticated user-client routes retain the explicit path session as the target. A different body target is rejected even with all. Reading a chosen registered conversation needs no new approval. |
 
@@ -48,6 +48,12 @@ library access. It does not require the browser's previously selected workspace
 to match. Scope selection does not alter the current conversation, private draft,
 native writer ownership or execution. Explicit all never authorizes a send,
 stop, configuration change, assignment membership change or source replay.
+
+Existing-root communication uses a separate authenticated `coordination.send`
+admission path across these registered workspaces and managed locations. It
+records both endpoints without moving either one. See
+[cross-workspace communication](../TASK-COORDINATION.md#cross-workspace-existing-root-communication)
+for the changed message scope and unchanged authority boundaries.
 
 Other APIs retain their own domains: memory has task/workspace/global and
 explicit cross-scope review plus attributable human authorization for writes;
