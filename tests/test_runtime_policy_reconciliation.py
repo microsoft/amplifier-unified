@@ -322,6 +322,7 @@ async def test_preliminary_collection_allows_only_recognized_artifacts_before_al
     git(s.root, 'add', '__pycache__')
     git(s.root, 'commit', '-m', 'tracked fixture artifact')
     head = git(s.root, 'rev-parse', 'HEAD')
+    git(s.root, 'push', str(s.repo), 'HEAD:refs/heads/artifact-fixture')
     s.marker.write_text(json.dumps({'git_url': URL, 'ref': 'main', 'commit': head}))
     (s.stage / 'runtime-sources.json').write_text(json.dumps({NAME: {
         'url': URL, 'ref': 'main', 'revision': head, 'subdirectory': ''}}))
