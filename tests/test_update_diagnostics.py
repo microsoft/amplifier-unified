@@ -448,6 +448,7 @@ async def test_installed_source_mismatch_has_safe_actionable_receipt(tmp_path):
         error.diagnostic_facts = {
             'reason': 'runtime-installed-source-mismatch', 'package': 'amplifier-foundation',
             'resolutionMismatches': ['revision', 'private/path', 'revision', {'secret': 'token'}],
+            'expectedRevision': 'a' * 40, 'observedRevision': 'b' * 40,
             'stdout': 'private credential', 'path': '/private/cache',
         }
         raise error
@@ -459,6 +460,8 @@ async def test_installed_source_mismatch_has_safe_actionable_receipt(tmp_path):
         assert receipt['reason'] == exported['reason'] == 'runtime-installed-source-mismatch'
         assert exported['package'] == 'amplifier-foundation'
         assert exported['resolutionMismatches'] == ['revision']
+        assert exported['expectedRevision'] == 'a' * 40
+        assert exported['observedRevision'] == 'b' * 40
         assert 'kept the current components active' in failure_guidance(receipt)
         assert 'private' not in json.dumps(receipt)
         assert 'credential' not in json.dumps(exported)
@@ -500,6 +503,8 @@ async def test_real_freeze_mismatch_reaches_install_error_and_sanitized_report(n
         assert failure['phase'] == 'ecosystem-validation'
         assert failure['reason'] == 'runtime-installed-source-mismatch'
         assert failure['resolutionMismatches'] == ['revision']
+        assert failure['expectedRevision'] == ROW['latest']
+        assert failure['observedRevision'] == 'd' * 40
         assert 'kept the current components active' in state['error']
         assert 'Check for an app update' in state['error']
         assert 'during ecosystem validation' not in state['error']

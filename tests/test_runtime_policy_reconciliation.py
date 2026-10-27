@@ -268,6 +268,37 @@ def test_optional_pin_is_protective_even_if_not_selected_to_authorize_recovery()
     assert migration.authored_constraints(raw)[NAME] is None  # Protective, never selection authority.
 
 
+@pytest.mark.parametrize('change', ['none', 'unselected', 'outside', 'optional', 'runtime', 'explicit-local'])
+async def test_selected_sibling_dev_path_is_not_a_runtime_pin(selected, change):
+    s = selected
+    context = s.root / 'modules/context-fixture'
+    transcript = s.root / 'modules/transcript-fixture'
+    context.mkdir(parents=True); transcript.mkdir()
+    (context / 'pyproject.toml').write_text('[project]\nname="fixture-context"\nversion="0.1"\n')
+    edge = '../../../outside' if change == 'outside' else '../context-fixture'
+    extra = ('dependencies=["fixture-context"]\n' if change == 'runtime' else '')
+    extra += ('[project.optional-dependencies]\nunused=["fixture-context"]\n' if change == 'optional' else '')
+    (transcript / 'pyproject.toml').write_text(
+        '[project]\nname="fixture-transcript"\nversion="0.1"\n' + extra +
+        '[tool.uv.sources]\nfixture-context={path="' + edge + '",editable=true}\n'
+        '[dependency-groups]\ndev=["fixture-context"]\n')
+    git(s.root, 'add', 'modules')
+    git(s.root, 'commit', '-m', 'sibling modules')
+    head = git(s.root, 'rev-parse', 'HEAD')
+    s.marker.write_text(json.dumps({'git_url': URL, 'ref': 'main', 'commit': head}))
+    s.batch.names = {'fixture-context': context, 'fixture-transcript': transcript}
+    if change == 'unselected':
+        s.batch.names.pop('fixture-context')
+    if change == 'explicit-local':
+        s.collector.local_sources.add(context)
+    report = await s.collector.report(s.batch, s.config)
+    if change == 'none':
+        assert report['packages']['fixture-context']['status'] == 'selected'
+        assert report['packages']['fixture-context']['revision'] == head
+    elif change != 'unselected':
+        assert report['packages']['fixture-context']['status'] != 'selected'
+
+
 @pytest.mark.parametrize('key', ['UV_CONFIG_FILE', 'UV_OVERRIDE', 'UV_CONSTRAINT', 'UV_BUILD_CONSTRAINT'])
 def test_explicit_external_resolver_policy_does_not_get_a_migration_prompt(selected, monkeypatch, key):
     monkeypatch.setenv(key, '/external/policy')
