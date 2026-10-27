@@ -182,6 +182,8 @@ try{
   diagnosticReceipt:{attemptId:receipt.attemptId,lastFailure:receipt.lastFailure,events:constraintEvents}};
  await page.reload();await page.waitForSelector('#amp-one');
  if(!await overview.isVisible())await openSettingsPage(page,'updates');
+ // Reload restores Settings, not the local Advanced details disclosure.
+ if(!await advanced.evaluate(element=>element.open))await advanced.locator('summary').first().click();
  const constraintAfterReload=await assertConstraint();
  assert.deepEqual(constraintAfterReload,constraintBeforeReload);
  await page.setViewportSize({width:320,height:844});
