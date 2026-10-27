@@ -82,11 +82,11 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{},{lo
  const scroll=()=>{
   if(!ready||restore||snapshot&&pane.scrollTop===snapshot.top)return;
   // Removing a notice (or enlarging the viewport) can clamp the old bottom
-  // before our layout frame runs. That is not a request to pause a live call.
+  // before our layout frame runs. That does not cancel call or submitted intent.
   // Wheel/touch/key intent has already stopped following; other external
   // scrolls, including browser focus moves, retain their existing behavior.
   const limit=Math.max(0,pane.scrollHeight-pane.clientHeight);
-  if(snapshot&&followingCall()&&snapshot.top>limit&&atBottom()){update();return}
+  if(snapshot&&(followingCall()||(submitted&&following.current))&&snapshot.top>limit&&atBottom()){update();return}
   if(snapshot)stop();report();
  };
  const resize=new view.ResizeObserver(update),observed=new Set();
