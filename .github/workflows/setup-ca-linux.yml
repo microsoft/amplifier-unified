@@ -1,0 +1,41 @@
+name: Linux setup CA commands
+
+# Focused instruction qualification; not a new publication prerequisite.
+on:
+  pull_request:
+    paths:
+      - 'amplifier_web/setup_page.py'
+      - 'scripts/check_setup_ca_linux.py'
+      - 'scripts/qualify_setup_ca_linux_ci.py'
+      - 'tests/test_setup_ca_linux_harness.py'
+      - 'docs/DEPLOYMENT.md'
+      - '.github/workflows/setup-ca-linux.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  setup-ca-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Exercise exact rendered commands in one disposable Debian guest
+        env:
+          EXPECTED_SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python scripts/qualify_setup_ca_linux_ci.py
+      - name: Retain checks, negative control and exact cleanup evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: setup-ca-linux-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/setup-ca-evidence/
+          if-no-files-found: error
+          retention-days: 14
