@@ -23,6 +23,7 @@ from test_collaborative_workspaces import (
     Runtime,
     agent_action,
     app,
+    finish,
     generation,
     settled,
 )
@@ -246,6 +247,10 @@ async def test_managed_location_is_labelled_without_private_path_in_envelope(cro
 
 
 async def test_typed_result_retained_file_exact_read_and_adjacent_request(cross_app):
+    """Two admitted round trips with scripted native evidence, not a provider."""
+    from amplifier_operations.coordination import fingerprint
+    from amplifier_web.automatic_history import directory, display_identity
+
     app = cross_app
     source, target = app.state["sessions"]
     file, reference = exact_file(target)
@@ -280,18 +285,229 @@ async def test_typed_result_retained_file_exact_read_and_adjacent_request(cross_
     assert continuation["target"]["workspace"] == source["workspace"]
     assert continuation["dependencyRequestId"] == "cross-request"
     assert continuation["dependencySatisfied"] is True and continuation["delivery"] == "queued"
-    source["status"] = "idle"
+    # Idle alone is not a completed generation. End the actual requesting turn
+    # before admitting its return; no fabricated source terminal anchor is needed.
+    await finish(app, source, "incoming-peer", generation_id="source-generation",
+                 nativeTerminal=None, text="Waiting for the exact peer result.")
+    assert source["collaborationGeneration"]["terminal"] is True
+    await app.on_runtime_event("runtime.status", {"sessionId": source["id"], "status": "idle"})
     await app.collaboration.drain(source["id"])
     await settled(app, continuation_id, "accepted")
     await app.collaboration.drain(source["id"])
     assert [identity for _, identity, _ in app.runtime.inputs].count(continuation_id) == 1
+    await generation(app, source, "source-after-first-return", [continuation_id])
     previous = copy.deepcopy(app.collaboration.receipt("cross-request"))
-    adjacent = await request(app, "adjacent-request", mode="notify", text="Review the next candidate")
+    previous_results = copy.deepcopy((await result(app, source))["results"])
+    previous_file = copy.deepcopy(await artifact(app, source, reference))
+    previous_return = copy.deepcopy(app.collaboration.receipt(continuation_id))
+
+    await app.on_runtime_event("runtime.status", {"sessionId": target["id"], "status": "idle"})
+    second_file, second_reference = exact_file(
+        target, name="next-report.txt", content=b"Exact second candidate bytes\n",
+    )
+    second_declaration = await begin_reply(app, "adjacent-request", [second_reference])
+    adjacent = app.collaboration.receipt("adjacent-request")
+    assert adjacent["delivery"] == "accepted" and adjacent["admission"]["accepted"] is True
+    assert adjacent["sourceGenerationId"] == "source-after-first-return"
+    assert adjacent["sourceInputIds"] == [continuation_id]
     assert adjacent["messageId"] != previous["messageId"]
-    assert app.collaboration.receipt("cross-request") == previous
-    assert (await result(app, source))["qualified"]
+    assert second_declaration["artifacts"][0]["outputId"] != previous_file["outputId"]
     assert not (await result(app, source, "adjacent-request"))["qualified"]
-    assert (await artifact(app, source, reference))["text"] == "Exact candidate bytes\n"
+    second_wait = await agent_action(app, source, "coordination.subscribe", {
+        "sessionId": source["id"], "requestId": "adjacent-request",
+    }, "adjacent-wait")
+
+    # checkpoint_terminal deliberately writes a two-row fixture. Append this
+    # round instead of calling it again and replacing the first native result.
+    native_path = directory(target) / "transcript.jsonl"
+    first_native_bytes = native_path.read_bytes()
+    first_native_rows = [json.loads(line) for line in first_native_bytes.splitlines()]
+    assert len(first_native_rows) == 2
+    second_text = "Second candidate retained"
+    with native_path.open("a", encoding="utf-8") as stream:
+        for row in (
+            {"role": "user", "content": "Check the interface dependency",
+             "metadata": {"amplifier_input": {"version": 1, "kind": "user", "id": "adjacent-request"}}},
+            {"role": "assistant", "content": second_text},
+        ):
+            stream.write(json.dumps(row) + "\n")
+    second_index = len(first_native_rows) + 1
+    second_anchor = {
+        "messageId": display_identity(target, second_index, "assistant", second_text),
+        "nativeIndex": second_index, "nativeText": second_text,
+        "textDigest": fingerprint(second_text), "rootSessionId": target["id"],
+        "generationId": second_declaration["generationId"],
+    }
+    assert second_anchor["messageId"] != anchor["messageId"]
+    await app.on_runtime_event("runtime.collaboration_checkpoint", {
+        "sessionId": target["id"], "rootSessionId": target["id"],
+        "generation_id": second_anchor["generationId"], "messageAnchors": [second_anchor],
+    })
+    await finish(app, target, "adjacent-request", text=second_text, nativeTerminal=second_anchor)
+    second_file.unlink()
+    second_result = await result(app, source, "adjacent-request")
+    assert second_result["qualified"] is True
+    second_link, = second_result["results"]
+    assert second_link["inputId"] == "adjacent-request" and second_link["sessionId"] == target["id"]
+    assert second_link["messageId"] == second_anchor["messageId"]
+    assert second_link["declaration"]["nativeTerminal"] == second_anchor
+    assert second_link["declaration"]["references"] == [second_reference]
+    assert (await artifact(app, source, second_reference, "adjacent-request"))["text"] == "Exact second candidate bytes\n"
+    second_exact = (await agent_action(app, source, "coordination.read", {
+        "sessionId": target["id"], "scope": "all", "messageId": second_anchor["messageId"],
+    }, "exact-second-terminal"))["result"]["message"]
+    assert second_exact["text"] == second_text
+    assert second_exact["generationId"] == second_anchor["generationId"]
+
+    second_continuation_id = second_wait["result"]["continuationId"]
+    assert second_continuation_id != continuation_id
+    second_return = app.collaboration.receipt(second_continuation_id)
+    assert second_return["dependencyRequestId"] == "adjacent-request"
+    assert second_return["dependencySatisfied"] is True and second_return["delivery"] == "queued"
+    assert second_return["senderSessionId"] == target["id"]
+    assert second_return["workspace"] == target["workspace"]
+    assert second_return["target"]["sessionId"] == source["id"]
+    assert second_return["target"]["workspace"] == source["workspace"]
+    await finish(app, source, continuation_id, generation_id="source-after-first-return",
+                 nativeTerminal=None, text="Waiting for the second exact peer result.")
+    assert source["collaborationGeneration"]["terminal"] is True
+    await app.on_runtime_event("runtime.status", {"sessionId": source["id"], "status": "idle"})
+    await app.collaboration.drain(source["id"])
+    await settled(app, second_continuation_id, "accepted")
+    await generation(app, source, "source-after-second-return", [second_continuation_id])
+    await app.collaboration.drain(source["id"])
+    await app.collaboration.drain(target["id"])
+    assert [(sid, identity) for sid, identity, _ in app.runtime.inputs] == [
+        (target["id"], "cross-request"), (source["id"], continuation_id),
+        (target["id"], "adjacent-request"), (source["id"], second_continuation_id),
+    ]
+    assert app.collaboration.receipt("cross-request") == previous
+    assert app.collaboration.receipt(continuation_id) == previous_return
+    first_result = await result(app, source)
+    assert first_result["qualified"] and first_result["results"] == previous_results
+    assert await artifact(app, source, reference) == previous_file
+    first_exact = (await agent_action(app, source, "coordination.read", {
+        "sessionId": target["id"], "scope": "all", "messageId": anchor["messageId"],
+    }, "reread-first-terminal"))["result"]["message"]
+    assert first_exact["text"] == exact["text"] and first_exact["generationId"] == exact["generationId"]
+    assert native_path.read_bytes().startswith(first_native_bytes)
+    assert not file.exists() and not second_file.exists()
+
+
+async def test_cross_workspace_retained_file_canvas_and_authenticated_http_download(
+    cross_app, authenticated_client,
+):
+    """Exercise saved bytes through real HTTP routes, not rendered browser QA."""
+    from amplifier_web.agent_canvas import scope
+    from amplifier_web.server import create_app
+
+    app = cross_app
+    source, target = app.state["sessions"]
+    content = b"Exact candidate bytes\n"
+    file, reference = exact_file(target, content=content)
+    declaration = await begin_reply(app, references=[reference])
+    await checkpoint_terminal(app, target, "cross-request")
+    file.unlink()
+    app._save_changes()
+    await app.close()
+    runtime = Runtime()
+    server = await create_app(app.data_dir, workspace=app.default_workspace, runtime=runtime,
+                              voice=False, background_updates=False, preload_providers=False)
+    reopened = runtime.app = server["service"]
+    client = await authenticated_client(server)
+    reader = reopened._session(source["id"])
+    producer = reopened._session(target["id"])
+    assert reader["workspace"] != producer["workspace"]
+    client_record = reopened.clients.attach("cross-retained-reader")
+    client_record["selectedSessionId"], client_record["selectedWorkspaceId"] = scope(reopened, reader["id"])
+    headers = {"X-Amplifier-Client": "cross-retained-reader"}
+    response = await client.post("/api/sessions/" + reader["id"] + "/commands", headers=headers, json={
+        "id": "http-cross-artifact", "action": "coordination.artifact",
+        "args": {"requestId": "cross-request", "reference": reference,
+                 "responseRevision": declaration["responseRevision"]},
+    })
+    assert response.status == 200, await response.text()
+    value = (await response.json())["result"]
+    assert value["qualified"] is True and value["status"] == "retained"
+    assert value["outputId"] == declaration["artifacts"][0]["outputId"]
+    assert value["sha256"] == hashlib.sha256(content).hexdigest()
+    assert value["provenance"]["workspace"] == producer["workspace"]
+    assert value["provenance"]["requestId"] == "cross-request"
+    download = await client.get(value["downloadUrl"], headers=headers)
+    assert download.status == 200, await download.text()
+    assert await download.read() == content
+    opened = await client.post("/api/actions", headers=headers, json={
+        "action": "canvas.openFile",
+        "args": {"sessionId": reader["id"], "workspace": reader["workspace"], "path": file.name,
+                 "expectedSha256": value["sha256"], "referenceRequestId": "cross-request",
+                 "referenceResponseRevision": declaration["responseRevision"]},
+    })
+    assert opened.status == 200, await opened.text()
+    assert (await opened.json())["result"]["status"] == "opened"
+    with reopened.clients.bind("cross-retained-reader"):
+        canvas = reopened.state["canvas"]
+        assert canvas["content"] == content.decode("utf-8")
+        assert canvas["artifactReference"] == {
+            "sha256": value["sha256"], "requestId": "cross-request",
+            "responseRevision": declaration["responseRevision"], "path": file.name,
+            "outputId": value["outputId"],
+        }
+        assert "path" not in canvas and "workspacePath" not in canvas
+        assert reopened.state["selectedSessionId"] == reader["id"]
+    assert not file.exists() and runtime.inputs == []
+
+
+async def test_cross_workspace_exact_outcome_acknowledgement_preserves_result(cross_app):
+    app = cross_app
+    source, target = app.state["sessions"]
+    file, reference = exact_file(target)
+    await begin_reply(app, references=[reference])
+    wait = await agent_action(app, source, "coordination.subscribe", {
+        "sessionId": source["id"], "requestId": "cross-request",
+    }, "review-wait")
+    await checkpoint_terminal(app, target, "cross-request")
+    file.unlink()
+    observed = await result(app, source)
+    assert observed["qualified"] and observed["notification"]["acknowledged"] is False
+    review = observed["notification"]["review"]
+    assert review["action"] == "coordination.acknowledge"
+    assert review["args"]["sessionId"] == source["id"]
+    assert review["args"]["requestId"] == "cross-request"
+    previous = copy.deepcopy(app.collaboration.receipt("cross-request"))
+    previous_file = copy.deepcopy(await artifact(app, source, reference))
+    continuation_id = wait["result"]["continuationId"]
+    queued_return = copy.deepcopy(app.collaboration.receipt(continuation_id))
+    assert queued_return["delivery"] == "queued"
+    inputs = list(app.runtime.inputs)
+    with pytest.raises(AppError) as changed:
+        await agent_action(app, source, review["action"],
+                           {**review["args"], "reviewKey": "not-the-observed-outcome"}, "wrong-review")
+    assert changed.value.status == 409
+    assert app.collaboration.receipt("cross-request") == previous
+    assert app.collaboration.receipt(continuation_id) == queued_return
+
+    acknowledged = await agent_action(app, source, review["action"], review["args"], "exact-review")
+    outcome = acknowledged["result"]
+    assert outcome["requestId"] == "cross-request"
+    assert outcome["reviewKey"] == review["args"]["reviewKey"]
+    assert outcome["outcomeRevision"] == review["args"]["outcomeRevision"]
+    assert outcome["notificationId"] == continuation_id and outcome["notificationRetired"] is True
+    assert outcome["notificationDelivery"] == "suppressed"
+    assert outcome["workCancelled"] is False and outcome["resultQualificationChanged"] is False
+    current = await result(app, source)
+    assert current["qualified"] and current["notification"]["acknowledged"]
+    assert current["results"] == observed["results"]
+    assert current["receipt"]["response"] == previous["response"]
+    assert current["receipt"]["delivery"] == previous["delivery"]
+    assert await artifact(app, source, reference) == previous_file
+    duplicate = await agent_action(app, source, review["action"], review["args"], "exact-review")
+    assert duplicate["duplicate"] and duplicate["result"] == outcome
+    await finish(app, source, "incoming-peer", generation_id="source-generation",
+                 nativeTerminal=None, text="Reviewed the exact peer result.")
+    await app.on_runtime_event("runtime.status", {"sessionId": source["id"], "status": "idle"})
+    await app.collaboration.drain(source["id"])
+    assert app.collaboration.receipt(continuation_id)["delivery"] == "suppressed"
+    assert app.runtime.inputs == inputs
 
 
 @pytest.mark.parametrize("failure", ["missing", "changed", "outside"])
@@ -605,6 +821,7 @@ async def test_fresh_request_to_cold_saved_cross_workspace_root_after_restart(cr
     reopened = runtime.app = AppService(app.data_dir, runtime, workspace=app.default_workspace)
     try:
         assert target_id not in {row["id"] for row in reopened.state["sessions"]}
+        original_selection = reopened.state["selectedSessionId"]
         assert other_id not in {row["id"] for row in reopened.state["sessions"]}
         resumed = reopened._session(source_id)
         reopened._message(resumed, "user", "Send this new consultation to the saved recipient.",
@@ -640,7 +857,7 @@ async def test_fresh_request_to_cold_saved_cross_workspace_root_after_restart(cr
         assert len(incoming) == 1 and incoming[0]["peerEnvelope"]["senderSessionId"] == source_id
         assert not any(row.get("inputId") == identity for row in resumed["messages"])
         assert not reopened._session(other_id)["messages"]
-        assert reopened.state["selectedSessionId"] == source_id
+        assert reopened.state["selectedSessionId"] == original_selection
     finally:
         await reopened.close()
 

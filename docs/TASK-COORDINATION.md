@@ -30,6 +30,12 @@ existing roots in the authenticated user's Unified installation.
 Focused synthetic action-path and rendered checks must qualify the candidate.
 Native-provider behavior is not established by deterministic transport fixtures.
 
+**Adapter limit:** a sender with an assignment token or cost cap cannot queue
+or steer work in an independent root, because this adapter cannot enforce that
+cap on a single peer request. The refusal is explicit. Informational `notify`
+remains available without waking the recipient. Communication never removes a
+cap or enrolls the recipient to make a refused request pass.
+
 ## Compact orientation and delegated recovery
 
 The current coordination reference offers `assignment.briefRef` to an actual

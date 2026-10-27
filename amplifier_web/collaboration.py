@@ -535,7 +535,7 @@ class Collaboration:
             if (not participant_matches(receipt, reader)
                     or not participant_matches(receipt, self.service._session(sender, hydrate=False))
                     or not participant_matches(receipt, self.service._session(sid, hydrate=False))):
-                self.error("This result is outside the caller's recorded request workspace.")
+                self.error("This result is outside the caller's recorded request workspace scope.")
         elif reader['workspace'] != workspace:
             self.error("This result is outside the caller's request and workspace scope.")
 
