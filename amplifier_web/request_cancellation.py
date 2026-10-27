@@ -73,7 +73,7 @@ async def cancel(owner, source, args, origin, command_id):
                 or request.get('senderSessionId') != source['id'] or request.get('protocol') != PROTOCOL
                 or request.get('workspace') != source['workspace']):
             owner.error('Cancel only a request sent by this conversation in its current workspace.')
-        owner.authorize(source, request['target'], hydrate=False)
+        owner.request_target(source, request, hydrate=False)
         original = copy.deepcopy(request)
         service.db.commit()
         try:

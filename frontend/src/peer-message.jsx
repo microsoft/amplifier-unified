@@ -17,14 +17,14 @@ export function PeerRun({row,session,state,renderMessage}){
  const known=ids.map(id=>presentation.open['group:'+session.id+':'+id]).filter(v=>v!==undefined);
  const open=known.length?known.some(Boolean):ids.some(id=>presentation.open[session.id+':'+id]);
  const setOpen=value=>presentation.setOpen(old=>({...old,...Object.fromEntries(ids.map(id=>['group:'+session.id+':'+id,typeof value==='function'?value(open):value]))}));
- const sources=new Map(row.rows.flatMap(r=>r.message.attribution?.peer?.available?[[r.message.attribution.peer.sourceId,r.message.attribution.peer.title]]:[]));
+ const sources=new Map(row.rows.flatMap(r=>r.message.attribution?.peer?.available?[[r.message.attribution.peer.sourceId,r.message.attribution.peer]]:[]));
  const unavailable=row.rows.filter(r=>!r.message.attribution?.peer?.available).length;
  const focus=state.view?.messageFocus;
  useEffect(()=>{if(focus?.sessionId===session.id&&row.rows.some(r=>[r.message.id,r.message.nativeMessageId].includes(focus.messageId)))setOpen(true)},[focus?.revision]);
  const attention=peerAttention(row.rows.map(r=>r.message));
  return <section className="a-peer-run" data-peer-run={row.id}>
   <button className="a-peer-run-summary" type="button" aria-expanded={open} aria-controls={bodyId} onClick={()=>setOpen(v=>!v)}><ChevronRight className={open?'open':''}/><span>{ids.length} messages{sources.size>0?` · ${sources.size} ${unavailable?'available ':''}${sources.size===1?'chat':'chats'}`:''}</span><small>Peer messages</small></button>
-  <p className="a-peer-sources">{[...sources.values()].slice(0,2).join(' · ')}{sources.size>2?` · +${sources.size-2} more`:''}{sources.size===0?'Source chats unavailable':''}</p>
+  <p className="a-peer-sources">{[...sources.values()].slice(0,2).map(source=>[source.title,source.workspaceLabel].filter(Boolean).join(' — ')).join(' · ')}{sources.size>2?` · +${sources.size-2} more`:''}{sources.size===0?'Source chats unavailable':''}</p>
   {unavailable>0&&sources.size>0&&<p className="a-peer-sources">{unavailable} {unavailable===1?'message has an unavailable source':'messages have unavailable sources'}</p>}
   {attention.length>0&&<p className="a-peer-attention" role="status">{attention.join(' · ')}</p>}
   <div id={bodyId} hidden={!open}>{row.rows.map(r=>renderMessage(r))}</div>
@@ -48,6 +48,7 @@ export function PeerMessage({message,session,state,act,dispatch,date,label,attri
   <div className="a-peer-header">
    <button type="button" className="a-peer-summary" aria-label={`Expand or collapse peer message ${message.id}`} aria-controls={bodyId} aria-expanded={open} onClick={()=>setOpen(value=>!value)}><ChevronRight className={open?'open':''}/><GitBranch/><span>{peer?'Message from':attribution||'Message from another chat'}</span></button>
    {peer&&(peer.available&&presentation?<button type="button" className="a-link a-peer-source" disabled={opening} aria-label={`Preview source chat: ${peer.title}`} onClick={preview}>{opening?'Opening preview…':peer.title}</button>:<span className="a-caption">Source chat unavailable</span>)}
+   {peer?.available&&peer.workspaceLabel&&<small className="a-peer-workspace">{peer.workspaceLabel}</small>}
    {peer?.archived&&<small>Archived</small>}
    {date&&<time className="a-message-date" aria-label={date.full} dateTime={date.iso}>{date.text}</time>}
   </div>

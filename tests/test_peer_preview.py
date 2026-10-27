@@ -11,10 +11,18 @@ from test_canvas_views import command, view, target
 from fixtures.peer_message_content import TEXT, LONG, CRLF
 
 
-@pytest.fixture
-async def app(tmp_path):
+@pytest.fixture(params=['same-workspace', 'cross-workspace', 'managed'])
+async def app(tmp_path, request):
     service = AppService(tmp_path / 'app', workspace=tmp_path)
     source, receiving = [service._new_session({'title': name}) for name in ('Source review', 'Receiving')]
+    if request.param == 'cross-workspace':
+        folder = tmp_path / 'peer-review'
+        folder.mkdir()
+        source['workspace'] = str(folder)
+    elif request.param == 'managed':
+        from amplifier_web.managed_chats import allocate
+        source['workspace'] = allocate(service.data_dir, source['id'], 'managed-preview-fixture')
+        source['location'] = {'kind': 'managed'}
     service.state['sessions'] = [source, receiving]
     service.state['selectedSessionId'] = receiving['id']
     for i in range(24):
@@ -45,6 +53,13 @@ async def test_exact_transport_markdown_readonly_preview_and_page_boundary(app, 
     assert row['text'] == TEXT
     assert TEXT in peer_input(row['peerEnvelope'], row['text'])
     meta = descriptor(service, receiving, mid)
+    assert meta['sourceId'] == source['id']
+    if (source.get('location') or {}).get('kind') == 'managed':
+        assert meta['workspaceLabel'] == 'No workspace'
+        assert meta['location'] == {'kind': 'managed'}
+        assert source['workspace'] not in str(meta)
+    else:
+        assert meta['location'] == {'kind': 'workspace', 'path': source['workspace']}
     before = copy.deepcopy(receiving)
     # The preview must never use the full transcript reader or history hydrator.
     monkeypatch.setattr(service.history, 'ensure_loaded', AsyncMock(side_effect=AssertionError('eager hydrate')))

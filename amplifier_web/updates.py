@@ -1097,11 +1097,6 @@ class UpdateManager:
             await self.diagnostics.run('ecosystem-runtime-prepare', process, shutil.which('uv'), 'sync', '--locked',
                 '--project', str(project), '--python', '3.13', timeout=900)
         shared = store_environment(self.home) if worker_supports_shared(project) else {}
-        if fresh:
-            from .runtime_source_alignment import align_checked_sources
-            await self.diagnostics.run('ecosystem-source-preflight', align_checked_sources, self, stage)
-        if fresh and shared:
-            await self.diagnostics.run('ecosystem-source-sharing', adopt_clean_sources, self, stage)
         env={**os.environ,**shared,'AMPLIFIER_WEB_HOME':str(stage),'AMPLIFIER_HOME':str(stage/'shared-config'),'AMPLIFIER_UNIFIED_RELEASE':'','AMPLIFIER_INSTALL_PREPARATION':uuid.uuid4().hex}
         if not shared:
             env.pop('AMPLIFIER_SOURCE_STORE', None)  # Preserve pinned/older workers' legacy source contract.
@@ -1116,10 +1111,10 @@ class UpdateManager:
                 probe_env['UV_OVERRIDE'] = str(overrides)
             flags.append('--global-only')
             if refresh:
-                # One collection pass and one resolver transaction for the shared
-                # graph, followed by fresh read-only compatibility processes.
+                # Verify this actual collected batch before its one installation.
                 await self.diagnostics.run('ecosystem-prepare', process, *command, str(workspace), profiles[0],
-                    *flags, '--profiles', str(profiles_file), env=probe_env, timeout=900)
+                    *flags, '--profiles', str(profiles_file),
+                    '--checked-sources', str(receipt/'runtime-sources.json'), env=probe_env, timeout=900)
                 return
             completed=0
             progress={'attemptId':getattr(self.diagnostics,'state',{}).get('attemptId'),
@@ -1147,6 +1142,7 @@ class UpdateManager:
                 await asyncio.gather(*tasks, return_exceptions=True)
         if fresh:
             from .runtime_policy_reconciliation import reconcile, legacy_candidates, RECEIPT
+            from .runtime_source_alignment import align_checked_sources
             async def collect_source_policy():
                 target = stage / 'selected-source-declarations.json'
                 overrides = await self.diagnostics.run('ecosystem-runtime-policy', prepare_overrides,
@@ -1160,6 +1156,15 @@ class UpdateManager:
             previous = receipt_directory(self.home, active_release(self.home).get('current'))
             if legacy_candidates(self.inventory) or (previous / RECEIPT).exists():
                 await self.diagnostics.run('ecosystem-source-policy', reconcile, self, stage, project, collect_source_policy)
+            # Source paths first materialized during composition were absent
+            # from the early cache scan. Align them before a fresh composition;
+            # never install the batch captured before a binding/checkout moved.
+            selection = await collect_source_policy()
+            await self.diagnostics.run('ecosystem-source-preflight', align_checked_sources,
+                                       self, stage, selection=selection)
+            if shared:
+                await self.diagnostics.run('ecosystem-source-sharing', adopt_clean_sources,
+                                           self, stage, selection=selection)
             await self.publish(detail='Preparing changed dependencies in an isolated runtime…')
             # The refresh activator dies with each short-lived probe process.
             # Capture after dynamic module installation, then recreate an

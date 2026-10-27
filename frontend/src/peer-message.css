@@ -6,6 +6,7 @@
 #amp-one .a-peer-summary>span{min-width:0;overflow-wrap:anywhere}
 #amp-one .a-peer-header .a-message-date{white-space:nowrap;font-size:.75rem;margin-left:auto}
 #amp-one .a-peer-source{min-height:44px;text-align:left;overflow-wrap:anywhere;max-width:100%;text-decoration:underline;text-underline-offset:3px}
+#amp-one .a-peer-workspace{min-width:0;max-width:100%;overflow-wrap:anywhere;color:var(--a-muted)}
 #amp-one .a-peer-message>.a-message-attribution{font-size:.72rem;margin:0 0 .3rem;color:var(--a-muted)}
 #amp-one .a-peer-content{margin:.35rem 0 .5rem;border-radius:12px;min-width:0}
 #amp-one .a-peer-content .a-message-actions{padding:0 .5rem;opacity:1}

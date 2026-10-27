@@ -4,6 +4,9 @@ on:
     paths:
       - 'amplifier_operations/coordination.py'
       - 'amplifier_web/coordination.py'
+      - 'amplifier_web/peer_scope.py'
+      - 'tests/test_cross_workspace_coordination.py'
+      - 'tests/test_peer_scope.py'
       - 'amplifier_web/request_cancellation.py'
       - 'amplifier_web/outcome_acknowledgement.py'
       - 'tests/test_request_cancellation.py'
@@ -150,6 +153,7 @@ jobs:
       - run: >-
           uv run --no-sync pytest
           tests/test_coordination.py tests/test_coordination_generation.py
+          tests/test_cross_workspace_coordination.py tests/test_peer_scope.py
           tests/test_coordination_revisions.py tests/test_request_cancellation.py tests/test_outcome_acknowledgement.py
           tests/test_test_outcome_acknowledgement.py
           tests/test_coordination_bridge_returns.py

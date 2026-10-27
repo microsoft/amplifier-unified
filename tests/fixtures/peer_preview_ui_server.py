@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / 'tests'))
 from aiohttp import web
 from amplifier_web import server
 from amplifier_web.server import create_app
+from amplifier_web.workspace_canvas import workspace_command
 from test_collaborative_workspaces import generation, agent_action
 from fixtures.peer_message_content import TEXT, LONG, CRLF
 
@@ -75,8 +76,20 @@ async def main():
             service.history.task.cancel(); await asyncio.gather(service.history.task, return_exceptions=True)
             service.history.task = None
         await service.event_log_view.close()
-        a, b, recipient = [service._new_session({'title':x}) for x in (
-            'Navigation design', 'Accessibility review — keyboard, touch and narrow screen behavior', 'Release planning')]
+        # Independent existing roots in two registered synthetic workspaces.
+        # Set placement before the real app bridge commits the peer receipts.
+        review_workspace = temp / 'readiness-review'
+        review_workspace.mkdir()
+        # Use the registration owner for fixture setup without scheduling a new
+        # background discovery pass over this deliberately synthetic history.
+        workspace_command(service.state, 'workspace.add', {'path':str(review_workspace), 'name':'Readiness review'})
+        a = service._new_session({'title':'Navigation design', 'workspace':str(review_workspace)})
+        # The main journey proves same-title disambiguation. Dedicated header
+        # and focus journeys retain their existing long-title source by default.
+        second_title = ('Navigation design' if os.environ.get('PEER_PREVIEW_DUPLICATE_TITLES') == '1'
+                        else 'Accessibility review — keyboard, touch and narrow screen behavior')
+        b, recipient = [service._new_session({'title':x, 'workspace':str(temp)}) for x in (
+            second_title, 'Release planning')]
         recipient.update(historyLoaded=True, deferRuntimeUntilInteraction=True, draft='Unsent synthetic draft α')
         service.state['sessions'] = [a,b,recipient]
         service.state['selectedSessionId'] = recipient['id']
@@ -92,7 +105,7 @@ async def main():
         for i in range(77): service._message(a,'assistant','Earlier synthetic answer %d' % i)
         source_text = service._message(a,'assistant',TEXT)
         source_long = service._message(a,'assistant',LONG)
-        service._message(b,'assistant',CRLF)
+        source_b_text = service._message(b,'assistant',CRLF)
         service._publish()
         async def send(source, identity, text):
             return await agent_action(service,source,'coordination.send',{'sessionId':recipient['id'],'mode':'notify','text':text},identity)
@@ -101,6 +114,13 @@ async def main():
         async def facts(request):
             return web.json_response({'sourceA':a['id'],'sourceB':b['id'],'receiving':recipient['id'],
                 'originals':[x['messageId'] for x in sent], 'older':older['id'],'sourceText':source_text['id'],'sourceLong':source_long['id'],
+                'requests':[x['requestId'] for x in sent],
+                'sourceWorkspace':str(review_workspace),'recipientWorkspace':recipient['workspace'],
+                'sourceWorkspaceRegistered':any(row['path']==str(review_workspace) for row in service.state['workspaces']),
+                'sourceWorkspaceLabel':review_workspace.name,
+                'sourceBTitle':b['title'],'sourceBWorkspace':b['workspace'],
+                'sourceBWorkspaceLabel':Path(b['workspace']).name,'sourceBText':source_b_text['id'],
+                'independentRoots':all(row.get('sessionKind','root')=='root' and not row.get('collaboration') for row in (a,b,recipient)),
                 'sourceIds':[message['id'] for message in a['messages']],
                 'text':TEXT,'long':LONG,'crlf':CRLF,'textSha256':hashlib.sha256(TEXT.encode()).hexdigest(),
                 'effects':runtime.effects,'subprocesses':attempts,'installed':INSTALLED,

@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 
 from .outputs import file_bytes, MAX_FILE
+from .peer_scope import participant_matches
 
 MAX_DECLARATION = 2 * MAX_FILE
 EXACT = re.compile(r'([^@\n]+)@sha256:([a-f0-9]{64})\Z')
@@ -124,7 +125,9 @@ def resolve(collaboration, sid, request_id, reference, response_revision=None):
     request = collaboration.receipt(request_id)
     if (request.get('commandAction') != 'coordination.send'
             or sid not in {request.get('senderSessionId'), request.get('target', {}).get('sessionId')}
-            or request.get('workspace') != reader.get('workspace')):
+            or not participant_matches(request, reader)
+            or not participant_matches(request, app._session(request['senderSessionId'], hydrate=False))
+            or not participant_matches(request, app._session(request['target']['sessionId'], hydrate=False))):
         collaboration.error('This artifact is outside the conversation request and workspace scope.')
     response = request.get('response') or {}
     if response_revision is not None and response.get('responseRevision') != response_revision:

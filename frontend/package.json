@@ -139,6 +139,8 @@
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
+    "remark-parse": "11.0.0",
+    "unified": "11.0.5",
     "zod": "^4.6.2"
   },
   "devDependencies": {

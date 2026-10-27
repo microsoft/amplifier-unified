@@ -120,14 +120,11 @@ async def test_actual_root_and_current_generation_required(app, transport):
     assert not peer["messages"] and not app.runtime.inputs
 
 
-async def test_missing_transport_cross_workspace_and_peer_control_refused(app):
+async def test_missing_transport_and_peer_control_refused(app):
     source, peer = app.state["sessions"]
     with pytest.raises(AppError):
         await app.dispatch("coordination.send", {"sessionId": peer["id"], "text": "no"},
                            origin="agent", caller_session_id=source["id"])
-    peer["workspace"] += "/other"
-    with pytest.raises(AppError, match="workspace"):
-        await agent(app, source, "coordination.send", {"sessionId": peer["id"], "text": "no"}, "foreign")
     for action, args in [
         ("conversation.stop", {"sessionId": peer["id"]}),
         ("configuration.apply", {"id": peer["id"], "config": {}}),

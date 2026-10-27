@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import time
+from .peer_scope import participant_matches
 
 PAGE = 8
 MAX_ITEMS = 96
@@ -97,8 +98,11 @@ def recap_items(app, source, rows, resources):
         if peer_id == source['id']:
             peer_id = receipt.get('senderSessionId')
         peer = index.get(peer_id) or {}
-        # Do not reveal a peer's new title after it leaves this request workspace.
-        label = peer.get('title') if peer.get('workspace') == source['workspace'] else 'Related task'
+        # Show current metadata only while the exact recorded location matches.
+        # Cold peers can use their receipt's historical label, not a catalog scan.
+        recorded = receipt.get('sender') if peer_id == receipt.get('senderSessionId') else receipt.get('target')
+        label = (peer.get('title') if peer and participant_matches(receipt, peer)
+                 else (recorded or {}).get('title') if not peer else None) or 'Related task'
         response, wait = outcome(receipt), receipt.get('subscription') or {}
         add(['request', receipt['requestId']], 'request', label, phase(receipt),
             [receipt.get('delivery'), receipt.get('phase'), receipt.get('responseRevision'),
@@ -206,7 +210,8 @@ async def read(collaboration, action, args, origin, caller):
     if binding != [source['workspace'], source.get('runtimeSessionId'), source.get('nativeIdentity')]:
         collaboration.error('The conversation moved while reading its observation scope; inspect again.', 409)
     rows, truncated = receipts(app, source['id'])
-    rows = [row for row in rows if row.get('workspace') == source['workspace']]
+    rows = [row for row in rows if (participant_matches(row, source)
+            if row.get('commandAction') == 'coordination.send' else row.get('workspace') == source['workspace'])]
     if action == 'coordination.diagnostics':
         return diagnostics(app, source, rows, truncated)
     return recap(source, recap_items(app, source, rows, resources), args.get('cursor'),

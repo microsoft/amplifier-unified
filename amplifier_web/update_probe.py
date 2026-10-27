@@ -22,6 +22,7 @@ async def main():
     parser.add_argument("--read-only", action="store_true")
     parser.add_argument("--profiles", type=Path)
     parser.add_argument("--source-policy-only", type=Path)
+    parser.add_argument("--checked-sources", type=Path)
     parser.add_argument("--global-only", action="store_true")
     parser.add_argument("--runtime-plan", type=Path)
     args = parser.parse_args()
@@ -38,7 +39,7 @@ async def main():
             profiles = json.loads(args.profiles.read_text())
             catalog = {}
             from amplifier_web.runtime_policy_reconciliation import Collector
-            collector = Collector() if args.source_policy_only else None
+            collector = Collector() if args.source_policy_only or args.checked_sources else None
             if not isinstance(profiles, list) or not profiles or any(not isinstance(p, str) for p in profiles):
                 raise ValueError('Invalid qualification profiles')
             for index, profile in enumerate(profiles):
@@ -48,13 +49,18 @@ async def main():
                     profile_catalog=catalog, source_policy_collector=collector)
             facts.pop('profileIndex', None)
             from amplifier_web.host.config import load_config
-            if collector is not None:
+            if args.source_policy_only:
                 from amplifier_web.deployment import write_private
-                evidence = await collector.report(batch, load_config(args.workspace, global_only=True))
+                evidence = await collector.report(batch, load_config(args.workspace, global_only=True), allow_generated=True)
                 write_private(args.source_policy_only, json.dumps(evidence))
                 facts.update(ok=True, stage='source-policy-collected', dependenciesPrepared=False)
                 print(PROBE_PREFIX + json.dumps(facts), flush=True)
                 return
+            if args.checked_sources:
+                from amplifier_web.runtime_source_alignment import checked_batch_sources, verify_checked_selection
+                checked = json.loads(args.checked_sources.read_text())
+                selection = await checked_batch_sources(batch, collector, load_config(args.workspace, global_only=True), checked)
+                verify_checked_selection(checked, selection, exact=True)
             report = await batch.install()
             from amplifier_web.profile_catalog import save_catalog
             save_catalog(load_config(args.workspace, global_only=True), profiles, catalog)

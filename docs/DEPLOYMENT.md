@@ -72,9 +72,114 @@ scp '<owner>@<host>:/absolute/path/amplifier-unified-ca.crt' .
 openssl x509 -in amplifier-unified-ca.crt -noout -fingerprint -sha256
 ```
 
-Compare that fingerprint with the trusted host's `amplifier-unified setup-tls status` output. Import the CA into the user trust store on each client device, then restart the browser. On macOS, use Keychain Access's **login** keychain and trust it for SSL. Follow your organization's approved process for mobile-device certificate trust.
+Compare that fingerprint with the trusted host's `amplifier-unified setup-tls status` output. Use the same data directory as the running host if non-default. On macOS, use Keychain Access's **login** keychain and trust it for SSL. Windows can use the current user's Trusted Root Certification Authorities store. Follow your organization's approved process for mobile-device certificate trust.
 
 The `/setup` page can provide platform-specific follow-up instructions after TLS is trusted. Its displayed fingerprint or an anonymous certificate download is not independent proof of authenticity.
+
+### Ubuntu and Debian clients
+
+Run these steps on the computer running the browser, not the Unified server.
+WSL trust does not configure a Windows browser. Other Linux distributions need
+their own approved procedure. Use a normal-user terminal with `sudo` access and
+the `openssl`, `coreutils` and `ca-certificates` packages. If tools are missing or
+policy blocks installation, ask your administrator; the page installs nothing.
+
+1. Set the exact public CA path from the trusted transfer. For a download from an
+   **already trusted** connection:
+
+```sh
+ca_file="$HOME/Downloads/amplifier-unified-ca.crt"
+```
+
+If the browser saved a duplicate, use this **instead**:
+
+```sh
+ca_file="$HOME/Downloads/amplifier-unified-ca (1).crt"
+```
+
+Keep the quotes around spaces and parentheses. Adjust the directory if needed;
+do not use a wildcard or select an arbitrary downloaded certificate.
+
+```sh
+openssl x509 -in "$ca_file" -noout -subject -issuer -fingerprint -sha256
+```
+
+2. **Stop and compare the SHA-256 fingerprint** with `amplifier-unified setup-tls
+   status` on the intended host, through a trusted console or verified SSH. Do
+   not install if the fingerprints differ or origin is uncertain. A root CA can
+   authenticate other sites, not just Unified.
+3. After verification, install the single PEM certificate using the same terminal.
+   The destination is absolute `/usr/...`, **not `~/usr/...`** under your home:
+
+```sh
+ca_dest=/usr/local/share/ca-certificates/amplifier-unified-ca.crt
+if [ -e "$ca_dest" ] || [ -L "$ca_dest" ]; then
+  printf '%s\n' "Stop: $ca_dest already exists; ask your administrator to check it." >&2
+  false
+elif [ "$(grep -c -- '-----BEGIN ' "$ca_file")" != 1 ] ||
+     [ "$(grep -c -- '-----END ' "$ca_file")" != 1 ]; then
+  printf '%s\n' "Stop: expected exactly one PEM certificate, not a bundle." >&2
+  false
+else
+  sudo install -d -m 0755 /usr/local/share/ca-certificates &&
+  sudo install -m 0644 -- "$ca_file" "$ca_dest" &&
+  sudo update-ca-certificates
+fi
+```
+
+The stable `.crt` destination holds exactly one PEM certificate, readable by
+applications. Do not overwrite an existing CA; another host needs a distinct
+destination. Stop on any error. A rehash warning about the generated
+`ca-certificates.crt` bundle containing multiple certificates is normally benign,
+but a warning naming your individual CA file needs investigation.
+
+4. Check OS trust:
+
+```sh
+openssl verify -CAfile /etc/ssl/certs/ca-certificates.crt "$ca_file"
+```
+
+Expect the selected filename followed by `OK`. OpenSSL can also consult its
+configured default trust locations. This checks OS trust for the CA, not the
+server's hostname/connection or the browser's trust.
+
+5. Save browser work, fully quit and reopen the browser yourself, and open the
+   intended HTTPS URL. Confirm there is no certificate warning before signing in.
+   Firefox, Chromium/Chrome and Edge can use different stores depending on version,
+   packaging, profile and policy. Confined Snap packages may not inherit OS trust.
+   OS success is **not** proof of browser success.
+
+If the browser still says **Not secure**, read its connection/certificate details
+before importing anything again. If warnings were turned off for this site,
+save unsent work, turn warnings back on and reload without proceeding past a
+warning. Check the served host and chain against the verified CA. Match the
+URL hostname against the Subject Alternative Name (SAN), not just the Common
+Name (CN). A hostname mismatch needs the correct URL or server-certificate
+repair; a date error needs a clock/validity check, not another CA import. For an
+untrusted issuer with matching host/CA identities, inspect the installed browser's
+certificate manager and follow its local-CA/Authorities import procedure or your
+administrator's policy. Firefox has a separate Authorities store. Do not disable
+verification, bypass warnings or run NSS/certutil against a guessed database.
+Chromium's documented Linux NSS location has changed across versions; it is not
+evidence of the location used by a particular Edge installation.
+
+**Back out only your new installation**, after checking that this exact path is
+the file you installed (not a pre-existing CA):
+
+```sh
+sudo rm -- /usr/local/share/ca-certificates/amplifier-unified-ca.crt &&
+sudo update-ca-certificates --fresh
+```
+
+Remove any separately imported browser copy in that browser's certificate
+settings too. OS removal alone does not prove browser removal.
+
+References: [Ubuntu trust-store guide](https://ubuntu.com/server/docs/how-to/security/install-a-root-ca-certificate-in-the-trust-store/),
+[Debian update-ca-certificates](https://manpages.debian.org/testing/ca-certificates/update-ca-certificates.8.en.html),
+[Chromium Linux certificate management](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/docs/linux/cert_management.md),
+[Firefox certificate policies](https://firefox-admin-docs.mozilla.org/reference/policies/certificates/),
+and [Edge root-store policy history](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-policies/microsoftrootstoreenabled).
+The obsolete Edge root-store policy is not a workaround.
 
 ## Keep the host running
 

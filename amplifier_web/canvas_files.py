@@ -3,6 +3,7 @@ import copy
 import uuid
 from .workspace_canvas import canvas_command, ReferencedFileChanged
 from .canvas_library import remember
+from .peer_scope import participant_matches, valid_binding
 
 
 def open_file(service, args, origin, *, retained_file=None):
@@ -28,14 +29,22 @@ def open_file(service, args, origin, *, retained_file=None):
     retained = None
     if args.get('referenceRequestId'):
         receipt = service.collaboration.receipt(args['referenceRequestId'])
+        if not valid_binding(receipt):
+            raise AppError('The exact artifact request location binding is unavailable.', 403)
+        # The legacy same-workspace path fallback is not permission to read a
+        # moved producer's old directory. Recheck both before any file access.
+        service.collaboration.request_target(
+            service._session(receipt['senderSessionId'], hydrate=False), receipt, hydrate=False)
         response = receipt.get('response') or {}
         reference = args['path'] + '@sha256:' + args.get('expectedSha256', '')
         if args.get('referenceResponseRevision') is not None:
             from .result_artifacts import resolve
             _, _, response = resolve(service.collaboration, sid, args['referenceRequestId'], reference, args['referenceResponseRevision'])
-        if (receipt.get('workspace') != session['workspace'] or (response.get('status') != 'sealed' and 'artifacts' not in response)
+        if (not participant_matches(receipt, session) or (response.get('status') != 'sealed' and 'artifacts' not in response)
                 or reference not in response.get('references', [])):
             raise AppError('Choose an exact artifact reference from this workspace request.', 403)
+        if 'artifacts' not in response and receipt['target'].get('workspace', receipt.get('workspace')) != receipt.get('workspace'):
+            return {'status': 'unavailable', 'message': 'Cross-workspace references require an explicitly retained file version; no source path was read.'}
         if 'artifacts' in response and retained is None:
             from .result_artifacts import resolve
             item, _, current = resolve(service.collaboration, sid, args['referenceRequestId'], reference, args.get('referenceResponseRevision'))

@@ -8,6 +8,7 @@ import time
 from amplifier_operations.coordination import fingerprint
 from .session_identity import reference
 from .transcript_window import _Invalid
+from .peer_scope import location, location_label, participant_matches
 
 
 class PeerPreview:
@@ -18,11 +19,11 @@ class PeerPreview:
     def windows(self):
         return self.service.history.windows
 
-    def _target(self, identity, parent):
+    def _target(self, identity, parent, receipt):
         from .service import AppError
         target = self.service.directory.resolve(identity)
         if (not target or target.get('sessionKind', 'root') != 'root'
-                or target.get('workspace') != parent.get('workspace')
+                or not participant_matches(receipt, parent) or not participant_matches(receipt, target)
                 or target.get('workspaceAvailable') is False or target.get('nativeAvailable') is False
                 or target.get('_deleting')):
             raise AppError('Source chat unavailable.', 403)
@@ -36,6 +37,7 @@ class PeerPreview:
         title = target.get('title') or 'Untitled chat'
         title = ''.join(c for c in title if ord(c) >= 32 and ord(c) != 127)[:200]
         return {'sourceId': target['id'], 'title': title or 'Untitled chat', 'available': True,
+                'location': location(target), 'workspaceLabel': location_label(location(target)),
                 'archived': bool(self.service.state.get('conversationOrganization', {}).get('archived', {}).get(target['id'])),
                 'status': target.get('status', 'unknown')}
 
@@ -49,7 +51,7 @@ class PeerPreview:
         from .service import AppError
         try:
             parent = self.service._session(parent['id'], hydrate=False)
-            target = self._target(receipt['senderSessionId'], parent)
+            target = self._target(receipt['senderSessionId'], parent, receipt)
         except (ValueError, AppError):
             return {'available': False}
         payload = {'kind': 'peer-preview', 'sourceSessionId': parent['id'],
@@ -90,7 +92,7 @@ class PeerPreview:
         owner = {'id': parent['id'], 'messages': originals}
         if original is None or not self.service.peer_attribution.resolve(owner, [original])[0].get('attribution', {}).get('peer'):
             raise AppError('The original source binding is unavailable. Reopen its message.', 403)
-        target = self._target(value['targetId'], parent)
+        target = self._target(value['targetId'], parent, receipt)
         if self._identity(target) != value['targetIdentity']:
             raise AppError('This source identity changed. No other chat was opened.', 403)
         return value, target

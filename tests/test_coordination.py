@@ -159,7 +159,8 @@ async def test_list_none_workspace_scope_filters_before_one_row_pages(app, monke
         assert whole['items'][0]['target']['sessionId'] == foreign['id']
         exact = app.coordination.list({'scope': 'all', 'sessionId': foreign['id']}, caller['id'])
         assert exact['items'][0]['target']['sessionId'] == foreign['id']
-        assert not exact['items'][0]['canFollowup'] and not exact['items'][0]['canInterrupt']
+        assert exact['items'][0]['canFollowup'] and exact['items'][0]['canMessage']
+        assert not exact['items'][0]['canInterrupt']
         assert not app.runtime.sent and not app.runtime.messages
     finally:
         for row in (caller, peer):

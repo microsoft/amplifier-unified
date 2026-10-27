@@ -312,6 +312,33 @@ async def test_snapshot_validation_and_forged_metadata(app):
     assert sent['replyTo']['segments'][0]['quote'] == first
 
 
+async def test_send_quote_only_document_keeps_exact_projection_and_validation(app):
+    from amplifier_web.message_interactions import document_text
+    from amplifier_web.service import AppError
+    first = await snapshot(app)
+    sid = target(app)['sessionId']
+    submitted = document(reference(first, 'only'))
+    args = {'sessionId': sid, 'text': '', 'document': submitted}
+    before = copy.deepcopy(app._session()['messages'])
+    invalid = document(reference({'id': 'missing'}, 'only'))
+    for changes in [
+        {'document': invalid},
+        {'document': document({'type': 'reference', 'text': 'forged'})},
+        {'replyId': first['id']},  # Legacy reply and structured document cannot mix.
+    ]:
+        with pytest.raises(AppError):
+            await call(app, 'conversation.send', {**args, **changes})
+    assert app._session()['messages'] == before and not app.runtime.sent
+
+    receipt = await call(app, 'conversation.send', args, command_id='quote-only')
+    duplicate = await call(app, 'conversation.send', args, command_id='quote-only')
+    assert receipt['delivery'] == 'accepted' and duplicate['duplicate']
+    expected = document_text(submitted)
+    row = next(m for m in app._session()['messages'] if m.get('inputId') == 'quote-only' and m['role'] == 'user')
+    assert row['text'] == expected and row['replyTo']['segments'] == submitted['segments']
+    assert app.runtime.sent == [(sid, expected, 'quote-only')]
+
+
 async def test_private_structured_draft_reopen_and_two_chats(app):
     quote = await snapshot(app)
     sid = target(app)['sessionId']
@@ -407,6 +434,354 @@ async def test_commentary_editor_content_retains_whitespace_but_cannot_forge_quo
     with pytest.raises(AppError, match='commentary'):
         await call(app, 'view.update', {'sessionId': sid, 'patch': {'draft': 'forged', 'draftDocument': forged}})
     assert app.clients.records['one']['view']['draftDocument'] == value
+
+
+def checkpoint():
+    """Synthetic editor JSON, including literal source that must not be rendered."""
+    raw = '  café e\u0301 東京 \U0001f642\t\r\n<script>literal()</script>\r\n\r\n  '
+    table = {'type': 'table', 'content': [
+        {'type': 'table_row', 'content': [
+            {'type': 'table_cell', 'attrs': {'header': header, 'align': align},
+             'content': [{'type': 'text', 'text': ' café e\u0301\t東京 ',
+                          'marks': [{'type': 'strike'}]}]}
+            for align in [None, 'left', 'center', 'right']]}
+        for header in [True, False]]}
+    tasks = {'type': 'bullet_list', 'attrs': {'tight': True}, 'content': [
+        {'type': 'list_item', 'attrs': {'checked': checked},
+         'content': [{'type': 'paragraph', 'content': [{'type': 'text', 'text': ' task  '}]}]}
+        for checked in [True, False, None]]}
+    return document(
+        {**words('| café | e\u0301 | 東京 | end |\n| --- | :--- | :---: | ---: |'), 'content': table},
+        {**words('* [x] task\n* [ ] task\n* task'), 'content': tasks},
+        {**words(raw), 'content': {'type': 'markdown_source', 'content': [{'type': 'text', 'text': raw}]}})
+
+
+@pytest.mark.parametrize('new_chat', [False, True], ids=['current-chat', 'new-chat'])
+async def test_draft_checkpoint_roundtrip_reload_clone_and_chat_isolation(app, new_chat):
+    from amplifier_web.agent_private_state import project
+    from amplifier_web.client_views import ClientViews
+    sid = target(app)['sessionId']
+    if new_chat:
+        await call(app, 'session.draft', {})
+    owner = None if new_chat else sid
+    value = checkpoint()
+    raw = '  private draft café e\u0301 東京 \U0001f642\t\r\n\r\n  '
+    before = copy.deepcopy(value)
+    await call(app, 'view.update', {'sessionId': owner, 'patch': {'draft': raw, 'draftDocument': value}})
+    assert value == before
+    for client in ['one', 'reloaded', 'cloned']:
+        if client != 'one':
+            app.clients.attach(client, resume='one')
+        with app.clients.bind(client):
+            state = app.browser_state()
+            assert state['selectedSessionId'] == owner
+            assert state['view']['draft'] == raw
+            assert state['view']['draftDocument'] == value
+            private = project(state, sid, {})
+            assert 'draftDocument' not in private['view']
+            assert 'private draft' not in json.dumps(private, ensure_ascii=False)
+    # Read back persisted JSON, not only the in-memory view copy.
+    persisted = ClientViews(app).records['one']
+    assert persisted['drafts'][owner or ''] == raw
+    assert persisted['draftDocuments'][owner or ''] == value
+    assert not app.clients.records['two']['view'].get('draftDocument')
+    await call(app, 'view.update', {'sessionId': owner,
+        'patch': {'draft': 'Clone only', 'draftDocument': document(words('Clone only'))}}, client='cloned')
+    assert app.clients.records['one']['view']['draftDocument'] == value
+    assert app.clients.records['reloaded']['view']['draftDocument'] == value
+
+    await call(app, 'session.create', {'title': 'Other checkpoint chat'})
+    other = app.clients.records['one']['selectedSessionId']
+    assert other != owner
+    await call(app, 'view.update', {'patch': {'draft': 'Other chat', 'draftDocument': None}})
+    # A delayed nonquote checkpoint must retain its explicit original target.
+    await call(app, 'view.update', {'sessionId': owner, 'patch': {'draft': raw, 'draftDocument': value}})
+    assert app.clients.records['one']['view']['draft'] == 'Other chat'
+    assert app.clients.records['one']['view'].get('draftDocument') is None
+    if new_chat:
+        await call(app, 'session.draft', {})
+    else:
+        await call(app, 'session.select', {'id': sid})
+    with app.clients.bind('one'):
+        assert app.browser_state()['view']['draftDocument'] == value
+        assert app.browser_state()['view']['draft'] == raw
+    await call(app, 'view.update', {'sessionId': owner, 'patch': {'draft': '', 'draftDocument': None}})
+    assert (owner or '') not in app.clients.records['one']['draftDocuments']
+    assert app.clients.records['reloaded']['view']['draftDocument'] == value
+    assert not app.runtime.sent and not app.runtime.started
+
+
+@pytest.mark.parametrize('new_chat', [False, True], ids=['current-chat', 'new-chat'])
+async def test_draft_checkpoint_host_restart_retains_exact_private_document(app, tmp_path, new_chat):
+    from amplifier_web.service import AppService
+    from test_service import Runtime
+    if new_chat:
+        await call(app, 'session.draft', {})
+    owner = app.clients.records['one']['selectedSessionId']
+    value = checkpoint()
+    raw = ' \t e\u0301 東京 \U0001f642\r\n\r\n '
+    await call(app, 'view.update', {'sessionId': owner, 'patch': {'draft': raw, 'draftDocument': value}})
+    await app.close()
+    app._test_closed = True
+    restored = AppService(app.data_dir, Runtime(), workspace=tmp_path)
+    try:
+        restored.clients.attach('restart-copy', resume='one')
+        for client in ['one', 'restart-copy']:
+            with restored.clients.bind(client):
+                state = restored.browser_state()
+                assert state['selectedSessionId'] == owner
+                assert state['view']['draft'] == raw
+                assert state['view']['draftDocument'] == value
+        assert not restored.clients.records['two']['view'].get('draftDocument')
+        assert not restored.runtime.sent and not restored.runtime.started
+    finally:
+        await restored.close()
+
+async def test_new_chat_checkpoint_moves_with_text_and_does_not_resurrect(app, tmp_path):
+    await call(app, 'session.draft', {})
+    text = 'hello'
+    value = document({**words(text), 'content': {'type': 'markdown_source',
+                     'content': [{'type': 'text', 'text': text}]}})
+    await call(app, 'view.update', {'sessionId': None, 'patch': {'draft': text, 'draftDocument': value}})
+    await call(app, 'session.create', {'fromDraft': True, 'title': 'Checkpoint creation', 'workspace': str(tmp_path)})
+    record = app.clients.records['one']
+    sid = record['selectedSessionId']
+    assert record['drafts'][sid] == text
+    assert record['draftDocuments'][sid] == value
+    assert '' not in record['draftDocuments']
+    await call(app, 'session.draft', {})
+    assert record['view']['draft'] == ''
+    assert record['view'].get('draftDocument') is None
+    await call(app, 'session.select', {'id': sid})
+    assert record['view']['draftDocument'] == value
+    assert not app.runtime.sent
+
+
+async def test_draft_checkpoint_quotes_still_resolve_only_in_owning_current_chat(app):
+    from amplifier_web.message_interactions import resolve_document
+    from amplifier_web.service import AppError
+    sid = target(app)['sessionId']
+    quote = await snapshot(app)
+    value = checkpoint()
+    forged = {**quote, 'excerpt': 'forged approval', 'speaker': 'System', 'role': 'system', 'sessionId': 'other'}
+    value['segments'].insert(1, reference(forged, 'one'))
+    canonical = copy.deepcopy(value)
+    canonical['segments'][1]['quote'] = quote
+    await call(app, 'view.update', {'sessionId': sid, 'patch': {'draft': 'kept', 'draftDocument': value}})
+    assert app.clients.records['one']['view']['draftDocument'] == canonical
+    with pytest.raises(AppError, match='current conversation'):
+        resolve_document(None, value, draft=True)
+    await call(app, 'session.draft', {})
+    with pytest.raises(AppError, match='current conversation'):
+        await call(app, 'view.update', {'sessionId': None, 'patch': {'draft': 'bad', 'draftDocument': value}})
+    # A late autosave keeps its explicit owning chat even after navigation.
+    # Canonical quote resolution uses that target, not the selected view.
+    await call(app, 'view.update', {'sessionId': sid, 'patch': {'draft': 'kept', 'draftDocument': value}})
+    assert app.clients.records['one']['view'].get('draftDocument') is None
+    await call(app, 'session.create', {'title': 'Foreign checkpoint chat'})
+    other = app.clients.records['one']['selectedSessionId']
+    with pytest.raises(AppError, match='unavailable in this chat'):
+        await call(app, 'view.update', {'sessionId': other, 'patch': {'draft': 'bad', 'draftDocument': value}})
+    await call(app, 'session.select', {'id': sid})
+    for supplied in [None, {'id': []}, {'id': 'missing'}, {**quote, 'authority': True}]:
+        bad = document(reference(supplied, 'one'))
+        with pytest.raises(AppError):
+            await call(app, 'view.update', {'patch': {'draft': 'bad', 'draftDocument': bad}})
+        assert app.clients.records['one']['view']['draftDocument'] == canonical
+        assert app.clients.records['one']['view']['draft'] == 'kept'
+    assert not app.runtime.sent
+
+
+@pytest.mark.parametrize('href', [
+    'https://example.test/東京?q=caf%C3%A9#part', 'HTTP://example.test',
+    'mailto:person@example.test', 'tel:+15550100', 'ftp://example.test/file',
+    '../guide.md', '/docs/guide', '#part', '?query=value', '//example.test/guide', '',
+])
+def test_draft_checkpoint_safe_urls_and_existing_shapes_are_preserved(href):
+    from amplifier_web.message_interactions import resolve_document
+    paragraph = {'type': 'paragraph', 'content': [
+        {'type': 'text', 'text': ' Link e\u0301 ', 'marks': [
+            {'type': 'em'}, {'type': 'strong'},
+            {'type': 'link', 'attrs': {'href': href, 'title': None}},
+            {'type': 'strike'}, {'type': 'code'}]},
+        {'type': 'image', 'attrs': {'src': href, 'alt': 'inert <img>', 'title': 'title'}},
+        {'type': 'hard_break'},
+    ]}
+    nodes = [
+        paragraph, {'type': 'heading', 'attrs': {'level': 6}, 'content': [{'type': 'text', 'text': 'H'}]},
+        {'type': 'code_block', 'attrs': {'params': 'python'}, 'content': [{'type': 'text', 'text': '\tcode\n  '}]},
+        {'type': 'horizontal_rule'}, {'type': 'blockquote', 'content': [paragraph]},
+        {'type': 'ordered_list', 'attrs': {'order': 0, 'tight': False}, 'content': [
+            {'type': 'list_item', 'attrs': {'checked': None}, 'content': [paragraph]}]},
+        {'type': 'paragraph'}, {'type': 'markdown_source'},
+    ]
+    value = document(*[{**words('exact projection  \n'), 'content': node} for node in nodes])
+    before = copy.deepcopy(value)
+    result = resolve_document(None, value, draft=True)
+    assert result == value == before
+    result['segments'][0]['content']['content'][0]['text'] = 'changed'
+    assert value == before
+
+
+@pytest.mark.parametrize('href', [
+    None, False, 1, [], {}, 'javascript:alert(1)', '  JaVaScRiPt:alert(1)',
+    '\ufeffjavascript:alert(1)', 'java\nscript:alert(1)', 'java\tscript:alert(1)',
+    '\x00https://example.test', 'https://example.test/\x7f',
+    'vbscript:msgbox(1)', 'data:text/html,<script>bad()</script>',
+    'data:image/svg+xml,<svg onload="bad()"/>', 'file:///private.txt',
+    '\\\\example.test\\path', 'unknown:command',
+])
+def test_draft_checkpoint_refuses_unsafe_or_malformed_urls(href):
+    from amplifier_web.message_interactions import resolve_document
+    from amplifier_web.service import AppError
+    for child in [
+        {'type': 'text', 'text': 'link', 'marks': [{'type': 'link', 'attrs': {'href': href}}]},
+        {'type': 'image', 'attrs': {'src': href}},
+    ]:
+        value = document({**words('unchanged'), 'content': {'type': 'paragraph', 'content': [child]}})
+        with pytest.raises(AppError, match='commentary'):
+            resolve_document(None, value, draft=True)
+
+
+def invalid_checkpoints():
+    paragraph = {'type': 'paragraph', 'content': [{'type': 'text', 'text': 'text'}]}
+    cell = {'type': 'table_cell', 'attrs': {'header': False, 'align': None}, 'content': []}
+    def table(value):
+        return {'type': 'table', 'content': [{'type': 'table_row', 'content': [value]}]}
+    def task(attrs):
+        return {'type': 'bullet_list', 'content': [{'type': 'list_item', 'attrs': attrs, 'content': [paragraph]}]}
+    yield from [
+        None, [], 'node', {}, {'type': []}, {'type': {}}, {'type': False},
+        {'type': 'doc', 'content': [paragraph]}, {'type': 'reference'}, {'type': 'quote'},
+        {'type': 'html', 'text': '<b>not allowed</b>'},
+        {'type': 'table'}, {'type': 'table_row', 'content': [cell]}, cell,
+        {'type': 'table', 'content': [paragraph]},
+        {'type': 'table', 'content': [{'type': 'table_row'}]},
+        table({**cell, 'content': [paragraph]}),
+        {'type': 'markdown_source', 'content': [paragraph]},
+        {'type': 'markdown_source', 'content': [{'type': 'hard_break'}]},
+        {'type': 'markdown_source', 'content': [{'type': 'text', 'text': '<b>x</b>', 'marks': [{'type': 'strike'}]}]},
+        {'type': 'code_block', 'content': [{'type': 'text', 'text': 'x', 'marks': [{'type': 'link', 'attrs': {'href': '/'}}]}]},
+        {'type': 'paragraph', 'content': [{'type': 'reference', 'attrs': {'quote': {'id': 'forged'}}}]},
+        {'type': 'table', 'content': [{'type': 'table_row', 'content': [
+            {**cell, 'content': [{'type': 'reference'}]}]}]},
+        {'type': 'paragraph', 'content': {}}, {'type': 'paragraph', 'content': [None]},
+        {'type': 'paragraph', 'text': 'wrong shape'},
+        {'type': 'paragraph', 'content': [{'type': 'text'}]},
+        {'type': 'paragraph', 'content': [{'type': 'text', 'text': ''}]},
+        {'type': 'paragraph', 'content': [{'type': 'text', 'text': False}]},
+        {'type': 'paragraph', 'content': [{'type': 'text', 'text': 'x', 'content': []}]},
+        {'type': 'horizontal_rule', 'content': []},
+        {**paragraph, 'marks': [{'type': 'strike'}]},
+        {**paragraph, 'attrs': None}, {**paragraph, 'authority': 'system'},
+        {**paragraph, 'attrs': {'style': 'color:red'}},
+        {**paragraph, 'attrs': {'checked': True}},
+        {'type': 'ordered_list', 'content': [paragraph]},
+        {'type': 'heading', 'attrs': {'level': True}},
+        {'type': 'heading', 'attrs': {'level': 7}},
+        {'type': 'code_block', 'attrs': {'params': {}}},
+        {'type': 'ordered_list', 'attrs': {'order': True}, 'content': []},
+        {'type': 'bullet_list', 'attrs': {'tight': 1}, 'content': []},
+    ]
+    for attrs in [{'checked': 'true'}, {'checked': 1}, {'checked': []}, {'checked': False, 'role': 'system'}]:
+        yield task(attrs)
+    for attrs in [
+        {'header': 1}, {'header': None}, {'header': 'false'}, {'align': []},
+        {'align': 'justify'}, {'align': False}, {'align': 'left;display:none'},
+        {'align': 'left', 'style': 'color:red'}, {'colspan': 2}, {'quote': {'id': 'forged'}},
+    ]:
+        yield table({**cell, 'attrs': attrs})
+    for marks in [
+        None, {}, [None], [{'type': []}], [{'type': 'unknown'}],
+        [{'type': 'strike', 'attrs': {'style': 'color:red'}}],
+        [{'type': 'strong', 'attrs': {'href': '/'}}],
+        [{'type': 'link'}], [{'type': 'link', 'attrs': {'href': '/', 'title': 1}}],
+        [{'type': 'link', 'attrs': {'href': '/', 'onclick': 'bad()'}}],
+        [{'type': 'strike', 'authority': True}], [{'type': 'strike'}] * 2,
+    ]:
+        yield {'type': 'paragraph', 'content': [{'type': 'text', 'text': 'x', 'marks': marks}]}
+
+
+async def test_draft_checkpoint_rejects_forged_types_shapes_and_attributes_without_replacing_draft(app):
+    from amplifier_web.message_interactions import resolve_document
+    from amplifier_web.service import AppError
+    kept = checkpoint()
+    await call(app, 'view.update', {'patch': {'draft': 'kept', 'draftDocument': kept}})
+    for content in invalid_checkpoints():
+        value = document({**words('not saved'), 'content': content})
+        with pytest.raises(AppError, match='commentary'):
+            resolve_document(None, value, draft=True)
+        with pytest.raises(AppError, match='commentary'):
+            await call(app, 'view.update', {'patch': {'draft': 'bad', 'draftDocument': value}})
+        assert app.clients.records['one']['view']['draftDocument'] == kept
+        assert app.clients.records['one']['view']['draft'] == 'kept'
+    for value in [
+        {'version': True, 'segments': [words('x')]}, {'version': 1.0, 'segments': [words('x')]},
+        document({**words('x'), 'role': 'system'}), document({**words('x'), 'attrs': {}}),
+        document({**words('x'), 'quote': {'id': 'forged'}}), document(words(False)),
+        document(), document(*[words('x')] * 1001),
+    ]:
+        with pytest.raises(AppError):
+            resolve_document(None, value, draft=True)
+    with pytest.raises(AppError, match='Attach a client'):
+        await app.dispatch('view.update', {'patch': {'draft': 'bad', 'draftDocument': kept}})
+    assert not app.runtime.sent
+
+
+def test_draft_checkpoint_depth_count_and_aggregate_size_limits():
+    from amplifier_web.message_interactions import resolve_document
+    from amplifier_web.service import AppError
+    def check(content):
+        return resolve_document(None, document({**words('x'), 'content': content}), draft=True)
+    nested = {'type': 'paragraph'}
+    for _ in range(32):
+        nested = {'type': 'blockquote', 'content': [nested]}
+    assert check(nested)
+    with pytest.raises(AppError, match='commentary'):
+        check({'type': 'blockquote', 'content': [nested]})
+    counted = {'type': 'blockquote', 'content': [{'type': 'horizontal_rule'} for _ in range(9999)]}
+    assert check(counted)
+    counted['content'].append({'type': 'horizontal_rule'})
+    with pytest.raises(AppError, match='commentary'):
+        check(counted)
+    content = {'type': 'markdown_source', 'content': [{'type': 'text', 'text': ''}]}
+    overhead = len(json.dumps(content, ensure_ascii=False))
+    content['content'][0]['text'] = '東' * (400000 - overhead)
+    assert check(content)  # Serialized Unicode character bound, not UTF-8 bytes.
+    content['content'][0]['text'] += '東'
+    with pytest.raises(AppError, match='too long'):
+        check(content)
+    half = {**words('x'), 'content': {'type': 'markdown_source',
+        'content': [{'type': 'text', 'text': 'x' * 200000}]}}
+    with pytest.raises(AppError, match='too long'):
+        resolve_document(None, document(half, half), draft=True)
+    with pytest.raises(AppError, match='too long'):
+        resolve_document(None, document(words('x' * 100001)), draft=True)
+
+
+async def test_send_guard_refuses_gfm_checkpoint_content_but_accepts_text_projection(app):
+    from amplifier_web.message_interactions import resolve_document
+    from amplifier_web.service import AppError
+    sid = target(app)['sessionId']
+    quote = await snapshot(app)
+    gfm = checkpoint()['segments'] + [{
+        **words('~~strike~~'), 'content': {'type': 'paragraph', 'content': [
+            {'type': 'text', 'text': 'strike', 'marks': [{'type': 'strike'}]}]}}]
+    before = copy.deepcopy(app._session()['messages'])
+    for part in gfm:
+        value = document(part, reference(quote, 'one'))
+        assert resolve_document(app._session(), value, draft=True) == value
+        with pytest.raises(AppError, match='commentary'):
+            resolve_document(app._session(), value)
+        with pytest.raises(AppError, match='commentary'):
+            await call(app, 'conversation.send', {'sessionId': sid, 'text': 'no', 'document': value})
+    assert app._session()['messages'] == before and not app.runtime.sent
+    # The frontend's stripped send projection travels as literal new text.
+    value = document(*[words(part['text']) for part in gfm], reference(quote, 'one'))
+    await call(app, 'conversation.send', {'sessionId': sid, 'text': 'readable', 'document': value})
+    sent = next(row for row in app._session()['messages'] if row.get('replyTo'))
+    assert sent['replyTo']['segments'] == value['segments']
+    assert len(app.runtime.sent) == 1
 
 
 async def test_whole_long_source_digest_and_snapshot_after_source_removal(app):

@@ -43,6 +43,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--header-only', action='store_true',
                         help='Fixed header-occlusion regression plus served-asset parity.')
+    parser.add_argument('--markdown-only', action='store_true',
+                        help='Markdown/GFM input and quote journeys plus served-asset parity.')
     args = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=False)
     result = {'status': 'running', 'limits': ['Read-only locked development dependencies, not minimal production dependency install', 'Synthetic runtime, no real provider/physical IME/audio']}
@@ -95,7 +97,8 @@ print(json.dumps({'packageRoot':str(root),'verified':True,'fileCount':len(expect
         (harness / 'frontend/node_modules').symlink_to(ROOT / 'frontend/node_modules', target_is_directory=True)
         (harness / '.venv').symlink_to(venv, target_is_directory=True)
         scenarios = []
-        selected = (['composer-header', 'compact-composer'] if args.header_only else
+        selected = (['markdown-composer', 'multi-quote', 'compact-composer'] if args.markdown_only else
+                    ['composer-header', 'compact-composer'] if args.header_only else
                     ['composer-fidelity', 'composer-options', 'compact-composer', 'composer-primary-action', 'message-delivery'])
         result['selection'] = selected
         for name in selected:
