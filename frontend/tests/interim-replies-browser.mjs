@@ -71,13 +71,20 @@ try{
  const detailGeneration=detailSession.fixtureGeneration;
  const detailProgress=detailSession.messages.filter(row=>row.role==='assistant');
  assert.equal(detailProgress.length,2);
- await page.getByRole('textbox',{name:'Message Amplifier'}).focus();
- const detailFinish=await control({op:'interim-finish'});
- const detailFinal=detailFinish.state.sessions.find(row=>row.id===started.alpha).messages.find(row=>row.text==='The final next step.');
- await expect(page.locator(`[data-message-id="${detailFinal.id}"]`)).toBeAttached();
- await page.locator('.a-messages').evaluate(el=>{el.scrollTop=0});
- await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight});
- await expect(group).toHaveCount(1);
+ await observeInterimTransition(detailGeneration,detailSession.messages.map(row=>row.id));
+ let detailFinal;
+ try{
+  await page.getByRole('textbox',{name:'Message Amplifier'}).focus();
+  const detailFinish=await control({op:'interim-finish'});
+  detailFinal=detailFinish.state.sessions.find(row=>row.id===started.alpha).messages.find(row=>row.text==='The final next step.');
+  await expect(page.locator(`[data-message-id="${detailFinal.id}"]`)).toBeAttached();
+  await page.locator('.a-messages').evaluate(el=>{el.scrollTop=0});
+  await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight});
+  await expect(group).toHaveCount(1);
+ }finally{
+  try{console.log('INTERIM-DETAILED-TERMINAL',JSON.stringify(await page.evaluate(()=>window.interimTransitionEvidence.finish())))}
+  catch(error){console.error('INTERIM-DETAILED-EVIDENCE-GAP',error.name)}
+ }
  await control({op:'interim-saved-view'});
  const reloadNavigation=[];
  const observeNavigation=request=>{
@@ -95,7 +102,7 @@ try{
   return {messageFocus:state.view.messageFocus||null,readingAnchor:saved?.messageId||null,
    distance:pane.scrollHeight-pane.scrollTop-pane.clientHeight,focused:pane.contains(document.activeElement),
    selected:!!(selection&&!selection.isCollapsed&&pane.contains(selection.anchorNode)),
-   responses:messages.filter(row=>row.generationId===generation&&row.response?.interim).map(row=>
+   responses:messages.filter(row=>row.generationId===generation&&row.response?.phase==='interim').map(row=>
     ({id:row.id,status:row.response.status,generationId:row.response.generationId,finalMessageIds:row.response.finalMessageIds}))};
  },{sid:started.alpha,generation:detailGeneration});
  console.log('INTERIM-RELOAD-BOUNDARY',JSON.stringify({readingEvidence,reloadNavigation}));
@@ -143,8 +150,93 @@ try{
  await expect(page.getByText('Checking the second detail.',{exact:true})).toBeVisible();
  await control({op:'interim-error'});await expect(group).toHaveCount(0);
  await expect(page.getByText('Checking the first detail.',{exact:true})).toBeVisible();
- await control({op:'interim-start'});await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight;document.activeElement?.blur()});
- await control({op:'interim-finish'});await expect(group).toHaveCount(1);
+ const restart=await control({op:'interim-start'});
+ const restartMessages=restart.state.sessions.find(row=>row.id===started.alpha).messages;
+ const restartGeneration=restartMessages.find(row=>row.role==='assistant').generationId;
+ // Observe this transition without changing scroll/focus, response qualification,
+ // rendering or the reading guard. getSelection returns its original result once;
+ // its samples include the synchronous reading-predicate boundary.
+ async function observeInterimTransition(generationId,messageIds){
+ await page.evaluate(({sessionId,generationId,messageIds})=>{
+  const original=document.getSelection,descriptor=Object.getOwnPropertyDescriptor(document,'getSelection');
+  const rows=[],gaps=[],limit=96;let dropped=0,busy=false,last='';
+  const capture=(phase,selection)=>{
+   if(busy)return;busy=true;
+   try{
+    const pane=document.querySelector('.a-messages'),state=window.amplifier.getState();
+    const messages=(state.sessions.find(row=>row.id===sessionId)?.messages||[]).filter(row=>row.generationId===generationId);
+    const rect=element=>{if(!element)return null;const r=element.getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height,width:r.width}};
+    const row={phase,generationId,messageIds,pane:rect(pane),viewport:{width:innerWidth,height:innerHeight},
+     scroll:pane?{top:pane.scrollTop,height:pane.scrollHeight,client:pane.clientHeight,distance:pane.scrollHeight-pane.scrollTop-pane.clientHeight}:null,
+     focusInside:!!pane?.contains(document.activeElement),selectionInside:!!(selection&&!selection.isCollapsed&&pane?.contains(selection.anchorNode)),
+     messages:messages.slice(0,8).map(m=>({id:m.id,generationId:m.generationId,role:m.role,partial:!!m.partial,streaming:!!m.streaming,observation:!!m.observation,
+      response:m.response?{version:m.response.version,status:m.response.status,phase:m.response.phase,generationId:m.response.generationId,finalMessageIds:m.response.finalMessageIds}:null,
+      mounted:!!pane?.querySelector(`[data-message-id="${CSS.escape(m.id)}"]`),
+      rect:rect(pane?.querySelector(`[data-message-id="${CSS.escape(m.id)}"]`))})),
+     groups:[...document.querySelectorAll('[data-interim-group]')].slice(0,4).map(g=>({id:g.getAttribute('data-interim-group'),messages:[...g.querySelectorAll('[data-message-id]')].slice(0,8).map(m=>m.dataset.messageId)}))};
+    const signature=JSON.stringify(row);if(signature===last)return;last=signature;
+    if(rows.length<limit)rows.push(row);else dropped++;
+   }catch(error){if(gaps.length<4)gaps.push(error.name)}finally{busy=false}
+  };
+  const wrapped=function(...args){const result=Reflect.apply(original,this,args);capture('selection-read',result);return result};
+  document.getSelection=wrapped;
+  const sample=phase=>capture(phase,Reflect.apply(original,document,[]));
+  const observer=new MutationObserver(()=>sample('dom-commit'));
+  observer.observe(document.querySelector('.a-messages'),{subtree:true,childList:true,attributes:true});
+  const scroll=()=>sample('scroll');document.querySelector('.a-messages').addEventListener('scroll',scroll);
+  sample('armed');
+  window.interimTransitionEvidence={sample,finish(){
+   sample('assertion-settled');observer.disconnect();document.querySelector('.a-messages')?.removeEventListener('scroll',scroll);
+   if(descriptor)Object.defineProperty(document,'getSelection',descriptor);else delete document.getSelection;
+   delete window.interimTransitionEvidence;return {generationId,messageIds,rows,dropped,gaps};
+  }};
+ },{sessionId:started.alpha,generationId,messageIds});
+ }
+ await observeInterimTransition(restartGeneration,restartMessages.map(row=>row.id));
+ let restartFailure;
+ try{
+  // The nonreading completion case needs the final tail to exist before its
+  // one scroll. Otherwise final insertion itself moves the reader >80px away.
+  const staged=await control({op:'interim-finals',generationId:restartGeneration});
+  const stagedMessages=staged.state.sessions.find(row=>row.id===started.alpha).messages;
+  const previousIds=new Set(restartMessages.map(row=>row.id));
+  const finalMessages=stagedMessages.filter(row=>row.generationId===restartGeneration&&!previousIds.has(row.id));
+  assert.equal(finalMessages.length,2);
+  assert.deepEqual(finalMessages.map(row=>row.text),['The final conclusion.','The final next step.']);
+  for(const message of finalMessages)await expect(page.locator(`[data-message-id="${message.id}"]`)).toBeAttached();
+  await expect(group,'Final prose alone cannot qualify completed interim work').toHaveCount(0);
+  await page.locator('.a-messages').evaluate(el=>{el.scrollTop=el.scrollHeight;document.activeElement?.blur()});
+  const beforeCompletion=await page.evaluate(({sid,generationId,ids})=>{
+   const pane=document.querySelector('.a-messages'),selection=document.getSelection();
+   const messages=window.amplifier.getState().sessions.find(row=>row.id===sid)?.messages||[];
+   return {distance:pane.scrollHeight-pane.scrollTop-pane.clientHeight,focusInside:pane.contains(document.activeElement),
+    selectionInside:!!(selection&&!selection.isCollapsed&&pane.contains(selection.anchorNode)),
+    messageIds:messages.filter(row=>ids.includes(row.id)).map(row=>row.id),
+    qualified:messages.some(row=>row.generationId===generationId&&row.response?.status==='completed')};
+  },{sid:started.alpha,generationId:restartGeneration,ids:finalMessages.map(row=>row.id)});
+  console.log('INTERIM-RESTART-PRECOMPLETION',JSON.stringify(beforeCompletion));
+  assert.deepEqual(beforeCompletion.messageIds,finalMessages.map(row=>row.id));
+  assert.equal(beforeCompletion.qualified,false);
+  assert.ok(beforeCompletion.distance<=80,'Nonreading completion requires the rendered final tail in view');
+  assert.equal(beforeCompletion.focusInside,false);assert.equal(beforeCompletion.selectionInside,false);
+  const finished=await control({op:'interim-finish'});
+  assert.deepEqual(finished.state.sessions.find(row=>row.id===started.alpha).messages.map(row=>row.id),
+   stagedMessages.map(row=>row.id),'Completion must not append the staged final messages again');
+  await expect(group).toHaveCount(1);
+ }catch(error){restartFailure=error}
+ finally{
+  try{console.log('INTERIM-RESTART-TERMINAL',JSON.stringify(await page.evaluate(()=>window.interimTransitionEvidence.finish())))}
+  catch(error){console.error('INTERIM-RESTART-EVIDENCE-GAP',error.name)}
+ }
+ if(restartFailure){
+  // A later ordinary Latest action diagnoses deferral; it never replaces the
+  // failed automatic-grouping oracle or turns this run into a pass.
+  try{
+   await page.getByRole('button',{name:'Jump to latest messages',exact:true}).click({timeout:3000});
+   console.log('INTERIM-RESTART-AFTER-LATEST',JSON.stringify({groups:await group.count()}));
+  }catch(error){console.error('INTERIM-RESTART-LATEST-GAP',error.name)}
+  throw restartFailure;
+ }
  await expect(header).toHaveAttribute('aria-expanded','false');
  // Completion must not remove a keyboard user's focused progress controls.
  await control({op:'interim-start'});

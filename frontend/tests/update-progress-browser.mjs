@@ -116,6 +116,84 @@ try{
  await page.setViewportSize({width:320,height:844});
  await expect.poll(()=>page.locator('.a-dialog').evaluate(el=>el.scrollWidth-el.clientWidth)).toBeLessThanOrEqual(1);
  await page.screenshot({path:output+'-partial-success-mobile.png'});
+ // A declaration constraint is not evidence of local edits or an override.
+ // Publish it over the same HTTP/SSE path; retain the exact confirmed app receipt.
+ const beforeConstraint=await readObservations();
+ const confirmedAppResult=await page.evaluate(()=>window.amplifier.getState().updates.applicationResult);
+ const confirmedAppText=await overview.locator('[data-part="confirmed-application-result"]').innerText();
+ assert.equal(confirmedAppResult.phase,'restart-ack');
+ const constraintGuidance='A package source declaration could not be reconciled with the selected component. The current components remain active. This does not establish local edits. Share the update diagnostics for review; do not remove pins or caches to bypass this check.';
+ const terminalDetail='Component update preparation failed. Current components remain active.';
+ const appOnlyDetail='The latest published application release is installed.';
+ const constraintState=()=>page.evaluate(()=>{
+  const updates=window.amplifier.getState().updates;
+  return {phase:updates.phase,detail:updates.detail,error:updates.error,
+   applicationDetail:updates.application.detail,applicationResult:updates.applicationResult,
+   attemptId:updates.diagnostics.attemptId,lastFailure:updates.diagnostics.lastFailure};
+ });
+ const assertConstraint=async()=>{
+  await expect.poll(async()=>(await constraintState()).lastFailure?.reason).toBe('runtime-source-constraint');
+  await expect(overview).toContainText('Some components were not updated');
+  await expect(overview.locator('[data-part="confirmed-application-result"]')).toHaveText(confirmedAppText);
+  await expect(overview).toContainText('amplifier-foundation');
+  await expect(overview).not.toContainText('You’re up to date');
+  await expect(check).toBeEnabled();
+  await expect(overview.locator('.a-progress-spinner')).toHaveCount(0);
+  const issue=advanced.locator('.a-update-failure[role="alert"]');
+  await expect(issue).toBeVisible();
+  await expect(issue).toContainText('amplifier-foundation');
+  await expect(issue).toContainText('ProtectedRuntimeSource');
+  await expect(issue).toContainText(constraintGuidance);
+  await expect(updates.getByRole('alert').filter({hasText:constraintGuidance}).first()).toBeVisible();
+  await expect(advanced.getByText(appOnlyDetail,{exact:true})).toBeVisible();
+  await expect(updates).not.toContainText('Local source changes or an explicit dependency override were preserved.');
+  await expect(updates).not.toContainText('The latest published application release and checked components are installed.');
+  await expect(updates).not.toContainText('Preparing dependencies in a separate runtime');
+  const state=await constraintState();
+  assert.equal(state.phase,'error');
+  assert.equal(state.detail,terminalDetail);
+  assert.equal(state.error,constraintGuidance);
+  assert.equal(state.applicationDetail,appOnlyDetail);
+  assert.deepEqual(state.applicationResult,confirmedAppResult);
+  assert.equal(state.lastFailure.attemptId,state.attemptId);
+  assert.equal(state.lastFailure.phase,'ecosystem-validation');
+  assert.equal(state.lastFailure.status,'failed');
+  assert.equal(state.lastFailure.errorType,'ProtectedRuntimeSource');
+  assert.equal(state.lastFailure.package,'amplifier-foundation');
+  return state;
+ };
+ await stage('component-source-constraint');
+ const constraintBeforeReload=await assertConstraint();
+ await page.setViewportSize({width:1280,height:950});
+ await overview.scrollIntoViewIfNeeded();
+ await page.screenshot({path:output+'-source-constraint-desktop.png'});
+ const diagnosticPanel=updates.locator('[data-part="update-diagnostics"]');
+ await diagnosticPanel.getByRole('button',{name:'View update details',exact:true}).click();
+ const receipt=JSON.parse(await updates.locator('#update-diagnostic-receipt').inputValue());
+ assert.equal(receipt.attemptId,constraintBeforeReload.attemptId);
+ assert.deepEqual(receipt.lastFailure,constraintBeforeReload.lastFailure);
+ assert.ok(receipt.events.length<=50);
+ const constraintEvents=receipt.events.filter(event=>event.attemptId===receipt.attemptId);
+ assert.deepEqual(constraintEvents.map(event=>[event.phase,event.status]),
+  [['ecosystem-validation','failed'],['ecosystem-stage','failed']]);
+ assert.deepEqual(constraintEvents[0],receipt.lastFailure);
+ // Keep only this attempt, not unrelated historical diagnostics, in the evidence.
+ result.constraintFailure={beforeReload:constraintBeforeReload,
+  diagnosticReceipt:{attemptId:receipt.attemptId,lastFailure:receipt.lastFailure,events:constraintEvents}};
+ await page.reload();await page.waitForSelector('#amp-one');
+ if(!await overview.isVisible())await openSettingsPage(page,'updates');
+ // Reload restores Settings, not the local Advanced details disclosure.
+ if(!await advanced.evaluate(element=>element.open))await advanced.locator('summary').first().click();
+ const constraintAfterReload=await assertConstraint();
+ assert.deepEqual(constraintAfterReload,constraintBeforeReload);
+ await page.setViewportSize({width:320,height:844});
+ await expect.poll(()=>page.locator('.a-dialog').evaluate(el=>el.scrollWidth-el.clientWidth),
+  {message:'constraint guidance must fit the narrow dialog'}).toBeLessThanOrEqual(1);
+ await advanced.locator('.a-update-failure[role="alert"]').scrollIntoViewIfNeeded();
+ await page.screenshot({path:output+'-source-constraint-mobile.png'});
+ assert.deepEqual(await readObservations(),beforeConstraint);
+ result.constraintFailure.afterReload=constraintAfterReload;
+ result.constraintFailure.noUpdateEffects=true;
  await stage('app-result-stale');
  await expect(overview).not.toContainText('Application updated successfully');
  await expect(overview).toContainText('Updates need attention');

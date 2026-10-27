@@ -73,6 +73,7 @@ async def test_failed_validation_does_not_activate_or_close_sessions(app,repo):
     manager.validate=fail
     await manager.install()
     assert app.state['updates']['phase']=='error'
+    assert app.state['updates']['detail']=='Component update preparation failed. Current components remain active.'
     assert not active_release(app.data_dir)
     assert app.runtime.closed==0
     assert git(root,'rev-parse','HEAD')==repo[1]

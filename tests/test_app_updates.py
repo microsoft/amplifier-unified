@@ -402,20 +402,30 @@ async def test_current_version_is_visible_and_saved_before_any_check(tmp_path):
     await service.close()
 
 
-async def test_installed_ahead_of_release_is_explicit_and_never_tracks_main(monkeypatch):
+@pytest.mark.parametrize('ahead', [True, False])
+async def test_installed_ahead_of_release_is_explicit_and_never_tracks_main(monkeypatch, ahead):
+    from amplifier_web import __version__
+    tag = 'v0.0.1' if ahead else 'v' + __version__
     monkeypatch.setattr(app_updates.shutil,'which',lambda _: '/fixture/tool')
     calls=[]
     async def process(*args,**kwargs):
         calls.append(args)
-        if args[0]=='gh':return json.dumps({'tag_name':'v0.0.1','published_at':'2026-01-01T00:00:00Z'})
-        return 'a'*40+'\trefs/tags/v0.0.1'
+        if args[0]=='gh':return json.dumps({'tag_name':tag,'published_at':'2026-01-01T00:00:00Z'})
+        return 'a'*40+'\trefs/tags/'+tag
     monkeypatch.setattr(app_updates,'process',process)
+    async def component_updates(*args): return []
+    monkeypatch.setattr(app_updates.components,'updates',component_updates)
     async def metadata(path, **kwargs):
         return await app_updates.process('gh', 'api', path)
     monkeypatch.setattr(app_updates, 'github_read', metadata)
     result=await app_updates.check()
-    assert result['status']=='current' and result['releaseBehind'] is True
-    assert result['latest']=='v0.0.1' and 'newer than' in result['detail']
+    assert result['status']=='current' and result['releaseBehind'] is ahead
+    assert result['latest']==tag
+    if ahead:
+        assert 'newer than' in result['detail']
+    else:
+        # Application check cannot attest a separate ecosystem batch succeeded.
+        assert result['detail']=='The latest published application release is installed.'
     assert result['publishedAt']=='2026-01-01T00:00:00Z'
     assert not any('refs/heads/main' in part for call in calls for part in call)
 

@@ -157,6 +157,24 @@ async def main(home):
             diagnostics.record('ecosystem-validation','failed',errorType='ValueError',reason='runtime-source-changed')
             await manager.publish(phase='error',sequence={'stage':'other','install':False},
                 error='Worker sources changed while checking. Check for updates again.')
+        elif stage=='component-source-constraint':
+            # Presentation fixture, not source-policy or installer execution.
+            # Keep the prior verified app identity while its component batch fails.
+            from amplifier_web.runtime_environment import ProtectedRuntimeSource
+            from amplifier_web.update_diagnostics import exception_facts, failure_guidance
+            diagnostics.begin('ecosystem','f'*32,tier='other',components=['amplifier-foundation'])
+            await manager.publish(phase='validating',error=None,
+                sequence={'stage':'other','install':False},
+                application={**service.state['updates']['application'],
+                    'detail':'The latest published application release is installed.'},
+                detail='Preparing dependencies in a separate runtime…')
+            error=ProtectedRuntimeSource('amplifier-foundation','runtime-source-constraint')
+            failure=diagnostics.record('ecosystem-validation','failed',
+                **{**error.diagnostic_facts,**exception_facts(error)})
+            diagnostics.record('ecosystem-stage','failed',preserve_last_failure=True)
+            await manager.publish(phase='error',pendingRelease=None,
+                detail='Component update preparation failed. Current components remain active.',
+                error=failure_guidance(failure))
         elif stage=='app-result-stale':
             await manager.publish(application={**service.state['updates']['application'],'runningRevision':'f'*40})
         elif stage=='unconfirmed-restart':

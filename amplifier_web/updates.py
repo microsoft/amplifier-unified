@@ -1006,6 +1006,7 @@ class UpdateManager:
                 failure=self.diagnostics.state['lastFailure']
                 self.diagnostics.record('ecosystem-stage',status,commandId=stage_id,preserve_last_failure=True)
                 await self.publish(phase='interrupted' if interrupted else 'error',pendingRelease=None,
+                    detail='Component update preparation '+('was interrupted' if interrupted else 'failed')+'. Current components remain active.',
                     error=failure_guidance(failure) or 'Ecosystem update '+('interrupted' if interrupted else 'failed')+' during '+failure['phase'].replace('-',' ')+'. Current sources remain active; no conversation work was replayed.')
                 if not isinstance(error,Exception):raise
                 return

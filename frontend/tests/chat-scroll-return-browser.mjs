@@ -148,4 +148,91 @@ try {
  await page.evaluate(()=>{pane.style.height='350px';pane.querySelector('article').style.height='3400px'});
  await expect.poll(remaining).toBe(0);
  await page.evaluate(()=>controller.dispose());console.log('PASS: return during reply, top alignment, growth, manual scrollback, controller reload, explicit latest jump, missing history anchor.');
+ // Reproduce the measured submitted-input layout, including the browser's
+ // native clamp scroll BEFORE the queued controller frame. No application
+ // state or synthetic scroll event is used; only controller frame order is
+ // held in this isolated fixture. Keep all deliberate-reading controls first
+ // so an old-controller failure still reports their outcomes.
+ const clampResults=[];
+ for(const mode of ['wheel','touch','key','external-focus','not-submitted','below-limit','submitted-clamp']){
+  const clampPage=await browser.newPage({viewport:{width:1280,height:900}});
+  try{
+   await clampPage.goto('about:blank');
+   await clampPage.setContent('<style>body{margin:0}#pane{position:absolute;top:52px;width:1040px;height:679px;overflow:auto;overflow-anchor:none}#old{height:9986px;position:relative}#old button{position:absolute;top:8000px}#user{height:322px}#tail{height:56px}</style><div id="pane"><div id="old" data-message-id="old"><button>Earlier control</button></div><div id="user" data-message-id="input" data-input-id="input">Submitted message</div><div id="tail"></div></div>');
+   const result=await clampPage.evaluate(async({source,mode})=>{
+    const {createChatScroll}=await import('data:text/javascript;base64,'+btoa(source));
+    Object.defineProperty(window,'sessionStorage',{value:{getItem:()=>null,setItem:()=>{}}});
+    const pane=document.querySelector('#pane'),following={current:true},frames=new Map();
+    const nativeFrame=window.requestAnimationFrame,nativeCancel=window.cancelAnimationFrame;
+    let frame=0,controller;
+    window.requestAnimationFrame=callback=>{frames.set(++frame,callback);return frame};
+    window.cancelAnimationFrame=id=>frames.delete(id);
+    const nextFrame=()=>{const pending=[...frames.values()];frames.clear();for(const callback of pending)callback(performance.now())};
+    const geometry=()=>({
+     top:pane.scrollTop,height:pane.scrollHeight,client:pane.clientHeight,
+     max:pane.scrollHeight-pane.clientHeight,following:following.current,
+     messageId:document.querySelector('#user').dataset.messageId,
+     inputId:document.querySelector('#user').dataset.inputId,
+     offset:document.querySelector('#user').getBoundingClientRect().bottom-pane.getBoundingClientRect().top
+    });
+    // Listener is installed after the controller's scroll listener. Its receipt
+    // includes the supplied following ref AFTER the actual handler returned.
+    const nativeScroll=change=>new Promise((resolve,reject)=>{
+     const cleanup=()=>{clearTimeout(timer);pane.removeEventListener('scroll',observe)};
+     const observe=event=>{if(!event.isTrusted)return;cleanup();resolve({trusted:event.isTrusted,...geometry()})};
+     const timer=setTimeout(()=>{cleanup();reject(Error('No native scroll at controlled layout boundary'))},2000);
+     pane.addEventListener('scroll',observe);
+     try{change();void pane.scrollTop}catch(error){cleanup();reject(error)}
+    });
+    try{
+     controller=createChatScroll(pane,following);controller.select('submitted-clamp');
+     controller.submitted('input');
+     const initial=await nativeScroll(nextFrame);
+     if(mode==='wheel')pane.dispatchEvent(new WheelEvent('wheel',{deltaY:-100}));
+     if(mode==='touch')pane.dispatchEvent(new Event('touchmove'));
+     if(mode==='key')pane.dispatchEvent(new KeyboardEvent('keydown',{key:'PageUp'}));
+     if(mode==='not-submitted')controller.reveal();
+     const boundary=await nativeScroll(()=>{
+      if(mode==='external-focus')document.querySelector('#old button').focus();
+      else{
+       pane.style.height='726px';void pane.scrollTop;
+       if(mode==='below-limit')pane.scrollTop=9600;
+      }
+     });
+     // Exact same input, new canonical message ID; range grows by 65+84=149.
+     const canonical=document.querySelector('#user').cloneNode(true);canonical.dataset.messageId='canonical';
+     document.querySelector('#user').replaceWith(canonical);
+     document.querySelector('#tail').style.height='121px';pane.style.height='642px';
+     controller.update();nextFrame();
+     const replaced=geometry();
+     document.querySelector('#tail').style.height='1600px';controller.update();nextFrame();
+     return {mode,initial,boundary,replaced,grown:geometry()};
+    }finally{
+     controller?.dispose();frames.clear();
+     window.requestAnimationFrame=nativeFrame;window.cancelAnimationFrame=nativeCancel;
+    }
+   },{source,mode});
+   clampResults.push(result);console.log('SUBMITTED-CLAMP-CONTROL',JSON.stringify(result));
+   assert.equal(result.initial.trusted,true);assert.equal(result.initial.following,true);
+   assert.deepEqual([result.initial.top,result.initial.height,result.initial.client,result.initial.max],[9685,10364,679,9685]);
+   assert.equal(result.boundary.trusted,true,'The browser, not dispatchEvent, must deliver the changed position');
+   if(mode==='external-focus')assert.ok(result.boundary.top<9685,'Focus must actually scroll the pane');
+   else assert.deepEqual([result.boundary.top,result.boundary.height,result.boundary.client,result.boundary.max],
+    [mode==='below-limit'?9600:9638,10364,726,9638]);
+   const following=mode==='submitted-clamp';
+   assert.equal(result.boundary.following,following,'Only an automatic clamp with active submitted intent may preserve following');
+   assert.equal(result.replaced.following,following);
+   assert.equal(result.replaced.messageId,'canonical');assert.equal(result.replaced.inputId,'input');
+   assert.deepEqual([result.replaced.height,result.replaced.client,result.replaced.max],[10429,642,9787]);
+   if(following){
+    assert.equal(result.replaced.top,9787,'Canonical replacement must reach the available bottom');
+    assert.ok(Math.abs(result.grown.offset-16)<1,'Later reply growth must retain the submitted anchor');
+   }else{
+    assert.equal(result.replaced.top,result.boundary.top,'Layout must not resume deliberately stopped following');
+    assert.equal(result.grown.top,result.replaced.top,'Later growth must preserve reading position');
+   }
+  }finally{await clampPage.close()}
+ }
+ assert.equal(clampResults.length,7);
+ console.log('PASS: native submitted clamp, canonical replacement, growth, and six reading-intent controls.');
 }finally{await browser.close()}

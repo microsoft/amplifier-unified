@@ -25,6 +25,8 @@ def verify_checked_selection(checked, selection, *, exact=False):
         if policy is None:
             continue  # Ordinary dependencies remain governed by overrides and freeze.
         source = packages.get(name, {})
+        if source.get('status') == 'authored-constraint':
+            raise ProtectedRuntimeSource(name, 'runtime-source-constraint')
         if (source.get('status') not in {'selected', 'explicit-pin'}
                 or any(not source.get(field) for field in ('url', 'ref', 'revision'))
                 or source_key(source['url'], source['ref']) != source_key(policy['url'], policy['ref'])
