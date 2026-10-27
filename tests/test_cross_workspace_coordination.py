@@ -788,4 +788,3 @@ async def test_sender_cancels_only_queued_cross_workspace_request_without_reassi
     await settled(app, "keep-this", "accepted")
     assert [(sid, identity) for sid, identity, _ in app.runtime.inputs] == [(target["id"], "keep-this")]
     assert app.collaboration.receipt("cancel-this")["delivery"] == "cancelled"
-
