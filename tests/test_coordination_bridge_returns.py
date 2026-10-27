@@ -373,6 +373,9 @@ async def test_bridge_errors_restore_transport_and_browser_context_without_effec
         transport["_runtimeSessionId"] = "actual-child"
     elif failure == "workspace":
         target["workspace"] = str(app.data_dir / "foreign-workspace")
+        # Existing-root messaging may cross workspaces. A history read without
+        # explicit scope=all still refuses, and must restore the same contexts.
+        action, args = "coordination.read", {"sessionId": target["id"]}
     elif failure == "foreign_context":
         action, args = "coordination.context", {"sessionId": target["id"]}
     else:
