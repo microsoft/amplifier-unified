@@ -131,7 +131,7 @@ async def legacy_siblings(tmp_path, monkeypatch, request):
     settings = {'bundle': {'active': 'fixture', 'added': {'fixture': REFERENCE}}}
     if explicit_local:
         settings['sources'] = {'modules': {
-            'context-fixture': str((root / PACKAGES['fixture-context']).relative_to(stage))}}
+            'context-fixture': './' + str((root / PACKAGES['fixture-context']).relative_to(stage))}}
     settings_file = shared / 'settings.yaml'
     settings_file.write_text(json.dumps(settings))  # JSON is also valid YAML.
     config = read_config(stage, home=stage, shared_home=shared, global_only=True)
