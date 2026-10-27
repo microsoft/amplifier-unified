@@ -33,19 +33,20 @@ def carried_origin(policy, previous=None):
                   **({key: old[key] for key in ('manifestSha256', 'originalRef', 'resolution') if key in old} if valid else {}))
 
 
-def declarations(content):
-    """Recover only unconditional, selected policy; keep all conflicts visible.
-
-    A universal lock contains unselected extras/groups and marker alternatives.
-    Their presence or matching installed bytes cannot prove they selected a ref.
-    """
+def _declaration_evidence(content, *, prepared_local_sources=()):
+    """Parse source identity once; selection and restrictions are distinct."""
     from .runtime_environment import package_name
     data = tomllib.loads(content.decode())
     found, eligible, selected_names = {}, set(), set()
+    restrictions, conditional_names = {}, set()
     uv = data.get('tool', {}).get('uv', {})
 
-    def add(name, source, selected):
+    def restrict(name, source):
+        restrictions.setdefault(package_name(name), []).append(source)
+
+    def add(name, source, selected, *, conditional=False):
         name = package_name(name)
+        restrict(name, None if conditional else source)
         if name in found and found[name] != source:
             found[name] = None  # Includes same-spelling branch/tag conflicts.
         else:
@@ -61,18 +62,28 @@ def declarations(content):
         except InvalidRequirement:
             return
         selected = selected and parsed_requirement.marker is None
+        if parsed_requirement.marker is not None or parsed_requirement.extras:
+            conditional_names.add(package_name(parsed_requirement.name))
         if selected:
             selected_names.add(package_name(parsed_requirement.name))
         if not parsed_requirement.url or not parsed_requirement.url.startswith('git+'):
+            if parsed_requirement.url:
+                restrict(parsed_requirement.name, None)
             return
         parsed = urlsplit(parsed_requirement.url[4:])
         path, separator, ref = parsed.path.rpartition('@')
         fragments = parse_qs(parsed.fragment)
+        constraint_fragments = parse_qs(parsed.fragment, keep_blank_values=True)
+        malformed_constraint = (bool(set(constraint_fragments) - {'subdirectory'})
+                                or len(constraint_fragments.get('subdirectory', [''])) != 1)
         if not separator or not ref or len(fragments.get('subdirectory', [''])) != 1:
+            restrict(parsed_requirement.name, None)
             return
         add(parsed_requirement.name, {'url': urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, '')),
                        'ref': ref, 'refKind': 'rev',
-                       'subdirectory': fragments.get('subdirectory', [''])[0]}, selected)
+                       'subdirectory': fragments.get('subdirectory', [''])[0]}, selected,
+            conditional=parsed_requirement.marker is not None or bool(parsed_requirement.extras)
+                        or malformed_constraint)
 
     for value in data.get('project', {}).get('dependencies', []):
         requirement(value, selected=True)
@@ -90,23 +101,46 @@ def declarations(content):
         for value in uv.get(collection, []):
             requirement(value)  # Overrides constrain resolution; they do not select a package.
     for name, source in uv.get('sources', {}).items():
+        if package_name(name) in prepared_local_sources:
+            continue  # Caller proved this local development mapping is the selected Git package.
         # Every alternative can disqualify a ref, even when its selection is
         # unknown. Neither an inactive marker nor an unused extra authorizes it.
         entries = source if isinstance(source, list) else [source]
         if not entries:
             found[package_name(name)] = None
+            restrict(name, None)
         for entry in entries:
             refs = ([(key, entry[key]) for key in ('branch', 'rev', 'tag') if entry.get(key)]
                     if isinstance(entry, dict) else [])
             if (not isinstance(entry, dict) or not entry.get('git') or len(refs) != 1
                     or not isinstance(refs[0][1], str)):
                 found[package_name(name)] = None
+                restrict(name, None)
                 continue
             selected = (package_name(name) in selected_names
                         and not any(key in entry for key in ('marker', 'extra', 'group')))
             add(name, {'url': entry['git'], 'ref': refs[0][1], 'refKind': refs[0][0],
-                       'subdirectory': entry.get('subdirectory', '')}, selected)
+                       'subdirectory': entry.get('subdirectory', '')}, selected,
+                conditional=bool(set(entry) - {'git', 'branch', 'rev', 'tag', 'subdirectory'}))
+    for name in conditional_names & restrictions.keys():
+        restrict(name, None)
+    return found, eligible, restrictions
+
+
+def declarations(content):
+    """Recover only unconditional selected policy, never optional-source authority."""
+    found, eligible, _ = _declaration_evidence(content)
     return {name: value for name, value in found.items() if value is not None and name in eligible}
+
+
+def constraint_declarations(content, *, prepared_local_sources=()):
+    """All source restrictions, including unselected optional/dev declarations.
+
+    An optional compatible declaration does not select a package, nor does its
+    lack of selection make its identity unknown. Keep every alternative so a
+    later matching declaration cannot erase a pin, fork or unknown restriction.
+    """
+    return _declaration_evidence(content, prepared_local_sources=prepared_local_sources)[2]
 
 
 def owned_cache_path(home, cache_root, installed, subdirectory):

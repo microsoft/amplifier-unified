@@ -20,7 +20,7 @@ STORAGE_REASONS = {getattr(errno, name): reason for name, reason in {
     'ENOSPC': 'disk-full', 'EDQUOT': 'disk-quota-exceeded',
     'EACCES': 'storage-permission-denied', 'EPERM': 'storage-permission-denied',
     'EROFS': 'read-only-storage'}.items() if hasattr(errno, name)}
-RECOVERY_REASONS = {'smart-tool-startup-failed', 'smart-tool-update-failed', 'missing-configured-environment', 'incompatible-conversation-loop', 'protected-runtime-source', 'runtime-source-changed', 'runtime-resolution-mismatch', 'runtime-installed-source-mismatch', *PREPARATION_REASONS.values(), *STORAGE_REASONS.values()}
+RECOVERY_REASONS = {'smart-tool-startup-failed', 'smart-tool-update-failed', 'missing-configured-environment', 'incompatible-conversation-loop', 'protected-runtime-source', 'runtime-source-constraint', 'runtime-source-changed', 'runtime-resolution-mismatch', 'runtime-installed-source-mismatch', *PREPARATION_REASONS.values(), *STORAGE_REASONS.values()}
 RESOLUTION_FIELDS = {'source', 'repository', 'ref', 'subdirectory', 'revision'}
 PROBE_STAGES = {'imports','package','assets','login','terminal','complete','prepare','prepared','capabilities','cleanup','worker-imports'}
 
@@ -59,6 +59,7 @@ def exception_facts(error):
 
 def failure_guidance(event):
     return {
+        'runtime-source-constraint': 'A package source declaration could not be reconciled with the selected component. The current components remain active. This does not establish local edits. Share the update diagnostics for review; do not remove pins or caches to bypass this check.',
         'runtime-installed-source-mismatch': 'A component changed to a different source during update preparation. Amplifier kept the current components active. Check for an app update before retrying; if this happens again, share the update details.',
         'disk-full': 'The update stopped because its destination disk is full. Free space on the computer running Amplifier, then try again.',
         'disk-quota-exceeded': 'The update stopped because its storage quota was reached. Increase the quota or free space, then try again.',
@@ -69,6 +70,12 @@ def failure_guidance(event):
 
 def probe_failure(error, stage):
     facts={'ok':False, **exception_facts(error)}
+    detail = getattr(error, 'diagnostic_facts', {})
+    if detail.get('reason') in RECOVERY_REASONS:
+        facts['reason'] = detail['reason']
+    if (isinstance(detail.get('package'), str) and len(detail['package']) <= 128
+            and re.fullmatch(r'amplifier-[a-z0-9]+(?:-[a-z0-9]+)*', detail['package'])):
+        facts['package'] = detail['package']
     from .reset import repository_auth_failure
     current, seen = error, set()
     while current is not None and id(current) not in seen:
@@ -108,6 +115,7 @@ def probe_record(output):
         if isinstance(value.get('stage'),str) and value['stage'] in PROBE_STAGES:safe['stage']=value['stage']
         if isinstance(value.get('errorType'),str) and value['errorType'] in ERROR_TYPES:safe['errorType']=value['errorType']
         if isinstance(value.get('reason'),str) and value['reason'] in RECOVERY_REASONS:safe['reason']=value['reason']
+        if isinstance(value.get('package'),str) and len(value['package']) <= 128 and re.fullmatch(r'amplifier-[a-z0-9]+(?:-[a-z0-9]+)*',value['package']):safe['package']=value['package']
         if failure_location(value.get('failureLocation')):safe['failureLocation']=value['failureLocation']
         if value.get('osError') in errno.errorcode.values():safe['osError']=value['osError']
         for key in ('version','pythonVersion'):

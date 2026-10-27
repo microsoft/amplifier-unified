@@ -197,13 +197,13 @@ class Collector:
             if package_name(tomllib.loads(content.decode()).get('project', {}).get('name', '')) != name:
                 raise ValueError('A selected source changed its package identity.')
             sibling_dev = selected_sibling_dev_sources(content, source, root, batch.names)
-            for dependency, declaration in authored_constraints(content).items():
+            sibling_runtime = selected_runtime_sibling_sources(content, source, root, data, batch.names)
+            from .runtime_source_policy import constraint_declarations
+            for dependency, declarations in constraint_declarations(
+                    content, prepared_local_sources=sibling_runtime).items():
                 if dependency in sibling_dev:
                     continue  # --no-sources does not activate this selected sibling's dev edge.
-                if dependency in constraints and constraints[dependency] != declaration:
-                    constraints[dependency] = None
-                else:
-                    constraints[dependency] = declaration
+                constraints.setdefault(dependency, []).extend(declarations)
             if any((path / 'uv.toml').exists() or (path / 'uv.toml').is_symlink() for path in (root, source)):
                 package['status'] = 'separate-resolver-config'
                 continue
@@ -234,9 +234,13 @@ class Collector:
         for name, package in packages.items():
             if package.get('status') != 'selected' or name not in constraints:
                 continue
-            constraint = constraints[name]
-            if not constraint or constraint.get('refKind') == 'tag' or any(constraint.get(field, '') != package[field]
-                                     for field in ('url', 'ref', 'subdirectory')):
+            # Check each authored choice against the independently selected
+            # identity. rev=main and branch=main can each agree with it without
+            # declaring every rev a branch or discarding a conflicting tag.
+            if any(not constraint or constraint.get('refKind') == 'tag'
+                   or any(constraint.get(field, '') != package[field]
+                          for field in ('url', 'ref', 'subdirectory'))
+                   for constraint in constraints[name]):
                 package.clear()
                 package['status'] = 'authored-constraint'
         from .selected_runtime_dependencies import selected
@@ -301,6 +305,56 @@ def selected_sibling_dev_sources(content, source, root, selected):
         target_root = next((path for path in (target, *target.parents) if (path / '.git').exists()), None)
         if (target == Path(selected[name]).resolve() and target != source
                 and target.is_relative_to(root) and target_root == root):
+            result.add(name)
+    return result
+
+
+def selected_runtime_sibling_sources(content, source, root, metadata, selected):
+    """Prove a local uv development mapping denotes the selected Git sibling.
+
+    Runtime direct Git requirements remain restrictions. Only the redundant
+    local tool.uv.sources entry is excluded from the --no-sources batch policy.
+    An ordinary local source, fork, pin or conditional mapping cannot qualify.
+    """
+    from packaging.requirements import Requirement, InvalidRequirement
+    from .runtime_environment import package_name
+    from .selected_runtime_dependencies import git_source
+    from .updates import pinned, source_key
+    data = tomllib.loads(content.decode())
+    project = data.get('project', {})
+    if project.get('dynamic'):
+        return set()
+    requirements = {}
+    for value in project.get('dependencies', []):
+        try:
+            requirement = Requirement(value)
+        except (InvalidRequirement, TypeError):
+            return set()
+        name = package_name(requirement.name)
+        requirements.setdefault(name, []).append(requirement)
+    result = set()
+    sources = data.get('tool', {}).get('uv', {}).get('sources', {})
+    aliases = [package_name(name) for name in sources]
+    for name, entry in sources.items():
+        name = package_name(name)
+        if (aliases.count(name) != 1 or name not in selected or name not in requirements or not isinstance(entry, dict)
+                or set(entry) != {'path', 'editable'} or entry['editable'] is not True
+                or not isinstance(entry['path'], str) or Path(entry['path']).is_absolute()):
+            continue
+        target = (source / entry['path']).resolve()
+        target_root = next((path for path in (target, *target.parents) if (path / '.git').exists()), None)
+        if target != Path(selected[name]).resolve() or target_root != root:
+            continue
+        subdir = '' if target == root else target.relative_to(root).as_posix()
+        valid = True
+        for requirement in requirements[name]:
+            declared = git_source(requirement.url)
+            if (not declared or requirement.marker or requirement.extras or pinned(declared['ref'])
+                    or source_key(declared['url'], declared['ref']) !=
+                       source_key(metadata['git_url'], metadata.get('ref') or 'HEAD')
+                    or declared['subdirectory'] != subdir):
+                valid = False
+        if valid:
             result.add(name)
     return result
 
