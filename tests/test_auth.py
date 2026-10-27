@@ -71,3 +71,20 @@ def test_history_scope_decorates_only_request_owned_browser_snapshot():
     assert with_history_scope({}, source) is source
     terminal = {"client": {"id": "terminal", "kind": "terminal"}}
     assert with_history_scope({"history_scope": "opaque"}, terminal) is terminal
+
+
+def test_pam_wrong_user_cannot_enter_same_installation_peer_scope(monkeypatch):
+    """Even valid credentials for another OS account do not join this library."""
+    import sys
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from amplifier_web.auth import authenticate_pam
+
+    accepted_password = Mock(return_value=True)
+    monkeypatch.setitem(sys.modules, "pwd", SimpleNamespace(
+        getpwuid=lambda _: SimpleNamespace(pw_name="synthetic-owner")))
+    monkeypatch.setitem(sys.modules, "pam", SimpleNamespace(authenticate=accepted_password))
+    assert not authenticate_pam("another-user", "synthetic-password")
+    accepted_password.assert_not_called()
+    assert authenticate_pam("synthetic-owner", "synthetic-password")
+    accepted_password.assert_called_once_with("synthetic-owner", "synthetic-password", service="login")

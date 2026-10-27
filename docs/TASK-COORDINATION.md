@@ -1,5 +1,41 @@
 # Task and worker coordination
 
+## Cross-workspace existing-root communication
+
+The October 26 user direction is: “Lets spin up a task that lets you do so in
+the future. We need to have cross-workspace chat support.” This section records
+the proposed implementation of that direction, not completed qualification.
+It extends the historical same-workspace choice below for communication between
+existing roots in the authenticated user's Unified installation.
+
+- Discover exact root identities with `coordination.list`, using `scope:"all"`
+  explicitly for other registered workspaces, including managed-location chats.
+  Default discovery remains workspace-scoped. Address the returned `sessionId`,
+  not a title or a guessed path.
+- Use ordinary `coordination.send`, `reply`, `result` and request-scoped retained
+  artifacts. The host binds both chat identities and locations to the request.
+  Each chat keeps its own configuration, execution folder, permissions, Stop
+  state and budget. Sending does not commission, enroll, reparent or resume an
+  independent recipient. Notify never wakes; unsupported steering stays explicit.
+- Message attribution identifies both locations. A managed chat is labelled as
+  managed storage, not registered as a workspace. This is not cross-user or
+  remote-host federation and provides no new credentials or filesystem access.
+- Explicit references remain citations unless the existing exact-file result
+  mechanism retains their bytes. General peer output libraries, private drafts
+  and files are not shared by sending. Request participants can inspect only
+  their exact retained result relationship; later location changes fail closed.
+- Stable request IDs, cancellation and unknown receipts retain their original
+  meaning. Shipping this change never resends rejected or uncertain old input.
+
+Focused synthetic action-path and rendered checks must qualify the candidate.
+Native-provider behavior is not established by deterministic transport fixtures.
+
+**Adapter limit:** a sender with an assignment token or cost cap cannot queue
+or steer work in an independent root, because this adapter cannot enforce that
+cap on a single peer request. The refusal is explicit. Informational `notify`
+remains available without waking the recipient. Communication never removes a
+cap or enrolls the recipient to make a refused request pass.
+
 ## Compact orientation and delegated recovery
 
 The current coordination reference offers `assignment.briefRef` to an actual

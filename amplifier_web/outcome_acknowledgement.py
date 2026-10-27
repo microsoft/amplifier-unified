@@ -60,7 +60,10 @@ async def acknowledge(owner, source, args, origin, command_id):
                 or request.get('senderSessionId') != source['id'] or request.get('protocol') != PROTOCOL
                 or request.get('workspace') != source['workspace']):
             owner.error('Acknowledge only your own request in its current workspace.')
-        owner.authorize(source, request['target'], hydrate=False)
+        if request.get('commandAction') == 'coordination.send':
+            owner.request_target(source, request, hydrate=False)
+        else:
+            owner.authorize(source, request['target'], hydrate=False)
         if request.get('commandAction') == 'workspace.tests.submit':
             # Test waits belong to this root's exact placement and cancellation
             # boundary, in addition to the shared task/Stop guards below.

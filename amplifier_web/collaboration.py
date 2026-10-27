@@ -15,6 +15,7 @@ import uuid
 
 from amplifier_operations.coordination import fingerprint
 from .task_binding import continuation_epoch, matches as task_matches
+from .peer_scope import descriptor, location, participant_matches, valid_binding
 
 PRINCIPAL = ContextVar("collaboration_principal", default=None)
 BINDING = ContextVar("collaboration_binding", default=None)
@@ -90,7 +91,7 @@ def definitions(schema, string):
         "coordination.decide": ("Retired. Legacy pending proposals cannot authorize new work.", schema({
             **sid, "proposalId": string(200), "decision": {"enum": ["allow", "deny"]},
         }, ["sessionId", "proposalId", "decision"])),
-        "coordination.send": ("Commit attributed same-workspace task input and return its receipt promptly. Notify never wakes; queue preparation continues under service ownership. Read results, never replay uncertain input. To resume a commissioned member after an explicit human instruction, use queue with resume={sourceMessageId, expectedInterruptionRevision}; the host binds the current human input and exact Stop/task/assignment boundaries. This admits one fresh input without resetting budgets, permissions or replaying old work. For explicit human repair of existing schedules, scheduleRepair scopes the sourceMessageId and exact target IDs/revisions; the owner may resume those schedules unchanged.", schema(message, ["sessionId", "text"])),
+        "coordination.send": ("Commit attributed task input to an exact existing root in this user's Unified installation, including other workspaces and managed chats. Discover IDs with coordination.list scope=all. No assignment, permissions, files or resume authority transfers. Notify never wakes; queue preparation continues under service ownership. Read results, never replay uncertain input. To resume a commissioned same-workspace member after an explicit human instruction, use queue with resume={sourceMessageId, expectedInterruptionRevision}; the host binds the current human input and exact Stop/task/assignment boundaries. This admits one fresh input without resetting budgets, permissions or replaying old work. For explicit human repair of existing same-workspace schedules, scheduleRepair scopes the sourceMessageId and exact target IDs/revisions; the owner may resume those schedules unchanged.", schema(message, ["sessionId", "text"])),
         "coordination.create": ("Commission an authorized durable task chat inheriting the caller's configuration, workspace and actual execution placement, with a saved return notification before its brief can run. This does not create an independent user chat in a different folder. Inspect this operation's requestId for its initial result. Returns before preparation and does not select the peer. Set returnNotification:false only when no automatic return is wanted.", schema({
             "senderSessionId": string(200), "grantId": string(200), "title": {**string(100), "minLength": 1},
             "text": {**string(16000), "minLength": 1}, "references": references,
@@ -105,7 +106,7 @@ def definitions(schema, string):
         "coordination.cancel": ("Withdraw your exact queued request, or request cancellation of already admitted work. Does not stop the recipient chat, undo effects, or prove cancellation. Active recipients see the request at their next coordination boundary and report outcome=cancelled when settled. Inspect coordination.result; never replay an unknown admission.", schema({
             **sid, "requestId": string(200), "reason": string(1000)}, ["sessionId", "requestId"])),
         "coordination.acknowledge": ("After reviewing an exact result, retire only its unsubmitted completion notification. Use the review reference from coordination.result or workspace.tests.read/result and a stable command ID. Does not cancel work, qualify success, change limits or suppress later changed outcomes. Reading alone never acknowledges.", schema({**sid, "requestId": string(200), "outcomeRevision": {"type": "integer", "minimum": 1}, "reviewKey": string(200)}, ["sessionId", "requestId", "outcomeRevision", "reviewKey"])),
-        "coordination.result": ("Inspect admission and exact qualified final result links for one request. scope=all never widens request-participant/workspace authority. Acknowledgements and unrelated turns do not count.", schema({"requestId": string(200), "scope": {"enum": ["workspace", "all"]}}, ["requestId"])),
+        "coordination.result": ("Inspect admission and exact qualified final result links for one request. Only its exact participants may read across its recorded locations; scope=all grants no extra request authority. Acknowledgements and unrelated turns do not count.", schema({"requestId": string(200), "scope": {"enum": ["workspace", "all"]}}, ["requestId"])),
         "coordination.artifact": ("Read the exact retained file declared in your request relationship, even after its source disappears. Bounded text and download identity; no peer output-library access or work admission. Retained bytes are not proof of correctness.", schema({**sid,
             "requestId": string(200), "reference": string(2000), "scope": {"enum": ["workspace", "all"]}, "responseRevision": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0},
             "limit": {"type": "integer", "minimum": 1, "maximum": 4000}}, ["sessionId", "requestId", "reference"])),
@@ -267,12 +268,24 @@ class Collaboration:
             self.error("The collaboration grant's workspace changed.")
         return value
 
-    def authorize(self, source, args, *, hydrate=True):
+    def authorize(self, source, args, *, hydrate=True, cross_workspace=False):
+        # _session resolves only this installation's registered identities. Keep
+        # the default narrow for adoption, watches and other non-message callers.
         target = self.service._session(args["sessionId"], hydrate=hydrate)
-        if target["workspace"] != source["workspace"]:
+        if not cross_workspace and target["workspace"] != source["workspace"]:
             self.error("The target is outside this caller's workspace.")
         if target.get("sessionKind", "root") != "root":
             self.error("Peer worker admission is unsupported; target its authorized root instead.", 409)
+        return target
+
+    def request_target(self, source, receipt, *, hydrate=True):
+        """Revalidate both frozen locations; never widen historical receipts."""
+        if not valid_binding(receipt) or source.get('id') != receipt.get('senderSessionId'):
+            self.error('The exact request location binding is invalid.', 409)
+        target = self.authorize(source, receipt['target'], hydrate=hydrate,
+                                cross_workspace=receipt.get('endpointBindingVersion') == 1)
+        if not participant_matches(receipt, source) or not participant_matches(receipt, target):
+            self.error('The request participant workspace or location changed.', 409)
         return target
 
     def lineage(self, source, origin):
@@ -465,6 +478,9 @@ class Collaboration:
             self.error('Declare only your exact delivered request from a current root generation.')
         if request.get('protocol') != PROTOCOL:
             self.error('Legacy requests cannot receive fresh response declarations.', 410)
+        if (not participant_matches(request, source)
+                or not participant_matches(request, self.service._session(request['senderSessionId'], hydrate=False))):
+            self.error('The recipient request workspace or location changed.', 409)
         revision = request.get('responseRevision', 1 if request.get('response') else 0)
         if args.get('expectedResponseRevision', 0) != revision:
             self.error('The response revision changed. Read the retained result and use its expectedResponseRevision.', 409)
@@ -513,10 +529,14 @@ class Collaboration:
         sid = receipt.get('target', {}).get('sessionId') or receipt['sessionId']
         sender = receipt.get('senderSessionId') or receipt.get('result', {}).get('creatorSessionId')
         workspace = receipt.get('workspace') or self.service._session(sender, hydrate=False)['workspace']
-        if (reader['id'] not in {sender, sid}
-                or reader['workspace'] != workspace
-                or receipt.get('commandAction') == 'coordination.send'
-                and self.service._session(sid, hydrate=False)['workspace'] != reader['workspace']):
+        if reader['id'] not in {sender, sid}:
+            self.error("This result is outside the caller's request and workspace scope.")
+        if receipt.get('commandAction') == 'coordination.send':
+            if (not participant_matches(receipt, reader)
+                    or not participant_matches(receipt, self.service._session(sender, hydrate=False))
+                    or not participant_matches(receipt, self.service._session(sid, hydrate=False))):
+                self.error("This result is outside the caller's recorded request workspace scope.")
+        elif reader['workspace'] != workspace:
             self.error("This result is outside the caller's request and workspace scope.")
 
     def resolve_message(self, session, identity, *, strict_source=False):
@@ -722,7 +742,7 @@ class Collaboration:
                     return 'This outcome notification was superseded or its qualification changed; inspect the current result.'
             elif 'taskContinuationEpoch' in receipt:
                 return 'Only retained outcome notifications can follow a continuing objective.'
-            target = self.authorize(source, {"sessionId": receipt["target"]["sessionId"]})
+            target = self.request_target(source, receipt)
             if target.get('fileAccessPending'):
                 return 'The recipient has pending file-access settings; existing work must settle before new input.'
             reason = self.service.assignments.blocked(target)
@@ -1185,8 +1205,21 @@ class Collaboration:
                     self.save(request['requestId'], request)
                     self.service.db.commit()
                     return
+            producer_session = self.service._session(producer, hydrate=False)
+            # Return direction is B -> A, not the original request's A -> B.
+            # Freeze from the original request, not newly moved participants.
+            locations_match = (participant_matches(request, sender) and participant_matches(request, producer_session)
+                if request.get('commandAction') == 'coordination.send'
+                else sender['workspace'] == producer_session['workspace'] == request['workspace'])
+            if not locations_match:
+                wait.update(status='suppressed', open=False, detail='The request participant location changed; no return was sent.')
+                self.save(request['requestId'], request)
+                self.service.db.commit()
+                return
             sender['historyManaged'] = False
             envelope = {"senderSessionId": producer, "recipientSessionId": sender["id"],
+                        "senderLocation": location(producer_session), "recipientLocation": location(sender),
+                        "sender": descriptor(producer_session), "recipient": descriptor(sender),
                         "requestId": identity, "inputId": identity, "replyToRequestId": request["requestId"],
                         "mode": "queue", "purpose": "Resume the saved request-specific wait",
                         "references": ([response['terminalMessageId']] if response.get('terminalMessageId') else []) + response.get('references', [])[:15]}
@@ -1208,7 +1241,11 @@ class Collaboration:
                                             peerEnvelope=envelope)
             receipt = {"accepted": True, "commandAction": "coordination.send", "requestId": identity, "inputId": identity,
                        "messageId": message["id"], "senderSessionId": producer,
-                       "target": {"sessionId": sender["id"]}, "protocol": PROTOCOL, "workspace": request["workspace"],
+                       "sender": descriptor(producer_session),
+                       "endpointBindingVersion": 1,
+                       "target": {**descriptor(sender), "workspace": sender['workspace']},
+                       "senderLocation": location(producer_session), "recipientLocation": location(sender),
+                       "protocol": PROTOCOL, "workspace": producer_session["workspace"],
                        "mode": "queue", "delivery": "queued", "interruptionRevision": wait["interruptionRevision"],
                        "taskId": wait["taskId"], "taskRevision": wait["taskRevision"], "dependencyRequestId": request["requestId"],
                        **({'taskContinuationEpoch': wait['taskContinuationEpoch']}
@@ -1483,6 +1520,7 @@ class Collaboration:
                         or args["sessionId"] != source["id"] or request.get("protocol") != PROTOCOL
                         or request.get("workspace") != source["workspace"]):
                     self.error("A wait must bind this sender's exact current request.")
+                self.request_target(source, request, hydrate=False)
                 if request.get("subscription"):
                     return {"accepted": True, "result": request["subscription"], "duplicate": True}
                 self.require_inbox_slot(source['id'])
@@ -1534,7 +1572,9 @@ class Collaboration:
                 self.require_continuation()
                 receipt = None
             else:
-                target = self.authorize(source, args)
+                target = self.authorize(source, args, cross_workspace=True)
+                if args.get('resume') and source['workspace'] != target['workspace']:
+                    self.error('Cross-workspace messaging does not authorize commissioned-member resume.')
                 reason = self.service.assignments.blocked(source)
                 if reason:
                     self.error(reason, 409)
@@ -1565,6 +1605,8 @@ class Collaboration:
                 task = target.get("task") or self.service.coordination.task(target["id"])
                 envelope = {"senderSessionId": source["id"], "senderRuntimeSessionId": source.get("runtimeSessionId") or source["id"],
                     "recipientSessionId": target["id"], **lineage,
+                    "senderLocation": location(source), "recipientLocation": location(target),
+                    "sender": descriptor(source), "recipient": descriptor(target),
                     "requestId": identity, "inputId": identity,
                     "mode": mode, "purpose": "Scoped collaboration task input", "references": args.get("references", []),
                     "replyToRequestId": args.get("replyToRequestId")}
@@ -1592,7 +1634,10 @@ class Collaboration:
                                                inputOrigin="peer", peerEnvelope=envelope)
                 receipt = {"accepted": True, "commandAction": "coordination.send", "requestId": identity,
                     "inputId": identity, "messageId": message["id"], "senderSessionId": source["id"],
-                    "target": {"sessionId": target["id"]}, "protocol": PROTOCOL, "workspace": source["workspace"], **lineage,
+                    "endpointBindingVersion": 1,
+                    "sender": descriptor(source), "target": {**descriptor(target), "workspace": target["workspace"]},
+                    "senderLocation": location(source), "recipientLocation": location(target),
+                    "protocol": PROTOCOL, "workspace": source["workspace"], **lineage,
                     "mode": mode, 'causalDepth': depth, "delivery": "notified" if mode == "notify" else "queued",
                     "interruptionRevision": target.get("interruptionRevision", 0),
                     "taskId": task.get("id"), "taskRevision": task.get("revision"),

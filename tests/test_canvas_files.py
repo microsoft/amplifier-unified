@@ -143,8 +143,12 @@ async def test_exact_peer_artifact_uses_retained_execution_folder(app, tmp_path,
     response = {'status': 'sealed', 'references': ['candidate.md@sha256:' + digest]}
     if not legacy:
         response['executionDirectory'] = str(source)
+    reader = app._session(request['sessionId'])
+    producer = app._new_session({'title': 'Peer producer', 'workspace': str(tmp_path)})
+    app.state['sessions'].append(producer)
     app.collaboration.insert('exact-peer', 'fixture', {'requestId': 'exact-peer',
-        'workspace': str(tmp_path), 'response': response})
+        'commandAction': 'coordination.send', 'senderSessionId': reader['id'],
+        'target': {'sessionId': producer['id']}, 'workspace': str(tmp_path), 'response': response})
     result = (await command(app, 'canvas.openFile', request))['result']
     assert result['status'] == ('unavailable' if legacy else 'opened')
     if not legacy:
@@ -153,6 +157,25 @@ async def test_exact_peer_artifact_uses_retained_execution_folder(app, tmp_path,
             assert 'path' not in app.state['canvas']
         with pytest.raises(AppError, match='exact artifact reference'):
             await command(app, 'canvas.openFile', {**request, 'path': 'unreported.md'})
+
+
+async def test_legacy_peer_file_rejects_moved_producer_before_path_read(app, tmp_path, monkeypatch):
+    import amplifier_web.canvas_files as files
+    request = {**args(app, 'candidate.md'), 'expectedSha256': 'a' * 64,
+               'referenceRequestId': 'legacy-location'}
+    reader = app._session(request['sessionId'])
+    producer = app._new_session({'title': 'Peer producer', 'workspace': str(tmp_path)})
+    app.state['sessions'].append(producer)
+    app.collaboration.insert('legacy-location', 'fixture', {
+        'requestId': 'legacy-location', 'commandAction': 'coordination.send',
+        'senderSessionId': reader['id'], 'target': {'sessionId': producer['id']},
+        'workspace': str(tmp_path), 'response': {'status': 'sealed',
+            'executionDirectory': str(tmp_path), 'references': ['candidate.md@sha256:' + 'a' * 64]}})
+    producer['workspace'] = str(tmp_path / 'moved')
+    monkeypatch.setattr(files, 'canvas_command',
+                        lambda *a, **kw: pytest.fail('A moved producer path must not be read'))
+    with pytest.raises(AppError, match='workspace|location'):
+        await command(app, 'canvas.openFile', request)
 
 
 async def test_missing_escape_and_symlink_do_not_replace_canvas(app, tmp_path):
