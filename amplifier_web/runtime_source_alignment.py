@@ -15,7 +15,43 @@ from pathlib import Path
 from .staged_sources import owned_path as _owned, owned_git_checkout, retarget_registry, require_exclusive_registry_owner
 
 
-async def align_checked_sources(manager, stage):
+def verify_checked_selection(checked, selection, *, exact=False):
+    """Check explicit batch choices, never infer selection from installed extras."""
+    from .runtime_environment import ProtectedRuntimeSource
+    from .updates import source_key
+    packages = selection['packages']
+    for name in selection['batchPaths']:
+        policy = checked.get(name)
+        if policy is None:
+            continue  # Ordinary dependencies remain governed by overrides and freeze.
+        source = packages.get(name, {})
+        if (source.get('status') not in {'selected', 'explicit-pin'}
+                or source_key(source['url'], source['ref']) != source_key(policy['url'], policy['ref'])
+                or source.get('subdirectory', '') != policy.get('subdirectory', '')):
+            raise ProtectedRuntimeSource(name)
+        if (exact or source['status'] == 'explicit-pin') and source['revision'] != policy['revision']:
+            raise ValueError('A selected module differs from its checked revision before installation.')
+
+
+async def checked_batch_sources(batch, collector, config, checked):
+    """Read the actual batch just collected; never install or rewrite its paths."""
+    selection = await collector.report(batch, config)
+    verify_checked_selection(checked, selection)
+    return selection
+
+
+def protected_selection(root, selection):
+    if selection is None:
+        return False
+    root = Path(root)
+    protected = [Path(path) for path in selection.get('protectedPaths', [])]
+    protected += [Path(path) for name, path in selection['batchPaths'].items()
+                  if selection['packages'].get(name, {}).get('status') != 'selected']
+    return any(path == root or path.is_relative_to(root) or root.is_relative_to(path)
+               for path in protected)
+
+
+async def align_checked_sources(manager, stage, *, selection=None):
     from .updates import cache_changes, pinned, process, safe_label, source_key
 
     stage = Path(stage)
@@ -27,6 +63,15 @@ async def align_checked_sources(manager, stage):
     if not checked_path.exists():
         return
     checked = json.loads(checked_path.read_text())
+    if selection is not None:
+        verify_checked_selection(checked, selection)
+    def protect_selected_root(root):
+        if selection is None:
+            return
+        # A local/pinned sibling can share the mutable checkout. Preflight all
+        # roots before any mutation, even when that sibling is not in checked.
+        if protected_selection(root, selection):
+            raise ValueError('A selected local or pinned source shares the candidate checkout.')
     policies = {}
     for policy in checked.values():
         key = source_key(policy['url'], policy['ref'])
@@ -55,10 +100,11 @@ async def align_checked_sources(manager, stage):
         root = meta.parent
         await owned_git_checkout(root, base)
         current = await process('git', 'rev-parse', 'HEAD', cwd=root, timeout=10)
-        dirty, _ = await cache_changes(root)
+        dirty, artifacts = await cache_changes(root)
         if dirty or current != data.get('commit'):
             raise ValueError('A staged managed source changed before preparation.')
-        if current != policy['revision']:
+        if current != policy['revision'] or artifacts:
+            protect_selected_root(root)
             require_exclusive_registry_owner(base / 'registry.json', data['git_url'], data.get('ref') or 'HEAD', root)
             rows.append({
                 'path': str(root.relative_to(base)), 'url': data['git_url'],

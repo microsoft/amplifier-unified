@@ -126,7 +126,8 @@ async def test_real_selected_dependency_only_recovers_after_exact_branch_proof(t
     paths = [str(path) for path in (project / '.venv').glob('lib/python*/site-packages')]
     authored = manifest([NAME + ' @ git+' + url + '@main'])
     def collect():
-        return {'version':1, 'configuration':'fixture', 'packages': dependencies.selected(
+        return {'version':1, 'configuration':'fixture', 'batchPaths': {}, 'protectedPaths': [],
+                'packages': dependencies.selected(
             {'selected-root':authored}, distributions=importlib.metadata.distributions(path=paths))}
     first = collect()
     assert first['packages'][NAME]['revision'] == old

@@ -1,6 +1,7 @@
 import json
 import errno
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 import pytest
 from amplifier_web import app_updates
@@ -485,7 +486,10 @@ async def test_real_freeze_mismatch_reaches_install_error_and_sanitized_report(n
     preparation_probes = []
 
     async def process(*args, **kwargs):
-        if '--profiles' in args:
+        if '--source-policy-only' in args:
+            Path(args[args.index('--source-policy-only') + 1]).write_text(json.dumps({
+                'packages': {}, 'batchPaths': {}, 'protectedPaths': []}))
+        elif '--profiles' in args:
             preparation_probes.append(args)
             # The dynamic preparation finishes with a different installed commit.
             # Do not seed diagnostic facts: the production freeze guard must emit them.

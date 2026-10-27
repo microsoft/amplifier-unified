@@ -268,7 +268,7 @@ def test_optional_pin_is_protective_even_if_not_selected_to_authorize_recovery()
     assert migration.authored_constraints(raw)[NAME] is None  # Protective, never selection authority.
 
 
-@pytest.mark.parametrize('change', ['none', 'unselected', 'outside', 'optional', 'runtime', 'explicit-local'])
+@pytest.mark.parametrize('change', ['none', 'unselected', 'outside', 'optional', 'runtime', 'explicit-local', 'nested', 'dynamic'])
 async def test_selected_sibling_dev_path_is_not_a_runtime_pin(selected, change):
     s = selected
     context = s.root / 'modules/context-fixture'
@@ -277,6 +277,7 @@ async def test_selected_sibling_dev_path_is_not_a_runtime_pin(selected, change):
     (context / 'pyproject.toml').write_text('[project]\nname="fixture-context"\nversion="0.1"\n')
     edge = '../../../outside' if change == 'outside' else '../context-fixture'
     extra = ('dependencies=["fixture-context"]\n' if change == 'runtime' else '')
+    extra += ('dynamic=["dependencies"]\n' if change == 'dynamic' else '')
     extra += ('[project.optional-dependencies]\nunused=["fixture-context"]\n' if change == 'optional' else '')
     (transcript / 'pyproject.toml').write_text(
         '[project]\nname="fixture-transcript"\nversion="0.1"\n' + extra +
@@ -291,12 +292,47 @@ async def test_selected_sibling_dev_path_is_not_a_runtime_pin(selected, change):
         s.batch.names.pop('fixture-context')
     if change == 'explicit-local':
         s.collector.local_sources.add(context)
+    if change == 'nested':
+        git(context, 'init', '-b', 'main')
+        git(context, 'config', 'user.email', 'fixture@example.invalid')
+        git(context, 'config', 'user.name', 'Fixture')
+        git(context, 'remote', 'add', 'origin', URL + '-other')
+        git(context, 'add', 'pyproject.toml')
+        git(context, 'commit', '-m', 'separately owned nested package')
+        nested_head = git(context, 'rev-parse', 'HEAD')
+        (context / '.amplifier_cache_meta.json').write_text(json.dumps({
+            'git_url': URL + '-other', 'ref': 'main', 'commit': nested_head}))
+        s.collector.references.add(updates.source_key(URL + '-other', 'main'))
     report = await s.collector.report(s.batch, s.config)
     if change == 'none':
         assert report['packages']['fixture-context']['status'] == 'selected'
         assert report['packages']['fixture-context']['revision'] == head
     elif change != 'unselected':
         assert report['packages']['fixture-context']['status'] != 'selected'
+
+
+async def test_preliminary_collection_allows_only_recognized_artifacts_before_alignment(selected):
+    from amplifier_web import runtime_source_alignment as alignment
+    from test_updates_cache import pyc
+    s = selected
+    cache = s.root / '__pycache__'
+    cache.mkdir()
+    artifact = cache / 'module.cpython-313.pyc'
+    artifact.write_bytes(pyc('value = 1'))
+    git(s.root, 'add', '__pycache__')
+    git(s.root, 'commit', '-m', 'tracked fixture artifact')
+    head = git(s.root, 'rev-parse', 'HEAD')
+    s.marker.write_text(json.dumps({'git_url': URL, 'ref': 'main', 'commit': head}))
+    (s.stage / 'runtime-sources.json').write_text(json.dumps({NAME: {
+        'url': URL, 'ref': 'main', 'revision': head, 'subdirectory': ''}}))
+    artifact.write_bytes(pyc('value = 2'))
+    with pytest.raises(ValueError, match='changed'):
+        await s.collector.report(s.batch, s.config)
+    preliminary = await s.collector.report(s.batch, s.config, allow_generated=True)
+    await alignment.align_checked_sources(s.manager, s.stage, selection=preliminary)
+    strict = await s.collector.report(s.batch, s.config)
+    assert strict['packages'][NAME]['revision'] == head
+    assert artifact.read_bytes() == pyc('value = 1')
 
 
 @pytest.mark.parametrize('key', ['UV_CONFIG_FILE', 'UV_OVERRIDE', 'UV_CONSTRAINT', 'UV_BUILD_CONSTRAINT'])

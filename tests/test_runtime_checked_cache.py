@@ -652,16 +652,22 @@ async def test_late_resolved_sibling_modules_keep_checked_commit(candidate, monk
         return batch, collector, root
     batch, collector, root = await collect()
     assert git(root, 'rev-parse', 'HEAD') == later
+    async def inspect_batch(batch, collector):
+        # The local Git transport redirect is not source authority. Inspect
+        # the authored origin without Git's insteadOf display rewriting it.
+        with monkeypatch.context() as context:
+            context.delenv('GIT_CONFIG_GLOBAL')
+            return await alignment.checked_batch_sources(batch, collector, config, policies)
     # Capability check lets this exact test run on old production source:
     # it must fail on installed commit B, not on a missing helper import.
     if not old_flow and hasattr(alignment, 'checked_batch_sources'):
-        report = await alignment.checked_batch_sources(batch, collector, config, policies)
+        report = await inspect_batch(batch, collector)
         await alignment.align_checked_sources(c.manager, c.stage, selection=report)
         # Later upstream C must not replace already checked A.
         (c.repo / 'selected-revision.txt').write_text('even later remote')
         git(c.repo, 'commit', '-am', 'remote advanced again')
         batch, collector, root = await collect()  # Never install the stale composed batch.
-        report = await alignment.checked_batch_sources(batch, collector, config, policies)
+        report = await inspect_batch(batch, collector)
         alignment.verify_checked_selection(policies, report, exact=True)
     result = await batch.install()
     assert result['resolverTransactions'] == 1
@@ -720,3 +726,44 @@ async def test_checked_selected_package_refuses_incompatible_choice_before_insta
         alignment.verify_checked_selection({'fixture-foundation': policy}, report, exact=True)
     assert before == {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
     assert not c.fetches
+
+
+async def test_checked_unchanged_explicit_pin_does_not_authorize_alignment(candidate):
+    from amplifier_web.host.config import HostConfig
+    from amplifier_web.runtime_policy_reconciliation import Collector
+    c = candidate
+    root = c.copy()
+    (root / 'pyproject.toml').write_text('[project]\nname="fixture-foundation"\nversion="1"\n')
+    git(root, 'add', 'pyproject.toml')
+    git(root, 'commit', '-m', 'pinned fixture')
+    head = git(root, 'rev-parse', 'HEAD')
+    git(root, 'remote', 'add', 'origin', URL)
+    (root / '.amplifier_cache_meta.json').write_text(json.dumps({'git_url': URL, 'ref': head, 'commit': head}))
+    checked = {'fixture-foundation': {**c.policy, 'ref': head, 'revision': head}}
+    (c.stage / 'runtime-sources.json').write_text(json.dumps(checked))
+    collector = Collector()
+    collector.references.add(updates.source_key(URL, head))
+    config = HostConfig(c.stage, c.stage, {}, c.stage / 'foundation')
+    report = await alignment.checked_batch_sources(SimpleNamespace(names={'fixture-foundation': root}),
+                                                  collector, config, checked)
+    alignment.verify_checked_selection(checked, report, exact=True)
+    await alignment.align_checked_sources(c.manager, c.stage, selection=report)
+    assert git(root, 'rev-parse', 'HEAD') == head and not c.fetches
+
+
+async def test_local_sibling_absent_from_checked_policy_protects_existing_checkout(candidate):
+    c = candidate
+    root = c.copy()
+    local = root / 'modules/local-sibling'
+    local.mkdir(parents=True)
+    (local / 'pyproject.toml').write_text('[project]\nname="fixture-local"\nversion="1"\n')
+    selection = {'packages': {
+        'fixture-foundation': {**c.policy, 'revision': c.old, 'status': 'selected'},
+        'fixture-local': {'status': 'local'}},
+        'batchPaths': {'fixture-foundation': str(root), 'fixture-local': str(local)},
+        'protectedPaths': [str(local)]}
+    before = (root / 'bundle.md').read_bytes()
+    with pytest.raises(ValueError, match='local or pinned'):
+        await alignment.align_checked_sources(c.manager, c.stage, selection=selection)
+    assert git(root, 'rev-parse', 'HEAD') == c.old
+    assert (root / 'bundle.md').read_bytes() == before and not c.fetches
