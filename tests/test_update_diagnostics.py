@@ -1,6 +1,7 @@
 import json
 import errno
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 import pytest
 from amplifier_web import app_updates
@@ -448,6 +449,7 @@ async def test_installed_source_mismatch_has_safe_actionable_receipt(tmp_path):
         error.diagnostic_facts = {
             'reason': 'runtime-installed-source-mismatch', 'package': 'amplifier-foundation',
             'resolutionMismatches': ['revision', 'private/path', 'revision', {'secret': 'token'}],
+            'expectedRevision': 'a' * 40, 'observedRevision': 'b' * 40,
             'stdout': 'private credential', 'path': '/private/cache',
         }
         raise error
@@ -459,6 +461,8 @@ async def test_installed_source_mismatch_has_safe_actionable_receipt(tmp_path):
         assert receipt['reason'] == exported['reason'] == 'runtime-installed-source-mismatch'
         assert exported['package'] == 'amplifier-foundation'
         assert exported['resolutionMismatches'] == ['revision']
+        assert exported['expectedRevision'] == 'a' * 40
+        assert exported['observedRevision'] == 'b' * 40
         assert 'kept the current components active' in failure_guidance(receipt)
         assert 'private' not in json.dumps(receipt)
         assert 'credential' not in json.dumps(exported)
@@ -482,7 +486,10 @@ async def test_real_freeze_mismatch_reaches_install_error_and_sanitized_report(n
     preparation_probes = []
 
     async def process(*args, **kwargs):
-        if '--profiles' in args:
+        if '--source-policy-only' in args:
+            Path(args[args.index('--source-policy-only') + 1]).write_text(json.dumps({
+                'packages': {}, 'batchPaths': {}, 'protectedPaths': []}))
+        elif '--profiles' in args:
             preparation_probes.append(args)
             # The dynamic preparation finishes with a different installed commit.
             # Do not seed diagnostic facts: the production freeze guard must emit them.
@@ -500,6 +507,8 @@ async def test_real_freeze_mismatch_reaches_install_error_and_sanitized_report(n
         assert failure['phase'] == 'ecosystem-validation'
         assert failure['reason'] == 'runtime-installed-source-mismatch'
         assert failure['resolutionMismatches'] == ['revision']
+        assert failure['expectedRevision'] == ROW['latest']
+        assert failure['observedRevision'] == 'd' * 40
         assert 'kept the current components active' in state['error']
         assert 'Check for an app update' in state['error']
         assert 'during ecosystem validation' not in state['error']

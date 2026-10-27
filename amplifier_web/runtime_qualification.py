@@ -312,6 +312,11 @@ async def freeze(manager, generation, project):
                 'reason': 'runtime-installed-source-mismatch', 'package': name,
                 'resolutionMismatches': mismatches,
             }
+            import re
+            for key, value in (('expectedRevision', policy.get('revision')),
+                               ('observedRevision', source.get('current'))):
+                if isinstance(value, str) and re.fullmatch(r'[a-f0-9]{40}', value):
+                    error.diagnostic_facts[key] = value
             raise error
         policies[name] = policy
     from .runtime_source_policy import qualify_cache_policies

@@ -130,13 +130,14 @@ async def stage_binding(manager, stage, row):
                       store.checkout(row["url"], row["current"]), target)
 
 
-async def adopt_clean_sources(manager, stage):
+async def adopt_clean_sources(manager, stage, *, selection=None):
     """Legacy checkouts remain intact in the serving and rollback generations.
 
     Only clean, owned staged copies enter the shared store. Unknown usage is
     not a deletion signal. Dirty/local sources stay as ordinary writable copies.
     """
     from .updates import process
+    from .runtime_source_alignment import protected_selection
 
     environment = store_environment(manager.home)
     if not environment:
@@ -157,6 +158,8 @@ async def adopt_clean_sources(manager, stage):
     candidates, protected, revisions = [], set(), {}
     for meta in roots:
         root = meta.parent
+        if protected_selection(root, selection):
+            continue  # Effective local choices need this exact candidate path.
         key = None
         try:
             owned_path(meta, base)

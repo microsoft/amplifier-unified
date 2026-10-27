@@ -170,7 +170,8 @@ async def test_source_guard_reports_only_mismatch_field_names(tmp_path, monkeypa
         await qualification.freeze(SimpleNamespace(home=tmp_path), generation, project)
     assert error.value.diagnostic_facts == {
         'reason': 'runtime-installed-source-mismatch', 'package': 'fixture-foundation',
-        'resolutionMismatches': ['revision']}
+        'resolutionMismatches': ['revision'],
+        'expectedRevision': 'a' * 40, 'observedRevision': 'b' * 40}
     assert '/private/' not in str(error.value)
 
 
@@ -551,3 +552,218 @@ async def test_already_aligned_mixed_registry_does_not_block_noop(candidate):
         'local': {'uri': (root / 'bundle.md').as_uri(), 'local_path': str(root)}}}))
     await alignment.align_checked_sources(c.manager, c.stage)
     assert git(root, 'rev-parse', 'HEAD') == c.new and not c.fetches
+
+
+@pytest.mark.parametrize('shared', [False, True])
+@pytest.mark.parametrize('old_flow', [False, True])
+async def test_late_resolved_sibling_modules_keep_checked_commit(candidate, monkeypatch, shared, old_flow):
+    """No root package; real Git resolution, Foundation batch, uv and freeze.
+
+    old_flow is a retained negative control, not an alternate production path.
+    Neither synthetic commit is a claim about an earlier user's failed update.
+    """
+    from amplifier_foundation import Bundle
+    from amplifier_foundation.modules import activator
+    from amplifier_foundation.modules.batch import DependencyBatch
+    from amplifier_foundation.sources.resolver import SimpleSourceResolver
+    from amplifier_web import runtime_environment as environments
+    from amplifier_web.runtime_policy_reconciliation import Collector
+
+    c = candidate
+    names = {'fixture-context': 'modules/context-fixture', 'fixture-transcript': 'modules/transcript-fixture'}
+    for name, subdir in names.items():
+        path = c.repo / subdir
+        path.mkdir(parents=True)
+        (path / 'pyproject.toml').write_text(
+            '[project]\nname="' + name + '"\nversion="0.1.0"\n'
+            '[build-system]\nrequires=[]\nbuild-backend="backend"\nbackend-path=["."]\n')
+        (path / 'backend.py').write_text(BACKEND)
+    # The sibling's local dev source is not an installer constraint: both
+    # distributions are explicit batch selections and uv uses --no-sources.
+    transcript = c.repo / names['fixture-transcript'] / 'pyproject.toml'
+    transcript.write_text(transcript.read_text() +
+        '[tool.uv.sources]\nfixture-context={path="../context-fixture",editable=true}\n'
+        '[dependency-groups]\ndev=["fixture-context"]\n')
+    git(c.repo, 'add', '.')
+    git(c.repo, 'commit', '-m', 'checked sibling packages')
+    checked = git(c.repo, 'rev-parse', 'HEAD')
+    manifest = ('[project]\nname="fixture-runtime"\nversion="1"\nrequires-python=">=3.13"\n'
+                'dependencies=' + json.dumps(list(names)) + '\n[tool.uv.sources]\n' +
+                '\n'.join(name + '={git="' + URL + '",branch="main",subdirectory="' + subdir + '"}'
+                          for name, subdir in names.items())).encode()
+    rows = [{'kind': 'runtime dependency', 'package': name, 'url': URL, 'ref': 'main',
+             'subdirectory': subdir, 'current': c.old, 'latest': checked, 'eligible': True}
+            for name, subdir in names.items()]
+    async def update_manifest(_):
+        return rows, manifest
+    monkeypatch.setattr(environments, 'update_manifest', update_manifest)
+    manifest_file = c.home / 'base.toml'
+    manifest_file.write_bytes(manifest)
+    monkeypatch.setattr(environments, 'manifest_path', lambda: manifest_file)
+    config_file = c.home / 'gitconfig'
+    config_file.write_text('[url "' + c.repo.as_uri() + '"]\n insteadOf = ' + URL + '\n')
+    monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(config_file))
+    monkeypatch.setenv('GIT_CONFIG_NOSYSTEM', '1')
+    monkeypatch.setenv('UV_NO_INDEX', '1')
+    monkeypatch.delenv('UV_OFFLINE', raising=False)  # Git redirects to this fixture only.
+    monkeypatch.setenv('UV_PYTHON_DOWNLOADS', 'never')
+    monkeypatch.setenv('UV_CACHE_DIR', str(c.home / 'uv-cache'))
+    monkeypatch.setenv('PYTHONDONTWRITEBYTECODE', '1')
+    if shared:
+        monkeypatch.setenv('AMPLIFIER_SOURCE_STORE', str(c.home / 'source-store'))
+    project = await environments.stage(c.manager, c.stage.name, rows, finalize=False)
+    await updates.process(shutil.which('uv'), 'sync', '--locked', '--project', str(project),
+                          '--python', sys.executable, timeout=30)
+    policy_file = c.stage / 'runtime-sources.json'
+    policies = json.loads(policy_file.read_text())
+    overrides = await qualification.prepare_overrides(project, c.stage / 'runtime-install-overrides.txt')
+    pointer = c.home / 'updates/active.json'
+    pointer.write_text(json.dumps({'current': None, 'previous': None}))
+    prior_failure = c.home / 'updates/prior-failure.json'
+    prior_failure.write_text('{"status":"failed","attemptId":"retained"}')
+    preserved = (pointer.read_bytes(), prior_failure.read_bytes(), policy_file.read_bytes())
+    # Initial alignment has no materialized copy/binding to align.
+    await alignment.align_checked_sources(c.manager, c.stage)
+    (c.repo / 'selected-revision.txt').write_text('later source, same package versions')
+    git(c.repo, 'add', '.')
+    git(c.repo, 'commit', '-m', 'later bundle revision')
+    later = git(c.repo, 'rev-parse', 'HEAD')
+    original = activator.ModuleActivator
+    class OwnedActivator(original):
+        def __init__(self, *args, **kwargs):
+            kwargs['install_python'] = str(project / '.venv/bin/python')
+            super().__init__(*args, **kwargs)
+    monkeypatch.setattr(activator, 'ModuleActivator', OwnedActivator)
+    from amplifier_web.host.config import HostConfig
+    config = HostConfig(c.stage, c.stage, {}, c.stage / 'foundation')
+    async def collect():
+        resolved = await SimpleSourceResolver(cache_dir=config.registry_home / 'cache').resolve('git+' + URL + '@main')
+        root = resolved.active_path
+        assert not (root / 'pyproject.toml').exists()
+        bundle = Bundle(name='fixture', base_path=root,
+                        session={'context': {'module': 'context-fixture', 'source': str(root / names['fixture-context'])}},
+                        tools=[{'module': 'transcript-fixture', 'source': str(root / names['fixture-transcript'])}])
+        batch = DependencyBatch()
+        await bundle.prepare(strict=True, refresh_dependencies=True, dependency_batch=batch,
+                             cache_dir=config.registry_home / 'cache', install_overrides=overrides)
+        assert set(batch.names) == set(names)
+        collector = Collector()
+        collector.references.add(updates.source_key(URL, 'main'))
+        return batch, collector, root
+    batch, collector, root = await collect()
+    assert git(root, 'rev-parse', 'HEAD') == later
+    async def inspect_batch(batch, collector):
+        # The local Git transport redirect is not source authority. Inspect
+        # the authored origin without Git's insteadOf display rewriting it.
+        with monkeypatch.context() as context:
+            context.delenv('GIT_CONFIG_GLOBAL')
+            return await alignment.checked_batch_sources(batch, collector, config, policies)
+    # Capability check lets this exact test run on old production source:
+    # it must fail on installed commit B, not on a missing helper import.
+    if not old_flow and hasattr(alignment, 'checked_batch_sources'):
+        report = await inspect_batch(batch, collector)
+        await alignment.align_checked_sources(c.manager, c.stage, selection=report)
+        # Later upstream C must not replace already checked A.
+        (c.repo / 'selected-revision.txt').write_text('even later remote')
+        git(c.repo, 'commit', '-am', 'remote advanced again')
+        batch, collector, root = await collect()  # Never install the stale composed batch.
+        report = await inspect_batch(batch, collector)
+        alignment.verify_checked_selection(policies, report, exact=True)
+    result = await batch.install()
+    assert result['resolverTransactions'] == 1
+    installed = environments.installed_sources(project)
+    assert {installed[name]['current'] for name in names} == {later if old_flow else checked}
+    assert all(installed[name]['subdirectory'] == subdir for name, subdir in names.items())
+    assert (pointer.read_bytes(), prior_failure.read_bytes(), policy_file.read_bytes()) == preserved
+    if old_flow:
+        with pytest.raises(ValueError) as error:
+            await qualification.freeze(c.manager, c.stage.name, project)
+        assert error.value.diagnostic_facts['resolutionMismatches'] == ['revision']
+        assert not (c.stage / 'runtime-installed.json').exists()
+    else:
+        frozen = await qualification.freeze(c.manager, c.stage.name, project)
+        qualification.verify_recorded(frozen, c.stage)
+        assert all(row['current'] == checked for name, row in environments.installed_sources(frozen).items()
+                   if name in names)
+    assert pointer.read_bytes() == preserved[0] and prior_failure.read_bytes() == preserved[1]
+
+
+@pytest.mark.parametrize('change', ['repository', 'subdirectory', 'ref', 'pin', 'local', 'dirty', 'revision'])
+async def test_checked_selected_package_refuses_incompatible_choice_before_install(candidate, change):
+    from amplifier_web.host.config import HostConfig
+    from amplifier_web.runtime_policy_reconciliation import Collector
+    c = candidate
+    root = c.copy()
+    (root / 'pyproject.toml').write_text('[project]\nname="fixture-foundation"\nversion="1"\n')
+    git(root, 'add', 'pyproject.toml')
+    git(root, 'commit', '-m', 'selected fixture package')
+    head = git(root, 'rev-parse', 'HEAD')
+    git(root, 'remote', 'add', 'origin', URL)
+    marker = root / '.amplifier_cache_meta.json'
+    marker.write_text(json.dumps({'git_url': URL, 'ref': 'main', 'commit': head}))
+    policy = {**c.policy, 'revision': head}
+    collector = Collector()
+    collector.references.add(updates.source_key(URL, 'main'))
+    if change == 'repository':
+        policy['url'] += '-other'
+    elif change == 'subdirectory':
+        policy['subdirectory'] = 'other'
+    elif change in {'ref', 'pin'}:
+        ref = 'release' if change == 'ref' else head
+        collector.references = {updates.source_key(URL, ref)}
+        marker.write_text(json.dumps({'git_url': URL, 'ref': ref, 'commit': head}))
+    elif change == 'local':
+        collector.local_sources.add(root)
+    elif change == 'dirty':
+        (root / 'pyproject.toml').write_text('changed')
+    else:
+        policy['revision'] = 'd' * 40
+    before = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    config = HostConfig(c.stage, c.stage, {}, c.stage / 'foundation')
+    with pytest.raises(ValueError):
+        report = await alignment.checked_batch_sources(SimpleNamespace(names={'fixture-foundation': root}),
+                                                       collector, config, {'fixture-foundation': policy})
+        alignment.verify_checked_selection({'fixture-foundation': policy}, report, exact=True)
+    assert before == {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    assert not c.fetches
+
+
+async def test_checked_unchanged_explicit_pin_does_not_authorize_alignment(candidate):
+    from amplifier_web.host.config import HostConfig
+    from amplifier_web.runtime_policy_reconciliation import Collector
+    c = candidate
+    root = c.copy()
+    (root / 'pyproject.toml').write_text('[project]\nname="fixture-foundation"\nversion="1"\n')
+    git(root, 'add', 'pyproject.toml')
+    git(root, 'commit', '-m', 'pinned fixture')
+    head = git(root, 'rev-parse', 'HEAD')
+    git(root, 'remote', 'add', 'origin', URL)
+    (root / '.amplifier_cache_meta.json').write_text(json.dumps({'git_url': URL, 'ref': head, 'commit': head}))
+    checked = {'fixture-foundation': {**c.policy, 'ref': head, 'revision': head}}
+    (c.stage / 'runtime-sources.json').write_text(json.dumps(checked))
+    collector = Collector()
+    collector.references.add(updates.source_key(URL, head))
+    config = HostConfig(c.stage, c.stage, {}, c.stage / 'foundation')
+    report = await alignment.checked_batch_sources(SimpleNamespace(names={'fixture-foundation': root}),
+                                                  collector, config, checked)
+    alignment.verify_checked_selection(checked, report, exact=True)
+    await alignment.align_checked_sources(c.manager, c.stage, selection=report)
+    assert git(root, 'rev-parse', 'HEAD') == head and not c.fetches
+
+
+async def test_local_sibling_absent_from_checked_policy_protects_existing_checkout(candidate):
+    c = candidate
+    root = c.copy()
+    local = root / 'modules/local-sibling'
+    local.mkdir(parents=True)
+    (local / 'pyproject.toml').write_text('[project]\nname="fixture-local"\nversion="1"\n')
+    selection = {'packages': {
+        'fixture-foundation': {**c.policy, 'revision': c.old, 'status': 'selected'},
+        'fixture-local': {'status': 'local'}},
+        'batchPaths': {'fixture-foundation': str(root), 'fixture-local': str(local)},
+        'protectedPaths': [str(local)]}
+    before = (root / 'bundle.md').read_bytes()
+    with pytest.raises(ValueError, match='local or pinned'):
+        await alignment.align_checked_sources(c.manager, c.stage, selection=selection)
+    assert git(root, 'rev-parse', 'HEAD') == c.old
+    assert (root / 'bundle.md').read_bytes() == before and not c.fetches

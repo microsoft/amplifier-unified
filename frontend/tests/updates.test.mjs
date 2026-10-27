@@ -529,6 +529,7 @@ test('prepared source mismatch explains preservation and exports only mismatch f
  const failure={id:'mismatch',attemptId:'candidate',phase:'ecosystem-validation',status:'failed',
   errorType:'ValueError',reason:'runtime-installed-source-mismatch',package:'amplifier-foundation',
   resolutionMismatches:['revision','private/source', {path:'/private/cache'},'revision'],
+  expectedRevision:'a'.repeat(40),observedRevision:'b'.repeat(40),
   path:'/private/cache',message:'credential-bearing failure'};
  const diagnostics={attemptId:'candidate',lastFailure:failure,events:[failure]};
  const html=render({phase:'error',diagnostics});
@@ -536,8 +537,12 @@ test('prepared source mismatch explains preservation and exports only mismatch f
  assert.match(html,/component changed to a different source during update preparation/);
  assert.match(html,/kept the current components active/);
  assert.match(html,/share the update details/);
+ assert.match(html,/Expected revision a{12}/);
+ assert.match(html,/Found revision b{12}/);
  const exported=JSON.parse(diagnosticReceipt(diagnostics));
  assert.deepEqual(exported.lastFailure.resolutionMismatches,['revision']);
  assert.deepEqual(exported.events[0].resolutionMismatches,['revision']);
+ assert.equal(exported.lastFailure.expectedRevision,'a'.repeat(40));
+ assert.equal(exported.lastFailure.observedRevision,'b'.repeat(40));
  assert.doesNotMatch(JSON.stringify(exported),/private|credential/);
 });

@@ -141,7 +141,7 @@ class Collector:
                 return
             reference = config.resolve_source(registered) or registered
 
-    async def report(self, batch, config):
+    async def report(self, batch, config, *, allow_generated=False):
         from .runtime_environment import package_name
         from .updates import process, cache_changes, source_key
         from .staged_sources import owned_path, owned_git_checkout
@@ -184,7 +184,7 @@ class Collector:
                 data = json.loads(meta.read_text())
                 head = await process('git', 'rev-parse', 'HEAD', cwd=root, timeout=10)
                 dirty, artifacts = await cache_changes(root)
-                if dirty or artifacts or head != data.get('commit'):
+                if dirty or (artifacts and not allow_generated) or head != data.get('commit'):
                     raise ValueError('A selected source changed during policy reconciliation.')
                 remote = await process('git', 'remote', 'get-url', 'origin', cwd=root, timeout=10)
                 if source_key(remote, 'HEAD')[0] != source_key(data['git_url'], 'HEAD')[0]:
@@ -196,7 +196,10 @@ class Collector:
             content = manifest.read_bytes()
             if package_name(tomllib.loads(content.decode()).get('project', {}).get('name', '')) != name:
                 raise ValueError('A selected source changed its package identity.')
+            sibling_dev = selected_sibling_dev_sources(content, source, root, batch.names)
             for dependency, declaration in authored_constraints(content).items():
+                if dependency in sibling_dev:
+                    continue  # --no-sources does not activate this selected sibling's dev edge.
                 if dependency in constraints and constraints[dependency] != declaration:
                     constraints[dependency] = None
                 else:
@@ -211,19 +214,22 @@ class Collector:
                 continue
             ref = next(iter(refs))
             from .updates import pinned
-            if pinned(ref):
-                package['status'] = 'explicit-pin'
-                continue
+            unbound_status = 'explicit-pin' if pinned(ref) else 'unbound'
             if allowed == store:
                 if ref not in bindings.get((data['git_url'], data['commit']), set()):
-                    package['status'] = 'unbound'
+                    package['status'] = unbound_status
                     continue
             elif source_key(data['git_url'], data.get('ref') or 'HEAD')[1] != ref:
-                package['status'] = 'unbound'
+                package['status'] = unbound_status
                 continue
             package.update(status='selected', url=data['git_url'], ref=ref,
                            subdirectory=('' if source == root else source.relative_to(root).as_posix()),
                            revision=data['commit'], manifestSha256=hashlib.sha256(content).hexdigest())
+            if pinned(ref):
+                # Identity can prove an unchanged install without granting
+                # moving-ref recovery or permission to rewrite this checkout.
+                package['status'] = 'explicit-pin'
+                continue
             manifests[name] = content
         for name, package in packages.items():
             if package.get('status') != 'selected' or name not in constraints:
@@ -238,8 +244,65 @@ class Collector:
                                  if packages[name].get('status') == 'selected'})
         for name, package in dependencies.items():
             packages.setdefault(name, package)
-        return {'version': VERSION, 'configuration': configuration(config), 'packages': packages}
+        return {'version': VERSION, 'configuration': configuration(config), 'packages': packages,
+                # Private preparation evidence, never copied into update diagnostics.
+                'batchPaths': {name: str(path) for name, path in batch.names.items()},
+                'protectedPaths': sorted(str(path) for path in self.local_sources | self.local_manifests)}
 
+
+
+def selected_sibling_dev_sources(content, source, root, selected):
+    """Ignore only a proven selected sibling's local, dev-only uv source.
+
+    Optional, conditional, Git, external, unselected and resolver constraints
+    remain protective. This does not select a package or authorize a new ref.
+    Foundation's batch installs these exact paths with --no-sources.
+    """
+    from packaging.requirements import Requirement, InvalidRequirement
+    from .runtime_environment import package_name
+    data = tomllib.loads(content.decode())
+    project, uv = data.get('project', {}), data.get('tool', {}).get('uv', {})
+    if ('dependencies' in project.get('dynamic', []) or 'optional-dependencies' in project.get('dynamic', [])
+            or not isinstance(project.get('dependencies', []), list)):
+        return set()
+    groups = data.get('dependency-groups', {})
+    dev = groups.get('dev', [])
+    protected = list(project.get('dependencies', []))
+    for values in project.get('optional-dependencies', {}).values():
+        protected.extend(values)
+    for group, values in groups.items():
+        if group != 'dev':
+            protected.extend(values)
+    for key in ('override-dependencies', 'constraint-dependencies', 'build-constraint-dependencies', 'dev-dependencies'):
+        protected.extend(uv.get(key, []))
+    def requirement(value):
+        try:
+            return Requirement(value) if isinstance(value, str) else None
+        except InvalidRequirement:
+            return None
+    parsed = [requirement(value) for value in protected]
+    if any(value is None for value in parsed):
+        return set()
+    protected_names = {package_name(value.name) for value in parsed}
+    result = set()
+    for name, entry in uv.get('sources', {}).items():
+        name = package_name(name)
+        if (name not in selected or name in protected_names or not isinstance(entry, dict)
+                or set(entry) - {'path', 'editable'} or entry.get('editable') is not True
+                or not isinstance(entry.get('path'), str) or Path(entry['path']).is_absolute()):
+            continue
+        declarations = [requirement(value) for value in dev]
+        matching = [value for value in declarations if value and package_name(value.name) == name]
+        if (not matching or any(value is None for value in declarations)
+                or any(value.url or value.marker or value.extras or value.specifier for value in matching)):
+            continue
+        target = (source / entry['path']).resolve()
+        # Containment alone can include a nested, independently owned checkout.
+        target_root = next((path for path in (target, *target.parents) if (path / '.git').exists()), None)
+        if (target == Path(selected[name]).resolve() and target != source
+                and target.is_relative_to(root) and target_root == root):
+            result.add(name)
+    return result
 
 
 def authored_constraints(content):
@@ -352,7 +415,7 @@ async def reconcile(manager, stage, project, collect):
                                    'selected-declaration', manifestSha256=source['manifestSha256'])
     if selected:
         write_private(checked_path, json.dumps(checked, indent=2) + '\n')
-        await align_checked_sources(manager, stage)
+        await align_checked_sources(manager, stage, selection=first)
         from .selected_runtime_dependencies import refresh
         await refresh(manager, stage, project, selected)
         second = await collect()
