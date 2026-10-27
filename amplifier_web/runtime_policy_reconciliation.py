@@ -213,17 +213,18 @@ class Collector:
                 package['status'] = 'conflicting' if refs else 'unselected'
                 continue
             ref = next(iter(refs))
+            from .updates import pinned
+            unbound_status = 'explicit-pin' if pinned(ref) else 'unbound'
             if allowed == store:
                 if ref not in bindings.get((data['git_url'], data['commit']), set()):
-                    package['status'] = 'unbound'
+                    package['status'] = unbound_status
                     continue
             elif source_key(data['git_url'], data.get('ref') or 'HEAD')[1] != ref:
-                package['status'] = 'unbound'
+                package['status'] = unbound_status
                 continue
             package.update(status='selected', url=data['git_url'], ref=ref,
                            subdirectory=('' if source == root else source.relative_to(root).as_posix()),
                            revision=data['commit'], manifestSha256=hashlib.sha256(content).hexdigest())
-            from .updates import pinned
             if pinned(ref):
                 # Identity can prove an unchanged install without granting
                 # moving-ref recovery or permission to rewrite this checkout.
