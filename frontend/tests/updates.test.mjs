@@ -546,3 +546,16 @@ test('prepared source mismatch explains preservation and exports only mismatch f
  assert.equal(exported.lastFailure.observedRevision,'b'.repeat(40));
  assert.doesNotMatch(JSON.stringify(exported),/private|credential/);
 });
+
+test('authored constraint names the source check without claiming local edits',()=>{
+ const failure={id:'constraint',attemptId:'candidate',phase:'ecosystem-source-preflight',status:'failed',
+  reason:'runtime-source-constraint',package:'amplifier-foundation'};
+ const diagnostics={attemptId:'candidate',lastFailure:failure,events:[failure]};
+ const html=render({phase:'error',diagnostics});
+ assert.match(html,/amplifier-foundation/);
+ assert.match(html,/could not be reconciled with the selected component/);
+ assert.match(html,/does not establish local edits/);
+ assert.doesNotMatch(html,/Local source changes or an explicit dependency override were preserved/);
+ const receipt=JSON.parse(diagnosticReceipt(diagnostics));
+ assert.equal(receipt.lastFailure.reason,'runtime-source-constraint');
+});

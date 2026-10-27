@@ -16,6 +16,7 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
     receipt = runtime_environment.receipt_directory(tmp_path, release)
     receipt.mkdir(parents=True)
     first, frozen = tmp_path / 'first', tmp_path / 'frozen'
+    selection = {'packages': {}, 'batchPaths': {}, 'protectedPaths': []}
     async def stage(manager, generation, candidates, *, finalize):
         assert not finalize
         calls.append('stage')
@@ -35,6 +36,8 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
     class Diagnostics:
         async def run(self, phase, function, *command, **kwargs):
             if phase == 'ecosystem-source-preflight':
+                assert calls[-1] == 'collect'
+                assert kwargs == {'selection': selection}
                 calls.append('source-alignment')
                 return await function(*command, **kwargs)
             if phase == 'ecosystem-runtime-policy':
@@ -44,6 +47,23 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
                 calls.append('runtime-sync')
                 return
             assert command[command.index('--project') + 1] in {str(first), str(frozen)}
+            assert '--no-sync' in command
+            if phase == 'ecosystem-source-policy':
+                assert command[command.index('--project') + 1] == str(first)
+                assert '--profiles' in command
+                assert '--read-only' not in command and '--checked-sources' not in command
+                target = Path(command[command.index('--source-policy-only') + 1])
+                assert target == receipt / 'selected-source-declarations.json'
+                target.write_text(json.dumps(selection))
+                calls.append('collect')
+                return
+            assert phase in {'ecosystem-prepare', 'ecosystem-compatibility'}
+            assert '--source-policy-only' not in command
+            assert ('--profiles' in command) == (phase == 'ecosystem-prepare')
+            assert ('--checked-sources' in command) == (phase == 'ecosystem-prepare')
+            assert ('--read-only' in command) == (phase == 'ecosystem-compatibility')
+            if phase == 'ecosystem-prepare':
+                assert command[command.index('--checked-sources') + 1] == str(receipt / 'runtime-sources.json')
             calls.append(('probe', '--profiles' in command))
     monkeypatch.setattr(runtime_environment, 'stage', stage)
     monkeypatch.setattr(runtime_qualification, 'freeze', freeze)
@@ -52,7 +72,7 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
     manager = SimpleNamespace(home=tmp_path, inventory=[], diagnostics=Diagnostics(),publish=AsyncMock(),
         service=SimpleNamespace(get_state=lambda: {'sessions': [], 'settings': {'workspace': str(tmp_path), 'bundle': 'work'}}))
     await UpdateManager.validate(manager, receipt, release)
-    assert calls == ['stage', 'runtime-sync', 'source-alignment', ('overrides', first), ('probe', True), 'freeze', 'verify', ('overrides', frozen), ('probe', False), ('probe', False), ('probe', False), ('probe', False), 'verify']
+    assert calls == ['stage', 'runtime-sync', ('overrides', first), 'collect', 'source-alignment', ('overrides', first), ('probe', True), 'freeze', 'verify', ('overrides', frozen), ('probe', False), ('probe', False), ('probe', False), ('probe', False), 'verify']
 
 
 async def test_historical_receipt_never_gets_refresh_or_new_foundation_arguments(tmp_path, monkeypatch):
@@ -240,37 +260,59 @@ async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path,
     release = '9' * 32
     receipt = runtime_environment.receipt_directory(tmp_path, release)
     receipt.mkdir(parents=True)
+    selection = {'packages': {}, 'batchPaths': {}, 'protectedPaths': []}
     if partial:
         (receipt/'shared-config').mkdir()
         (receipt/'shared-config/settings.yaml').write_text('bundle:\n  added:\n    library: any-location\n')
     async def stage(*args, **kwargs): return project
-    async def freeze(*args): return project
+    async def freeze(*args):
+        assert completed[-1] == 'prepare'
+        completed.append('freeze')
+        return project
     async def overrides(project, target): return target
     class Diagnostics:
         async def run(self, phase, function, *command, **kwargs):
-            if phase in {'ecosystem-runtime-policy', 'ecosystem-source-preflight'}:
+            if phase == 'ecosystem-runtime-policy':
                 return await function(*command, **kwargs)
+            if phase == 'ecosystem-source-preflight':
+                assert completed[-1] == 'collect'
+                assert kwargs == {'selection': selection}
+                result = await function(*command, **kwargs)
+                completed.append('align')
+                return result
             if phase == 'ecosystem-runtime-prepare':
                 assert command[1:3]==('sync','--locked')
                 completed.append('sync')
                 return
-            key = 'prepare' if phase == 'ecosystem-prepare' else 'check'
+            key = {'ecosystem-source-policy': 'collect', 'ecosystem-prepare': 'prepare',
+                   'ecosystem-compatibility': 'check'}[phase]
             assert kwargs['env'].get('UV_OVERRIDE') == caller_policy
             assert kwargs['env']['UV_CONSTRAINT'] == '/caller/constraints.txt'
             assert '--install-overrides' in command
             assert ('--read-only' in command) == (key == 'check')
-            assert '--no-sync' in command  # Both probes reuse the one-time sync.
-            assert ('--profiles' in command) == (key == 'prepare')
+            assert '--no-sync' in command  # All probes reuse the one-time sync.
+            assert ('--profiles' in command) == (key in {'collect', 'prepare'})
+            assert ('--source-policy-only' in command) == (key == 'collect')
+            assert ('--checked-sources' in command) == (key == 'prepare')
             expected = ['anchors', 'anchors-amp-dev', 'work', 'work-amp-dev']
-            if key == 'prepare':
+            if key in {'collect', 'prepare'}:
                 candidates = sorted([*expected, *(['library'] if partial else [])])
                 assert json.loads(Path(command[command.index('--profiles') + 1]).read_text()) == candidates
+                if key == 'collect':
+                    target = Path(command[command.index('--source-policy-only') + 1])
+                    assert target == receipt / 'selected-source-declarations.json'
+                    target.write_text(json.dumps(selection))
+                    completed.append('collect')
+                    return
+                assert completed[-1] == 'align'
+                assert command[command.index('--checked-sources') + 1] == str(receipt / 'runtime-sources.json')
                 if partial:
                     from amplifier_web.host.config import read_config
                     from amplifier_web.profile_catalog import save_catalog
                     config = read_config(receipt/'qualification-workspace', home=receipt, shared_home=receipt/'shared-config', global_only=True)
                     save_catalog(config, candidates, {name: {'complete': name!='library'} for name in candidates})
             else:
+                assert 'freeze' in completed
                 profile = command[command.index('--global-only') - 3]
                 checked_profiles.append(profile)
             counts[key] += 1
@@ -298,6 +340,8 @@ async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path,
         assert json.loads((receipt/'profiles-qualified.json').read_text())['profiles'] == sorted(checked_profiles)
     assert completed.count('prepare') == 1 and peaks['prepare'] == 1
     assert completed.count('sync')==1
+    assert completed[:5] == ['sync', 'collect', 'align', 'prepare', 'freeze']
+    assert completed.count('collect') == 1
     assert counts == {'prepare': 0, 'check': 0}  # No orphan probes after a failure.
     preparation=[row['probeProgress'] for row in published if row.get('probeProgress',{} ) is not None and row.get('probeProgress',{}).get('phase')=='prepare']
     checks=[row['probeProgress'] for row in published if row.get('probeProgress',{}) is not None and row.get('probeProgress',{}).get('phase')=='compatibility']

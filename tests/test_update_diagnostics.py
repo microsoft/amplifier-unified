@@ -470,6 +470,33 @@ async def test_installed_source_mismatch_has_safe_actionable_receipt(tmp_path):
         await service.close()
 
 
+async def test_authored_constraint_has_specific_sanitized_guidance(tmp_path):
+    from amplifier_web.runtime_source_alignment import verify_checked_selection
+    from amplifier_web.update_diagnostics import failure_guidance, probe_failure
+    from amplifier_web.update_report import event
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    manager = UpdateManager(service)
+    service.update_manager = manager
+    async def fail():
+        verify_checked_selection({'amplifier-foundation': {'url': 'private'}},
+            {'batchPaths': {'amplifier-foundation': '/private/source'},
+             'packages': {'amplifier-foundation': {'status': 'authored-constraint'}}})
+    try:
+        with pytest.raises(ValueError) as caught:
+            await manager.diagnostics.run('ecosystem-source-preflight', fail)
+        exported = event(manager.diagnostics.state['lastFailure'])
+        assert exported['reason'] == 'runtime-source-constraint'
+        assert exported['package'] == 'amplifier-foundation'
+        assert 'does not establish local edits' in failure_guidance(exported)
+        assert 'private' not in json.dumps(exported)
+        probe = probe_record(PROBE_PREFIX + json.dumps(probe_failure(caught.value, 'prepare')))
+        assert probe['reason'] == 'runtime-source-constraint'
+        assert probe['package'] == 'amplifier-foundation'
+        assert 'private' not in json.dumps(probe)
+    finally:
+        await service.close()
+
+
 async def test_real_freeze_mismatch_reaches_install_error_and_sanitized_report(normalized_runtime, monkeypatch):
     """Exercise install/validate/stage/freeze; only external resolver/probe is controlled."""
     from amplifier_web import updates, runtime_environment as environments
