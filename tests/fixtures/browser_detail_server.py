@@ -8,7 +8,11 @@ from aiohttp import web
 from amplifier_web.server import create_app
 from amplifier_web.setup import SetupManager
 from amplifier_web.host.config import write_private
+import amplifier_web
 import yaml
+
+if os.environ.get('AMPLIFIER_TEST_PACKAGE_ROOT'):
+    assert Path(amplifier_web.__file__).resolve().parent == Path(os.environ['AMPLIFIER_TEST_PACKAGE_ROOT']).resolve(), 'Browser fixture must import the exact installed package'
 
 async def fixture_probe(self, action, args, workspace):
     return {"models":[{"id":"fixture-model"}],"modelsProviderId":args.get("id"),"modelsSupported":True}

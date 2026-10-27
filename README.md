@@ -4,12 +4,35 @@ Amplifier Unified is a local, authenticated workspace for Amplifier. It provides
 
 ## Writing messages
 
-The chat input formats Markdown as you type: `**bold**`, `_emphasis_`, headings
-with `# `, and lists with `* ` or `1. `. Press **Enter** to send, or **Shift+Enter**
+The chat input formats Markdown as you type: `**bold**`, `_emphasis_`,
+`~~strikethrough~~`, headings with `# `, and lists with `* ` or `1. `.
+Type three backticks, optionally a language such as `python`, then **Enter**
+or **Space** to open a code block. **Enter inside code inserts a newline and
+keeps the line's indentation; it never sends.** Use **Alt+Enter** to leave the
+block, or the Send button to send it. Undo restores the typed fence.
+
+Outside literal blocks, press **Enter** to send, or **Shift+Enter**
 or **Ctrl+Enter** to continue writing. In a list, these continue the list;
 **Backspace** at the beginning of an empty item returns to a paragraph.
 Undo and redo work as usual. Pasted images remain attachments, and pasted text
 longer than 10,000 characters becomes a **Pasted text** attachment.
+
+Select text to use the compact formatting controls: link, bold, italic, inline
+code, strikethrough, headings, lists, task lists, ordinary block quotes and code
+blocks. **Alt+F10** focuses these controls; **Escape** returns to the selection.
+Right-click still opens the browser's copy, paste and spelling menu. The app does
+not replace those native controls.
+
+The composer reuses CommonMark and the reader's GitHub Flavored Markdown (GFM)
+grammar. Tables, task lists, strikethrough and safe links have rich representations.
+Where the rich representation would change GFM meaning, it keeps editable
+**Markdown source** instead. Reference definitions, footnotes, alerts, math,
+front matter, raw HTML and CRLF input use this literal representation.
+Markdown source is not a rendered preview: its punctuation remains visible.
+Rich editing may normalize equivalent Markdown delimiters and spacing.
+GitHub website features such as mentions, issue references and emoji shortcodes
+remain notation, with no GitHub account lookup. Diagram fences remain literal
+code in the editor. Images are inert references; raw HTML never executes.
 
 Reply adds a saved quotation inside the composer without sending or moving your
 reading position. Add several messages, or select text and choose **Quote

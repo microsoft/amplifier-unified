@@ -2958,7 +2958,8 @@ class AppService:
                     self.state["view"]["draft"] = ""
                     if client_id is not None and (previous_scope[0] is None or args.get('fromDraft')):
                         drafts = self.clients.record().setdefault("drafts", {})
-                        self.clients.draft(session["id"], drafts.pop("", ""))
+                        documents = self.clients.record().setdefault("draftDocuments", {})
+                        self.clients.draft(session["id"], drafts.pop("", ""), documents.pop("", None))
                         attachments = self.clients.record().setdefault('attachments', {})
                         attachments[session['id']] = attachments.pop('', [])
                         self.clients.bind_attachment_draft(session['id'])
@@ -3242,7 +3243,9 @@ class AppService:
                 # into new work under a policy that is awaiting replacement.
                 allow_next_turn = args.get('allowNextTurn') is True and not session.get('fileAccessPending')
                 target_generation = steering_target(session, args.get('expectedGenerationId'), allow_next_turn)
-                text = args["text"].strip()
+                # Whitespace can carry Markdown meaning; validate blank input
+                # separately without changing the saved or delivered message.
+                text = args["text"]
                 from .message_interactions import resolve_quote, resolve_document, document_text
                 quote = resolve_quote(session, args.get("replyId"))
                 if args.get('document') is not None:
@@ -3255,8 +3258,10 @@ class AppService:
                 available={row['id']:row for row in self.clients.attachments(session)}
                 if any(identity not in available for identity in requested):raise AppError('An attachment is no longer in this draft. Refresh and retry.')
                 attachments=[available[identity] for identity in requested]
-                if not text and not attachments:raise AppError("Enter a message or attach a file.")
-                text=text or 'Please review the attached files.'
+                if not text.strip():
+                    if not attachments:
+                        raise AppError("Enter a message or attach a file.")
+                    text = 'Please review the attached files.'
                 if not self.runtime:
                     raise AppError("The Amplifier runtime is unavailable.")
                 input_id = command_id or str(uuid.uuid4())
@@ -3455,6 +3460,8 @@ class AppService:
                 if 'draft' in patch:
                     if not isinstance(patch['draft'], str):
                         raise AppError('Draft must be text.')
+                    if client_id is None and patch.get('draftDocument') is not None:
+                        raise AppError('Attach a client to save an editor checkpoint.')
                     target = args.get('sessionId', self.state.get('selectedSessionId'))
                     if client_id is not None:
                         if target is not None:
@@ -3462,9 +3469,8 @@ class AppService:
                         from .message_interactions import resolve_document
                         rich = patch.pop('draftDocument', ...)
                         if rich is not None and rich is not ...:
-                            if target is None:
-                                raise AppError('Quotes require their current conversation.')
-                            rich = resolve_document(self._session(target), rich)
+                            rich = resolve_document(self._session(target) if target is not None else None,
+                                                    rich, draft=True)
                         self.clients.draft(target, patch.pop('draft'), rich)
                     elif target:
                         self._session(target, hydrate=False)['draft'] = patch['draft']
