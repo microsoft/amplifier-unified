@@ -7,6 +7,8 @@ an ordinary cache miss. These records are host-owned, not agent arguments.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import base64
+import binascii
 import hashlib
 import io
 import json
@@ -95,6 +97,22 @@ def public_url(value, *, git=False):
     return not url.query and not url.fragment
 
 
+def npm_integrity(value):
+    """Accept npm's recorded SRI formats; npm verifies the locked tarball itself."""
+    if not isinstance(value, str) or not value or len(value) > 1024:
+        return False
+    lengths = {'sha1': 20, 'sha256': 32, 'sha384': 48, 'sha512': 64}
+    try:
+        for token in value.split():
+            algorithm, encoded = token.split('-', 1)
+            decoded = base64.b64decode(encoded, validate=True)
+            if len(decoded) != lengths.get(algorithm) or base64.b64encode(decoded).decode() != encoded:
+                return False
+        return bool(value.split())
+    except (ValueError, binascii.Error):
+        return False
+
+
 def browser_inputs(files, expected):
     """Only locked public registry packages; never copy npm configuration or source."""
     prefix = expected['nodeDirectory'] + '/' if expected['nodeDirectory'] else ''
@@ -118,7 +136,7 @@ def browser_inputs(files, expected):
                 continue
             if (not name.startswith('node_modules/') or any(part in {'', '.', '..'} for part in name.split('/'))
                     or '\\' in name or not public_url(entry.get('resolved'))
-                    or not re.fullmatch(r'sha512-[A-Za-z0-9+/]{86}==', str(entry.get('integrity')))):
+                    or not npm_integrity(entry.get('integrity'))):
                 return False
         return 'node_modules/playwright' in lock['packages']
     except (KeyError, TypeError, ValueError, UnicodeError):

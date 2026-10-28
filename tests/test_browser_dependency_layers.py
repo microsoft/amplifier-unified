@@ -1,13 +1,15 @@
 """Browser seeds reuse locked dependencies while each task retains its own source."""
 import hashlib
+import base64
 import json
+from pathlib import Path
 
 import pytest
 
 from amplifier_web import test_dependency_layers as layers
 from amplifier_web import test_environment_preparation as preparation
 from amplifier_web import test_environment_prepare_guest as guest
-from test_dependency_layers import prepared, settle, source
+from test_dependency_layers import prepared, settle
 from test_environment_preparation import archive
 
 
@@ -15,8 +17,22 @@ def manifests(prefix='frontend/'):
     package = {'name': 'browser-fixture', 'version': '1.0.0', 'devDependencies': {'playwright': '1.63.0'}}
     lock = {'lockfileVersion': 3, 'packages': {'': package, 'node_modules/playwright': {
         'version': '1.63.0', 'resolved': 'https://registry.npmjs.org/playwright/-/playwright-1.63.0.tgz',
-        'integrity': 'sha512-' + 'a' * 86 + '=='}}}
+        'integrity': 'sha512-' + base64.b64encode(b'a' * 64).decode()}}}
     return {prefix + 'package.json': json.dumps(package), prefix + 'package-lock.json': json.dumps(lock)}
+
+
+def test_current_repository_npm_inputs_remain_eligible():
+    root = Path(__file__).parents[1]
+    files = {name: (root / name).read_bytes() for name in ('frontend/package.json', 'frontend/package-lock.json')}
+    assert layers.browser_inputs(files, {'nodeDirectory': 'frontend'})
+
+
+@pytest.mark.parametrize('algorithm,length', [('sha1', 20), ('sha256', 32), ('sha384', 48), ('sha512', 64)])
+def test_npm_sri_variants_preserve_lockfile_hash_policy(algorithm, length):
+    value = algorithm + '-' + base64.b64encode(b'a' * length).decode()
+    assert layers.npm_integrity(value)
+    assert not layers.npm_integrity(value + '!')
+    assert not layers.npm_integrity(algorithm + '-eA==')
 
 
 @pytest.mark.parametrize('prefix', ['', 'frontend/'])
