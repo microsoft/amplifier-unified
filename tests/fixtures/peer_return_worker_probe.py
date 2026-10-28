@@ -316,6 +316,7 @@ class PeerReturnProvider:
                 if row.role == "user" and not (
                     (row.metadata or {}).get("coordinationObservation")
                     or (row.metadata or {}).get("workPlaintextObservation")
+                    or (row.metadata or {}).get("reactionObservation")
                 )
             )
             text = message_text(incoming)
