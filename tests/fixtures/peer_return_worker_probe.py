@@ -410,6 +410,7 @@ async def run(root):
         from amplifier_web.service import AppService
         from amplifier_foundation.session.history import SessionHistoryStore
         from amplifier_web.automatic_history import directory
+        from amplifier_web.session_identity import project
     except ImportError as exc:
         raise RuntimeError(
             "PEER_RETURN_QUALIFICATION_PREREQUISITE: prepared native/application "
@@ -626,7 +627,8 @@ async def run(root):
                     REVIEW if revision == 1 else
                     notification_by_request[CORRECTIONS[revision - 2]]["inputId"]]
                 # Verify the exact native row, not just a host display message.
-                messages = SessionHistoryStore(directory(roots["reviewer"])).load_messages()
+                reader = {**roots["reviewer"], "nativeProject": project(roots["reviewer"])}
+                messages = SessionHistoryStore(directory(reader)).load_messages()
                 anchor = report["nativeTerminal"]
                 native = messages[anchor["nativeIndex"]]
                 assert native["role"] == "assistant"
@@ -635,7 +637,8 @@ async def run(root):
                     block.get("text", "") for block in content if block.get("type") == "text")
                 assert text == anchor["nativeText"]
             for role, session in roots.items():
-                messages = SessionHistoryStore(directory(session)).load_messages()
+                reader = {**session, "nativeProject": project(session)}
+                messages = SessionHistoryStore(directory(reader)).load_messages()
                 native_inputs = Counter(
                     (row.get("metadata") or {}).get("amplifier_input", {}).get("id")
                     for row in messages if row.get("role") == "user")
