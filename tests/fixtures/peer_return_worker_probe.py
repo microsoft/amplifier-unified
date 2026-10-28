@@ -309,16 +309,27 @@ class PeerReturnProvider:
         assert (REVIEWER_SECRET if self.role == "author" else AUTHOR_SECRET) not in full_text
         assert (AUTHOR_SECRET if self.role == "author" else REVIEWER_SECRET) in full_text
         if self.plan is None:
-            incoming = next(row for row in reversed(request.messages) if row.role == "user")
+            # Delivery appends current reference observations as user-role
+            # messages. They are not a newly admitted task input.
+            incoming = next(
+                row for row in reversed(request.messages)
+                if row.role == "user" and not (
+                    (row.metadata or {}).get("coordinationObservation")
+                    or (row.metadata or {}).get("workPlaintextObservation")
+                )
+            )
             text = message_text(incoming)
             envelope = None
             if text.startswith("Host-attributed peer task input."):
                 envelope = json.loads(text.split("\n", 2)[1])
                 self.input_id = envelope["inputId"]
             else:
-                self.input_id = {AUTHOR_SECRET: "author-seed", REVIEWER_SECRET: "reviewer-seed",
-                                 "begin-review": "author-start",
-                                 "stop-probe": "author-stop-probe"}[text]
+                human_inputs = {
+                    AUTHOR_SECRET: "author-seed", REVIEWER_SECRET: "reviewer-seed",
+                    "begin-review": "author-start", "stop-probe": "author-stop-probe",
+                }
+                assert text in human_inputs, f"Unexpected fixture input: {text!r}"
+                self.input_id = human_inputs[text]
             self.record("input", envelope=envelope)
             self.plan = self.journey(envelope, text)
             value = None
