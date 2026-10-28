@@ -4786,10 +4786,50 @@ class AppService:
                                       detail_only=detail_only and not changed and not collaboration_changed)
 
 
+    def _unmounted_legacy_refresh(self, session):
+        """Prove only that passive freshness has no owned mount to retire.
+
+        The unbound settings operation remains unknown and fenced. Never send
+        this case through runtime retirement, whose completion releases busy.
+        Called synchronously under the service lock; unavailable evidence holds.
+        """
+        pending = session.get('pendingConfiguration', {})
+        ownership = session.get('ownership', {})
+        if not isinstance(ownership, dict) or ownership.get('status') not in {None, 'available'}:
+            return False
+        if (pending.get('phase') != 'error' or pending.get('recoveryRequired') is not True
+                or pending.get('operationId') or session.get('configurationOperationFence')):
+            return False
+        if session.get('configurationRefresh', {}).get('phase') not in {None, 'pending'}:
+            return False
+        if any(row.get('phase') in {'pending', 'unknown'} for row in session.get('worktreeHandoffs', [])):
+            return False
+        if any(turn.get('phase') == 'running' for turn in session.get('execution', {}).get('turns', [])):
+            return False
+        if any(worker.get('status') in {'queued', 'starting', 'running', 'working', 'stopping'}
+                or worker.get('persistent') and worker.get('status') == 'idle'
+                for worker in session.get('workers', [])):
+            return False
+        workers = getattr(self.runtime, 'workers', None)
+        if not isinstance(workers, dict) or session['id'] in workers:
+            return False
+        tasks = getattr(self.management, 'pending_config_tasks', None)
+        lock = getattr(self.management, 'lock', None)
+        observe = getattr(self.runtime, 'has_pending_operations', None)
+        if not isinstance(tasks, dict) or not callable(getattr(lock, 'locked', None)) or not callable(observe):
+            return False
+        try:
+            task = tasks.get(session['id'])
+            return (not lock.locked() and (task is None or task.done() is True)
+                    and observe() is False)
+        except Exception:
+            return False
+
     def _claim_configuration_refresh(self,session):
         """Reserve an idle runtime under the service lock before deferring it."""
+        if (session.get('historyManaged') and not session.get('fileAccessPending')) or not session.get('configurationPending') or session['status'] not in {'idle','stopped','interrupted','error'}:return
+        if session.get('configurationBusy') and not self._unmounted_legacy_refresh(session):return
         if session.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:return
-        if (session.get('historyManaged') and not session.get('fileAccessPending')) or not session.get('configurationPending') or session.get('configurationBusy') or session['status'] not in {'idle','stopped','interrupted','error'}:return
         workers=getattr(self.runtime,'workers',None)
         if self.runtime is None or isinstance(workers,dict) and session['id'] not in workers:
             # There is no mounted configuration to retire. The next start reads
