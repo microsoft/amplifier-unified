@@ -71,9 +71,20 @@ try{
  await openSettingsPage(page,'custom-appearance');
  await expect(page.getByRole('alert').filter({hasText:'Fixture save was rejected'})).toBeVisible();
  await expect(page.locator('#theme-name')).toBeEnabled();
+ // Reverse the ordering: return before rejection without starting a successor.
+ // Releasing the abandoned local lock must not discard this request's error.
+ held=null;outcome='error';await save.click();await expect.poll(()=>held?.action).toBe('theme.save');
+ await openSettingsPage(page,'notifications');await openSettingsPage(page,'custom-appearance');
+ await expect(page.locator('#theme-name')).toBeEnabled();
+ const returnedRejection=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action==='theme.save');
+ release();release=null;await returnedRejection;
+ await expect(page.getByRole('alert').filter({hasText:'Fixture save was rejected'})).toBeVisible();
+ await expect(page.locator('#theme-name')).toHaveValue('Retained appearance draft');
+ await expect(page.locator('#theme-css')).toHaveValue(originalCss);
+ await expect(page.locator('#theme-name')).toBeEnabled();
  await page.setViewportSize({width:390,height:844});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  const inspection=await(await page.request.get(url+'/fixture')).json();assert.deepEqual(inspection.sent,[]);
  assert.deepEqual(errors,[]);
- console.log('Appearance save feedback passed: immediate keyboard activation guard, precise draft locking, working label/status, retained text, failure/retry, inactive completion, contrast/motion and mobile.');
+ console.log('Appearance save feedback passed: immediate keyboard activation guard, precise draft locking, working label/status, retained text, failure/retry, inactive completion and return-before-rejection, contrast/motion and mobile.');
 }finally{release?.();await browser?.close();fixture.kill('SIGTERM')}

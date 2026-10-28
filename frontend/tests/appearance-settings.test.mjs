@@ -315,6 +315,40 @@ test('a failure arriving on an inactive section remains visible for the unchange
  }finally{await host.close()}
 });
 
+for(const operation of ['save','update','delete']){
+ for(const successor of ['unchanged','edit','operation']){
+  test(`${operation} failure after section return respects ${successor} feedback ownership`,async()=>{
+   const host=await heldEditor(operation);
+   try{
+    const {completion}=await host.start();
+    await host.reactivate();
+    if(successor==='edit')await setFields(host.root,newerFields);
+    const expected=host.saved.getItem(appearanceEditorKey);
+    let next,nextCompletion;
+    if(successor==='operation'){
+     next=host.holdNext();
+     await act(async()=>{
+      if(operation==='delete')button(host.root,'Delete Ocean').props.onClick();
+     });
+     await act(async()=>{nextCompletion=actionButton(host.root,'theme.'+operation).props.onClick()});
+    }
+    await act(async()=>{host.held.reject(Error('Returned section mutation failed'));await completion});
+    assert.equal(host.saved.getItem(appearanceEditorKey),expected);
+    const alerts=host.root.findAllByProps({role:'alert'});
+    if(successor==='unchanged')assert.match(alerts[0]?.props.children||'',/Returned section mutation failed/);
+    else assert.equal(alerts.length,0,'Superseded intent owns its own failure feedback');
+    assert.equal(input(host.root,'theme-name').props.disabled,successor==='operation');
+    if(next){
+     await act(async()=>{next.reject(Error('Successor mutation failed'));await nextCompletion});
+     assert.match(host.root.findByProps({role:'alert'}).props.children,/Successor mutation failed/);
+     assert.equal(input(host.root,'theme-name').props.disabled,false);
+    }
+    assert.equal(host.calls.filter(row=>row.action==='theme.'+operation).length,successor==='operation'?2:1);
+   }finally{await host.close()}
+  });
+ }
+}
+
 for(const simple of [false,true]){
  test(`selection reports ${simple?'Apply':'preview'} failure after its own draft replacement`,async()=>{
   const saved=memoryStorage(),storage=()=>saved,calls=[];
