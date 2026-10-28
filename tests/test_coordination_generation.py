@@ -221,7 +221,7 @@ async def test_upgrade_retains_evidence_and_suppresses_legacy_before_drain(app):
     assert retired.value.status == 410
 
 
-@pytest.mark.parametrize("gate", ["stop", "exception", "timeout", "cancel", "release", "caller-timeout", "separate-bound"])
+@pytest.mark.parametrize("gate", ["stop", "exception", "timeout", "cancel", "release", "caller-timeout", "separate-bound", "ready-timeout"])
 async def test_real_manager_preworker_gate_receipt_progress_and_settlement(tmp_path, monkeypatch, gate):
     """Real RuntimeManager.ensure boundary; fixture process is NOT a native Worker."""
     from amplifier_web import runtime_profiles
@@ -234,7 +234,7 @@ async def test_real_manager_preworker_gate_receipt_progress_and_settlement(tmp_p
         return None
     monkeypatch.setenv("AMPLIFIER_HOME", str(tmp_path / "native"))
     monkeypatch.setattr(runtime_profiles, "ensure", ensure)
-    manager = RuntimeManager(startup_timeout=.15 if gate == "separate-bound" else 3,
+    manager = RuntimeManager(startup_timeout=.15 if gate in {"separate-bound", "ready-timeout"} else 3,
                              preparation_timeout=.3 if gate == "timeout" else 3,
                              progress_interval=.02, retention={"prewarm_on_select": False})
     writes = tmp_path / "worker-controls.jsonl"
@@ -243,13 +243,14 @@ import json,sys
 for line in sys.stdin:
  data=json.loads(line)
  if data['op']=='start':
+  if sys.argv[2]=='ready-timeout': continue
   print(json.dumps({'type':'runtime.ready','report':{}}),flush=True)
  elif data['op']=='control':
   with open(sys.argv[1],'a') as output: output.write(json.dumps(data)+'\\n')
   print(json.dumps({'op':'reply','id':data['id'],'result':{'accepted':True}}),flush=True)
  elif data['op']=='stop': break
 """
-    monkeypatch.setattr(manager, "_command", lambda *a, **kw: [sys.executable, "-c", fixture, str(writes)])
+    monkeypatch.setattr(manager, "_command", lambda *a, **kw: [sys.executable, "-c", fixture, str(writes), gate])
     app = AppService(tmp_path / "app", manager, workspace=tmp_path)
     source = app._new_session({"title": "Source"})
     app.state["sessions"] = [source]
@@ -297,6 +298,10 @@ for line in sys.stdin:
                                        manager.startup_timeout + .05)
             assert not manager._preparations[target]["task"].done()
             assert not writes.exists()
+            # The independent preparation boundary is now proved. Give the
+            # real Python child the ordinary fixture budget to become ready;
+            # interpreter scheduling is not the boundary under test here.
+            manager.startup_timeout = 3
         if gate == "stop":
             await app.dispatch("conversation.stop", {"sessionId": target})
         elif gate == "cancel":
@@ -306,14 +311,17 @@ for line in sys.stdin:
         await until(lambda: app.collaboration.receipt("slow-create:brief")["delivery"] in {"accepted", "not_sent"})
         outcome = app.collaboration.receipt("slow-create:brief")
         if gate in {"release", "caller-timeout", "separate-bound"}:
-            assert outcome["delivery"] == "accepted"
+            assert outcome["delivery"] == "accepted", outcome.get("admission")
             controls = [json.loads(line) for line in writes.read_text().splitlines()]
             assert len(controls) == 1
             assert controls[0]["arguments"]["inputId"] == "slow-create:brief"
         else:
-            assert outcome["delivery"] == "not_sent"
+            assert outcome["delivery"] == "not_sent", outcome.get("admission")
             assert not writes.exists() and not manager.workers
             assert app._session(target)["status"] in {"error", "stopped", "interrupted"}
+            if gate == "ready-timeout":
+                assert outcome["admission"]["reason"] == (
+                    "The conversation worker could not start. This attempt did not send your message.")
         assert any(row.get("elapsedSeconds", 0) > 0 for _, row in events)
     finally:
         release.set()
