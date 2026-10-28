@@ -136,14 +136,18 @@ def restore_browser(plan, uv):
 def main():
     plan = json.loads(Path('/prepare/plan.json').read_text())
     os.environ.clear()
-    os.environ.update(PATH='/usr/local/bin:/usr/bin:/bin', HOME='/tmp/build-home',
+    # A warm clone can start this recipe before systemd's boot cleanup of /tmp.
+    # Keep interpreter probes, caches and downloads within the owned build tree;
+    # both adapters remove /prepare before publishing the prepared image.
+    os.environ.update(PATH='/usr/local/bin:/usr/bin:/bin', HOME='/prepare/build-home', TMPDIR='/prepare/tmp',
                       LANG='C.UTF-8', DEBIAN_FRONTEND='noninteractive',
                       GIT_TERMINAL_PROMPT='0', GIT_CONFIG_NOSYSTEM='1',
                       PIP_CONFIG_FILE='/dev/null', UV_NO_CONFIG='1',
                       UV_PROJECT_ENVIRONMENT=str(PREFIX / 'venv'),
                       UV_PYTHON_INSTALL_DIR=str(PREFIX / 'python'),
                       PLAYWRIGHT_BROWSERS_PATH=str(PREFIX / 'browsers'))
-    Path('/tmp/build-home').mkdir(mode=0o700, exist_ok=True)
+    Path(os.environ['HOME']).mkdir(mode=0o700, exist_ok=True)
+    Path(os.environ['TMPDIR']).mkdir(mode=0o700, exist_ok=True)
     PREFIX.mkdir(parents=True, exist_ok=True)
     reused = plan.get('dependencyMode') == 'finalize'
     layer = plan.get('dependencyMode') == 'layer'
@@ -196,7 +200,7 @@ def main():
         base = 'https://nodejs.org/dist/v' + NODE_VERSION + '/'
         sums = urllib.request.urlopen(base + 'SHASUMS256.txt', timeout=60).read().decode()
         expected = next(line.split()[0] for line in sums.splitlines() if line.split()[-1] == filename)
-        target = Path('/tmp') / filename
+        target = Path(os.environ['TMPDIR']) / filename
         with urllib.request.urlopen(base + filename, timeout=120) as source, target.open('wb') as output:
             shutil.copyfileobj(source, output)
         actual = hashlib.sha256(target.read_bytes()).hexdigest()
@@ -276,7 +280,7 @@ def main():
             path = Path(root) / name
             if not path.is_symlink():
                 path.chmod(path.stat().st_mode | 0o444)
-    shutil.rmtree('/tmp/build-home')
+    shutil.rmtree(os.environ['HOME'])
     shutil.rmtree('/root/.cache', ignore_errors=True)
     shutil.rmtree('/var/lib/apt/lists', ignore_errors=True)
     target = locals().get('target')
