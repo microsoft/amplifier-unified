@@ -117,6 +117,9 @@ class ClientViews:
             if device is not None:
                 record['deviceOwner'] = device
             record.update(kind=kind, updatedAt=time.time(), deviceCommands=[])
+            # A new document may restore its editor and preferences, but not an
+            # uncommitted appearance preview from the document it copied.
+            record["view"]["themePreview"] = False
             # A new page mounts its own inline viewers. Copying their leases
             # would retain invisible frames and stale commands from the old tab.
             views = record.get('canvasViews', {})
