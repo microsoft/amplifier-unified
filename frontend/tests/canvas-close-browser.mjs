@@ -32,6 +32,14 @@ try{
   page=await context.newPage();page.setDefaultTimeout(10000);
   page.on('pageerror',error=>report.errors.push(error.message));
   page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'){const body=request.postDataJSON();report.commands.push(body?.action==='shell.command'?(body.args.command||body.args):body)}});
+  const receipts=[];
+  page.on('response',response=>{
+   const request=response.request();
+   if(request.method()!=='POST'||new URL(request.url()).pathname!=='/api/actions')return;
+   const raw=request.postDataJSON(),command=raw?.action==='shell.command'?(raw.args.command||raw.args):raw;
+   if(['canvas.tabClose','canvas.visibility'].includes(command?.action))
+    receipts.push(response.json().then(body=>({command,status:response.status(),body})));
+  });
   const action=async(name,args={})=>{const result=await page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);assert.equal(result?.accepted,true,JSON.stringify(result));return result.result};
   const state=()=>page.evaluate(()=>window.amplifier.getState());
   await page.goto(url);await showFixtureConversation(page,{navPinned:false});
@@ -134,6 +142,8 @@ try{
   await expect(dismiss).toBeFocused();await reachable(dismiss);await capture('keyboard-close-panel-'+width);
   await page.keyboard.press('Enter');
   await expect(panel).toBeHidden();await expect(toggle).toBeFocused();
+  const hiddenState=await (await page.request.get(url+'/api/state?clientId='+encodeURIComponent((await state()).client.id))).json();
+  assert.equal(hiddenState.canvas.open,false,'Panel hide must be accepted by the host, not only painted optimistically');
   await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
   assert.equal((await artifactRows()).filter(row=>row.tabOpen).length,2);await preserved();
   await toggle.press('Enter');await expect(panel).toBeVisible();
@@ -151,6 +161,10 @@ try{
   await expect(panel).toBeVisible();await expect(panel.locator('.a-canvas-document-tabs [role=tab]')).toHaveCount(0);
   await preserved();await reopen('Alpha report');
   await capture('reopened-'+width);
+  const accepted=await Promise.all(receipts);
+  assert.ok(accepted.some(row=>row.command.action==='canvas.tabClose')&&accepted.some(row=>row.command.action==='canvas.visibility'));
+  assert.deepEqual(accepted.filter(row=>row.status!==200||row.body?.accepted!==true),[],'Every close/dismiss must retain its actual accepted receipt');
+  (report.closeReceipts??=[]).push({width,receipts:accepted});
   report.checks.push({width,status:'passed',closeOne:true,closePanel:true,keyboard:true,touch:width<500,versionsAndHistoryPreserved:true});
   await context.close();
  }
