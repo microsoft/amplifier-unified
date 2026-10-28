@@ -7,6 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {openSettingsPage} from './browser-settings.mjs';
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const output=process.env.AMPLIFIER_TEST_ARTIFACTS;
@@ -26,7 +27,7 @@ try{
  page=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:headers});
  page.on('pageerror',error=>errors.push(error.message));
  page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'){const body=request.postDataJSON();commands.push(body?.action==='shell.command'?(body.args.command||body.args):body)}});
- await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();
+ await page.goto(url);await showFixtureConversation(page);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();
  await composer.fill('Keep my appearance reading draft');
  const pane=page.locator('.a-messages');await expect(pane).toBeVisible();
  // One real wheel gesture expresses scrollback intent; the anchor is measured
