@@ -115,8 +115,10 @@ class PeerReturnProvider:
     name = "peer-return-fixture"
 
     def __init__(self, config):
-        self.role = config["role"]
-        self.scenario = Path(config["scenario"])
+        # Provider metadata discovery constructs with an empty configuration.
+        # Only the mounted runtime instance receives the scenario and role.
+        self.role = config.get("role", "metadata-only")
+        self.scenario = Path(config["scenario"]) if config.get("scenario") else None
         self.plan = None
         self.pending = None
         self.sequence = 0
@@ -299,6 +301,7 @@ class PeerReturnProvider:
 
     async def complete(self, request, **kwargs):
         from amplifier_core.message_models import ChatResponse, TextBlock, ToolCall, Usage
+        assert self.scenario is not None, "Metadata-only provider cannot execute"
         self.values = json.loads(self.scenario.read_text())
         self.sid = self.values[self.role]["id"]
         assert os.getcwd() == self.values[self.role]["directory"]
@@ -400,6 +403,7 @@ async def run(root):
         "from importlib.util import spec_from_file_location, module_from_spec\n"
         f"_spec = spec_from_file_location('peer_return_script', {str(Path(__file__).resolve())!r})\n"
         "_module = module_from_spec(_spec)\n_spec.loader.exec_module(_module)\n"
+        "PeerReturnProvider = _module.PeerReturnProvider\n"
         "mount = _module.mount\n"
     )
     scenario = root / "scenario.json"
