@@ -123,9 +123,14 @@ costs are recorded separately; the live walk and individual SQL operations are
 not a strict wall-clock latency bound.
 
 Before collection, changed durable rows are decoded again off the interactive
-thread. Progress-only changes with the same roots can collect. The exact final
-durable snapshot, complete live root set and resource index bindings must agree
-under writer exclusion; uncertainty preserves all files. Each automatic pass
+thread. Progress-only changes with the same roots can collect. A new immutable
+snapshot may also arrive during traversal: up to three catch-up rounds extend
+the conservative mark with its complete reference closure. Earlier marks remain
+retained for that pass, even when their original roots have been replaced. The
+exact final durable snapshot, coverage of every current live/durable root and
+all inspected resource index bindings must still agree under writer exclusion.
+Continued churn beyond that bound, late changes, recovery or unavailable bodies
+preserve all files for a later attempt. Each automatic pass
 prunes at most 1,024 indexed resources, commits, then rechecks re-adoption before
 removing those files in a worker. Cancellation settles the file worker before
 releasing exclusion. Later saves continue the backlog with a fresh proof.
@@ -135,6 +140,17 @@ Cancellation before pruning does not delete anything; cancellation after pruning
 settles the bounded file removal before releasing exclusion. Missing bodies or
 an uncertain reference graph defer collection, and navigation need not wait for
 body traversal.
+
+Read-only performance diagnostics expose the latest `storageCollection` outcome,
+fixed reason code, root catch-up count and completed-pass reclamation counters.
+Reasons distinguish presentation recovery, root capture/decode failure, unavailable
+bodies, catch-up exhaustion, late live/durable roots, changed indexes and file
+cleanup failure. `indexedPruned` is not physical cleanup: `indexedFilesRemoved`
+and `indexedBytesRemoved` count confirmed file unlinks after the re-adoption check.
+Bytes are logical file lengths, not filesystem free-space gain. Unindexed file
+removal has a separate count. Cancellation or failure can leave partial cleanup,
+so `removalCountsComplete: false` means zero reported counts are not proof that
+nothing was removed. Diagnostics contain no artifact identities, paths or bodies.
 
 Deletion preview remains read-only. The confirmed path reconciles unindexed
 files under writer exclusion before reporting file cleanup complete, yielding

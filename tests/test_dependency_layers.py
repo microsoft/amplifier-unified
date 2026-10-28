@@ -28,10 +28,10 @@ source={registry="https://pypi.org/simple"}
 wheels=[{url="https://files.pythonhosted.org/pkg.whl",hash="sha256:''' + 'a' * 64 + '"}]\n'
 
 
-def source(root, body='first', project=PROJECT, lock=LOCK):
+def source(root, body='first', project=PROJECT, lock=LOCK, extra=None):
     root.mkdir(parents=True, exist_ok=True)
     with tarfile.open(root / 'source.tar', 'w') as archive:
-        for name, data in {'pyproject.toml': project, 'uv.lock': lock, 'fixture.py': body}.items():
+        for name, data in {'pyproject.toml': project, 'uv.lock': lock, 'fixture.py': body, **(extra or {})}.items():
             item = tarfile.TarInfo(name)
             item.size = len(data.encode())
             archive.addfile(item, io.BytesIO(data.encode()))
@@ -57,17 +57,17 @@ def prepared(tmp_path, monkeypatch):
         calls.append({'mode': mode, 'contents': contents, 'base': plan.get('_dependencyBase')})
         value = {'preparationId': plan['preparationId'], 'sourceSha256': plan['sourceSha256']}
         if mode == 'layer':
-            value.update(dependencyKey=plan['dependencyKey'], preparedFiles={key: 'a' * 64 for key in ('venv', 'bootstrap', 'python')})
+            value.update(dependencyKey=plan['dependencyKey'], preparedFiles={key: 'a' * 64 for key in layers.prepared_directories(plan['profileId'])})
         else:
             value['executionContract'] = {**plan['executionContract'], 'pythonBuild': {'available': False, 'reason': 'This source declares no Python build backend.'}}
         return 'sha256:' + hashlib.sha256(plan['resourceName'].encode()).hexdigest(), json.dumps(value)
     monkeypatch.setattr(preparation, '_docker', adapter)
     monkeypatch.setattr(preparation, 'backend_identity', lambda *args, **kwargs: {'backend': 'docker', 'daemon': 'fixture'})
     monkeypatch.setattr(layers, 'native', lambda *args, **kwargs: 100)
-    def run(name, body='first', **kwargs):
+    def run(name, body='first', profile='python-project', **kwargs):
         root = tmp_path / name
         snapshot = source(root, body, **kwargs)
-        result = preparation.prepare(config, root, snapshot, 'python-project', 'request-' + name,
+        result = preparation.prepare(config, root, snapshot, profile, 'request-' + name,
             host_reservation={'admitted': True}, dependency_store=layers.store(tmp_path))
         return root, result
     return run, calls, config

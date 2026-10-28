@@ -274,13 +274,19 @@ def test_failed_process_preflight_never_publishes_usable_contract(tmp_path, monk
     }))
     monkeypatch.setattr(guest, 'PREFIX', prefix)
     monkeypatch.setattr(guest, 'Path', lambda value: {
-        '/prepare/plan.json': plan_path, '/tmp/build-home': tmp_path / 'build-home',
+        '/prepare/plan.json': plan_path, '/prepare/build-home': tmp_path / 'build-home',
+        '/prepare/tmp': tmp_path / 'build-tmp',
     }.get(str(value), Path(value)))
     monkeypatch.setattr(guest.os, 'environ', dict(os.environ))
     calls = []
 
     def run(*args, **kwargs):
         calls.append(args)
+        # Warm guests may still be clearing /tmp while the first uv interpreter
+        # probe starts. Its HOME/cache and temporary module must survive that.
+        assert guest.os.environ['HOME'] == '/prepare/build-home'
+        assert guest.os.environ['TMPDIR'] == '/prepare/tmp'
+        assert (tmp_path / 'build-home').is_dir() and (tmp_path / 'build-tmp').is_dir()
         if args == ('ps', '-axo', 'command='):
             assert kwargs == {'capture': True}
             if failure == 'missing':

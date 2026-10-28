@@ -66,6 +66,34 @@ def test_uncertain_references_and_failed_presentation_refuse_orphan_cleanup(tmp_
     db.close()
 
 
+def test_retained_directory_cursor_does_not_count_already_removed_files(tmp_path):
+    db = database(tmp_path / 'app.sqlite3')
+    ref = files.put(db, {'abandoned': True})
+    db.rollback()
+    with os.scandir(files.root(db)) as scan:
+        entries = list(scan)
+    assert all(entry.is_file(follow_symlinks=False) for entry in entries)
+    (files.root(db) / (ref['$resource'] + '.json')).unlink()
+
+    class Cursor:
+        def __init__(self):
+            self.entries, self.closed = iter(entries), False
+        def __next__(self):
+            return next(self.entries)
+        def close(self):
+            self.closed = True
+
+    cursor = Cursor()
+    db.execute('BEGIN IMMEDIATE')
+    try:
+        next_cursor, result = files.sweep_unindexed_locked(db, cursor)
+        assert next_cursor is None and cursor.closed
+        assert result['inspected'] == 1 and result['removed'] == 0
+    finally:
+        db.rollback()
+        db.close()
+
+
 def test_writer_blocks_sweep_until_commit_or_rollback_and_reuse_survives(tmp_path):
     writer=database(tmp_path/'app.sqlite3');reader=database(tmp_path/'app.sqlite3')
     ref=files.put(writer,{'value':'pending'})
