@@ -231,7 +231,6 @@ ACTION_DEFINITIONS = {
     "settings.update": ("Change voice, workspace or update defaults. Update checks support intervalHours 1, 4, 8 or 24.", schema({"patch": {"type": "object"}})),
     "theme.apply": ("Apply a complete single-file CSS skin", schema({"name": string(100), "css": string(1000000)})),
     "theme.reset": ("Restore the default skin", schema()),
-    "theme.export": ("Export the applied skin", schema()),
     "state.export": ("Export app state and attached device views", schema()),
     "notification.request": ("Request notification permission on this device", schema()),
     "call.start": ("Start a realtime voice call on the connected browser", schema({"attemptId": string(200)}, [])),
@@ -291,6 +290,14 @@ def validate_theme(css):
             if node.type == "function" and node.lower_name == "url":
                 value = tinycss2.serialize(node.arguments).strip().strip('\"\'')
                 check_url(value)
+            if node.type == 'function' and node.lower_name in {'image-set', '-webkit-image-set', 'image', 'src'}:
+                # These CSS image forms also accept bare strings as URLs.
+                # Dynamic string substitution cannot be verified as embedded.
+                for argument in node.arguments:
+                    if argument.type == 'string':
+                        check_url(argument.value)
+                    if argument.type == 'function' and argument.lower_name in {'var', 'attr', 'env'}:
+                        raise AppError('Use explicit embedded assets in image functions, not dynamic URLs.')
             for attr in ("prelude", "content", "arguments"):
                 child = getattr(node, attr, None)
                 if child:
@@ -3214,9 +3221,13 @@ class AppService:
             elif action in {"state.export", "session.export", "theme.export"}:
                 if action == 'session.export' and args.get('destination', 'download') != 'download':
                     raise AppError('Choose Markdown to copy a conversation or create a readable snapshot.')
-                content = self.state if action == "state.export" else self._session(args["id"]) if action == "session.export" else self.state["theme"]["css"]
+                if action == 'theme.export':
+                    from .theme_library import export
+                    diagnostic_result = export(self, args.get('id'))
+                content = self.state if action == "state.export" else self._session(args["id"]) if action == "session.export" else diagnostic_result['css']
                 mime = "text/css" if action == "theme.export" else "application/json"
-                effects.append({"type": "download", "filename": "amplifier-skin.css" if action == "theme.export" else "amplifier-export.json", "mime": mime, "mimeType": mime, "content": content if isinstance(content, str) else json.dumps(content, indent=2)})
+                filename = (diagnostic_result['filename'] if args.get('id') else 'amplifier-skin.css') if action == 'theme.export' else 'amplifier-export.json'
+                effects.append({"type": "download", "filename": filename, "mime": mime, "mimeType": mime, "content": content if isinstance(content, str) else json.dumps(content, indent=2)})
             elif action == "attachment.add":
                 from .attachments import save,MAX_FILES
                 target = args.get('sessionId', self.state.get('selectedSessionId'))
@@ -3641,9 +3652,12 @@ class AppService:
                 from .workspace_placement import defaults as workspace_root
                 self.state['workspaceDefaults'] = {'root': workspace_root(self), 'hostLabel': socket.gethostname()}
                 self._refresh_shared_preferences()
-            elif action == 'theme.save':
-                from .theme_library import save
-                diagnostic_result = save(self, args)
+            elif action in {'theme.save', 'theme.import', 'theme.update', 'theme.delete'}:
+                from . import theme_library
+                if action in {'theme.save', 'theme.import'}:
+                    diagnostic_result = theme_library.save(self, args)
+                else:
+                    diagnostic_result = theme_library.mutate(self, args, deleting=action == 'theme.delete')
             elif action in {'theme.apply', 'theme.preview', 'theme.revert'}:
                 from .canvas_apps import theme_command
                 theme_command(self, action, args)

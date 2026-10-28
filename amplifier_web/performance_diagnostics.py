@@ -168,6 +168,7 @@ class PerformanceDiagnostics:
         self.projection_failures = deque(maxlen=16)
         self.shell_queries = deque(maxlen=60)
         self.runtime_timings = deque(maxlen=120)
+        self.storage_collection = None
         self.resource_rebuild_counts = {'total': 0, 'byReason': {}, 'byResource': {}}
         self.lock = threading.Lock()
         self.task = None
@@ -212,6 +213,22 @@ class PerformanceDiagnostics:
         if delay >= 0.1:
             with self.lock:
                 self.lag.append({'at': time.time(), 'delayMs': round(delay * 1000, 2)})
+
+    def record_storage_collection(self, *, outcome, reason, elapsed_ms, catchups,
+                                  indexedPruned=0, indexedFilesRemoved=0,
+                                  indexedBytesRemoved=0, unindexedFilesRemoved=0):
+        """Latest bounded collector facts; no artifact identities or paths.
+
+        Byte counts describe successful indexed-file unlinks, not filesystem free
+        space. Interrupted/cancelled passes can have partially removed files;
+        only completed-pass counts establish measured reclamation here.
+        """
+        with self.lock:
+            self.storage_collection = {'at': time.time(), 'outcome': outcome,
+                'reason': reason, 'elapsedMs': round(elapsed_ms, 2), 'rootCatchups': catchups,
+                'indexedPruned': indexedPruned, 'indexedFilesRemoved': indexedFilesRemoved,
+                'indexedBytesRemoved': indexedBytesRemoved, 'unindexedFilesRemoved': unindexedFilesRemoved,
+                'removalCountsComplete': outcome == 'completed'}
 
     def record_resource_rebuild(self, resource, package, reasons, globals_changed):
         """Call-site enums only; page keys and their values never enter diagnostics."""
@@ -288,6 +305,7 @@ class PerformanceDiagnostics:
                     'historyProjectionFailures': [dict(row) for row in self.projection_failures],
                     'shellQueries': [{**row, **({'failure': dict(row['failure'])}
                                       if 'failure' in row else {})} for row in self.shell_queries],
+                    'storageCollection': dict(self.storage_collection) if self.storage_collection is not None else None,
                     'shellResourceRebuilds': {'total': self.resource_rebuild_counts['total'],
                         'byReason': dict(self.resource_rebuild_counts['byReason']),
                         'byResource': dict(self.resource_rebuild_counts['byResource']),

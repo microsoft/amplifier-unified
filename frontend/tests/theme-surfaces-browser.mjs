@@ -67,7 +67,7 @@ try{
  await page.getByRole('button',{name:'Save, import & export themes',exact:true}).click();
  await page.getByText('Advanced customization',{exact:true}).click();await page.locator('#theme-name').fill('My panel theme');
  const custom=aurora.css+'\n#amp-one{--a-panel-gap:13px;--a-panel-radius:17px}';await page.locator('#theme-css').fill(custom);
- await page.getByRole('button',{name:'Save to library',exact:true}).click();await expect(page.getByRole('button',{name:'Preview My panel theme',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Save as copy',exact:true}).click();await expect(page.getByRole('button',{name:'Preview My panel theme',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Apply appearance',exact:true}).click();await expect.poll(async()=>(await style('.a-layout')).gap).toBe('13px');
  const downloaded=page.waitForEvent('download');await page.getByRole('button',{name:'Export current appearance',exact:true}).click();
  const exported=await readFile(await (await downloaded).path(),'utf8');assert.equal(exported,custom);
