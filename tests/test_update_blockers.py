@@ -158,5 +158,19 @@ def test_missing_runtime_observer_is_reported_without_changing_gate_policy():
         service = SimpleNamespace(state={'sessions': []}, runtime=runtime)
         observation = assess(service)['observation']
         assert observation['blocked'] is False  # Existing gate policy, not proof of inactivity.
-        assert observation['runtimeObservation'] == (
+        assert observation['initialRuntimeObservation'] == (
             'clear' if callable(getattr(runtime, 'has_pending_operations', None)) else 'unavailable')
+
+
+def test_initial_runtime_sample_can_differ_from_later_hold_sample():
+    from amplifier_web.update_blockers import assess
+    service = legacy_service()
+    samples = iter((False, True))
+    calls = []
+    service.runtime.has_pending_operations = lambda: calls.append('runtime') or next(samples)
+    service.management.lock.locked = lambda: calls.append('lock') or False
+    observation = assess(service)['observation']
+    assert calls == ['runtime', 'lock', 'runtime']
+    assert observation['initialRuntimeObservation'] == 'clear'
+    assert observation['configurationHolds'][0]['reasonCode'] == 'runtime-operations-pending'
+    assert observation['blocked'] is True
