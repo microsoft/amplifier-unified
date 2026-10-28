@@ -38,6 +38,16 @@ cap or enrolls the recipient to make a refused request pass.
 
 ## Compact orientation and delegated recovery
 
+Fresh direct queue messages can be handled by an independently dependency-blocked
+root when its canonical task proves that its own agent recorded the block from an
+active objective. This is one receipt-bound conversational input, not task resume.
+The task, dependencies and automatic goal remain blocked; the recipient chooses a
+valid next decision under its own authority. The message remains peer-attributed.
+Exact task/Stop revisions, saved turn/cost/token limits, configuration and native
+ownership checks still apply. Explicit Stop, paused/completed/cancelled states,
+human-recorded blocks and unknown block provenance remain refusals. Old suppressed
+receipts and automatic result notifications do not acquire the new exception.
+
 The current coordination reference offers `assignment.briefRef` to an actual
 root assignment member. Following it reads the existing bounded, paged member
 brief. The reference does not load a roster or peer histories at every model

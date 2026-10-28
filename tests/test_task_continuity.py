@@ -44,6 +44,79 @@ async def test_explicit_resume_input_does_not_rewrite_task_or_clear_capacity_den
     assert control.tasks.snapshot() == before
 
 
+@pytest.mark.parametrize("origin,prior,allowed", [
+    ("agent", "active", True), ("ui", "active", False),
+    (None, "active", False), ("agent", "paused", False),
+])
+async def test_dependency_block_input_policy_is_owned_and_not_goal_resume(tmp_path, monkeypatch, origin, prior, allowed):
+    from amplifier_web.task_binding import dependency_blocked
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path))
+    control = controls()
+    try:
+        await create(control, maxTurns=3)
+        revision = 1
+        if prior == "paused":
+            await control.perform("task.pause", {"commandId": "pause", "expectedRevision": revision, "origin": "ui"})
+            revision += 1
+        await control.perform("task.block", {"commandId": "block", "expectedRevision": revision,
+            "reason": "Awaiting the exact peer result", "origin": origin})
+        before = copy.deepcopy(control.tasks.record())
+        assert dependency_blocked(before) is allowed
+        assert await control.tasks.peer_input_allowed() is allowed
+        assert not await control.tasks.continuation_allowed()
+        assert control.tasks.record() == before and control.coordinator.session_state["goal"] is None
+        if allowed:
+            control.tasks.reserve_peer_input("first")
+            control.tasks.reserve_peer_input("first")
+            assert control.tasks.record()["goalState"]["turns_used"] == 1
+            restored = controls()
+            try:
+                await restored.restore()
+                assert await restored.tasks.peer_input_allowed()
+                restored.tasks.reserve_peer_input("second")
+                assert restored.tasks.record()["goalState"]["turns_used"] == 2
+                assert restored.tasks.record()["revision"] == before["revision"]
+                assert restored.coordinator.session_state["goal"] is None
+                restored.capacity.last_denial = {"budgetRevision": restored.capacity.policy["revision"]}
+                assert not await restored.tasks.peer_input_allowed()
+                assert restored.capacity.last_denial
+                restored.tasks.reserve_peer_input("third")
+                with pytest.raises(ValueError, match="exhausted"):
+                    restored.tasks.reserve_peer_input("fourth")
+            finally:
+                await restored.close()
+        # A human re-recording the SAME reason must revoke the input policy too.
+        await control.perform("task.block", {"commandId": "human-block",
+            "expectedRevision": control.tasks.record()["revision"],
+            "reason": before["blockedReason"], "origin": "ui"})
+        assert not await control.tasks.peer_input_allowed()
+    finally:
+        await control.close()
+
+
+def test_legacy_dependency_origin_requires_recorded_active_transition():
+    from amplifier_web.task_binding import dependency_blocked
+    task = {"id": "saved", "revision": 3, "status": "blocked", "changes": [
+        {"revision": 1, "origin": "ui", "fields": {"status": "active"}},
+        {"revision": 2, "origin": "agent", "fields": {"status": "blocked", "blockedReason": "Wait"}},
+        {"revision": 3, "origin": "agent", "fields": {"artifactRefs": ["exact-result"]}},
+    ]}
+    assert dependency_blocked(task)
+    for origin in ("ui", "user", None):
+        changed = copy.deepcopy(task)
+        changed["changes"][1]["origin"] = origin
+        assert not dependency_blocked(changed)
+    for history in (None, [], task["changes"][1:], list(reversed(task["changes"]))):
+        assert not dependency_blocked({**task, "changes": history})
+    assert not dependency_blocked({**task, "blockProvenance": {}})
+    assert not dependency_blocked({**task, "status": "paused"})
+    # Legacy no-op human block at revision3 did not append a change row. Neither
+    # a trailing gap nor a later artifact update can prove agent block ownership.
+    assert not dependency_blocked({**task, "changes": task["changes"][:2]})
+    assert not dependency_blocked({**task, "revision": 4, "changes": [
+        *task["changes"][:2], {**task["changes"][2], "revision": 4}]})
+
+
 async def test_cas_receipts_pause_restart_and_explicit_completion(tmp_path, monkeypatch):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
     first = controls()

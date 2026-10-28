@@ -219,6 +219,36 @@ async def test_queue_continuation_keeps_peer_shape_and_ordinary_idle_mode(bounda
     b.capability["submit"].assert_not_awaited()
 
 
+@pytest.mark.parametrize("change", ["none", "forged", "revoked", "stop", "budget", "revision", "oversize"])
+async def test_blocked_peer_permission_is_host_bound_rechecked_and_charged(boundary, input_type, change):
+    b = boundary
+    b.controls.require_idle = Mock()
+    b.task.update(status="blocked", maxTurns=2, goalState={"turns_used": 1})
+    b.args["blockedTaskInput"] = True  # An RPC caller's flag is not authority.
+    b.permission["blockedTaskInput"] = change != "forged"
+    b.controls.tasks.continuation_allowed.return_value = False
+    b.controls.tasks.peer_input_allowed = AsyncMock(return_value=True)
+    b.controls.tasks.reserve_peer_input = Mock()
+    if change == "oversize":
+        b.runtime.max_input_chars = 1
+    calls = 0
+    async def authorize(args):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            if change == "revoked": b.permission["blockedTaskInput"] = False
+            elif change == "stop": b.epoch[0] += 1
+            elif change == "budget": b.task["goalState"]["turns_used"] = 2
+            elif change == "revision": b.task["revision"] += 1
+        return b.permission
+    answer = await admit(b.controls, b.runtime, b.args, None, authorize, lambda: b.epoch[0])
+    assert answer["accepted"] is (change == "none")
+    assert b.runtime.submit.await_count == (1 if change == "none" else 0)
+    assert b.controls.tasks.reserve_peer_input.call_count == (1 if change == "none" else 0)
+    assert b.task["status"] == "blocked"
+    assert b.controls.coordinator.session_state == {}
+
+
 @pytest.mark.parametrize("change", ["stop", "guard", "cap", "revision", "busy", "revoked"])
 async def test_queue_final_boundary_cannot_bypass_stop_budget_or_task(boundary, input_type, change):
     b = boundary

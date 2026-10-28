@@ -45,6 +45,11 @@ on:
       - 'tests/test_coordination_bridge_returns.py'
       - 'tests/test_collaborative_workspaces.py'
       - 'tests/test_collaboration_input.py'
+      - 'amplifier_web/task_binding.py'
+      - 'amplifier_web/task_continuity.py'
+      - 'tests/test_task_continuity.py'
+      - 'tests/test_blocked_peer_input.py'
+      - 'tests/test_blocked_peer_native.py'
       - 'tests/test_creation_inheritance.py'
       - 'tests/test_inherited_module_sources.py'
       - 'tests/test_runtime_profile_inputs.py'
@@ -160,6 +165,7 @@ jobs:
           tests/test_assignment_brief.py
           tests/test_background_reservation_recovery.py
           tests/test_collaborative_workspaces.py tests/test_collaboration_input.py
+          tests/test_task_continuity.py tests/test_blocked_peer_input.py
           tests/test_creation_inheritance.py tests/test_inherited_module_sources.py
           tests/test_runtime_profile_inputs.py tests/test_runtime_source_declarations.py
           tests/test_state_write_scopes.py tests/test_host_storage.py
@@ -174,6 +180,15 @@ jobs:
           tests/test_multi_repository_worktrees.py
           tests/test_file_access_policy.py tests/test_canvas_files.py tests/test_management.py
           tests/test_service.py tests/test_runtime.py tests/test_agent_chat_controls.py -q
+      - name: Verify blocked peer input through the native boundary
+        run: |
+          uv run --no-sync pytest -q tests/test_blocked_peer_native.py --junitxml=output/blocked-peer-native.xml
+          uv run --no-sync python - <<'PY'
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/blocked-peer-native.xml').getroot().findall('.//testcase')
+          assert len(rows) == 2
+          assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          PY
       - name: Verify mounted child identity and file boundaries
         run: >-
           uv run --locked
