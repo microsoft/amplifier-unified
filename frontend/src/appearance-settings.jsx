@@ -20,21 +20,32 @@ function Swatch({item}){
  </div>;
 }
 
-export function AppearanceSettings({state,shell,act,editor:editorState,preview,setPreview,defaultSkin,simple=false,advancedOnly=false,onAdvanced}){
+export function AppearanceSettings({state,shell,act,editor:editorState,preview,previewSnapshot,setPreview,defaultSkin,simple=false,advancedOnly=false,onAdvanced}){
  const {active}=useContext(SettingsLayoutContext);
  const [libraryError,setLibraryError]=useState('');
  const [library,setLibrary]=useState({items:[],errors:[],directory:''}),[selected,setSelected]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [operation,setOperation]=useState(null),submitting=useRef(false);
  // The app's tab-private owner survives Settings unmounts. The mutable editor
  // and the exact host-validated preview snapshot deliberately remain separate.
- const {draft,setDraft,storageError}=editorState;
+ const {draft,setDraft,compareAndSetDraft,storageError}=editorState;
  const {entry:editing,name,css,description}=draft;
+ const confirmedPreview=preview&&previewSnapshot?previewSnapshot:null;
  const [deleteTarget,setDeleteTarget]=useState(null),editor=useRef(null);
  const api=useRef(act),alive=useRef(true),generation=useRef(0),previewing=useRef(preview);api.current=act;previewing.current=preview;
  const presentation=shell.composition.presentation,scheme=presentation.scheme||state.view?.scheme||'system';
- async function refresh(){const receipt=await api.current('theme.list',{});if(!Array.isArray(receipt.result?.items))throw Error('The appearance library is unavailable. Try reopening Settings.');if(alive.current){setLibrary(receipt.result);setLibraryError('')}}
- useEffect(()=>{if(!active)return;alive.current=true;refresh().catch(e=>setLibraryError(e.message));const timer=setInterval(()=>refresh().catch(()=>{}),5000);return()=>{alive.current=false;generation.current++;clearInterval(timer);previewing.current=false;clearAppearancePreview(setPreview,api.current).catch(()=>{})}},[active]);
- async function run(fn,key='change'){if(submitting.current)return;submitting.current=true;setBusy(true);setOperation(key);setError('');setNotice('');try{return await fn()}catch(e){setError(e.message)}finally{submitting.current=false;setBusy(false);setOperation(null)}}
+ async function refresh(){const current=generation.current,receipt=await api.current('theme.list',{});if(!Array.isArray(receipt.result?.items))throw Error('The appearance library is unavailable. Try reopening Settings.');if(alive.current&&current===generation.current){setLibrary(receipt.result);setLibraryError('')}}
+ useEffect(()=>{if(!active){alive.current=false;return}alive.current=true;submitting.current=false;setBusy(false);setOperation(null);refresh().catch(e=>{if(alive.current)setLibraryError(e.message)});const timer=setInterval(()=>refresh().catch(()=>{}),5000);return()=>{alive.current=false;generation.current++;clearInterval(timer);previewing.current=false;clearAppearancePreview(setPreview,api.current).catch(()=>{})}},[active]);
+ async function run(fn,key='change'){
+  if(submitting.current)return;
+  const current=generation.current,token={},isCurrent=()=>alive.current&&current===generation.current;
+  submitting.current=token;setBusy(true);setOperation(key);setError('');setNotice('');
+  try{return await fn(isCurrent)}catch(e){
+   // Keep a failure for the same draft while its section is hidden. A newer
+   // draft or submission owns its own feedback, even if this receipt is late.
+   if(submitting.current===token&&(isCurrent()||compareAndSetDraft(draft,current=>current)))setError(e.message);
+  }
+  finally{if(submitting.current===token){submitting.current=false;if(isCurrent()){setBusy(false);setOperation(null)}}}
+ }
  async function choose(item){
   if(submitting.current)return;
   const current=++generation.current;
@@ -42,6 +53,8 @@ export function AppearanceSettings({state,shell,act,editor:editorState,preview,s
  }
  async function startPreview(){const current=generation.current;await run(()=>previewAppearance(setPreview,api.current,{name,css},()=>alive.current&&current===generation.current),'preview')}
  async function apply(){await run(async()=>{await api.current('theme.apply',{name,css});setPreview(false);setNotice(name+' applied.')},'apply')}
+ async function applyPreview(){if(!confirmedPreview)return;const snapshot={...confirmedPreview};await run(async()=>{await api.current('theme.apply',snapshot);setPreview(false);setNotice(snapshot.name+' applied.')},'apply')}
+ async function cancelPreview(){await run(()=>clearAppearancePreview(setPreview,api.current),'revert')}
  async function revert(){await run(async()=>{await clearAppearancePreview(setPreview,api.current);setDraft({entry:null,name:state.theme?.name||'Amplifier Unified',css:state.theme?.css||defaultSkin,description:'',dirty:false});setSelected(null);setDeleteTarget(null)},'revert')}
  async function changeDraft(patch){
   const next={...draft,...patch,dirty:true};setDraft(next);setDeleteTarget(null);
@@ -50,8 +63,27 @@ export function AppearanceSettings({state,shell,act,editor:editorState,preview,s
   // It is not the editor's identity owner and cannot replace its target.
   await api.current('view.update',{patch:{themeDraft:next.css,themeDraftName:next.name,themePreview:false}});
  }
- async function save(update=false){await run(async()=>{const args={name,css,description,...(update?appearanceMutationTarget(editing):{})};const {result}=await api.current(update?'theme.update':'theme.save',args);setSelected(result.id);setDraft({...draft,entry:result,dirty:false});setDeleteTarget(null);await refresh();setNotice(update?'Library entry updated. Apply separately to change the current appearance.':'Saved to your appearance library. Apply separately to use it.')},update?'update':'save')}
- async function remove(){await run(async()=>{await api.current('theme.delete',appearanceMutationTarget(deleteTarget));setSelected(null);setDraft(current=>({...current,entry:null,dirty:true}));setDeleteTarget(null);await refresh();setNotice('Deleted from your library. The applied appearance is unchanged.')},'delete')}
+ async function save(update=false){await run(async isCurrent=>{
+  const args={name,css,description,...(update?appearanceMutationTarget(editing):{})};
+  const receipt=await api.current(update?'theme.update':'theme.save',args);
+  if(receipt?.accepted!==true||!receipt.result?.id)throw Error(receipt?.error||'Saving this appearance was not confirmed. Check the library before trying again.');
+  const adopted=compareAndSetDraft(draft,{...draft,entry:receipt.result,dirty:false});
+  // A confirmed library mutation still stands if the editor has moved on.
+  // Only the unchanged draft may adopt its target; old UI instances stay silent.
+  if(!isCurrent())return;
+  if(adopted){setSelected(receipt.result.id);setDeleteTarget(null)}
+  await refresh();
+  if(isCurrent())setNotice(update?'Library entry updated. Apply separately to change the current appearance.':'Saved to your appearance library. Apply separately to use it.');
+ },update?'update':'save')}
+ async function remove(){await run(async isCurrent=>{
+  const target=appearanceMutationTarget(deleteTarget),receipt=await api.current('theme.delete',target);
+  if(receipt?.accepted!==true)throw Error(receipt?.error||'Deleting this appearance was not confirmed. Check the library before trying again.');
+  const adopted=draft.entry?.id===target.id&&draft.entry?.fingerprint===target.expectedFingerprint&&compareAndSetDraft(draft,{...draft,entry:null,dirty:true});
+  if(!isCurrent())return;
+  if(adopted){setSelected(null);setDeleteTarget(null)}
+  await refresh();
+  if(isCurrent())setNotice('Deleted from your library. The applied appearance is unchanged.');
+ },'delete')}
  function edit(){if(editor.current)editor.current.open=true;editor.current?.querySelector('input')?.focus()}
  async function upload(file){
   if(!file)return;return run(async()=>{if(file.size>990000)throw Error('Choose a CSS appearance smaller than 1 MB.');
@@ -61,7 +93,7 @@ export function AppearanceSettings({state,shell,act,editor:editorState,preview,s
  const chosenId=selected||editing?.id||(state.theme?.name==='Amplifier Unified'?'builtin:default':library.items.find(item=>item.name===state.theme?.name)?.id);
  const setPresentation=patch=>run(()=>shell.setPresentation(patch));
  return <div className="a-appearance-settings" data-appearance-simple={simple} data-appearance-advanced={advancedOnly}>
-  <div className="a-appearance-intro"><div>{simple?<p>Choose a look. Your choice is saved automatically.</p>:<><p>Make this space yours.</p><small>Choose an appearance to try it. Apply when it feels right.</small></>}</div>{!simple&&<span className="a-appearance-current"><Palette size={14}/>{preview?'Previewing '+name:state.theme?.name||'Amplifier'}</span>}</div>
+  <div className="a-appearance-intro"><div>{simple?<p>Choose a look. Your choice is saved automatically.</p>:<><p>Make this space yours.</p><small>Choose an appearance to try it. Apply when it feels right.</small></>}</div>{!simple&&<span className="a-appearance-current"><Palette size={14}/>{confirmedPreview?'Previewing '+confirmedPreview.name:state.theme?.name||'Amplifier'}</span>}</div>
   {simple&&<h4 className="a-appearance-label">Look & feel</h4>}
   {advancedOnly&&<h3>Included & saved appearances</h3>}
   <div className="a-appearance-gallery" aria-label="Appearance library">
@@ -76,7 +108,7 @@ export function AppearanceSettings({state,shell,act,editor:editorState,preview,s
    {editing.source==='saved'&&<button type="button" className="a-soft" disabled={busy} onClick={()=>setDeleteTarget(editing)}>Delete {editing.name}</button>}
   </div>}
   {!simple&&deleteTarget&&<div role="group" aria-label="Delete appearance confirmation"><p>Delete “{deleteTarget.name}” from the shared library? This cannot be undone. The applied appearance stays unchanged. Export it first to keep a copy.</p><div className="a-dialog-actions"><button type="button" className="a-soft" disabled={busy} onClick={()=>setDeleteTarget(null)}>Cancel deletion</button><button type="button" className="a-primary" disabled={busy} data-action="theme.delete" onClick={remove}><WorkingLabel active={operation==='delete'} working="Deleting…">Confirm delete</WorkingLabel></button></div></div>}
-  {preview&&<div className="a-appearance-preview" role="status"><span>{preview?'Previewing '+name:'Current appearance'}</span><div>{preview&&<button type="button" className="a-soft" disabled={busy} onClick={revert}>Cancel preview</button>}<button type="button" className="a-primary" disabled={busy||!preview} data-action="theme.apply" onClick={apply}><Check/>{simple?'Apply appearance':'Use '+name}</button></div></div>}
+  {confirmedPreview&&<div className="a-appearance-preview" role="status"><span>{'Previewing '+confirmedPreview.name}</span><div><button type="button" className="a-soft" disabled={busy} onClick={cancelPreview}>Cancel preview</button><button type="button" className="a-primary" disabled={busy} data-action="theme.apply" onClick={applyPreview}><Check/>{simple?'Apply appearance':'Use '+confirmedPreview.name}</button></div></div>}
   {busy&&<p role="status" className="a-appearance-operation">{operationLabels[operation]}</p>}
   {(error||libraryError||storageError)&&<p role="alert" className="a-danger">{error||libraryError||storageError}</p>}{notice&&<p role="status" className="a-appearance-notice"><Check size={15}/>{notice}</p>}
   <section className="a-appearance-options">{simple?<div className="a-appearance-color"><label htmlFor="appearance-color-mode">Color mode</label><select id="appearance-color-mode" value={scheme} disabled={busy} data-action="shell.changes.apply" onChange={event=>setPresentation({scheme:event.target.value})}><option value="system">Device</option><option value="light">Light</option><option value="dark">Dark</option></select></div>:<div className="a-appearance-option"><div><h3>Color mode</h3><p>Keep a favorite look throughout the day.</p></div><div className="a-appearance-modes" role="group" aria-label="Color mode">{[['light','Light',Sun],['dark','Dark',Moon],['system','Device',Monitor]].map(([value,label,Icon])=><button type="button" key={value} disabled={busy} aria-pressed={scheme===value} data-action="shell.changes.apply" onClick={()=>setPresentation({scheme:value})}><Icon/>{label}</button>)}</div></div>}

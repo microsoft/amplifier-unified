@@ -690,7 +690,9 @@ function App(){
  // Preview is an exact host-validated client snapshot, not the mutable editor.
  // A committed change invalidates it immediately, before synchronization effects.
  const committedThemeKey=state?.theme?.name+'::'+state?.theme?.css;
- const activeCss=preview&&loadedTheme.current===committedThemeKey?(state?.view?.themeDraft??themeDraft):state?.theme?.css||'';
+ const previewSnapshot=preview&&loadedTheme.current===committedThemeKey&&state?.view?.themePreview&&typeof state.view.themeDraft==='string'
+  ?{name:state.view.themeDraftName||'Custom skin',css:state.view.themeDraft}:null;
+ const activeCss=previewSnapshot?.css??state?.theme?.css??'';
  const presentation=shell.composition.presentation;
  const requestedScheme=presentation.scheme||view.scheme;
  const scheme=requestedScheme==='system'?'light dark':requestedScheme||'light';
@@ -717,7 +719,7 @@ function App(){
  }});
  const settingsState={...state,view:{...state?.view,settingsCanvas:canvasSettingsVisible}};
  const settingsAct=(name,args={})=>act(name,name==='view.update'&&canvasSettingsVisible&&args.patch?.panel==='settings'?{...args,patch:{...args.patch,panel:null,settingsCanvas:true}}:args);
- const settingsSurface=<SettingsExperience state={settingsState} session={settingsSession} act={settingsAct} dispatch={dispatch} open={open} close={()=>canvasSettingsVisible?act('canvas.tabClose',{id:state.canvas.id}):dismissPanel()} navigationRef={settingsNavigation} appearance={<AppearanceSettings state={state} shell={shell} act={dispatch} editor={appearanceEditor} preview={preview} setPreview={setPreview} defaultSkin={defaultSkin}/>}/>;
+ const settingsSurface=<SettingsExperience state={settingsState} session={settingsSession} act={settingsAct} dispatch={dispatch} open={open} close={()=>canvasSettingsVisible?act('canvas.tabClose',{id:state.canvas.id}):dismissPanel()} navigationRef={settingsNavigation} appearance={<AppearanceSettings state={state} shell={shell} act={dispatch} editor={appearanceEditor} preview={!!previewSnapshot} previewSnapshot={previewSnapshot} setPreview={setPreview} defaultSkin={defaultSkin}/>}/>;
  const browsing=workSurface(state)!=='chat';
  const browse=(surface,id=null)=>act('view.update',{patch:{...browsePatch(surface,id),navExpanded:false}});
  const visitHistory=async key=>{

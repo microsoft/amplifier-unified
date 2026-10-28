@@ -102,6 +102,8 @@
     "test:sidebar-activity-browser": "node tests/sidebar-activity-browser.mjs",
     "test:appearance-library-browser": "node tests/appearance-library-browser.mjs",
     "test:appearance-lifecycle-browser": "node tests/appearance-lifecycle-browser.mjs",
+    "test:appearance-preview-boundaries-browser": "node tests/appearance-preview-boundaries-browser.mjs",
+    "test:appearance-late-completion-browser": "node tests/appearance-late-completion-browser.mjs",
     "test:workspace-experience-browser": "node tests/workspace-experience-browser.mjs",
     "test:pin-rapid-reorder-browser": "node tests/pin-rapid-reorder-browser.mjs",
     "test:workspace-starters-browser": "node tests/workspace-starters-browser.mjs",

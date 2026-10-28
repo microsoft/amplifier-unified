@@ -116,7 +116,14 @@ and a fine grid. The original Amplifier appearance retains its continuous frame.
 Theme changes remeasure panel space immediately, including previews. Narrow
 screens use an uninterrupted surface; focused and overlay canvases stay square.
 The background-artwork switch hides these panel decorations as well as root
-artwork, while retaining shapes, borders and spacing. Keep decorations static.
+artwork, while retaining shapes, borders and spacing. Prefer static decorations.
+The user-directed Digital Rain design intentionally uses continuous optional
+code-rain artwork. This is not a work-status or busy-region effect: it changes
+no layout and conveys no operational information. Such explicitly selected
+artwork must be non-flashing, remain behind readable content, stop under reduced
+motion, and disappear with decorations off or forced colors. The interaction
+contract's restrictions on animated busy-region backgrounds, tint, pulse and
+operational feedback remain unchanged.
 
 ### Create, edit, delete and share
 
@@ -143,6 +150,11 @@ closing/reopening Settings and reloading the same tab through browser session
 storage. A storage failure is shown explicitly; keep that tab open and save a
 library copy. Previews do not resume automatically. The renderer uses the exact
 validated preview CSS, not whatever the editor contains after further edits.
+The preview banner and its confirmation apply that same snapshot, including
+agent-requested previews. **Apply appearance** in the editor remains a distinct
+action on the retained draft. Cancelling a preview does not discard that draft.
+Reloading or duplicating a page ends its inherited preview, without cancelling
+another open page's preview or changing either page's saved preferences.
 Updates retain the saved ID, including a rename. A stale update or deletion fails
 with 409 and leaves the file unchanged: read it again, review differences, then
 decide which edits to retain. Included appearances are read-only; copy them instead.

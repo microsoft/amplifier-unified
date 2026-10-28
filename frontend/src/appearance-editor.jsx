@@ -17,6 +17,7 @@ export function useAppearanceEditor(theme,fallback,{storage=browserStorage}={}){
  const [storageError,setStorageError]=useState('');
  const setDraft=useCallback(update=>{
   const next=typeof update==='function'?update(current.current):update;
+  if(next===current.current)return;
   // Entries need identity/metadata only. The editable CSS has one canonical copy.
   const {css:entryCss,...entry}=next.entry||{};
   const value={...next,entry:next.entry?entry:null};
@@ -24,9 +25,16 @@ export function useAppearanceEditor(theme,fallback,{storage=browserStorage}={}){
   try{const target=storage();if(!target)throw Error('Browser storage unavailable');target.setItem(appearanceEditorKey,JSON.stringify(value));setStorageError('')}
   catch{setStorageError('Your appearance draft stays in this tab, but could not be saved for reload. Keep this tab open.')}
  },[storage]);
+ // Each published object is a revision token for the entire draft, including
+ // its target/fingerprint. Compare inside the persistent owner, not a mounted
+ // Settings closure. Even editing away and back invalidates an older token.
+ const compareAndSetDraft=useCallback((expected,update)=>{
+  if(current.current!==expected)return false;
+  setDraft(update);return true;
+ },[setDraft]);
  useEffect(()=>{
   if(!theme)return;
   setDraft(value=>value.entry||value.dirty?value:{...value,name:theme.name||'Amplifier Unified',css:theme.css||fallback});
  },[theme?.name,theme?.css,fallback,setDraft]);
- return {draft,setDraft,storageError};
+ return {draft,setDraft,compareAndSetDraft,storageError};
 }
