@@ -17,7 +17,7 @@ const report={status:'running',observe,checks:[],screenshots:[],geometry:[],erro
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','pipe']});
 let browser,page,failure,stdout='',stderr='';
 fixture.stderr.on('data',chunk=>stderr+=chunk);
-const capture=async name=>{const file=name+'.png';await page.screenshot({path:join(output,file)});report.screenshots.push(file)};
+const capture=async name=>{const file=name+'.png';await page.mouse.move(0,899);await page.screenshot({path:join(output,file)});report.screenshots.push(file)};
 try{
  const url=await new Promise((resolve,reject)=>{
   const timer=setTimeout(()=>reject(Error('Fixture startup timed out')),20000);
@@ -76,10 +76,14 @@ try{
   const savedBefore=await versions(),snapshot=await state();
   const historyBefore=snapshot.sessions.find(row=>row.id===snapshot.selectedSessionId).messages;
   const fixtureBefore=await (await page.request.get(url+'/fixture')).json();
+  if(process.env.AMPLIFIER_TEST_INSTALLED==='1'){
+   assert.equal(fixtureBefore.installedIdentity?.verified,true);
+   (report.installedIdentities??=[]).push(fixtureBefore.installedIdentity);
+  }
   const reachable=async locator=>{
    const box=await locator.evaluate(el=>{const r=el.getBoundingClientRect();return {width:r.width,height:r.height,
     hit:r.left>=0&&r.right<=innerWidth+1&&r.top>=0&&r.bottom<=innerHeight+1&&
-     el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}});
+     [[r.x+4,r.y+4],[r.right-4,r.y+4],[r.right-4,r.bottom-4],[r.x+4,r.bottom-4],[r.x+r.width/2,r.y+r.height/2]].every(([x,y])=>el.contains(document.elementFromPoint(x,y)))}});
    assert.ok(box.width>=44&&box.height>=44&&box.hit,'Close control must have an unclipped 44px hit target');
   };
   const use=async locator=>{await reachable(locator);if(width<500)await locator.tap();else await locator.click()};
@@ -108,6 +112,15 @@ try{
    await expect(panel.getByRole('heading',{name:title==='Beta report'?'Beta retained':'Alpha revised',exact:true})).toBeVisible();
   };
   await expect(dismiss).toContainText('Close Canvas');
+  const label=await dismiss.evaluate(el=>{
+   const span=el.querySelector('span'),range=document.createRange();range.selectNodeContents(span);
+   const r=range.getBoundingClientRect(),b=el.getBoundingClientRect(),s=span.getBoundingClientRect();
+   return {text:span.textContent,labelWidth:r.width,buttonWidth:b.width,
+    contained:r.left>=s.left-1&&r.right<=s.right+1&&r.left>=b.left&&r.right<=b.right,
+    clipped:span.scrollWidth>span.clientWidth+1};
+  });
+  assert.equal(label.text,'Close Canvas');assert.ok(label.contained&&!label.clipped);
+  report.geometry.push({width,label});
   await headerContained();
   await reachable(dismiss);await reachable(closeTab('Beta report'));
   if(width===1500){
