@@ -1,0 +1,153 @@
+"""Browser seeds reuse locked dependencies while each task retains its own source."""
+import hashlib
+import json
+
+import pytest
+
+from amplifier_web import test_dependency_layers as layers
+from amplifier_web import test_environment_preparation as preparation
+from amplifier_web import test_environment_prepare_guest as guest
+from test_dependency_layers import prepared, settle, source
+from test_environment_preparation import archive
+
+
+def manifests(prefix='frontend/'):
+    package = {'name': 'browser-fixture', 'version': '1.0.0', 'devDependencies': {'playwright': '1.63.0'}}
+    lock = {'lockfileVersion': 3, 'packages': {'': package, 'node_modules/playwright': {
+        'version': '1.63.0', 'resolved': 'https://registry.npmjs.org/playwright/-/playwright-1.63.0.tgz',
+        'integrity': 'sha512-' + 'a' * 86 + '=='}}}
+    return {prefix + 'package.json': json.dumps(package), prefix + 'package-lock.json': json.dumps(lock)}
+
+
+@pytest.mark.parametrize('prefix', ['', 'frontend/'])
+def test_browser_reuses_manifest_only_seed_and_finalizes_each_source(prepared, tmp_path, prefix):
+    run, calls, _ = prepared
+    first, a = run('first-browser', profile='browser-test', extra=manifests(prefix))
+    second, b = run('second-browser', body='new task source', profile='browser-test', extra=manifests(prefix))
+    assert [call['mode'] for call in calls] == ['layer', 'finalize', 'finalize']
+    assert set(calls[0]['contents']) == {'pyproject.toml', 'uv.lock', *manifests(prefix)}
+    assert calls[1]['contents']['fixture.py'] == 'first'
+    assert calls[2]['contents']['fixture.py'] == 'new task source'
+    assert calls[1]['base'] == calls[2]['base']
+    assert a['image'] != b['image'] and a['sourceSha256'] != b['sourceSha256']
+    assert a['profileId'] == b['profileId'] == 'browser-test'
+    assert layers.read(second / 'preparation/dependency-reuse.json')['hit'] is True
+    settle(first)
+    assert layers.inspect(tmp_path)['candidates'] == []
+    settle(second)
+    assert len(layers.inspect(tmp_path)['candidates']) == 1
+
+
+@pytest.mark.parametrize('change', ['local', 'workspace', 'link', 'credentials', 'unhashed', 'lock-type', 'manifest-type', 'escape', 'extra-source'])
+def test_unsupported_node_sources_keep_existing_cold_path(prepared, change):
+    files = manifests()
+    package = json.loads(files['frontend/package.json'])
+    lock = json.loads(files['frontend/package-lock.json'])
+    entry = lock['packages']['node_modules/playwright']
+    if change == 'local':
+        package['devDependencies']['helper'] = 'file:../helper'
+    elif change == 'workspace':
+        package['workspaces'] = ['packages/*']
+    elif change == 'link':
+        entry['link'] = True
+    elif change == 'credentials':
+        entry['resolved'] = 'https://token@registry.example/pkg.tgz'
+    elif change == 'unhashed':
+        entry.pop('integrity')
+    elif change == 'lock-type':
+        lock['lockfileVersion'] = 1
+    elif change == 'manifest-type':
+        package = []
+    elif change == 'escape':
+        lock['packages']['node_modules/../outside'] = dict(entry)
+    else:
+        lock['packages']['packages/local'] = dict(entry)
+    files.update({'frontend/package.json': json.dumps(package), 'frontend/package-lock.json': json.dumps(lock)})
+    run, calls, _ = prepared
+    root, result = run('unsupported-browser', profile='browser-test', extra=files)
+    assert result['status'] == 'ready'
+    assert [call['mode'] for call in calls] == [None]
+    assert not (root / 'preparation/dependency-borrow.json').exists()
+
+
+def test_browser_only_project_stays_cold(tmp_path):
+    snapshot = archive(tmp_path, manifests(''))
+    plan = preparation.plan(tmp_path / 'source.tar', snapshot, 'browser-test')
+    assert layers.inputs(tmp_path / 'source.tar', plan) is None
+
+
+@pytest.mark.parametrize('path', ['.npmrc', 'frontend/.npmrc', 'frontend/npm-shrinkwrap.json'])
+def test_project_npm_settings_or_overriding_lock_keep_cold_behavior(prepared, path):
+    run, calls, _ = prepared
+    run('npm-settings', profile='browser-test', extra={**manifests(), path: 'project-specific'})
+    assert [call['mode'] for call in calls] == [None]
+
+
+@pytest.mark.parametrize('filename', ['frontend/package.json', 'frontend/package-lock.json'])
+def test_node_manifest_or_lock_change_creates_a_different_seed(prepared, filename):
+    run, calls, _ = prepared
+    files = manifests()
+    run('original-browser', profile='browser-test', extra=files)
+    changed = json.loads(files[filename])
+    changed['description'] = 'changed frozen manifest'
+    files[filename] = json.dumps(changed)
+    run('changed-browser', profile='browser-test', extra=files)
+    assert [call['mode'] for call in calls] == ['layer', 'finalize', 'layer', 'finalize']
+    assert calls[1]['base'] != calls[3]['base']
+
+
+@pytest.fixture
+def browser_wheels(tmp_path, monkeypatch):
+    monkeypatch.setattr(guest, 'PREFIX', tmp_path)
+    folder = tmp_path / 'browser-wheels'
+    folder.mkdir()
+    wheel = folder / 'playwright.whl'
+    wheel.write_bytes(b'qualified immutable wheel')
+    inventory = {'profileId': 'browser-test', 'node': {'version': 'v' + guest.NODE_VERSION, 'playwright': '1.63.0'},
+                 'browserWheels': [{'filename': wheel.name, 'sha256': hashlib.sha256(wheel.read_bytes()).hexdigest()}]}
+    (tmp_path / 'inventory.json').write_text(json.dumps(inventory))
+    calls = []
+    def run(*args, **kwargs):
+        calls.append(args)
+        return json.dumps({'fixture': '2', 'locked-dependency': '3'}) if '-c' in args else None
+    monkeypatch.setattr(guest, 'run', run)
+    return tmp_path, inventory, calls
+
+
+def test_finalizer_restores_only_hashed_wheels_offline_without_changing_locked_packages(browser_wheels):
+    root, inventory, calls = browser_wheels
+    result = guest.restore_browser({'playwrightVersion': '1.63.0'}, 'uv')
+    assert result == {key: inventory[key] for key in ('node', 'browserWheels')}
+    install = next(call for call in calls if 'install' in call)
+    assert '--no-index' in install and '--find-links' in install and '--constraint' in install
+    assert (root / 'python-base-constraints.txt').read_text() == 'fixture==2\nlocked-dependency==3\n'
+
+
+@pytest.mark.parametrize('change', ['bytes', 'extra-wheel', 'duplicate', 'traversal', 'symlink', 'version'])
+def test_changed_retained_wheels_are_rejected_before_install(browser_wheels, change):
+    root, inventory, calls = browser_wheels
+    wheel = root / 'browser-wheels/playwright.whl'
+    if change == 'bytes':
+        wheel.write_bytes(b'changed')
+    elif change == 'extra-wheel':
+        (wheel.parent / 'unrecorded.whl').write_bytes(b'extra')
+    elif change == 'duplicate':
+        inventory['browserWheels'] *= 2
+    elif change == 'traversal':
+        inventory['browserWheels'][0]['filename'] = '../outside.whl'
+    elif change == 'symlink':
+        wheel.rename(root / 'outside.whl')
+        wheel.symlink_to(root / 'outside.whl')
+    else:
+        inventory['node']['playwright'] = '1.62.0'
+    (root / 'inventory.json').write_text(json.dumps(inventory))
+    with pytest.raises(ValueError, match='changed'):
+        guest.restore_browser({'playwrightVersion': '1.63.0'}, 'uv')
+    assert calls == []
+
+
+def test_finalizer_refuses_locked_dependency_drift(browser_wheels, monkeypatch):
+    observations = iter([{'locked': '1'}, {'locked': '2'}])
+    monkeypatch.setattr(guest, 'run', lambda *args, **kwargs: json.dumps(next(observations)) if '-c' in args else None)
+    with pytest.raises(ValueError, match='locked Python project dependency'):
+        guest.restore_browser({'playwrightVersion': '1.63.0'}, 'uv')

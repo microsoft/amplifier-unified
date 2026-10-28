@@ -102,6 +102,37 @@ def verify_contract(contract):
             raise ValueError('The prepared browser dependencies are incomplete.')
 
 
+def restore_browser(plan, uv):
+    """Restore only retained wheels after locked sync removes extra packages."""
+    saved = json.loads((PREFIX / 'inventory.json').read_text())
+    node = saved.get('node', {})
+    wheels = saved.get('browserWheels')
+    if (saved.get('profileId') != 'browser-test' or node.get('playwright') != plan['playwrightVersion']
+            or node.get('version') != 'v' + NODE_VERSION or not isinstance(wheels, list)
+            or not 1 <= len(wheels) <= 32 or any(not isinstance(wheel, dict) for wheel in wheels)):
+        raise ValueError('The reusable browser inventory changed.')
+    folder = PREFIX / 'browser-wheels'
+    for wheel in wheels:
+        name = wheel.get('filename')
+        if (not isinstance(name, str) or Path(name).name != name or not name.endswith('.whl')
+                or (folder / name).is_symlink()
+                or hashlib.sha256((folder / name).read_bytes()).hexdigest() != wheel.get('sha256')):
+            raise ValueError('The retained browser wheel changed.')
+    if len({wheel['filename'] for wheel in wheels}) != len(wheels) or set(folder.iterdir()) != {folder / wheel['filename'] for wheel in wheels}:
+        raise ValueError('The retained browser wheel set changed.')
+    python = str(PREFIX / 'venv/bin/python')
+    probe = 'import importlib.metadata,json; print(json.dumps({d.metadata["Name"].lower().replace("_", "-"):d.version for d in importlib.metadata.distributions()}))'
+    locked = json.loads(run(python, '-c', probe, capture=True))
+    constraints = PREFIX / 'python-base-constraints.txt'
+    constraints.write_text(''.join(name + '==' + version + '\n' for name, version in sorted(locked.items())))
+    run(uv, 'pip', 'install', '--python', python, '--no-index', '--find-links', str(folder),
+        '--constraint', str(constraints), 'playwright==' + plan['playwrightVersion'])
+    installed = json.loads(run(python, '-c', probe, capture=True))
+    if any(installed.get(name) != version for name, version in locked.items()):
+        raise ValueError('Browser dependency preparation changed a locked Python project dependency.')
+    return {'node': node, 'browserWheels': wheels}
+
+
 def main():
     plan = json.loads(Path('/prepare/plan.json').read_text())
     os.environ.clear()
@@ -154,7 +185,9 @@ def main():
         run(str(PREFIX / 'venv/bin/python'), '-c',
             'import importlib.metadata as m,re,sys; assert not any(re.sub(r"[-_.]+","-",d.metadata["Name"].lower())==sys.argv[1] for d in m.distributions())', name)
         inventory['dependencyKey'] = plan['dependencyKey']
-    if plan['profileId'] == 'browser-test':
+    if plan['profileId'] == 'browser-test' and reused:
+        inventory.update(restore_browser(plan, uv))
+    elif plan['profileId'] == 'browser-test':
         architecture = {'aarch64': 'arm64', 'x86_64': 'x64'}.get(os.uname().machine)
         if not architecture:
             raise ValueError('This browser profile supports Linux arm64 and x64.')
@@ -202,7 +235,8 @@ def main():
         if any(installed.get(name) != version for name, version in locked_packages.items()):
             raise ValueError('Browser dependency preparation changed a locked Python project dependency.')
         inventory['browserWheels'] = wheel_lock
-        shutil.rmtree(wheels)
+        if not layer:
+            shutil.rmtree(wheels)
         run('apt-get', 'install', '-y', '--no-install-recommends', 'xvfb', 'xauth', 'libxss1', 'x11-utils')
         (PREFIX / 'node').mkdir(exist_ok=True)
         shutil.move(str(project / 'node_modules'), str(PREFIX / 'node' / plan['nodeKey']))
@@ -211,7 +245,10 @@ def main():
     inventory['pythonPackages'] = run(uv, 'pip', 'freeze', '--python', str(PREFIX / 'venv/bin/python'), capture=True).splitlines()
     inventory['systemPackages'] = run('dpkg-query', '-W', '-f=${Package}=${Version}\n', capture=True).splitlines()
     inventory['preparedFiles'] = {}
-    for directory in (('venv', 'bootstrap', 'python') if layer else ('browsers', 'node', 'build-venv')):
+    directories = ('venv', 'bootstrap', 'python') if layer else ('browsers', 'node', 'build-venv')
+    if layer and plan['profileId'] == 'browser-test':
+        directories += ('node-runtime', 'node', 'browsers', 'browser-wheels')
+    for directory in directories:
         digest = hashlib.sha256()
         for path in sorted((PREFIX / directory).rglob('*')) if (PREFIX / directory).exists() else []:
             digest.update(str(path.relative_to(PREFIX)).encode())

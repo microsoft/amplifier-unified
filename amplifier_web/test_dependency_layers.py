@@ -1,4 +1,4 @@
-"""Source-free prepared Python dependencies, owned by the existing Storage policy.
+"""Source-free prepared dependencies, owned by the existing Storage policy.
 
 Only a qualified immutable image is reusable. Each task keeps its own source
 finalizer and image. An unfinished native attempt is retained, never replayed as
@@ -95,22 +95,66 @@ def public_url(value, *, git=False):
     return not url.query and not url.fragment
 
 
+def browser_inputs(files, expected):
+    """Only locked public registry packages; never copy npm configuration or source."""
+    prefix = expected['nodeDirectory'] + '/' if expected['nodeDirectory'] else ''
+    try:
+        package = json.loads(files[prefix + 'package.json'])
+        lock = json.loads(files[prefix + 'package-lock.json'])
+        if (not isinstance(package, dict) or not isinstance(lock, dict) or package.get('workspaces')
+                or lock.get('lockfileVersion') not in {2, 3}
+                or not isinstance(lock.get('packages'), dict)):
+            return False
+        for field in ('dependencies', 'devDependencies', 'optionalDependencies'):
+            dependencies = package.get(field, {})
+            if (not isinstance(dependencies, dict)
+                    or any(not isinstance(value, str) or ':' in value or '/' in value
+                           for value in dependencies.values())):
+                return False
+        for name, entry in lock['packages'].items():
+            if not isinstance(entry, dict) or entry.get('link') or entry.get('workspaces'):
+                return False
+            if name == '':
+                continue
+            if (not name.startswith('node_modules/') or any(part in {'', '.', '..'} for part in name.split('/'))
+                    or '\\' in name or not public_url(entry.get('resolved'))
+                    or not re.fullmatch(r'sha512-[A-Za-z0-9+/]{86}==', str(entry.get('integrity')))):
+                return False
+        return 'node_modules/playwright' in lock['packages']
+    except (KeyError, TypeError, ValueError, UnicodeError):
+        return False
+
+
+def prepared_directories(profile):
+    directories = {'venv', 'bootstrap', 'python'}
+    if profile == 'browser-test':
+        directories.update({'node-runtime', 'node', 'browsers', 'browser-wheels'})
+    return directories
+
+
 def inputs(archive, expected):
     """Conservative eligibility; an unsupported project keeps the existing path."""
-    if expected['profileId'] != 'python-project':
+    if expected['profileId'] not in {'python-project', 'browser-test'} or not expected['pythonProject']:
         return None
+    required = {row['path'] for row in expected['lockfiles']}
     files = {}
     with tarfile.open(archive) as source:
         for item in source:
-            if item.name in {'pyproject.toml', 'uv.lock'}:
+            if expected['profileId'] == 'browser-test' and Path(item.name).name in {'.npmrc', 'npm-shrinkwrap.json'}:
+                # npm configuration and overriding locks can change the cold
+                # install. Do not silently omit them from a manifest-only seed.
+                return None
+            if item.name in required:
                 if not item.isfile() or item.size > preparation.MAX_INPUT or item.name in files:
                     return None
                 files[item.name] = source.extractfile(item).read()
-    if set(files) != {'pyproject.toml', 'uv.lock'}:
+    if set(files) != required or not {'pyproject.toml', 'uv.lock'} <= required:
         return None
     if (preparation.digest(archive) != expected['sourceSha256']
             or any(hashlib.sha256(files[row['path']]).hexdigest() != row['sha256'] for row in expected['lockfiles'])):
         raise ValueError('The frozen dependency inputs changed.')
+    if expected['profileId'] == 'browser-test' and not browser_inputs(files, expected):
+        return None
     try:
         project = tomllib.loads(files['pyproject.toml'].decode())
         lock = tomllib.loads(files['uv.lock'].decode())
@@ -224,8 +268,11 @@ def native(config, folder, receipt, *, unused=False, deadline=None):
 
 def receipt(entry):
     value = read(entry / 'preparation/receipt.json')
-    preparation.validate_receipt(value, {'archive_sha256': value['intent']['sourceSha256']}, 'python-project')
     owner = owner_record(entry)
+    profile = owner['inputs']['profileId']
+    if profile not in {'python-project', 'browser-test'}:
+        raise ValueError('The dependency profile changed.')
+    preparation.validate_receipt(value, {'archive_sha256': value['intent']['sourceSha256']}, profile)
     intent = value['intent']
     inventory = read(entry / 'preparation/inventory.json')
     if (any(intent.get(field) != owner['inputs'][field] for field in ('backendIdentity', 'baseImage', 'profileId', 'lockfiles', 'recipeSha256'))
@@ -257,7 +304,7 @@ def owner_record(entry):
 
 
 def seed(directory, key, config, expected, material, deadline, task):
-    """No task source can enter this builder: its archive contains two manifests."""
+    """No task source can enter this builder: its archive contains manifests only."""
     entry = private(directory / (key + '-' + uuid.uuid4().hex))
     folder = private(entry / 'preparation')
     context = private(folder / 'context')
@@ -275,6 +322,8 @@ def seed(directory, key, config, expected, material, deadline, task):
     plan.update(preparationId=key, sourceSha256=source, pythonProject=True,
                 dependencyMode='layer', dependencyProject=material['project'], dependencyKey=key,
                 resourceName='au-deps-' + entry.name[-32:])
+    if expected['profileId'] == 'browser-test':
+        plan.update({name: expected[name] for name in ('nodeDirectory', 'nodeKey', 'playwrightVersion')})
     for option in ('resourceRequest', 'timingRequest'):
         if option in expected:
             plan[option] = expected[option]
@@ -299,11 +348,11 @@ def seed(directory, key, config, expected, material, deadline, task):
     inventory = json.loads(inventory)
     if (inventory.get('dependencyKey') != key or inventory.get('sourceSha256') != source
             or inventory.get('preparationId') != key or inventory.get('executionContract')
-            or set(inventory.get('preparedFiles', {})) != {'venv', 'bootstrap', 'python'}):
+            or set(inventory.get('preparedFiles', {})) != prepared_directories(plan['profileId'])):
         raise ValueError('The source-free dependency inventory did not qualify.')
     preparation.write(folder / 'inventory.json', inventory)
     value = {'version': 1, 'status': 'ready', 'intent': plan, 'backend': plan['backend'],
-             'profileId': 'python-project', 'sourceSha256': source, 'image': image,
+             'profileId': plan['profileId'], 'sourceSha256': source, 'image': image,
              'inventorySha256': preparation.digest(folder / 'inventory.json'), 'preparedAt': time.time()}
     preparation.write(folder / 'receipt.json', value)
     preparation.write(task / 'dependency-seed-settled.json', {'entry': entry.name, 'settledAt': time.time()})
