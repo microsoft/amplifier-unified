@@ -252,8 +252,12 @@ async def test_create_receipt_preserves_inheritance_and_initial_input_link(app, 
 
 @pytest.mark.parametrize("action", ["coordination.result", "coordination.read"])
 async def test_unrelated_catalog_messages_and_workspace_growth_do_not_grow_returns(
-    app, bridge_probe, record_property, action,
+    app, bridge_probe, record_property, action, monkeypatch,
 ):
+    from amplifier_web import coordination_return_state
+    observation_time = 1_730_000_000.125
+    monkeypatch.setattr(coordination_return_state, "time",
+                        SimpleNamespace(time=lambda: observation_time))
     source, target = app.state["sessions"]
     request = "growth-request"
     await declared_result(app, request=request)
@@ -278,8 +282,17 @@ async def test_unrelated_catalog_messages_and_workspace_growth_do_not_grow_retur
     } for index in range(100))
     inflated_state_bytes = json_bytes(app.get_state())
     assert inflated_state_bytes - baseline_state_bytes > 10_000_000
+    observation_time = 1_730_000_001.125
     after, raw = await compact_call(app, bridge_probe, source, action, args, "growth-after")
-    assert after == before
+    comparable_before, comparable_after = copy.deepcopy(before), copy.deepcopy(after)
+    if action == "coordination.result":
+        assert before["result"]["returnState"]["observation"]["observedAt"] == 1_730_000_000.125
+        assert after["result"]["returnState"]["observation"]["observedAt"] == observation_time
+        # Only this documented read-time fact is volatile. Every other byte of
+        # domain evidence, including the complete return projection, must match.
+        comparable_before["result"]["returnState"]["observation"]["observedAt"] = 0.0
+        comparable_after["result"]["returnState"]["observation"]["observedAt"] = 0.0
+    assert comparable_after == comparable_before
     assert json_bytes(after) == json_bytes(before)
     assert marker not in json.dumps(after)
     await measure_pair(app, source, after, raw, record_property, "after_growth")
@@ -303,7 +316,10 @@ async def test_large_legitimate_result_is_not_compacted_or_truncated(app, bridge
     await measure_pair(app, source, result, raw, record_property, "large_legitimate_result")
 
 
-async def test_uncertain_admission_duplicate_and_conflict_do_not_replay_input(app, bridge_probe):
+async def test_uncertain_admission_duplicate_and_conflict_do_not_replay_input(app, bridge_probe, monkeypatch):
+    from amplifier_web import coordination_return_state
+    monkeypatch.setattr(coordination_return_state, "time",
+                        SimpleNamespace(time=lambda: 1_730_000_000.125))
     source, target = app.state["sessions"]
     app.runtime.fail = True
     request = "uncertain-request"
@@ -320,7 +336,22 @@ async def test_uncertain_admission_duplicate_and_conflict_do_not_replay_input(ap
     duplicate, _ = await compact_call(app, bridge_probe, source, "coordination.send", args, request)
     assert duplicate["duplicate"] is True and duplicate["delivery"] == "unknown"
     assert {key: item for key, item in without_state(duplicate).items()
-            if key != "duplicate"} == saved
+            if key not in {"duplicate", "returnState"}} == saved
+    assert "returnState" not in saved
+    projection = duplicate["returnState"]
+    assert projection == result["result"]["returnState"]
+    assert projection["request"]["requestId"] == request
+    assert projection["request"]["delivery"] == "unknown"
+    assert projection["returnPolicy"] == "none"
+    assert projection["subscription"]["registered"] is False
+    assert projection["outcome"]["source"] == "terminalOutcome"
+    assert projection["outcome"]["outcome"] == "unknown"
+    assert projection["qualification"]["status"] == "unqualified"
+    assert projection["qualification"]["independentArtifactVerification"] is False
+    assert projection["notification"]["status"] == "not_queued"
+    assert projection["notification"]["receiptPresent"] is False
+    assert projection["notification"]["consumption"] == "unknown"
+    assert projection["observation"]["observedAt"] == 1_730_000_000.125
     with pytest.raises(AppError, match="different contents") as error:
         await agent_action(app, source, "coordination.send", {**args, "text": "Changed"}, request)
     assert error.value.status == 409
