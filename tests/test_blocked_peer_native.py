@@ -346,3 +346,198 @@ async def test_blocked_independent_native_root_handles_two_fresh_inputs_without_
                 assert [b["inputId"] for b in bridge["args"]["_inputBindings"]] == [REQUESTS[index]]
     finally:
         await app.close()
+
+
+async def test_blocked_native_overlapping_queue_retains_charge_after_lost_ack(tmp_path, monkeypatch):
+    """Real admission/submit; synthetic sender binding, not a runtime restart."""
+    import traceback
+    from test_task_continuity import controls as detached_controls
+
+    host = DirectNativeHost()
+    monkeypatch.setattr(runtime_worker, "publish", host.publish)
+    monkeypatch.setenv("AMPLIFIER_HOME", str(tmp_path / "native"))
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path / "app"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    app = host.app = AppService(tmp_path / "app", host, workspace=workspace)
+    source, target = [app._new_session({"title": title}) for title in ("Synthetic sender", "Blocked root")]
+    app.state["sessions"], app.state["selectedSessionId"] = [source, target], source["id"]
+    app._publish()
+    paths = {}
+    for name in ("loop-live", "context-simple"):
+        spec = importlib.util.find_spec("amplifier_module_" + name.replace("-", "_"))
+        assert spec and spec.origin, name
+        paths[name] = Path(spec.origin).parent
+    ack_pending, lose_ack = asyncio.Event(), asyncio.Event()
+    provider_entered, release_provider = asyncio.Event(), asyncio.Event()
+    submitted, seen, failures = [], [], []
+
+    class GatedRecipient(ScriptedProvider):
+        async def complete(self, request, **kwargs):
+            try:
+                self.calls += 1
+                assert self.calls <= 2, "Duplicate, capped input or goal continuation reached provider"
+                envelope, _ = peer_envelopes(request)[-1]
+                identity = REQUESTS[self.calls - 1]
+                assert envelope["inputId"] == envelope["requestId"] == identity
+                assert envelope["senderSessionId"] == envelope["senderRuntimeSessionId"] == source["id"]
+                assert envelope["sourceGenerationId"] == "synthetic-overlap-generation"
+                assert envelope["sourceInputIds"] == [HUMAN_INPUT] and envelope["mode"] == "queue"
+                assert envelope["recipientSessionId"] == target["id"] and "humanResume" not in envelope
+                assert envelope["blockedTaskHandling"]["taskRevision"] == before["revision"]
+                assert_task_retained(worker, before, self.calls, identity)
+                seen.append(identity)
+                if self.calls == 1:
+                    provider_entered.set()
+                    await release_provider.wait()
+                return self.final(f"Handled {identity}; the objective remains blocked.")
+            except Exception:
+                failures.append(traceback.format_exc())
+                raise
+
+    async def bridge(action, args, identity):
+        return await app.app_bridge("dispatch", {
+            "action": action, "args": args, "id": identity,
+            "_runtimeSessionId": source["id"], "_generationId": "synthetic-overlap-generation",
+            "_inputBindings": [{"inputId": HUMAN_INPUT, "clientId": None}],
+        }, source["id"])
+
+    async def send(index):
+        return await bridge("coordination.send", {
+            "sessionId": target["id"], "mode": "queue",
+            "text": f"Inspect fresh dependency handoff {index + 1}; keep the objective blocked.",
+        }, REQUESTS[index])
+
+    async def assert_restored(count, identity):
+        # Fresh real RuntimeControls/TaskController, detached from the live
+        # coordinator. Restore only: no worker restart or native input replay.
+        restored = detached_controls(target["id"])
+        restored.preserve_configuration = True
+        state_bytes = worker.controls.state_path().read_bytes()
+        try:
+            for module, attr in (("orchestrator", "max_iterations"), ("context", "max_tokens")):
+                setattr(restored.coordinator.get(module), attr, getattr(worker.controls.coordinator.get(module), attr, None))
+            await restored.restore()
+            assert restored.tasks.record() == worker.controls.tasks.record()
+            assert restored.coordinator.session_state["goal"] is None
+            assert not await restored.tasks.continuation_allowed()
+            assert worker.controls.state_path().read_bytes() == state_bytes
+            assert_task_retained(worker, before, count, identity)
+        finally:
+            await restored.close()
+
+    recipient = GatedRecipient()
+    host.pump = asyncio.create_task(host.route_events())
+    try:
+        async with asyncio.timeout(60):
+            worker = await host.mount(target, recipient, paths)
+            # Only the recipient has a native runtime; the source binding is
+            # explicit fixture provenance, validated by the actual app bridge.
+            await app.on_runtime_event("runtime.generation", {
+                "sessionId": source["id"], "rootSessionId": source["id"],
+                "event": "generation.started", "generation_id": "synthetic-overlap-generation",
+            })
+            await app.on_runtime_event("runtime.status", {
+                "sessionId": source["id"], "status": "working",
+                "event": "input.delivered", "inputId": HUMAN_INPUT,
+            })
+            await worker.controls.perform("task.create", {
+                "commandId": "overlap-create", "origin": "agent", "expectedRevision": 0,
+                "objective": "Wait for independently checked dependencies", "maxTurns": 2,
+                "constraints": ["Preserve prior evidence"], "questionIds": ["unresolved-question"],
+                "operationIds": ["unresolved-operation"], "artifactRefs": ["fixture:original-evidence"],
+            })
+            task = (await worker.controls.perform("task.block", {
+                "commandId": "overlap-block", "origin": "agent", "expectedRevision": 1,
+                "reason": "Dependency checks remain unresolved",
+            }))["task"]
+            target["task"] = copy.deepcopy(task)
+            app._publish()
+            before = copy.deepcopy(worker.controls.tasks.record())
+            task_receipts = copy.deepcopy(worker.controls.tasks.receipts)
+            assert_task_retained(worker, before, 0)
+            native_submit = worker.runtime.submit
+
+            async def hold_ack(value, *args, **kwargs):
+                try:
+                    if value.kind == "user":
+                        assert value.id == REQUESTS[len(submitted)]
+                        # Real reserve_peer_input must persist BEFORE the real submit.
+                        assert_task_retained(worker, before, len(submitted) + 1, value.id)
+                        submitted.append(value.id)
+                    result = await native_submit(value, *args, **kwargs)
+                except Exception:
+                    failures.append(traceback.format_exc())
+                    raise
+                if value.kind == "user" and value.id == REQUESTS[0]:
+                    ack_pending.set()
+                    await lose_ack.wait()
+                    raise RuntimeError("Fixture lost acknowledgement AFTER real native submit")
+                return result
+
+            monkeypatch.setattr(worker.runtime, "submit", hold_ack)
+            assert (await send(0))["delivery"] == "queued"
+            await asyncio.gather(ack_pending.wait(), provider_entered.wait())
+            await host.flush()
+            assert worker.command_lock.locked()
+            assert app.collaboration.receipt(REQUESTS[0])["delivery"] == "submitting"
+            assert (await send(1))["delivery"] == "queued"
+            duplicates = await asyncio.gather(send(0), send(1), send(0), send(1))
+            assert all(row["duplicate"] for row in duplicates), duplicates
+            assert [row["delivery"] for row in duplicates] == ["submitting", "queued"] * 2
+            await app.collaboration.drain(target["id"])
+            assert submitted == seen == [REQUESTS[0]]
+            assert list(worker.runtime.accepted) == [REQUESTS[0]]
+            assert_task_retained(worker, before, 1, REQUESTS[0])
+
+            lose_ack.set()
+            unknown = copy.deepcopy(await settled_receipt(app, REQUESTS[0]))
+            assert unknown["delivery"] == "unknown" and "no replay" in unknown["admission"]["reason"], unknown
+            assert not release_provider.is_set() and worker.runtime.generation
+            await assert_restored(1, REQUESTS[0])
+            await app.collaboration.drain(target["id"])  # Busy: cannot charge the queued second input.
+            assert app.collaboration.receipt(REQUESTS[1])["delivery"] == "queued"
+            assert_task_retained(worker, before, 1, REQUESTS[0])
+            release_provider.set()
+            first = await host.outcome(worker, REQUESTS[0])  # Actual finished, then idle.
+            await app.collaboration.drain(target["id"])
+            second_receipt = await settled_receipt(app, REQUESTS[1])
+            assert second_receipt["delivery"] == "accepted" and second_receipt["admission"]["accepted"], second_receipt
+            second = await host.outcome(worker, REQUESTS[1])
+            assert first["generation_id"] != second["generation_id"]
+            assert [first["input_ids"], second["input_ids"]] == [[REQUESTS[0]], [REQUESTS[1]]]
+            assert (await send(2))["delivery"] == "queued"
+            third = await settled_receipt(app, REQUESTS[2])
+            assert third["delivery"] == "suppressed" and third["admission"]["accepted"] is False, third
+            assert "turn budget is exhausted" in third["admission"]["reason"], third
+            duplicates = await asyncio.gather(*(send(i) for i in (0, 1, 2)))
+            assert all(row["duplicate"] for row in duplicates), duplicates
+            assert [row["delivery"] for row in duplicates] == ["unknown", "accepted", "suppressed"]
+            read = await bridge("coordination.result", {"requestId": REQUESTS[0]}, "overlap-read-unknown")
+            assert read["accepted"] and not read["result"]["qualified"], read
+            assert read["result"]["receipt"] == unknown
+            await assert_restored(2, REQUESTS[1])
+            await app.collaboration.drain(target["id"])
+            await host.flush()
+            assert app.collaboration.receipt(REQUESTS[0]) == unknown
+            assert submitted == seen == list(worker.runtime.accepted) == list(REQUESTS[:2])
+            assert recipient.calls == 2 and not failures and not host.errors and not host.approvals
+            assert [row["inputId"] for row in host.admissions] == list(REQUESTS[1:])
+            assert [row["accepted"] for row in host.admissions] == [True, False]
+            assert_task_retained(worker, before, 2, REQUESTS[1])
+            assert worker.controls.tasks.receipts == task_receipts
+            native_rows = worker.store.load(target["id"])[0]
+            assert [(row.get("metadata") or {}).get("amplifier_input", {}).get("id")
+                    for row in native_rows if row["role"] == "user"] == list(REQUESTS[:2])
+            for terminal in (first, second):
+                anchor = terminal["nativeTerminal"]
+                assert display_message(native_rows[anchor["nativeIndex"]], anchor["nativeIndex"], target)["id"] == anchor["messageId"]
+            assert sum(e["type"] == "generation.started" for e in worker.runtime.events) == 2
+    except BaseException as exc:
+        exc.add_note(f"Provider/submit failures: {failures!r}\nAdmissions: {host.admissions!r}\n"
+                     f"Submitted: {submitted!r}; seen: {seen!r}\nNative tail: {host.published[-12:]!r}")
+        raise
+    finally:
+        lose_ack.set()
+        release_provider.set()
+        await app.close()
