@@ -113,7 +113,9 @@ try{
   if(width===1500){
    // Deliberately remove the visible affordances; the same geometry oracle must
    // reject the pre-fix discovery failure, not merely accept existing actions.
-   const hidden=await page.addStyleTag({content:'.a-canvas-tab-close,.a-canvas-dismiss{display:none!important}'});
+   // Preserve layout/scroll position: this negative removes discoverability,
+   // not width. display:none would also clamp the document strip's scroll.
+   const hidden=await page.addStyleTag({content:'.a-canvas-tab-close,.a-canvas-dismiss{visibility:hidden!important}'});
    await assert.rejects(()=>reachable(closeTab('Beta report')),/unclipped 44px/);
    await assert.rejects(()=>reachable(dismiss),/unclipped 44px/);
    await hidden.evaluate(el=>el.remove());
