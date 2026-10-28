@@ -645,10 +645,25 @@ try{
  await page.evaluate(id=>{void window.amplifier.dispatch('session.select',{id});},separateSession);
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId)).not.toBe(originalSession);
  await editor.fill('Separate draft');chatRelease();await chatDone;await page.unroute('**/api/actions');
- await page.getByText('The conversation changed. The quote was not added.',{exact:true}).first().waitFor();
  await expect(editor).toHaveText('Separate draft');await expect(quotes).toHaveCount(0);
  await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),originalSession);
  await expect(editor).toHaveText('Retain original draft');await expect(quotes).toHaveCount(0);
+ // Quote feedback stays with its originating chat (#1126). The late refusal explains the missing
+ // quote in the original chat and is absent beneath the other chat's composer.
+ const changedNotice=page.getByText('The conversation changed. The quote was not added.',{exact:true});
+ await changedNotice.first().waitFor();
+ await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),separateSession);
+ await expect(editor).toHaveText('Separate draft');await expect(changedNotice).toHaveCount(0);
+ await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),originalSession);
+ await expect(editor).toHaveText('Retain original draft');await changedNotice.first().waitFor();
+ // A successful quote's confirmation does not follow the user into another chat either.
+ const addedNotice=page.getByText('Quote added. Earlier quotes, commentary and attachments kept.',{exact:true});
+ await b.getByRole('button',{name:'Reply to message',exact:true}).click();await expect(quotes).toHaveCount(1);await addedNotice.first().waitFor();
+ await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),separateSession);
+ await expect(editor).toHaveText('Separate draft');await expect(addedNotice).toHaveCount(0);await expect(changedNotice).toHaveCount(0);
+ await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),originalSession);
+ await expect(quotes).toHaveCount(1);await addedNotice.first().waitFor();
+ await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();await expect(quotes).toHaveCount(0);
  assert.equal((await observe()).sends.length,2,'Quote/remove must not execute another turn');
  assert.deepEqual(errors,[]);
  async function compareReference(){
