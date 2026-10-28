@@ -191,6 +191,7 @@ async def test_later_commissioned_report_then_atomic_optin_correction(app):
     before = copy.deepcopy(source['task'])
     await agent_action(app, target, 'coordination.reply', {
         'requestId': 'optin-correction', 'kind': 'result', 'outcome': 'success',
+        'references': ['urn:fixture:corrected-candidate'],
         'text': 'Adjacent invariant corrected.'}, 'correction-report')
     await finish(app, target, 'optin-correction')
     for identity in (first_return, second_return):

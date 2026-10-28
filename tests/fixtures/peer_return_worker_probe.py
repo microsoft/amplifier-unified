@@ -23,6 +23,7 @@ import hashlib
 import importlib.metadata
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -599,7 +600,16 @@ async def run(root):
             old_artifacts, old_corrections = {}, {}
             for row in rows:
                 if row["kind"] == "sealed-report":
-                    assert row["report"] == revisions[row["report"]["responseRevision"]]
+                    observed_report = copy.deepcopy(row["report"])
+                    saved_report = revisions[observed_report["responseRevision"]]
+                    # Python -> native JSON -> provider round trips can move this
+                    # float one representable step. Validate that rounding only;
+                    # all identities, other fields and artifact hashes stay exact.
+                    observed_at, saved_at = observed_report["declaredAt"], saved_report["declaredAt"]
+                    assert math.isfinite(observed_at) and math.isfinite(saved_at)
+                    assert abs(observed_at - saved_at) <= max(math.ulp(observed_at), math.ulp(saved_at))
+                    observed_report["declaredAt"] = saved_at
+                    assert observed_report == saved_report
                 elif row["kind"] == "artifact":
                     key = (row["requestId"], row["revision"], row["name"])
                     assert old_artifacts.setdefault(key, row["artifact"]) == row["artifact"]
