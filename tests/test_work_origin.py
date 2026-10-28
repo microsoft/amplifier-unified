@@ -106,8 +106,8 @@ def test_child_assignment_retains_full_inputs_and_expires_with_parent_generation
 
 
 @pytest.mark.parametrize('fault', ['none', 'work_deny', 'stop_after_await', 'new_input_after_await',
-                                 'changed_arguments', 'late_mount', 'timeout', 'check_replaced'])
-async def test_final_tool_wrapper_runs_after_real_engine_approval_and_rechecks(app, fault):
+                                 'changed_arguments', 'late_mount', 'timeout', 'check_replaced', 'body_failure'])
+async def test_final_tool_wrapper_runs_after_real_engine_approval_and_rechecks(app, fault, monkeypatch):
     from amplifier_core import ToolResult, HookResult
     from amplifier_core.message_models import ToolCall
     adapter, child, required = await installed_work_adapter(app)
@@ -120,6 +120,8 @@ async def test_final_tool_wrapper_runs_after_real_engine_approval_and_rechecks(a
         'input_ids': list(adapter.scope['inputIds'])}, closed=False, stop_requested=False)
     worker.activation_gate = SimpleNamespace(current_valid=True)
     worker.app_access_bridge(c)
+    timings = []
+    c.register_capability('web.performance.emit', timings.append)
     adapter.delivery.begin_work.__self__.origin_scope = c.get_capability('web.work_origin_scope')
     stages, witnesses, effects, actual_arguments = [], [], [], []
     actual_check = c.get_capability('web.work_effect_check')
@@ -149,7 +151,7 @@ async def test_final_tool_wrapper_runs_after_real_engine_approval_and_rechecks(a
         async def execute(self, value):
             stages.append('execute')
             effects.append(value)
-            return ToolResult(success=True, output='fixture')
+            return ToolResult(success=fault != 'body_failure', output='fixture')
     if fault != 'late_mount':
         adapter.tools['probe'] = Probe()
     async def policy(event, data):
@@ -175,12 +177,21 @@ async def test_final_tool_wrapper_runs_after_real_engine_approval_and_rechecks(a
     await adapter.loop._execute_tool_only(ToolCall(id='final-call', name='probe', arguments=arguments),
                                          adapter.tools, adapter.hooks, None, c)
     assert stages[:2] == ['policy', 'service']
-    assert bool(effects) is (fault in {'none', 'late_mount', 'check_replaced'})
+    assert bool(effects) is (fault in {'none', 'late_mount', 'check_replaced', 'body_failure'})
     witness = witnesses[0]['_workOrigin']
     assert witness['complete'] is True and witness['effectAuthorized'] is False
     assert witness['toolCallId'] == witnesses[0]['toolCallId'] == 'final-call'
     assert witness['origin']['admittedCallId'] in adapter.admissions
     assert c._tool_dispatch_contexts == {}
+    assert len(timings) == 1
+    timing = timings[0]
+    assert timing['toolCallId'] == 'final-call'
+    assert timing['generationId'] == adapter.scope['generationId']
+    marks = timing['marks']
+    assert marks['start'] <= marks['origin.start'] <= marks['origin.end'] <= marks['check.start'] <= marks['check.end'] <= marks['end']
+    assert ('body.start' in marks) == bool(effects)
+    assert timing['outcome'] == ('failed' if fault == 'body_failure' else 'completed' if effects else 'denied')
+    assert 'path' not in str(timing) and 'fixture' not in str(timing)
 
 
 async def test_real_rust_coordinator_mount_wraps_late_tools():

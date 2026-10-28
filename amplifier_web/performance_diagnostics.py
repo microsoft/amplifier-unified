@@ -7,10 +7,155 @@ Stack sampling remains the separate opt-in profiling facility.
 import asyncio
 from collections import deque
 from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from functools import wraps
+from functools import lru_cache
+import hashlib
 import inspect
+import os
+from pathlib import Path
+import re
 import threading
 import time
+import uuid
+
+
+# Observation only. Neither context participates in Work or permission decisions.
+TOOL_TIMING = ContextVar('unified_tool_timing', default=None)
+BRIDGE_TIMING = ContextVar('unified_bridge_timing', default=None)
+# Inherited at process startup so an uninstrumented control disables BOTH ends.
+TIMING_ENABLED = os.environ.get('AMPLIFIER_RUNTIME_TIMING', '1') != '0'
+TIMING_MARKS = frozenset({
+    'start', 'origin.start', 'origin.end', 'check.start', 'check.end',
+    'body.start', 'body.end', 'end', 'write.start', 'write.end', 'received',
+    'resumed', 'dequeued', 'handler.start', 'handler.end', 'reply.start',
+    'reply.end', 'lock.start', 'lock.end', 'checkpoint.start', 'checkpoint.end',
+    'history.refresh.start', 'history.refresh.end', 'history.copy.start',
+    'history.copy.end', 'history.read.start', 'history.read.end',
+})
+
+
+@lru_cache(maxsize=1)
+def clock_domain():
+    """Comparable only on a verified common Linux boot AND time namespace.
+
+    Failure means unknown, not a guessed clock offset. Wall time is never used
+    for phase subtraction. Hashes avoid exporting host/namespace identifiers.
+    """
+    try:
+        if time.get_clock_info('monotonic').implementation != 'clock_gettime(CLOCK_MONOTONIC)':
+            return None
+        boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+        namespace = os.readlink('/proc/self/ns/time')
+        offsets = Path('/proc/self/timens_offsets').read_text()
+        return hashlib.sha256(f'{boot}\n{namespace}\n{offsets}'.encode()).hexdigest()
+    except (OSError, ValueError):
+        return None
+
+
+def timing_identity(value):
+    return value if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}', value) else None
+
+
+def timing_metadata(value):
+    """Bounded, detached wire facts. They are never authority or tool results."""
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    for key in ('invocationId', 'toolCallId', 'runtimeSessionId', 'generationId', 'bridgeId', 'operation'):
+        item = timing_identity(value.get(key))
+        if item is not None:
+            result[key] = item
+    if type(value.get('kind')) is str and value['kind'] in {'tool', 'bridge', 'host.bridge', 'checkpoint'}:
+        result['kind'] = value['kind']
+    if type(value.get('outcome')) is str and value['outcome'] in {'completed', 'failed', 'cancelled', 'denied'}:
+        result['outcome'] = value['outcome']
+    domain = value.get('clockDomain')
+    if isinstance(domain, str) and re.fullmatch('[a-f0-9]{64}', domain):
+        result['clockDomain'] = domain
+    marks = value.get('marks')
+    if isinstance(marks, dict):
+        result['marks'] = {key: item for key, item in marks.items()
+                           if key in TIMING_MARKS and type(item) is int and 0 <= item < 2**63}
+    return result
+
+
+class PhaseTiming:
+    def __init__(self, **facts):
+        self.facts = timing_metadata(facts)
+        self.facts.pop('clockDomain', None)
+        domain = clock_domain()
+        if domain:
+            self.facts['clockDomain'] = domain
+        self.marks = {}
+        self.outcome = 'completed'
+        self.task = asyncio.current_task()
+        self.active = True
+
+    def mark(self, name):
+        if name in TIMING_MARKS:
+            self.marks[name] = time.monotonic_ns()
+
+    def snapshot(self, outcome=None):
+        return {**self.facts, 'marks': dict(self.marks), 'outcome': outcome or self.outcome}
+
+
+def active_bridge():
+    timing = BRIDGE_TIMING.get()
+    return timing if timing and timing.active and timing.task is asyncio.current_task() else None
+
+
+def active_tool(coordinator=None):
+    scope = TOOL_TIMING.get()
+    if (scope and scope['active'] and scope['task'] is asyncio.current_task()
+            and (coordinator is None or scope['coordinator'] is coordinator)):
+        # A context inherited by a nested/background task is not its call ID.
+        dispatch = getattr(scope['coordinator'], '_tool_dispatch_contexts', {}).get(asyncio.current_task())
+        if dispatch is scope['dispatch'] and dispatch.get('tool_call_id') == scope['call']:
+            return scope['timing']
+    return None
+
+
+@contextmanager
+def tool_scope(coordinator, name):
+    """One invocation, including origin revalidation bridges, with no extra RPC."""
+    emit = coordinator.get_capability('web.performance.emit')
+    dispatch = getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task())
+    call = timing_identity(dispatch.get('tool_call_id')) if isinstance(dispatch, dict) else None
+    timing = PhaseTiming(kind='tool', operation=name,
+                         runtimeSessionId=coordinator.session_id,
+                         **({'toolCallId': call} if call else {}),
+                         invocationId=uuid.uuid4().hex) if TIMING_ENABLED and callable(emit) else None
+    if timing:
+        source = coordinator.get_capability('web.performance.scope')
+        if callable(source):
+            timing.facts.update({key: value for key, value in timing_metadata(source()).items()
+                                 if key in {'runtimeSessionId', 'generationId'}})
+    scope = {'timing': timing, 'task': asyncio.current_task(), 'coordinator': coordinator,
+             'dispatch': dispatch, 'call': call, 'active': True}
+    token = TOOL_TIMING.set(scope if timing and call else None)
+    outcome = 'completed'
+    try:
+        if timing:
+            timing.mark('start')
+        yield timing
+    except BaseException as exc:
+        outcome = 'cancelled' if isinstance(exc, asyncio.CancelledError) else 'failed'
+        raise
+    finally:
+        scope['active'] = False
+        TOOL_TIMING.reset(token)
+        if timing:
+            timing.mark('end')
+            try:
+                emit(timing.snapshot(outcome if outcome != 'completed' else None))
+            except Exception:
+                pass  # Observability must not replace an outcome.
+
+
+def mark(timing, name):
+    if timing is not None:
+        timing.mark(name)
 
 
 class PerformanceDiagnostics:
@@ -22,6 +167,7 @@ class PerformanceDiagnostics:
         self.resource_rebuilds = deque(maxlen=60)
         self.projection_failures = deque(maxlen=16)
         self.shell_queries = deque(maxlen=60)
+        self.runtime_timings = deque(maxlen=120)
         self.resource_rebuild_counts = {'total': 0, 'byReason': {}, 'byResource': {}}
         self.lock = threading.Lock()
         self.task = None
@@ -53,6 +199,14 @@ class PerformanceDiagnostics:
         with self.lock:
             if name in self.counters or len(self.counters) < 64:
                 self.counters[name] = self.counters.get(name, 0) + amount
+
+    def record_runtime_timing(self, session_id, value):
+        row = timing_metadata(value)
+        if row.get('kind') and row.get('marks'):
+            row['sessionId'] = session_id
+            row['observedAt'] = time.time()
+            with self.lock:
+                self.runtime_timings.append(row)
 
     def record_lag(self, delay):
         if delay >= 0.1:
@@ -129,6 +283,7 @@ class PerformanceDiagnostics:
                                          for key, value in values.items()}
                                    for name, values in self.operations.items()},
                     'slowOperations': [dict(row) for row in self.slow],
+                    'runtimeTimings': [{**row, 'marks': dict(row['marks'])} for row in self.runtime_timings],
                     'eventLoopDelays': [dict(row) for row in self.lag],
                     'historyProjectionFailures': [dict(row) for row in self.projection_failures],
                     'shellQueries': [{**row, **({'failure': dict(row['failure'])}

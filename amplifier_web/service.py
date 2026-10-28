@@ -1744,10 +1744,12 @@ class AppService:
                 startup_timeout=current.startup_timeout,
                 progress_interval=current.progress_interval,
                 retention=retention if retention is not None else dict(current.retention.settings),
+                performance_diagnostics=self.performance_diagnostics,
             )
         from .deployment import load_server_config
         config = getattr(self, "server_config", None) or load_server_config(self.data_dir)
         return RuntimeManager(app_bridge=self.app_bridge,
+                              performance_diagnostics=self.performance_diagnostics,
                               retention=retention if retention is not None else config["runtime"])
 
     async def install_runtime(self, runtime):
@@ -4413,6 +4415,11 @@ class AppService:
             self._publish(session_ids=changed, record_only=True, detail_only=True)
 
     async def on_runtime_event(self, kind, payload):
+        if kind == 'runtime.timing':
+            # Disposable diagnostics must not hydrate a session, acquire its
+            # state lock, dirty progress or trigger another durable publication.
+            self.performance_diagnostics.record_runtime_timing(payload.get('sessionId'), payload.get('timing'))
+            return
         if kind == 'image.generated':
             from .image_results import attach_completed
             await attach_completed(self, payload)
@@ -4941,9 +4948,13 @@ class AppService:
     async def _app_bridge(self, operation, args, session_id, *, input_origin=None):
         if operation == 'work.effect.check':
             from .workspace_work_effects import check
+            from .performance_diagnostics import active_bridge, mark
             # Private worker transport only. This synchronous read is a Work
             # precondition, not a reusable permission or delayed-effect grant.
+            timing = active_bridge()
+            mark(timing, 'lock.start')
             async with self.lock:
+                mark(timing, 'lock.end')
                 return check(self.work_invocation, session_id, args)
         if operation == 'work.invocation.revalidate':
             if set(args) != {'version'} or not isinstance(args['version'], str) or len(args['version']) > 64:

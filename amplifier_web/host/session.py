@@ -1086,7 +1086,27 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         continuity = install_continuity(coordinator, runtime.session_id, edited_path.parent, checkpoint)
         async def checkpoint_hook(event, data):
             if data.get("session_id", runtime.session_id) == runtime.session_id:
-                await checkpoint()
+                from ..performance_diagnostics import PhaseTiming, TIMING_ENABLED
+                emit = coordinator.get_capability('web.performance.emit')
+                timing = (PhaseTiming(kind='checkpoint', toolCallId=data.get('tool_call_id'),
+                    runtimeSessionId=runtime.session_id,
+                    generationId=(runtime.generation or {}).get('id'))
+                    if TIMING_ENABLED and callable(emit) else None)
+                outcome = 'completed'
+                if timing:
+                    timing.mark('checkpoint.start')
+                try:
+                    await checkpoint()
+                except BaseException as exc:
+                    outcome = 'cancelled' if isinstance(exc, asyncio.CancelledError) else 'failed'
+                    raise
+                finally:
+                    if timing:
+                        timing.mark('checkpoint.end')
+                        try:
+                            emit(timing.snapshot(outcome))
+                        except Exception:
+                            pass
             return HookResult()
         for event in ("tool:post", "tool:error", "orchestrator:complete", "context:compaction_finished"):
             coordinator.hooks.register(event, checkpoint_hook, name="unified-checkpoint-" + event)

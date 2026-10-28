@@ -214,3 +214,85 @@ async def test_bridge_timeout_emits_bounded_correlated_diagnostic(monkeypatch, o
     assert diagnostics[1]['generation_id'] == 'g'
     assert 'private' not in str(diagnostics)
     assert not worker.bridges
+    timings = [row['timing'] for row in emitted if row.get('type') == 'runtime.timing']
+    assert len(timings) == 1 and timings[0]['outcome'] == 'failed'
+    assert timings[0]['bridgeId'] == diagnostics[0]['bridgeId']
+    assert 'private' not in str(timings) and not worker.bridge_timings
+
+
+@pytest.mark.parametrize('outcome', ['completed', 'failed', 'cancelled'])
+async def test_bridge_phase_timing_preserves_results_and_task_identity(monkeypatch, outcome):
+    import asyncio
+    from amplifier_web import runtime_worker
+    from amplifier_web.performance_diagnostics import tool_scope, active_tool
+    worker = Worker()
+    c = coordinator('native')
+    worker.runtime = SimpleNamespace(generation={'id': 'generation'})
+    emitted = []
+    c.register_capability('web.performance.emit', lambda row: emitted.append({'type': 'tool-timing', 'timing': row}))
+
+    async def invoke(call):
+        task = asyncio.current_task()
+        c._tool_dispatch_contexts[task] = {'tool_call_id': call}
+        try:
+            with tool_scope(c, 'probe'):
+                assert active_tool(c).facts['toolCallId'] == call
+                async def inherited():
+                    assert active_tool(c) is None
+                await asyncio.create_task(inherited())
+                if outcome == 'cancelled':
+                    pending = asyncio.create_task(worker.bridge('history', {'secret': 'private'}))
+                    await asyncio.sleep(0)
+                    pending.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await pending
+                elif outcome == 'failed':
+                    with pytest.raises(RuntimeError, match='controlled'):
+                        await worker.bridge('history', {'secret': 'private'})
+                else:
+                    assert await worker.bridge('history', {'secret': 'private'}) == {'exact': call}
+        finally:
+            c._tool_dispatch_contexts.pop(task)
+
+    def publish(row):
+        emitted.append(row)
+        if row.get('op') == 'bridge' and outcome != 'cancelled':
+            # Reply delivery is asynchronous, just as the real protocol reader.
+            call = row['_timing'].get('toolCallId')
+            reply = {'op': 'bridge.result', 'id': row['id'],
+                     **({'error': 'controlled'} if outcome == 'failed' else {'result': {'exact': call}})}
+            asyncio.create_task(worker._command_serial(reply))
+    monkeypatch.setattr(runtime_worker, 'publish', publish)
+    c._tool_dispatch_contexts = {}
+    await asyncio.gather(invoke('call-a'), invoke('call-b'))
+    timings = [row['timing'] for row in emitted if row.get('type') == 'runtime.timing']
+    assert len(timings) == 2 and len({row['bridgeId'] for row in timings}) == 2
+    assert all(row['outcome'] == outcome for row in timings)
+    assert 'private' not in str(timings)
+    if outcome != 'cancelled':
+        assert {row['toolCallId'] for row in timings} == {'call-a', 'call-b'}
+        assert all(row['marks']['write.start'] <= row['marks']['write.end'] <= row['marks']['received'] <= row['marks']['end'] for row in timings)
+    else:
+        assert all('toolCallId' not in row for row in timings), 'Inherited task context must not manufacture a join'
+    assert not worker.bridges and not worker.bridge_timings and active_tool(c) is None
+
+
+async def test_bridge_cleanup_precedes_disposable_timing_and_probes_off(monkeypatch):
+    import asyncio
+    from amplifier_web import runtime_worker, performance_diagnostics
+    worker = Worker()
+    events = []
+    def publish(row):
+        events.append(row)
+        if row.get('type') == 'runtime.timing':
+            assert not worker.bridges and not worker.bridge_timings
+        if row.get('op') == 'bridge':
+            asyncio.create_task(worker._command_serial({'op': 'bridge.result', 'id': row['id'], 'result': {'ok': True}}))
+    monkeypatch.setattr(runtime_worker, 'publish', publish)
+    assert await worker.bridge('capacity.admit', {'waitForCapacity': True}) == {'ok': True}
+    assert next(i for i, r in enumerate(events) if r.get('op') == 'bridge.received') < next(
+        i for i, r in enumerate(events) if r.get('type') == 'runtime.timing')
+    events.clear()
+    monkeypatch.setattr(performance_diagnostics, 'TIMING_ENABLED', False)
+    assert await worker.bridge('history', {}) == {'ok': True}
+    assert all('_timing' not in r and r.get('type') != 'runtime.timing' for r in events)
