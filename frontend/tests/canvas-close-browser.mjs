@@ -59,7 +59,10 @@ try{
   const overview=panel.getByRole('tab',{name:'Chat overview',exact:true});
   const toggle=page.locator('#canvas-toggle');
   const artifactRows=async()=>{const s=await state();return s.canvasArtifacts.filter(row=>row.sessionId===s.selectedSessionId)};
-  const versions=()=>action('canvas.versions.inspect',{id:first.id,version:1,includeSource:true});
+  const versions=async()=>Promise.all([[first.id,1],[first.id,2],[second.id,1]].map(async([id,version])=>{
+   const result=await action('canvas.versions.inspect',{id,version,includeSource:true});
+   return {id,version,source:result.source,versions:result.versions,revision:result.revision};
+  }));
   const savedBefore=await versions(),snapshot=await state();
   const historyBefore=snapshot.sessions.find(row=>row.id===snapshot.selectedSessionId).messages;
   const fixtureBefore=await (await page.request.get(url+'/fixture')).json();
@@ -70,6 +73,16 @@ try{
    assert.ok(box.width>=44&&box.height>=44&&box.hit,'Close control must have an unclipped 44px hit target');
   };
   const use=async locator=>{await reachable(locator);if(width<500)await locator.tap();else await locator.click()};
+  const headerContained=async()=>{
+   const sample=await panel.evaluate(el=>{
+    const header=el.querySelector('.a-canvas-head').getBoundingClientRect(),content=el.querySelector('.a-canvas-content').getBoundingClientRect();
+    return {headerBottom:header.bottom,contentTop:content.top,contained:[...el.querySelectorAll('.a-canvas-head>.a-open-documents,.a-canvas-head>.a-icon,.a-canvas-head>.a-canvas-dismiss')].every(button=>{
+     const r=button.getBoundingClientRect();return r.top>=header.top&&r.bottom<=header.bottom+1&&r.left>=header.left&&r.right<=header.right+1;
+    })};
+   });
+   assert.ok(sample.contained&&sample.contentTop>=sample.headerBottom-1,'Header actions must not overlap the reader');
+   report.geometry.push({width,focused:(await state()).view.canvasFocused,...sample});
+  };
   const preserved=async()=>{
    assert.equal((await artifactRows()).length,2);
    assert.deepEqual(await versions(),savedBefore,'Closing views cannot revise saved versions');
@@ -82,9 +95,21 @@ try{
    const saved=panel.locator('.a-saved-artifact').filter({hasText:title});
    await saved.click();
    await expect(panel.getByRole('tab',{name:title,exact:true})).toHaveAttribute('aria-selected','true');
+   await expect(panel.getByRole('heading',{name:title==='Beta report'?'Beta retained':'Alpha revised',exact:true})).toBeVisible();
   };
   await expect(dismiss).toContainText('Close Canvas');
+  await headerContained();
   await reachable(dismiss);await reachable(closeTab('Beta report'));
+  if(width===1500){
+   // Deliberately remove the visible affordances; the same geometry oracle must
+   // reject the pre-fix discovery failure, not merely accept existing actions.
+   const hidden=await page.addStyleTag({content:'.a-canvas-tab-close,.a-canvas-dismiss{display:none!important}'});
+   await assert.rejects(()=>reachable(closeTab('Beta report')),/unclipped 44px/);
+   await assert.rejects(()=>reachable(dismiss),/unclipped 44px/);
+   await hidden.evaluate(el=>el.remove());
+   await reachable(dismiss);await reachable(closeTab('Beta report'));
+   report.checks.push({name:'Missing visible close controls rejected by the same oracle',status:'passed'});
+  }
   await use(closeTab('Beta report'));
   await expect(panel.getByRole('tab',{name:'Beta report',exact:true})).toHaveCount(0);
   await expect(panel.getByRole('tab',{name:'Alpha report',exact:true})).toHaveAttribute('aria-selected','true');
@@ -116,6 +141,7 @@ try{
   await use(dismiss);await expect(panel).toBeHidden();await toggle.click();
   // Full-frame and narrow dismissal share the retained visibility operation.
   await panel.getByRole('button',{name:'Focus canvas',exact:true}).click();
+  await headerContained();await capture('focused-'+width);
   await use(dismiss);await expect(panel).toBeHidden();
   assert.equal((await state()).view.canvasFocused,false);
   await toggle.click();await expect(panel).toBeVisible();await preserved();

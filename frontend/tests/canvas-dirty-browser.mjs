@@ -230,8 +230,11 @@ try {
  await expect(primary).toHaveCount(1);assert.equal(await primary.getAttribute('data-mount'),mount);
  await expect(toggle).toHaveAccessibleName('Open canvas');await toggle.click();await retained();
  // The newly visible close button uses the same dirty refusal as the list.
- await panel.locator('.a-canvas-document-tabs').getByRole('button',{name:'Close tab Editable artifact',exact:true}).click();
+ const directClose=panel.locator('.a-canvas-document-tabs').getByRole('button',{name:'Close tab Editable artifact',exact:true});
+ await editableTab.focus();await page.keyboard.press('Tab');await expect(directClose).toBeFocused();
+ await page.keyboard.press('Enter');
  await expect(panel.locator('.a-canvas-navigation-error')).toContainText('viewer edit');
+ await expect(directClose).toBeFocused();
  await retained();
  await overviewTab.click();await retained(true);
  await toggle.click();await expect(panel).toBeHidden();await toggle.click();await retained(true);

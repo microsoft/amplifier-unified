@@ -111,7 +111,7 @@
 /* Keep named dismissal and full tab/close hit targets at narrow pane widths.
    This is still one document navigation strip, not a second navigation owner. */
 @container canvas (max-width:600px){
- #amp-one.a-approachable-shell .a-canvas-panel .a-canvas-head{display:grid;grid-template-columns:1fr 44px auto;height:auto;min-height:100px}
+ #amp-one.a-approachable-shell .a-canvas-panel[data-focused] .a-canvas-head{display:grid;grid-template-columns:1fr 44px auto;height:auto;min-height:100px}
  #amp-one .a-canvas-navigation{grid-column:1 / -1}
  #amp-one .a-open-documents{justify-self:start}
  #amp-one .a-open-documents>span{display:inline}
