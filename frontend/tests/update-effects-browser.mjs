@@ -23,6 +23,22 @@ try{
  await updates.getByRole('button',{name:'Update Amplifier',exact:true}).click();
  await expect(overview).toContainText('Waiting for 1 chat to finish');const staged=await receipt();assert.equal(staged.calls.length,1);assert.equal(staged.calls[0].application.latest,'99.0.0');assert.equal(staged.generation.active,'original-generation');assert.deepEqual(staged.updates.pendingApp,staged.target);
  await updates.locator('[data-part="update-blockers"]>summary').click();await expect(updates.locator('[data-part="update-blockers"]')).toContainText('Settings test');
+ const blockers=updates.locator('[data-part="update-blockers"]');
+ for(const [mode,label,code,linked] of [
+  ['management-hold','Update waits for global configuration management to settle','management-lock-held',false],
+  ['unobservable-hold','Update cannot verify global runtime activity','runtime-observer-unavailable',false],
+  ['operation-hold','Conversation configuration operation remains held for recovery','operation-bound-recovery',true]]){
+  await receipt(mode);await expect(blockers).toContainText(label);
+  await expect(blockers).not.toContainText('Conversation settings are being applied');
+  await expect(blockers.getByRole('button',{name:'Settings test',exact:true})).toHaveCount(linked?1:0);
+  const response=await page.request.post(boot.url+'/api/actions',{data:{action:'updates.diagnostics',args:{}}});
+  assert.ok(response.ok());const report=(await response.json()).result;
+  assert.equal(report.activationGate.blocked,true);
+  assert.equal(report.activationGate.configurationHolds[0].reasonCode,code);
+  assert.ok(!JSON.stringify(report).includes('PRIVATE_'));
+  assert.equal((await receipt()).calls.length,1);
+ }
+ await receipt('hold-clear');await expect(overview).toContainText('Waiting for 1 chat to finish');
  assert.equal(actions.filter(row=>row.action==='updates.forceRestart').length,0);assert.equal(staged.updates.application.current,'0.20.165');
  await expect(identity).toHaveText('Amplifier 0.20.165 · Latest 99.0.0');await expect(overview).not.toContainText('Latest release installed');
  // A public check refreshes the channel while work is running, without turning

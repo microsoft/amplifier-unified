@@ -70,7 +70,9 @@ def test_source_redaction_handles_credential_urls_and_custom_hosts():
 
 async def test_failure_report_remains_available_when_runtime_cannot_be_inspected(changed_worker, monkeypatch):
     from types import SimpleNamespace
+    from amplifier_web.updates import UpdateManager
     manager, *_ = changed_worker
+    manager.requires_idle = UpdateManager.requires_idle
     manager.lock = asyncio.Lock()
     manager.service = SimpleNamespace(state={'updates': {'error': 'private exception', 'diagnostics': {
         'lastFailure': {'phase': 'ecosystem-runtime-preflight', 'errorType': 'ValueError', 'reason': 'protected-runtime-source',
@@ -101,4 +103,50 @@ async def test_report_contains_bounded_scheduler_state_and_check_history(tmp_pat
     assert len(report['recentChecks']) == 5
     assert report['recentChecks'][0]['startedAt'] == 3
     assert 'private path' not in json.dumps(report) and 'secret' not in json.dumps(report)
+    await service.close()
+
+
+async def test_gate_observation_revision_precedes_async_inventory(tmp_path, monkeypatch):
+    from amplifier_web.service import AppService
+    from amplifier_web.updates import UpdateManager
+    from test_service import Runtime
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    manager = service.update_manager = UpdateManager(service)
+    revision = service.state['revision']
+    original_to_thread = asyncio.to_thread
+
+    async def inventory_boundary(function, *args):
+        service.state['revision'] += 1
+        service.state['voicePreviewBusy'] = True
+        return {}
+
+    monkeypatch.setattr(update_report.asyncio, 'to_thread', inventory_boundary)
+    try:
+        report = await update_report.collect(manager)
+    finally:
+        monkeypatch.setattr(update_report.asyncio, 'to_thread', original_to_thread)
+    assert report['activationGate']['stateRevision'] == revision
+    assert report['activationGate']['blocked'] is False
+    assert service.state['revision'] == revision + 1 and manager.busy()
+    await service.close()
+
+
+async def test_failed_gate_observation_is_unavailable_not_clear(tmp_path, monkeypatch):
+    from amplifier_web.service import AppService
+    from amplifier_web.updates import UpdateManager
+    from test_service import Runtime
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    manager = service.update_manager = UpdateManager(service)
+    def fail():
+        raise ValueError('SECRET_OBSERVER /private/path')
+    service.runtime.has_pending_operations = fail
+    monkeypatch.setattr(update_report, 'runtime_report', lambda home: {})
+    report = await update_report.collect(manager)
+    assert report['activationGate']['unavailable']
+    assert report['activationGate']['blocked'] is None
+    assert report['activationGate']['reasonCode'] == 'observation-failed'
+    assert 'SECRET_OBSERVER' not in json.dumps(report) and '/private/path' not in json.dumps(report)
+    with pytest.raises(ValueError, match='SECRET_OBSERVER'):
+        manager.busy()  # Diagnostics did not weaken or replace admission.
+    service.runtime.has_pending_operations = lambda: False
     await service.close()
