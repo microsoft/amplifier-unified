@@ -639,9 +639,19 @@ async def run(root):
             for role, session in roots.items():
                 reader = {**session, "nativeProject": project(session)}
                 messages = SessionHistoryStore(directory(reader)).load_messages()
+                user_rows = [row for row in messages if row.get("role") == "user"]
+                # Foundation retains the host's pre-user system reminder with
+                # user role. It is not another admitted input. Refuse all other
+                # unprovenanced rows rather than silently dropping them.
+                for row in user_rows:
+                    metadata = row.get("metadata") or {}
+                    if not metadata.get("amplifier_input", {}).get("id"):
+                        assert metadata.get("ephemeral") is True, row
+                        assert metadata.get("reminder_placement") == "pre_user", row
                 native_inputs = Counter(
                     (row.get("metadata") or {}).get("amplifier_input", {}).get("id")
-                    for row in messages if row.get("role") == "user")
+                    for row in user_rows
+                    if (row.get("metadata") or {}).get("amplifier_input", {}).get("id"))
                 assert native_inputs == Counter({i: n for (sid, i), n in delivered.items()
                                                  if sid == session["id"]}), native_inputs
                 assert session["workspace"] == before[role]["workspace"]
