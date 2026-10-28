@@ -102,6 +102,10 @@ class BlockedRecipient(ScriptedProvider):
             return self.dispatch(f"blocked-reply-{index}", "coordination.reply", {
                 "requestId": identity, "kind": "result", "outcome": "success",
                 "text": f"Inspected fresh dependency handoff {index + 1}; the objective stays blocked.",
+                # Typed success needs an explicit result reference as well as
+                # the native terminal anchor. This is a synthetic citation, not
+                # independently verified artifact bytes.
+                "references": [f"urn:fixture:blocked-handoff:{index + 1}"],
             })
         receipt = tool_output(request, f"blocked-reply-{index}")
         assert receipt["accepted"] and receipt["result"]["status"] == "staged", receipt
