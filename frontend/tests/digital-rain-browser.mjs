@@ -1,0 +1,117 @@
+// Production host and renderer; synthetic messages, isolated data, no model calls.
+import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {mkdir} from 'node:fs/promises';
+import assert from 'node:assert/strict';
+import {chromium,expect} from '@playwright/test';
+import {showFixtureConversation} from './browser-chat-pages.mjs';
+import './composer-test-helpers.mjs';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
+
+const root=fileURLToPath(new URL('../../',import.meta.url));
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',
+ [root+'tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
+const stop=ownFixture(fixture,{label:'Digital Rain fixture'});
+const out=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp/amplifier-digital-rain';
+let browser,failure;
+try{
+ const url=await new Promise((resolve,reject)=>{
+  let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);
+  fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});
+  fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{
+   const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row.url)}
+  }catch{}});
+ });
+ await mkdir(out,{recursive:true});
+ browser=await chromium.launch({headless:true});
+ const page=await browser.newPage({viewport:{width:1600,height:1000},colorScheme:'light',
+  reducedMotion:'no-preference',extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const errors=[];page.on('pageerror',error=>errors.push(error.message));
+ const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
+ const presentation=patch=>page.evaluate(async patch=>{
+  const state=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
+  const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,
+   expectedRevision:state.revision,composition:{...state.effectiveComposition,
+    presentation:{...state.effectiveComposition.presentation,...patch}}});
+  const applied=await window.amplifier.dispatch('shell.changes.apply',{clientId,
+   expectedRevision:state.revision,changeId:prepared.result.id});
+  if(!applied.accepted)throw Error('Presentation was not applied');
+ },patch);
+ await page.goto(url);await showFixtureConversation(page,{navPinned:false});
+ await action('session.create');
+ const input=page.getByRole('textbox',{name:'Message Amplifier'});
+ await input.fill('A synthetic long message for appearance checks. '.repeat(90));
+ await page.getByRole('button',{name:'Send message',exact:true}).click();
+ await page.getByText('Synthetic first response',{exact:true}).waitFor();
+ await input.fill('Retain this unsent draft.');
+ const selected=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
+ const theme=(await action('theme.read',{id:'builtin:digital-rain'})).result;
+ assert.equal(theme.name,'Digital Rain');
+ const preset=(await action('theme.read',{id:'builtin:graphite'})).result;
+ await action('theme.apply',{name:preset.name,css:preset.css});
+ const geometry=()=>page.locator('[data-part="conversation"]').evaluate(el=>{
+  const rail=el.querySelector('.a-conversation-rail'),messages=el.querySelector('[data-part="messages"]');
+  const bounds=el.getBoundingClientRect(),box=messages.getBoundingClientRect();
+  return {railPosition:rail&&getComputedStyle(rail).position,
+   railTop:rail?rail.getBoundingClientRect().top-bounds.top:null,
+   messagesBottom:box.bottom,composerTop:el.querySelector('form[data-part="composer"]').getBoundingClientRect().top};
+ });
+ const baseline=await geometry();
+ await action('theme.apply',{name:theme.name,css:theme.css});
+ for(const scheme of ['light','dark','system']){
+  await presentation({scheme});
+  const expected=scheme==='system'?'light':scheme;
+  await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',expected);
+  await expect.poll(()=>page.locator('#amp-one').evaluate(el=>getComputedStyle(el).getPropertyValue('--a-ink').trim()))
+   .toBe(expected==='light'?'#143522':'#e0f4e5');
+  const styles=await page.locator('[data-part="conversation"]').evaluate(el=>{
+   const style=node=>getComputedStyle(node),rain=getComputedStyle(el,'::before');
+   return {images:rain.backgroundImage.match(/data:image\/png/g)?.length,animation:rain.animationName,
+    form:style(el.querySelector('form[data-part="composer"]')).backgroundColor,
+    configuration:style(el.querySelector('.a-compose-configuration')).backgroundColor,
+    user:style(el.querySelector('.a-message.a-user')).backgroundColor,
+    input:style(el.querySelector('[data-part="composer-surface"]')).backgroundColor,
+    mask:style(el.querySelector('[data-part="messages"]')).maskImage,
+    font:style(el.querySelector('.a-message.a-user p')).fontFamily};
+  });
+  assert.equal(styles.images,3);assert.equal(styles.animation,'digital-rain-drift');
+  for(const key of ['form','configuration','user'])assert.equal(styles[key],'rgba(0, 0, 0, 0)',key);
+  assert.notEqual(styles.input,'rgba(0, 0, 0, 0)');
+  assert.match(styles.mask,/linear-gradient/);assert.match(styles.font,/mono|Menlo|Consolas/i);
+  const after=await geometry();assert.equal(after.railPosition,'absolute');
+  assert.ok(Math.abs(after.railTop-baseline.railTop)<16,'Navigator retains native top anchoring');
+  assert.ok(Math.abs((after.composerTop-after.messagesBottom)-(baseline.composerTop-baseline.messagesBottom))<24,
+   'Theme does not reserve an extra flex child beneath the transcript');
+  const before=await page.locator('[data-part="conversation"]').evaluate(el=>getComputedStyle(el,'::before').backgroundPosition);
+  await page.waitForFunction(before=>{
+   const el=document.querySelector('[data-part="conversation"]');
+   return getComputedStyle(el,'::before').backgroundPosition!==before;
+  },before);
+  await page.screenshot({path:`${out}/digital-rain-${scheme}.png`});
+ }
+ await page.emulateMedia({colorScheme:'dark'});
+ await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme','dark');
+ await page.emulateMedia({reducedMotion:'reduce'});
+ await expect.poll(()=>page.locator('[data-part="conversation"]').evaluate(el=>getComputedStyle(el,'::before').animationName)).toBe('none');
+ await presentation({decorations:false});
+ await expect.poll(()=>page.locator('[data-part="conversation"]').evaluate(el=>getComputedStyle(el,'::before').content)).toBe('none');
+ await presentation({decorations:true});
+ await page.emulateMedia({forcedColors:'active'});
+ await expect.poll(()=>page.locator('[data-part="conversation"]').evaluate(el=>getComputedStyle(el,'::before').content)).toBe('none');
+ await page.emulateMedia({forcedColors:'none',reducedMotion:'no-preference'});
+ await input.fill('Long retained draft. '.repeat(100));
+ for(const width of [760,390]){
+  await page.setViewportSize({width,height:900});
+  await expect(input).toBeVisible();await expect(page.locator('[data-part="composer-primary-action"]')).toBeInViewport();
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ }
+ await action('theme.apply',{name:preset.name,css:preset.css});
+ assert.equal(await page.locator('[data-part="conversation"]').evaluate(el=>getComputedStyle(el,'::before').animationName),'none');
+ await action('theme.apply',{name:theme.name,css:theme.css});
+ await page.reload();await showFixtureConversation(page,{navPinned:false});
+ await expect(input).toHaveDraft('Long retained draft. '.repeat(100));
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),selected);
+ assert.deepEqual(errors,[]);
+ console.log('Digital Rain passed: light/dark/system, three animated layers, native layout, transparent wrappers, fade, motion/decorations/forced-colors, narrow layouts, switch-back and reload with draft.');
+}catch(error){failure=error;throw error}
+finally{await finishFixture({label:'Digital Rain fixture',close:[['Digital Rain browser',()=>browser?.close()]],stop,originalError:failure})}

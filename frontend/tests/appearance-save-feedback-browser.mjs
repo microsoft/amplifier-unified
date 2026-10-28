@@ -25,7 +25,7 @@ try{
   if(result==='error')return route.fulfill({status:409,json:{accepted:false,error:'Fixture save was rejected; your draft is kept.'}});
   return route.continue();
  });
- const save=page.getByRole('button',{name:'Save to library',exact:true});
+ const save=page.getByRole('button',{name:'Save as copy',exact:true});
  const beforeBox=await save.boundingBox();
  await save.focus();await page.keyboard.press('Enter');
  await expect.poll(()=>held?.action).toBe('theme.save');
@@ -49,7 +49,7 @@ try{
  await expect(page.locator('#theme-css')).toHaveValue(originalCss);
  release();release=null;
  await expect(page.locator('#theme-name')).toBeEnabled();
- await expect(page.getByText('Saved to your appearance library.',{exact:true})).toBeVisible();
+ await expect(page.getByText('Saved to your appearance library. Apply separately to use it.',{exact:true})).toBeVisible();
  // A failed write re-enables the same retained draft and offers another try.
  held=null;outcome='error';await save.click();await expect.poll(()=>held?.action).toBe('theme.save');release();release=null;
  await expect(page.getByRole('alert').filter({hasText:'Fixture save was rejected'})).toBeVisible();

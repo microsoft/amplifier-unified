@@ -118,18 +118,68 @@ screens use an uninterrupted surface; focused and overlay canvases stay square.
 The background-artwork switch hides these panel decorations as well as root
 artwork, while retaining shapes, borders and spacing. Keep decorations static.
 
-### Save, import and export
+### Create, edit, delete and share
 
-Open **Settings → Appearance → Save, import & export themes**. Upload a portable
-`.css` file to add it to the library, or expand **Advanced customization**, name
-your CSS and choose **Save to library**. Saving does not apply a theme. Preview
-or apply it separately. **Export current appearance** downloads the applied CSS;
-unsaved editor changes and temporary previews are not exported. Upload that file
-on another installation to import it, then preview and apply it there.
+Open **Settings → Appearance → Save, import & export themes**. The ordinary
+Appearance cards choose a shared committed look immediately. In the library,
+selecting a card previews it only in your attached browser. Leaving Appearance
+or closing Settings clears that preview. Library operations never apply CSS.
 
-Agents use the same path: `theme.list`, `theme.read({id})`,
-`theme.save({name, css, description})`, `theme.preview({name, css})`,
-`theme.apply({name, css})`, and `theme.export({})`. Saved CSS includes optional
-surface tokens and embedded artwork; no separate asset installation is needed.
-Export retains the existing download effect for the targeted attached client.
-Edited custom themes are never silently replaced when bundled presets change.
+| Intent | Settings | Shared agent action |
+| --- | --- | --- |
+| Create or copy | Expand **Advanced customization**, name the CSS, choose **Save as copy**. | `theme.save({name, css, description})` |
+| Import | **Upload appearance** accepts portable `.css`; it keeps embedded metadata. | `theme.import({css})`; optional `name`/`description` override metadata, `fallbackName` names files with no embedded name. |
+| Edit | Select an entry, choose **Edit**, change name/description/CSS, then **Update saved appearance**. | Read with `theme.read({id})`, then `theme.update({id, expectedFingerprint, name, css, description})`. |
+| Delete | Select a saved entry, choose **Delete**, then **Confirm delete**. Export first to retain a copy. | `theme.delete({id, expectedFingerprint})` |
+| Export | **Export [selected name]** exports that saved/included entry. **Export current appearance** exports committed CSS, not edits or previews. | `theme.export({id})` or the existing no-id `theme.export({})`. |
+
+`theme.list` returns metadata and fingerprints, without CSS. `theme.read` returns
+the exact current CSS and its SHA-256 `fingerprint`. Keep that fingerprint with
+the editor draft; do not silently replace it with one from background refresh.
+Settings keeps the target, fingerprint, name, description and CSS together in a
+tab-private editor draft. Another client's Apply or a background library refresh
+cannot replace that draft. It survives visiting unrelated Settings sections,
+closing/reopening Settings and reloading the same tab through browser session
+storage. A storage failure is shown explicitly; keep that tab open and save a
+library copy. Previews do not resume automatically. The renderer uses the exact
+validated preview CSS, not whatever the editor contains after further edits.
+Updates retain the saved ID, including a rename. A stale update or deletion fails
+with 409 and leaves the file unchanged: read it again, review differences, then
+decide which edits to retain. Included appearances are read-only; copy them instead.
+Deleting or updating a library entry leaves already-applied CSS intact across
+restarts. Apply an edited version separately.
+
+Imports never silently overwrite another entry. Identical canonical uploads
+reuse the same ID; changed content creates another entry even with the same name.
+If an in-place update occupies an older export's content-based filename, importing
+that export uses a deterministic unused suffix. Reimporting the identical export
+reuses that entry instead of replacing the updated appearance.
+The portable file carries one leading metadata comment:
+
+```css
+/* amplifier-appearance: {"name":"Quiet Studio","description":"Warm surfaces and calm accents."} */
+#amp-one { --a-accent: #316653; }
+```
+
+Saving/exporting preserves metadata (including additional author-provided fields)
+without nesting headers. Imports accept UTF-8 with or without a BOM and LF or
+CRLF line endings. Export writes one canonical metadata header and retains the
+CSS body. Artwork and fonts must be embedded in the CSS; remote
+URLs, filesystem URLs, SVG data URLs and external imports are rejected by the
+same validator used for preview/apply. The file including metadata is limited to
+1 MB. Imports are published atomically; symlink files/directories, traversal IDs
+and nonregular files are rejected. Cooperating host writers serialize updates.
+An external editor should use the shared actions when it needs stale-write
+protection; arbitrary filesystem writers do not participate in that lock.
+
+Export returns the exact downloadable CSS in the action result and retains the
+existing attached-client download effect. With no ID, it preserves the established
+exact committed-CSS export. To share a named library entry, export it by ID and
+upload the file on the recipient's installation. This transfers a theme only,
+not shell layout, accessibility preferences, credentials or executable components.
+An import is validated, not certified accessible: preview both schemes, reduced
+motion, decorations off and a narrow layout before applying.
+
+Digital Rain is included as a complete packaged stylesheet with embedded artwork.
+It is loaded unchanged, rather than rebuilt using another preset's geometry.
+Bundled updates do not overwrite edited saved appearances.
