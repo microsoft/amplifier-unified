@@ -313,6 +313,14 @@ try{
    await expect(returnStatus).toContainText('Delivery does not prove the requester consumed or accepted');
    await expect(row.locator('[data-part="exact-result"]')).toContainText('Result: sealed · success · Qualified terminal evidence');
    await expect(row).toContainText('not independently verified correctness');
+   if(round===1&&task===tasks[0]){
+    await returnStatus.scrollIntoViewIfNeeded();
+    await returnStatus.screenshot({path:join(outputDir,'amplifier-return-status-desktop.png'),animations:'disabled'});
+    await page.setViewportSize({width:390,height:844});
+    assert.equal(await page.locator('.a-dialog').evaluate(element=>element.scrollWidth<=element.clientWidth),true);
+    await returnStatus.screenshot({path:join(outputDir,'amplifier-return-status-mobile.png'),animations:'disabled'});
+    await page.setViewportSize({width:1100,height:900});
+   }
    await preserve();await noForms();
    await expect(row.getByRole('button',{name:'Open exact terminal message',exact:true})).toHaveAttribute('data-message-id',anchor.messageId);
    await row.getByRole('button',{name:'Open exact terminal message',exact:true}).click();
