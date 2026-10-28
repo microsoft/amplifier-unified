@@ -80,13 +80,25 @@ try{
    assert.equal(fixtureBefore.installedIdentity?.verified,true);
    (report.installedIdentities??=[]).push(fixtureBefore.installedIdentity);
   }
-  const reachable=async locator=>{
-   const box=await locator.evaluate(el=>{const r=el.getBoundingClientRect();return {width:r.width,height:r.height,
-    hit:r.left>=0&&r.right<=innerWidth+1&&r.top>=0&&r.bottom<=innerHeight+1&&
-     [[r.x+4,r.y+4],[r.right-4,r.y+4],[r.right-4,r.bottom-4],[r.x+4,r.bottom-4],[r.x+r.width/2,r.y+r.height/2]].every(([x,y])=>el.contains(document.elementFromPoint(x,y)))}});
+  const targetGeometry=locator=>locator.evaluate(el=>{
+   const r=el.getBoundingClientRect(),points=[[r.x+4,r.y+4],[r.right-4,r.y+4],[r.right-4,r.bottom-4],[r.x+4,r.bottom-4],[r.x+r.width/2,r.y+r.height/2]];
+   const hits=points.map(([x,y])=>{const node=document.elementFromPoint(x,y);return {x,y,inside:el.contains(node),target:node?.getAttribute('aria-label')||node?.className}});
+   return {width:r.width,height:r.height,left:r.left,right:r.right,hits,
+    hit:r.left>=0&&r.right<=innerWidth+1&&r.top>=0&&r.bottom<=innerHeight+1&&hits.every(point=>point.inside)};
+  });
+  const reachable=async(locator,settle=false)=>{
+   let box=await targetGeometry(locator);
+   if(settle&&!(box.width>=44&&box.height>=44&&box.hit)){
+    const initial=box;
+    // Native strip scrolling changes the Overview width for 140ms. Wait on
+    // the exact same corner-hit invariant, never click through an obstruction.
+    await expect.poll(async()=>{box=await targetGeometry(locator);return box.width>=44&&box.height>=44&&box.hit},
+     {timeout:1500,message:'Close control must have an unclipped 44px hit target: '+JSON.stringify(initial)}).toBe(true);
+    (report.settledTargets??=[]).push({width,initial,settled:box});
+   }
    assert.ok(box.width>=44&&box.height>=44&&box.hit,'Close control must have an unclipped 44px hit target');
   };
-  const use=async locator=>{await reachable(locator);if(width<500)await locator.tap();else await locator.click()};
+  const use=async locator=>{await reachable(locator,true);if(width<500)await locator.tap();else await locator.click()};
   const headerContained=async()=>{
    const sample=await panel.evaluate(el=>{
     const header=el.querySelector('.a-canvas-head').getBoundingClientRect(),content=el.querySelector('.a-canvas-content').getBoundingClientRect();
