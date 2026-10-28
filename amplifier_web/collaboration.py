@@ -550,10 +550,17 @@ class Collaboration:
                 return {**row, "generationId": anchor["generationId"]}
             return row
         message = next((row for row in session.get("messages", []) if row["id"] == identity), None)
-        if message or not session.get("nativeProject"):
-            return correlated(message) if message else None
+        if message:
+            return correlated(message)
+        # A new Worker can checkpoint a terminal before catalog discovery has
+        # populated nativeProject. Resolve its existing canonical history home
+        # without rewriting placement or relying on a catalog refresh.
+        from .session_identity import project
+        native_project = project(session)
+        if not native_project:
+            return None
         from .automatic_history import read_transcript
-        rows = read_transcript(session, limit=None)["messages"]
+        rows = read_transcript({**session, "nativeProject": native_project}, limit=None)["messages"]
         native = next((row for row in rows if row["id"] == identity), None)
         if native is None:
             return None
