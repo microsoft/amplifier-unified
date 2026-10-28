@@ -37,6 +37,7 @@
 #amp-one .a-open-documents-dialog button{min-height:44px;min-width:44px}
 #amp-one .a-canvas-artifact-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:4px;min-height:48px;padding:0 6px;flex:none;border-bottom:1px solid var(--a-line)}
 #amp-one .a-canvas-refresh{flex:none}
+#amp-one .a-canvas-refresh[aria-disabled=true]{opacity:.65;cursor:progress}
 #amp-one .a-canvas-freshness{order:10;flex-basis:100%;min-width:0;padding:0 4px 6px;color:var(--a-muted);font-size:12px;line-height:1.4;overflow-wrap:anywhere}
 #amp-one .a-canvas-freshness[role=alert]{color:var(--a-ink)}
 #amp-one .a-canvas-artifact-toolbar>strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}

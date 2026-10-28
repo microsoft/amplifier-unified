@@ -22,7 +22,7 @@ test('document Refresh reads saved state only and ignores an obsolete response',
  const text=()=>JSON.stringify(root.toJSON());
  assert.match(text(),/Historical · Version 2 available/);
  await renderAct(async()=>{completion=button().props.onClick()});
- assert.equal(button().props.disabled,true);assert.match(text(),/Checking saved content/);
+ assert.equal(button().props['aria-disabled'],true);assert.match(text(),/Checking saved content/);
  await renderAct(async()=>{await button().props.onClick()});
  assert.deepEqual(calls,[['canvas.views.inspect',{}]],'No duplicate, reload, selection or source-file action');
  view={...view,resourceId:'two',selectedVersion:null,latestVersion:1};await renderAct(async()=>root.update(render()));
@@ -30,15 +30,15 @@ test('document Refresh reads saved state only and ignores an obsolete response',
  assert.doesNotMatch(text(),/Checked|Could not refresh/);
  await renderAct(async()=>{completion=button().props.onClick()});
  await renderAct(async()=>{reject(Error('Offline'));await completion});
- assert.match(text(),/Could not refresh: Offline/);assert.equal(button().props.disabled,false);
+ assert.match(text(),/Could not refresh: Offline/);assert.equal(button().props['aria-disabled'],false);
  await renderAct(async()=>{completion=button().props.onClick()});
  await renderAct(async()=>{resolve({result:{views:[view]}});await completion});
  assert.match(text(),/Checked · Latest · Version 1 · Current saved content/);
  await renderAct(async()=>{completion=button().props.onClick()});
  view={...view,resourceRevision:'body-two',latestVersion:2};await renderAct(async()=>root.update(render()));
- assert.equal(button().props.disabled,true);assert.match(text(),/Checking saved content/);
+ assert.equal(button().props['aria-disabled'],true);assert.match(text(),/Checking saved content/);
  await renderAct(async()=>{reject(Error('Disconnected after update'));await completion});
- assert.match(text(),/Disconnected after update/);assert.equal(button().props.disabled,false);
+ assert.match(text(),/Disconnected after update/);assert.equal(button().props['aria-disabled'],false);
  await renderAct(async()=>{completion=button().props.onClick()});
  await renderAct(async()=>{resolve({result:{views:[view]}});await completion});
  assert.match(text(),/Checked · Latest · Version 2/);

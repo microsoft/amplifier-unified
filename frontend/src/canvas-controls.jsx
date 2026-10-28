@@ -29,7 +29,7 @@ export function CanvasDocumentRefresh({view,dispatch}){
   finally{pending.current=false}
  };
  return <>
-  <button type="button" className="a-soft a-canvas-refresh" aria-label="Refresh document" title="Check saved content and versions without reloading the preview or reading the source file" disabled={!!shown?.pending} onClick={refresh}>Refresh</button>
+  <button type="button" className="a-soft a-canvas-refresh" aria-label="Refresh document" title="Check saved content and versions without reloading the preview or reading the source file" aria-disabled={!!shown?.pending} onClick={refresh}>Refresh</button>
   <div className="a-canvas-freshness" role={shown?.error?'alert':'status'} aria-live="polite">
    {shown?.pending?'Checking saved content…':shown?.error?`Could not refresh: ${shown.error} The open document is retained.`:`${shown?.checkedVersion===versionOf(view)?'Checked · ':''}${identity} · ${freshness}`}
   </div>
