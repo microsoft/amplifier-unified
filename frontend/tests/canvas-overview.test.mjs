@@ -101,7 +101,7 @@ async function controlledTabs(Component,run){
  };
  const openList=async()=>act(async()=>root.root.findByProps({'aria-haspopup':'dialog'}).props.onClick());
  const remove=async(id,modal=false)=>{
-  if(modal){await openList();listeners.get('pointerdown')?.();await act(async()=>{root.root.findByProps({'aria-label':'Close tab Document '+id}).props.onClick()})}
+  if(modal){await openList();listeners.get('pointerdown')?.();await act(async()=>{root.root.findByType('dialog').findByProps({'aria-label':'Close tab Document '+id}).props.onClick()})}
   else{node(id).focus();await key('Delete')}
  };
  const settle=async(receipt={accepted:true})=>{await act(async()=>{
