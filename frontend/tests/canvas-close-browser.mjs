@@ -62,8 +62,10 @@ try{
    await capture('before-open-documents-'+width);
    await context.close();continue;
   }
-  const closeTab=title=>panel.getByRole('button',{name:`Close tab ${title}`,exact:true});
-  const dismiss=panel.getByRole('button',{name:'Close canvas panel',exact:true});
+  // Keep the actual DOM target addressable during the deliberate hidden-control
+  // negative. Geometry, not accessibility-tree absence/timeouts, is the oracle.
+  const closeTab=title=>panel.locator('.a-canvas-document-tabs').getByRole('button',{name:`Close tab ${title}`,exact:true,includeHidden:true});
+  const dismiss=panel.getByRole('button',{name:'Close canvas panel',exact:true,includeHidden:true});
   const overview=panel.getByRole('tab',{name:'Chat overview',exact:true});
   const toggle=page.locator('#canvas-toggle');
   const artifactRows=async()=>{const s=await state();return s.canvasArtifacts.filter(row=>row.sessionId===s.selectedSessionId)};
@@ -142,8 +144,11 @@ try{
   await expect(dismiss).toBeFocused();await reachable(dismiss);await capture('keyboard-close-panel-'+width);
   await page.keyboard.press('Enter');
   await expect(panel).toBeHidden();await expect(toggle).toBeFocused();
-  const hiddenState=await (await page.request.get(url+'/api/state?clientId='+encodeURIComponent((await state()).client.id))).json();
-  assert.equal(hiddenState.canvas.open,false,'Panel hide must be accepted by the host, not only painted optimistically');
+  const clientId=(await state()).client.id;
+  await expect.poll(async()=>{
+   const hiddenState=await (await page.request.get(url+'/api/state?clientId='+encodeURIComponent(clientId))).json();
+   return hiddenState.canvas.open;
+  },{message:'Panel hide must be accepted by the host, not only painted optimistically'}).toBe(false);
   await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
   assert.equal((await artifactRows()).filter(row=>row.tabOpen).length,2);await preserved();
   await toggle.press('Enter');await expect(panel).toBeVisible();
