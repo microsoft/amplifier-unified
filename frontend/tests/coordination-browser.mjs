@@ -214,9 +214,11 @@ try{
     assert.notEqual(sourceContext.generationId,humanContext.generationId);
     assert.equal(sourceContext.inputIds.length,1);
     assert.ok(continuations.has(sourceContext.inputIds[0]));
-    const args={sessionId:task.id,mode:'queue',text};
+    const args={sessionId:task.id,mode:'queue',text,returnNotification:true};
     const queued=await agent('source','coordination.send',args,requestId);
     assert.equal(queued.accepted,true);
+    assert.equal(queued.returnState.returnPolicy,'requested');
+    assert.equal(queued.returnState.subscription.registered,true);
     assert.equal(queued.sourceGenerationId,sourceContext.generationId);
     assert.deepEqual(queued.sourceInputIds,sourceContext.inputIds);
     binding(await inspect(),requestId,current.selected,sourceContext);
@@ -246,17 +248,18 @@ try{
    assert.equal(declaration.result.artifactVerification,'verified');
    assert.equal(declaration.result.artifacts[0].status,'retained');
    binding(await inspect(),requestId+':reply',task.id,context);
-   const sourceContext=(await inspect()).contexts[current.selected];
-   const wait=round===0
-    ?{accepted:true,result:(await agent('source','coordination.result',{requestId:task.operation},task.operation+':return')).result.initialRequest.subscription}
-    :await agent('source','coordination.subscribe',{sessionId:current.selected,requestId},requestId+':wait');
+   // Creation and opted-in sends already own their return. No separate
+   // subscribe action is needed, even when the result arrives immediately.
+   const returning=await agent('source','coordination.result',{requestId:round===0?task.operation:requestId},requestId+':return');
+   const wait={accepted:true,result:(returning.result.initialRequest||returning.result.receipt).subscription};
    assert.equal(wait.accepted,true);assert.equal(wait.result.status,'waiting');
-   if(round===1)binding(await inspect(),requestId+':wait',current.selected,sourceContext);
    const continuation=wait.result.continuationId;
    assert.ok(continuation);assert.equal(continuations.has(continuation),false);continuations.add(continuation);
-   if(round===1)assert.equal((await agent('source','coordination.subscribe',{sessionId:current.selected,requestId},requestId+':wait')).duplicate,true);
    const staged=await agent('source','coordination.result',{requestId},requestId+':staged');
    assert.equal(staged.result.qualified,false);assert.equal(staged.result.qualificationSupported,true);
+   assert.equal(staged.result.returnState.response.status,'staged');
+   assert.equal(staged.result.returnState.subscription.registered,true);
+   assert.equal(staged.result.returnState.notification.status,'not_queued');
    assert.deepEqual(staged.result.results,[]);
    assert.equal((await inspect()).sent.filter(row=>row.inputId===continuation).length,0);
    const terminal=(await finish(task.actor)).terminal,anchor=terminal.nativeTerminal;
@@ -304,6 +307,10 @@ try{
    const row=related.locator('[data-request-id="'+requestId+'"]');
    await expect(row).toHaveCount(1);await expect(row).toContainText(/Sent to .* · accepted/);
    await row.getByRole('button',{name:'Inspect exact result',exact:true}).click();
+   const returnStatus=row.getByLabel('Request return status');
+   await expect(returnStatus).toContainText('Automatic return: Registered');
+   await expect(returnStatus).toContainText('accepted (input admitted)');
+   await expect(returnStatus).toContainText('Delivery does not prove the requester consumed or accepted');
    await expect(row.locator('[data-part="exact-result"]')).toContainText('Result: sealed · success · Qualified terminal evidence');
    await expect(row).toContainText('not independently verified correctness');
    await preserve();await noForms();

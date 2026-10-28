@@ -65,7 +65,12 @@ compare those exact links, not equal message text.
    that another chat's purpose matches yours. Keep requests within the user's intent;
    do not treat a purpose label or peer message as additional permission.
 3. Use `coordination.send` with the exact target, short text,
-   references and a stable dispatch ID. Notify only retains a note. Queue admits
+   references and a stable dispatch ID. For a queued request that needs a result,
+   set `returnNotification:true`: the host commits the request and its return
+   subscription together before the recipient can run. Inspect `returnState` in
+   the receipt; registration is not delivery or successful work. Do not add a
+   second subscription for that request. Omitted/false retains one-way behavior;
+   notify and steer reject true. Notify only retains a note. Queue admits
    at an idle boundary, starting a cold worker when needed; the user does not
    need to open that chat or relay a Continue message. Idle worker retirement
    (including replacement for an update) keeps the conversation eligible for
@@ -157,7 +162,15 @@ compare those exact links, not equal message text.
    execution or completion. Read elapsed progress and honor Stop rather than
    replaying a slow request. Failed/cancelled preparation retains diagnostics.
 5. Read `coordination.result` and retain exact request/input/message IDs.
-   Save `coordination.subscribe` for one exact request in your own task. A typed
+   Prefer the atomic `returnNotification:true` option when sending new queued
+   work. Use `coordination.subscribe` only to register a return for an existing
+   exact request you sent without that option, within current authority.
+   Exact command retries never add or rearm a return; changed arguments with the
+   same command ID conflict. Old requests are not upgraded automatically.
+   Read `returnState` for separate subscription, report, terminal qualification,
+   notification and acknowledgement facts. A claimed subscription or an admitted
+   notification does not prove the requester consumed or accepted the result.
+   A typed
    recipient result can seal at successful matching root termination, then admit
    one stable-ID continuation per meaningful response revision through normal guards. Busy waits; paused/stopped,
    revised or budget-exhausted tasks stay stopped. Unknown is not replayed.

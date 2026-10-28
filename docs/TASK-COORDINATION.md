@@ -1,5 +1,40 @@
 # Task and worker coordination
 
+## Atomic returns for existing-root requests
+
+For new queued work that needs a returned result, `coordination.send` accepts
+`returnNotification:true`. The host reserves the requester's return capacity
+and commits its saved wait with the attributed recipient input and request
+receipt before scheduling admission. Unsupported adapters or insufficient
+capacity refuse before these effects. Pre-commit failures restore affected
+database and in-memory state; a committed request survives a lost acknowledgement.
+An exact retry returns its original receipt and never rearms work.
+
+Omitting the option, or passing false, preserves ordinary one-way sending.
+True with notify or steer is refused. Notify remains non-waking. Creation keeps
+its existing default automatic return. Explicit `coordination.subscribe` remains
+available for a request sent without a return policy; no old request is migrated,
+replayed or enrolled in an assignment by this addition.
+
+Send receipts and exact result reads expose a bounded `returnState` projection
+of the existing records. Subscription, staged/sealed response, terminal
+qualification, notification delivery, explicit acknowledgement and artifact
+retention are separate facts. A claimed wait is not proof of notification
+delivery. Queue acceptance is not model consumption; terminal qualification is
+not independent artifact verification or review approval. Negative reports can
+return without satisfying a successful dependency. Unknown evidence remains
+unknown and is never a retry instruction.
+
+Saved waits retain task/Stop/location and capacity checks at admission. A busy
+requester waits for a real idle boundary. Backpressure, changed task authority,
+Stop or an uncertain admission remain explicit and do not trigger replay or
+budget reset. An earlier reviewed response never accepts a later candidate.
+
+Qualification must exercise the public request/reply path across two existing
+independent roots, including a second correction round without separate
+subscription calls or manual completion messages. Scripted runtime evidence,
+real Worker-process evidence and actual-model cooperation remain distinct.
+
 ## Cross-workspace existing-root communication
 
 The October 26 user direction is: “Lets spin up a task that lets you do so in

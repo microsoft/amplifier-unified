@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, contextmanager
 from contextvars import ContextVar
 import json
 import time
@@ -65,6 +65,8 @@ def definitions(schema, string):
     message = {**sid, "senderSessionId": string(200), "grantId": string(200),
                "text": {**string(16000), "minLength": 1},
                "mode": {"enum": ["notify", "queue", "steer"]},
+               "returnNotification": {"type": "boolean", "default": False,
+                   "description": "Queue only: atomically register a guarded return for this request before the recipient can run. Omitted/false keeps one-way send behavior; exact retries never rearm a saved wait."},
                "replyToRequestId": string(200), "references": references,
                "expiresInSeconds": {"type": "integer", "minimum": 1, "maximum": 86400},
                "resume": schema({"sourceMessageId": string(200),
@@ -321,7 +323,7 @@ class Collaboration:
                                 (identity, digest, json.dumps(receipt)))
         self.refresh_reference(receipt)
 
-    def require_inbox_slot(self, sid, sender=None, assignment=None):
+    def require_inbox_slot(self, sid, sender=None, assignment=None, *, slots=1):
         # A saved wait reserves one slot for its eventual outcome. Interim
         # notifications retain a slot for the next revision as well as their
         # queued input, and both count against this bound.
@@ -344,7 +346,7 @@ class Collaboration:
                      AND json_extract(receipt,'$.subscription.taskRevision') IS ?))""",
             (sid, session.get('interruptionRevision', 0), task.get('id'),
              continuation_epoch(task), task.get('revision'))).fetchone()[0]
-        if pending + waiting >= MAX_PENDING_INPUTS:
+        if pending + waiting + slots > MAX_PENDING_INPUTS:
             self.error('This conversation inbox is full, including reserved replies. Wait for pending work to settle; no input was added.', 429)
         for key, value, limit, label in [('senderSessionId', sender, MAX_SENDER_INPUTS, 'sender'),
                                         ('assignmentId', assignment, MAX_ASSIGNMENT_INPUTS, 'assignment')]:
@@ -1154,6 +1156,39 @@ class Collaboration:
         with sqlite3.connect(path) as database:
             return database.execute('SELECT 1 FROM commands WHERE id=?', (identity,)).fetchone() is not None
 
+    @contextmanager
+    def return_send_transaction(self, identity, source, target):
+        """Ordinary opted-in sends own one commit, under the service lock.
+
+        Creation-owned sends retain their existing transaction owner. Only the
+        affected roots are snapshotted; a failed commit must not leave a phantom
+        message, recency change or request reference in a later publication.
+        """
+        sessions = {row['id']: row for row in (source, target)}
+        snapshots = {sid: copy.deepcopy(row) for sid, row in sessions.items()}
+        self.service.db.commit()  # Preserve unrelated pending receipt work.
+        self.service.db.execute('BEGIN IMMEDIATE')
+        try:
+            yield
+        except BaseException:
+            if not self.committed(identity):
+                self.service.db.rollback()
+                for sid, row in sessions.items():
+                    row.clear()
+                    row.update(snapshots[sid])
+                self.service.projections.invalidate(state=self.service.state, session_ids=set(sessions))
+            else:
+                # A lost publication acknowledgement cannot abandon committed
+                # work or depend on the caller retrying to start the queue.
+                retained = self.receipt(identity)
+                self.expire_later(retained)
+                self.service._task(self.drain(target['id']))
+            raise
+
+    def send_result(self, receipt):
+        from .coordination_return_state import project
+        return {**receipt, 'returnState': project(self, receipt)}
+
     def continuation_identity(self, wait, revision):
         return wait['continuationId'] if revision == 1 else str(uuid.uuid5(
             uuid.NAMESPACE_URL, wait['continuationId'] + ':' + str(revision)))
@@ -1457,6 +1492,7 @@ class Collaboration:
             target = next((row for row in self.service.state["sessions"] if row["id"] == sid), None)
             if target:
                 await self.service.history.ensure_loaded(sid)
+                receipt = self.receipt(args["requestId"])
                 # Hydration yields to workspace moves and session replacement.
                 # Resolve the actual reader and target again before exposing data.
                 self.require_result_reader(receipt, origin, caller)
@@ -1480,7 +1516,9 @@ class Collaboration:
                                 "inputId": (initial or receipt)['requestId'], "declaration": response})
             from .request_cancellation import status as cancellation_status
             from .outcome_acknowledgement import reference as notification_reference
+            from .coordination_return_state import project as return_state
             return {"accepted": True, "result": {"receipt": receipt, "results": results,
+                'returnState': return_state(self, report),
                 'cancellation': cancellation_status(report),
                 'notification': notification_reference(report),
                 'responseRevision': report.get('responseRevision', 1 if response else 0), 'revisions': revisions,
@@ -1488,10 +1526,17 @@ class Collaboration:
                 "preparation": copy.deepcopy((target or {}).get("activity")),
                 "qualified": bool(results), "qualificationSupported": True,
                 "detail": "Typed agent declaration plus host terminal evidence; not independently verified correctness."}}
-        if action == "coordination.send":
-            await self.service.history.ensure_loaded(args["sessionId"])
         identity = command_id or str(uuid.uuid4())
         digest = fingerprint([action, args, origin, source["id"]])
+        if action == "coordination.send":
+            async with self.service.lock:
+                duplicate = self.duplicate(identity, digest)
+                if duplicate:
+                    return self.send_result(duplicate)
+            # Refuse unsupported return modes before hydration or fresh effects.
+            if args.get('returnNotification') is True and args.get('mode', 'queue') != 'queue':
+                self.error('returnNotification:true requires queue mode; no input or wait was created.', 400)
+            await self.service.history.ensure_loaded(args["sessionId"])
         prepared_artifacts = None
         if action == 'coordination.reply':
             from .result_artifacts import prepare
@@ -1504,7 +1549,7 @@ class Collaboration:
             duplicate = self.duplicate(identity, digest)
             if duplicate:
                 # Re-reading a prior receipt never dispatches work.
-                return duplicate
+                return self.send_result(duplicate) if action == 'coordination.send' else duplicate
             from .workspace_work_effects import guard
             guard(self.service, action, args, origin, source['id'], final=True)
             if args.get("grantId"):
@@ -1591,6 +1636,10 @@ class Collaboration:
                 if reason:
                     self.error(reason, 409)
                 mode = args.get("mode", "queue")
+                notify_return = args.get('returnNotification', False)
+                creation_owned = bool(creation and identity == creation[4]['requestId'] + ':brief')
+                if notify_return:
+                    self.require_continuation()
                 if args.get('resume') and (origin != 'agent' or mode != 'queue'):
                     self.error('Resume requires a current human-rooted agent request using queue.')
                 self.service.assignments.require_request(source, target, mode)
@@ -1608,7 +1657,11 @@ class Collaboration:
                 depth = self.causal_depth(source, lineage, origin)
                 if mode != 'notify':
                     self.require_causal_depth(depth)
-                    self.require_inbox_slot(target['id'], source['id'], source.get('assignmentId') or (source.get('collaboration') or {}).get('assignmentId'))
+                    self.require_inbox_slot(target['id'], source['id'],
+                        source.get('assignmentId') or (source.get('collaboration') or {}).get('assignmentId'),
+                        slots=2 if notify_return and source['id'] == target['id'] else 1)
+                if notify_return and source['id'] != target['id']:
+                    self.require_inbox_slot(source['id'])
                 if args.get("replyToRequestId"):
                     previous = self.receipt(args["replyToRequestId"])
                     if (previous.get("commandAction") != "coordination.send" or previous["target"]["sessionId"] != source["id"]
@@ -1635,6 +1688,21 @@ class Collaboration:
                 if target.get("collaboration"):
                     envelope["task"] = {key: target["collaboration"][key] for key in
                         ("creatorSessionId", "requestId", "outputNamespace", "configurationHash")}
+                wait = None
+                if not creation_owned:
+                    if notify_return:
+                        recovery_boundary.enter_context(self.return_send_transaction(identity, source, target))
+                        wait = self.saved_wait(source, identity)
+                    envelope['returnContract'] = {
+                        'version': 1, 'requestId': identity, 'returnNotification': notify_return,
+                        'subscriptionRegistered': wait is not None,
+                        **({'continuationId': wait['continuationId'], 'notificationVersion': wait['notificationVersion']}
+                           if wait else {})}
+                    if wait:
+                        envelope['returnContract']['instruction'] = (
+                            'Report with coordination.reply for this exact request. A saved report is not '
+                            'requester consumption or independent acceptance. Automatic returns remain subject '
+                            'to the saved Stop/task, capacity and outcome-revision guards.')
                 repair = None
                 resume = None
                 if args.get('resume'):
@@ -1671,6 +1739,10 @@ class Collaboration:
                     "origin": origin if origin in {"agent", "ui", "user"} else None,
                     "displayBinding": fingerprint([envelope, args["text"]])}
                 receipt['assignmentId'] = (self.service.assignments.current(source) or {}).get('id')
+                if not creation_owned:
+                    receipt['returnNotification'] = notify_return
+                    if wait:
+                        receipt['subscription'] = wait
                 if repair:
                     receipt['scheduleRepair'] = repair
                 if resume:
@@ -1699,12 +1771,12 @@ class Collaboration:
         if action == "coordination.create":
             return await self.create(source, args, origin, identity, digest, lineage)
         if receipt.get("delivery") == "pending_steer":
-            return await self.submit_steer(identity)
+            return self.send_result(await self.submit_steer(identity))
         if receipt.get("delivery") == "queued":
             # The committed receipt owns the operation, not the request socket.
             self.expire_later(receipt)
             self.service._task(self.drain(receipt["target"]["sessionId"]))
-        return receipt
+        return self.send_result(receipt) if action == 'coordination.send' else receipt
 
     async def create(self, source, args, origin, identity, digest, lineage):
         from .session_creation import template

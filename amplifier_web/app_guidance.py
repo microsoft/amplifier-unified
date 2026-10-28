@@ -57,6 +57,20 @@ Root bundles are selected through the shared bundle actions. bundle.preview {ses
 CANVAS_GUIDANCE += '\n' + READ_GUIDANCE + '\n'
 
 CANVAS_GUIDANCE += '''
+When queued work in an existing root needs a result, use coordination.send with
+returnNotification:true. The host commits the request and its return subscription
+together before admission; inspect returnState in the receipt. Do not add a
+second wait for that request. Omitted/false is one-way; notify/steer reject true.
+Use coordination.subscribe only for an exact earlier request sent without a
+return. Exact retries never change that policy or rearm old work. A saved report,
+terminal qualification, queued/admitted notification, explicit acknowledgement
+and independent acceptance are different facts. Do not say a peer consumed the
+result merely because coordination.reply accepted it. Retain exact evidence
+through the existing file-reference mechanism; a commit URL is a citation, not
+transferred test evidence.
+'''
+
+CANVAS_GUIDANCE += '''
 For GIF/MP4 inside an assistant article, emit brief commentary first, then inspect
 the actual saved assistant message ID with app_control get_state. Do not invent
 an ID or choose a later turn after a file read. Discover outputs.attachMedia and
