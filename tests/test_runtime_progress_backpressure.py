@@ -230,7 +230,8 @@ async def test_phase_timings_never_hydrate_dirty_or_persist_state(app_factory, m
 
 
 @pytest.mark.parametrize('fault', ['none', 'malformed', 'serialize', 'cancel'])
-async def test_host_bridge_timing_never_awaits_sink_or_inherits_task(fault):
+async def test_host_bridge_timing_never_awaits_sink_or_inherits_task(fault, monkeypatch):
+    monkeypatch.setattr('amplifier_web.performance_diagnostics.TIMING_ENABLED', True)
     from amplifier_web.performance_diagnostics import PerformanceDiagnostics, active_bridge
     from amplifier_web.runtime import normalize_event
     diagnostics = PerformanceDiagnostics()

@@ -108,6 +108,7 @@ def test_child_assignment_retains_full_inputs_and_expires_with_parent_generation
 @pytest.mark.parametrize('fault', ['none', 'work_deny', 'stop_after_await', 'new_input_after_await',
                                  'changed_arguments', 'late_mount', 'timeout', 'check_replaced', 'body_failure'])
 async def test_final_tool_wrapper_runs_after_real_engine_approval_and_rechecks(app, fault, monkeypatch):
+    monkeypatch.setattr('amplifier_web.performance_diagnostics.TIMING_ENABLED', True)
     from amplifier_core import ToolResult, HookResult
     from amplifier_core.message_models import ToolCall
     adapter, child, required = await installed_work_adapter(app)

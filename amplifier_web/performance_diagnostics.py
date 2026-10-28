@@ -23,8 +23,9 @@ import uuid
 # Observation only. Neither context participates in Work or permission decisions.
 TOOL_TIMING = ContextVar('unified_tool_timing', default=None)
 BRIDGE_TIMING = ContextVar('unified_bridge_timing', default=None)
-# Inherited at process startup so an uninstrumented control disables BOTH ends.
-TIMING_ENABLED = os.environ.get('AMPLIFIER_RUNTIME_TIMING', '1') != '0'
+# Explicit opt-in, inherited at startup by both host and worker. Ordinary work
+# must not pay for extra telemetry frames before overhead is qualified there.
+TIMING_ENABLED = os.environ.get('AMPLIFIER_RUNTIME_TIMING') == '1'
 TIMING_MARKS = frozenset({
     'start', 'origin.start', 'origin.end', 'check.start', 'check.end',
     'body.start', 'body.end', 'end', 'write.start', 'write.end', 'received',

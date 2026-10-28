@@ -194,6 +194,7 @@ async def test_child_transport_cannot_borrow_root_principal_or_generation(worker
     ('work.effect.check', {'toolName': 'probe', 'toolInput': {'secret': 'private'}}, 60),
 ])
 async def test_bridge_timeout_emits_bounded_correlated_diagnostic(monkeypatch, operation, args, deadline):
+    monkeypatch.setattr('amplifier_web.performance_diagnostics.TIMING_ENABLED', True)
     import asyncio
     from amplifier_web import runtime_worker
     worker = runtime_worker.Worker()
@@ -222,6 +223,7 @@ async def test_bridge_timeout_emits_bounded_correlated_diagnostic(monkeypatch, o
 
 @pytest.mark.parametrize('outcome', ['completed', 'failed', 'cancelled'])
 async def test_bridge_phase_timing_preserves_results_and_task_identity(monkeypatch, outcome):
+    monkeypatch.setattr('amplifier_web.performance_diagnostics.TIMING_ENABLED', True)
     import asyncio
     from amplifier_web import runtime_worker
     from amplifier_web.performance_diagnostics import tool_scope, active_tool
@@ -278,6 +280,7 @@ async def test_bridge_phase_timing_preserves_results_and_task_identity(monkeypat
 
 
 async def test_bridge_cleanup_precedes_disposable_timing_and_probes_off(monkeypatch):
+    monkeypatch.setattr('amplifier_web.performance_diagnostics.TIMING_ENABLED', True)
     import asyncio
     from amplifier_web import runtime_worker, performance_diagnostics
     worker = Worker()
@@ -296,3 +299,20 @@ async def test_bridge_cleanup_precedes_disposable_timing_and_probes_off(monkeypa
     monkeypatch.setattr(performance_diagnostics, 'TIMING_ENABLED', False)
     assert await worker.bridge('history', {}) == {'ok': True}
     assert all('_timing' not in r and r.get('type') != 'runtime.timing' for r in events)
+
+
+@pytest.mark.parametrize('value,enabled', [(None, False), ('0', False), ('1', True)])
+def test_phase_timing_startup_is_explicit_opt_in(value, enabled):
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+    env = dict(os.environ)
+    env.pop('AMPLIFIER_RUNTIME_TIMING', None)
+    if value is not None:
+        env['AMPLIFIER_RUNTIME_TIMING'] = value
+    result = subprocess.run([sys.executable, '-B', '-c',
+        'from amplifier_web.performance_diagnostics import TIMING_ENABLED; print(TIMING_ENABLED)'],
+        cwd=Path(__file__).resolve().parents[1], env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(enabled)
