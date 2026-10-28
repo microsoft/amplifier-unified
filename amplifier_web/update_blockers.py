@@ -134,7 +134,7 @@ def assess(service):
             elif worker.get('persistent') and worker.get('status') == 'idle':
                 add('worker', 'A persistent background worker is still open', sid)
     observation = {'schemaVersion': 1, 'observedAt': observed_at, 'basis': 'first-failing-predicate',
-                   'runtimeObservation': runtime_observation,
+                   'initialRuntimeObservation': runtime_observation,
                    'blocked': bool(result), 'configurationHolds': holds,
                    'configurationHoldCount': hold_count, 'configurationReasonCounts': hold_reasons,
                    'omittedConfigurationHolds': hold_count - len(holds)}

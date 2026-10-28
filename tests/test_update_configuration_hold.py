@@ -195,14 +195,30 @@ def test_absent_management_cannot_prove_hold_is_quiescent():
 
 async def test_public_diagnostics_identifies_global_wait_without_mutation(held, monkeypatch):
     from amplifier_web import update_report
+    from amplifier_web import cold_display
+    from unittest.mock import AsyncMock, Mock
     app, sid, path, payload = held
     session = app._session(sid)
     session['title'] = 'SECRET_CHAT_TITLE'
     session['pendingConfiguration']['error'] = 'SECRET_ERROR /private/secret/path'
     session['pendingConfiguration']['payload'] = {'api_key': 'SECRET_CREDENTIAL'}
     monkeypatch.setattr(update_report, 'runtime_report', lambda home: {})
+    peer = cold_display.ColdRecord({
+        'id': 'untouched-cold-peer', 'status': 'idle', 'historyLoaded': False,
+        '_coldFields': {key: {'$resource': 'PRIVATE_COLD_SENTINEL'}
+                        for key in ('messages', 'configuration', 'execution')},
+    }, app.db)
+    app.state['sessions'].append(peer)
+    load = Mock(side_effect=AssertionError('Diagnostics must not load cold peer fields'))
+    hydrate = Mock(side_effect=AssertionError('Diagnostics must not hydrate a peer'))
+    history = AsyncMock(side_effect=AssertionError('Diagnostics must not load peer history'))
+    original_load, original_hydrate, original_history = cold_display.load, app.cold_display.hydrate, app.history.ensure_loaded
+    monkeypatch.setattr(cold_display, 'load', load)
+    monkeypatch.setattr(app.cold_display, 'hydrate', hydrate)
+    monkeypatch.setattr(app.history, 'ensure_loaded', history)
     await app.management.lock.acquire()
-    before = copy.deepcopy(app.state)
+    before = copy.deepcopy({**app.state, 'sessions': [
+        cold_display.raw(row) for row in app.state['sessions']]})
     original_files = {str(file.relative_to(app.data_dir)): file.read_bytes()
                       for file in app.data_dir.rglob('*') if file.is_file()}
     try:
@@ -222,10 +238,18 @@ async def test_public_diagnostics_identifies_global_wait_without_mutation(held, 
         assert app.state == before
         assert not app.runtime.workers and not app.management.pending_config_tasks
         assert path.read_bytes() == payload
+        load.assert_not_called()
+        hydrate.assert_not_called()
+        history.assert_not_awaited()
+        assert dict.get(peer, '_coldFields') == before['sessions'][-1]['_coldFields']
         assert original_files == {str(file.relative_to(app.data_dir)): file.read_bytes()
                                   for file in app.data_dir.rglob('*') if file.is_file()}
     finally:
         app.management.lock.release()
+        app.state['sessions'].remove(peer)
+        monkeypatch.setattr(cold_display, 'load', original_load)
+        monkeypatch.setattr(app.cold_display, 'hydrate', original_hydrate)
+        monkeypatch.setattr(app.history, 'ensure_loaded', original_history)
     report = (await app.dispatch('updates.diagnostics', {}, include_state=False))['result']
     assert not report['activationGate']['blocked']
     assert report['activationGate']['configurationHolds'][0]['reasonCode'] == 'legacy-hold-quiescent'

@@ -149,6 +149,7 @@ async def collect(manager):
     report['activationGate'].update(
         requiresIdle=manager.requires_idle(state),
         qualification='Point-in-time observation only; not evidence of no effects or permission to retry. '
+                      'Initial runtime sample precedes per-hold checks. '
                       'Runtime and lock activity can change without a state revision.')
     sequence = state.get('sequence') or {}
     phases = {'idle', 'checking', 'available', 'checked', 'staging', 'validating', 'staged', 'app-staged', 'activating', 'installed', 'error', 'interrupted'}
