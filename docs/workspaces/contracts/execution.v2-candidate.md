@@ -610,6 +610,13 @@ a pause followed by resume cannot revive an earlier notification. Existing
 receipts without this field retain their exact-revision boundary. Migration
 never retries suppressed, accepted or uncertain input.
 
+New commissioned-task receipts also capture the requester's continuation epoch.
+An already admitted member can return evidence in a later root generation after
+the requester updates progress or commissions siblings within the same objective.
+Creation preparation and initial input admission still require the exact captured
+task revision. Existing receipts without the epoch keep that stricter boundary;
+this change neither retries old refusals nor changes a blocked task to complete.
+
 Only correlated outcome observations and later reports about an already delivered
 request may use that continuing-objective boundary. Ordinary queued instructions
 and active steering retain their exact task revision. Notifications do not grant
