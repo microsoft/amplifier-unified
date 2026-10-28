@@ -665,6 +665,39 @@ try{
  await expect(quotes).toHaveCount(1);await addedNotice.first().waitFor();
  await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();await expect(quotes).toHaveCount(0);
  assert.equal((await observe()).sends.length,2,'Quote/remove must not execute another turn');
+ // The reported path (#1126): quote, send, then another chat. Sending takes the quote with it,
+ // so its feedback ends there, in this chat, another chat and a new one.
+ const pendingNotice=page.getByText('Adding quote…',{exact:true});
+ const expectNoQuoteNotice=async()=>{for(const notice of [addedNotice,changedNotice,pendingNotice])await expect(notice).toHaveCount(0);};
+ const showChat=async id=>{await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),id);await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId)).toBe(id);};
+ await b.getByRole('button',{name:'Reply to message',exact:true}).click();await expect(quotes).toHaveCount(1);await addedNotice.first().waitFor();
+ await page.getByRole('button',{name:'Send message',exact:true}).click();
+ await expect.poll(async()=>(await observe()).sends.length).toBe(3);await expect(quotes).toHaveCount(0);
+ await expectNoQuoteNotice();
+ await showChat(separateSession);await expectNoQuoteNotice();
+ await showChat(originalSession);await expectNoQuoteNotice();
+ await page.evaluate(()=>{void window.amplifier.dispatch('session.draft',{});});
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId)).not.toBe(originalSession);
+ await expectNoQuoteNotice();
+ await showChat(originalSession);
+ // A quote still pending when the user leaves keeps the draft and attachment where they were,
+ // shows nothing in the other chat, and explains the missing quote on return.
+ await editor.fill('Keep pending draft');
+ await page.locator('.a-file-input').setInputFiles({name:'pending.txt',mimeType:'text/plain',buffer:Buffer.from('Pending attachment')});
+ const pendingFile=page.getByRole('button',{name:'Remove pending.txt',exact:true});await expect(pendingFile).toBeVisible();
+ let lateRelease,lateStarted,lateSettled;
+ const lateHeld=new Promise(resolve=>lateRelease=resolve),lateWaiting=new Promise(resolve=>lateStarted=resolve),lateDone=new Promise(resolve=>lateSettled=resolve);
+ await page.route('**/api/actions',async route=>{if(route.request().postDataJSON()?.action==='message.reply'){const response=await route.fetch();lateStarted();await lateHeld;await route.fulfill({response});lateSettled();}else await route.continue();});
+ await b.getByRole('button',{name:'Reply to message',exact:true}).click();await lateWaiting;
+ await page.evaluate(id=>{void window.amplifier.dispatch('session.select',{id});},separateSession);
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId)).toBe(separateSession);
+ lateRelease();await lateDone;await page.unroute('**/api/actions');
+ await expect(editor).toHaveText('Separate draft');await expect(quotes).toHaveCount(0);await expect(pendingFile).toHaveCount(0);await expectNoQuoteNotice();
+ await showChat(originalSession);
+ await changedNotice.first().waitFor();await expect(addedNotice).toHaveCount(0);await expect(pendingNotice).toHaveCount(0);
+ await expect(editor).toHaveText('Keep pending draft');await expect(quotes).toHaveCount(0);await expect(pendingFile).toBeVisible();
+ await pendingFile.click();await editor.fill('');
+ assert.equal((await observe()).sends.length,3,'A late quote must not execute another turn');
  assert.deepEqual(errors,[]);
  async function compareReference(){
   // Optional private design comparison. The supplied HTML is data in an opaque

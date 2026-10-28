@@ -1,7 +1,7 @@
 import {ApprovalPanel} from './approval-card';
 import {AutomationHub} from './automation-hub';
 import {createArchiveAction} from './archive-action.js';
-import {quoteNotice as makeQuoteNotice,visibleQuoteNotice} from './quote-notice.js';
+import {quoteNotice as makeQuoteNotice,quoteNoticeAfterSend,visibleQuoteNotice} from './quote-notice.js';
 import {ArchiveContext,ArchiveNotice} from './archive-feedback.jsx';
 import {createStateStream} from './state-stream.js';
 import {recordActionTiming} from './api.js';
@@ -656,7 +656,7 @@ function App(){
   const expectedGenerationId=activeGeneration&&!activeGeneration.terminal?activeGeneration.id:null;
   if(!submittedText.trim()&&!attachments.length)return;
   if(detail.focused)detail.latest(false);
-  chatScroll.current?.submitted(id);setError('');editDraft('');clearTimeout(draftTimer.current);
+  chatScroll.current?.submitted(id);setError('');setQuoteNotice(notice=>quoteNoticeAfterSend(notice,session?.id));editDraft('');clearTimeout(draftTimer.current);
   const blankToken=stagedDraft.current;
   let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,allowNextTurn:true,...(expectedGenerationId?{expectedGenerationId}:{}),...(!session?{creation:{id:crypto.randomUUID(),setup:creationSetup()}}:{}),text:submittedText,...(submittedDocument?{document:submittedDocument,replyTo:{version:2,segments:submittedDocument.segments}}:state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
   try{
