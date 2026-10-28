@@ -683,7 +683,7 @@ class Collaboration:
         if notify and receipt.get('subscription') and continuation_outcome(receipt):
             self.enqueue_continuation(receipt)
 
-    def creation_guard(self, receipt):
+    def creation_guard(self, receipt, *, for_reply=False):
         if receipt.get('assignmentId'):
             reason = self.service.assignments.blocked(identity=receipt['assignmentId'])
             if reason:
@@ -699,7 +699,12 @@ class Collaboration:
         if (source.get('interruptionRevision', 0) != receipt['sourceInterruptionRevision']
                 or task.get('status') in {'paused', 'blocked', 'completed'}):
             return 'The requester or its assignment was stopped.'
-        if (task.get('id'), task.get('revision')) != (receipt.get('sourceTaskId'), receipt.get('sourceTaskRevision')):
+        binding = {'taskId': receipt.get('sourceTaskId'), 'taskRevision': receipt.get('sourceTaskRevision')}
+        # A later report describes already admitted work. Progress on the same
+        # objective may retain that evidence without authorizing new execution.
+        if for_reply and 'sourceTaskContinuationEpoch' in receipt:
+            binding['taskContinuationEpoch'] = receipt['sourceTaskContinuationEpoch']
+        if not task_matches(task, binding):
             return 'The requesting assignment changed.'
         if (source['workspace'] != receipt['workspace']
                 or (source.get('workingDirectory') or source['workspace']) != receipt['result']['workingDirectory']):
@@ -740,7 +745,7 @@ class Collaboration:
                 return 'The assignment requester was interrupted after this request; old input is not replayed.'
             if receipt.get('creationOperationId'):
                 creation = self.receipt(receipt['creationOperationId'])
-                reason = self.creation_guard(creation)
+                reason = self.creation_guard(creation, for_reply=for_reply)
                 if reason:
                     return reason
             if receipt.get('dependencyRequestId'):
@@ -1861,6 +1866,7 @@ class Collaboration:
                 'creationVersion': 1, 'phase': 'planned', 'title': args['title'], 'origin': origin,
                 **lineage,
                 'sourceTaskId': task.get('id'), 'sourceTaskRevision': task.get('revision'),
+                'sourceTaskContinuationEpoch': continuation_epoch(task),
                 "initialInputId": identity + ":brief", "detail": "Creation committed; preparation is owned by the service."}
             receipt['assignmentId'] = assignment_id
             if args.get('workReferences'):

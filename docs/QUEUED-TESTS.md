@@ -332,9 +332,9 @@ Environment inspection is paged and every action names the exact resource and
 revision. Separate checks can be inspected, cancelled, and cleaned up without
 selecting or stopping another check from the same chat.
 
-## Reusing prepared Python dependencies
+## Reusing prepared dependencies
 
-Local Python-project preparations can reuse a qualified immutable dependency
+Local Python-project and eligible browser-test preparations can reuse a qualified immutable dependency
 image on the same backend. Its key binds the exact project manifest and frozen
 lockfile, resolved Git commits, immutable base, backend identity, profile and
 recipe. The shared builder receives only dependency manifests, never the task
@@ -347,9 +347,16 @@ a branch policy into a standing pin.
 
 The first scope accepts static single-root projects with public hashed registry
 artifacts and exact resolved Git sources. Local/path/workspace dependencies,
-dynamic root metadata, unsupported indexes, hosts without shared file locking and
-browser profiles retain ordinary
-cold preparation. Registered remote controllers also keep cold preparation until
+dynamic root metadata, unsupported indexes and hosts without shared file locking
+retain ordinary cold preparation. Browser reuse additionally requires a Python
+project and a version 2 or 3 npm lock with public, integrity-hashed registry
+packages. npm workspaces, local or linked packages, project npm configuration,
+overriding shrinkwrap locks and browser-only projects keep cold preparation.
+The browser seed contains Node, locked npm dependencies, Chromium and hashed
+Python Playwright wheels. Each source finalizer reinstalls Python Playwright from
+those retained wheels offline, constraining and checking existing locked Python
+dependencies. No task source, credentials or npm configuration enter the seed.
+Registered remote controllers also keep cold preparation until
 they have their own settings-governed dependency-storage owner.
 
 Concurrent first use coalesces under one dependency-key lock. A separate durable

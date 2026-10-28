@@ -422,6 +422,48 @@ async def test_capped_assignment_refusal_does_not_register_or_transfer_return(cr
     assert app.assignments.current(source)['limits'][limit] == 1000
 
 
+@pytest.mark.parametrize('change,expected', [
+    ('progress', 'accepted'), ('epoch', 'suppressed'), ('stop', 'suppressed'),
+    ('legacy-progress', 'suppressed'), ('legacy-unchanged', 'accepted'),
+])
+async def test_optin_return_preserves_epoch_and_legacy_admission_boundaries(app, change, expected):
+    source, target = app.state['sessions']
+    source['task'] = {'id': 'same-objective', 'revision': 1, 'continuationEpoch': 1,
+                      'status': 'active', 'objective': 'Review the exact candidate.'}
+    sent = await send(app, returnNotification=True)
+    continuation = sent['subscription']['continuationId']
+    assert sent['subscription']['taskContinuationEpoch'] == 1
+    await settled(app, 'request-1', 'accepted')
+    if change.startswith('legacy'):
+        request = app.collaboration.receipt('request-1')
+        request['subscription'].pop('taskContinuationEpoch')
+        app.collaboration.save('request-1', request)
+        app.db.commit()
+    await declare(app)
+    await finish(app, target, 'request-1')
+    assert app.collaboration.receipt(continuation)['delivery'] == 'queued'
+    if change != 'legacy-unchanged':
+        source['task']['revision'] = 2
+    if change == 'epoch':
+        source['task']['continuationEpoch'] = 2
+    elif change == 'stop':
+        source['interruptionRevision'] = source.get('interruptionRevision', 0) + 1
+    before = copy.deepcopy(source['task'])
+    source['status'] = 'idle'
+    await app.collaboration.drain(source['id'])
+    await settled(app, continuation, expected)
+    inspected = await result(app)
+    assert inspected['qualified'] and inspected['receipt']['response']['status'] == 'sealed'
+    state = inspected['returnState']
+    assert state['notification']['requestId'] == continuation
+    assert state['notification']['status'] == expected
+    assert state['notification']['consumption'] == 'unknown'
+    assert source['task'] == before
+    await app.collaboration.drain(source['id'])
+    assert [row[1] for row in app.runtime.inputs] == (
+        ['request-1', continuation] if expected == 'accepted' else ['request-1'])
+
+
 @pytest.mark.parametrize('usage', [{'totalTokens': 100}, {}], ids=['exhausted', 'unknown'])
 async def test_optin_return_does_not_override_saved_budget_readiness(app, usage):
     await staged(app)
