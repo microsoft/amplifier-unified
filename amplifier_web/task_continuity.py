@@ -7,7 +7,7 @@ import logging
 import time
 import uuid
 
-from .task_binding import continuation_epoch
+from .task_binding import continuation_epoch, dependency_blocked
 
 READ_ACTIONS = frozenset({"task.get", "task.history", "task.detail", "task.receipt"})
 # Leave room for the action envelope and the request-boundary policy text.
@@ -65,7 +65,7 @@ def _project(task, history, goal, sid, *, continuity=None, supported=None):
         return _bounded(result)
     summary = {key: copy.deepcopy(task.get(key)) for key in (
         "id", "revision", "appliedRevision", "status", "continuationEpoch",
-        "createdAt", "updatedAt", "completedAt", "maxTurns")}
+        "createdAt", "updatedAt", "completedAt", "maxTurns", "blockProvenance")}
     summary.update(continuationEpoch=continuation_epoch(task),
                    correctionCount=len(task.get("corrections", [])),
                    originalObjectiveAvailable=isinstance(task.get("originalObjective"), str),
@@ -372,6 +372,41 @@ class TaskController:
         allowed = {"active", "paused", "blocked", "completed"} if resume else {"active"}
         return task is None or (task["status"] in allowed and bool(self.coordinator.get_capability("live.continuation_guard_supported")))
 
+    async def peer_input_allowed(self):
+        """Handling a fresh handoff is not resuming this blocked objective."""
+        self.apply()
+        capacity = getattr(self.controls, "capacity", None)
+        if capacity and capacity.last_denial and capacity.last_denial.get("budgetRevision") == capacity.policy["revision"]:
+            return False
+        return (dependency_blocked(self.record())
+                and bool(self.coordinator.get_capability("live.continuation_guard_supported")))
+
+    def reserve_peer_input(self, identity):
+        """Charge a finite blocked handoff against saved turns before effects.
+
+        An uncertain submit retains its charge, just as its host receipt retains
+        uncertainty. No goal is installed and no task revision/epoch is advanced.
+        """
+        task = self.record()
+        if not dependency_blocked(task):
+            raise ValueError("The dependency block changed before input reservation")
+        if task.get("lastBlockedInputId") == identity:
+            return
+        previous = copy.deepcopy(task)
+        goal = task.setdefault("goalState", {})
+        used = goal.get("turns_used", 0)
+        cap = task.get("maxTurns", goal.get("cap"))
+        if cap is not None and used >= cap:
+            raise ValueError("The saved task's turn budget is exhausted.")
+        goal["turns_used"] = used + 1
+        task["lastBlockedInputId"] = identity
+        try:
+            self.controls.persist(task_only=True)
+        except BaseException:
+            task.clear()
+            task.update(previous)
+            raise
+
     async def yield_to_peer(self, event, data):
         """Supersede this goal execution, not the goal, before an automatic turn."""
         from amplifier_core import HookResult
@@ -481,7 +516,11 @@ class TaskController:
         elif operation == "task.block":
             if not isinstance(args.get("reason"), str) or not args["reason"].strip():
                 raise ValueError("Explain what blocks the task")
-            task.update(status="blocked", blockedReason=args["reason"])
+            task.update(status="blocked", blockedReason=args["reason"],
+                blockProvenance={"version": 1, "origin": args.get("origin"),
+                    "revision": revision + 1,
+                    "dependency": args.get("origin") == "agent" and (
+                        (previous or {}).get("status") == "active" or dependency_blocked(previous))})
         elif operation == "task.complete":
             if args.get("condition") != task["objective"]:
                 raise ValueError("Completion must refer to the exact current objective")
@@ -502,7 +541,7 @@ class TaskController:
         # Retain full changed fields in the EXISTING canonical record. Never
         # derive the old original from a legacy record's latest objective.
         changed_fields = {key: copy.deepcopy(task[key]) for key in
-                          ("objective", "constraints", "status", "blockedReason", "questionIds",
+                          ("objective", "constraints", "status", "blockedReason", "blockProvenance", "questionIds",
                            "operationIds", "artifactRefs", "completionEvidence", "maxTurns")
                           if key in task and (previous or {}).get(key) != task[key]}
         task.setdefault("changesRecordedFromRevision", task["revision"])
