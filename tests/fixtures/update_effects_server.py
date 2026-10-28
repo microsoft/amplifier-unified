@@ -71,6 +71,23 @@ async def serve():
                     available = {**application, 'latest': '99.0.1', 'revision': 'c'*40}
                 elif mode == 'offline':
                     available = {'status': 'check_failed'}
+                elif mode in {'management-hold', 'unobservable-hold', 'operation-hold', 'hold-clear'}:
+                    # Synthetic predicate inputs, real gate/public projection.
+                    if manager.service.management.lock.locked():
+                        manager.service.management.lock.release()
+                    session.update(status='error', configurationBusy=True,
+                                   pendingConfiguration={'phase': 'error', 'recoveryRequired': True,
+                                                         'error': 'PRIVATE_HOLD_SENTINEL'})
+                    service.runtime.has_pending_operations = lambda: False
+                    if mode == 'management-hold':
+                        await service.management.lock.acquire()
+                    elif mode == 'unobservable-hold':
+                        service.runtime.has_pending_operations = None
+                    elif mode == 'operation-hold':
+                        session['pendingConfiguration']['operationId'] = 'PRIVATE_OPERATION_SENTINEL'
+                    else:
+                        session.update(status='working', configurationBusy=False, pendingConfiguration={})
+                    await manager.publish()
                 elif mode == 'unknown':
                     await manager.publish(phase='error', pendingApp=None,
                                           pendingReplacement={'attemptId': 'unconfirmed-attempt'},
