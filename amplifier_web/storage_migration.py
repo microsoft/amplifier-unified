@@ -12,6 +12,7 @@ RESULT_LIMIT = 200
 RESULT_BYTES = 32_000_000
 RESULT_DAYS = 30
 BACKGROUND_PRUNE_LIMIT = 1024
+BACKGROUND_ROOT_CATCHUPS = 3
 
 
 def trim_operations(db, state):
@@ -172,8 +173,13 @@ async def _finish_async(service, marked):
     from .resource_files import remove_files_async
     stale = _prune(service, marked, limit=BACKGROUND_PRUNE_LIMIT)
     if stale is not None:
-        await remove_files_async(service.db, stale)
+        removed = await remove_files_async(service.db, stale)
         service._resource_scan_status['indexedRemoved'] = len(stale)
+        return {'indexedPruned': len(stale),
+                'indexedFilesRemoved': (removed or {}).get('filesRemoved', 0),
+                'indexedBytesRemoved': (removed or {}).get('bytesRemoved', 0),
+                'unindexedFilesRemoved': service._resource_scan_status.get('removed', 0)}
+    return {}
 
 
 def _maintenance_sync(service):
@@ -192,7 +198,8 @@ async def _maintenance_async(service):
     No writer transaction or application lock spans durable JSON/body reading.
     Before deletion, recheck every root and source index under the writer boundary.
     Bounded file deletion retains exclusion until its worker has settled.
-    A changed, unavailable or uncertain graph defers the sweep in its entirety.
+    A bounded catch-up retains newly added roots as well as earlier roots. A
+    still-changing, unavailable or uncertain graph defers the entire sweep.
     """
     from .resource_files import references, detach, ReferenceEdges, settle_worker
     from . import resource_roots
@@ -203,6 +210,12 @@ async def _maintenance_async(service):
         edges = service._resource_edges = ReferenceEdges()
     before = (edges.hits, edges.misses, edges.bytes_read)
     deferred = None
+    reason = None
+    catchups = 0
+    removed = {}
+    started = time.monotonic()
+    outcome = 'interrupted'
+    stage = 'root-capture-unavailable'
 
     def live_roots():
         state = _roots(service)
@@ -234,33 +247,53 @@ async def _maintenance_async(service):
             with measure(service, 'storage.gc.roots', synchronous=True):
                 initial = live_roots()
                 snapshot = resource_roots.capture(service.db)
+        stage = 'durable-roots-unavailable'
         saved = await settle_worker(durable_roots, snapshot) if initial is not None else set()
         if initial is not None:
             initial.update(saved)
         pending, sources = list(initial or ()), {}
         valid = initial is not None
-        while pending and valid:
-            identity = pending.pop()
-            if identity in sources:
-                continue
-            try:
-                async with service.lock:
-                    if unavailable():
-                        return
-                    source = detach(service.db, identity)
-                pending.extend(await settle_worker(inspect, source))
-                sources[identity] = source
-            except (OSError, ValueError, TypeError, KeyError, RecursionError):
-                valid = False
-        # Decode changed durable records outside both ownership locks. Common
-        # progress-only saves can change their bytes without changing any roots;
-        # those must not starve collection either.
-        async with service.lock:
-            if unavailable():
-                return
-            final_snapshot = resource_roots.capture(service.db) if valid else None
-        if valid and final_snapshot != snapshot:
-            saved = await settle_worker(durable_roots, final_snapshot)
+        if not valid:
+            reason = 'presentation-recovery-pending'
+        while valid:
+            while pending and valid:
+                identity = pending.pop()
+                if identity in sources:
+                    continue
+                try:
+                    async with service.lock:
+                        if unavailable():
+                            return
+                        source = detach(service.db, identity)
+                    pending.extend(await settle_worker(inspect, source))
+                    sources[identity] = source
+                except (OSError, ValueError, TypeError, KeyError, RecursionError):
+                    valid, reason = False, 'resource-body-unavailable'
+            if not valid:
+                break
+            # A save can replace a large immutable session snapshot while we
+            # walk. Extend the conservative mark, including the new closure,
+            # instead of requiring an idle interval for the entire first walk.
+            stage = 'root-capture-unavailable'
+            async with service.lock:
+                if unavailable():
+                    return
+                current = live_roots()
+                final_snapshot = resource_roots.capture(service.db)
+            if current is None:
+                valid, reason = False, 'presentation-recovery-pending'
+                break
+            if final_snapshot != snapshot:
+                stage = 'durable-roots-unavailable'
+                saved = await settle_worker(durable_roots, final_snapshot)
+                snapshot = final_snapshot
+            pending = list((current | saved) - sources.keys())
+            if not pending:
+                break
+            if catchups >= BACKGROUND_ROOT_CATCHUPS:
+                valid, reason = False, 'root-catchup-limit'
+                break
+            catchups += 1
         async with service.lock:
             if unavailable():
                 return
@@ -268,24 +301,32 @@ async def _maintenance_async(service):
             try:
                 with measure(service, 'storage.gc.roots', synchronous=True):
                     current = live_roots() if valid else None
-                    valid = (valid and current is not None
-                             and (current | saved) == initial
-                             and resource_roots.capture(service.db) == final_snapshot)
+                    if valid and current is None:
+                        valid, reason = False, 'presentation-recovery-pending'
+                    if valid and not (current | saved) <= sources.keys():
+                        valid, reason = False, 'live-roots-changed'
+                    if valid and resource_roots.capture(service.db) != snapshot:
+                        valid, reason = False, 'durable-roots-changed'
                 if valid:
                     try:
                         valid = all(detach(service.db, key) == value for key, value in sources.items())
                     except ValueError:
                         valid = False
-                await _finish_async(service, set(sources) if valid else None)
+                    if not valid:
+                        reason = 'resource-index-changed'
+                stage = 'file-cleanup-unavailable'
+                removed = await _finish_async(service, set(sources) if valid else None)
                 if not valid:
-                    deferred = {'deferred': True, 'reason': 'retained-graph-changed-or-unavailable'}
+                    deferred = {'deferred': True, 'reason': reason}
                     service._resource_scan_status.update(deferred)
                 else:
                     service._storage_maintenance_error = None
+                    outcome = 'completed'
             except BaseException:
                 service.db.rollback()
                 raise
     except asyncio.CancelledError:
+        outcome = 'cancelled'
         raise  # Detached readers have settled; no writer boundary is retained.
     except Exception as exc:
         service._storage_maintenance_error = type(exc).__name__
@@ -293,13 +334,25 @@ async def _maintenance_async(service):
         if scan is not None:
             scan.close()
             service._resource_scan = None
-        deferred = {'deferred': True, 'reason': 'retained-graph-unavailable'}
+        deferred = {'deferred': True, 'reason': stage}
         service._resource_scan_status = {'blocked': True, 'complete': False,
                                         'inspected': 0, 'removed': 0, **deferred}
         logging.getLogger(__name__).warning('Storage maintenance deferred.', exc_info=True)
     finally:
         if deferred is not None:
+            outcome = 'deferred'
             count(service, 'storage.gc.rootsDeferred')
+        if outcome == 'completed':
+            count(service, 'storage.gc.passesCompleted')
+            for key in ('indexedPruned', 'indexedFilesRemoved', 'indexedBytesRemoved', 'unindexedFilesRemoved'):
+                count(service, 'storage.gc.' + key, removed.get(key, 0))
+        count(service, 'storage.gc.rootCatchups', catchups)
+        diagnostics = getattr(service, 'performance_diagnostics', None)
+        if diagnostics is not None:
+            diagnostics.record_storage_collection(outcome=outcome,
+                reason=deferred['reason'] if deferred else None,
+                elapsed_ms=(time.monotonic() - started) * 1000,
+                catchups=catchups, **removed)
         count(service, 'storage.gc.edgeHits', edges.hits - before[0])
         count(service, 'storage.gc.edgeMisses', edges.misses - before[1])
         count(service, 'storage.gc.bodyBytesRead', edges.bytes_read - before[2])
