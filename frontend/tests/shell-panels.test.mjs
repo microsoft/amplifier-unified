@@ -34,6 +34,14 @@ test('document Refresh reads saved state only and ignores an obsolete response',
  await renderAct(async()=>{completion=button().props.onClick()});
  await renderAct(async()=>{resolve({result:{views:[view]}});await completion});
  assert.match(text(),/Checked · Latest · Version 1 · Current saved content/);
+ await renderAct(async()=>{completion=button().props.onClick()});
+ view={...view,resourceRevision:'body-two',latestVersion:2};await renderAct(async()=>root.update(render()));
+ assert.equal(button().props.disabled,true);assert.match(text(),/Checking saved content/);
+ await renderAct(async()=>{reject(Error('Disconnected after update'));await completion});
+ assert.match(text(),/Disconnected after update/);assert.equal(button().props.disabled,false);
+ await renderAct(async()=>{completion=button().props.onClick()});
+ await renderAct(async()=>{resolve({result:{views:[view]}});await completion});
+ assert.match(text(),/Checked · Latest · Version 2/);
  await renderAct(async()=>root.unmount());
 });
 test.after(()=>server.close());

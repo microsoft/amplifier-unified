@@ -129,6 +129,10 @@ try{
   await capture('pinned-first-update-desktop');
   report.checks.push('Pinned v1 discovers its first and adjacent updates without replacing its content');
   await action('canvas.select',{id:pinned});
+  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
+  await composer.fill('Preserve this unfinished message, typed in the composer');
+  await refresh().click();await expect(status()).toContainText('Checked');
+  await expect(composer).toHaveText('Preserve this unfinished message, typed in the composer');
   const manifest={id:'example.refresh-editor',label:'Refresh editor',version:'1.0.0',apiVersion:'1.0',profile:'trusted-native-renderer-v1',stateSchema:'canvas-view-v1',resourceKinds:['markdown'],capabilities:['canvas.resource.read','canvas.view.update']};
   const source='export default ({React})=>function Editor({host}){const [text,setText]=React.useState("");const [mount]=React.useState(()=>crypto.randomUUID());return React.createElement("label",null,"Unfinished renderer edit",React.createElement("input",{"data-mount":mount,value:text,onChange:event=>{setText(event.target.value);host.setDirty(true)}}))}';
   const digest=(await action('shell.packages.stage',{manifest,source})).result.digest;
@@ -147,7 +151,8 @@ try{
   await capture('dirty-renderer-refresh');
   report.checks.push('Refresh retains a declared dirty renderer, generation, mount identity and unfinished draft');
  }
- assert.equal((await state()).view.draft,'Preserve this unfinished message');
+ if(report.baseline)assert.equal((await state()).view.draft,'Preserve this unfinished message');
+ else await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveText('Preserve this unfinished message, typed in the composer');
  const history=(await action('canvas.versions.inspect',{id,version:2,includeSource:true})).result;
  assert.equal(history.source.content,'# Saved two');
  assert.deepEqual(report.browserErrors,[]);

@@ -10,27 +10,28 @@ export const CanvasPrimaryActionsHost=createContext(undefined);
 // A same-version check must retain live HTML and native-renderer input.
 export function CanvasDocumentRefresh({view,dispatch}){
  const [check,setCheck]=useState(null),pending=useRef(false);
- const revision=JSON.stringify([view.resourceId,view.selectedVersion,view.resourceRevision,view.latestVersion]);
- const current=useRef(revision);current.current=revision;
- const shown=check?.revision===revision?check:null;
+ const selection=JSON.stringify([view.resourceId,view.selectedVersion]);
+ const versionOf=value=>JSON.stringify([value.resourceRevision,value.latestVersion]);
+ const current=useRef(selection);current.current=selection;
+ const shown=check?.selection===selection?check:null;
  const historical=view.selectedVersion!=null&&view.selectedVersion<view.latestVersion;
  const identity=view.selectedVersion==null?`Latest · Version ${view.latestVersion}`:`Version ${view.selectedVersion} · Saved`;
  const freshness=historical?`Historical · Version ${view.latestVersion} available`:'Current saved content';
  const refresh=async()=>{
   if(pending.current)return;
-  pending.current=true;setCheck({revision,pending:true});
+  pending.current=true;setCheck({selection,pending:true});
   try{
    const receipt=await dispatch('canvas.views.inspect',{});
    const observed=receipt?.result?.views?.find(item=>item.viewId===view.viewId);
    if(!observed||observed.resourceId!==view.resourceId||observed.selectedVersion!==view.selectedVersion)throw Error('The selected document changed. Check the document now open.');
-   if(current.current===revision)setCheck({revision,checked:true});
-  }catch(error){if(current.current===revision)setCheck({revision,error:error.message})}
+   if(current.current===selection)setCheck({selection,checkedVersion:versionOf(observed)});
+  }catch(error){if(current.current===selection)setCheck({selection,error:error.message})}
   finally{pending.current=false}
  };
  return <>
   <button type="button" className="a-soft a-canvas-refresh" aria-label="Refresh document" title="Check saved content and versions without reloading the preview or reading the source file" disabled={!!shown?.pending} onClick={refresh}>Refresh</button>
   <div className="a-canvas-freshness" role={shown?.error?'alert':'status'} aria-live="polite">
-   {shown?.pending?'Checking saved content…':shown?.error?`Could not refresh: ${shown.error} The open document is retained.`:`${shown?.checked?'Checked · ':''}${identity} · ${freshness}`}
+   {shown?.pending?'Checking saved content…':shown?.error?`Could not refresh: ${shown.error} The open document is retained.`:`${shown?.checkedVersion===versionOf(view)?'Checked · ':''}${identity} · ${freshness}`}
   </div>
  </>;
 }
