@@ -328,16 +328,29 @@ def import_name(descriptor, name, content):
     """An updated entry may still own its old content-addressed file name."""
     from .service import AppError
     stem = name.removesuffix('.amplifier.css')
-    for index in range(1, 1001):
+    candidates = {name if index == 1 else f'{stem}-{index}.amplifier.css': index
+                  for index in range(1, 1001)}
+    occupied = set()
+    # Inspect only existing members of this bounded collision family. A deleted
+    # earlier slot must not hide an identical later import or change its identity.
+    with os.scandir(descriptor) as entries:
+        for entry in entries:
+            if (index := candidates.get(entry.name)) is not None:
+                occupied.add(index)
+    for index in sorted(occupied):
         candidate = name if index == 1 else f'{stem}-{index}.amplifier.css'
         try:
             existing = read_file(Path(candidate), descriptor)['css']
         except FileNotFoundError:
-            return candidate
+            occupied.discard(index)
+            continue
         except (OSError, UnicodeError, AppError) as exc:
             raise AppError('This library file is unavailable. Nothing was replaced.') from exc
         if existing == content:
             return candidate
+    for index in range(1, 1001):
+        if index not in occupied:
+            return name if index == 1 else f'{stem}-{index}.amplifier.css'
     raise AppError('Too many appearances share this import identity. Choose another name.')
 
 

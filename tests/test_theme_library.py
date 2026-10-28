@@ -139,6 +139,55 @@ async def test_portable_metadata_roundtrip_imports_do_not_apply_or_overwrite(app
     assert len(list((app.data_dir / 'themes').glob('*.css'))) == 2
 
 
+@pytest.mark.parametrize('deleted_slot', [1, 2])
+async def test_reimport_reuses_identical_collision_after_deleting_earlier_slot(app, deleted_slot):
+    original = (await dispatch(app, 'theme.save', {
+        'name': 'Ocean', 'css': '#amp-one{color:red}',
+    }))['result']
+    exported = (await dispatch(app, 'theme.export', {'id': original['id']}))['result']['css']
+    restored = original
+    for index in range(1, deleted_slot + 1):
+        updated = (await dispatch(app, 'theme.update', {
+            'id': restored['id'], 'expectedFingerprint': restored['fingerprint'],
+            'name': 'Ocean', 'css': f'#amp-one{{--collision:{index};color:blue}}',
+        }))['result']
+        restored = (await dispatch(app, 'theme.import', {'css': exported}))['result']
+    await dispatch(app, 'theme.delete', {
+        'id': updated['id'], 'expectedFingerprint': updated['fingerprint'],
+    })
+    for _ in range(2):
+        repeated = (await dispatch(app, 'theme.import', {'css': exported}))['result']
+        assert repeated['id'] == restored['id']
+    root = app.data_dir / 'themes'
+    identical = [path for path in root.glob('*.css') if path.read_text() == exported]
+    assert [path.name for path in identical] == [restored['id'][6:]]
+    assert not (root / updated['id'][6:]).exists(), 'Reimport must not refill an earlier gap'
+
+
+def test_import_collision_lookup_opens_only_existing_family_members(app, monkeypatch):
+    root = app.data_dir / 'themes'
+    root.mkdir()
+    name = 'ocean-example.amplifier.css'
+    content = theme_library.portable('#amp-one{color:red}', 'Ocean')
+    far_name = 'ocean-example-1000.amplifier.css'
+    (root / far_name).write_text(content)
+    (root / 'unrelated.css').write_text('#amp-one{color:blue}')
+    # Out-of-range/noncanonical suffixes do not widen the bounded identity family.
+    for suffix in ('1', '0002', '1001'):
+        (root / f'ocean-example-{suffix}.amplifier.css').symlink_to(root / 'absent.css')
+    opened = []
+    read_file = theme_library.read_file
+
+    def inspect(path, descriptor):
+        opened.append(path.name)
+        return read_file(path, descriptor)
+
+    monkeypatch.setattr(theme_library, 'read_file', inspect)
+    with theme_library.directory(app, writing=True) as descriptor:
+        assert theme_library.import_name(descriptor, name, content) == far_name
+    assert opened == [far_name], 'Do not probe missing slots or unrelated files'
+
+
 async def test_export_builtin_by_id_and_current_without_id(app):
     before = dict(app.state['theme'])
     builtin = (await dispatch(app, 'theme.read', {'id': 'builtin:aurora'}))['result']
