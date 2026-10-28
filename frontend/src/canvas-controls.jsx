@@ -1,4 +1,4 @@
-import React,{createContext,useContext,useState} from 'react';
+import React,{createContext,useContext,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
 
 // Controls share one stable surface. Pinning changes its layout, never the viewers.
@@ -6,6 +6,34 @@ export const CanvasControlsHost=createContext(undefined);
 // Primary common actions have their own stable compact row. Inline viewers keep
 // their existing controls: absence of this context is not a second toolbar.
 export const CanvasPrimaryActionsHost=createContext(undefined);
+// Refresh is a saved-state read, not a renderer reload or a selection command.
+// A same-version check must retain live HTML and native-renderer input.
+export function CanvasDocumentRefresh({view,dispatch}){
+ const [check,setCheck]=useState(null),pending=useRef(false);
+ const revision=JSON.stringify([view.resourceId,view.selectedVersion,view.resourceRevision,view.latestVersion]);
+ const current=useRef(revision);current.current=revision;
+ const shown=check?.revision===revision?check:null;
+ const historical=view.selectedVersion!=null&&view.selectedVersion<view.latestVersion;
+ const identity=view.selectedVersion==null?`Latest · Version ${view.latestVersion}`:`Version ${view.selectedVersion} · Saved`;
+ const freshness=historical?`Historical · Version ${view.latestVersion} available`:'Current saved content';
+ const refresh=async()=>{
+  if(pending.current)return;
+  pending.current=true;setCheck({revision,pending:true});
+  try{
+   const receipt=await dispatch('canvas.views.inspect',{});
+   const observed=receipt?.result?.views?.find(item=>item.viewId===view.viewId);
+   if(!observed||observed.resourceId!==view.resourceId||observed.selectedVersion!==view.selectedVersion)throw Error('The selected document changed. Check the document now open.');
+   if(current.current===revision)setCheck({revision,checked:true});
+  }catch(error){if(current.current===revision)setCheck({revision,error:error.message})}
+  finally{pending.current=false}
+ };
+ return <>
+  <button type="button" className="a-soft a-canvas-refresh" aria-label="Refresh document" title="Check saved content and versions without reloading the preview or reading the source file" disabled={!!shown?.pending} onClick={refresh}>Refresh</button>
+  <div className="a-canvas-freshness" role={shown?.error?'alert':'status'} aria-live="polite">
+   {shown?.pending?'Checking saved content…':shown?.error?`Could not refresh: ${shown.error} The open document is retained.`:`${shown?.checked?'Checked · ':''}${identity} · ${freshness}`}
+  </div>
+ </>;
+}
 export const usePrimaryCanvas=()=>useContext(CanvasPrimaryActionsHost)!==undefined;
 export function CanvasPrimaryAction({children}){
  const host=useContext(CanvasPrimaryActionsHost);

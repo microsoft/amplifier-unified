@@ -8,9 +8,34 @@ const server=await createServer({server:{middlewareMode:true,hmr:false},appType:
 const {ChatDetails,WorkspaceManager}=await server.ssrLoadModule('/src/shell/navigation-components.jsx');
 const {WorkspaceRail:Rail,ChatRename,AgentCanvas,CanvasToggle,A2UISurface,reopenCanvas,SessionHistoryControls}=await server.ssrLoadModule('/src/shell-panels.jsx');
 const {WorkHeader}=await server.ssrLoadModule('/src/work-shell.jsx');
+const {CanvasDocumentRefresh}=await server.ssrLoadModule('/src/canvas-controls.jsx');
 const {WorkNavigationContext}=await server.ssrLoadModule('/src/work-navigation.js');
 function WorkspaceRail(props){return React.createElement(Rail,{...props,shell:shellFor(props.state,props.act)})}
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
+test('document Refresh reads saved state only and ignores an obsolete response',async()=>{
+ let root,resolve,reject,completion,calls=[];
+ let view={viewId:'primary',resourceId:'one',resourceRevision:'body-one',selectedVersion:1,latestVersion:2};
+ const dispatch=(name,args)=>{calls.push([name,args]);return new Promise((yes,no)=>{resolve=yes;reject=no})};
+ const render=()=>React.createElement(CanvasDocumentRefresh,{view,dispatch});
+ await renderAct(async()=>{root=create(render())});
+ const button=()=>root.root.findByProps({'aria-label':'Refresh document'});
+ const text=()=>JSON.stringify(root.toJSON());
+ assert.match(text(),/Historical · Version 2 available/);
+ await renderAct(async()=>{completion=button().props.onClick()});
+ assert.equal(button().props.disabled,true);assert.match(text(),/Checking saved content/);
+ await renderAct(async()=>{await button().props.onClick()});
+ assert.deepEqual(calls,[['canvas.views.inspect',{}]],'No duplicate, reload, selection or source-file action');
+ view={...view,resourceId:'two',selectedVersion:null,latestVersion:1};await renderAct(async()=>root.update(render()));
+ await renderAct(async()=>{resolve({result:{views:[{...view,resourceId:'one',selectedVersion:1}]}});await completion});
+ assert.doesNotMatch(text(),/Checked|Could not refresh/);
+ await renderAct(async()=>{completion=button().props.onClick()});
+ await renderAct(async()=>{reject(Error('Offline'));await completion});
+ assert.match(text(),/Could not refresh: Offline/);assert.equal(button().props.disabled,false);
+ await renderAct(async()=>{completion=button().props.onClick()});
+ await renderAct(async()=>{resolve({result:{views:[view]}});await completion});
+ assert.match(text(),/Checked · Latest · Version 1 · Current saved content/);
+ await renderAct(async()=>root.unmount());
+});
 test.after(()=>server.close());
 const initial=()=>({view:{navExpanded:true,navSimple:false},workspaceExplorer:{path:'/',parentPath:null,breadcrumbs:[{name:'/',path:'/'}],filter:'',page:1,pages:1,totalWorkspaces:2,rows:[{path:'/one',name:'one',workspaceId:'one',chatCount:2,canBrowse:false,unread:0},{path:'/two',name:'two',workspaceId:'two',chatCount:1,canBrowse:false,unread:0}]},workspaces:[{id:'one',name:'One',path:'/one',available:true},{id:'two',name:'Two',path:'/two',available:true}],selectedWorkspaceId:'one',sessions:[{id:'a',title:'First plan',workspace:'/one'},{id:'b',title:'Another plan',workspace:'/one'},{id:'c',title:'Other workspace',workspace:'/two'}]});
 

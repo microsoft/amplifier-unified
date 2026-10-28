@@ -132,7 +132,7 @@ controls, reuse the owning entry or record the necessary semantic difference.
 | Control / owner | Variants, state and reuse boundary | Accessibility / focused evidence |
 | --- | --- | --- |
 | Compact exact-version card and disclosure: `frontend/src/inline-artifacts.jsx` (`DocumentOutput`, `Preview`, `ArtifactLinks`) | HTML, documents, diagrams and images share title/type/version/open/disclosure; image gallery and specialized renderer bodies remain distinct. Client-local placement, pending/error and explicit HTML reset are not generic card state. | Native buttons; stable `aria-expanded`/`aria-controls`; titled open target; status errors; preserved focus. `tests/test_artifact_presentation.py`, `frontend/tests/artifact-one-surface-browser.mjs`, `frontend/tests/inline-artifacts-browser.mjs`. |
-| Viewer controls: `frontend/src/canvas-controls.jsx`, `canvas-viewer.jsx`, `canvas-workspace.jsx` | Existing renderer host, exact source binding, source/copy/download, portal placement and inline toolbar suppression. Do not add a competing inline toolbar or renderer registry. | Existing keyboard controls, labels and dirty/reload guards; `tests/test_canvas_views.py` and viewer browser tests. |
+| Viewer controls: `frontend/src/canvas-controls.jsx`, `canvas-viewer.jsx`, `canvas-workspace.jsx` | Existing renderer host, exact source binding, source/copy/download, portal placement and inline toolbar suppression. Document Refresh uses `canvas.views.inspect` to check saved state without reloading a renderer, selecting Latest, or reading the source file. Current/historical, pending and failed checks stay visible outside Details. Live apps and websites retain their own controls. Do not add a competing inline toolbar or renderer registry. | Native named Refresh button, live status, 44px target and existing keyboard controls/dirty guards; `tests/test_canvas_views.py`, `frontend/tests/canvas-refresh-browser.mjs` and viewer browser tests. |
 | Canvas Details inspector: `frontend/src/shell-panels.jsx`, `canvas-experience.css` | The existing control portal stays mounted beside the reader at Canvas widths of 720px or more. Narrower panes use the same bounded right-hand sheet below the single navigation bar; only the covered reader is inert. The compact version/copy/download/Details row and format-specific viewers remain their existing owners. No new renderer or preference is introduced. | Named region, 44px controls, Escape/close focus restoration, retained header toggle and document navigation. `frontend/tests/shell-panels.test.mjs`, `canvas-chrome-browser.mjs` geometry/old-top-band negative and `canvas-dirty-browser.mjs` retained-editor checks. |
 | Saved output inspection: `frontend/src/outputs.jsx`, shared `image-actions.jsx` | Snapshot read/download/lineage and image follow-up; output HTML is **not** an executable preview. See [Outputs](OUTPUTS.md). | Exact-target download and draft-preserving follow-up; `tests/test_output_images.py` and inline-artifact browser tests. |
 
@@ -323,6 +323,16 @@ buttons record the version published during their turn. Saved surface versions
 include the inputs captured when that definition was created; older versions
 without recorded inputs are labelled explicitly. Live interaction is available
 only on Latest. Retained definitions are not evicted after twenty revisions.
+
+The document action row shows the open saved version and whether a newer saved
+version is available, even with Details closed. **Refresh** checks the existing
+saved-state owner and version list. Latest follows new saved definitions; an
+exact version stays selected. Refresh is not a page/iframe reload, does not
+rerun document code, and does not import file edits or create a revision.
+Unfinished viewer input and the composer draft remain in place. A failed check
+retains the open document and shows an error beside Refresh; try Refresh again
+after the connection recovers. Use the existing version button to choose another
+saved version. Live apps and websites keep their separate lifecycle controls.
 
 For MCP Apps, reopening the same completed operation reuses its tab. A tool may
 supply `_meta["amplifier/presentationId"]` in its result to identify one durable
