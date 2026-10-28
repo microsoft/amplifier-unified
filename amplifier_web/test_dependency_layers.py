@@ -130,9 +130,11 @@ def browser_inputs(files, expected):
                            for value in dependencies.values())):
                 return False
         for name, entry in lock['packages'].items():
-            if not isinstance(entry, dict) or entry.get('link') or entry.get('workspaces'):
+            if not isinstance(entry, dict) or entry.get('link'):
                 return False
             if name == '':
+                if entry.get('workspaces'):
+                    return False
                 continue
             if (not name.startswith('node_modules/') or any(part in {'', '.', '..'} for part in name.split('/'))
                     or '\\' in name or not public_url(entry.get('resolved'))
