@@ -7,13 +7,16 @@ import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 import {openSettingsPage} from './browser-settings.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
-import {mkdir} from 'node:fs/promises';
+import {mkdir,writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/update_effects_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser;
 try{
  const boot=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),15000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row)}}catch{}})});
  browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),actions=[],errors=[];
+ const servedAssets={},assetReads=[];
+ page.on('response',response=>{const url=new URL(response.url());if(url.origin===boot.url&&url.pathname.startsWith('/assets/')&&response.ok())assetReads.push(response.body().then(body=>{servedAssets[url.pathname.slice(1)]=createHash('sha256').update(body).digest('hex')}));});
  page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(request.url().endsWith('/api/actions')&&request.method()==='POST')actions.push(request.postDataJSON())});
  const receipt=async mode=>{const response=mode?await page.request.post(boot.url+'/fixture/update-effects',{data:{mode}}):await page.request.get(boot.url+'/fixture/update-effects');assert.ok(response.ok(),`Fixture ${mode||'read'} returned ${response.status()}: ${await response.text()}`);return response.json()};
  await page.goto(boot.url);await showFixtureConversation(page);const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Keep my unsent update draft');const before=await receipt();
@@ -37,6 +40,7 @@ try{
   assert.equal(report.activationGate.configurationHolds[0].reasonCode,code);
   assert.ok(!JSON.stringify(report).includes('PRIVATE_'));
   assert.equal((await receipt()).calls.length,1);
+  if(process.env.AMPLIFIER_TEST_ARTIFACTS){await mkdir(process.env.AMPLIFIER_TEST_ARTIFACTS,{recursive:true});await page.screenshot({path:process.env.AMPLIFIER_TEST_ARTIFACTS+'/'+mode+'.png'});await writeFile(process.env.AMPLIFIER_TEST_ARTIFACTS+'/'+mode+'.json',JSON.stringify(report,null,2));}
  }
  await receipt('hold-clear');await expect(overview).toContainText('Waiting for 1 chat to finish');
  assert.equal(actions.filter(row=>row.action==='updates.forceRestart').length,0);assert.equal(staged.updates.application.current,'0.20.165');
@@ -75,5 +79,7 @@ try{
  await restore.click();await expect(restore).toHaveCount(0);const after=await receipt();assert.equal(after.generation.active,'previous-generation');assert.deepEqual(after.calls.at(-1),{operation:'rollback',target:'previous-generation'});assert.deepEqual(after.messages,before.originalMessages);
  await page.getByRole('button',{name:'Close panel',exact:true}).click();await expect(composer).toHaveDraft('Keep my unsent update draft');assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),before.sessionId);assert.deepEqual(errors,[]);
  assert.equal(actions.filter(row=>['conversation.send','session.warm','updates.forceRestart'].includes(row.action)).length,0);
+ await Promise.all(assetReads);assert.ok(Object.keys(servedAssets).length>0);
+ if(process.env.AMPLIFIER_TEST_ARTIFACTS)await writeFile(process.env.AMPLIFIER_TEST_ARTIFACTS+'/served-assets.json',JSON.stringify(servedAssets,null,2));
  console.log(JSON.stringify({passed:true,syntheticEffects:true,exactStage:true,unknownPreventsRetry:true,explicitKnownRetry:true,rollbackIntent:true,historyAndDraftRetained:true,hostRestarts:0,limits:['Real installer and generation activation are not exercised.','Rollback target is verified at effect boundary; UI target presentation is not asserted.']}));
 }finally{try{await browser?.close()}finally{if(fixture.exitCode===null){const done=once(fixture,'exit');fixture.kill('SIGTERM');const timer=setTimeout(()=>fixture.kill('SIGKILL'),5000);try{await done}catch{}finally{clearTimeout(timer)}}}}
