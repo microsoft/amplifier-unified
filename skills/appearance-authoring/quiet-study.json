@@ -1,0 +1,32 @@
+{
+  "name": "Quiet study",
+  "definition": {
+    "version": 1,
+    "palette": {
+      "light": {
+        "bg": "#F7F5F0",
+        "surface": "#FFFFFF",
+        "soft": "#EDEAE3",
+        "ink": "#242D32",
+        "muted": "#58636B",
+        "line": "#C9CCC8",
+        "accent": "#285E70",
+        "tint": "#E1EFF2",
+        "green": "#256440",
+        "danger": "#AC2938"
+      },
+      "dark": {
+        "bg": "#171E24",
+        "surface": "#202A32",
+        "soft": "#29353E",
+        "ink": "#EFF2F3",
+        "muted": "#B4C0C8",
+        "line": "#51616C",
+        "accent": "#9DD7E5",
+        "tint": "#29444E",
+        "green": "#9AD5AC",
+        "danger": "#FFAFB7"
+      }
+    }
+  }
+}

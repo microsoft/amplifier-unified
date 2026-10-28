@@ -32,6 +32,7 @@ import windowControlsOverlayCss from './window-controls-overlay.css?raw';
 import './window-controls-overlay.css';
 import {AppReloadContext,AppReloadNotice,useAppReload} from './app-reload.jsx';
 import {AppearanceSettings} from './appearance-settings';
+import {useAppearanceEditor} from './appearance-editor';
 import {homePatch} from './adaptive-work.js';
 import {SettingsExperience} from './settings-experience';
 import {useGuardedSettingsPanel,useGuardedSettingsSession} from './settings-drafts';
@@ -123,6 +124,7 @@ function App(){
  if(!destinationHistory.current)destinationHistory.current=createDestinationHistory({changed:setDestinationTrail});
  useEffect(()=>onAuthenticationChange(scope=>{destinationHistory.current.invalidate(scope);setBootAttempt(value=>value+1)}),[]);
  const [state,setState]=useState(null),[catalog,setCatalog]=useState([]),[error,setError]=useState(''),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[bootAttempt,setBootAttempt]=useState(0),[draft,setDraft]=useState(''),[workerDraft,setWorkerDraft]=useState(''),[themeDraft,setThemeDraft]=useState(defaultSkin),[themeName,setThemeName]=useState('Amplifier Unified'),[preview,setPreview]=useState(false),[agentAction,setAgentAction]=useState('view.update'),[agentArgs,setAgentArgs]=useState('{"patch":{"mode":"chat"}}'),[voice,setVoice]=useState({status:'idle'}),[uploading,setUploading]=useState(false);
+ const appearanceEditor=useAppearanceEditor(state?.theme,defaultSkin);
  const visualClient=useRef(null),computerClient=useRef(null);const [visual,setVisual]=useState({status:'idle'}),[computerVisual,setComputerVisual]=useState({status:'idle'});
  const startingCall=useRef(false),[voiceStarting,setVoiceStarting]=useState(false);
  const outbox=useMessageOutbox(),deliveries=useRef(new Set()),sendQueue=useRef(Promise.resolve()),draftSaves=useRef(new WeakMap());
@@ -423,7 +425,7 @@ function App(){
  useEffect(()=>{const timer=setTimeout(publishView,300);return()=>clearTimeout(timer)},[state,draft,themeDraft,preview,voice,publishView,shell.data]);
  useEffect(()=>{let timer;const schedule=()=>{clearTimeout(timer);timer=setTimeout(publishView,200)};document.addEventListener('visibilitychange',schedule);document.addEventListener('selectionchange',schedule);document.addEventListener('focusin',schedule);document.addEventListener('input',schedule);window.addEventListener('resize',schedule);return()=>{clearTimeout(timer);document.removeEventListener('visibilitychange',schedule);document.removeEventListener('selectionchange',schedule);document.removeEventListener('focusin',schedule);document.removeEventListener('input',schedule);window.removeEventListener('resize',schedule)}},[publishView]);
  useEffect(()=>{if(!state)return;const serverDraft=state.view?.draft||'';if(serverDraft!==lastDraft.current){setDraft(serverDraft);lastDraft.current=serverDraft}},[state?.view?.draft,state?.selectedSessionId]);
- useEffect(()=>{if(!state)return;const key=state.theme?.name+'::'+state.theme?.css;if(key!==loadedTheme.current){setThemeDraft(state.theme?.css||defaultSkin);setThemeName(state.theme?.name||'Amplifier Unified');setPreview(false);loadedTheme.current=key}},[state?.theme]);
+ useEffect(()=>{if(!state)return;const key=state.theme?.name+'::'+state.theme?.css;if(key!==loadedTheme.current){const changed=loadedTheme.current!==null;setThemeDraft(state.theme?.css||defaultSkin);setThemeName(state.theme?.name||'Amplifier Unified');setPreview(false);loadedTheme.current=key;if(changed&&state.view?.themePreview)dispatch('view.update',{patch:{themePreview:false}}).catch(reportError)}},[state?.theme]);
  useEffect(()=>{const v=state?.view;if(!v)return;if(v.workerDraft!==undefined)setWorkerDraft(v.workerDraft);if(v.themeDraft!==undefined)setThemeDraft(v.themeDraft);if(v.themeDraftName!==undefined)setThemeName(v.themeDraftName);if(v.themePreview!==undefined)setPreview(v.themePreview);if(v.agentAction!==undefined)setAgentAction(v.agentAction);if(v.agentArgs!==undefined)setAgentArgs(v.agentArgs)},[state?.view?.workerDraft,state?.view?.themeDraft,state?.view?.themeDraftName,state?.view?.themePreview,state?.view?.agentAction,state?.view?.agentArgs]);
  const detail=useConversationDetail(state?.sessions?.find(s=>s.id===state.selectedSessionId),()=>{stickToBottom.current=false;const pane=messagesPane.current;if(!pane)return;const top=pane.getBoundingClientRect().top,anchor=[...pane.querySelectorAll('[data-message-id]')].find(node=>node.getBoundingClientRect().bottom>top);if(anchor)historyScrollAnchor.current={sessionId:state.selectedSessionId,messageId:anchor.dataset.messageId,top:anchor.getBoundingClientRect().top}},dispatch);
  useEffect(()=>{if(detail.jumpRequest){const frame=requestAnimationFrame(()=>detail.jumpRequest.id==='latest'?chatScroll.current?.reveal():chatScroll.current?.jump(detail.jumpRequest.id));return()=>cancelAnimationFrame(frame)}},[detail.jumpRequest]);
@@ -686,7 +688,12 @@ function App(){
  }
  async function startCall(){dictationControl.current?.cancel();if(state.voiceConfiguration?.available===false){await dispatch('view.update',{patch:{panel:'settings',settingsSection:'setup',settingsExpanded:['voice']}});return}if(startingCall.current)return;startingCall.current=true;setVoiceStarting(true);setError('');try{await ensureSession();await dispatch('view.update',{patch:{mode:'call'}});await dispatch('call.start',{})}catch(e){reportError(e)}finally{startingCall.current=false;setVoiceStarting(false)}}
  const callActive=!['idle','ended','error'].includes(voice.status||'idle');
- const activeCss=preview?themeDraft:state?.theme?.css||'';
+ // Preview is an exact host-validated client snapshot, not the mutable editor.
+ // A committed change invalidates it immediately, before synchronization effects.
+ const committedThemeKey=state?.theme?.name+'::'+state?.theme?.css;
+ const previewSnapshot=preview&&loadedTheme.current===committedThemeKey&&state?.view?.themePreview&&typeof state.view.themeDraft==='string'
+  ?{name:state.view.themeDraftName||'Custom skin',css:state.view.themeDraft}:null;
+ const activeCss=previewSnapshot?.css??state?.theme?.css??'';
  const presentation=shell.composition.presentation;
  const requestedScheme=presentation.scheme||view.scheme;
  const scheme=requestedScheme==='system'?'light dark':requestedScheme||'light';
@@ -713,7 +720,7 @@ function App(){
  }});
  const settingsState={...state,view:{...state?.view,settingsCanvas:canvasSettingsVisible}};
  const settingsAct=(name,args={})=>act(name,name==='view.update'&&canvasSettingsVisible&&args.patch?.panel==='settings'?{...args,patch:{...args.patch,panel:null,settingsCanvas:true}}:args);
- const settingsSurface=<SettingsExperience state={settingsState} session={settingsSession} act={settingsAct} dispatch={dispatch} open={open} close={()=>canvasSettingsVisible?act('canvas.tabClose',{id:state.canvas.id}):dismissPanel()} navigationRef={settingsNavigation} appearance={<AppearanceSettings state={state} shell={shell} act={dispatch} name={themeName} css={themeDraft} preview={preview} setName={setThemeName} setCss={setThemeDraft} setPreview={setPreview} defaultSkin={defaultSkin}/>}/>;
+ const settingsSurface=<SettingsExperience state={settingsState} session={settingsSession} act={settingsAct} dispatch={dispatch} open={open} close={()=>canvasSettingsVisible?act('canvas.tabClose',{id:state.canvas.id}):dismissPanel()} navigationRef={settingsNavigation} appearance={<AppearanceSettings state={state} shell={shell} act={dispatch} editor={appearanceEditor} preview={!!previewSnapshot} previewSnapshot={previewSnapshot} setPreview={setPreview} defaultSkin={defaultSkin}/>}/>;
  const browsing=workSurface(state)!=='chat';
  const browse=(surface,id=null)=>act('view.update',{patch:{...browsePatch(surface,id),navExpanded:false}});
  const visitHistory=async key=>{
