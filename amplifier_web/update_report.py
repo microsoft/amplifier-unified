@@ -121,6 +121,7 @@ def runtime_report(home):
 
 async def collect(manager):
     from . import __version__
+    from .update_blockers import assess
     # Snapshot only the update resource. Never serialize all service state.
     state = copy.deepcopy(manager.service.state['updates'])
     diagnostics = state.get('diagnostics', {})
@@ -131,6 +132,25 @@ async def collect(manager):
               'lastFailure': event(diagnostics.get('lastFailure', {})),
               'pending': {key: bool(state.get(key)) for key in ('pendingApp', 'pendingRelease', 'pendingRestart', 'pendingSmartTools')},
               'busy': manager.lock.locked()}
+    # "busy" above is the updater lock, not the activation gate. Use the same
+    # evaluator as busy()/blockers(), not cached labels or a second predicate.
+    try:
+        gate = assess(manager.service)
+        report['activationGate'] = {
+            **gate['observation'],
+            'blockerCounts': {kind: sum(row['kind'] == kind for row in gate['blockers'])
+                              for kind in sorted({row['kind'] for row in gate['blockers']})},
+        }
+    except Exception:
+        # Failed observation is not quiescence. Do not change the safety gate's
+        # exception behavior or expose private observer errors in this report.
+        report['activationGate'] = {'schemaVersion': 1, 'observedAt': time.time(),
+                                    'unavailable': True, 'blocked': None, 'reasonCode': 'observation-failed'}
+    report['activationGate'].update(
+        requiresIdle=manager.requires_idle(state),
+        qualification='Point-in-time observation only; not evidence of no effects or permission to retry. '
+                      'Initial runtime sample precedes per-hold checks. '
+                      'Runtime and lock activity can change without a state revision.')
     sequence = state.get('sequence') or {}
     phases = {'idle', 'checking', 'available', 'checked', 'staging', 'validating', 'staged', 'app-staged', 'activating', 'installed', 'error', 'interrupted'}
     stages = {'application', 'included', 'other', 'complete'}

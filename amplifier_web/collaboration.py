@@ -14,7 +14,7 @@ import time
 import uuid
 
 from amplifier_operations.coordination import fingerprint
-from .task_binding import continuation_epoch, matches as task_matches
+from .task_binding import continuation_epoch, matches as task_matches, dependency_blocked
 from .peer_scope import descriptor, location, participant_matches, valid_binding
 
 PRINCIPAL = ContextVar("collaboration_principal", default=None)
@@ -702,6 +702,15 @@ class Collaboration:
         active = target.get("collaborationGeneration") or {}
         return bool(hasattr(self.service.runtime, "collaboration_steer") and active.get("id") and not active.get("terminal"))
 
+    def blocked_input(self, receipt, task):
+        return (receipt.get('blockedTaskInput') is True
+                and receipt.get('commandAction') == 'coordination.send'
+                and receipt.get('mode') == 'queue'
+                and not any(receipt.get(key) for key in
+                            ('dependencyRequestId', 'creationOperationId', 'humanResume', 'scheduleRepair'))
+                and 'taskContinuationEpoch' not in receipt
+                and task_matches(task, receipt) and dependency_blocked(task))
+
     def guard(self, receipt, *, for_reply=False):
         if not for_reply and receipt.get('cancellation'):
             return 'The requester cancelled this exact request before further admission.'
@@ -757,10 +766,11 @@ class Collaboration:
             if resuming and (reason := peer_resume.guard(self.service, receipt, source, target)):
                 return reason
             if target.get("status") in {"stopping", "interrupted"} or (
-                    target.get("status") in {"stopped", "error"} and not resuming):
+                    target.get("status") in {"stopped", "error", "cancelled", "failed"} and not resuming):
                 return "The recipient is stopped or unavailable."
             task = target.get("task") or self.service.coordination.task(target["id"])
-            if task.get("status") in {"paused", "blocked", "completed"} and not resuming:
+            if (task.get("status") in {"paused", "blocked", "completed", "cancelled"}
+                    and not resuming and not self.blocked_input(receipt, task)):
                 return "The recipient task is not active."
             task_binding = receipt
             if for_reply and 'replyTaskContinuationEpoch' in receipt:
@@ -955,8 +965,10 @@ class Collaboration:
         if message is None:
             return {"admitted": False, "reason": "The saved host-attributed input is unavailable."}
         from .peer_resume import pending
+        task = self.service._session(sid).get("task") or self.service.coordination.task(sid)
         return {"admitted": not reason, "reason": reason, "message": copy.deepcopy(message),
-                "humanResume": not reason and pending(receipt)}
+                "humanResume": not reason and pending(receipt),
+                "blockedTaskInput": not reason and self.blocked_input(receipt, task)}
 
     async def submit_steer(self, identity):
         async with self.service.lock:
@@ -1603,6 +1615,9 @@ class Collaboration:
                             or previous["senderSessionId"] != target["id"] or previous.get("protocol") != PROTOCOL):
                         self.error("Reply linkage must identify the exact incoming request.")
                 task = target.get("task") or self.service.coordination.task(target["id"])
+                blocked_input = (mode == 'queue' and source['id'] != target['id']
+                    and not args.get('resume') and not args.get('scheduleRepair')
+                    and dependency_blocked(task))
                 envelope = {"senderSessionId": source["id"], "senderRuntimeSessionId": source.get("runtimeSessionId") or source["id"],
                     "recipientSessionId": target["id"], **lineage,
                     "senderLocation": location(source), "recipientLocation": location(target),
@@ -1610,6 +1625,13 @@ class Collaboration:
                     "requestId": identity, "inputId": identity,
                     "mode": mode, "purpose": "Scoped collaboration task input", "references": args.get("references", []),
                     "replyToRequestId": args.get("replyToRequestId")}
+                if blocked_input:
+                    envelope['blockedTaskHandling'] = {
+                        'taskId': task['id'], 'taskRevision': task['revision'],
+                        'instruction': 'Handle this new peer input within existing authority. The saved objective '
+                            'remains blocked. Reconcile the dependency; do not infer approval, resume the goal '
+                            'automatically, discard conditions or replay older input. You may reply, defer, decline '
+                            'or make a separately valid owner decision about your own task.'}
                 if target.get("collaboration"):
                     envelope["task"] = {key: target["collaboration"][key] for key in
                         ("creatorSessionId", "requestId", "outputNamespace", "configurationHash")}
@@ -1641,6 +1663,7 @@ class Collaboration:
                     "mode": mode, 'causalDepth': depth, "delivery": "notified" if mode == "notify" else "queued",
                     "interruptionRevision": target.get("interruptionRevision", 0),
                     "taskId": task.get("id"), "taskRevision": task.get("revision"),
+                    **({'blockedTaskInput': True} if blocked_input else {}),
                     'replyTaskContinuationEpoch': continuation_epoch(task),
                     # Dispatcher provenance is host-owned. Never copy actor
                     # claims from args, message prose, or the peer envelope.

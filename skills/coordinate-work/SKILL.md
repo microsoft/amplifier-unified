@@ -71,6 +71,13 @@ compare those exact links, not equal message text.
    (including replacement for an update) keeps the conversation eligible for
    this ordinary guarded input. It does not clear an actual Stop, a blocked task
    or a failed turn, and does not replay previously suppressed requests.
+   A fresh direct queued message may be handled while the recipient's own
+   agent-recorded dependency block remains in place. The host binds that one
+   input to the exact blocked task; this is not peer task-resume authority.
+   Reconcile the dependency and reply/defer/decline within existing permissions.
+   Do not treat the message as human approval, remove unresolved conditions or
+   replay older input. Human blocks, unknown provenance, explicit Stop and
+   paused/completed tasks retain their separate refusal boundaries.
    When the human explicitly asks you to resume your commissioned or explicitly adopted chats, inspect
    their current task, completed effects and `signal.interruptionRevision` through
    `coordination.list`. For each intended unfinished member, send one fresh

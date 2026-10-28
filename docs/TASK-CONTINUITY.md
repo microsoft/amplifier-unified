@@ -27,6 +27,24 @@ Legacy goal setters cannot replace an unfinished saved task. Completion requires
 the exact current objective/revision and nonempty evidence; a model turn ending
 or the goal judge stopping never automatically completes the saved task.
 
+A dependency block recorded by the owning agent is distinct from human Stop or
+task pause. A **new direct queued peer message** may receive one ordinary response
+while that task stays blocked. The host records this classification on the new
+receipt and revalidates its exact task revision, Stop boundary and provenance at
+native admission. The worker does not restore a goal, resume the task or remove
+dependency/question conditions. It retains ordinary permissions and capacity
+checks and charges one saved task turn before submission; an uncertain submission
+retains that charge rather than making a retry free.
+
+The recipient may inspect, reply, defer or decline within its existing authority.
+Only a separate valid owner decision can resume its objective. A human-recorded
+block, missing provenance, a block recorded from a paused task, Stop, failure,
+completion or cancellation does not receive this exception. Old records can use
+their exact retained agent-origin status changes; reason text is never classified
+as permission. Notify remains non-waking; steer and automatic outcome notifications
+keep their existing admission rules. No old suppressed or uncertain input is
+replayed or newly classified.
+
 Before a generic goal re-prompt, a transport-bound root may yield to an already
 sealed, qualified saved peer continuation. This is a read-only eligibility check,
 not admission: the existing queue still claims durably and rechecks task, Stop,

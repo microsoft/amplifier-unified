@@ -5,6 +5,8 @@ configuration, or conversation execution. Unknown effects remain unknown.
 """
 import asyncio
 import copy
+import hashlib
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -54,6 +56,9 @@ async def test_cold_legacy_hold_allows_tool_update_but_retains_chat_fence_and_pa
     app, sid, path, payload = held
     session = app._session(sid)
     original = copy.deepcopy(session['pendingConfiguration'])
+    report = (await app.dispatch('updates.diagnostics', {}, include_state=False))['result']
+    assert not report['activationGate']['blocked']
+    assert report['activationGate']['configurationHolds'][0]['reasonCode'] == 'legacy-hold-quiescent'
     await app.smart_tools.connect('board')
     assert not app.update_manager.busy()
     await app.update_manager.activateSmartTools()
@@ -79,13 +84,18 @@ async def test_cold_legacy_hold_allows_tool_update_but_retains_chat_fence_and_pa
         assert reopened.smart_tools._server('board')['installationId'] == 'b' * 24
         assert not reopened.update_manager.busy()
         assert not reopened.runtime.workers
+        report = (await reopened.dispatch('updates.diagnostics', {}, include_state=False))['result']
+        assert not report['activationGate']['blocked']
+        assert reopened._session(sid)['pendingConfiguration'] == original
+        assert path.read_bytes() == payload
     finally:
         await reopened.close()
 
 
-@pytest.mark.parametrize('guard', ['settings-task', 'cancelling-task', 'management-lock', 'runtime',
+@pytest.mark.parametrize('guard', ['settings-task', 'cancelling-task', 'management-lock', 'runtime', 'other-runtime',
     'queued', 'applying', 'refresh', 'refresh-applying', 'modern-operation', 'new-fence',
-    'handoff', 'working', 'worker', 'working-worker', 'running-turn', 'unobservable-runtime'])
+    'handoff', 'working', 'worker', 'working-worker', 'persistent-worker', 'running-turn', 'unobservable-runtime',
+    'unobservable-tasks', 'unobservable-lock'])
 async def test_actual_or_unobservable_work_still_holds_update(held, guard):
     app, sid, path, payload = held
     session = app._session(sid)
@@ -107,6 +117,9 @@ async def test_actual_or_unobservable_work_still_holds_update(held, guard):
         await app.management.lock.acquire()
     elif guard == 'runtime':
         app.runtime.has_pending_operations = lambda: True
+    elif guard == 'other-runtime':
+        app.runtime._locks['other-fixture-chat'] = asyncio.Lock()
+        await app.runtime._locks['other-fixture-chat'].acquire()
     elif guard in {'queued', 'applying'}:
         session['pendingConfiguration']['phase'] = guard
     elif guard == 'refresh':
@@ -125,11 +138,35 @@ async def test_actual_or_unobservable_work_still_holds_update(held, guard):
         session['workers'] = [{'status': 'running'}]
     elif guard == 'working-worker':
         session['workers'] = [{'status': 'working'}]
+    elif guard == 'persistent-worker':
+        session['workers'] = [{'status': 'idle', 'persistent': True}]
     elif guard == 'running-turn':
         session['execution'] = {'turns': [{'id': 'running-turn', 'phase': 'running'}]}
     elif guard == 'unobservable-runtime':
         app.runtime.has_pending_operations = None
+    elif guard == 'unobservable-tasks':
+        app.management.pending_config_tasks = None
+    elif guard == 'unobservable-lock':
+        app.management.lock = None
     try:
+        from amplifier_web.update_blockers import assess
+        expected = {
+            'settings-task': 'configuration-task-pending', 'cancelling-task': 'configuration-task-pending',
+            'management-lock': 'management-lock-held', 'runtime': 'runtime-operations-pending',
+            'other-runtime': 'runtime-operations-pending', 'queued': 'configuration-queued',
+            'applying': 'configuration-applying', 'refresh': 'configuration-pending',
+            'refresh-applying': 'configuration-refresh-applying', 'modern-operation': 'operation-bound-recovery',
+            'new-fence': 'configuration-operation-fence', 'handoff': 'checkout-handoff-unknown',
+            'working': 'session-not-quiescent', 'worker': 'active-worker', 'working-worker': 'active-worker',
+            'persistent-worker': 'persistent-worker', 'running-turn': 'running-turn',
+            'unobservable-runtime': 'runtime-observer-unavailable', 'unobservable-tasks': 'management-tasks-unavailable',
+            'unobservable-lock': 'management-lock-unavailable',
+        }
+        observation = assess(app)['observation']
+        detail = next(row for row in observation['configurationHolds']
+                      if row['sessionRef'] == hashlib.sha256(sid.encode()).hexdigest()[:16])
+        assert detail['reasonCode'] == expected[guard]
+        assert not detail['quiescent']
         assert app.update_manager.busy()
         await app.update_manager.activateSmartTools()
         assert app.smart_tools._server('board')['installationId'] == OLD
@@ -141,10 +178,79 @@ async def test_actual_or_unobservable_work_still_holds_update(held, guard):
             await task
         if guard == 'management-lock':
             app.management.lock.release()
+        if guard == 'other-runtime':
+            app.runtime._locks['other-fixture-chat'].release()
+        if guard == 'unobservable-tasks':
+            app.management.pending_config_tasks = {}
+        if guard == 'unobservable-lock':
+            app.management.lock = asyncio.Lock()
 
 
 def test_absent_management_cannot_prove_hold_is_quiescent():
-    service = SimpleNamespace(state={'sessions': [{'id': 'chat', 'configurationBusy': True,
+    service = SimpleNamespace(state={'sessions': [{'id': 'chat', 'status': 'error', 'configurationBusy': True,
         'pendingConfiguration': {'phase': 'error', 'recoveryRequired': True}}]},
         runtime=SimpleNamespace(has_pending_operations=lambda: False))
     assert blockers(service)
+
+
+async def test_public_diagnostics_identifies_global_wait_without_mutation(held, monkeypatch):
+    from amplifier_web import update_report
+    from amplifier_web import cold_display
+    from unittest.mock import AsyncMock, Mock
+    app, sid, path, payload = held
+    session = app._session(sid)
+    session['title'] = 'SECRET_CHAT_TITLE'
+    session['pendingConfiguration']['error'] = 'SECRET_ERROR /private/secret/path'
+    session['pendingConfiguration']['payload'] = {'api_key': 'SECRET_CREDENTIAL'}
+    monkeypatch.setattr(update_report, 'runtime_report', lambda home: {})
+    peer = cold_display.ColdRecord({
+        'id': 'untouched-cold-peer', 'status': 'idle', 'historyLoaded': False,
+        '_coldFields': {key: {'$resource': 'PRIVATE_COLD_SENTINEL'}
+                        for key in ('messages', 'configuration', 'execution')},
+    }, app.db)
+    app.state['sessions'].append(peer)
+    load = Mock(side_effect=AssertionError('Diagnostics must not load cold peer fields'))
+    hydrate = Mock(side_effect=AssertionError('Diagnostics must not hydrate a peer'))
+    history = AsyncMock(side_effect=AssertionError('Diagnostics must not load peer history'))
+    original_load, original_hydrate, original_history = cold_display.load, app.cold_display.hydrate, app.history.ensure_loaded
+    monkeypatch.setattr(cold_display, 'load', load)
+    monkeypatch.setattr(app.cold_display, 'hydrate', hydrate)
+    monkeypatch.setattr(app.history, 'ensure_loaded', history)
+    await app.management.lock.acquire()
+    before = copy.deepcopy({**app.state, 'sessions': [
+        cold_display.raw(row) for row in app.state['sessions']]})
+    original_files = {str(file.relative_to(app.data_dir)): file.read_bytes()
+                      for file in app.data_dir.rglob('*') if file.is_file()}
+    try:
+        result = await app.dispatch('updates.diagnostics', {}, include_state=False)
+        assert result['accepted'] and result['effects'] == []
+        report = result['result']
+        assert report['busy'] is False  # Updater lock is not management quiescence.
+        gate = report['activationGate']
+        assert gate['blocked'] and gate['stateRevision'] == before['revision']
+        assert gate['basis'] == 'first-failing-predicate'
+        assert gate['configurationHolds'] == [{
+            'sessionRef': hashlib.sha256(sid.encode()).hexdigest()[:16], 'quiescent': False,
+            'reasonCode': 'management-lock-held', 'scope': 'global'}]
+        text = json.dumps(report)
+        assert all(secret not in text for secret in
+                   ('SECRET_CHAT_TITLE', 'SECRET_ERROR', '/private/secret/path', 'SECRET_CREDENTIAL', sid, str(path)))
+        assert app.state == before
+        assert not app.runtime.workers and not app.management.pending_config_tasks
+        assert path.read_bytes() == payload
+        load.assert_not_called()
+        hydrate.assert_not_called()
+        history.assert_not_awaited()
+        assert dict.get(peer, '_coldFields') == before['sessions'][-1]['_coldFields']
+        assert original_files == {str(file.relative_to(app.data_dir)): file.read_bytes()
+                                  for file in app.data_dir.rglob('*') if file.is_file()}
+    finally:
+        app.management.lock.release()
+        app.state['sessions'].remove(peer)
+        monkeypatch.setattr(cold_display, 'load', original_load)
+        monkeypatch.setattr(app.cold_display, 'hydrate', original_hydrate)
+        monkeypatch.setattr(app.history, 'ensure_loaded', original_history)
+    report = (await app.dispatch('updates.diagnostics', {}, include_state=False))['result']
+    assert not report['activationGate']['blocked']
+    assert report['activationGate']['configurationHolds'][0]['reasonCode'] == 'legacy-hold-quiescent'
+    assert session['configurationBusy'] and path.read_bytes() == payload
