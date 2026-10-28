@@ -28,6 +28,7 @@ from pathlib import Path
 import re
 import signal
 import sys
+import traceback
 
 
 SOURCE = Path(__file__).resolve().parents[2]
@@ -300,6 +301,14 @@ class PeerReturnProvider:
         return FINAL
 
     async def complete(self, request, **kwargs):
+        try:
+            return await self._complete(request, **kwargs)
+        except Exception:
+            if hasattr(self, "input_id"):
+                self.record("fixture-error", traceback=traceback.format_exc())
+            raise
+
+    async def _complete(self, request, **kwargs):
         from amplifier_core.message_models import ChatResponse, TextBlock, ToolCall, Usage
         assert self.scenario is not None, "Metadata-only provider cannot execute"
         self.values = json.loads(self.scenario.read_text())
@@ -460,7 +469,10 @@ async def run(root):
                 while not predicate():
                     errors = [(kind, p) for kind, p in events
                               if kind == "runtime.error" or p.get("event") == "generation.failed"]
-                    assert not errors, (label, errors)
+                    assert not errors, (
+                        label, errors,
+                        [row for row in audit(root) if row["kind"] == "fixture-error"],
+                    )
                     await asyncio.sleep(.02)
         except TimeoutError as exc:
             raise AssertionError(f"Timed out observing {label}; last events: {events[-5:]}") from exc
