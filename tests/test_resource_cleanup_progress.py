@@ -115,7 +115,7 @@ async def test_durable_decode_releases_app_and_sql_writer_and_settles_on_close(t
         await close(app)
 
 
-@pytest.mark.parametrize('late_root', [False, True])
+@pytest.mark.parametrize('late_root', [None, 'durable', 'live', 'index'])
 async def test_changed_durable_roots_are_parsed_then_revalidated_under_writer_exclusion(tmp_path, monkeypatch, late_root):
     app, keep, garbage = setup(tmp_path)
     db = app.db
@@ -151,13 +151,23 @@ async def test_changed_durable_roots_are_parsed_then_revalidated_under_writer_ex
             db.commit()
         body_release.set()
         assert await asyncio.to_thread(final_entered.wait, 5)
-        if late_root:
+        if late_root == 'durable':
             competitor.execute('UPDATE client_views SET value=?', (json.dumps({'keep': keep, 'new': garbage}),))
+            competitor.commit()
+        elif late_root == 'live':
+            app._state['new'] = garbage
+        elif late_root == 'index':
+            competitor.execute('UPDATE state_resources SET value=? WHERE id=?',
+                               (json.dumps({'new': garbage}), keep['$resource']))
             competitor.commit()
         final_release.set()
         await task
-        assert app._resource_scan_status['blocked'] is late_root
-        assert bool(db.execute('SELECT 1 FROM state_resources WHERE id=?', (garbage['$resource'],)).fetchone()) is late_root
+        assert app._resource_scan_status['blocked'] is bool(late_root)
+        assert bool(db.execute('SELECT 1 FROM state_resources WHERE id=?', (garbage['$resource'],)).fetchone()) is bool(late_root)
+        if late_root:
+            assert app._resource_scan_status['reason'] == {
+                'durable': 'durable-roots-changed', 'live': 'live-roots-changed',
+                'index': 'resource-index-changed'}[late_root]
         assert not db.in_transaction
     finally:
         body_release.set()
@@ -211,7 +221,9 @@ async def test_async_delete_rechecks_adoption_after_index_commit(tmp_path, monke
 
 
 async def test_cancellation_settles_bounded_unlink_before_releasing_ownership(tmp_path, monkeypatch):
+    from amplifier_web.performance_diagnostics import PerformanceDiagnostics
     app, keep, garbage = setup(tmp_path)
+    app.performance_diagnostics = PerformanceDiagnostics()
     app._state['keep'] = keep
     entered, release, finished = threading.Event(), threading.Event(), threading.Event()
     original = Path.unlink
@@ -248,6 +260,8 @@ async def test_cancellation_settles_bounded_unlink_before_releasing_ownership(tm
         assert finished.is_set() and not app.lock.locked() and not app.db.in_transaction
         assert (files.root(app.db) / (keep['$resource'] + '.json')).is_file()
         assert not (files.root(app.db) / (garbage['$resource'] + '.json')).exists()
+        facts = app.performance_diagnostics.snapshot()['storageCollection']
+        assert facts['outcome'] == 'cancelled' and not facts['removalCountsComplete']
         competitor.execute('BEGIN IMMEDIATE')
         competitor.rollback()
     finally:
@@ -292,5 +306,127 @@ async def test_invalid_durable_roots_never_authorize_collection(tmp_path, value)
         assert app.db.execute('SELECT COUNT(*) FROM state_resources').fetchone()[0] == 2
         assert all((files.root(app.db) / (ref['$resource'] + '.json')).exists() for ref in (keep, garbage))
         assert not app.db.in_transaction and not app.lock.locked()
+    finally:
+        await close(app)
+
+
+@pytest.mark.parametrize('store', ['live', 'client_views'])
+@pytest.mark.parametrize('broken', [False, True])
+async def test_progress_snapshot_added_during_walk_can_collect_unrelated_garbage(tmp_path, monkeypatch, store, broken):
+    app, keep, adopted = setup(tmp_path)
+    garbage = files.put(app.db, {'unrelated': 'obsolete'})
+
+    def save(ref):
+        if store == 'live':
+            app._state['current'] = ref
+        else:
+            app.db.execute('INSERT OR REPLACE INTO client_views VALUES(?,?)', ('view', json.dumps(ref)))
+        app.db.commit()
+
+    save(keep)
+    entered, release = threading.Event(), threading.Event()
+    original = files.detached_references
+
+    def inspect(source):
+        if source.identity == keep['$resource']:
+            entered.set()
+            assert release.wait(5)
+        return original(source)
+
+    monkeypatch.setattr(files, 'detached_references', inspect)
+    task = asyncio.create_task(storage_migration._maintenance_async(app))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        async with app.lock:
+            # A new snapshot can adopt an OLD candidate for deletion, not only
+            # fresh bodies. Its entire nested closure must join the proof.
+            current = files.put(app.db, {'revision': 1, 'retained': adopted})
+            save(current)
+            if broken:
+                (files.root(app.db) / (current['$resource'] + '.json')).unlink()
+        release.set()
+        await task
+        retained = {row[0] for row in app.db.execute('SELECT id FROM state_resources')}
+        assert {keep['$resource'], current['$resource'], adopted['$resource']} <= retained
+        if broken:
+            assert garbage['$resource'] in retained
+            assert app._resource_scan_status['reason'] == 'resource-body-unavailable'
+            return
+        assert garbage['$resource'] not in retained
+        assert not (files.root(app.db) / (garbage['$resource'] + '.json')).exists()
+        assert not app._resource_scan_status['blocked']
+        # The conservative union delays obsolete roots for only this pass.
+        await storage_migration._maintenance_async(app)
+        assert not app.db.execute('SELECT 1 FROM state_resources WHERE id=?', (keep['$resource'],)).fetchone()
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await close(app)
+
+
+async def test_continuous_new_roots_defer_at_bounded_catchup_limit(tmp_path, monkeypatch):
+    from amplifier_web.performance_diagnostics import PerformanceDiagnostics
+    app, keep, garbage = setup(tmp_path)
+    app._state['current'] = keep
+    app.performance_diagnostics = PerformanceDiagnostics()
+    original = files.ReferenceEdges.read
+    loop = asyncio.get_running_loop()
+    writes = []
+
+    async def progress():
+        async with app.lock:
+            current = files.put(app.db, {'progress': len(writes), 'nested': keep})
+            app._state['current'] = current
+            writes.append(current)
+            app.db.commit()
+
+    def inspect(edges, source):
+        # Every inspection sees another ordinary committed session snapshot.
+        asyncio.run_coroutine_threadsafe(progress(), loop).result(5)
+        return original(edges, source)
+
+    monkeypatch.setattr(files.ReferenceEdges, 'read', inspect)
+    try:
+        await asyncio.wait_for(storage_migration._maintenance_async(app), 5)
+        assert len(writes) == storage_migration.BACKGROUND_ROOT_CATCHUPS + 1
+        assert app._resource_scan_status['reason'] == 'root-catchup-limit'
+        assert app.db.execute('SELECT COUNT(*) FROM state_resources').fetchone()[0] == 2 + len(writes)
+        facts = app.performance_diagnostics.snapshot()['storageCollection']
+        assert facts['outcome'] == 'deferred' and facts['reason'] == 'root-catchup-limit'
+        assert facts['indexedFilesRemoved'] == 0 and not facts['removalCountsComplete']
+        assert not app.db.in_transaction and not app.lock.locked()
+    finally:
+        await close(app)
+
+
+@pytest.mark.parametrize('readopt', [False, True])
+async def test_collector_reports_confirmed_unlinks_separately_from_pruned_index(tmp_path, monkeypatch, readopt):
+    from amplifier_web.performance_diagnostics import PerformanceDiagnostics
+    app, keep, garbage = setup(tmp_path)
+    app._state['keep'] = keep
+    app.performance_diagnostics = PerformanceDiagnostics()
+    expected_bytes = (files.root(app.db) / (garbage['$resource'] + '.json')).stat().st_size
+    original = files.remove_files_async
+
+    async def unlink(db, identities):
+        if readopt:
+            assert files.put(db, {'garbage': True}) == garbage
+            db.commit()
+        return await original(db, identities)
+
+    monkeypatch.setattr(files, 'remove_files_async', unlink)
+    try:
+        await storage_migration._maintenance_async(app)
+        snapshot = app.performance_diagnostics.snapshot()
+        facts = snapshot['storageCollection']
+        assert facts['outcome'] == 'completed' and facts['removalCountsComplete']
+        assert facts['indexedPruned'] == 1
+        assert facts['indexedFilesRemoved'] == (0 if readopt else 1)
+        assert facts['indexedBytesRemoved'] == (0 if readopt else expected_bytes)
+        assert snapshot['counters']['storage.gc.passesCompleted'] == 1
+        assert snapshot['counters']['storage.gc.indexedBytesRemoved'] == facts['indexedBytesRemoved']
+        assert str(tmp_path) not in json.dumps(snapshot)
+        facts['indexedPruned'] = -1
+        assert app.performance_diagnostics.snapshot()['storageCollection']['indexedPruned'] == 1
     finally:
         await close(app)

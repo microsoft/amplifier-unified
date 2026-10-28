@@ -596,7 +596,7 @@ async def remove_files_async(db, identities):
         raise ValueError('Commit index pruning before removing resource files.')
     directory = root(db)
     if directory is None or not identities:
-        return
+        return {'filesRemoved': 0, 'bytesRemoved': 0}
     db.execute('BEGIN IMMEDIATE')
     try:
         paths = []
@@ -607,10 +607,18 @@ async def remove_files_async(db, identities):
                 paths.append(directory / (identity + '.json'))
 
         def unlink():
+            removed = {'filesRemoved': 0, 'bytesRemoved': 0}
             for path in paths:
-                path.unlink(missing_ok=True)
+                try:
+                    size = path.lstat().st_size
+                    path.unlink()
+                except FileNotFoundError:
+                    continue
+                removed['filesRemoved'] += 1
+                removed['bytesRemoved'] += size
+            return removed
 
-        await settle_worker(unlink)
+        return await settle_worker(unlink)
     finally:
         db.rollback()
 
@@ -657,7 +665,12 @@ def sweep_unindexed_locked(db, iterator=None, *, limit=128):
             if identity and db.execute('SELECT 1 FROM state_resources WHERE id=?', (identity,)).fetchone():
                 continue
             if identity or temporary:
-                Path(entry.path).unlink(missing_ok=True)
+                try:
+                    Path(entry.path).unlink()
+                except FileNotFoundError:
+                    # A retained scandir cursor can still yield an entry that
+                    # an earlier indexed-pruning batch already removed.
+                    continue
                 removed += 1
         return iterator, {'blocked': False, 'complete': False, 'inspected': inspected, 'removed': removed}
     except BaseException:
