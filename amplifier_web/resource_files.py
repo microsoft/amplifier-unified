@@ -665,7 +665,12 @@ def sweep_unindexed_locked(db, iterator=None, *, limit=128):
             if identity and db.execute('SELECT 1 FROM state_resources WHERE id=?', (identity,)).fetchone():
                 continue
             if identity or temporary:
-                Path(entry.path).unlink(missing_ok=True)
+                try:
+                    Path(entry.path).unlink()
+                except FileNotFoundError:
+                    # A retained scandir cursor can still yield an entry that
+                    # an earlier indexed-pruning batch already removed.
+                    continue
                 removed += 1
         return iterator, {'blocked': False, 'complete': False, 'inspected': inspected, 'removed': removed}
     except BaseException:

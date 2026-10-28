@@ -221,7 +221,9 @@ async def test_async_delete_rechecks_adoption_after_index_commit(tmp_path, monke
 
 
 async def test_cancellation_settles_bounded_unlink_before_releasing_ownership(tmp_path, monkeypatch):
+    from amplifier_web.performance_diagnostics import PerformanceDiagnostics
     app, keep, garbage = setup(tmp_path)
+    app.performance_diagnostics = PerformanceDiagnostics()
     app._state['keep'] = keep
     entered, release, finished = threading.Event(), threading.Event(), threading.Event()
     original = Path.unlink
@@ -258,6 +260,8 @@ async def test_cancellation_settles_bounded_unlink_before_releasing_ownership(tm
         assert finished.is_set() and not app.lock.locked() and not app.db.in_transaction
         assert (files.root(app.db) / (keep['$resource'] + '.json')).is_file()
         assert not (files.root(app.db) / (garbage['$resource'] + '.json')).exists()
+        facts = app.performance_diagnostics.snapshot()['storageCollection']
+        assert facts['outcome'] == 'cancelled' and not facts['removalCountsComplete']
         competitor.execute('BEGIN IMMEDIATE')
         competitor.rollback()
     finally:
