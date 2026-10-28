@@ -24,7 +24,7 @@ export function AppearanceSettings({state,shell,act,editor:editorState,preview,p
  const {active}=useContext(SettingsLayoutContext);
  const [libraryError,setLibraryError]=useState('');
  const [library,setLibrary]=useState({items:[],errors:[],directory:''}),[selected,setSelected]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
- const [operation,setOperation]=useState(null),submitting=useRef(false);
+ const [operation,setOperation]=useState(null),submitting=useRef(false),feedbackOwner=useRef(null);
  // The app's tab-private owner survives Settings unmounts. The mutable editor
  // and the exact host-validated preview snapshot deliberately remain separate.
  const {draft,setDraft,compareAndSetDraft,storageError}=editorState;
@@ -38,11 +38,13 @@ export function AppearanceSettings({state,shell,act,editor:editorState,preview,p
  async function run(fn,key='change'){
   if(submitting.current)return;
   const current=generation.current,token={},isCurrent=()=>alive.current&&current===generation.current;
-  submitting.current=token;setBusy(true);setOperation(key);setError('');setNotice('');
+  submitting.current=token;feedbackOwner.current=token;setBusy(true);setOperation(key);setError('');setNotice('');
   try{return await fn(isCurrent)}catch(e){
    // Keep a failure for the same draft while its section is hidden. A newer
    // draft or submission owns its own feedback, even if this receipt is late.
-   if(submitting.current===token&&(isCurrent()||compareAndSetDraft(draft,current=>current)))setError(e.message);
+   // Returning to the section releases its abandoned lock, not its right to
+   // report failure. Only a newer submission or draft supersedes that feedback.
+   if(feedbackOwner.current===token&&(isCurrent()||compareAndSetDraft(draft,current=>current)))setError(e.message);
   }
   finally{if(submitting.current===token){submitting.current=false;if(isCurrent()){setBusy(false);setOperation(null)}}}
  }
