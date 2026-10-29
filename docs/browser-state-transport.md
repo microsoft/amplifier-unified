@@ -1,5 +1,20 @@
 # Browser state transport and idle work
 
+## Revision-only observations
+
+A delta may advance only the application revision when a committed change has
+no other fields in this client's projection. It is still a causal watermark:
+the browser validates the delta chain, updates current state readback, observes
+navigation receipts, wakes command waiters and notifies state subscribers.
+These frames are not dropped or replaced by a separate polling path.
+
+When all non-revision top-level fields retain their exact immutable identities,
+the bundled browser avoids repainting the unchanged application and scheduling
+another rendered-view scan. New baselines, changed or removed fields and host
+changes use normal rendering. The advanced agent-state panel also keeps normal
+rendering because it displays the revision itself. Reconnect, optimistic drafts
+and navigation, receipt ordering and hidden-tab recovery retain their owners.
+
 ## Selected media availability
 
 The selected session in a bound web frame carries `linkedMediaAvailable`, an

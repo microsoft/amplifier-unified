@@ -72,7 +72,7 @@ import {Phone,MessageCircle,Bell,ArrowUp,Plus,Settings,X,GitBranch,Check,Downloa
 import {request,download,visibleView} from './api';
 import {createPendingView} from './pending-view';
 import {createSettingsActionQueue,settingsDraftKey,isProviderCatalogRead,isDraftDefaultsRead,isConversationChoiceRead} from './settings-action-queue';
-import {applyStateDelta} from './state-transport';
+import {applyStateDelta,onlyStateRevisionChanged} from './state-transport';
 import {createViewReporter} from './view-reporter';
 import {createConversationNavigation,isNavigationAction,usesNavigationQueue} from './conversation-navigation';
 import {createDestinationHistory,destinationCommand,destinationKey} from './destination-history.js';
@@ -180,6 +180,7 @@ function App(){
  const acceptState=useCallback((next,historyOptions={})=>{
   if(!next||typeof next!=='object')return;
   if(serverState.current && next.client?.hostInstanceId===serverState.current.client?.hostInstanceId && next.revision<serverState.current.revision)return;
+  const unchangedPresentation=!historyOptions.baseline&&next.view?.panel!=='agent'&&onlyStateRevisionChanged(serverState.current,next);
   if(!latest.current){for(const effect of next.deviceCommands||[])if(effect.id)seenEffects.current.add(effect.id);for(const m of notificationMessages(next))lastNotify.current.add(m.id)}
   else effectHandler.current(next.deviceCommands);
   const previousSession=latest.current?.sessions?.find(s=>s.id===latest.current.selectedSessionId),nextSession=next.sessions?.find(s=>s.id===next.selectedSessionId);
@@ -190,7 +191,7 @@ function App(){
   serverState.current=next;conversationNavigation.current.remember(next);
   destinationHistory.current.observe(next,historyOptions);
   for(const wake of stateWaiters.current)wake(next);
-  latest.current=conversationNavigation.current.apply(next);if(!document.hidden)setState(pendingView.current.apply(latest.current));stateListeners.current.forEach(fn=>fn(pendingView.current.apply(latest.current)));
+  latest.current=conversationNavigation.current.apply(next);if(!document.hidden&&!unchangedPresentation)setState(pendingView.current.apply(latest.current));stateListeners.current.forEach(fn=>fn(pendingView.current.apply(latest.current)));
  },[]);
  useEffect(()=>{const resume=()=>{if(!document.hidden&&latest.current)setState(pendingView.current.apply(latest.current))};document.addEventListener('visibilitychange',resume);return()=>document.removeEventListener('visibilitychange',resume)},[]);
  const awaitState=useCallback(result=>{

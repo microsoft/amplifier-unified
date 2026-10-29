@@ -15,3 +15,14 @@ export function applyStateDelta(previous, delta){
  if(next.revision!==delta.revision)throw Error('State stream revision mismatch.');
  return next;
 }
+
+// Delta application preserves untouched branches. A causal revision still
+// advances readback and command waiters, but need not repaint an unchanged UI.
+// Fresh baselines and changed/deleted fields deliberately take the normal path.
+export function onlyStateRevisionChanged(previous,next){
+ if(!previous?.client?.hostInstanceId||previous.client.hostInstanceId!==next?.client?.hostInstanceId
+  ||!Number.isSafeInteger(previous.revision)||!Number.isSafeInteger(next.revision)||next.revision<previous.revision)return false;
+ const before=Object.keys(previous),after=Object.keys(next);
+ return before.length===after.length&&after.every(key=>Object.hasOwn(previous,key)
+  &&(key==='revision'||Object.is(previous[key],next[key])));
+}
