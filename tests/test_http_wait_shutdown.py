@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 from aiohttp import ClientConnectionError, ClientSession, web
+from aiohttp.web_protocol import RequestHandler
 
 from amplifier_web.server import create_app
 from amplifier_web.service import AppService
@@ -259,9 +260,77 @@ class GatedRuntime(Runtime):
 async def test_accepted_effect_stays_shielded_during_read_wait_shutdown(tmp_path, monkeypatch, disconnect):
     runtime = GatedRuntime()
     async with host(tmp_path, monkeypatch, runtime) as h:
-        request, read_task, _ = await pending_read(h)
+        request, read_task, read_args = await pending_read(h)
         sid = h['service'].state['selectedSessionId']
         args = {'sessionId': sid, 'text': 'Exactly one durable synthetic input'}
+        observed, stages = {}, []
+        disconnected = asyncio.Event()
+
+        def stage(name, **detail):
+            task = h['records'].get('effect-once')
+            row = {'stage': name, 'at': time.monotonic(),
+                   'gateOpen': runtime.release.is_set(),
+                   'effectDone': task.done() if task else None,
+                   'effectCancelling': task.cancelling() if task else None,
+                   'runtimeCancelled': runtime.cancelled, **detail}
+            stages.append(row)
+            return row
+
+        original_json = web.Request.json
+
+        async def observe_request(http_request, *values, **options):
+            payload = await original_json(http_request, *values, **options)
+            if payload.get('id') == 'effect-once':
+                # Bind the actual HTTP handler/protocol, not the client future.
+                observed['protocol'] = http_request.protocol
+                observed['request_task'] = asyncio.current_task()
+                stage('effect_request_parsed', protocol=id(http_request.protocol),
+                      requestTask=id(observed['request_task']))
+            return payload
+
+        original_lost = RequestHandler.connection_lost
+
+        def observe_disconnect(protocol, error):
+            result = original_lost(protocol, error)
+            if protocol is observed.get('protocol'):
+                stage('server_connection_lost', protocol=id(protocol),
+                      transportGone=protocol.transport is None)
+                disconnected.set()
+            return result
+
+        original_shutdown = RequestHandler.shutdown
+
+        async def observe_request_shutdown(protocol, *values, **options):
+            if protocol is observed.get('protocol'):
+                observed['drain_task'] = asyncio.current_task()
+                stage('effect_request_shutdown_enter', protocol=id(protocol),
+                      drainTask=id(observed['drain_task']))
+            return await original_shutdown(protocol, *values, **options)
+
+        server = h['runner'].server
+        original_drain = server.shutdown
+
+        async def observe_http_drain(*values, **options):
+            stage('http_drain_enter')
+            try:
+                return await original_drain(*values, **options)
+            finally:
+                stage('http_drain_exit')
+
+        original_close = h['service'].close
+
+        async def observe_service_close():
+            observed['service_close_entered'] = True
+            stage('service_close_enter')
+            return await original_close()
+
+        # All observers delegate unchanged; none suspends/reorders cleanup or
+        # opens the gate. The real methods choose their wait/cancellation policy.
+        monkeypatch.setattr(web.Request, 'json', observe_request)
+        monkeypatch.setattr(RequestHandler, 'connection_lost', observe_disconnect)
+        monkeypatch.setattr(RequestHandler, 'shutdown', observe_request_shutdown)
+        monkeypatch.setattr(server, 'shutdown', observe_http_drain)
+        monkeypatch.setattr(h['service'], 'close', observe_service_close)
         # Separate connection so the read and effect are genuinely concurrent.
         effect_client = ClientSession(headers=h['client'].headers)
         effect = asyncio.create_task(effect_client.post(h['url'], json={
@@ -272,20 +341,79 @@ async def test_accepted_effect_stays_shielded_during_read_wait_shutdown(tmp_path
             assert stored and json.loads(stored[0])['accepted'] is True
             effect_task = h['records']['effect-once']
             assert not effect_task.done()
+            stage('durable_effect_receipt_observed', effectDispatch=id(effect_task),
+                  requestTask=id(observed['request_task']))
+            effect_task.add_done_callback(lambda task: stage(
+                'effect_dispatch_settled', cancelled=task.cancelled()))
+            assert observed['request_task'] is not effect_task
             if disconnect:
                 await effect_client.close()
                 await asyncio.gather(effect, return_exceptions=True)
+                await asyncio.wait_for(disconnected.wait(), 3)
+                assert observed['protocol'].transport is None
                 assert not effect_task.cancelled() and not runtime.cancelled
             await h['app'].shutdown()
-            status, result = await request
-            assert status == 503 and result['accepted'] is False
-            assert read_task.cancelled() and not effect_task.done()
-            assert not runtime.cancelled
-            # A real HTTP drain must wait for this effect, rather than canceling
-            # all service tasks or moving service.close before the drain.
+            stage('on_shutdown_returned', passiveCancelled=read_task.cancelled(),
+                  passiveDone=read_task.done())
+            # This assertion is specifically about on_shutdown's cancellation
+            # list, before any later AppService.close policy is reached.
+            assert not effect_task.done() and not effect_task.cancelling()
+            assert not runtime.cancelled and not runtime.release.is_set()
+            assert not observed.get('service_close_entered')
+
+            # This same two-case effect oracle is runnable against the baseline.
+            # Baseline leaves the passive read alive; settle it by a real version
+            # change so it cannot mask whether the EFFECT is awaited by drain.
+            # The five drain tests above still require cancellation/503; this
+            # explicit stimulus does not waive their passive-wait falsifier.
+            if not read_task.done():
+                workspace = next(row for row in h['service'].state['workspaces']
+                                 if row['id'] == read_args['workspaceId'])
+                h['service'].workspace_work.advance(workspace)
+                h['service'].db.commit()
+                h['service'].coordination.notify()
+                stage('passive_read_released_by_version_change')
+            status, result = await asyncio.wait_for(request, 3)
+            if read_task.cancelled():
+                assert (status, result['accepted'], result['code']) == (503, False, 'host_shutdown')
+            else:
+                assert status == 200 and result['accepted'] and result['changed'] and not result['timedOut']
+            assert read_task.done() and not effect_task.done()
+
+            # Observe the actual RequestHandler.shutdown suspension for THIS
+            # protocol, not merely runner.cleanup being scheduled for one turn.
+            # aiohttp's default disconnect policy must be measured, not assumed.
+            def effect_drain_waiting():
+                protocol = observed['protocol']
+                drain_task = observed.get('drain_task')
+                waiter = protocol._handler_waiter
+                return bool(drain_task and not drain_task.done()
+                            and protocol._request_in_progress
+                            and waiter is not None and not waiter.done()
+                            and getattr(drain_task, '_fut_waiter', None) is waiter
+                            and 'RequestHandler.shutdown' in chain(drain_task))
+
             h['cleanup'] = asyncio.create_task(h['runner'].cleanup())
-            await asyncio.sleep(0)
-            assert not h['cleanup'].done()
+            await until(lambda: effect_drain_waiting()
+                        or observed.get('service_close_entered')
+                        or effect_task.done() or effect_task.cancelling()
+                        or h['cleanup'].done())
+            stage('pre_release_boundary', exactEffectDrainWait=effect_drain_waiting(),
+                  serviceCloseEntered=bool(observed.get('service_close_entered')),
+                  requestPending=not observed['request_task'].done(),
+                  serverDisconnectObserved=disconnected.is_set(),
+                  handlerWaiter=id(observed['protocol']._handler_waiter),
+                  drainAwaitChain=chain(observed['drain_task']) if observed.get('drain_task') else [])
+            # An early transition to service.close/cancellation is counterevidence,
+            # not permission to release first and call the effect durable. Run
+            # this identical oracle on baseline before attributing such a failure.
+            assert not observed.get('service_close_entered'), 'SERVICE_CLOSE_BEFORE_EFFECT_DRAIN'
+            assert not effect_task.done() and not effect_task.cancelling() and not runtime.cancelled
+            assert not observed['request_task'].done() and effect_drain_waiting(), 'EFFECT_NOT_OWNED_BY_HTTP_DRAIN'
+            assert not runtime.release.is_set()
+            if disconnect:
+                assert disconnected.is_set()
+            stage('effect_gate_release')
             runtime.release.set()
             receipt = await asyncio.wait_for(asyncio.shield(effect_task), 3)
             assert receipt['accepted'] and receipt['delivery'] == 'accepted'
@@ -295,9 +423,14 @@ async def test_accepted_effect_stays_shielded_during_read_wait_shutdown(tmp_path
             await asyncio.wait_for(asyncio.shield(h['cleanup']), 10)
             assert not runtime.cancelled and len(runtime.sent) == 1
         finally:
+            stage('test_finally_before_gate_release',
+                  serviceCloseEntered=bool(observed.get('service_close_entered')))
             runtime.release.set()
             await effect_client.close()
             await asyncio.gather(effect, return_exceptions=True)
+            print(json.dumps({'effectDisconnect': disconnect,
+                              'aiohttpHandlerCancellation': server.handler_cancellation,
+                              'stages': stages}))
     # Reopen only the synthetic store: exact retry returns durable receipt, no send.
     restored = AppService(tmp_path / 'data', Runtime(), workspace=tmp_path)
     try:
