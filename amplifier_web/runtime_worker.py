@@ -631,6 +631,10 @@ class Worker:
         replacement.commit()
 
     async def start(self, config, *, raise_errors=False, recover_bundle=True, resolved_root=None):
+        started = (time.monotonic_ns(), time.process_time_ns())
+        startup_timing = None
+        report_directory = None
+        outcome = "failed"
         progress = None
         startup_capture = None
         replacement = None
@@ -645,14 +649,19 @@ class Worker:
                 from runtime_bootstrap import bootstrap_app_package
             bootstrap_app_package()
             from amplifier_web.host.config import app_home
-            from amplifier_web.worker_diagnostics import StartupCapture
+            from amplifier_web.worker_diagnostics import StartupCapture, StartupTimings
+            startup_timing = StartupTimings(started=started)
+            with startup_timing.phase("worker.bootstrap", started=started):
+                pass
             startup_capture = StartupCapture()
-            from amplifier_web.host.session import prepare_manager
-            from amplifier_web.execution_events import ExecutionEvents
-            from amplifier_web.runtime_controls import RuntimeControls
-            from amplifier_web.shared_state import ActivationGate, configuration_stamp
-            from amplifier_module_loop_live.runtime import Runtime
+            with startup_timing.phase('worker.imports'):
+                from amplifier_web.host.session import prepare_manager
+                from amplifier_web.execution_events import ExecutionEvents
+                from amplifier_web.runtime_controls import RuntimeControls
+                from amplifier_web.shared_state import ActivationGate, configuration_stamp
+                from amplifier_module_loop_live.runtime import Runtime
             self.home = app_home()
+            report_directory = self.home / "runtime-reports" / config["id"]
             from amplifier_web.runtime_qualification import active_install_overrides
             # Caller policy is inherited exactly, even when it names an app path.
             # Otherwise scope the app policy to Foundation's installer, never
@@ -670,28 +679,29 @@ class Worker:
             self.start_config = dict(config)
             # Execution locking lives in the isolated runtime. The outer host
             # uses the same Foundation native-history reader for navigation.
-            if self.shared_store is None:
-                from amplifier_foundation.session.shared_state import SharedSessionStore, file_stamp
-                self.shared_store = SharedSessionStore(workspace, config["id"])
-                self.shared_store_stamp = file_stamp
-                self.activation_gate = ActivationGate()
-            if self.shared_handle is None:
-                self.shared_handle = await asyncio.to_thread(
-                    self.shared_store.acquire, app="amplifier-unified", pid=os.getpid())
-            if recover_bundle:
-                from amplifier_web.bundle_selection import BundleTransaction
-                BundleTransaction(self.home, workspace, config["id"]).restore()
-            from amplifier_web.history_revision import recover_pending
-            recover_pending(self.home, workspace, config['id'])
-            if config.get('bundleReplacement') is not None:
-                from amplifier_web.bundle_selection import begin_replacement
-                replacement, resolved_root = await begin_replacement(self.home, workspace, config,
-                    admit=lambda: self.bridge('configuration.nextMessage.admit', {}))
+            with startup_timing.phase('worker.ownership'):
+                if self.shared_store is None:
+                    from amplifier_foundation.session.shared_state import SharedSessionStore, file_stamp
+                    self.shared_store = SharedSessionStore(workspace, config["id"])
+                    self.shared_store_stamp = file_stamp
+                    self.activation_gate = ActivationGate()
+                if self.shared_handle is None:
+                    self.shared_handle = await asyncio.to_thread(
+                        self.shared_store.acquire, app="amplifier-unified", pid=os.getpid())
+            with startup_timing.phase('worker.recovery'):
+                if recover_bundle:
+                    from amplifier_web.bundle_selection import BundleTransaction
+                    BundleTransaction(self.home, workspace, config["id"]).restore()
+                from amplifier_web.history_revision import recover_pending
+                recover_pending(self.home, workspace, config['id'])
+                if config.get('bundleReplacement') is not None:
+                    from amplifier_web.bundle_selection import begin_replacement
+                    replacement, resolved_root = await begin_replacement(self.home, workspace, config,
+                        admit=lambda: self.bridge('configuration.nextMessage.admit', {}))
             self.activation = self.activation_gate.activate()
             self.runtime.capture_activation = self.activation_gate.current
             # Always allow loading the saved transcript when one exists; the
             # adapter marks interrupted jobs as evidence, never replays them.
-            report_directory = self.home / "runtime-reports" / config["id"]
             progress = asyncio.create_task(self.preparation_progress(report_directory))
             # Saved controls are the resume authority, including an explicit
             # reset. Only a user/agent selection action may replace that choice.
@@ -701,36 +711,39 @@ class Worker:
                 saved_controls = json.loads(controls_path.read_text())
                 if 'selection' in saved_controls:
                     selection = saved_controls['selection']
-            self.session, self.runtime, report = await prepare_manager(workspace,
-                runtime=self.runtime, bundle=config.get("bundle") or None, ask=self.ask,
-                resume=True, application_host="Amplifier Web", selection=selection or None,
-                report_dir=report_directory, shared_handle=self.shared_handle,
-                shared_handle_getter=lambda: self.shared_handle,
-                write_guard=self.activation_gate.check_current, resolved_root=resolved_root,
-                execution_workspace=config.get("workingDirectory"), install_overrides=install_overrides)
+            with startup_timing.phase('manager.prepare'):
+                self.session, self.runtime, report = await prepare_manager(workspace,
+                    runtime=self.runtime, bundle=config.get("bundle") or None, ask=self.ask,
+                    resume=True, application_host="Amplifier Web", selection=selection or None,
+                    report_dir=report_directory, shared_handle=self.shared_handle,
+                    shared_handle_getter=lambda: self.shared_handle,
+                    write_guard=self.activation_gate.check_current, resolved_root=resolved_root,
+                    execution_workspace=config.get("workingDirectory"), install_overrides=install_overrides,
+                    startup_timing=startup_timing)
             if qualified_overrides is not None:
                 active_install_overrides(self.home, str(qualified_overrides))
             self.config_inputs = tuple(report.get("config_inputs", ()))
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)
-            self.controls = RuntimeControls(self.session, self.runtime, self.telemetry,
-                preserve_configuration=config.get('_preserveConfiguration') is True,
-                tool_invocation=self.tool_invocation)
-            self.controls.capacity.admit = lambda row: self.bridge("capacity.admit", {
-                "call": row, "waitForCapacity": True, "_runtimeSessionId": self.session.session_id,
-                "_generationId": (getattr(self.runtime, 'generation', None) or {}).get('id')})
-            self.telemetry.admission_guard = self.controls.capacity.guard
-            # Preserve app controls on native mounts. A legacy common snapshot
-            # retains its previous restoration policy during one-time recovery.
-            if report.get("history_source") != "legacy-checkpoint":
-                if config.get('replaceSavedSelection') is True:
-                    await self.controls.restore(selection_override=config['selection'])
-                else:
-                    await self.controls.restore()
-            self.start_config.pop('replaceSavedSelection', None)
-            self.start_config.pop('bundleReplacement', None)
-            self.start_config.pop('_preserveConfiguration', None)
-            self.controls.persist()
+            with startup_timing.phase('worker.controls.restore'):
+                self.controls = RuntimeControls(self.session, self.runtime, self.telemetry,
+                    preserve_configuration=config.get('_preserveConfiguration') is True,
+                    tool_invocation=self.tool_invocation)
+                self.controls.capacity.admit = lambda row: self.bridge("capacity.admit", {
+                    "call": row, "waitForCapacity": True, "_runtimeSessionId": self.session.session_id,
+                    "_generationId": (getattr(self.runtime, 'generation', None) or {}).get('id')})
+                self.telemetry.admission_guard = self.controls.capacity.guard
+                # Preserve app controls on native mounts. A legacy common snapshot
+                # retains its previous restoration policy during one-time recovery.
+                if report.get("history_source") != "legacy-checkpoint":
+                    if config.get('replaceSavedSelection') is True:
+                        await self.controls.restore(selection_override=config['selection'])
+                    else:
+                        await self.controls.restore()
+                self.start_config.pop('replaceSavedSelection', None)
+                self.start_config.pop('bundleReplacement', None)
+                self.start_config.pop('_preserveConfiguration', None)
+                self.controls.persist()
             if config.get("forkContext") and not report.get("resumed"):
                 # Fork conversational context without tool receipts or runtime
                 # ownership. Source operations must never be replayed.
@@ -744,8 +757,9 @@ class Worker:
                 report["fork_context_messages"] = len(messages)
             host = self
             from amplifier_web.app_guidance import install_app_access
-            await install_app_access(self.session.coordinator, self.app_access_bridge(self.session.coordinator))
-            self.install_collaboration_checkpoint(self.session.coordinator)
+            with startup_timing.phase('worker.app.access'):
+                await install_app_access(self.session.coordinator, self.app_access_bridge(self.session.coordinator))
+                self.install_collaboration_checkpoint(self.session.coordinator)
             original_host = self.session.coordinator.get_capability("live.host")
             class ObservedHost:
                 def __getattr__(self, name):
@@ -775,7 +789,8 @@ class Worker:
             self.naming=LiveSessionNaming(self.session.coordinator,self.home,publish,completed)
             from amplifier_web.loaded_provenance import capture_mount
             self.provenance_mount = capture_mount(self.session)
-            await self.ownership.register()
+            with startup_timing.phase('worker.ownership.register'):
+                await self.ownership.register()
             self.capture_manager_failures()
             self.execution = asyncio.create_task(self.session.execute(""))
             self.execution.add_done_callback(self.executed)
@@ -793,10 +808,14 @@ class Worker:
                     deferred=config.get('bundleReplacement', {}).get('deferred'), stop_revision=stop_revision)
                 replacement = None
             from amplifier_web.support_diagnostics import runtime_versions
-            public["support"] = runtime_versions()
-            publish({"type": "runtime.ready", "report": public,
-                     "workerIdentity": {"pid": os.getpid(), "sessionId": self.session.session_id}})
+            with startup_timing.phase('worker.support'):
+                public["support"] = runtime_versions()
+            with startup_timing.phase('worker.ready'):
+                publish({"type": "runtime.ready", "report": public,
+                         "workerIdentity": {"pid": os.getpid(), "sessionId": self.session.session_id}})
+            outcome = "completed"
         except asyncio.CancelledError:
+            outcome = "cancelled"
             raise
         except Exception as exc:
             diagnostic = startup_capture.save(exc, config.get("id")) if startup_capture else None
@@ -815,24 +834,31 @@ class Worker:
             publish(error)
             self.shutdown.set()
         finally:
-            if replacement:
-                # Stop partially mounted execution before restoring exact files.
-                try:
-                    if self.execution and not self.execution.done():
-                        self.execution.cancel()
-                        await asyncio.gather(self.execution, return_exceptions=True)
-                    if self.controls:
-                        await self.controls.close()
-                    if self.session:
-                        await self.session.cleanup()
-                finally:
-                    self.session = self.controls = self.naming = self.execution = None
-                    replacement.restore()
-            if startup_capture:
-                startup_capture.close()
-            if progress:
-                progress.cancel()
-                await asyncio.gather(progress, return_exceptions=True)
+            try:
+                if replacement:
+                    # Stop partially mounted execution before restoring exact files.
+                    try:
+                        if self.execution and not self.execution.done():
+                            self.execution.cancel()
+                            await asyncio.gather(self.execution, return_exceptions=True)
+                        if self.controls:
+                            await self.controls.close()
+                        if self.session:
+                            await self.session.cleanup()
+                    finally:
+                        self.session = self.controls = self.naming = self.execution = None
+                        replacement.restore()
+                if startup_capture:
+                    startup_capture.close()
+                if progress:
+                    progress.cancel()
+                    await asyncio.gather(progress, return_exceptions=True)
+            except BaseException as exc:
+                outcome = "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
+                raise
+            finally:
+                if startup_timing and report_directory is not None:
+                    startup_timing.save(report_directory, outcome)
 
     def defer_park_for_naming(self, activation):
         """Keep the writer until naming settles, without holding the live inbox."""
