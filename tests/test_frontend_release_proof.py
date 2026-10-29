@@ -320,7 +320,7 @@ def test_workflow_retains_successful_build_before_committed_asset_failure():
     assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '30'
     steps = job['steps']
     source = next(step for step in steps if step.get('id') == 'build-source')
-    assert steps[0] == {'uses': 'actions/checkout@v4'} and steps[1] == source
+    assert steps[0] == {'uses': 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262'} and steps[1] == source
     assert source['run'].splitlines() == [
         'echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"',
         'echo "tree=$(git rev-parse HEAD^{tree})" >> "$GITHUB_OUTPUT"',
@@ -328,7 +328,7 @@ def test_workflow_retains_successful_build_before_committed_asset_failure():
     build = next(step for step in steps if step.get('id') == 'frontend-build')
     assert build == {'name': 'Build frontend', 'id': 'frontend-build',
                      'run': 'npm run build --prefix frontend'}
-    uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@v4']
+    uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02']
     assert len(uploads) == 2
     retained, proof = uploads
     create = next(step for step in steps if step.get('name') == 'Retain frontend build output')
@@ -340,7 +340,7 @@ def test_workflow_retains_successful_build_before_committed_asset_failure():
     assert retained == {
         'name': 'Upload frontend build output',
         'if': "${{ !cancelled() && steps.frontend-build.outcome == 'success' }}",
-        'uses': 'actions/upload-artifact@v4',
+        'uses': 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
         'with': {
             'name': 'frontend-build-output-${{ github.run_attempt }}',
             'path': '${{ runner.temp }}/frontend-build-output/',
@@ -353,7 +353,7 @@ def test_workflow_retains_successful_build_before_committed_asset_failure():
     # Retention runs before the comparison; its failure cannot be turned into
     # qualification or prevent saving an already successful build after the fact.
     assert steps.index(build) < steps.index(create) < steps.index(retained) < steps.index(verify) < steps.index(proof)
-    assert proof == {'name': 'Upload frontend proof', 'uses': 'actions/upload-artifact@v4',
+    assert proof == {'name': 'Upload frontend proof', 'uses': 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
                      'with': {'name': 'frontend-proof-${{ github.run_attempt }}',
                               'path': '${{ runner.temp }}/frontend-proof.json',
                               'if-no-files-found': 'error', 'retention-days': '7'}}

@@ -297,7 +297,7 @@ def test_installed_media_diagnostic_is_explicit_full_scenario_and_cannot_replace
     assert commands.count('node frontend/tests/inline-media-browser.mjs') == 1
     assert "result['fullScenario'] and result['coreChecks'] == 'PASS'" in commands
     assert 'INLINE_MEDIA_PHASES' not in commands and 'secrets.' not in str(job)
-    upload = next(step for step in steps if step.get('uses') == 'actions/upload-artifact@v4')
+    upload = next(step for step in steps if step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02')
     assert upload['if'] == "always() && steps.diagnostic-evidence.outcome == 'success'"
     assert upload['with']['path'].splitlines() == [
         '${{ runner.temp }}/inline-media-diagnostic/*.json',
@@ -387,7 +387,7 @@ def test_full_python_suite_is_post_release_or_manual_but_fast_proofs_remain():
     assert 'set -o pipefail' in complete['run']
     assert 'tee output/python-checks/pytest.log' in complete['run']
     assert '--maxfail' not in complete['run'] and ' tests/' not in complete['run']
-    upload = next(step for step in python['steps'] if step.get('uses') == 'actions/upload-artifact@v4')
+    upload = next(step for step in python['steps'] if step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02')
     assert upload['if'] == 'always()' and upload['with']['path'] == 'output/python-checks/'
     for filename in ('release.yml', 'work-workflows.yml'):
         jobs = yaml.load((workflows / filename).read_text(), Loader=yaml.BaseLoader)['jobs']
@@ -522,14 +522,14 @@ def test_browser_retains_only_the_successfully_built_public_web_payload():
     assert workflow['permissions'] == {'contents': 'read'}
     steps = workflow['jobs']['browser']['steps']
     identity = next(index for index, step in enumerate(steps) if step.get('id') == 'build-source')
-    assert steps[identity - 1]['uses'] == 'actions/checkout@v4'
+    assert steps[identity - 1]['uses'] == 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262'
     assert steps[identity]['run'] == 'echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"'
     build = next(index for index, step in enumerate(steps) if step.get('id') == 'frontend-build')
     assert identity < build
     assert steps[build]['run'] == 'npm run build --prefix frontend'
     upload = steps[build + 1]
     assert upload['if'] == "${{ steps.frontend-build.outcome == 'success' }}"
-    assert upload['uses'] == 'actions/upload-artifact@v4'
+    assert upload['uses'] == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
     assert upload['with'] == {
         'name': 'browser-static-${{ steps.build-source.outputs.revision }}-${{ github.run_attempt }}',
         'path': 'amplifier_web/static/', 'include-hidden-files': 'true', 'if-no-files-found': 'error'}
@@ -574,7 +574,7 @@ def test_canvas_qualification_is_fixed_manual_and_installed_not_a_release_gate()
     assert 'npm ci --prefix frontend' in commands
     assert 'npx playwright install --with-deps chromium' in commands
     assert 'python scripts/canvas_qualification.py run' in commands
-    upload = next(step for step in job['steps'] if step.get('uses') == 'actions/upload-artifact@v4')
+    upload = next(step for step in job['steps'] if step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02')
     assert 'always()' in upload['if'] and upload['with']['if-no-files-found'] == 'error'
     source = (ROOT / 'scripts/canvas_qualification.py').read_text()
     assert 'from browser_check_runner import run_scenarios' in source
@@ -668,7 +668,7 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
         'uv run --no-sync python scripts/browser_check_runner.py '
         '--plan frontend/tests/browser-checks.json --output output/browser-checks --budget-seconds 1500')
     assert next(i for i, s in enumerate(steps) if '--initialize' in s.get('run', '')) < next(
-        i for i, s in enumerate(steps) if s.get('uses') == 'actions/setup-python@v5')
+        i for i, s in enumerate(steps) if s.get('uses') == 'actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065')
     contracts = [s for s in steps if s.get('name') == 'Verify fixed APP004 qualification contracts']
     assert len(contracts) == 1
     contract = contracts[0]
@@ -680,7 +680,7 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
         '2>&1 | tee output/browser-checks/app004-contracts.log',
     ]
     before = steps[:steps.index(contract)]
-    assert any(s.get('uses') == 'actions/setup-node@v4' for s in before)
+    assert any(s.get('uses') == 'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020' for s in before)
     assert any(s.get('run') == 'npm ci --prefix frontend' for s in before)
     assert any(s.get('run') == 'uv sync --locked --group dev --group artifacts' for s in before)
     assert any(s.get('with', {}).get('path') == 'amplifier_web/static/' for s in before)
@@ -706,7 +706,7 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert failures['run'] == 'exit 1' and 'always()' in failures['if']
     diagnostics = steps[-1]
     assert diagnostics['if'] == 'always()'
-    assert diagnostics['uses'] == 'actions/upload-artifact@v4'
+    assert diagnostics['uses'] == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
     assert 'output/browser-checks/' in diagnostics['with']['path']
 
 
@@ -730,7 +730,7 @@ def test_compact_composer_is_fixed_manual_only_with_independent_failure_evidence
     assert 'npm run build --prefix frontend' in commands
     assert all('${{' not in command for command in commands)
     assert all('continue-on-error' not in step for step in steps)
-    uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@v4']
+    uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02']
     assert len(uploads) == 2
     assert uploads[0]['if'] == "${{ steps.compact-build.outcome == 'success' }}"
     assert uploads[0]['with']['path'] == 'amplifier_web/static/'
@@ -746,13 +746,13 @@ def test_runtime_cache_is_selected_after_fresh_resolution_without_fallback():
     steps = jobs['runtime']['steps']
     resolve = next(i for i, step in enumerate(steps) if 'uv lock ' in step.get('run', ''))
     key = next(i for i, step in enumerate(steps) if ' cache-key ' in step.get('run', ''))
-    restore = next(i for i, step in enumerate(steps) if step.get('uses') == 'actions/cache/restore@v4')
+    restore = next(i for i, step in enumerate(steps) if step.get('uses') == 'actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830')
     assert resolve < key < restore
     assert '--refresh --upgrade' in steps[resolve]['run']
     assert 'restore-keys' not in steps[restore]['with']
     assert 'runtime-build-cache' in steps[restore]['with']['path']
     install = next(i for i, step in enumerate(steps) if 'uv sync --project' in step.get('run', ''))
-    save = next(i for i, step in enumerate(steps) if step.get('uses') == 'actions/cache/save@v4')
+    save = next(i for i, step in enumerate(steps) if step.get('uses') == 'actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830')
     assert install < save
     assert 'uv cache clean amplifier-module-loop-live' in steps[install]['run']
 
@@ -780,7 +780,7 @@ def test_native_core_qualification_is_manual_and_cannot_publish():
     assert host.count('--junitxml="$RUNNER_TEMP/host-core-junit.xml"') == 1
     assert runtime.count('--junitxml="$RUNNER_TEMP/runtime-core-junit.xml"') == 1
     assert runtime.index('cp ') < runtime.index('runtime-snapshot') < runtime.index('cmp ') < runtime.index('git rev-parse HEAD')
-    retained = next(step for step in steps if step.get('uses') == 'actions/upload-artifact@v4')
+    retained = next(step for step in steps if step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02')
     assert retained['if'] == 'always()'
     assert set(retained['with']['path'].splitlines()) == {
         '${{ runner.temp }}/' + name for name in (
