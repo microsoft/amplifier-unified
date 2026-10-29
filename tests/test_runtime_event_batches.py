@@ -31,7 +31,7 @@ def wire(value):
     return json.dumps({'type': kind, 'event': payload}).encode() + b'\n'
 
 
-async def reader(events, *, batch=None, single=None, extra=b'', eof=True):
+async def reader(events, *, batch=None, single=None, extra=b'', eof=True, root='root'):
     stream = asyncio.StreamReader(limit=2**20)
     stream.feed_data(b''.join(wire(item) for item in events) + extra)
     if eof:
@@ -49,10 +49,10 @@ async def reader(events, *, batch=None, single=None, extra=b'', eof=True):
     async def exited(): return 0
     row = {'process': SimpleNamespace(stdout=stream, returncode=0, wait=exited),
         'emit': EventSink(emit, combined), 'closing': True, 'ready': ready,
-        'runtime_id': 'root', 'inputId': 'turn', 'pending': {}, 'bridge_tasks': set()}
+        'runtime_id': root, 'inputId': 'turn', 'pending': {}, 'bridge_tasks': set()}
     manager = RuntimeManager()
-    manager.workers['root'] = row
-    task = asyncio.create_task(manager._read('root', row))
+    manager.workers[root] = row
+    task = asyncio.create_task(manager._read(root, row))
     return manager, row, task, observed
 
 
@@ -137,6 +137,192 @@ async def test_buffered_collection_has_one_fairness_turn_under_replenished_load(
     finally:
         running = False
         await lines.close()
+
+
+def starting_frames(count=5, root='root'):
+    frames = []
+    for index in range(count):
+        start = event(f'tool-{index}', root=root, kind='tool', phase='running',
+                      endedAt=None, toolCallId=f'call-{index}', label='read_file')
+        start[1].pop('usage')
+        frames.extend([wire(start),
+            observation_wire('runtime.activity', phase='tools', detail='Running read_file.'),
+            observation_wire('tool.pre', tool='read_file', call_id=f'call-{index}')])
+    return frames
+
+
+async def test_buffered_tool_starts_share_bounded_turns_before_effect_barrier():
+    frames = starting_frames(13)
+    turns, running, observed_turns, commands = 0, True, [], []
+    loop = asyncio.get_running_loop()
+    def background():
+        nonlocal turns
+        turns += 1
+        if running: loop.call_soon(background)
+    async def single(kind, payload):
+        if kind != 'runtime.ended': observed_turns.append((kind, turns))
+    manager, row, task, observed = await reader([], single=single,
+        extra=b''.join(frames) + b'{"op":"bridge","id":"effect","operation":"work.effect.check","args":{}}\n')
+    async def bridge(*args, **kwargs): commands.append(len(observed_turns))
+    manager._bridge = bridge
+    loop.call_soon(background)
+    try:
+        await task
+        await asyncio.gather(*row['bridge_tasks'])
+    finally: running = False
+    assert commands == [39]
+    assert [kind for kind, _ in observed_turns] == ['execution.event', 'runtime.status', 'runtime.tool'] * 13
+    # Exactly three bounded prefixes, not one competing scheduler turn per
+    # already-buffered observation. This measures scheduling, not wall time.
+    assert len({turn for _, turn in observed_turns}) == 3
+    assert all(len([1 for _, seen in observed_turns if seen == turn]) <= 16
+               for _, turn in observed_turns)
+
+
+@pytest.mark.parametrize('barrier', [
+    {'op': 'bridge', 'operation': 'work.effect.check'},
+    {'type': 'approval.requested', 'id': 'approval'},
+    {'type': 'generation.started', 'sessionId': 'root', 'rootSessionId': 'root'},
+    {'type': 'input.delivered', 'input_id': 'new'},
+    {'type': 'runtime.ownership', 'status': 'yielded'},
+    {'type': 'collaboration.checkpoint', 'generation_id': 'generation'},
+    {'type': 'unrecognized.observation'},
+    {'type': 'runtime.activity', 'phase': 'tools', 'detail': 'Running', 'report': {}},
+    {'type': 'runtime.activity', 'phase': 'tools', 'detail': 'Running', 'inputId': 'new'},
+    {'type': 'runtime.activity', 'phase': [], 'detail': 'Running'},
+    {'type': 'tool.pre', 'tool': 'read_file', 'call_id': 'call', 'session_id': 'child'},
+    {'type': 'tool.pre', 'tool': 'read_file', 'call_id': 'call', 'root_session_id': 'child'},
+    {'type': 'execution.event', 'event': event('child', root='root', sessionId='child', kind='tool', phase='running')[1]},
+    {'type': 'execution.event', 'event': event('bad', root='root', kind='tool', phase='running', statusPlan={})[1]},
+])
+def test_start_prefix_authority_unknown_and_child_frames_reset_fairness(barrier):
+    from amplifier_web.runtime_event_batches import ObservationTurns, starting_observation
+    progress = {'type': 'runtime.activity', 'phase': 'tools', 'detail': 'Running'}
+    roots = ('root', 'native-root')
+    turns = ObservationTurns()
+    assert turns.yield_before(100, starting_observation(progress, roots))
+    assert not turns.yield_before(100, starting_observation(progress, roots))
+    assert not starting_observation(barrier, roots)
+    assert turns.yield_before(100, starting_observation(barrier, roots))
+    assert turns.yield_before(100, starting_observation(progress, roots))
+
+
+def test_start_prefix_bytes_and_native_alias_are_bounded():
+    from amplifier_web.runtime_event_batches import ObservationTurns, starting_observation
+    progress = {'type': 'tool.pre', 'tool': 'read_file', 'call_id': 'call', 'session_id': 'native-root'}
+    assert starting_observation(progress, ('root', 'native-root'))
+    turns = ObservationTurns()
+    assert turns.yield_before(40000, True)
+    assert turns.yield_before(40000, True)
+    assert not turns.yield_before(100, True)
+    assert turns.yield_before(MAX_BYTES + 1, True)
+    assert turns.yield_before(100, True)
+
+
+@pytest.mark.parametrize('missing', ['sessionId', 'rootSessionId'])
+@pytest.mark.parametrize('value', ['absent', None, '', [], {}])
+def test_start_prefix_missing_or_invalid_identity_is_a_barrier(missing, value):
+    from amplifier_web.runtime_event_batches import starting_observation
+    data = json.loads(starting_frames(1)[0])
+    if value == 'absent': data['event'].pop(missing)
+    else: data['event'][missing] = value
+    assert not starting_observation(data, ('root', None))
+
+
+@pytest.mark.parametrize('barrier', [
+    {'op': 'bridge', 'id': 'check', 'operation': 'work.effect.check', 'args': {}},
+    {'type': 'approval.requested', 'id': 'approval'},
+    {'type': 'generation.started', 'sessionId': 'root', 'rootSessionId': 'root'},
+    {'type': 'input.delivered', 'input_id': 'new'},
+    {'type': 'unrecognized.observation'},
+    {'type': 'execution.event', 'event': event('child', root='root', sessionId='child', kind='tool', phase='running')[1]},
+])
+async def test_start_prefix_keeps_barrier_between_exact_observations(barrier):
+    turns, running, order = 0, True, []
+    loop = asyncio.get_running_loop()
+    def background():
+        nonlocal turns
+        turns += 1
+        if running: loop.call_soon(background)
+    async def single(kind, payload):
+        if kind != 'runtime.ended': order.append((payload.get('id', kind), turns))
+    before = json.loads(starting_frames(1)[0]); before['event']['id'] = 'before'
+    after = copy.deepcopy(before); after['event']['id'] = 'after'
+    manager, row, task, _ = await reader([], single=single,
+        extra=b''.join(json.dumps(frame).encode() + b'\n' for frame in (before, barrier, after)))
+    async def bridge(*args, **kwargs): order.append(('command', turns))
+    manager._bridge = bridge
+    loop.call_soon(background)
+    try:
+        await task; await asyncio.gather(*row['bridge_tasks'])
+    finally: running = False
+    assert order[0][0] == 'before' and order[-1][0] == 'after'
+    assert order[-1][1] - order[0][1] >= 2
+    if barrier.get('op'): assert order[1][0] == 'command'
+    elif barrier['type'] != 'unrecognized.observation': assert len(order) == 3
+
+
+async def test_start_prefix_callback_takeover_and_fault_do_not_replay_or_cross_command():
+    old, new, commands = [], [], []
+    async def first(kind, payload):
+        old.append(kind)
+        row['emit'] = replacement
+    async def replacement(kind, payload):
+        if kind == 'runtime.ended': return
+        new.append(kind)
+        if kind == 'runtime.tool': raise ValueError('observer failed')
+    manager, row, task, _ = await reader([], single=first,
+        extra=b''.join(starting_frames(2)) + b'{"op":"bridge","id":"blocked","operation":"list_actions","args":{}}\n')
+    async def bridge(*args, **kwargs): commands.append('called')
+    manager._bridge = bridge
+    await task
+    assert old == ['execution.event']
+    assert new[:2] == ['runtime.status', 'runtime.tool']
+    assert new.count('execution.event') == 0 and not commands
+
+
+async def test_start_prefix_cancellation_preserves_applied_prefix_without_command():
+    entered, release, observed = asyncio.Event(), asyncio.Event(), []
+    async def single(kind, payload):
+        if kind == 'execution.event':
+            observed.append(payload['id']); entered.set(); await release.wait()
+    manager, row, task, _ = await reader([], single=single,
+        extra=b''.join(starting_frames(2)) + b'{"op":"bridge","id":"blocked","operation":"list_actions","args":{}}\n')
+    calls = []
+    async def bridge(*args, **kwargs): calls.append('called')
+    manager._bridge = bridge
+    await entered.wait(); task.cancel()
+    with pytest.raises(asyncio.CancelledError): await task
+    assert observed == ['tool-0'] and not calls and row['process'].stdout._waiter is None
+
+
+async def test_start_prefix_keeps_single_reducers_progress_and_saved_state(app_factory, monkeypatch):
+    app = app_factory(); await app.history.close(); await app.diagnostics.close()
+    await app.dispatch('session.create', {})
+    sid = app.state['selectedSessionId']; session = app._session(sid)
+    session['status'] = 'working'
+    monkeypatch.setattr('amplifier_web.service.time.time', lambda: 1234.0)
+    initial = copy.deepcopy(session)
+    frames = starting_frames(5, sid)
+    from amplifier_web.runtime import normalize_event
+    for line in frames:
+        await app.on_runtime_event(*normalize_event(json.loads(line), sid, 'turn'))
+    await app._flush_pending_progress()
+    expected = copy.deepcopy(session)
+    session.clear(); session.update(initial); app._publish_changes(sessions={sid})
+    commits = []
+    original = app._commit_pending_progress
+    def commit(): commits.append(1); return original()
+    monkeypatch.setattr(app, '_commit_pending_progress', commit)
+    async def single(kind, payload):
+        if kind != 'runtime.ended':
+            await app.on_runtime_event(kind, {**payload, 'sessionId': sid})
+    _, _, task, _ = await reader([], single=single, extra=b''.join(frames), root=sid)
+    await task
+    await app._flush_pending_progress()
+    assert session == expected and len(commits) == 1
+    saved = next(s for s in saved_state(app)['sessions'] if s['id'] == sid)
+    assert saved['execution'] == stored_execution(expected['execution'])
 
 
 async def test_late_read_is_retained_without_mutating_the_committed_prefix():

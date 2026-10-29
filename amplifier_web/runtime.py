@@ -692,9 +692,11 @@ class RuntimeManager:
             await self.app_bridge('capacity.abandoned', bridge['args'], sid)
 
     async def _read(self, sid, row):
-        from .runtime_event_batches import BufferedLines, EventSink, MAX_BYTES, finish_owned, observation, terminal
+        from .runtime_event_batches import (BufferedLines, EventSink, MAX_BYTES, ObservationTurns,
+                                           finish_owned, observation, starting_observation, terminal)
         from . import performance_diagnostics
         lines = BufferedLines(row['process'].stdout)
+        turns = ObservationTurns()
 
         def terminal_event(data):
             if not isinstance(data, dict) or data.get('op') or data.get('type') != 'execution.event':
@@ -772,24 +774,30 @@ class RuntimeManager:
                 try:
                     data = decoded[1] if decoded is not None and line is decoded[0] else json.loads(line)
                 except (ValueError, UnicodeDecodeError):
+                    turns.reset()
                     await asyncio.sleep(0)
                     continue
                 finally:
                     decoded = None
                 if not isinstance(data, dict):
+                    turns.reset()
                     await asyncio.sleep(0)
                     continue
                 sink = row['emit']
                 event = terminal_event(data) if isinstance(sink, EventSink) and len(line) <= MAX_BYTES else None
                 if event is not None:
+                    turns.reset()
                     # Cancellation cannot abandon already consumed receipts.
                     # The bounded collector never waits for another full line.
                     await finish_owned(deliver_batch(line, event, sink))
                     continue
-                # readline and event callbacks can both finish synchronously
-                # while stdout is buffered. Let pending replies, bridge calls,
-                # HTTP requests and stop commands run between ordered events.
-                await asyncio.sleep(0)
+                # Buffered progress uses the unchanged single-event reducer.
+                # A bounded prefix gets one fairness turn, not a competing save
+                # per frame. Commands, lifecycle, unknown and child frames keep
+                # their ordered yield boundary; no bytes are read ahead here.
+                if turns.yield_before(len(line), isinstance(sink, EventSink) and
+                        starting_observation(data, (sid, row.get('runtime_id')))):
+                    await asyncio.sleep(0)
                 if data.get("op") == "bridge":
                     task = asyncio.create_task(self._bridge(sid, row, data, dequeued_ns=dequeued_ns))
                     row["bridge_tasks"].add(task)
