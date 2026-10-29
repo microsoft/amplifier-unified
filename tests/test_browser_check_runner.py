@@ -457,7 +457,7 @@ def test_workflow_keeps_independent_artifacts_and_readiness_unique_python_covera
     browser = yaml.load((workflows / 'browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     steps = browser['jobs']['browser']['steps']
     assert any('browser_check_runner.py' in step.get('run', '') for step in steps)
-    uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@v4']
+    uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02']
     assert len(uploads) == 2
     by_name = {step['with']['name']: step for step in uploads}
     diagnostics_name = 'extended-browser-evidence-${{ github.run_attempt }}'
@@ -646,7 +646,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert owners[0][1]['env']['AMPLIFIER_TEST_OUTPUT_DIR'] == '${{ runner.temp }}/test-environments'
     coordination = yaml.load((workflows / 'coordination.yml').read_text(), Loader=yaml.BaseLoader)
     assert 'frontend/' + environment in coordination['on']['pull_request']['paths']
-    assert any(step.get('if') == 'always()' and step.get('uses') == 'actions/upload-artifact@v4'
+    assert any(step.get('if') == 'always()' and step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
                and step.get('with', {}).get('path', '').splitlines() == [
                    '${{ runner.temp }}/test-environments',
                    'output/coordination-runtime-readiness.json']
@@ -700,7 +700,7 @@ def test_attachment_focus_workflow_retains_failures_and_default_coverage():
     assert final['run'] == 'exit 1'
     assert "always()" in final['if'] and "steps.attachment-contracts.outcome != 'success'" in final['if']
     assert "steps.attachment-client-contracts.outcome != 'success'" in final['if']
-    assert any(step.get('if') == 'always()' and step.get('uses') == 'actions/upload-artifact@v4'
+    assert any(step.get('if') == 'always()' and step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
                for step in job['steps'])
 
 
@@ -725,7 +725,7 @@ def test_performance_reports_are_distinct_and_uploaded():
     assert 'demand' not in reports
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     uploads = [step for step in workflow['jobs']['browser']['steps']
-               if step.get('uses') == 'actions/upload-artifact@v4']
+               if step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02']
     directories = [line.strip().rstrip('/') + '/' for step in uploads
                    for line in step['with']['path'].splitlines() if line.strip()]
     assert all(any(path.removeprefix('{root}/').startswith(directory) for directory in directories)
@@ -761,7 +761,7 @@ def test_destination_history_manual_route_is_fixed_and_preserves_default_coverag
                    'work-shell', 'archive-action', 'archive-feedback', 'attention', 'shell-panels',
                    'automation-hub', 'schedule-editor', 'submission-reset'):
         assert f'tests/{target}.test.mjs' in run
-    uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@v4']
+    uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02']
     assert len(uploads) == 1 and uploads[0]['if'] == 'always()'
     assert 'output/destination-history/' in uploads[0]['with']['path']
     assert 'output/browser-checks/' in uploads[0]['with']['path']
@@ -784,7 +784,7 @@ def test_attachment_experience_route_is_fixed_and_installs_the_exact_wheel():
     assert "file.read_bytes() == archive.read(" in runs
     assert 'secrets.' not in json.dumps(job)
     assert all(step.get('if') == 'always()' for step in job['steps']
-               if step.get('uses') == 'actions/upload-artifact@v4')
+               if step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02')
     assert "steps.installed-browser.outcome != 'success'" in json.dumps(job)
     assert "steps.intersections.outcome != 'success'" in json.dumps(job)
 

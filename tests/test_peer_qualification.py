@@ -32,7 +32,7 @@ def test_peer_hosted_route_is_fixed_and_separate():
     assert 'npm ci --prefix frontend' in commands
     assert 'uv run --no-sync python scripts/peer_message_qualification.py' in commands
     assert commands.index('python scripts/peer_message_qualification.py --initialize') < commands.index('uv sync --locked --group dev --group artifacts')
-    upload, = [step for step in steps if step.get('uses') == 'actions/upload-artifact@v4']
+    upload, = [step for step in steps if step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02']
     assert upload['if'] == 'always()' and upload['with']['path'] == 'output/peer-messages/'
 
 
