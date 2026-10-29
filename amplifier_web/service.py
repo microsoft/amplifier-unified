@@ -630,6 +630,10 @@ class AppService:
             SettingsStore(self.data_dir).update(self.default_workspace, "global", migrate_voice)
         self.state["sharedVoiceMigration"] = True
         self._view_cache = {}
+        from .message_preparation import MessagePreparation
+        self._message_preparation = MessagePreparation()
+        from .execution_preparation import ExecutionPreparation
+        self._execution_preparation = ExecutionPreparation()
         self._session_projection_refs = {item['id']: copy.deepcopy(item) for item in self.state['sessions']}
         self._history_local_revision = 0
         from .cold_display import ColdDisplay
@@ -798,6 +802,8 @@ class AppService:
             self._saved_detail_facts = {identity: value for identity, value in self._saved_detail_facts.items()
                                        if identity in retained}
             self._view_cache.clear()
+            self._message_preparation.entries.clear()
+            self._execution_preparation.retain(())
             for identity in tuple(self.cold_display.recent):
                 if identity not in retained:
                     self.cold_display.recent.pop(identity, None)
@@ -1047,9 +1053,10 @@ class AppService:
                                for key in session_ids} if record_only else self._state.get('runtimeControl', {})}
         from .session_projection import persist
         pending_views = dict(self._view_cache)
+        pending_messages = {}
         pending_references = dict(self._session_projection_refs)
         normalization_undo, view_undo = [], []
-        from .cold_display import saved as saved_cold
+        from .cold_display import saved as saved_cold, MARKER
         from .state_records import save_working
         admitted_ids = ({row['id'] for row in self._state['sessions']}
                         if session_ids is None else set(session_ids))
@@ -1073,7 +1080,9 @@ class AppService:
                                 session_ids=admitted_ids, by_id=admitted_index,
                                 references=pending_references, scoped_result=True,
                                 undo=view_undo, db=self.db,
-                                retain_native=lambda row: not self.directory.native_backing(row))
+                                retain_native=lambda row: not self.directory.native_backing(row),
+                                message_preparation=self._message_preparation, pending_messages=pending_messages,
+                                execution_preparation=self._execution_preparation)
             pending_clients = self.clients.save(defer_ack=True)
             if record_only:
                 # Persist sanitized global presentation just as full checkpoints
@@ -1114,6 +1123,10 @@ class AppService:
             self._client_snapshots.clear()
             self._client_snapshot_preferences = {}
             raise
+        self._message_preparation.committed(pending_messages, admitted_index, deleted_ids)
+        self._execution_preparation.retain({sid for sid, row in admitted_index.items()
+                                           if sid not in deleted_ids and dict.__contains__(row, 'execution')
+                                           and 'execution' not in dict.get(row, MARKER, {})})
         changed_clients = {identity for identity, value in pending_clients.items()
                            if self.clients.saved.get(identity) != value}
         self.clients.acknowledge(pending_clients)
