@@ -118,7 +118,9 @@ Derived message summaries must retire when their mutable body is handed out.
 Passive peer notifications load the recipient's messages when appending, while
 unrelated cold execution, configuration and catalog references stay indirect.
 They still verify native history and reconcile a changed transcript before the
-append. An exact retry uses the saved receipt and never wakes the recipient.
+append. The message and receipt share their existing save boundary; an uncommitted
+failure restores the append and its navigation/reference metadata, and an exact
+retry of a committed notification never wakes the recipient.
 
 Do not infer physical cleanup from transaction rollback: a process may die after
 writing a file but before committing its index. Resource creation now takes the

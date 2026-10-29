@@ -1,4 +1,5 @@
 """Passive peer append resolves needed fields without waking a dormant owner."""
+import asyncio
 import copy
 import json
 import sqlite3
@@ -168,6 +169,39 @@ async def test_notify_lost_publication_ack_retries_receipt_without_loading_or_wa
     assert (await send(app, mode='notify'))['duplicate']
     assert calls == [] and sum(m.get('inputId') == 'request-1' for m in target['messages']) == 1
     assert dict.get(target, '_coldFields')['execution'] == refs['execution'] and not app.runtime.inputs
+
+
+@pytest.mark.parametrize('fault', ['message', 'insert', 'storage', 'cancelled_storage'])
+async def test_notify_failed_save_does_not_duplicate_on_retry(app, tmp_path, monkeypatch, fault):
+    source, target, refs, _, _ = await dormant(app, tmp_path, monkeypatch)
+    target['navigationPostAdmissions'] = {'posts': [{'id': 'existing-admission'}], 'progress': False}
+    target['navigationActivityPending'] = False
+    fields = ('historyManaged', 'coordinationReference', 'recentActivityAt',
+              'navigationActivityAt', 'navigationActivityPending', 'navigationPostAdmissions')
+    before = {row['id']: {key:copy.deepcopy(row[key]) for key in fields if key in row}
+              for row in (source, target)}
+    app.db.execute('INSERT INTO commands(id,fingerprint,receipt) VALUES(?,?,?)',
+                   ('prior-operation', 'prior', json.dumps({'accepted': True})))
+    owner, name = {'message': (app, '_message'), 'insert': (app.collaboration, 'insert'),
+                   'storage': (app.directory, 'sync'), 'cancelled_storage': (app.directory, 'sync')}[fault]
+    original = getattr(owner, name)
+    error = asyncio.CancelledError if fault == 'cancelled_storage' else OSError
+    def failed(*args, **kwargs):
+        original(*args, **kwargs)
+        raise error('Synthetic notification save failure')
+    with monkeypatch.context() as scoped:
+        scoped.setattr(owner, name, failed)
+        with pytest.raises(error, match='notification save'):
+            await send(app, mode='notify')
+    assert committed(app, 'request-1') is None
+    assert committed(app, 'prior-operation') == {'accepted': True}
+    assert not any(m.get('inputId') == 'request-1' for m in target['messages'])
+    assert {row['id']: {key:copy.deepcopy(row[key]) for key in fields if key in row}
+            for row in (source, target)} == before
+    assert dict.get(target, '_coldFields')['execution'] == refs['execution']
+    app._publish_changes(sessions={source['id'], target['id']})
+    assert (await send(app, mode='notify'))['delivery'] == 'notified'
+    assert sum(m.get('inputId') == 'request-1' for m in target['messages']) == 1 and not app.runtime.inputs
 
 
 async def test_notify_requires_exact_message_resource_and_retry_is_single(app, tmp_path, monkeypatch):
