@@ -602,13 +602,14 @@ async def run(root):
                 if row["kind"] == "sealed-report":
                     observed_report = copy.deepcopy(row["report"])
                     saved_report = revisions[observed_report["responseRevision"]]
-                    # Python -> native JSON -> provider round trips can move this
-                    # float one representable step. Validate that rounding only;
+                    # Python -> native JSON -> provider round trips can move either
+                    # timestamp one representable step. Validate that rounding only;
                     # all identities, other fields and artifact hashes stay exact.
-                    observed_at, saved_at = observed_report["declaredAt"], saved_report["declaredAt"]
-                    assert math.isfinite(observed_at) and math.isfinite(saved_at)
-                    assert abs(observed_at - saved_at) <= max(math.ulp(observed_at), math.ulp(saved_at))
-                    observed_report["declaredAt"] = saved_at
+                    for field in ("declaredAt", "sealedAt"):
+                        observed_at, saved_at = observed_report[field], saved_report[field]
+                        assert math.isfinite(observed_at) and math.isfinite(saved_at)
+                        assert abs(observed_at - saved_at) <= max(math.ulp(observed_at), math.ulp(saved_at))
+                        observed_report[field] = saved_at
                     assert observed_report == saved_report
                 elif row["kind"] == "artifact":
                     key = (row["requestId"], row["revision"], row["name"])

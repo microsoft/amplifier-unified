@@ -1,6 +1,7 @@
 import {ApprovalPanel} from './approval-card';
 import {AutomationHub} from './automation-hub';
 import {createArchiveAction} from './archive-action.js';
+import {quoteNotice as makeQuoteNotice,quoteNoticeAfterSend,visibleQuoteNotice} from './quote-notice.js';
 import {ArchiveContext,ArchiveNotice} from './archive-feedback.jsx';
 import {createStateStream} from './state-stream.js';
 import {recordActionTiming} from './api.js';
@@ -129,7 +130,7 @@ function App(){
  const outbox=useMessageOutbox(),deliveries=useRef(new Set()),sendQueue=useRef(Promise.resolve()),draftSaves=useRef(new WeakMap());
  const draftJournalEntries=useRef(new WeakMap()),[draftStorageError,setDraftStorageError]=useState(false);
  const referenceDraftLock=useRef(false),[referencingDraft,setReferencingDraft]=useState(false);
- const quoteApi=useRef(null),addingQuote=useRef(false),[quoteNotice,setQuoteNotice]=useState(''),[quoteReturn,setQuoteReturn]=useState(null);
+ const quoteApi=useRef(null),addingQuote=useRef(false),[quoteNotice,setQuoteNotice]=useState(null),[quoteReturn,setQuoteReturn]=useState(null);
  const workerSubmission=useRef({busy:false,revision:0}),[workerSending,setWorkerSending]=useState(false);
  const [awayFromBottom,setAwayFromBottom]=useState(false);
  const questionReviewState=useState({});
@@ -237,7 +238,7 @@ function App(){
   if(action==='message.reply'&&!meta.quotePrepared){
    if(addingQuote.current||!quoteApi.current||args.sessionId!==latest.current?.selectedSessionId)return Promise.reject(Error('Choose an available message in this conversation; a quote may already be pending.'));
    const api=quoteApi.current,target=api.capture(),sessionId=args.sessionId;
-   addingQuote.current=true;setQuoteNotice('Adding quote…');
+   addingQuote.current=true;setQuoteNotice(makeQuoteNotice(sessionId,'Adding quote…'));
    return (async()=>{
     let prepared={...args,snapshotOnly:true};
     const source=meta.quoteDetail?await readDetail(meta.quoteDetail,async(url,options)=>{
@@ -253,8 +254,8 @@ function App(){
     return dispatch(action,prepared,{...meta,quotePrepared:true});
    })().then(result=>{
     if(api!==quoteApi.current||latest.current?.selectedSessionId!==sessionId)throw Error('The conversation changed. The quote was not added.');
-    api.insert(result.result.quote,target);setQuoteNotice('Quote added. Earlier quotes, commentary and attachments kept.');return result;
-   }).catch(error=>{setQuoteNotice(error.message);throw error}).finally(()=>{addingQuote.current=false;});
+    api.insert(result.result.quote,target);setQuoteNotice(makeQuoteNotice(sessionId,'Quote added. Earlier quotes, commentary and attachments kept.'));return result;
+   }).catch(error=>{setQuoteNotice(makeQuoteNotice(sessionId,error.message));throw error}).finally(()=>{addingQuote.current=false;});
   }
   const referenceAction=action==='canvas.reference'||action==='canvas.views.command'&&args.action==='canvas.reference';
   if(referenceAction&&!meta.referencePrepared){
@@ -655,7 +656,7 @@ function App(){
   const expectedGenerationId=activeGeneration&&!activeGeneration.terminal?activeGeneration.id:null;
   if(!submittedText.trim()&&!attachments.length)return;
   if(detail.focused)detail.latest(false);
-  chatScroll.current?.submitted(id);setError('');editDraft('');clearTimeout(draftTimer.current);
+  chatScroll.current?.submitted(id);setError('');setQuoteNotice(notice=>quoteNoticeAfterSend(notice,session?.id));editDraft('');clearTimeout(draftTimer.current);
   const blankToken=stagedDraft.current;
   let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,allowNextTurn:true,...(expectedGenerationId?{expectedGenerationId}:{}),...(!session?{creation:{id:crypto.randomUUID(),setup:creationSetup()}}:{}),text:submittedText,...(submittedDocument?{document:submittedDocument,replyTo:{version:2,segments:submittedDocument.segments}}:state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
   try{
@@ -807,7 +808,7 @@ function App(){
      const digest=[...new Uint8Array(bytes)].map(n=>n.toString(16).padStart(2,'0')).join('');
      return digest===quote.sourceDigest?'Original revealed. Saved quotation is unchanged.':'Source changed since quoting. The earlier snapshot is retained.';
     }} onFiles={addFiles} disabled={executionUnavailable} readOnly={referencingDraft} pasteDisabled={historyPending}/>
-    {quoteNotice&&<small role="status">{quoteNotice}</small>}
+    {visibleQuoteNotice(quoteNotice,session?.id)&&<small role="status">{visibleQuoteNotice(quoteNotice,session?.id)}</small>}
     {quoteReturn&&quoteReturn.sid===session?.id&&<button type="button" className="a-link" onClick={()=>{if(messagesPane.current)messagesPane.current.scrollTop=quoteReturn.top;const button=quoteReturn.button;setQuoteReturn(null);if(button?.isConnected&&button.getClientRects().length)button.focus({preventScroll:true});else composerRef.current?.focus({preventScroll:true});}}>Return to reading position</button>}
     </div>
     <div role="status" aria-live="polite" aria-atomic="true" className="a-sr-only">{sendingHere?'Sending message…':''}</div>
