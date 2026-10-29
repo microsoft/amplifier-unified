@@ -1,4 +1,4 @@
-"""Bounded, ordered terminal receipts; never a queue for executing commands."""
+"""Bounded, ordered terminal receipts and observations; never executing commands."""
 import asyncio
 
 MAX_EVENTS = 16
@@ -11,6 +11,32 @@ def terminal(kind, payload):
             and isinstance(payload.get('id'), str) and bool(payload['id'])
             and isinstance(payload.get('kind'), str) and payload['kind'] in {'llm', 'tool', 'worker'}
             and isinstance(payload.get('phase'), str) and payload['phase'] in TERMINAL_PHASES)
+
+
+ACTIVITY_PHASES = frozenset({'model', 'processing', 'waiting-workers', 'tools', 'retrying', 'compacting'})
+ACTIVITY_FIELDS = frozenset({'sessionId', 'status', 'activityOnly', 'phase', 'detail',
+                             'activeWorkers', 'retryAttempt', 'retryMax'})
+BRIDGE_FIELDS = frozenset({'sessionId', 'type', 'bridgeId', 'operation', 'generation_id',
+                           'timeoutSeconds', 'runtimeSessionId', 'action', 'phase',
+                           'elapsedSeconds', 'errorType'})
+
+
+def observation(kind, payload):
+    """Only normalized, non-authoritative root observations may join a receipt."""
+    if not isinstance(payload, dict) or not isinstance(payload.get('sessionId'), str):
+        return False
+    if kind == 'runtime.timing':
+        return set(payload) == {'sessionId', 'timing'}
+    if kind == 'runtime.bridge':
+        return set(payload) <= BRIDGE_FIELDS and payload.get('type') == 'runtime.bridge'
+    return (kind == 'runtime.status' and set(payload) <= ACTIVITY_FIELDS
+            and payload.get('activityOnly') is True and payload.get('status') == 'working'
+            and isinstance(payload.get('phase'), str) and payload['phase'] in ACTIVITY_PHASES
+            and isinstance(payload.get('detail'), str))
+
+
+def receipt(kind, payload):
+    return terminal(kind, payload) or observation(kind, payload)
 
 
 class EventSink:

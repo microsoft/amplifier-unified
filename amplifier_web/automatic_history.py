@@ -613,13 +613,18 @@ class AutomaticHistory:
                     count(self.service, 'catalog.merge.rows', len(snapshot['sessions']))
                     changed = bool(locations_changed or state.get('sharedHistory', {}).get('loading') or state.get('sharedHistory', {}).get('error')
                                    or directory_mode and (incoming['reset'] or incoming['sessions'] or incoming['removed'] or incoming['removedProjects']))
-                    workspace_pins_changed = False
+                    globals_changed = ({'sharedHistory'} if state.get('sharedHistory', {}).get('loading')
+                                       or state.get('sharedHistory', {}).get('error') else set())
+                    workspace_remapped = False
                     worker_detail_only = (delta_mode and not full_merge
                         and not incoming['workspaces'] and not incoming['removed']
                         and not incoming['removedProjects']
                         and bool(snapshot['sessions'])
-                        and all(row.get('sessionKind') == 'worker' for row in snapshot['sessions'])
-                        and not changed)
+                        and all(row.get('sessionKind') == 'worker' for row in incoming['sessions'])
+                        and (not directory_mode or all(
+                            (row['nativeProject'], row['nativeIdentity']) in admitted
+                            for row in incoming['sessions']))
+                        and not locations_changed)
                     hidden_workspaces = set(state.get('hiddenNativeWorkspaces', []))
                     workspaces = {row['id']: row for row in state['workspaces']}
                     # Most refreshes contain no unresolved folders. Index the
@@ -634,6 +639,7 @@ class AutomaticHistory:
                         if previous and previous.get('path') == row.get('path') and previous.get('available') != row['available']:
                             previous['available'] = row['available']
                             changed = True
+                            globals_changed.add('workspaces')
                     for row in snapshot['workspaces']:
                         if row.get('path') in managed_paths:
                             continue
@@ -643,6 +649,7 @@ class AutomaticHistory:
                             hidden_workspaces.add(row['id'])
                             state.setdefault('hiddenNativeWorkspaces', []).append(row['id'])
                             changed = True
+                            globals_changed.add('hiddenNativeWorkspaces')
                         if row['id'] in hidden_workspaces:
                             continue
                         previous = workspaces.get(row['id'])
@@ -653,10 +660,12 @@ class AutomaticHistory:
                             state['workspaces'].append(dict(row)); workspaces[row['id']] = state['workspaces'][-1]
                             previous = workspaces[row['id']]
                             changed = True
+                            globals_changed.add('workspaces')
                         else:
                             for key in ('nativeProject', 'available', 'sessionCount', 'workerSessionCount'):
                                 if key in row and previous.get(key) != row[key]:
                                     previous[key] = row[key]; changed = True
+                                    globals_changed.add('workspaces')
                         if not previous.get('path'):
                             # Later rows in this same scan must see additions
                             # and identity changes, just as a fresh list scan did.
@@ -667,6 +676,7 @@ class AutomaticHistory:
                         for old in unresolved:
                             # Migrate the generated placeholder, preserving any
                             # user customization and every reference to it.
+                            workspace_remapped = True
                             if old.get('name') != old.get('nativeProject'):
                                 if previous.get('name') == row.get('name'):
                                     previous['name'] = old['name']
@@ -698,7 +708,6 @@ class AutomaticHistory:
                                         state['pinnedItemIds'] = list(dict.fromkeys(
                                             'workspace:' + row['id'] if key == 'workspace:' + old['id'] else key
                                             for key in state['pinnedItemIds']))
-                                    workspace_pins_changed = True
                             for scoped in [*state['sessions'], *state.get('canvasArtifacts', []), state.get('canvas', {})]:
                                 if scoped.get('workspaceId') == old['id']:
                                     scoped['workspaceId'] = row['id']
@@ -706,6 +715,7 @@ class AutomaticHistory:
                             workspaces.pop(old['id'], None)
                             unresolved_by_project.get(old.get('nativeProject'), {}).pop(old['id'], None)
                             changed = True
+                            globals_changed.add('workspaces')
                     if not delta_mode or self._existing is None:
                         existing = {(s.get('nativeProject') or (project_slug(s['workspace']) if s.get('workspace') else None),
                                      s.get('nativeIdentity') or s.get('runtimeSessionId') or s['id']): s for s in state['sessions']}
@@ -839,6 +849,7 @@ class AutomaticHistory:
                     if (state['sharedHistory'].get('issues', []) != issues[:100]
                             or state['sharedHistory'].get('issueCount', 0) != len(issues)):
                         changed = True
+                        globals_changed.add('sharedHistory')
                     counts = (self._public_catalog_counts(incoming, deleted_projects)
                               if delta_mode else {
                                   'projectCount': len(snapshot['workspaces']),
@@ -847,6 +858,7 @@ class AutomaticHistory:
                                   'internalSessionCount': sum(row['sessionKind'] == 'internal' for row in snapshot['sessions'])})
                     if delta_mode and any(state['sharedHistory'].get(key) != value for key, value in counts.items()):
                         changed = True
+                        globals_changed.add('sharedHistory')
                     state['sharedHistory'].update(loading=False, issues=copy.deepcopy(issues[:100]),
                         issueCount=len(issues), error=None, **counts)
                     if delta_mode:
@@ -857,14 +869,17 @@ class AutomaticHistory:
                                           for key in ('phase', 'completedAt')}
                         if state['sharedHistory'].get('reconciliation') != reconciliation:
                             changed = True
+                            globals_changed.add('sharedHistory')
                         state['sharedHistory']['reconciliation'] = reconciliation
                     self.last_scan = snapshot
                     if changed:
-                        if delta_mode and not full_merge:
-                            globals_changed = {'sharedHistory', 'workspaces'}
-                            if workspace_pins_changed:
-                                globals_changed.update({'pinnedWorkspaceIds', 'pinnedItemIds'})
-                            self.service._publish_changes(sessions=touched, globals=globals_changed, detail_only=worker_detail_only)
+                        if delta_mode and not full_merge and not workspace_remapped:
+                            # Native directory changes still need a committed
+                            # publication, but unchanged registries are not its
+                            # write scope. The service retains its independent
+                            # detail-facts and pending-progress broadening guards.
+                            self.service._publish_changes(sessions=touched, globals=globals_changed,
+                                                          detail_only=worker_detail_only and not globals_changed)
                         else:
                             self.service._publish_full(reason='Native catalog membership and ownership reconciliation')
                     if delta_mode:

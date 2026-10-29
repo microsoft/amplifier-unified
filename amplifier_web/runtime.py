@@ -692,7 +692,7 @@ class RuntimeManager:
             await self.app_bridge('capacity.abandoned', bridge['args'], sid)
 
     async def _read(self, sid, row):
-        from .runtime_event_batches import BufferedLines, EventSink, MAX_BYTES, finish_owned, terminal
+        from .runtime_event_batches import BufferedLines, EventSink, MAX_BYTES, finish_owned, observation, terminal
         from . import performance_diagnostics
         lines = BufferedLines(row['process'].stdout)
 
@@ -711,6 +711,31 @@ class RuntimeManager:
                     payload[key] = sid
             return normalize_event({**data, 'event': payload}, sid, row['inputId'])
 
+        def receipt_event(data):
+            event = terminal_event(data)
+            if event is not None:
+                return event
+            if not isinstance(data, dict) or data.get('op'):
+                return None
+            # These exact worker frames contain observations only. Unknown
+            # fields, child roots, authority and lifecycle remain flush barriers.
+            identity_fields = {'sessionId', 'session_id', 'rootSessionId', 'root_session_id'}
+            if any(data.get(key) not in (None, sid, row.get('runtime_id')) for key in identity_fields):
+                return None
+            kind = data.get('type')
+            allowed = {
+                'runtime.activity': {'type', 'phase', 'detail', 'activeWorkers', 'retryAttempt', 'retryMax'},
+                'runtime.bridge': {'type', 'bridgeId', 'operation', 'generation_id', 'timeoutSeconds',
+                                   'runtimeSessionId', 'action', 'phase', 'elapsedSeconds', 'errorType'},
+                'runtime.timing': {'type', 'timing'},
+            }.get(kind)
+            if allowed is None or set(data) - allowed - identity_fields:
+                return None
+            if kind == 'runtime.bridge' and data.get('runtimeSessionId') not in (None, sid, row.get('runtime_id')):
+                return None
+            event = normalize_event(data, sid, row['inputId'])
+            return event if event is not None and observation(*event) else None
+
         decoded = None
 
         async def deliver_batch(line, event, sink):
@@ -722,7 +747,7 @@ class RuntimeManager:
                     data = json.loads(candidate)
                 except (ValueError, UnicodeDecodeError):
                     return None
-                result = terminal_event(data)
+                result = receipt_event(data)
                 if result is None:
                     decoded = (candidate, data)
                 return result
