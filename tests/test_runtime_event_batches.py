@@ -386,3 +386,147 @@ async def test_batch_commits_cross_session_observer_effects(app_factory,monkeypa
     saved=saved_state(app)
     assert next(s for s in saved['sessions'] if s['id']==peer)['description']=='observed terminal receipt'
     assert len(next(s for s in saved['sessions'] if s['id']==sid)['execution']['retiredUsageNodes'])==2
+
+
+def observation_wire(kind, **fields):
+    return json.dumps({'type': kind, **fields}).encode() + b'\n'
+
+
+async def test_terminal_batch_keeps_observations_ordered_before_command_barrier():
+    frames = (observation_wire('runtime.activity', phase='tools', detail='Reading')
+        + observation_wire('runtime.bridge', bridgeId='bridge', operation='work.effect.check',
+                           runtimeSessionId='root', phase='completed', elapsedSeconds=0.1)
+        + observation_wire('runtime.timing', timing={})
+        + wire(event('second'))
+        + b'{"op":"bridge","id":"next","operation":"work.effect.check","args":{}}\n')
+    order = []
+    async def batch(rows):
+        order.append(('commit', [kind for kind, _ in rows]))
+    manager, row, task, observed = await reader([event('first')], batch=batch, extra=frames)
+    async def bridge(*args, **kwargs):
+        order.append(('command',))
+    manager._bridge = bridge
+    await task
+    await asyncio.gather(*row['bridge_tasks'])
+    assert order == [('commit', ['execution.event', 'runtime.status', 'runtime.bridge',
+                                 'runtime.timing', 'execution.event']), ('command',)]
+    assert all(payload.get('rootSessionId', payload.get('sessionId')) == 'root'
+               for kind, payload in observed if kind != 'runtime.ended')
+
+
+@pytest.mark.parametrize('barrier', [
+    {'type': 'runtime.activity', 'phase': 'tools', 'detail': 'Reading', 'report': {}},
+    {'type': 'runtime.activity', 'phase': 'tools', 'detail': 'Reading', 'inputId': 'input'},
+    {'type': 'runtime.activity', 'phase': 'tools', 'detail': 'Reading', 'status': 'ready'},
+    {'type': 'runtime.activity', 'phase': 'tools', 'detail': 'Reading', 'rootSessionId': 'other'},
+    {'type': 'runtime.activity', 'phase': 'tools', 'detail': 'Reading', 'runtimeSessionId': 'other'},
+    {'type': 'runtime.activity', 'phase': 'tools', 'detail': 'Reading', 'session_id': 'other'},
+    {'type': 'runtime.activity', 'phase': 'tools', 'detail': 'Reading', 'root_session_id': 'other'},
+    {'type': 'runtime.bridge', 'bridgeId': 'bridge', 'runtimeSessionId': 'child'},
+    {'type': 'runtime.bridge', 'bridgeId': 'bridge', 'args': {'action': 'anything'}},
+    {'type': 'runtime.timing', 'timing': {}, 'unknown': True},
+    {'type': 'runtime.timing', 'timing': {}, 'sessionId': 'child'},
+    {'type': 'unrecognized.observation', 'detail': 'Do not guess'},
+])
+async def test_unknown_fields_and_nonroot_observations_remain_barriers(barrier):
+    batches = []
+    async def batch(rows): batches.append([p['id'] for _, p in rows])
+    _, _, task, _ = await reader([event('before')], batch=batch,
+        extra=json.dumps(barrier).encode() + b'\n' + wire(event('after')))
+    await task
+    assert batches == [['before'], ['after']]
+
+
+def mixed_receipts(sid):
+    return [event('first', root=sid),
+        ('runtime.status', {'sessionId': sid, 'status': 'working', 'activityOnly': True,
+                            'phase': 'tools', 'detail': '', 'activeWorkers': 0}),
+        ('runtime.bridge', {'sessionId': sid, 'type': 'runtime.bridge', 'bridgeId': 'bridge',
+                            'operation': 'work.effect.check', 'phase': 'completed'}),
+        ('runtime.timing', {'sessionId': sid, 'timing': {}}),
+        event('second', root=sid)]
+
+
+@pytest.mark.parametrize('status', ['working', 'starting', 'idle', 'error'])
+async def test_mixed_batch_uses_same_reducer_and_order_as_single_delivery(app_factory, monkeypatch, status):
+    from amplifier_web import conversation_steering
+    app = app_factory(); await app.history.close(); await app.diagnostics.close()
+    await app.dispatch('session.create', {})
+    sid = app.state['selectedSessionId']; session = app._session(sid)
+    session['status'] = status
+    app._activity(session, 'tools', 'Running tools')['activeTools'] = [{'tool': 'read_file'}]
+    monkeypatch.setattr('amplifier_web.service.time.time', lambda: 1234.0)
+    initial = copy.deepcopy(session); order = []
+    for owner, name in ((app.diagnostics, 'runtime_event'), (app.collaboration, 'observe'),
+                        (conversation_steering, 'observe')):
+        original = getattr(owner, name)
+        def observe(*args, _original=original, _name=name, _owner=owner):
+            if _owner is app.diagnostics: kind, payload = args[:2]
+            elif _owner is conversation_steering: kind, payload = args[2:]
+            else: kind, payload = args[1:]
+            order.append((_name, kind, payload.get('id', payload.get('bridgeId'))))
+            return _original(*args)
+        monkeypatch.setattr(owner, name, observe)
+    values = mixed_receipts(sid)
+    for item in values: await app.on_runtime_event(*item)
+    await app._flush_pending_progress()
+    expected = copy.deepcopy(session); expected_order = list(order)
+    session.clear(); session.update(initial); app._publish_changes(sessions={sid}); order.clear()
+    revision = app.state['revision']; queue = app.subscribe()
+    await app.on_runtime_event.batch(values)
+    assert session == expected
+    assert order == expected_order
+    assert app.state['revision'] == revision + 1 and queue.qsize() == 1
+    saved = saved_state(app)
+    assert next(s for s in saved['sessions'] if s['id'] == sid)['execution'] == stored_execution(expected['execution'])
+    assert session['status'] == ('working' if status == 'starting' else status)
+    app.unsubscribe(queue)
+
+
+async def test_observation_failure_commits_terminal_prefix_without_replay(app_factory, monkeypatch):
+    app = app_factory(); await app.history.close(); await app.diagnostics.close()
+    await app.dispatch('session.create', {}); sid = app.state['selectedSessionId']
+    app._session(sid)['status'] = 'working'
+    original = app.diagnostics.runtime_event; seen = []
+    def fail(kind, payload, session):
+        seen.append(kind)
+        if kind == 'runtime.bridge': raise ValueError('observation failed')
+        return original(kind, payload, session)
+    monkeypatch.setattr(app.diagnostics, 'runtime_event', fail)
+    with pytest.raises(ValueError, match='observation failed'):
+        await app.on_runtime_event.batch(mixed_receipts(sid))
+    saved = saved_state(app)
+    nodes = next(s for s in saved['sessions'] if s['id'] == sid)['execution']['retiredUsageNodes']
+    assert {n['id'] for n in nodes} == {'first'}
+    assert seen == ['execution.event', 'runtime.status', 'runtime.bridge']
+
+
+async def test_cancellation_and_callback_takeover_keep_mixed_consumed_prefix():
+    entered, release = asyncio.Event(), asyncio.Event()
+    old, new = [], []
+    async def batch(rows):
+        entered.set(); await release.wait(); old.extend(kind for kind, _ in rows)
+    manager, row, task, _ = await reader([event('first')], batch=batch,
+        extra=observation_wire('runtime.activity', phase='tools', detail='Reading') + wire(event('second'))
+        + b'{"op":"bridge","id":"next","operation":"work.effect.check","args":{}}\n')
+    commands = []
+    async def bridge(*args, **kwargs): commands.append(args)
+    manager._bridge = bridge
+    await entered.wait(); task.cancel(); await asyncio.sleep(0); task.cancel(); await asyncio.sleep(0)
+    assert not task.done() and not commands
+    release.set()
+    with pytest.raises(asyncio.CancelledError): await task
+    assert old == ['execution.event', 'runtime.status', 'execution.event'] and not commands
+
+    async def current(kind, payload): new.append(kind)
+    _, row, task, _ = await reader([event('first')],
+        extra=observation_wire('runtime.activity', phase='tools', detail='Reading') + wire(event('second')))
+    original = row['process'].stdout.readline; reads = 0
+    async def replacement():
+        nonlocal reads
+        result = await original(); reads += 1
+        if reads == 3: row['emit'] = current
+        return result
+    row['process'].stdout.readline = replacement
+    await task
+    assert new[:3] == ['execution.event', 'runtime.status', 'execution.event']

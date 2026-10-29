@@ -4407,10 +4407,40 @@ class AppService:
             session['failure'] = {**payload['failure'], 'inputId': payload.get('turnId'), 'recordedAt': payload.get('endedAt')}
             session.pop('health', None)
 
+    def _apply_runtime_receipt(self, session, kind, payload):
+        """Shared synchronous reducer for eligible single and batched receipts."""
+        if kind == 'runtime.timing':
+            self.performance_diagnostics.record_runtime_timing(payload.get('sessionId'), payload.get('timing'))
+            return set()
+        self.event_log_view.invalidate({session['id']}, notify=False)
+        self.diagnostics.runtime_event(kind, payload, session)
+        from .chat_navigation import runtime_activity
+        runtime_activity(session, kind, payload)
+        if kind == 'execution.event':
+            self._ingest_runtime_execution(session, payload)
+        elif kind == 'runtime.status':
+            # Eligibility requires the exact normalized runtime.activity shape:
+            # no report, delivery, lifecycle, runtime identity or settings data.
+            if session.get('status') not in {'working', 'starting'}:
+                return None
+            session['status'] = 'working'
+            activity = self._activity(session, payload['phase'], payload.get('detail') or 'Waiting for the model response…')
+            if activity['activeTools'] and not payload.get('detail'):
+                activity.update({'phase': 'tools', 'label': 'Running tools'})
+            session['progress'] = {key: payload[key] for key in ('phase', 'detail', 'elapsedSeconds') if key in payload}
+        else:  # normalized runtime.bridge diagnostic; never execute its operation
+            session.setdefault('runtimeEvents', []).append({'type': kind, **payload, 'at': time.time()})
+            session['runtimeEvents'] = session['runtimeEvents'][-100:]
+        changed = self.collaboration.observe(session, kind, payload)
+        from .conversation_steering import observe as observe_steering
+        observe_steering(self, session, kind, payload)
+        return {session['id']} | changed
+
     async def on_runtime_events(self, events):
-        """Apply ordered terminal receipts, then durably publish their union once."""
-        from .runtime_event_batches import MAX_EVENTS, terminal
-        if not events or len(events) > MAX_EVENTS or not all(terminal(*event) for event in events):
+        """Apply ordered receipts/observations, then durably publish their union."""
+        from .runtime_event_batches import MAX_EVENTS, receipt, terminal
+        if (not events or len(events) > MAX_EVENTS or not terminal(*events[0])
+                or not all(receipt(*event) for event in events)):
             raise ValueError('Invalid terminal event batch')
         roots = {payload.get('rootSessionId') or payload.get('sessionId') for _, payload in events}
         if len(roots) != 1 or not next(iter(roots)):
@@ -4421,25 +4451,19 @@ class AppService:
             except AppError:
                 return
             changed = {session['id']}
-            from .chat_navigation import runtime_activity
-            from .conversation_steering import observe as observe_steering
+            detail_only = True
             try:
                 for kind, payload in events:
-                    self.event_log_view.invalidate({session['id']}, notify=False)
-                    self.diagnostics.runtime_event(kind, payload, session)
-                    runtime_activity(session, kind, payload)
-                    self._ingest_runtime_execution(session, payload)
-                    changed.update(self.collaboration.observe(session, kind, payload))
-                    observe_steering(self, session, kind, payload)
+                    observed = self._apply_runtime_receipt(session, kind, payload)
+                    if observed is not None:
+                        changed.update(observed)
+                        detail_only &= kind in {'execution.event', 'runtime.timing'}
             except Exception:
-                # Like a single-event reader fault, stop before later commands.
-                # Preserve the applied prefix, including unknown partial observer
-                # side effects. Neither this prefix nor the failed tail is replayed.
+                # Preserve the applied prefix and unknown partial observer
+                # effects before stopping. Neither prefix nor tail is replayed.
                 self._publish_full(reason='Terminal receipt observer failed; preserve unknown partial effects')
                 raise
-            # _publish includes all prior progress writers and retains their
-            # dirty scope on failure. No reducer/observer is replayed on retry.
-            self._publish(session_ids=changed, record_only=True, detail_only=True)
+            self._publish(session_ids=changed, record_only=True, detail_only=detail_only)
 
     async def on_runtime_event(self, kind, payload):
         if kind == 'runtime.timing':
@@ -4455,6 +4479,15 @@ class AppService:
             try:
                 session = self._session(payload.get("rootSessionId") or payload.get("sessionId"))
             except AppError:
+                return
+            from .runtime_event_batches import receipt, terminal
+            if receipt(kind, payload):
+                changed = self._apply_runtime_receipt(session, kind, payload)
+                if changed is not None:
+                    if terminal(kind, payload):
+                        self._publish(session_ids=changed, record_only=True, detail_only=True)
+                    else:
+                        self._publish_progress(session_ids=changed, record_only=True)
                 return
             if kind == 'worker.updated' and payload.get('activityOnly'):
                 worker = next((w for w in session.get('workers', []) if w['id'] == payload.get('id')), None)
