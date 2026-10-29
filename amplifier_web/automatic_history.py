@@ -27,6 +27,21 @@ INDEX_FIELDS = ('location', 'draft', 'id', 'title', 'titleSource', 'nativeNameSo
                 'historyManaged', 'historyReadOnlyReason', 'draftAttachments', 'sessionKind', 'sessionPurpose',
                 'messageAnnotations', 'messageAnnotationRevision', 'messageReactionOrder', 'messageQuotes', 'nativeAvailable', 'collaboration', 'coordinationReference')
 
+
+def resident_catalog_facts(row):
+    # Only this merge's mutable metadata, including presence, parent aliases and
+    # private native-reference inputs. Never traverse messages or execution just
+    # to decide whether a metadata journal changed an app-owned resident.
+    return copy.deepcopy({key: row[key] for key in (
+        'title', 'titleSource', 'nativeNameSource', 'nativeNameRevision',
+        'nativeNamePolicyRevision', 'autoName', 'description', 'bundle',
+        'workspace', 'workspaceId', 'workspaceAvailable', 'createdAt', 'updatedAt',
+        'recentActivityAt', 'navigationActivityAt', 'nativeProject', 'nativeIdentity',
+        'nativeRevision', 'parentId', 'nativeParentId', 'turnCount', 'sessionKind',
+        'sessionPurpose', 'historyReadOnlyReason', 'location', 'nativeAvailable',
+        '_catalogRecentAt', '_catalogId') if key in row})
+
+
 def workspace_inputs(state):
     # Discovery needs identity/availability, not arbitrary presentation bodies.
     return [{key: row.get(key) for key in ('id', 'path', 'nativeProject', 'available')}
@@ -592,6 +607,7 @@ class AutomaticHistory:
                 async with self.service.lock:
                     state = self.service.state
                     touched = set()
+                    resident_before = {}
                     locations_changed = False
                     if directory_mode:
                         locations_changed = self.service.directory.sync_locations(managed_paths,
@@ -761,6 +777,8 @@ class AutomaticHistory:
                         previous = existing.get(key)
                         if previous is None and directory_mode:
                             continue  # selection/action admission owns the working set
+                        if previous is not None:
+                            resident_before[previous['id']] = resident_catalog_facts(previous)
                         if previous is None:
                             public_id = row['nativeIdentity']
                             if native_counts[public_id] > 1 or public_id in catalog_ids:
@@ -782,6 +800,7 @@ class AutomaticHistory:
                             if hasattr(self.service, 'cold_display'):
                                 previous = self.service.cold_display.record(previous)
                             state['sessions'].append(previous); existing[key] = previous; catalog_ids.add(public_id); changed = True
+                            touched.add(public_id)
                         else:
                             from .chat_navigation import recent_activity, navigation_activity
                             previous.setdefault('navigationActivityAt', navigation_activity(previous))
@@ -842,7 +861,6 @@ class AutomaticHistory:
                             previous['nativeAvailable'] = True
                             changed = True
                         previous['_catalogId'] = row['nativeIdentity'] if native_counts[row['nativeIdentity']] == 1 else row['id']
-                        touched.add(previous['id'])
                     # Parent identities belong to their native project. UI IDs
                     # are aliases and can differ even when a web root predated
                     # automatic discovery or another project reused the ID.
@@ -850,6 +868,8 @@ class AutomaticHistory:
                         session = existing.get((row['nativeProject'], row['nativeIdentity']))
                         if session is None or not row.get('parentId'):
                             continue
+                        if session['id'] not in resident_before:
+                            resident_before[session['id']] = resident_catalog_facts(session)
                         parent = existing.get((row['nativeProject'], row['parentId']))
                         if parent is None and directory_mode:
                             parent = self.service.directory.resolve(row['parentId'], row['nativeProject'])
@@ -857,6 +877,9 @@ class AutomaticHistory:
                         for key_name, value in {'parentId': parent_id, 'nativeParentId': row['parentId']}.items():
                             if session.get(key_name) != value:
                                 session[key_name] = value; changed = True
+                    touched.update(session['id'] for session in existing.values()
+                                   if session['id'] in resident_before and
+                                   resident_catalog_facts(session) != resident_before[session['id']])
                     issues = snapshot.get('issues', [])
                     if (state['sharedHistory'].get('issues', []) != issues[:100]
                             or state['sharedHistory'].get('issueCount', 0) != len(issues)):
