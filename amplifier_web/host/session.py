@@ -547,7 +547,7 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
     components = required_components()
     if not snapshot:
         from ..builtin_behaviors import (
-            IMAGEGEN_BEHAVIOR_URI, COMPUTER_USE_BEHAVIOR_URI,
+            SHELL_BEHAVIOR_URI, IMAGEGEN_BEHAVIOR_URI, COMPUTER_USE_BEHAVIOR_URI,
             CONTEXT_INTELLIGENCE_BEHAVIOR_URI, ROUTING_BEHAVIOR_URI,
             default_behavior_uri, resolve_builtin_behavior,
         )
@@ -579,6 +579,10 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
                     automatic_routing = False
             if canonical == IMAGEGEN_BEHAVIOR_URI:
                 loaded, selected = imagegen_defaults(loaded, selected)
+            elif canonical == SHELL_BEHAVIOR_URI:
+                # Shipped skills are additive discovery, not permission to
+                # replace the selected loader, visibility or context budget.
+                loaded, selected = capability_defaults(loaded, selected, {})
             elif canonical in {COMPUTER_USE_BEHAVIOR_URI, CONTEXT_INTELLIGENCE_BEHAVIOR_URI, ROUTING_BEHAVIOR_URI}:
                 if not any(row.get("module") == "hook-context-intelligence" for row in loaded.hooks):
                     context_defaults.update(row.get("id") or row.get("instance_id") or row["module"]
@@ -596,7 +600,7 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
                         'project_slug': project_slug(config.workspace),
                     },
                 })
-            if canonical in {COMPUTER_USE_BEHAVIOR_URI, CONTEXT_INTELLIGENCE_BEHAVIOR_URI, ROUTING_BEHAVIOR_URI}:
+            if canonical in {SHELL_BEHAVIOR_URI, COMPUTER_USE_BEHAVIOR_URI, CONTEXT_INTELLIGENCE_BEHAVIOR_URI, ROUTING_BEHAVIOR_URI}:
                 components.select_defaults(selected, loaded, config.module_sources)
             else:
                 components.select_bundle(selected, config.module_sources)
@@ -1086,7 +1090,27 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         continuity = install_continuity(coordinator, runtime.session_id, edited_path.parent, checkpoint)
         async def checkpoint_hook(event, data):
             if data.get("session_id", runtime.session_id) == runtime.session_id:
-                await checkpoint()
+                from ..performance_diagnostics import PhaseTiming, TIMING_ENABLED
+                emit = coordinator.get_capability('web.performance.emit')
+                timing = (PhaseTiming(kind='checkpoint', toolCallId=data.get('tool_call_id'),
+                    runtimeSessionId=runtime.session_id,
+                    generationId=(runtime.generation or {}).get('id'))
+                    if TIMING_ENABLED and callable(emit) else None)
+                outcome = 'completed'
+                if timing:
+                    timing.mark('checkpoint.start')
+                try:
+                    await checkpoint()
+                except BaseException as exc:
+                    outcome = 'cancelled' if isinstance(exc, asyncio.CancelledError) else 'failed'
+                    raise
+                finally:
+                    if timing:
+                        timing.mark('checkpoint.end')
+                        try:
+                            emit(timing.snapshot(outcome))
+                        except Exception:
+                            pass
             return HookResult()
         for event in ("tool:post", "tool:error", "orchestrator:complete", "context:compaction_finished"):
             coordinator.hooks.register(event, checkpoint_hook, name="unified-checkpoint-" + event)

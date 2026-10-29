@@ -203,3 +203,76 @@ async def test_bridge_diagnostics_coalesce_without_repeated_durable_writes(app_f
     await app._flush_pending_progress()
     assert saves == [True]
     assert len([row for row in app._session(sid)['runtimeEvents'] if row['type'] == 'runtime.bridge']) == 12
+
+
+async def test_phase_timings_never_hydrate_dirty_or_persist_state(app_factory, monkeypatch):
+    from amplifier_web.performance_diagnostics import PhaseTiming
+    app = app_factory()
+    revision = app.state['revision']
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Timing observation must not read or write conversation state')
+    with monkeypatch.context() as patch:
+        patch.setattr(app, '_session', forbidden)
+        patch.setattr(app, '_save', forbidden)
+        for i in range(140):
+            timing = PhaseTiming(kind='host.bridge', bridgeId=str(i))
+            timing.mark('start'); timing.mark('end')
+            await app.on_runtime_event('runtime.timing', {'sessionId': 'unadmitted', 'timing': {
+                **timing.snapshot(), 'secret': 'private',
+                'marks': {**timing.marks, 'secret': 1, 'body.start': float('inf'), 'body.end': True}}})
+    rows = app.performance_diagnostics.snapshot()['runtimeTimings']
+    assert len(rows) == 120 and rows[0]['bridgeId'] == '20'
+    assert all(set(row['marks']) == {'start', 'end'} for row in rows)
+    assert 'private' not in str(rows)
+    rows[-1]['marks']['start'] = 0
+    assert app.performance_diagnostics.snapshot()['runtimeTimings'][-1]['marks']['start'] > 0
+    assert app.state['revision'] == revision and not getattr(app, '_progress_dirty', False)
+
+
+@pytest.mark.parametrize('fault', ['none', 'malformed', 'serialize', 'cancel'])
+async def test_host_bridge_timing_never_awaits_sink_or_inherits_task(fault, monkeypatch):
+    monkeypatch.setattr('amplifier_web.performance_diagnostics.TIMING_ENABLED', True)
+    from amplifier_web.performance_diagnostics import PerformanceDiagnostics, active_bridge
+    from amplifier_web.runtime import normalize_event
+    diagnostics = PerformanceDiagnostics()
+    replies = []
+    escaped = []
+    async def forbidden_sink(*args):
+        raise AssertionError('Private host timing must not call the event sink')
+    async def bridge(operation, args, sid):
+        timing = active_bridge()
+        assert bool(timing) == (fault != 'malformed')
+        async def child():
+            assert active_bridge() is None
+            escaped.append(timing)
+        await asyncio.create_task(child())
+        if fault == 'cancel':
+            raise asyncio.CancelledError()
+        return {'exact': True}
+    manager = RuntimeManager(bridge, performance_diagnostics=diagnostics)
+    row = {'process': SimpleNamespace(returncode=None), 'emit': forbidden_sink}
+    manager.workers['s'] = row
+    async def write(row, value):
+        if fault == 'serialize' and 'result' in value:
+            raise ValueError('controlled serialization error')
+        replies.append(value)
+    manager._write = write
+    metadata = {'kind': 'bridge', 'bridgeId': 'b', 'marks': {'start': 1}}
+    if fault == 'malformed':
+        metadata.update(kind=[], outcome={})
+        assert normalize_event({'type': 'runtime.timing', 'timing': metadata}, 's')[1]['timing'] == {
+            'bridgeId': 'b', 'marks': {'start': 1}}
+    call = manager._bridge('s', row, {'id': 'b', 'operation': 'history', 'args': {}, '_timing': metadata})
+    if fault == 'cancel':
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(call, 1)
+    else:
+        await asyncio.wait_for(call, 1)
+        assert replies == [{'op': 'bridge.result', 'id': 'b', **(
+            {'error': 'controlled serialization error'} if fault == 'serialize' else {'result': {'exact': True}})}]
+    rows = diagnostics.snapshot()['runtimeTimings']
+    assert len(rows) == (0 if fault == 'malformed' else 1)
+    if rows:
+        assert rows[0]['outcome'] == {'none': 'completed', 'serialize': 'failed', 'cancel': 'cancelled'}[fault]
+        assert not escaped[0].active
+    assert active_bridge() is None

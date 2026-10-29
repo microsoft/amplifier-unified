@@ -4,7 +4,7 @@ import React,{act} from 'react';
 import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const vite=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {CoordinationPanel,RelatedWork,selectWorkspaceChat}=await vite.ssrLoadModule('/src/coordination.jsx');
+const {CoordinationPanel,RelatedWork,RequestReturnState,selectWorkspaceChat}=await vite.ssrLoadModule('/src/coordination.jsx');
 const {WorkspaceWork,WorkspaceWorkInspection}=await vite.ssrLoadModule('/src/workspace-work.jsx');
 const {ChatOverview}=await vite.ssrLoadModule('/src/work-overview.jsx');
 const {WorkHeader}=await vite.ssrLoadModule('/src/work-shell.jsx');
@@ -26,6 +26,39 @@ const context={workspace:'/workspace',requests:[{requestId:'question-identity',s
 const list={items:[{target:{sessionId:'own'},title:'Plan the app',kind:'conversation',status:'working'},{target:{sessionId:'helper'},title:'Library helper',kind:'conversation',status:'error',attention:true,collaboration:{creatorSessionId:'own'}}],nextOffset:20};
 const accepted=result=>({accepted:true,result});
 const candidate=(id='candidate-a',paths=['/copies/app','/copies/lib'])=>({id,sessionId:'own',kind:'capture',status:'matched',purpose:'Combined check',repositories:paths.map(repositoryPath=>({repositoryPath,sourceRevision:'version:'+repositoryPath}))});
+
+test('return summary separates a claimed wait from notification admission and acceptance',async()=>{
+ let root;const state={subscription:{registered:true,status:'claimed'},response:{status:'sealed',outcome:'success'},qualification:{status:'qualified'},notification:{status:'not_queued',consumption:'unknown'},acknowledgement:{status:'recorded'},artifacts:{status:'not_requested'}};
+ await act(async()=>{root=create(React.createElement(RequestReturnState,{state}))});
+ const text=content(root.toJSON());
+ for(const phrase of ['Automatic return: Registered','claimed','not queued','recorded','not requested','not independent artifact verification'])assert.ok(text.includes(phrase),phrase);
+ assert.doesNotMatch(text,/input admitted|review approved|result accepted/i);
+ assert.equal(root.root.findAllByType('button').length,0);
+ await act(async()=>root.update(React.createElement(RequestReturnState,{state:{...state,notification:{status:'accepted',consumption:'unknown'}}})));
+ assert.match(content(root.toJSON()),/accepted \(input admitted\)/);
+ assert.match(content(root.toJSON()),/does not prove the requester consumed or accepted/);
+ await act(async()=>root.unmount());
+});
+
+test('return summary preserves unknown and bounded evidence without inventing a registered return',async()=>{
+ let root;await act(async()=>{root=create(React.createElement(RequestReturnState,{state:{subscription:{registered:null,status:'unknown'},observation:{coverage:'bounded'}}}))});
+ assert.match(content(root.toJSON()),/Automatic return: Unknown/);
+ assert.match(content(root.toJSON()),/Some exact references were omitted/);
+ assert.equal(root.root.findAllByType('button').length,0);await act(async()=>root.unmount());
+});
+
+test('exact-result inspection renders host return facts without sending, acknowledging or navigating',async()=>{
+ const calls=[],request={requestId:'review-work',senderSessionId:'own',target:{sessionId:'helper'},delivery:'accepted'};
+ const dispatch=async(action,args)=>{calls.push([action,args]);if(action==='coordination.context')return accepted({...context,requests:[request]});if(action==='coordination.list')return accepted(list);if(action==='coordination.result')return accepted({receipt:request,returnState:{subscription:{registered:true,status:'waiting'},response:{status:'staged',outcome:'success'},qualification:{status:'unqualified'},notification:{status:'not_queued'},acknowledgement:{status:'not_recorded'},artifacts:{status:'retained'}}});throw Error(action)};let root;
+ await act(async()=>{root=create(React.createElement(RelatedWork,{sessionId:'own',dispatch}))});
+ assert.equal(root.root.findAllByProps({'aria-label':'Request return status'}).length,0);
+ await click(root,'Inspect exact result');
+ assert.equal(root.root.findAllByProps({'aria-label':'Request return status'}).length,1);
+ assert.match(content(root.toJSON()),/Automatic return: Registered/);
+ assert.match(content(root.toJSON()),/staged/);
+ assert.deepEqual(calls.map(([action])=>action),['coordination.context','coordination.list','coordination.result']);
+ await act(async()=>root.unmount());
+});
 
 test('conversation header leaves workspace work in the workspace and canvas surfaces',async()=>{
  const calls=[],opened=[],state={view:{},selectedWorkspaceId:'w',workspaces:[{id:'w',name:'Project',path:'/workspace'}],sessions:[session]};let root;

@@ -135,6 +135,9 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
     if kind == 'runtime.bridge':
         from .support_diagnostics import event_detail
         return kind, {**base, **event_detail(event)}
+    if kind == 'runtime.timing':
+        from .performance_diagnostics import timing_metadata
+        return kind, {**base, 'timing': timing_metadata(event.get('timing'))}
     if kind == 'image.generated':
         return kind, {**base, 'nodeId': event.get('nodeId'), 'receipt': event.get('receipt')}
     if kind == 'runtime.ownership':
@@ -231,8 +234,9 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
 
 class RuntimeManager:
     def __init__(self, app_bridge=None, *, command=None, startup_timeout=600,
-                 preparation_timeout=3600, progress_interval=5, retention=None):
+                 preparation_timeout=3600, progress_interval=5, retention=None, performance_diagnostics=None):
         self.app_bridge = app_bridge
+        self.performance_diagnostics = performance_diagnostics
         self.command = command
         self.startup_timeout = startup_timeout
         # Qualification has several independently bounded 900s install/probe
@@ -617,28 +621,66 @@ class RuntimeManager:
         row["process"].stdin.write(encode_message(data))
         await row["process"].stdin.drain()
 
-    async def _bridge(self, sid, row, data):
+    async def _bridge(self, sid, row, data, *, dequeued_ns=None):
+        from .performance_diagnostics import PhaseTiming, BRIDGE_TIMING, timing_metadata, TIMING_ENABLED
+        observed = timing_metadata(data.get('_timing'))
+        timing = None
+        if TIMING_ENABLED and observed.get('kind') == 'bridge' and observed.get('bridgeId') == data.get('id'):
+            timing = PhaseTiming(kind='host.bridge', bridgeId=data['id'], operation=data['operation'],
+                **{key: observed[key] for key in ('invocationId', 'toolCallId', 'runtimeSessionId', 'generationId')
+                   if key in observed})
+            if dequeued_ns is not None:
+                timing.marks['dequeued'] = dequeued_ns
+            timing.mark('start')
+        token = BRIDGE_TIMING.set(timing)
+        outcome = 'completed'
         try:
-            if self.workers.get(sid) is not row or row.get("closing") or row.get("yielded") or row.get("yielding") or row["process"].returncode is not None:
-                raise RuntimeError("The calling runtime no longer owns this bridge.")
-            if data['operation'] == 'configuration.nextMessage.admit':
-                guard = row.get('configuration_guard')
-                if guard is None:
-                    raise RuntimeError('No deferred bundle application owns this worker.')
-                guard()
-                result = {'allowed': True}
-            else:
-                if not self.app_bridge:
-                    raise RuntimeError("App controls are not connected")
-                result = await self.app_bridge(data["operation"], data.get("args", {}), sid)
-            reply = {"op": "bridge.result", "id": data["id"], "result": result}
-        except Exception as exc:
-            reply = {"op": "bridge.result", "id": data["id"], "error": str(exc)}
-        if row["process"].returncode is None:
             try:
-                await self._write(row, reply)
-            except ValueError as exc:
-                await self._write(row, {"op":"bridge.result","id":data["id"],"error":str(exc)})
+                if self.workers.get(sid) is not row or row.get("closing") or row.get("yielded") or row.get("yielding") or row["process"].returncode is not None:
+                    raise RuntimeError("The calling runtime no longer owns this bridge.")
+                if timing:
+                    timing.mark('handler.start')
+                try:
+                    if data['operation'] == 'configuration.nextMessage.admit':
+                        guard = row.get('configuration_guard')
+                        if guard is None:
+                            raise RuntimeError('No deferred bundle application owns this worker.')
+                        guard()
+                        result = {'allowed': True}
+                    else:
+                        if not self.app_bridge:
+                            raise RuntimeError("App controls are not connected")
+                        result = await self.app_bridge(data["operation"], data.get("args", {}), sid)
+                finally:
+                    if timing:
+                        timing.mark('handler.end')
+                reply = {"op": "bridge.result", "id": data["id"], "result": result}
+            except Exception as exc:
+                outcome = 'failed'
+                reply = {"op": "bridge.result", "id": data["id"], "error": str(exc)}
+            if row["process"].returncode is None:
+                if timing:
+                    timing.mark('reply.start')
+                try:
+                    await self._write(row, reply)
+                except ValueError as exc:
+                    outcome = 'failed'
+                    await self._write(row, {"op":"bridge.result","id":data["id"],"error":str(exc)})
+                if timing:
+                    timing.mark('reply.end')
+        except BaseException as exc:
+            outcome = 'cancelled' if isinstance(exc, asyncio.CancelledError) else 'failed'
+            raise
+        finally:
+            BRIDGE_TIMING.reset(token)
+            if timing:
+                timing.active = False
+                timing.mark('end')
+                try:
+                    if self.performance_diagnostics is not None:
+                        self.performance_diagnostics.record_runtime_timing(sid, timing.snapshot(outcome))
+                except Exception:
+                    pass
 
     async def _cancel_capacity_bridge(self, sid, row, bridge):
         bridge['task'].cancel()
@@ -651,6 +693,7 @@ class RuntimeManager:
 
     async def _read(self, sid, row):
         from .runtime_event_batches import BufferedLines, EventSink, MAX_BYTES, finish_owned, terminal
+        from . import performance_diagnostics
         lines = BufferedLines(row['process'].stdout)
 
         def terminal_event(data):
@@ -700,6 +743,7 @@ class RuntimeManager:
         reported_error = None
         try:
             while line := await lines.next():
+                dequeued_ns = time.monotonic_ns() if performance_diagnostics.TIMING_ENABLED else None
                 try:
                     data = decoded[1] if decoded is not None and line is decoded[0] else json.loads(line)
                 except (ValueError, UnicodeDecodeError):
@@ -722,7 +766,7 @@ class RuntimeManager:
                 # HTTP requests and stop commands run between ordered events.
                 await asyncio.sleep(0)
                 if data.get("op") == "bridge":
-                    task = asyncio.create_task(self._bridge(sid, row, data))
+                    task = asyncio.create_task(self._bridge(sid, row, data, dequeued_ns=dequeued_ns))
                     row["bridge_tasks"].add(task)
                     task.add_done_callback(row["bridge_tasks"].discard)
                     if data.get('operation') == 'capacity.admit' and data.get('args', {}).get('waitForCapacity'):

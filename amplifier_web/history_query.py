@@ -77,7 +77,31 @@ def _identity(session):
             'id': native_id(session), 'sessionRef': reference(session), 'legacyId': session['id']}
 
 
+def _read_snapshot(session):
+    """Detach retrieval inputs while the caller holds the service lock.
+
+    Keep ALL retained message fields and occurrences: native/voice alignment
+    and receipt-bound attribution need originals outside the returned page.
+    Execution, workers and other presentation state are not reader inputs.
+    Named access also avoids materializing unrelated ColdRecord payloads.
+    """
+    from .cold_display import ColdRecord, detached
+    if isinstance(session, ColdRecord):
+        # Loading required fields must not retire the original cold references,
+        # cached summaries or touch callback as a side effect of a passive read.
+        session = detached(session)
+    missing = object()
+    fields = ('id', 'nativeIdentity', 'runtimeSessionId', 'nativeProject',
+              'workspace', 'title', 'description', 'status', 'parentId',
+              'nativeParentId', 'sessionKind', 'sessionPurpose', 'messages',
+              'historyManaged', 'createdAt', 'updatedAt', 'recentActivityAt')
+    return copy.deepcopy({key: value for key in fields
+                          if (value := session.get(key, missing)) is not missing})
+
+
 async def query_history(service, args, caller_id):
+    from .performance_diagnostics import active_bridge, mark
+    timing = active_bridge()
     validate(args, SCHEMA)
     attribution = getattr(service, 'peer_attribution', None)
     resolver = attribution.resolve if attribution is not None else None
@@ -88,8 +112,14 @@ async def query_history(service, args, caller_id):
         raise ValueError("search requires a nonempty query")
     # Refresh the existing native index, never import or copy conversation
     # bodies. Presentation records and uncheckpointed voice stay intact.
-    await service.history.refresh(force=False)
+    mark(timing, 'history.refresh.start')
+    try:
+        await service.history.refresh(force=False)
+    finally:
+        mark(timing, 'history.refresh.end')
+    mark(timing, 'lock.start')
     async with service.lock:
+        mark(timing, 'lock.end')
         caller = metadata(service, caller_id)
         if args.get('workspace') and scope != 'all' and args['workspace'] != caller.get('workspace'):
             raise ValueError('Workspace is outside the requested history scope. Use explicit scope=all for registered own-history.')
@@ -125,10 +155,12 @@ async def query_history(service, args, caller_id):
                 sessions = directory.select(where, parameters, limit=limit, offset=offset, order='recent DESC,id')
             # A requested page/read may need retained uncheckpointed messages.
             # Resolve only those local owners, never the complete library.
-            sessions = [copy.deepcopy(service._session(row['id'])) if action != 'list' and row.get('historyManaged') is not True
+            mark(timing, 'history.copy.start')
+            sessions = [_read_snapshot(service._session(row['id'])) if action != 'list' and row.get('historyManaged') is not True
                         else row for row in sessions]
+            mark(timing, 'history.copy.end')
         else:
-            sessions = [copy.deepcopy(row) for row in service.state.get("sessions", [])
+            sessions = [_read_snapshot(row) for row in service.state.get("sessions", [])
                         if includes(caller, row, scope)
                         and (not args.get("workspace") or row.get("workspace") == args["workspace"])
                         and (not args.get("nativeProject") or native_project(row) == args["nativeProject"])
@@ -157,7 +189,11 @@ async def query_history(service, args, caller_id):
         session = resolve(sessions, args.get('session_id'), args.get('nativeProject'))
         if session is None:
             raise ValueError("Session is not in the requested history scope")
-        messages, revision = await asyncio.to_thread(_rows, session)
+        mark(timing, 'history.read.start')
+        try:
+            messages, revision = await asyncio.to_thread(_rows, session)
+        finally:
+            mark(timing, 'history.read.end')
         require(service, caller_id, session['id'], scope)
         start, size = args.get("text_offset", 0), args.get("text_limit", 2000)
         values = []

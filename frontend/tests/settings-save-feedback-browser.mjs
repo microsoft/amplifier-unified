@@ -55,7 +55,7 @@ try{
  await expect(key).toHaveValue('');
  // Shared file picker keeps an explicit working label for async import.
  await openSettingsPage(page,'custom-appearance');
- action='theme.save';held=null;count=0;
+ action='theme.import';held=null;count=0;
  const upload=page.getByRole('button',{name:'Upload appearance',exact:true});
  const uploadWidth=(await upload.boundingBox()).width;
  await page.locator('#theme-import').setInputFiles({name:'fixture.css',mimeType:'text/css',buffer:Buffer.from('/* synthetic appearance */\n#amp-one { --accent: #336699; }')});
@@ -68,6 +68,8 @@ try{
  await expect(uploading).toBeVisible();
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  release();release=null;await expect(upload).toBeEnabled();
+ await expect(page.getByText('fixture added to your library. Select it to preview.',{exact:true})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Preview fixture',exact:true})).toBeVisible();
  assert.equal(count,1);assert.deepEqual(errors,[]);
  assert.deepEqual((await(await page.request.get(url+'/fixture')).json()).sent,[]);
  console.log('Settings save feedback passed: scoped credential locking, duplicate suppression, failure/draft/retry, stable labels, shared file progress, motion/contrast and mobile.');

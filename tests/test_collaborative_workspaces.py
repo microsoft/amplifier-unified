@@ -1451,11 +1451,14 @@ async def test_live_web_terminal_reveal_requires_exact_generation_and_preserves_
 @pytest.mark.parametrize("case", ["web-alias", "retained", "native-only", "same-text-other-index",
                                 "wrong-id", "wrong-anchor-index", "conflicting-generation",
                                 "conflicting-text", "ambiguous-index"])
-async def test_exact_coordination_read_exposes_verified_native_linkage_without_rewriting(app, case):
+@pytest.mark.parametrize("catalogued", [True, False], ids=["catalogued", "before-catalog"])
+async def test_exact_coordination_read_exposes_verified_native_linkage_without_rewriting(app, case, catalogued):
     from amplifier_web.automatic_history import directory, display_identity
+    from amplifier_web.session_identity import project
     source, target = app.state["sessions"]
-    target.update(nativeProject="fixture", nativeIdentity=target["id"])
-    path = directory(target)
+    if catalogued:
+        target.update(nativeProject="fixture", nativeIdentity=target["id"])
+    path = directory({**target, "nativeProject": project(target)})
     path.mkdir(parents=True, exist_ok=True)
     text = "Same text is not identity"
     rows = [{"role": "user", "content": "Request"},
@@ -1512,6 +1515,35 @@ async def test_exact_coordination_read_exposes_verified_native_linkage_without_r
     assert (path / "transcript.jsonl").read_bytes() == transcript_before
     assert app.state["selectedSessionId"] == source["id"]
     assert app.state["view"]["draft"] == "Private unsent draft"
+    assert not app.runtime.inputs
+
+
+async def test_exact_coordination_read_before_catalog_with_unindexed_web_message(app):
+    from amplifier_web.automatic_history import directory, display_identity
+    from amplifier_web.session_identity import project
+    source, target = app.state["sessions"]
+    assert not any(target.get(key) for key in ("nativeProject", "nativeIdentity", "runtimeSessionId"))
+    path = directory({**target, "nativeProject": project(target)})
+    path.mkdir(parents=True, exist_ok=True)
+    text = "Exact checkpoint before catalog discovery"
+    rows = [{"role": "user", "content": "Original request"},
+            {"role": "assistant", "content": text}]
+    transcript = path / "transcript.jsonl"
+    transcript.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    exact = display_identity(target, 1, "assistant", text)
+    visible = app._message(target, "assistant", text, generationId="actual-generation")
+    assert visible["id"] != exact and "nativeIndex" not in visible
+    target["collaborationMessageAnchors"] = [
+        {"messageId": exact, "nativeIndex": 1, "generationId": "actual-generation"}]
+    before = copy.deepcopy(target)
+    original = transcript.read_bytes()
+    result = await agent_action(app, source, "coordination.read", {
+        "sessionId": target["id"], "messageId": exact}, "before-catalog-read")
+    assert result["result"]["message"] == {
+        "id": exact, "sessionId": target["id"], "role": "assistant",
+        "nativeIndex": 1, "generationId": "actual-generation", "text": text,
+        "truncated": False}
+    assert target == before and transcript.read_bytes() == original
     assert not app.runtime.inputs
 
 

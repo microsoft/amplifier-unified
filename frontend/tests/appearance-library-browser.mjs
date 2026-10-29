@@ -27,7 +27,7 @@ try{
  await page.screenshot({path:out+'/appearance-gallery.png'});
  // Everyday cards now save immediately. Verify every built-in and both color
  // modes through that public path; previews belong to saved custom themes.
- for(const name of ['Aurora','Atelier','Graphite']){
+ for(const name of ['Aurora','Atelier','Graphite','Digital Rain']){
   await page.getByRole('button',{name:'Use '+name,exact:true}).click();
   await expect.poll(async()=>(await state()).theme.name).toBe(name);
   await expect(page.getByRole('button',{name:'Cancel preview',exact:true})).toHaveCount(0);
@@ -64,7 +64,7 @@ try{
  await expect(page.getByRole('button',{name:'Use Ocean',exact:true})).toHaveCount(0);assert.equal((await state()).theme.css,before);
  await page.locator('#theme-import').setInputFiles({name:'Bad.css',mimeType:'text/css',buffer:Buffer.from('@import "https://example.com/style.css";')});
  await expect(page.getByRole('button',{name:'Preview Bad',exact:true})).toHaveCount(0);assert.equal((await state()).theme.name,'Aurora');
- await page.getByText('Advanced customization',{exact:true}).click();await expect(page.locator('#theme-css')).toBeVisible();await page.locator('#theme-name').fill('My Aurora');await page.getByRole('button',{name:'Save to library',exact:true}).click();await expect(page.getByRole('button',{name:'Preview My Aurora',exact:true})).toBeVisible();
+ await page.getByText('Advanced customization',{exact:true}).click();await expect(page.locator('#theme-css')).toBeVisible();await page.locator('#theme-name').fill('My Aurora');await page.getByRole('button',{name:'Save as copy',exact:true}).click();await expect(page.getByRole('button',{name:'Preview My Aurora',exact:true})).toBeVisible();
  await page.getByText('Advanced customization',{exact:true}).click();
  await page.getByRole('button',{name:'Preview Ocean',exact:true}).click();
  await page.getByRole('button',{name:'Use Ocean',exact:true}).click();
@@ -73,6 +73,6 @@ try{
  await page.getByRole('button',{name:/^Close (panel|settings)$/}).click();
  await expect.poll(async()=>(await state()).view.themePreview).toBe(false);assert.equal((await state()).theme.name,'Ocean');
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep my unfinished ideas.');assert.deepEqual(errors,[]);
- console.log('Appearance library passed: three autosaved dual-mode built-ins, saved-theme preview/apply/cancel, background toggle, persistent uploads, rejected remote CSS, named save, responsive gallery and preserved draft.');
+ console.log('Appearance library passed: four autosaved dual-mode built-ins, saved-theme preview/apply/cancel, background toggle, persistent uploads, rejected remote CSS, named save, responsive gallery and preserved draft.');
 }catch(error){failure=error;throw error}
 finally{await finishFixture({label:'Appearance library fixture',close:[['Appearance library browser',()=>browser?.close()]],stop,originalError:failure})}

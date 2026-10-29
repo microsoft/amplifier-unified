@@ -25,7 +25,7 @@ try{
   if(result==='error')return route.fulfill({status:409,json:{accepted:false,error:'Fixture save was rejected; your draft is kept.'}});
   return route.continue();
  });
- const save=page.getByRole('button',{name:'Save to library',exact:true});
+ const save=page.getByRole('button',{name:'Save as copy',exact:true});
  const beforeBox=await save.boundingBox();
  await save.focus();await page.keyboard.press('Enter');
  await expect.poll(()=>held?.action).toBe('theme.save');
@@ -49,7 +49,7 @@ try{
  await expect(page.locator('#theme-css')).toHaveValue(originalCss);
  release();release=null;
  await expect(page.locator('#theme-name')).toBeEnabled();
- await expect(page.getByText('Saved to your appearance library.',{exact:true})).toBeVisible();
+ await expect(page.getByText('Saved to your appearance library. Apply separately to use it.',{exact:true})).toBeVisible();
  // A failed write re-enables the same retained draft and offers another try.
  held=null;outcome='error';await save.click();await expect.poll(()=>held?.action).toBe('theme.save');release();release=null;
  await expect(page.getByRole('alert').filter({hasText:'Fixture save was rejected'})).toBeVisible();
@@ -71,9 +71,20 @@ try{
  await openSettingsPage(page,'custom-appearance');
  await expect(page.getByRole('alert').filter({hasText:'Fixture save was rejected'})).toBeVisible();
  await expect(page.locator('#theme-name')).toBeEnabled();
+ // Reverse the ordering: return before rejection without starting a successor.
+ // Releasing the abandoned local lock must not discard this request's error.
+ held=null;outcome='error';await save.click();await expect.poll(()=>held?.action).toBe('theme.save');
+ await openSettingsPage(page,'notifications');await openSettingsPage(page,'custom-appearance');
+ await expect(page.locator('#theme-name')).toBeEnabled();
+ const returnedRejection=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action==='theme.save');
+ release();release=null;await returnedRejection;
+ await expect(page.getByRole('alert').filter({hasText:'Fixture save was rejected'})).toBeVisible();
+ await expect(page.locator('#theme-name')).toHaveValue('Retained appearance draft');
+ await expect(page.locator('#theme-css')).toHaveValue(originalCss);
+ await expect(page.locator('#theme-name')).toBeEnabled();
  await page.setViewportSize({width:390,height:844});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  const inspection=await(await page.request.get(url+'/fixture')).json();assert.deepEqual(inspection.sent,[]);
  assert.deepEqual(errors,[]);
- console.log('Appearance save feedback passed: immediate keyboard activation guard, precise draft locking, working label/status, retained text, failure/retry, inactive completion, contrast/motion and mobile.');
+ console.log('Appearance save feedback passed: immediate keyboard activation guard, precise draft locking, working label/status, retained text, failure/retry, inactive completion and return-before-rejection, contrast/motion and mobile.');
 }finally{release?.();await browser?.close();fixture.kill('SIGTERM')}

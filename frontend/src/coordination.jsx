@@ -106,6 +106,27 @@ function ResultFileStatus({response}){
  return null;
 }
 
+export function RequestReturnState({state}){
+ if(!state)return null;
+ const subscription=state.subscription||{},notification=state.notification||{};
+ const registered=subscription.registered===true?'Registered':subscription.registered===false?'Not registered':'Unknown';
+ const text=value=>typeof value==='string'?value.replaceAll('_',' '):'unknown';
+ return <div data-part="request-return-state" aria-label="Request return status">
+  <p>Automatic return: {registered} · {text(subscription.status)}</p>
+  {subscription.reason&&<p className="a-caption">{subscription.reason}</p>}
+  <dl>
+   <dt>Report</dt><dd>{text(state.response?.status)}{state.response?.outcome?' · '+text(state.response.outcome):''}</dd>
+   <dt>Terminal qualification</dt><dd>{text(state.qualification?.status)}</dd>
+   <dt>Return notification</dt><dd>{text(notification.status)}{notification.status==='accepted'?' (input admitted)':''}</dd>
+   <dt>Exact-outcome acknowledgement</dt><dd>{text(state.acknowledgement?.status)}</dd>
+   <dt>Saved file evidence</dt><dd>{text(state.artifacts?.status)}</dd>
+  </dl>
+  {notification.reason&&<p className="a-caption">{notification.reason}</p>}
+  {state.observation?.coverage==='bounded'&&<p className="a-caption">Some exact references were omitted from this summary. Inspect the retained report below.</p>}
+  <p className="a-caption">Delivery does not prove the requester consumed or accepted the result. Terminal qualification and acknowledgement are not independent artifact verification.</p>
+ </div>;
+}
+
 function RequestCancellation({dispatch,sessionId,request,onChanged}){
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[note,setNote]=useState(''),[unknown,setUnknown]=useState(false);
  const operation=useRef(null),inflight=useRef(false);
@@ -224,6 +245,7 @@ export function RelatedWork({dispatch,sessionId,session,onOpenChat,expectedWorks
    <small>{row.senderSessionId===sessionId?'Sent to':'Received from'} {requestName(row)} · {row.delivery}</small><details><summary>Request identity</summary><code>{row.requestId}</code></details>
    <button className="a-link" onClick={()=>inspectResult(row.requestId)}>Inspect exact result</button>
    <button className="a-link" onClick={()=>reveal(row.target.sessionId,row.messageId)}>Open submitted message</button>
+   <RequestReturnState state={result?.returnState}/>
    <RequestCancellation dispatch={dispatch} sessionId={sessionId} request={receipt} onChanged={refresh}/>
    {response&&<div data-part="exact-result"><p>Result: {response.status} · {response.outcome} · {response.qualified?'Qualified terminal evidence':'Not qualified'}</p><p>{response.text}</p>{response.detail&&<p role="alert">{response.detail}</p>}
     {response.terminalMessageId&&response.status==='sealed'&&<button className="a-link" data-message-id={response.terminalMessageId} onClick={()=>reveal(row.target.sessionId,response.terminalMessageId)}>Open exact terminal message</button>}

@@ -42,6 +42,10 @@ on:
       - 'tests/test_coordination.py'
       - 'tests/test_coordination_generation.py'
       - 'tests/test_coordination_revisions.py'
+      - 'amplifier_web/coordination_return_state.py'
+      - 'tests/test_coordination_return_policy.py'
+      - 'tests/test_peer_return_workflow.py'
+      - 'tests/fixtures/peer_return_worker_probe.py'
       - 'tests/test_coordination_bridge_returns.py'
       - 'tests/test_collaborative_workspaces.py'
       - 'tests/test_collaboration_input.py'
@@ -160,6 +164,7 @@ jobs:
           tests/test_coordination.py tests/test_coordination_generation.py
           tests/test_cross_workspace_coordination.py tests/test_peer_scope.py
           tests/test_coordination_revisions.py tests/test_request_cancellation.py tests/test_outcome_acknowledgement.py
+          tests/test_coordination_return_policy.py
           tests/test_test_outcome_acknowledgement.py
           tests/test_coordination_bridge_returns.py
           tests/test_assignment_brief.py
@@ -189,6 +194,29 @@ jobs:
           assert len(rows) == 3
           assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
           PY
+      - name: Verify repeated peer returns through real Worker processes
+        run: |
+          uv run --no-sync pytest -q tests/test_peer_return_workflow.py \
+            --basetemp="${{ runner.temp }}/peer-return" --junitxml=output/peer-return-workers.xml
+          uv run --no-sync python - <<'PY'
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/peer-return-workers.xml').getroot().findall('.//testcase')
+          assert len(rows) == 1
+          assert rows[0].get('name') == 'test_existing_roots_correct_rereview_and_return_through_real_workers'
+          assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          PY
+      - name: Retain peer return evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: peer-return-worker-evidence
+          path: |
+            output/peer-return-workers.xml
+            ${{ runner.temp }}/peer-return/**/evidence.json
+            ${{ runner.temp }}/peer-return/**/observed-events.json
+            ${{ runner.temp }}/peer-return/**/author.jsonl
+            ${{ runner.temp }}/peer-return/**/reviewer.jsonl
+          if-no-files-found: warn
       - name: Verify mounted child identity and file boundaries
         run: >-
           uv run --locked

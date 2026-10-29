@@ -70,8 +70,8 @@ try{
  await openSettingsPage(page,'updates');await expect.poll(async()=>(await state()).view.themePreview).toBe(false);
  await openSettingsPage(page,'custom-appearance');
  // Saved-library previews use the same ownership rule as the CSS button.
- await page.getByRole('button',{name:'Save to library',exact:true}).click();
- await expect(page.getByText('Saved to your appearance library.',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Save as copy',exact:true}).click();
+ await expect(page.getByText('Saved to your appearance library. Apply separately to use it.',{exact:true})).toBeVisible();
  mode='before';const savedCount=held;
  await page.getByRole('button',{name:'Preview Successor preview',exact:true}).click();await expect.poll(()=>held).toBe(savedCount+1);
  await openSettingsPage(page,'updates');
