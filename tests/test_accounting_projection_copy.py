@@ -94,3 +94,25 @@ def test_fresh_projection_observes_mutated_receipts_without_borrowing_child_iden
     assert initial[0]['revision'] == 1 and initial[0]['usage'] == {'inputTokens': 2}
     assert latest[0]['revision'] == 2 and latest[0]['usage']['outputTokens'] == 4
     assert latest[1]['sessionId'] == 'child' and latest[1]['revision'] == 1
+
+
+def test_assignment_reservations_remain_detached_and_prior_receipt_wins():
+    prior = {'id': 'call', 'kind': 'llm', 'sessionId': 'root', 'revision': 1,
+             'assignmentId': 'original', 'assignmentReservation': {'tokens': 100, 'cost': .2}}
+    latest = {**prior, 'revision': 2, 'liveObservation': True,
+              'assignmentId': 'replacement', 'assignmentReservation': {'tokens': 999}}
+    projected = accounting_projection({'retiredUsageNodes': [prior], 'nodes': [latest]})[0]
+    assert projected['assignmentId'] == 'original'
+    assert projected['assignmentReservation'] == {'tokens': 100, 'cost': .2}
+    prior['assignmentReservation']['tokens'] = 200
+    assert projected['assignmentReservation']['tokens'] == 100
+    projected['assignmentReservation']['cost'] = .5
+    assert prior['assignmentReservation']['cost'] == .2
+    prior['assignmentReservation'] = {RenamedKey('other'): CopiedScalar('4')}
+    projected = accounting_projection({'retiredUsageNodes': [prior]})[0]
+    assert projected['assignmentReservation'] == {'inputTokens': '4'}
+    nested = {'tokens': [100]}
+    prior['assignmentReservation'] = nested
+    projected = accounting_projection({'retiredUsageNodes': [prior]})[0]
+    nested['tokens'].append(200)
+    assert projected['assignmentReservation'] == {'tokens': [100]}

@@ -74,13 +74,36 @@ ACCOUNTING_USAGE_FIELDS = {'inputTokens', 'outputTokens', 'totalTokens',
     'grossTotalTokens', 'costUsd', 'costType', 'costSource'}
 
 
-def accounting_projection(tree):
+def _accounting_copy(value):
+    """Detach simple receipts without invoking deepcopy for every scalar.
+
+    Exact builtins only: custom mappings, keys and values retain their existing
+    deepcopy hooks and nested containers retain deep isolation.
+    """
+    scalar_types = (str, int, float, bool, type(None))
+    if type(value) in scalar_types:
+        return value
+    if type(value) is dict and all(type(key) is str and type(item) in scalar_types
+                                  for key, item in value.items()):
+        return value.copy()
+    return copy.deepcopy(value)
+
+
+def accounting_projection(tree, *, _retired=None):
     scalar_types = (str, int, float, bool, type(None))
     rows = [(row, False) for row in tree.get('retiredUsageNodes', [])]
+    retired_count = len(rows)
     rows.extend((row, True) for row in tree.get('nodes', [])
                 if row.get('liveObservation') and row.get('kind') in {'llm', 'worker'}
                 and not row.get('nativeHistory'))
-    saved = {}
+    # Preserve the existing membership snapshot and live lookup order before
+    # witnessing retired values: custom live hooks can edit the older receipts.
+    prepared = (_retired([row for row, _ in rows[:retired_count]])
+                if _retired is not None and type(tree) is dict else None)
+    if prepared is not None:
+        rows = rows[retired_count:]
+    saved = ({(row.get('sessionId'), row['id']): row for row in prepared}
+             if prepared is not None else {})
     for row, display in rows:
         if row.get('kind') not in {'llm', 'worker'} or not row.get('id'):
             continue
@@ -104,21 +127,29 @@ def accounting_projection(tree):
             if field not in ACCOUNTING_FIELDS:
                 continue
             if field == 'usage':
-                detached = type(value) is not dict or any(
-                    type(name) is not str or type(amount) not in scalar_types
-                    for name, amount in value.items())
-                usage = copy.deepcopy(value) if detached else value
+                if type(value) is dict:
+                    usage = {}
+                    for name, amount in value.items():
+                        # One scan both checks the plain-value fast path and
+                        # filters it. A custom value still takes the original
+                        # deepcopy-before-filter path, including its hooks.
+                        if type(name) is not str or type(amount) not in scalar_types:
+                            break
+                        if name in ACCOUNTING_USAGE_FIELDS and type(amount) in (str, int, float):
+                            usage[name] = amount
+                    else:
+                        record[field] = usage
+                        continue
+                usage = copy.deepcopy(value)
                 if isinstance(usage, dict):
-                    # Plain usage is already scalar; custom keys/values retain
-                    # deepcopy behavior before the existing exact-type filter.
                     record[field] = {name: amount for name, amount in usage.items()
                                    if name in ACCOUNTING_USAGE_FIELDS and type(amount) in (str, int, float)}
             else:
-                record[field] = value if type(value) in scalar_types else copy.deepcopy(value)
+                record[field] = value if type(value) in scalar_types else _accounting_copy(value)
         if prior:
             for field in ('assignmentId', 'assignmentRevision', 'assignmentReservation'):
                 if field in prior:
-                    record[field] = copy.deepcopy(prior[field])
+                    record[field] = _accounting_copy(prior[field])
         saved[key] = record
     return list(saved.values())
 
@@ -166,9 +197,9 @@ def _observed_work(row, turns, accounting):
     return result
 
 
-def stored_execution(tree):
+def stored_execution(tree, *, _retired=None):
     """Keep owned placement/receipts and legacy history, not canonical bodies."""
-    accounting = accounting_projection(tree)
+    accounting = accounting_projection(tree, _retired=_retired)
     receipts = {(row.get('sessionId'), row['id']): row for row in accounting}
     turns = [row for row in tree.get('turns', []) if not any(
         row.get(key) for key in ('nativeHistory', 'canonicalHistory'))]
@@ -184,7 +215,8 @@ def stored_execution(tree):
 
 
 def persist(home, state, cache, *, session_ids=None, by_id=None, references=None, scoped_result=False,
-            undo=None, db=None, retain_native=None, message_preparation=None, pending_messages=None):
+            undo=None, db=None, retain_native=None, message_preparation=None, pending_messages=None,
+            execution_preparation=None):
     """SQLite keeps only the session list; presentation files change on demand."""
     from .automatic_history import INDEX_FIELDS
     result = dict(state)
@@ -241,12 +273,17 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
         value = {key: item for key, item in saved_cold(session).items()
                  if key not in {'historyActivity', 'questions', 'workProjection'}}
         if 'execution' in value:
-            value['execution'] = stored_execution(value['execution'])
+            raw_tree = value['execution']
+            value['execution'] = stored_execution(raw_tree, _retired=(
+                (lambda rows: execution_preparation.retired(session['id'], rows))
+                if execution_preparation is not None else None))
             tree = value['execution']
             if db is not None and len(tree.get('retiredUsageNodes', ())) >= 128:
                 from .cold_display import execution_reference
                 value[MARKER] = {**value.get(MARKER, {}),
-                                 'execution': execution_reference(db, tree)}
+                                 'execution': execution_reference(db, tree, prepared=(
+                                     execution_preparation.prepare(session['id'], tree)
+                                     if execution_preparation is not None else None))}
                 value.pop('execution')
         messages = value.get('messages')
         if (db is not None and isinstance(messages, list)
