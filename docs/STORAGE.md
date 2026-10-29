@@ -98,12 +98,20 @@ This does not change canonical event capture, transcripts, or model context.
 
 The save path uses existing `_coldFields` resources in the **stored
 projection only** for large messages and retained execution accounting. Live
-objects remain mutable. Every save re-encodes resident content, so nested,
-same-length edits cannot reuse a stale reference. Normalization and the existing
+objects remain mutable. Every eligible save freshly checks complete typed
+content, including nested, same-length edits. Normalization and the existing
 execution filtering still precede storage; receipts are not discarded.
 
+Unchanged execution may reuse its committed resource after every fragment passes
+its bounded content check and the exact resource index and validated backing-file
+evidence still match under the SQLite writer lock. Initial file evidence requires
+the complete content hash; changed evidence requires canonical preparation and
+validation. Compact reference metadata shares the existing encoding budget and
+is promoted only after commit. Failed saves, owner replacement, cold/native
+transitions and unsupported content cannot acknowledge a new cached reference.
+
 This reduces repeated large-file writes when only progress changes, not all
-serialization. Unchanged-save CPU can increase. Restart, private drafts, command
+serialization. Changed content still uses canonical encoding. Restart, private drafts, command
 replay, nested edits, accounting and missing/corrupt resources require checks.
 Derived message summaries must retire when their mutable body is handed out.
 

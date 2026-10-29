@@ -289,6 +289,69 @@ def project_detached(source, projector):
     return projection, signature
 
 
+@dataclass(frozen=True)
+class ValidatedReference:
+    source: Detached
+    signature: tuple
+    size: int
+
+
+def validate_reference(db, reference):
+    """Compact evidence for an adopted file; the caller still owns commit.
+
+    Existing-file adoption checks size, not content. Validate the COMPLETE hash
+    before retaining evidence, including when this save found a pre-existing
+    same-size file. Inline resources keep their original preparation path.
+    """
+    if not db.in_transaction:
+        raise ValueError('Resource validation requires writer exclusion.')
+    source = detach(db, reference['$resource'])
+    if not _blob_index(source):
+        return None
+    _, signature = project_detached(source, lambda stream: None)
+    if signature[2] != reference['bytes']:
+        raise ValueError('Artifact size conflicts with its reference.')
+    return ValidatedReference(source, signature, reference['bytes'])
+
+
+def reuse_reference(db, evidence):
+    """Recheck committed evidence under the ordinary resource writer boundary.
+
+    A missing index/file can be prepared and adopted again. Changed file
+    evidence requires full validation on that path; a conflicting index or
+    non-regular file must never become a successful cached save.
+    """
+    owns_transaction = not db.in_transaction
+    if owns_transaction:
+        db.execute('BEGIN IMMEDIATE')
+    try:
+        if not owns_transaction:
+            # A caller may have opened a deferred/read-only transaction. As
+            # ordinary adoption's INSERT does, acquire writer exclusion before
+            # trusting the index/file pair, without changing any resource row.
+            db.execute('UPDATE state_resources SET value=value WHERE 0')
+        indexed = db.execute('SELECT value FROM state_resources WHERE id=?',
+                             (evidence.source.identity,)).fetchone()
+        if indexed is None:
+            return None
+        source = Detached(root(db), evidence.source.identity, indexed[0])
+        if source != evidence.source:
+            raise ValueError('Saved artifact index changed; original file preserved.')
+        try:
+            signature = detached_signature(source)
+        except FileNotFoundError:
+            return None
+        if signature != evidence.signature:
+            return None
+        if signature[2] != evidence.size:
+            raise ValueError('Artifact size conflicts with its reference.')
+        return {'$resource': source.identity, 'bytes': evidence.size}
+    except BaseException:
+        if owns_transaction:
+            db.rollback()
+        raise
+
+
 def resolve(db, identity, value):
     if isinstance(value, dict) and set(value) == {'$blob'}:
         if value['$blob'] != identity:

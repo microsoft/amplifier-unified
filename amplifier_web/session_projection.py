@@ -216,7 +216,7 @@ def stored_execution(tree, *, _retired=None):
 
 def persist(home, state, cache, *, session_ids=None, by_id=None, references=None, scoped_result=False,
             undo=None, db=None, retain_native=None, message_preparation=None, pending_messages=None,
-            execution_preparation=None):
+            execution_preparation=None, pending_execution=None):
     """SQLite keeps only the session list; presentation files change on demand."""
     from .automatic_history import INDEX_FIELDS
     result = dict(state)
@@ -238,6 +238,8 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
                 (by_id[identity] for identity in session_ids if identity in by_id))
     for session in sessions:
         from .cold_display import MARKER
+        if pending_execution is not None:
+            pending_execution[session['id']] = None
         if pending_messages is not None:
             # Inline/native/cold-reference saves must retire older preparation
             # only when this save commits, including cold_display.retire's save
@@ -280,10 +282,13 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
             tree = value['execution']
             if db is not None and len(tree.get('retiredUsageNodes', ())) >= 128:
                 from .cold_display import execution_reference
+                resource = (execution_preparation.reference(db, session, tree, pending_execution)
+                            if execution_preparation is not None and pending_execution is not None else None)
                 value[MARKER] = {**value.get(MARKER, {}),
                                  'execution': execution_reference(db, tree, prepared=(
                                      execution_preparation.prepare(session['id'], tree)
-                                     if execution_preparation is not None else None))}
+                                     if execution_preparation is not None and resource is None else None),
+                                     resource=resource)}
                 value.pop('execution')
         messages = value.get('messages')
         if (db is not None and isinstance(messages, list)

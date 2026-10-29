@@ -1054,6 +1054,7 @@ class AppService:
         from .session_projection import persist
         pending_views = dict(self._view_cache)
         pending_messages = {}
+        pending_execution = {}
         pending_references = dict(self._session_projection_refs)
         normalization_undo, view_undo = [], []
         from .cold_display import saved as saved_cold, MARKER
@@ -1082,7 +1083,7 @@ class AppService:
                                 undo=view_undo, db=self.db,
                                 retain_native=lambda row: not self.directory.native_backing(row),
                                 message_preparation=self._message_preparation, pending_messages=pending_messages,
-                                execution_preparation=self._execution_preparation)
+                                execution_preparation=self._execution_preparation, pending_execution=pending_execution)
             pending_clients = self.clients.save(defer_ack=True)
             if record_only:
                 # Persist sanitized global presentation just as full checkpoints
@@ -1124,6 +1125,7 @@ class AppService:
             self._client_snapshot_preferences = {}
             raise
         self._message_preparation.committed(pending_messages, admitted_index, deleted_ids)
+        self._execution_preparation.committed(pending_execution, admitted_index, deleted_ids)
         self._execution_preparation.retain({sid for sid, row in admitted_index.items()
                                            if sid not in deleted_ids and dict.__contains__(row, 'execution')
                                            and 'execution' not in dict.get(row, MARKER, {})})
