@@ -19,6 +19,26 @@ def latest(row):
     return row.get('app', {}).get('revision', row.get('revision', 1))
 
 
+def ordinary_preview(row):
+    return row.get('kind') in {'html', 'babylon'} and not row.get('app')
+
+
+def view_definition(row, canvas, db=None):
+    """Resolve the saved running definition, independently of Latest intent."""
+    version = canvas.get('selectedVersion')
+    if ordinary_preview(canvas):
+        version = canvas.get('runningVersion', version or canvas.get('revision', 1))
+    selected = definition(row, version, db)
+    if ordinary_preview(selected):
+        selected = copy.deepcopy(selected)
+        selected['runningVersion'] = version or latest(row)
+        selected['selectedVersion'] = canvas.get('selectedVersion')
+        selected['readOnlyVersion'] = canvas.get('selectedVersion') is not None
+        selected['latestVersion'] = latest(row)
+        selected['previewRetained'] = selected['selectedVersion'] is None and selected['runningVersion'] < latest(row)
+    return selected
+
+
 def entries(row):
     return row.get('app', {}).get('versions', row.get('versions', []))
 
@@ -180,19 +200,29 @@ def command(service, action, args, origin):
     canvas.update(id=row['id'], sessionId=sid, workspaceId=row.get('workspaceId'), createdAt=row.get('createdAt'), _versionWrite=True, _forceVersion=True)
     scoped = {**state, 'canvas': canvas}
     remember(scoped, service.db)
-    if state.get('canvas', {}).get('id') == row['id'] and (state.get('canvas', {}).get('selectedVersion') is None or action == 'canvas.versions.restore'):
+    if (state.get('canvas', {}).get('id') == row['id']
+            and not ordinary_preview(state['canvas'])
+            and (state['canvas'].get('selectedVersion') is None or action == 'canvas.versions.restore')):
         load(state, service.db, row['id'], open_panel=state['canvas'].get('open', False))
     return {'id': row['id'], 'revision': row['revision'], 'version': row['revision'], 'reference': reference(row)}
 
 
 def sync(service):
-    """Latest followers receive a new definition; exact historical views stay put."""
+    """Passive Latest follows; executable previews discover without replacing."""
     from .canvas_library import load
     rows = {r['id']: r for r in service._state.get('canvasArtifacts', [])}
     for record in [service._state, *service.clients.records.values()]:
         canvas = record.get('canvas', {})
         row = rows.get(canvas.get('id'))
-        if not row or row.get('app') or canvas.get('selectedVersion') is not None:
+        if not row or row.get('app'):
+            continue
+        if ordinary_preview(canvas):
+            canvas.setdefault('runningVersion', canvas.get('selectedVersion') or canvas.get('revision', 1))
+            canvas.update(latestVersion=latest(row),
+                          previewRetained=canvas.get('selectedVersion') is None and canvas['runningVersion'] < latest(row),
+                          versions=copy.deepcopy(entries(row)), publications=copy.deepcopy(row.get('publications', [])))
+            continue
+        if canvas.get('selectedVersion') is not None:
             continue
         if canvas.get('revision', 1) != latest(row):
             scoped = {**service._state, **record}

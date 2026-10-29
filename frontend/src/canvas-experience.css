@@ -40,6 +40,7 @@
 #amp-one .a-canvas-refresh[aria-disabled=true]{opacity:.65;cursor:progress}
 #amp-one .a-canvas-freshness{order:10;flex-basis:100%;min-width:0;padding:0 4px 6px;color:var(--a-muted);font-size:12px;line-height:1.4;overflow-wrap:anywhere}
 #amp-one .a-canvas-freshness[role=alert]{color:var(--a-ink)}
+#amp-one .a-canvas-load-version{display:block;max-width:100%;min-height:44px;margin-top:4px;white-space:normal;text-align:left;overflow-wrap:anywhere}
 #amp-one .a-canvas-artifact-toolbar>strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
 #amp-one .a-canvas-artifact-toolbar[hidden]{display:none}
 #amp-one .a-canvas-common-actions{display:flex;align-items:center;gap:2px}

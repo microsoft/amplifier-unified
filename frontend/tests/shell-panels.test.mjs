@@ -45,6 +45,21 @@ test('document Refresh reads saved state only and ignores an obsolete response',
  await renderAct(async()=>root.unmount());
 });
 test.after(()=>server.close());
+test('retained executable preview labels running version and loads only the clicked exact revision',async()=>{
+ let root,resolve,completion;
+ const calls=[],view={viewId:'primary',resourceId:'html-one',resourceRevision:'v1-body',generation:2,selectedVersion:null,runningVersion:1,latestVersion:2,previewRetained:true};
+ const dispatch=(name,args)=>{calls.push({name,args});return new Promise(done=>{resolve=done})};
+ const render=()=>React.createElement(CanvasDocumentRefresh,{view,dispatch});
+ await renderAct(async()=>{root=create(render())});
+ assert.match(JSON.stringify(root.toJSON()),/Viewing v1 · v2 available · preview retained/);
+ const button=()=>root.root.findByProps({className:'a-soft a-canvas-load-version'});
+ await renderAct(async()=>{completion=button().props.onClick()});
+ view.latestVersion=3;await renderAct(async()=>root.update(render()));
+ await renderAct(async()=>button().props.onClick());
+ assert.deepEqual(calls,[{name:'canvas.views.loadVersion',args:{viewId:'primary',resourceId:'html-one',resourceRevision:'v1-body',generation:2,version:2}}]);
+ await renderAct(async()=>{resolve({accepted:true});await completion});
+ await renderAct(async()=>root.unmount());
+});
 const initial=()=>({view:{navExpanded:true,navSimple:false},workspaceExplorer:{path:'/',parentPath:null,breadcrumbs:[{name:'/',path:'/'}],filter:'',page:1,pages:1,totalWorkspaces:2,rows:[{path:'/one',name:'one',workspaceId:'one',chatCount:2,canBrowse:false,unread:0},{path:'/two',name:'two',workspaceId:'two',chatCount:1,canBrowse:false,unread:0}]},workspaces:[{id:'one',name:'One',path:'/one',available:true},{id:'two',name:'Two',path:'/two',available:true}],selectedWorkspaceId:'one',sessions:[{id:'a',title:'First plan',workspace:'/one'},{id:'b',title:'Another plan',workspace:'/one'},{id:'c',title:'Other workspace',workspace:'/two'}]});
 
 test('workspace drill-in filters independently of Recent',async()=>{

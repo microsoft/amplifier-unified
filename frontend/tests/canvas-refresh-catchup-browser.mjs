@@ -22,7 +22,7 @@ const html=version=>`<h1>Executable version ${version}</h1><label>Local unfinish
 try{
  const url=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Fixture startup timeout')),20000);fixture.once('error',error=>{clearTimeout(timer);reject(error)});fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{stdout+=chunk;for(const line of stdout.split('\n'))try{const v=JSON.parse(line);if(v.url){clearTimeout(timer);resolve(v.url)}}catch{}})});
  browser=await chromium.launch({headless:true});report.browser=browser.version();
- const context=await browser.newContext({viewport:{width:1500,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const context=await browser.newContext({viewport:{width:1500,height:950},hasTouch:true,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  await context.routeWebSocket(/\/api\/events\/ws(?:\?|$)/,route=>{
   const server=route.connectToServer();connections++;sockets.push({route,server});
   server.onMessage(message=>{if(held){dropped++;return}route.send(message)});
@@ -97,6 +97,76 @@ try{
   await frame().locator('#executed').waitFor();const after=await sample();row.observed={before,after,connections};
   assert.equal(after.executed,before.executed,'Transport recovery must not execute a new HTML definition');
   assert.equal(after.input,before.input,'Transport recovery must not discard local HTML input');return row.observed;
+ });
+ for(const kind of ['html','babylon'])await check(kind+' retains adjacent versions, exact explicit Load, dirty refusal and narrow controls',async row=>{
+  held=false;await page.setViewportSize({width:1500,height:950});
+  const id=(await action('canvas.show',{kind,title:kind+' adoption',content:html(1)})).result.id;
+  await frame().getByRole('heading',{name:'Executable version 1'}).waitFor();
+  await frame().getByLabel('Local unfinished input').fill('Keep until explicit Load');
+  const original=await sample();
+  await miss(id,2,html(2));await refresh().click();
+  await expect.poll(async()=>(await view()).latestVersion).toBe(2);await reconnect();
+  assert.equal((await sample()).executed,original.executed);assert.equal((await sample()).input,original.input);
+  await expect(panel.locator('.a-canvas-freshness')).toContainText('Viewing v1');
+  await expect(panel.locator('.a-canvas-freshness')).toContainText('v2 available · preview retained');
+  const load=version=>panel.getByRole('button',{name:`Load v${version} — resets preview and runs its code`,exact:true});
+  await load(2).focus();await expect(load(2)).toBeFocused();
+  let release,loadHeld=false;const gate=new Promise(resolve=>{release=resolve});
+  const hold=async route=>{if(unwrap(route.request().postDataJSON()).action==='canvas.views.loadVersion'){loadHeld=true;await gate}await route.continue()};
+  await page.route('**/api/actions',hold);
+  try{
+   await page.keyboard.press('Enter');await expect.poll(()=>loadHeld).toBe(true);
+   assert.equal((await publish('canvas.versions.revise',{id,sessionId,expectedRevision:2,content:html(3)})).accepted,true);
+   await expect.poll(async()=>(await view()).latestVersion).toBe(3);
+   assert.equal((await sample()).executed,original.executed);assert.equal((await sample()).input,original.input);
+   release();await frame().getByRole('heading',{name:'Executable version 2'}).waitFor();
+   await expect.poll(async()=>(await view()).runningVersion).toBe(2);
+  }finally{release();await page.unroute('**/api/actions',hold)}
+  const loaded=await sample();assert.match(loaded.executed,/^executed-v2-/);assert.notEqual(loaded.executed,original.executed);
+  assert.equal(loaded.input,'');assert.equal(loaded.view.selectedVersion,null);assert.equal(loaded.view.latestVersion,3);
+  assert.deepEqual(loaded.view.versions.map(v=>v.version),[1,2,3]);
+  await frame().getByLabel('Local unfinished input').fill('Dirty v2 input');
+  await action('canvas.views.dirty',{...target(await view()),dirty:true});const dirty=await sample();
+  await load(3).click();await expect(panel.getByRole('alert')).toContainText(/edit/i);
+  assert.equal((await sample()).executed,dirty.executed);assert.equal((await sample()).input,dirty.input);
+  assert.equal((await view()).dirty,true);
+  await action('canvas.views.dirty',{...target(await view()),dirty:false});
+  for(const width of [390,320]){
+   await page.setViewportSize({width,height:780});
+   const box=await load(3).evaluate(el=>{const r=el.getBoundingClientRect();return {width:r.width,height:r.height,inside:r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight,hit:el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}});
+   assert.ok(box.width>=44&&box.height>=44&&box.inside&&box.hit,JSON.stringify(box));
+   await capture(kind+'-retained-'+width);
+  }
+  await load(3).tap();await frame().getByRole('heading',{name:'Executable version 3'}).waitFor();
+  const third=await sample();assert.match(third.executed,/^executed-v3-/);
+  await refresh().tap();await expect(panel.locator('.a-canvas-freshness')).toContainText('Checked');
+  assert.equal((await sample()).executed,third.executed,'Same-version Refresh must not run code twice');
+  await page.setViewportSize({width:1500,height:950});
+  await panel.getByRole('button',{name:'Choose artifact version',exact:true}).click();
+  await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('1');
+  await page.getByRole('button',{name:'Keep current preview',exact:true}).click();
+  assert.equal((await sample()).executed,third.executed);
+  await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('1');
+  await page.getByRole('button',{name:'Load v1 — resets preview and runs its code',exact:true}).click();
+  await frame().getByRole('heading',{name:'Executable version 1'}).waitFor();
+  await page.getByRole('button',{name:'Close canvas details',exact:true}).click();
+  const pinned=await sample();assert.equal(pinned.view.selectedVersion,1);
+  await action('canvas.select',{id,version:1});
+  assert.equal((await sample()).executed,pinned.executed,'Same-version reselection does not rerun executable content');
+  assert.equal((await publish('canvas.versions.revise',{id,sessionId,expectedRevision:3,content:html(4)})).accepted,true);
+  await expect.poll(async()=>(await view()).latestVersion).toBe(4);
+  await refresh().click();assert.equal((await sample()).executed,pinned.executed);
+  const source=(await action('canvas.versions.inspect',{id,version:2,includeSource:true})).result.source.content;
+  assert.equal(source,html(2));
+  const download=await page.request.get(url+`/api/canvas/${id}/download?version=1`);
+  assert.equal(download.status(),200);assert.ok((await download.text()).includes('Executable version 1'));
+  const fresh=await publish('canvas.select',{id});assert.equal(fresh.accepted,true);
+  await page.reload();await showFixtureConversation(page,{navPinned:false});
+  await frame().getByRole('heading',{name:'Executable version 1'}).waitFor();
+  assert.equal((await view()).selectedVersion,1,'Cold page retains explicit historical selection, not JS memory');
+  assert.notEqual((await sample()).executed,pinned.executed);
+  row.observed={original,loaded,third,pinned,versions:(await view()).versions.map(v=>v.version)};
+  await capture(kind+'-pinned-retained');return row.observed;
  });
  await check('Declared dirty view blocks publication; same-definition Refresh retains it',async row=>{
   const id=(await action('canvas.show',{kind:'html',title:'Declared dirty executable',content:html(1)})).result.id;

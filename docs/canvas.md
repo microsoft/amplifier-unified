@@ -326,13 +326,30 @@ only on Latest. Retained definitions are not evicted after twenty revisions.
 
 The document action row shows the open saved version and whether a newer saved
 version is available, even with Details closed. **Refresh** checks the existing
-saved-state owner and version list. Latest follows new saved definitions; an
-exact version stays selected. Refresh is not a page/iframe reload, does not
+saved-state owner and version list. Latest follows new passive document definitions;
+an exact version stays selected. Refresh is not a page/iframe reload, does not
 rerun document code, and does not import file edits or create a revision.
 Unfinished viewer input and the composer draft remain in place. A failed check
 retains the open document and shows an error beside Refresh; try Refresh again
 after the connection recovers. Use the existing version button to choose another
 saved version. Live apps and websites keep their separate lifecycle controls.
+
+For an already-open executable **HTML or Babylon** preview, Latest discovers new
+saved versions but retains the exact running definition and its unfinished input.
+The row distinguishes **Viewing v1 · v2 available · preview retained**. Only the
+explicit **Load v2 — resets preview and runs its code** control replaces that
+preview with the named saved definition. Changing executable versions through
+Details also offers **Keep current preview** before an explicit reset. Declared
+dirty edits still refuse replacement; agents cannot reset previews. Copy,
+Download, Source and renderer commands remain bound to the running version.
+Missed updates, Refresh and transport reconnect do not adopt a new executable
+definition. Newly opened previews behave normally; this does not serialize DOM
+or JavaScript state across a new browser page or a cold restart.
+
+This executable-preview exception was approved on October 28, 2026: “Preserve
+interactive previews; load new versions explicitly.” Passive documents retain
+automatic Latest following; saved histories and exact historical selections are
+unchanged.
 
 For MCP Apps, reopening the same completed operation reuses its tab. A tool may
 supply `_meta["amplifier/presentationId"]` in its result to identify one durable
