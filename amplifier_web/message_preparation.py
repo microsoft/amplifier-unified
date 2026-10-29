@@ -72,6 +72,40 @@ def _same(current, previous, budget, depth=0):
     return current == previous  # Previous leaves are exact immutable builtins.
 
 
+def _message_snapshot(messages, budget, chunk, nodes):
+    if type(messages) is not list:
+        return _snapshot(messages, budget, set())
+    # The byte budget spans the complete snapshot. Bound traversal per group
+    # of messages so an ordinary long conversation does not always miss merely
+    # because earlier messages consumed its node allowance.
+    budget[1] -= sys.getsizeof(messages)
+    if budget[1] < 0:
+        raise Unsupported
+    result, ancestors = [], {id(messages)}
+    for start in range(0, len(messages), chunk):
+        budget[0] = nodes
+        result.extend(_snapshot(item, budget, ancestors, 1)
+                      for item in messages[start:start + chunk])
+    budget[1] -= max(0, sys.getsizeof(result) - sys.getsizeof(messages))
+    if budget[1] < 0:
+        raise Unsupported
+    return result
+
+
+def _same_messages(current, previous, chunk, nodes):
+    if type(current) is not list or type(previous) is not list:
+        return _same(current, previous, [nodes])
+    if len(current) != len(previous):
+        return False
+    budget = [nodes]
+    for index, (item, old_item) in enumerate(zip(current, previous)):
+        if index % chunk == 0:
+            budget[0] = nodes
+        if not _same(item, old_item, budget, 1):
+            return False
+    return True
+
+
 @dataclass(frozen=True)
 class Entry:
     owner: int
@@ -81,6 +115,7 @@ class Entry:
 
 
 class MessagePreparation:
+    CHUNK = 128
     MAX_ENTRIES = 16
     MAX_BYTES = 64 * 1024 * 1024
     MAX_NODES = 20000
@@ -92,7 +127,7 @@ class MessagePreparation:
         identity = session['id']
         previous = self.entries.get(identity)
         if (previous is not None and previous.owner == id(session)
-                and _same(messages, previous.snapshot, [self.MAX_NODES])):
+                and _same_messages(messages, previous.snapshot, self.CHUNK, self.MAX_NODES)):
             pending[identity] = previous
             return previous.prepared
         pending[identity] = None
@@ -107,7 +142,7 @@ class MessagePreparation:
             return resource_files.prepare(messages)
         budget = [self.MAX_NODES, remaining]
         try:
-            snapshot = _snapshot(messages, budget, set())
+            snapshot = _message_snapshot(messages, budget, self.CHUNK, self.MAX_NODES)
         except Unsupported:
             # Unsupported values retain the original encoder/error behavior.
             return resource_files.prepare(messages)

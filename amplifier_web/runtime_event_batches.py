@@ -39,6 +39,56 @@ def receipt(kind, payload):
     return terminal(kind, payload) or observation(kind, payload)
 
 
+def starting_observation(data, roots):
+    """Recognize root progress only; this never admits a command or lifecycle."""
+    if not isinstance(data, dict) or data.get('op'):
+        return False
+    identities = {'sessionId', 'session_id', 'rootSessionId', 'root_session_id'}
+    if any(data.get(key) is not None and data[key] not in roots for key in identities):
+        return False
+    kind = data.get('type')
+    if kind == 'runtime.activity':
+        return (set(data) <= identities | {'type', 'phase', 'detail', 'activeWorkers', 'retryAttempt', 'retryMax'}
+                and isinstance(data.get('phase'), str) and data['phase'] in ACTIVITY_PHASES
+                and isinstance(data.get('detail'), str))
+    if kind == 'tool.pre':
+        return (set(data) <= identities | {'type', 'tool', 'call_id'}
+                and isinstance(data.get('tool'), str) and isinstance(data.get('call_id'), str))
+    if kind != 'execution.event' or set(data) != {'type', 'event'}:
+        return False
+    event = data.get('event')
+    fields = {'id', 'parentId', 'turnId', 'admissionInputId', 'sessionId', 'rootSessionId',
+              'kind', 'phase', 'toolCallId', 'label', 'tool', 'startedAt', 'endedAt',
+              'revision', 'liveObservation', 'toolObservationId', 'inputSummary',
+              'inputPreview', 'actionPath', 'outcomeSummary'}
+    return (isinstance(event, dict) and set(event) <= fields
+            and isinstance(event.get('sessionId'), str) and bool(event['sessionId'])
+            and isinstance(event.get('rootSessionId'), str) and bool(event['rootSessionId'])
+            and event.get('sessionId') in roots and event.get('rootSessionId') in roots
+            and isinstance(event.get('id'), str) and bool(event['id'])
+            and event.get('kind') == 'tool' and event.get('phase') == 'running')
+
+
+class ObservationTurns:
+    """Bound fairness turns without reading ahead or changing event reducers."""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.count = self.size = 0
+
+    def yield_before(self, size, eligible):
+        if not eligible or size > MAX_BYTES:
+            self.reset()
+            return True
+        boundary = not self.count or self.count >= MAX_EVENTS or self.size + size > MAX_BYTES
+        if boundary:
+            self.reset()
+        self.count += 1
+        self.size += size
+        return boundary
+
+
 class EventSink:
     """Explicit opt-in. Wrappers without this capability keep single delivery."""
     def __init__(self, single, batch):
