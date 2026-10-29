@@ -1371,9 +1371,12 @@ async def test_canonical_commit_revalidates_after_owned_resource_file_await(medi
 
 
 @pytest.mark.parametrize('cancel_media', [False, True])
+@pytest.mark.parametrize('overlap_cleanup', [False, True], ids=['ordinary', 'maintenance-overlap'])
 async def test_owned_media_writer_excludes_real_shell_http_and_receipts(
-        authenticated_client, tmp_path, monkeypatch, cancel_media):
+        authenticated_client, tmp_path, monkeypatch, cancel_media, overlap_cleanup):
     import asyncio
+    from collections import deque
+    from pathlib import Path
     import threading
     from amplifier_web import resource_files as files
     from amplifier_web.server import create_app
@@ -1391,21 +1394,54 @@ async def test_owned_media_writer_excludes_real_shell_http_and_receipts(
         await service.dispatch('shell.query', {'clientId': identity, 'instanceId': 'chats'})
     assert service.shell.get('client', 'fresh-browser') is None
     entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    cleanup_entered, cleanup_release = threading.Event(), threading.Event()
+    cleanup_task = None
+    pending = None
+    observer = asyncio.current_task()
     waiting = asyncio.Event()
     waiters, transactions, body_ids = [], [], []
+    timeline, task_ids = deque(maxlen=256), {}
+    media_release = []
     real_write = files.write_prepared
 
     original_acquire = service.lock.acquire
+    original_release = service.lock.release
+
+    def observe(event):
+        task = asyncio.current_task()
+        if task not in task_ids:
+            task_ids[task] = len(task_ids) + 1
+        timeline.append({
+            'event': event, 'task': task_ids[task],
+            'coroutine': task.get_coro().__qualname__ if task else None,
+            'transaction': service.db.in_transaction,
+            'locked': service.lock.locked(),
+        })
 
     async def acquire():
+        observe('lock.wait')
+        if asyncio.current_task() is observer and cleanup_entered.is_set():
+            observe('cleanup.observation-waits')
+            cleanup_release.set()
         if (service.lock.locked() and entered.is_set() and not release.is_set()
                 and service.clients.current.get() in {'owner-browser', 'other-browser', 'fresh-browser'}):
             waiters.append(asyncio.current_task())
             if len(waiters) >= 5:
                 waiting.set()
-        return await original_acquire()
+        result = await original_acquire()
+        observe('lock.acquired')
+        return result
+
+    def unlock():
+        observe('lock.release')
+        if asyncio.current_task() is pending and entered.is_set():
+            # Capture before queued shell writes can commit a leaked media
+            # transaction. Never assert here and prevent the lock release.
+            media_release.append((finished.is_set(), service.db.in_transaction))
+        return original_release()
 
     monkeypatch.setattr(service.lock, 'acquire', acquire)
+    monkeypatch.setattr(service.lock, 'release', unlock)
 
     def blocked(directory, prepared):
         if threading.current_thread() is not threading.main_thread() and '"encoding":"base64"' in prepared.text:
@@ -1419,6 +1455,10 @@ async def test_owned_media_writer_excludes_real_shell_http_and_receipts(
         return real_write(directory, prepared)
 
     def trace(sql):
+        operation = sql.strip().split(None, 1)[0].upper()
+        if operation in {'BEGIN', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE', 'INSERT', 'UPDATE', 'DELETE'}:
+            # Operation classes only: never retain expanded SQL or its values.
+            observe('sql.' + operation)
         if entered.is_set() and not release.is_set() and sql.strip().upper().startswith(('COMMIT', 'ROLLBACK')):
             transactions.append(sql)
 
@@ -1458,6 +1498,7 @@ async def test_owned_media_writer_excludes_real_shell_http_and_receipts(
             await cancelled
         assert service.shell.get('command', 'cancelled-waiter') is None
         if cancel_media:
+            observe('media.cancel')
             pending.cancel()
             await asyncio.sleep(0)  # Give cancellation to the owned worker wait.
             assert not pending.done() and not finished.is_set() and service.db.in_transaction
@@ -1468,7 +1509,10 @@ async def test_owned_media_writer_excludes_real_shell_http_and_receipts(
         else:
             assert (await pending)['accepted']
         assert finished.is_set()
+        assert media_release == [(True, False)], list(timeline)
+        observe('media.settled')
         responses = await asyncio.wait_for(asyncio.gather(*requests), 10)
+        observe('http.settled')
         assert all(response.status == 200 for response in responses)
         first, report, query, view = [await response.json() for response in responses]
         assert first['revision'] == 0 and report['accepted'] and query['accepted'] and view['accepted']
@@ -1479,31 +1523,167 @@ async def test_owned_media_writer_excludes_real_shell_http_and_receipts(
             assert service.shell.get('command', identity)['receipt']['accepted']
         for identity in ('owner-browser', 'other-browser'):
             assert service.shell.client(identity)['views'].get('chats', {}).get('generation', 0) == 0
-        assert not service.db.in_transaction
-        if cancel_media:
-            assert service.outputs.store.list(args['sessionId'])['items'] == []
-            assert service.db.execute('SELECT 1 FROM output_receipts WHERE id=?',
-                                      ('owned-media-command',)).fetchone() is None
-            assert service.db.execute('SELECT 1 FROM state_resources WHERE id=?', (body_ids[0],)).fetchone() is None
-            # The writer has settled before normal reconciliation can retire
-            # its unindexed file; a surviving orphan is a required failure.
+        if overlap_cleanup:
+            # Exercise maintenance's real file-deletion boundary with a known
+            # obsolete resource. Do not race its optimistic graph traversal
+            # against the independent history controller's legitimate saves.
+            task = getattr(service, '_storage_maintenance_task', None)
+            if task:
+                await task
             async with service.lock:
+                garbage = files.put(service.db, {'unreferenced': 'cleanup overlap'})
+                service.db.commit()
+            garbage_path = files.root(service.db) / (garbage['$resource'] + '.json')
+            real_unlink = Path.unlink
+
+            def unlink(path, *values, **options):
+                if path == garbage_path and threading.current_thread() is not threading.main_thread():
+                    cleanup_entered.set()
+                    assert cleanup_release.wait(10)
+                return real_unlink(path, *values, **options)
+
+            monkeypatch.setattr(Path, 'unlink', unlink)
+            async def cleanup():
+                async with service.lock:
+                    service.db.execute('DELETE FROM state_resources WHERE id=?', (garbage['$resource'],))
+                    service.db.commit()
+                    await files.remove_files_async(service.db, [garbage['$resource']])
+
+            cleanup_task = asyncio.create_task(cleanup())
+            assert await asyncio.to_thread(cleanup_entered.wait, 10)
+            assert service.lock.locked() and service.db.in_transaction
+            observe('cleanup.blocked')
+        # HTTP completion does not settle other owners. Observe under the same
+        # lock used by media, shell mutations and resource maintenance.
+        async with service.lock:
+            observe('final.locked')
+            assert not service.db.in_transaction, list(timeline)
+            if cancel_media:
+                assert service._session(args['sessionId']).get('mediaRevision', 0) == 0
+                assert service.outputs.store.list(args['sessionId'])['items'] == []
+                assert service.db.execute('SELECT 1 FROM output_receipts WHERE id=?',
+                                          ('owned-media-command',)).fetchone() is None
+                assert service.db.execute('SELECT 1 FROM state_resources WHERE id=?', (body_ids[0],)).fetchone() is None
+                # The writer has settled before normal reconciliation can retire
+                # its unindexed file; a surviving orphan is a required failure.
                 cursor = None
                 while True:
                     cursor, result = files.sweep_unindexed(service.db, service._state, cursor)
                     assert not result['blocked']
                     if result['complete']:
                         break
-            assert not (files.root(service.db) / (body_ids[0] + '.json')).exists()
+                assert not (files.root(service.db) / (body_ids[0] + '.json')).exists()
+        if cleanup_task:
+            await asyncio.wait_for(cleanup_task, 10)
+            assert not garbage_path.exists()
         again = await service.dispatch('shell.query',
             {'clientId': 'owner-browser', 'instanceId': 'chats'}, command_id='after-owned-write')
         assert again['accepted']
     finally:
         release.set()
+        cleanup_release.set()
         service.db.set_trace_callback(None)
         if cancelled and not cancelled.done():
             cancelled.cancel()
         await asyncio.gather(pending, *requests, *([cancelled] if cancelled else []), return_exceptions=True)
+        if cleanup_task:
+            await cleanup_task
+
+
+@pytest.mark.parametrize('outer_transaction', [False, True])
+@pytest.mark.parametrize('failure', ['cancel', 'write-error', 'cancel-and-write-error'])
+async def test_media_failure_preserves_transaction_owner_and_allows_reuse(
+        media_app, monkeypatch, outer_transaction, failure):
+    import asyncio
+    import sqlite3
+    import threading
+    from amplifier_web import resource_files as files
+    app = media_app
+    task = getattr(app, '_storage_maintenance_task', None)
+    if task:
+        await task
+    args = media_args(app)
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    real_write = files.write_prepared
+    error = OSError('synthetic media writer failure')
+    body_ids = []
+    if outer_transaction:
+        async with app.lock:
+            app.db.execute('BEGIN IMMEDIATE')
+            app.db.execute('INSERT INTO state_resources VALUES (?, ?)', ('caller-owned', '{}'))
+
+    def write(directory, prepared):
+        if '"encoding":"base64"' not in prepared.text:
+            return real_write(directory, prepared)
+        body_ids.append(prepared.identity)
+        entered.set()
+        assert release.wait(10)
+        try:
+            real_write(directory, prepared)
+            if failure != 'cancel':
+                raise error
+        finally:
+            finished.set()
+
+    # Resolve the actual service database rather than relying on its filename.
+    db_path = next(row[2] for row in app.db.execute('PRAGMA database_list') if row[1] == 'main')
+    observer = sqlite3.connect(db_path)
+    pending = None
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(files, 'write_prepared', write)
+            pending = asyncio.create_task(app.outputs.media.attach(args, 'ui', 'reuse-media'))
+            assert await asyncio.to_thread(entered.wait, 10)
+            assert app.lock.locked() and app.db.in_transaction
+            if failure.startswith('cancel'):
+                pending.cancel()
+                await asyncio.sleep(0)
+                pending.cancel()
+                await asyncio.sleep(0)
+                assert not pending.done() and not finished.is_set()
+            release.set()
+            if failure.startswith('cancel'):
+                with pytest.raises(asyncio.CancelledError):
+                    await pending
+            else:
+                with pytest.raises(OSError) as caught:
+                    await pending
+                assert caught.value is error
+            assert finished.is_set()
+            async with app.lock:
+                assert app.db.in_transaction is outer_transaction
+                assert app._session().get('mediaRevision', 0) == 0
+                assert app.outputs.store.list(args['sessionId'])['items'] == []
+                assert app.db.execute('SELECT 1 FROM output_receipts WHERE id=?',
+                                      ('reuse-media',)).fetchone() is None
+                assert app.db.execute('SELECT 1 FROM state_resources WHERE id=?',
+                                      (body_ids[0],)).fetchone() is None
+                assert bool(app.db.execute('SELECT 1 FROM state_resources WHERE id=?',
+                                           ('caller-owned',)).fetchone()) is outer_transaction
+                assert observer.execute('SELECT 1 FROM state_resources WHERE id=?',
+                                        ('caller-owned',)).fetchone() is None
+                if outer_transaction:
+                    # Only the caller settles its sentinel, after proving media
+                    # neither rolled it back nor committed it.
+                    app.db.commit()
+                    assert observer.execute('SELECT 1 FROM state_resources WHERE id=?',
+                                            ('caller-owned',)).fetchone() is not None
+                    app.db.execute('DELETE FROM state_resources WHERE id=?', ('caller-owned',))
+                    app.db.commit()
+        # A failed/cancelled command has no receipt. A deliberate later call can
+        # adopt its exact immutable file; subsequent receipt reuse adds nothing.
+        result = await app.outputs.media.attach(args, 'ui', 'reuse-media')
+        again = await app.outputs.media.attach(args, 'ui', 'reuse-media')
+        assert result['accepted'] and again['result']['id'] == result['result']['id']
+        async with app.lock:
+            assert not app.db.in_transaction
+            assert app._session()['mediaRevision'] == 1
+            assert len(app.outputs.store.list(args['sessionId'])['items']) == 1
+    finally:
+        release.set()
+        if pending:
+            await asyncio.gather(pending, return_exceptions=True)
+        observer.close()
 
 
 def cold_alias_corpus(app, *, native_message_id=True):
