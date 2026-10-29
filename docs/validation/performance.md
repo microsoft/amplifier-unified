@@ -105,6 +105,16 @@ record through paged details. It checks frame/projection growth, application-roo
 rendering, view-report feedback, current controls and unchanged canonical history.
 Its byte budgets are scoped to that fixture; timings are diagnostic.
 
+`tests/test_attention_demand.py` holds the viewed/resident set fixed while
+growing acknowledged notice owners and their resolved-question history. Routine
+views read existing notice facts without decoding unrelated session summaries;
+selected details and bounded navigation receipts keep their exact fingerprints.
+Global counts still aggregate scalar notice/read facts, and explicit Activity
+retains all notices for review and mark-all. Neither path claims constant-time
+global counts or a total byte bound. The check records SQLite work and diagnostic
+CPU alongside decode/visit counts, and preserves native naming, workspace,
+suppression, current read receipts and transaction boundaries.
+
 The additive Extended browser registration runs after publication. The separate
 `Client performance smoke` workflow selects affected PR paths and supports manual
 runs; it is not a required status or a publication dependency. Run it locally in

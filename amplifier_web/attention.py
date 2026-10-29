@@ -73,7 +73,7 @@ def session_item_at(session, read, position):
     return None
 
 
-def snapshot(state):
+def snapshot(state, *, session_items=None):
     items=[]
     read=state.get('attentionRead',{})
     def add(key,title,section,page,detail='',version=None,previous_titles=(),**target):
@@ -146,11 +146,11 @@ def snapshot(state):
               ('storageError', 'configurationError', 'dropped', 'outboxDropped', 'expiredPending')}
     if any(health.values()):add('diagnostics:capture','Some diagnostic records could not be retained','maintenance','diagnostics',version=health)
     if state.get('notificationError'):add('notifications:error','Notification delivery failed','maintenance','notifications',state['notificationError'])
-    for session in state.get('sessions', []):
-        for position in range(session_item_count(session)):
-            item = session_item_at(session, read, position)
-            if item is not None:
-                items.append(item)
+    if session_items is None:
+        session_items = (item for session in state.get('sessions', [])
+                         for position in range(session_item_count(session))
+                         if (item := session_item_at(session, read, position)) is not None)
+    items.extend(session_items)
     unread=[item for item in items if not item['read']]
     # Count once: many saved workspaces and unread outcomes must not produce
     # a workspaces × unread-items scan on every streamed publication.

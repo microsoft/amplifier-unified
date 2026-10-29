@@ -382,7 +382,7 @@ class ShellModules:
         projections = self.service.projections
         scoped = self.scoped_state(client, instance)
         if not _page_only:
-            scoped = {**scoped, 'attention': projections.attention(state)}
+            scoped = {**scoped, 'attention': projections.attention(state, session_ids=())}
         view, workspace_id = scoped['view'], scoped['selectedWorkspaceId']
         from .chat_navigation import RECENT_LIMITS
         # Preserve existing initial preferences, but never migrate an expanded
@@ -444,10 +444,7 @@ class ShellModules:
             visible_ids.update(context_visible_ids)
         # Exact review receipts for these bounded rows; never error bodies or
         # unrelated settings/permission notices from the full attention inbox.
-        read_receipts = [{key: item[key] for key in ('id', 'sessionId', 'fingerprint', 'read')}
-                          for item in scoped.get('attention', {}).get('items', ()) if not _page_only
-                          if item.get('sessionId') in visible_ids
-                          and item['id'] in {prefix + item['sessionId'] for prefix in ('session:', 'completion:', 'unread:')}]
+        read_receipts = projections.attention_receipts(state, visible_ids) if not _page_only else []
         activity_by_id = {}
         if not _page_only and visible_ids:
             from .attention import reviewed_session_errors
