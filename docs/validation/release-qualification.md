@@ -149,6 +149,11 @@ limits in the PR. Unrelated broad-suite findings remain visible follow-up work.
 A green GitHub check is not a substitute for focused qualification. Follow
 workspace DTU rules; never use a shared application installation as a test target.
 
+For changes affecting repeated reads, publication, persistence or preparation,
+apply [performance validation](performance.md) to the affected workload. Retain
+measured budgets and semantic checks; this adds no blanket benchmark or exhaustive
+suite requirement to merge or publication.
+
 Typical local commands, inside the owned test environment:
 
 ```sh

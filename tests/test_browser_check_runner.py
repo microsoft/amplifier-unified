@@ -234,6 +234,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
     additions = {
+        "client-traffic": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/client-traffic"},
         "assignment-adoption": {},
         "delegate-work-stream": {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/delegate-work-stream'},
         "request-cancellation": {},
@@ -311,7 +312,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 127
+    assert len(original) == 65 and len(rows) == 128
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -599,7 +600,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     # negative-control proof without replacing any existing ordinary owner.
     feature_additions = {f'tests/{name}-browser.mjs' for name in
                          ('compact-composer', 'composer-panel-ownership', 'peer-preview', 'peer-preview-header', 'peer-preview-focus',
-                          'canvas-chrome', 'canvas-close', 'multi-quote', 'artifact-one-surface', 'delegate-work-stream')}
+                          'canvas-chrome', 'canvas-close', 'multi-quote', 'artifact-one-surface', 'delegate-work-stream', 'client-traffic')}
     voice_additions = {f'tests/{name}-browser.mjs' for name in
                        ('chat-scroll-call-boundaries', 'semantic-settings', 'history-refresh', 'voice-work-message')}
     assert voice_additions <= extended_scripts - readiness_scripts
@@ -612,8 +613,8 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert all(sum(row['command'] == ['node', name] for row in plan['scenarios']) == 1
                for name in feature_additions)
     assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience, pin_reorder, approval, dormant, shared_work} - feature_additions - voice_additions) == 146
-    assert len((readiness_scripts | extended_scripts) - {shared_work, 'tests/delegate-work-stream-browser.mjs'} - voice_additions) == 164
-    assert len(readiness_scripts | extended_scripts) == 170
+    assert len((readiness_scripts | extended_scripts) - {shared_work, 'tests/delegate-work-stream-browser.mjs', 'tests/client-traffic-browser.mjs'} - voice_additions) == 164
+    assert len(readiness_scripts | extended_scripts) == 171
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']

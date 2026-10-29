@@ -2893,6 +2893,62 @@
         }
       ],
       "qualification": "docs/clients/live-sessions.md"
+    },
+    {
+      "id": "delta.client-traffic",
+      "reason": "Add a single maintained real-server browser traffic and history-scaling owner; preserve frozen standard UX coverage.",
+      "workflowsAdded": [
+        {
+          "id": "conversation.client-traffic",
+          "family": "conversation",
+          "title": "Keep routine client updates independent of retained task history",
+          "scope": "standard-path",
+          "entryPath": [
+            "Conversation",
+            "Work",
+            "Runtime controls"
+          ],
+          "prerequisites": [
+            "Built bundled client and isolated synthetic task history; no provider calls"
+          ],
+          "steps": [
+            "Grow retained task history while keeping current fields fixed",
+            "Observe causal-only updates with panels open and closed",
+            "Reconnect and retrieve complete historical detail through bounded pages"
+          ],
+          "expectedResults": [
+            "Routine task projection bytes do not scale with retained evidence bodies.",
+            "Revision readback advances without application-root rendering or view-report feedback.",
+            "Long current fields and controls remain usable; canonical history and exact detail remain intact."
+          ],
+          "variants": [
+            "small-history",
+            "large-history",
+            "reconnect",
+            "idle-publication"
+          ],
+          "existingTests": [
+            {
+              "path": "frontend/tests/client-traffic-browser.mjs",
+              "relation": "Single Extended owner for built-client traffic and historical-growth semantics"
+            },
+            {
+              "path": "frontend/tests/state-revision-presentation.test.mjs",
+              "relation": "Causal command and observation fences"
+            },
+            {
+              "path": "tests/test_browser_demand.py",
+              "relation": "Canonical projection and snapshot ownership"
+            }
+          ],
+          "limits": [
+            "Synthetic runtime; no native startup or live-provider latency claim.",
+            "Historical contribution is bounded; current fields are preserved and not globally size-capped.",
+            "Registration adds background coverage, not a blanket publication gate."
+          ]
+        }
+      ],
+      "qualification": "docs/validation/performance.md"
     }
   ]
 }
