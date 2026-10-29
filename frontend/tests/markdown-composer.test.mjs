@@ -187,6 +187,73 @@ for(const [name,input] of rawCases)test('lossless source: '+name,()=>{
  }
  assert.equal(view.state.doc.firstChild.type.spec.toDOM(view.state.doc.firstChild)[0],'pre');
 });
+// Custom schemes are outside the rich-link checkpoint policy. Preserve the
+// whole reference plus excerpt as source; do not look only for a blockquote node.
+const canvasQuoteLabel='Résumé 東京';
+const canvasQuoteUri='amplifier-canvas://artifact/canvas-copy-source?session=synthetic-canvas-source&version=17';
+const canvasQuoteExcerpt='Café e\u0301 — 東京\nSecond line: 𐐷 remains verbatim.';
+const canvasQuoteBlock=canvasQuoteExcerpt.split('\n').map(line=>'> '+line).join('\n');
+const canvasQuoteSource=`[${canvasQuoteLabel}](${canvasQuoteUri})\n\n${canvasQuoteBlock}`;
+function assertExactCanvasQuoteSource(doc){
+ assert.deepEqual(doc.toJSON(),{type:'doc',content:[{type:'markdown_source',content:[{type:'text',text:canvasQuoteSource}]}]});
+ assert.equal(composerMarkdown(doc),canvasQuoteSource);
+}
+test('versioned canvas reference and Unicode excerpt remain exact source through two checkpoint reloads',()=>{
+ assertExactCanvasQuoteSource(parseComposer(canvasQuoteSource));
+ let state=composerState(canvasQuoteSource);
+ assertExactCanvasQuoteSource(state.doc);
+ for(let cycle=0;cycle<2;cycle++){
+  const checkpoint=JSON.parse(JSON.stringify(composerDocument(state.doc)));
+  assert.deepEqual(checkpoint,{version:1,segments:[{type:'text',text:canvasQuoteSource,content:state.doc.firstChild.toJSON()}]});
+  state=composerState(composerMarkdown(state.doc),checkpoint);
+  assertExactCanvasQuoteSource(state.doc);
+  assertExactCanvasQuoteSource(parseComposer(composerMarkdown(state.doc)));
+ }
+});
+const httpsQuoteUri='https://example.test/artifact/canvas-copy-source?session=synthetic-canvas-source&version=17';
+for(const [name,source,href] of [
+ ['HTTPS reference and Unicode excerpt remain rich through two checkpoint reloads',`[${canvasQuoteLabel}](${httpsQuoteUri})\n\n${canvasQuoteBlock}`,httpsQuoteUri],
+ ['plain Unicode blockquote remains rich through two checkpoint reloads',canvasQuoteBlock,null],
+])test(name,()=>{
+ const initial=parseComposer(source);
+ let state=composerState(source);
+ for(let cycle=0;cycle<=2;cycle++){
+  const doc=state.doc;
+  assert.ok(doc.eq(initial),'reload preserves the complete rich document');
+  assert.equal(doc.childCount,href?2:1);
+  if(href){
+   const paragraph=doc.firstChild;
+   assert.equal(paragraph.type.name,'paragraph');
+   assert.equal(paragraph.childCount,1);
+   assert.equal(paragraph.textContent,canvasQuoteLabel);
+   assert.deepEqual(paragraph.firstChild.marks.map(mark=>mark.toJSON()),[{type:'link',attrs:{href,title:null}}]);
+  }
+  const quote=doc.lastChild;
+  assert.equal(quote.type.name,'blockquote');
+  assert.equal(quote.childCount,1);
+  assert.equal(quote.firstChild.type.name,'paragraph');
+  assert.equal(quote.textContent,canvasQuoteExcerpt);
+  assert.equal(composerMarkdown(doc),source);
+  if(cycle<2){
+   const checkpoint=composerDocument(doc);
+   assert.equal(checkpoint,null,'lossless rich Markdown needs no source checkpoint');
+   state=composerState(composerMarkdown(doc),checkpoint);
+  }
+ }
+});
+test('exact canvas source oracle rejects missing URI, changed session/version and truncated or normalized excerpt',()=>{
+ assertExactCanvasQuoteSource(parseComposer(canvasQuoteSource));
+ for(const corrupted of [
+  canvasQuoteBlock,
+  canvasQuoteSource.replace('session=synthetic-canvas-source','session=another-session'),
+  canvasQuoteSource.replace('version=17','version=1'),
+  canvasQuoteSource.slice(0,-1),
+  canvasQuoteSource.normalize('NFC'),
+ ]){
+  assert.notEqual(corrupted,canvasQuoteSource,'negative control must change the fixture');
+  assert.throws(()=>assertExactCanvasQuoteSource(parseComposer(corrupted)),{code:'ERR_ASSERTION'});
+ }
+});
 test('website notation remains source, with no account lookup or executable image',()=>{
  const source='@someone #123 :smile: https://example.com/issues/1';
  assert.equal(parseComposer(source).textContent,source);

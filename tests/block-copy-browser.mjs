@@ -3,7 +3,7 @@
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
-import {mkdir,mkdtemp} from 'node:fs/promises';
+import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import assert from 'node:assert/strict';
@@ -15,7 +15,9 @@ const artifacts=process.env.AMPLIFIER_TEST_ARTIFACTS||await mkdtemp(join(tmpdir(
 await mkdir(artifacts,{recursive:true});
 const tracePath=join(artifacts,'unified-block-copy-trace.zip');
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py','--canvas-versions'],{stdio:['ignore','pipe','inherit']});
-let browser,context;
+let browser,context,page,stage='startup';
+const evidence={status:'running',copies:[],reference:null};
+const save=()=>writeFile(join(artifacts,'block-copy-result.json'),JSON.stringify({...evidence,stage},null,2));
 async function bounded(promise,label){let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(`${label} did not settle within 30 seconds`)),30000)})])}finally{clearTimeout(timer)}}
 try{
  const url=await new Promise((resolve,reject)=>{
@@ -27,7 +29,7 @@ try{
  context=await browser.newContext({viewport:{width:1500,height:1050},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  context.setDefaultTimeout(30000);context.setDefaultNavigationTimeout(30000);
  await context.tracing.start({screenshots:true,snapshots:true});
- const page=await context.newPage(),errors=[];
+ page=await context.newPage();const errors=[];
  page.on('pageerror',error=>errors.push({name:error.name,message:error.message,stack:error.stack,topURL:page.url()}));
  const exceptionSession=await context.newCDPSession(page),exceptionContexts=new Map(),exceptions=[];
  exceptionSession.on('Runtime.executionContextCreated',({context})=>exceptionContexts.set(context.id,context.auxData));
@@ -45,6 +47,13 @@ try{
  const action=(name,args={})=>bounded(page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]),`App action ${name}`);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const clipboard=()=>bounded(page.evaluate(()=>navigator.clipboard.readText()),'Read clipboard');
+ let copySequence=0;
+ async function seedClipboard(label){
+  const sentinel=`block-copy sentinel ${++copySequence}: ${label}`;
+  await page.evaluate(text=>navigator.clipboard.writeText(text),sentinel);
+  await expect.poll(clipboard).toBe(sentinel);
+  return sentinel;
+ }
  const canvas=page.locator('.a-canvas-viewer');
  async function ready({home=false}={}){
   // Current startup is stream-first. Do not send actions against an empty baseline.
@@ -53,9 +62,12 @@ try{
   else await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  }
  async function copy(button,expected){
+  stage='copy '+await button.getAttribute('aria-label');await save();
+  const sentinel=await seedClipboard(stage);assert.notEqual(sentinel,expected);
   await button.focus();await page.keyboard.press('Enter');
   await expect.poll(clipboard).toBe(expected);
   await expect(button.locator('..').getByRole('status')).toHaveText('Copied.');
+  evidence.copies.push({label:stage,sentinel,expected,completed:true});await save();
  }
  await page.goto(url);await ready({home:true});
  await action('session.create');
@@ -92,8 +104,10 @@ try{
  // No block toolbar can include a neighboring paragraph or whole-message text.
  await expect(assistant.locator('[data-copy-block]')).toHaveCount(6);
  // Existing whole-message and writing controls must still use their own payloads.
+ await seedClipboard('whole message');
  await assistant.getByRole('button',{name:'Copy message as Markdown',exact:true}).click();
  await expect.poll(clipboard).toBe(message);
+ await seedClipboard('writing');
  await assistant.getByRole('button',{name:'Copy writing',exact:true}).click();
  await expect.poll(clipboard).toBe('Reusable writing');
  await action('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true}});
@@ -112,11 +126,49 @@ try{
  const span=canvas.locator('blockquote [data-canvas-source-start]').first();
  await span.evaluate(element=>{const range=document.createRange();range.selectNodeContents(element);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);document.dispatchEvent(new Event('selectionchange'))});
  await expect(page.getByRole('button',{name:'Reference in chat',exact:true})).toBeEnabled();
+ const referenceResponse=page.waitForResponse(response=>{
+  if(!response.url().endsWith('/api/actions'))return false;
+  try{return response.request().postDataJSON()?.action==='canvas.reference'}catch{return false}
+ });
  await page.getByRole('button',{name:'Reference in chat',exact:true}).click();
+ const response=await referenceResponse;assert.equal(response.status(),200);
+ const reference=(await response.json()).result;
+ assert.equal(reference.sent,false);assert.equal(reference.version,1);assert.equal(reference.excerpt,'quoted');
+ assert.equal(reference.id,artifact.id);
+ const uri=new URL(reference.reference);
+ assert.equal(uri.protocol,'amplifier-canvas:');assert.equal(uri.hostname,'artifact');
+ assert.equal(uri.pathname,'/'+artifact.id);assert.equal(uri.searchParams.get('version'),'1');
+ assert.equal(uri.searchParams.get('session'),reference.sessionId);
+ const expectedReference=`From [Block copy fixture · Version 1](${reference.reference}):\n\n> quoted\n\n`;
+ assert.equal(reference.draft,expectedReference);
  const referenceComposer=page.getByRole('textbox',{name:'Message Amplifier'});
- await expect.poll(()=>readComposerDraft(referenceComposer)).toMatch(/quoted/);
- await expect(referenceComposer.locator('blockquote')).toContainText('quoted');
+ async function exactReference(){
+  await expect.poll(()=>readComposerDraft(referenceComposer)).toBe(expectedReference);
+  await expect(referenceComposer.locator('.a-composer-markdown-source')).toBeVisible();
+  assert.equal(await referenceComposer.textContent(),expectedReference,'visible editor retains URI, version and complete excerpt');
+  const current=await state();
+  const persisted=await (await page.request.get(url+'/api/state',{headers:{'X-Amplifier-Client':current.client.id}})).json();
+  assert.equal(persisted.view.draft,expectedReference,'saved draft is exact, not a substring');
+  return {text:await referenceComposer.textContent(),draft:persisted.view.draft,document:persisted.view.draftDocument};
+ }
+ stage='reference before reload';
+ evidence.reference={uri:reference.reference,version:reference.version,excerpt:reference.excerpt,expected:expectedReference,before:await exactReference()};await save();
+ if(process.env.BLOCK_COPY_OLD_ORACLE==='1'){
+  // Deliberately retain the obsolete assertion as a discriminating control.
+  await expect(referenceComposer.locator('blockquote')).toContainText('quoted',{timeout:1000});
+  throw Error('OLD_ORACLE_UNEXPECTEDLY_PASSED');
+ }
  await page.reload();await ready();
+ stage='reference after reload';evidence.reference.after=await exactReference();await save();
+ await referenceComposer.press('Control+End');await referenceComposer.pressSequentially('Temporary edit');
+ await expect.poll(()=>readComposerDraft(referenceComposer)).toBe(expectedReference+'Temporary edit');
+ await referenceComposer.press('Control+z');await exactReference();
+ stage='reference Send';
+ await page.getByRole('button',{name:'Send message',exact:true}).click();
+ await expect.poll(()=>readComposerDraft(referenceComposer)).toBe('');
+ const sentReference=(await (await page.request.get(url+'/fixture')).json()).sent.at(-1);
+ assert.equal(sentReference.text,expectedReference);
+ evidence.reference.sent=sentReference;await save();
  await copy(canvas.getByRole('button',{name:'Copy code block',exact:true}).nth(0),raw);
  const saved=(await action('canvas.versions.inspect',{id:artifact.id,version:1,includeSource:true})).result;
  assert.equal(saved.source.content,markdown,'Copy and reload must not change saved content');
@@ -150,7 +202,7 @@ try{
  await action('canvas.show',{kind:'jsonl',content:records.map(row=>JSON.stringify(row)).join('\r\n')});
  await copy(canvas.getByRole('button',{name:'Copy record 1 as JSON',exact:true}),JSON.stringify(records[0],null,2));
  // Real browser permission denial, not a mock success.
- await page.evaluate(()=>navigator.clipboard.writeText('retained clipboard'));await context.clearPermissions();
+ const deniedSentinel=await seedClipboard('permission denied');await context.clearPermissions();
  const cdp=await context.newCDPSession(page);
  const {targetInfo}=await cdp.send('Target.getTargetInfo');
  for(const allowWithoutSanitization of [false,true])
@@ -159,11 +211,13 @@ try{
  await denied.locator('../..').hover();await denied.click();await expect(denied.locator('..').getByRole('status')).toContainText('denied');
  await cdp.send('Browser.resetPermissions',{browserContextId:targetInfo.browserContextId});
  await context.grantPermissions(['clipboard-read','clipboard-write']);
- await expect.poll(clipboard).toBe('retained clipboard');
+ await expect.poll(clipboard).toBe(deniedSentinel);
  // Unsupported API is a separate branch: only this branch is deliberately stubbed.
+ const unavailableSentinel=await seedClipboard('unavailable');
  await page.evaluate(()=>{window.originalClipboard=Object.getOwnPropertyDescriptor(navigator,'clipboard');Object.defineProperty(navigator,'clipboard',{configurable:true,value:undefined})});
  await denied.locator('../..').hover();await denied.click();await expect(denied.locator('..').getByRole('status')).toContainText('unavailable');
  await page.evaluate(()=>{if(window.originalClipboard)Object.defineProperty(navigator,'clipboard',window.originalClipboard);else delete navigator.clipboard});
+ await expect.poll(clipboard).toBe(unavailableSentinel);
  // Stored source is fetched for the selected version before exposing Copy.
  // Use inert HTML only to exercise the host's existing externalization path.
  const savedSource='<p>Saved source α😀</p>\r\n<!--'+'x'.repeat(1000100)+'-->\r\n';
@@ -221,6 +275,7 @@ try{
  // Hold completion, not invocation, to exercise rapid clicks/version replacement.
  await action('canvas.select',{id:artifact.id,version:1});
  await action('canvas.view',{id:artifact.id,patch:{source:false}});
+ await seedClipboard('held completion');
  await page.evaluate(()=>{
   const write=navigator.clipboard.writeText.bind(navigator.clipboard);window.copyCalls=[];
   Object.defineProperty(navigator.clipboard,'writeText',{configurable:true,value:text=>{
@@ -245,14 +300,27 @@ try{
  await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
  await action('view.update',{patch:{canvasFocused:true}});
  const touch=canvas.getByRole('button',{name:'Copy code block',exact:true});
+ stage='narrow touch visibility';await save();
  await expect(touch).toBeVisible();
  const size=await touch.boundingBox();assert.ok(size.width>=44&&size.height>=44);
  await expect(touch.locator('..')).toHaveCSS('opacity','1');
+ const touchSentinel=await seedClipboard('narrow touch');
+ stage='narrow touch clipboard';await save();
  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:size.x+size.width/2,y:size.y+size.height/2}]});
  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
  await expect.poll(clipboard).toBe('new version\n');
+ await expect(touch.locator('..').getByRole('status')).toHaveText('Copied.');
+ evidence.copies.push({label:'narrow touch',sentinel:touchSentinel,expected:'new version\n',completed:true});
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  console.log(JSON.stringify({pageErrors:errors,frameExceptions:exceptions}));
  assert.deepEqual(errors,[]);
+ evidence.status='passed';stage='complete';await save();
  console.log('PASS block-copy browser: SSE-first baseline, exact source clipboard, assistant/Canvas list/quote/table blocks, diagrams, code/text/JSON, saved-source readiness/failure, reference spans, reload, permission denial, unsupported API, pending/version race, keyboard/touch, writing/message regression.');
+}catch(error){
+ evidence.status='failed';evidence.error=String(error);
+ if(page){
+  evidence.diagnostic=await page.evaluate(()=>({width:innerWidth,height:innerHeight,focused:document.activeElement?.outerHTML.slice(0,500),canvas:window.amplifier?.getState()?.canvas,buttons:[...document.querySelectorAll('.a-canvas-viewer button')].map(el=>{const r=el.getBoundingClientRect();return {label:el.getAttribute('aria-label'),rect:{x:r.x,y:r.y,width:r.width,height:r.height},opacity:getComputedStyle(el.parentElement).opacity,display:getComputedStyle(el).display}})})).catch(()=>null);
+  await page.screenshot({path:join(artifacts,'failure.png')}).catch(()=>{});
+ }
+ await save();throw error;
 }finally{try{await context?.tracing.stop({path:tracePath});if(context)console.log(JSON.stringify({tracePath}))}finally{await browser?.close();fixture.kill()}}
