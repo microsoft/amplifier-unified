@@ -184,7 +184,7 @@ def stored_execution(tree):
 
 
 def persist(home, state, cache, *, session_ids=None, by_id=None, references=None, scoped_result=False,
-            undo=None, db=None, retain_native=None):
+            undo=None, db=None, retain_native=None, message_preparation=None, pending_messages=None):
     """SQLite keeps only the session list; presentation files change on demand."""
     from .automatic_history import INDEX_FIELDS
     result = dict(state)
@@ -206,6 +206,11 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
                 (by_id[identity] for identity in session_ids if identity in by_id))
     for session in sessions:
         from .cold_display import MARKER
+        if pending_messages is not None:
+            # Inline/native/cold-reference saves must retire older preparation
+            # only when this save commits, including cold_display.retire's save
+            # before it removes the resident field.
+            pending_messages[session['id']] = None
         if session.get('historyManaged'):
             # Rebuild native catalog rows from their source. Persist only local
             # presentation overrides and startup selection/pin references.
@@ -248,13 +253,16 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
                 and sum(len(message.get('text', '')) for message in messages
                         if isinstance(message, dict) and isinstance(message.get('text'), str)) >= 16000):
             from .cold_display import notifications
-            from .resource_files import put
+            from .resource_files import put, put_prepared
             # Storage projection only: live lists and borrowed nested aliases
-            # remain mutable. Re-encode every save so equal-length edits cannot
-            # reuse an obsolete reference. Existing cold readers/GC own the blob.
+            # remain mutable. Only exact type-aware content equality against a
+            # detached committed snapshot may reuse prepared bytes. Resource
+            # adoption, file validation, cold readers and GC remain unchanged.
             from .media_saved_aliases import binding_hint
+            message_reference = (put_prepared(db, message_preparation.prepare(session, messages, pending_messages))
+                                 if message_preparation is not None else put(db, messages))
             value[MARKER] = {**value.get(MARKER, {}),
-                             'messages': binding_hint(session, put(db, messages), messages)}
+                             'messages': binding_hint(session, message_reference, messages)}
             value['_coldMessageCount'] = len(messages)
             value['_coldNotifications'] = notifications(session)
             value.pop('messages')

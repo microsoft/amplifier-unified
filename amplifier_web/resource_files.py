@@ -67,6 +67,11 @@ def _rollback_put(db, owns_transaction):
 
 def put(db, value):
     prepared = prepare(value)
+    return put_prepared(db, prepared)
+
+
+def put_prepared(db, prepared):
+    """Adopt prepared bytes through the same transaction and file checks."""
     directory, indexed, owns_transaction = _stage(db, prepared)
     try:
         db.execute('INSERT OR IGNORE INTO state_resources VALUES (?, ?)', (prepared.identity, indexed))
