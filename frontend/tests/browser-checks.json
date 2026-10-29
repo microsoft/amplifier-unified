@@ -123,6 +123,7 @@
     {"id": "peer-preview-header", "command": ["node", "tests/peer-preview-header-browser.mjs"], "env": {"AMPLIFIER_PROOF_DIR": "{root}/output/browser-checks/peer-preview-header"}},
     {"id": "peer-preview-focus", "command": ["node", "tests/peer-preview-focus-browser.mjs"], "env": {"AMPLIFIER_PROOF_DIR": "{root}/output/browser-checks/peer-preview-focus"}},
     {"id": "canvas-chrome", "command": ["node", "tests/canvas-chrome-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/canvas-chrome"}},
+    {"id": "canvas-close", "command": ["node", "tests/canvas-close-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/canvas-close"}},
     {"id": "chat-scroll-call-boundaries", "command": ["node", "tests/chat-scroll-call-boundaries-browser.mjs"]},
     {"id": "semantic-settings", "command": ["node", "tests/semantic-settings-browser.mjs"]},
     {"id": "history-refresh", "command": ["node", "tests/history-refresh-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/history-refresh"}},

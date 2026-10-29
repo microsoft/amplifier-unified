@@ -1,7 +1,7 @@
 import {ApprovalPanel} from './approval-card';
 import {AutomationHub} from './automation-hub';
 import {createArchiveAction} from './archive-action.js';
-import {quoteNotice as makeQuoteNotice,quoteNoticeAfterSend,visibleQuoteNotice} from './quote-notice.js';
+import {quoteNotice as makeQuoteNotice,quoteNoticeAfterRemoval,quoteNoticeAfterSend,visibleQuoteNotice} from './quote-notice.js';
 import {ArchiveContext,ArchiveNotice} from './archive-feedback.jsx';
 import {createStateStream} from './state-stream.js';
 import {recordActionTiming} from './api.js';
@@ -793,7 +793,7 @@ function App(){
     <div className="a-compose-writing">
     <AttachmentStrip privateDraft sessionId={session?.id??null} items={availableAttachments} remove={id=>act('attachment.remove',{sessionId:session?.id??null,id})}/>{uploading&&<p role="status" className="a-upload-status">Uploading attachments…</p>}
     <ReplyPreview quote={state.view?.messageReply} sessionId={session?.id} dispatch={dispatch}/>
-    <MarkdownComposer key={session?.id??'new-chat'} editorRef={composerRef} quoteApi={quoteApi} value={draft} document={state.view?.draftDocument} onChange={editDraft} onSend={send} onReveal={async(quote,button)=>{
+    <MarkdownComposer key={session?.id??'new-chat'} editorRef={composerRef} quoteApi={quoteApi} value={draft} document={state.view?.draftDocument} onChange={editDraft} onSend={send} onQuoteRemoved={left=>setQuoteNotice(notice=>quoteNoticeAfterRemoval(notice,session?.id,left))} onReveal={async(quote,button)=>{
      const sid=session?.id,owner=quoteApi.current;
      if(quote.sessionId!==sid)throw Error('This source is from another chat. Cross-chat quotation is not available.');
      const top=messagesPane.current?.scrollTop;

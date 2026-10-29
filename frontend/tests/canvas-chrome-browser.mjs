@@ -465,7 +465,8 @@ try{
     await panel.getByRole('button',{name:'Focus canvas',exact:true}).click();
     await expect(panel).toHaveAttribute('data-focused','true');await page.keyboard.press('Escape');
     await expect(panel).toHaveAttribute('data-focused','false');
-    await expect(panel.getByRole('button',{name:/^(Close canvas panel|Back to canvas)$/})).toHaveCount(0);
+    await expect(panel.getByRole('button',{name:'Close canvas panel',exact:true})).toBeVisible();
+    await expect(panel.getByRole('button',{name:'Back to canvas',exact:true})).toHaveCount(0);
     return {...bounds,navigation,details:{closed:closedInspector,open:openInspector}};
    });
   }
