@@ -1,5 +1,6 @@
 import './composer-test-helpers.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {observeCoordinationDisclosures} from './coordination-disclosure-diagnostics.mjs';
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {mkdir,mkdtemp,writeFile,unlink} from 'node:fs/promises';
@@ -14,12 +15,13 @@ const outputBase=resolve(process.env.AMPLIFIER_TEST_OUTPUT_DIR||join(root,'worki
 await mkdir(outputBase,{recursive:true});
 const outputDir=await mkdtemp(join(outputBase,'coordination-browser-'));
 const fixture=spawn(python,[root+'/tests/fixtures/coordination_ui_server.py'],{stdio:['ignore','pipe','inherit'],env:{...process.env,AMPLIFIER_TEST_OUTPUT_DIR:outputDir}});
-let browser,page;
+let browser,page,disclosureFacts;
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timeout=setTimeout(()=>reject(Error('startup')),15000);fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timeout);resolve(row.url)}}catch{}});fixture.once('error',reject)});
  // ARM containers can opt into single-process Chromium for this fixture.
  browser=await chromium.launch({headless:true,...(process.env.UNIFIED_BROWSER_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}: {})});
  page=await browser.newPage({viewport:{width:1100,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ disclosureFacts=await observeCoordinationDisclosures(page);
  page.setDefaultTimeout(10000);
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  const uiActions=[];
@@ -509,6 +511,10 @@ try{
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({passed:true,actualService:true,twoTargets:true,followupExactTarget:true,cursorReconnect:true,failedReadReconnect:true,noDuplicateReports:true,noRepeatedSubmission:true,interruptWhileWaiting:true,selectionAndDraftPreserved:true,mobileNoOverflow:true,noCoordinationForms:true,noGrantRequired:true,runtimeOwnedBindings:true,twoDistinctTaskRoots:true,twoArtifactRoundsPerRoot:true,firstRoundBytesRetained:true,laterReplyVersionsInspectable:true,malformedReferenceRepair:true,opaqueReferenceNotSaved:true,correctedRetentionRevision:true,latestOutcomeAfterRefresh:true,peerWokenGeneration:true,notifyNeverWakes:true,exactResultInspector:true,referencedArtifactOpen:true,qualifiedScriptedTerminal:true,continuationOncePerRequest:true,deterministicRuntime:true,emulatedTerminalAnchor:true,nativeRuntime:false,liveModelEvidence:false,providerCalls:false,outputDir}));
 }catch(error){
+ try{
+  const facts=disclosureFacts?.();
+  if(facts){await writeFile(join(outputDir,'coordination-disclosure-failure.json'),JSON.stringify(facts,null,2)+'\n');console.error(JSON.stringify({coordinationDisclosureFailure:facts}))}
+ }catch{}
  // Failure-only facts distinguish a replaced disclosure from a closed one or
  // missing retained reports without retrying the interaction that failed.
  try{console.error(JSON.stringify({coordinationFailure:await page?.evaluate(()=>{
