@@ -615,7 +615,6 @@ class AutomaticHistory:
                                    or directory_mode and (incoming['reset'] or incoming['sessions'] or incoming['removed'] or incoming['removedProjects']))
                     globals_changed = ({'sharedHistory'} if state.get('sharedHistory', {}).get('loading')
                                        or state.get('sharedHistory', {}).get('error') else set())
-                    workspace_remapped = False
                     worker_detail_only = (delta_mode and not full_merge
                         and not incoming['workspaces'] and not incoming['removed']
                         and not incoming['removedProjects']
@@ -676,7 +675,6 @@ class AutomaticHistory:
                         for old in unresolved:
                             # Migrate the generated placeholder, preserving any
                             # user customization and every reference to it.
-                            workspace_remapped = True
                             if old.get('name') != old.get('nativeProject'):
                                 if previous.get('name') == row.get('name'):
                                     previous['name'] = old['name']
@@ -689,8 +687,10 @@ class AutomaticHistory:
                                     previous.setdefault(key, copy.deepcopy(value))
                             if state.get('selectedWorkspaceId') == old['id']:
                                 state['selectedWorkspaceId'] = row['id']
+                                globals_changed.add('selectedWorkspaceId')
                                 if row.get('path'):
                                     state['settings']['workspace'] = row['path']
+                                    globals_changed.add('settings')
                             pins = state.get('pinnedWorkspaceIds', [])
                             if isinstance(pins, list) and old['id'] in pins:
                                 # Replace identity in place; availability and
@@ -704,13 +704,25 @@ class AutomaticHistory:
                                         seen.add(value)
                                 if remapped != pins:
                                     state['pinnedWorkspaceIds'] = remapped
+                                    globals_changed.add('pinnedWorkspaceIds')
                                     if isinstance(state.get('pinnedItemIds'), list):
-                                        state['pinnedItemIds'] = list(dict.fromkeys(
+                                        items = list(dict.fromkeys(
                                             'workspace:' + row['id'] if key == 'workspace:' + old['id'] else key
                                             for key in state['pinnedItemIds']))
-                            for scoped in [*state['sessions'], *state.get('canvasArtifacts', []), state.get('canvas', {})]:
+                                        if items != state['pinnedItemIds']:
+                                            state['pinnedItemIds'] = items
+                                            globals_changed.add('pinnedItemIds')
+                            for scoped in state['sessions']:
                                 if scoped.get('workspaceId') == old['id']:
                                     scoped['workspaceId'] = row['id']
+                                    touched.add(scoped['id'])
+                            canvas_remaps = [(key, scoped) for key, values in (
+                                ('canvasArtifacts', state.get('canvasArtifacts', [])),
+                                ('canvas', [state.get('canvas', {})])) for scoped in values
+                                if scoped.get('workspaceId') == old['id']]
+                            for key, scoped in canvas_remaps:
+                                scoped['workspaceId'] = row['id']
+                                globals_changed.add(key)
                             state['workspaces'].remove(old)
                             workspaces.pop(old['id'], None)
                             unresolved_by_project.get(old.get('nativeProject'), {}).pop(old['id'], None)
@@ -873,7 +885,7 @@ class AutomaticHistory:
                         state['sharedHistory']['reconciliation'] = reconciliation
                     self.last_scan = snapshot
                     if changed:
-                        if delta_mode and not full_merge and not workspace_remapped:
+                        if delta_mode and not full_merge:
                             # Native directory changes still need a committed
                             # publication, but unchanged registries are not its
                             # write scope. The service retains its independent

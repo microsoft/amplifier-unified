@@ -213,7 +213,11 @@ async def test_workspace_placeholder_delta_retains_selection_pins_and_owner_refe
                         lambda: (True, {(project, 'second-worker', 'metadata')}))
     await app.history.refresh(force=False)
     assert app.state['sharedHistory']['error'] is None
-    assert len(publications) == 1 and publications[0] == {}  # Canonical full reconciliation.
+    assert len(publications) == 1
+    assert owners['root']['id'] in publications[0]['session_ids']
+    assert publications[0]['global_keys'] == {
+        'workspaces', 'sharedHistory', 'selectedWorkspaceId', 'settings',
+        'pinnedWorkspaceIds', 'pinnedItemIds'}
     saved = load_saved_state(app.db)
     assert saved['selectedWorkspaceId'] == resolved['id']
     assert saved['pinnedWorkspaceIds'] == [resolved['id']]
