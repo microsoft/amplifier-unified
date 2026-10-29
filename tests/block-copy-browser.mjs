@@ -46,6 +46,7 @@ try{
  });
  const action=(name,args={})=>bounded(page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]),`App action ${name}`);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
+ const sent=async()=>(await (await page.request.get(url+'/fixture')).json()).sent;
  const clipboard=()=>bounded(page.evaluate(()=>navigator.clipboard.readText()),'Read clipboard');
  let copySequence=0;
  async function seedClipboard(label){
@@ -123,6 +124,7 @@ try{
  await expect(canvas.getByRole('button',{name:'Copy Markdown source',exact:true})).toHaveCount(1);
  await copy(canvas.getByRole('button',{name:'Copy Markdown source',exact:true}),table);
  // Existing source-span mapping still supports references without toolbar text.
+ const sentBeforeReference=await sent();
  const span=canvas.locator('blockquote [data-canvas-source-start]').first();
  await span.evaluate(element=>{const range=document.createRange();range.selectNodeContents(element);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);document.dispatchEvent(new Event('selectionchange'))});
  await expect(page.getByRole('button',{name:'Reference in chat',exact:true})).toBeEnabled();
@@ -146,10 +148,13 @@ try{
   await expect.poll(()=>readComposerDraft(referenceComposer)).toBe(expectedReference);
   await expect(referenceComposer.locator('.a-composer-markdown-source')).toBeVisible();
   assert.equal(await referenceComposer.textContent(),expectedReference,'visible editor retains URI, version and complete excerpt');
-  const current=await state();
-  const persisted=await (await page.request.get(url+'/api/state',{headers:{'X-Amplifier-Client':current.client.id}})).json();
-  assert.equal(persisted.view.draft,expectedReference,'saved draft is exact, not a substring');
+  await expect.poll(async()=>(await savedDraft()).draft).toBe(expectedReference);
+  const persisted={view:await savedDraft()};
   return {text:await referenceComposer.textContent(),draft:persisted.view.draft,document:persisted.view.draftDocument};
+ }
+ async function savedDraft(){
+  const current=await state();
+  return (await (await page.request.get(url+'/api/state',{headers:{'X-Amplifier-Client':current.client.id}})).json()).view;
  }
  stage='reference before reload';
  evidence.reference={uri:reference.reference,version:reference.version,excerpt:reference.excerpt,expected:expectedReference,before:await exactReference()};await save();
@@ -162,12 +167,16 @@ try{
  stage='reference after reload';evidence.reference.after=await exactReference();await save();
  await referenceComposer.press('Control+End');await referenceComposer.pressSequentially('Temporary edit');
  await expect.poll(()=>readComposerDraft(referenceComposer)).toBe(expectedReference+'Temporary edit');
+ await expect.poll(async()=>(await savedDraft()).draft).toBe(expectedReference+'Temporary edit');
  await referenceComposer.press('Control+z');await exactReference();
+ assert.deepEqual(await sent(),sentBeforeReference,'reference/edit/undo must not send');
  stage='reference Send';
  await page.getByRole('button',{name:'Send message',exact:true}).click();
  await expect.poll(()=>readComposerDraft(referenceComposer)).toBe('');
- const sentReference=(await (await page.request.get(url+'/fixture')).json()).sent.at(-1);
+ await expect.poll(async()=>(await sent()).length).toBe(sentBeforeReference.length+1);
+ const sentReference=(await sent()).at(-1);
  assert.equal(sentReference.text,expectedReference);
+ assert.equal(sentReference.sessionId,reference.sessionId);
  evidence.reference.sent=sentReference;await save();
  await copy(canvas.getByRole('button',{name:'Copy code block',exact:true}).nth(0),raw);
  const saved=(await action('canvas.versions.inspect',{id:artifact.id,version:1,includeSource:true})).result;

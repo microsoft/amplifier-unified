@@ -226,7 +226,7 @@ for(const [name,source,href] of [
    assert.equal(paragraph.type.name,'paragraph');
    assert.equal(paragraph.childCount,1);
    assert.equal(paragraph.textContent,canvasQuoteLabel);
-   assert.deepEqual(paragraph.firstChild.marks.map(mark=>mark.toJSON()),[{type:'link',attrs:{href,title:null}}]);
+   assert.deepEqual(JSON.parse(JSON.stringify(paragraph.firstChild.marks.map(mark=>mark.toJSON()))),[{type:'link',attrs:{href,title:null}}]);
   }
   const quote=doc.lastChild;
   assert.equal(quote.type.name,'blockquote');

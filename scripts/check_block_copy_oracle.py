@@ -51,11 +51,16 @@ def main():
     current = json.loads((OUT / 'full-journey/block-copy-result.json').read_text())
     original = json.loads((OUT / 'browser/results.json').read_text())
     clean = all(not row['cleanup']['remaining'] and not row['cleanup']['terminated'] for row in original['scenarios'])
-    negative_ok = (negative['status'] == 'failed' and negative['stage'] == 'reference before reload'
+    old_process, full_process = original['scenarios']
+    negative_ok = (old_process['status'] == 'failed' and old_process['exitCode'] == 1
+                   and old_process['reason'] is None
+                   and negative['status'] == 'failed' and negative['stage'] == 'reference before reload'
                    and "locator('blockquote')" in negative['error']
                    and negative['reference']['before']['draft'] == negative['reference']['expected']
                    and negative['reference']['before']['text'] == negative['reference']['expected'])
-    passed = negative_ok and current['status'] == 'passed' and clean
+    passed = (original['complete'] and negative_ok and current['status'] == 'passed' and clean
+              and full_process['status'] == 'passed' and full_process['exitCode'] == 0
+              and full_process['reason'] is None)
     result = {'passed': passed, 'negativeRejectedObsoleteAssertion': negative_ok,
               'fullJourney': current['status'], 'fullJourneyStage': current['stage'],
               'fixtureCleanupComplete': clean, 'productChanged': False,
