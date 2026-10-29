@@ -69,48 +69,50 @@ class BufferedLines:
     def __init__(self, stream):
         self.stream = stream
         self.pending = None
-        self.saved = None
-        self.failure = None
 
     async def next(self):
-        if self.failure is not None:
-            error, self.failure = self.failure, None
-            raise error
-        if self.saved is not None:
-            value, self.saved = self.saved, None
-            return value
-        if self.pending is None:
-            return await self.stream.readline()
-        pending = self.pending
-        value = await pending
-        self.pending = None
-        return value
+        if self.pending is not None:
+            try:
+                value = await self.pending
+            finally:
+                self.pending = None
+            # None means the bounded batch filled without reading ahead.
+            # Empty bytes still represent the retained EOF barrier.
+            if value is not None:
+                return value
+        return await self.stream.readline()
 
     async def collect(self, first, event, accept):
         events, size = [event], len(first)
-        while len(events) < MAX_EVENTS and size < MAX_BYTES:
-            if self.pending is None:
-                self.pending = asyncio.create_task(self.stream.readline())
-            # Only consume a read already ready after giving other owners a turn.
-            await asyncio.sleep(0)
-            if not self.pending.done():
-                break
-            if self.pending.cancelled() or self.pending.exception() is not None:
-                # The read error is the next barrier, after durable delivery of
-                # the valid prefix. next() will raise the original exception.
-                break
-            line = self.pending.result()
-            self.pending = None
-            try:
+        if size >= MAX_BYTES:
+            return events
+        collecting = True
+
+        async def ready_lines():
+            nonlocal size
+            while len(events) < MAX_EVENTS and size < MAX_BYTES:
+                line = await self.stream.readline()
+                # A genuinely pending read belongs to next(), not to the
+                # already-returned prefix. Do not cancel or discard its bytes.
+                if not collecting:
+                    return line
                 candidate = accept(line) if line and size + len(line) <= MAX_BYTES else None
-            except Exception as exc:
-                self.failure = exc
-                break
-            if candidate is None:
-                self.saved = line
-                break
-            events.append(candidate)
-            size += len(line)
+                if candidate is None:
+                    return line
+                events.append(candidate)
+                size += len(line)
+            return None
+
+        self.pending = asyncio.create_task(ready_lines())
+        try:
+            # Buffered readline calls finish synchronously. Let this bounded
+            # task drain them in one turn, instead of paying a new background
+            # publication/scheduler turn for each already-buffered receipt.
+            await asyncio.sleep(0)
+        finally:
+            collecting = False
+        # Read/accept failures stay on the owned task. next() raises them only
+        # after this valid prefix has been delivered durably.
         return events
 
     async def close(self):
