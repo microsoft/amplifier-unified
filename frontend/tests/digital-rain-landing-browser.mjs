@@ -145,6 +145,7 @@ try{
    '.a-workspace-label>span[data-scroll-title],.a-workspace-label>span[data-scroll-title]>span';
   return {surface:getComputedStyle(document.querySelector('#amp-one')).getPropertyValue('--a-surface').trim(),
    tint:getComputedStyle(document.querySelector('#amp-one')).getPropertyValue('--a-tint').trim(),
+   soft:getComputedStyle(document.querySelector('#amp-one')).getPropertyValue('--a-soft').trim(),
    blocks:selectors.flatMap(selector=>[...el.querySelectorAll(selector)].filter(visible).map(node=>({
     selector,background:getComputedStyle(node).backgroundColor,image:getComputedStyle(node).backgroundImage}))),
    fonts:[...el.querySelectorAll('h1,h2,h3')].filter(visible).map(node=>getComputedStyle(node).fontFamily),
@@ -162,7 +163,10 @@ try{
   for(const title of reading.titleFonts)assert.match(title.font,/mono|Menlo|Consolas/i,
    `${title.selector} actual title span is monospace, including Focus layout`);
   for(const block of reading.blocks){
-   assert.ok(palette.includes(block.background),`${block.selector} must have a solid palette background: ${block.background}`);
+   // Native search chrome uses the theme's opaque inset surface. Preserve that
+   // distinction instead of overriding production CSS to fit a surface-only oracle.
+   const allowed=block.selector==='.a-nav-search'?[...palette,rgb(reading.soft)]:palette;
+   assert.ok(allowed.includes(block.background),`${block.selector} must have a solid palette background: ${block.background}`);
    assert.equal(block.image,'none',`${block.selector} keeps rain behind its reading surface`);
   }
   report.readingSelectors=[...new Set([...(report.readingSelectors||[]),...reading.blocks.map(block=>block.selector)])];
