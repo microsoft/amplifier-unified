@@ -77,6 +77,28 @@ def _identity(session):
             'id': native_id(session), 'sessionRef': reference(session), 'legacyId': session['id']}
 
 
+def _read_snapshot(session):
+    """Detach retrieval inputs while the caller holds the service lock.
+
+    Keep ALL retained message fields and occurrences: native/voice alignment
+    and receipt-bound attribution need originals outside the returned page.
+    Execution, workers and other presentation state are not reader inputs.
+    Named access also avoids materializing unrelated ColdRecord payloads.
+    """
+    from .cold_display import ColdRecord, detached
+    if isinstance(session, ColdRecord):
+        # Loading required fields must not retire the original cold references,
+        # cached summaries or touch callback as a side effect of a passive read.
+        session = detached(session)
+    missing = object()
+    fields = ('id', 'nativeIdentity', 'runtimeSessionId', 'nativeProject',
+              'workspace', 'title', 'description', 'status', 'parentId',
+              'nativeParentId', 'sessionKind', 'sessionPurpose', 'messages',
+              'historyManaged', 'createdAt', 'updatedAt', 'recentActivityAt')
+    return copy.deepcopy({key: value for key in fields
+                          if (value := session.get(key, missing)) is not missing})
+
+
 async def query_history(service, args, caller_id):
     from .performance_diagnostics import active_bridge, mark
     timing = active_bridge()
@@ -134,11 +156,11 @@ async def query_history(service, args, caller_id):
             # A requested page/read may need retained uncheckpointed messages.
             # Resolve only those local owners, never the complete library.
             mark(timing, 'history.copy.start')
-            sessions = [copy.deepcopy(service._session(row['id'])) if action != 'list' and row.get('historyManaged') is not True
+            sessions = [_read_snapshot(service._session(row['id'])) if action != 'list' and row.get('historyManaged') is not True
                         else row for row in sessions]
             mark(timing, 'history.copy.end')
         else:
-            sessions = [copy.deepcopy(row) for row in service.state.get("sessions", [])
+            sessions = [_read_snapshot(row) for row in service.state.get("sessions", [])
                         if includes(caller, row, scope)
                         and (not args.get("workspace") or row.get("workspace") == args["workspace"])
                         and (not args.get("nativeProject") or native_project(row) == args["nativeProject"])
