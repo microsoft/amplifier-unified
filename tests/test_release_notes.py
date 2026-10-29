@@ -68,10 +68,25 @@ def test_invalid_history_rejected(value):
 
 
 def test_history_limits_and_exact_published_version():
-    with pytest.raises(ValueError):release_notes.parse(' '*256001)
+    with pytest.raises(ValueError, match='too large'):
+        release_notes.parse(' ' * (release_notes.MAX_BYTES + 1))
     with pytest.raises(ValueError):release_notes.parse(document([entry()]),'98.0.0')
     with pytest.raises(ValueError):release_notes.parse(document([entry('98.0.0')]),'99.0.0')
     assert release_notes.parse(document([entry('98.0.0'),entry()]),'99.0.0')[0]['version']=='99.0.0'
+
+
+def test_valid_near_byte_limit_cached_unicode_history_survives(monkeypatch):
+    notes = [dict(entry(f'99.0.{i}'), changes=['é' * 1400] * 12) for i in range(15)]
+    compact = json.dumps({'schemaVersion': 1, 'releases': notes},
+                         ensure_ascii=False, separators=(',', ':'))
+    assert release_notes.MAX_BYTES * .95 < len(compact.encode('utf-8')) <= release_notes.MAX_BYTES
+    assert len(document(notes).encode('utf-8')) > release_notes.MAX_BYTES
+    parsed = release_notes.parse(compact)
+    monkeypatch.setattr(release_notes, 'bundled', lambda: [])
+    assert release_notes.history(parsed) == parsed
+    # The bound applies to UTF-8 bytes, not Python's character count.
+    with pytest.raises(ValueError, match='too large'):
+        release_notes.parse(compact + ' ' * (release_notes.MAX_BYTES - len(compact.encode('utf-8'))) + 'é')
 
 
 @pytest.mark.parametrize('count', [101, 257, release_notes.MAX_RELEASES])

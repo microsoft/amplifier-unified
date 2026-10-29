@@ -9,8 +9,8 @@ from functools import lru_cache
 from pathlib import Path
 import re
 
-MAX_BYTES = 256_000
-# Retain the authored history through 0.20.211; the independent byte cap still applies.
+# Preserve the authored history with bounded room for future release entries.
+MAX_BYTES = 512_000
 MAX_RELEASES = 512
 PATH = Path(__file__).with_name('release-notes.json')
 
@@ -86,7 +86,8 @@ def history(cached=(), latest=None):
     """Installed entries win over stale cached text; retain fetched future notes."""
     from . import __version__
     try:
-        saved = parse(json.dumps({'schemaVersion': 1, 'releases': cached})) if cached else []
+        saved = parse(json.dumps({'schemaVersion': 1, 'releases': cached},
+                                 ensure_ascii=False, separators=(',', ':'))) if cached else []
     except (ValueError, TypeError):
         saved = []
     ceiling = max(version(__version__), version(latest.removeprefix('v'))) if latest else max([version(__version__), *[version(row['version']) for row in saved]])
