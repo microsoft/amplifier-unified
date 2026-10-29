@@ -6,6 +6,12 @@ preparation and compatibility checks before a worker can accept its first input.
 The existing progress messages describe those stages; they are not delivery
 acknowledgements.
 
+Use [performance validation](performance.md) for startup and checkpoint changes.
+Declare transcript size, retained job count and cold/warm conditions; separate
+required recovery checks from repeated scans or copies. A no-op disk write does
+not establish a cheap checkpoint, and faster preparation must preserve ownership,
+native history, interruption evidence and cancellation cleanup.
+
 Each newly prepared profile retains a private `profile-attempt.json` in its
 generation receipt directory. It now records monotonic durations, in milliseconds,
 for preflight, waiting for the configuration lock, the attempt overall, and these

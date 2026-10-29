@@ -19,6 +19,16 @@ Amplifier Agent is separate from Unified's Core/Foundation runtime.
 - Keep unrelated upstream improvements separate from Unified release gates.
   Close out-of-scope tracking and correct misleading reviews when discovered.
 
+## Make performance changes reviewable
+
+For changes to repeated reads, publication, persistence or runtime preparation,
+follow [performance validation](docs/validation/performance.md). Identify the
+canonical owner, triggering operation and inputs that grow before choosing an
+optimization. Review work done before filtering or sending a response, including
+history reads, copies, scans and encoding. Retain a focused regression check for
+the demonstrated cost and the affected history, authority and recovery semantics.
+Use measured workload budgets; this does not add a full-suite release gate.
+
 ## Keep the development release loop fast
 
 Every release needs an authored What's new entry, including fixes-only and

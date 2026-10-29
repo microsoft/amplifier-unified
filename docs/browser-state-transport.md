@@ -1,5 +1,9 @@
 # Browser state transport and idle work
 
+Apply the [performance validation guidance](validation/performance.md) when changing
+these projections. Measure construction and subscriber work as well as frame bytes;
+a small delta can still conceal a full-history copy, scan or encoding pass.
+
 ## Revision-only observations
 
 A delta may advance only the application revision when a committed change has

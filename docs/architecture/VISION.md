@@ -58,6 +58,11 @@ serialize or hash unrelated historical state. Slow subscribers have bounded
 queues and recover through the protocol. A local input responds immediately;
 durable acknowledgement and model readiness remain distinct outcomes.
 
+Performance claims name the workload and the inputs that grow. Validation measures
+the work needed to construct, persist and deliver an update, as well as its size,
+while preserving history and action meaning. The [performance guidance](../validation/performance.md)
+applies this principle to implementation and review in the current application.
+
 ### 8. Separate ownership enables parallel work
 Web, TUI, host, agent adapters, discovery and optional capabilities have explicit
 repository boundaries. Each can run against a fixture peer. Cross-repo changes
@@ -95,4 +100,5 @@ inspectable with a clear limitation. Saved configuration is not mounted behavior
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-29 | Make scaling and semantic preservation explicit in performance evidence. | [Implementation and review guidance](../validation/performance.md); user-requested regression safeguards. |
 | 2026-10-02 | Initial destination for protocol adoption and decomposition. | [Design packet and source assessment](README.md). |
