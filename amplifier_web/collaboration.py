@@ -404,7 +404,7 @@ class Collaboration:
             if not sid:
                 continue
             try:
-                session = self.service._session(sid)
+                session = self.service._session(sid, hydrate=False)
             except Exception:
                 continue
             value = self.current(sid)
@@ -438,7 +438,7 @@ class Collaboration:
             WHERE json_extract(receipt,'$.commandAction')='coordination.watch'
             AND json_extract(receipt,'$.senderSessionId')=? ORDER BY rowid DESC LIMIT 16""", (sid,)).fetchall()]
         return {"grants": [row for row in grants if sid in row["participants"]], "proposals": proposals, 'watches': watches,
-                "workspace": self.service._session(sid)["workspace"],
+                "workspace": self.service._session(sid, hydrate=False)["workspace"],
                 "requests": requests, "capturedAt": time.time(),
                 "continuation": {"supported": hasattr(self.service.runtime, "collaboration_input"),
                                  "qualification": "recipient declaration plus successful root terminal evidence",
@@ -1548,7 +1548,10 @@ class Collaboration:
             # Refuse unsupported return modes before hydration or fresh effects.
             if args.get('returnNotification') is True and args.get('mode', 'queue') != 'queue':
                 self.error('returnNotification:true requires queue mode; no input or wait was created.', 400)
-            await self.service.history.ensure_loaded(args["sessionId"])
+            if args.get('mode') == 'notify':
+                await self.service.history.ensure_loaded(args['sessionId'], hydrate=False)
+            else:
+                await self.service.history.ensure_loaded(args["sessionId"])
         prepared_artifacts = None
         if action == 'coordination.reply':
             from .result_artifacts import prepare
@@ -1641,7 +1644,8 @@ class Collaboration:
                 self.require_continuation()
                 receipt = None
             else:
-                target = self.authorize(source, args, cross_workspace=True)
+                target = self.authorize(source, args, cross_workspace=True,
+                                        hydrate=args.get('mode') != 'notify')
                 if args.get('resume') and source['workspace'] != target['workspace']:
                     self.error('Cross-workspace messaging does not authorize commissioned-member resume.')
                 reason = self.service.assignments.blocked(source)
