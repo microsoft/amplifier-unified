@@ -1,0 +1,31 @@
+// Candidate / WIP. Discussion only; not governing current work.
+digraph Transition {
+  graph [rankdir=TB, bgcolor="#f8fafc", pad="0.35", nodesep="0.35", ranksep="0.5", fontname="DejaVu Sans", fontsize=18, label="CANDIDATE / WIP · proposed gradual replacement\nDiscussion only · prove one complete path before extracting everything", labelloc=t];
+  node [shape=box, style="rounded,filled", fillcolor=white, color="#64748b", fontname="DejaVu Sans", fontsize=12, margin="0.18,0.12"];
+  edge [color="#64748b", arrowsize=0.7, fontname="DejaVu Sans", fontsize=10];
+  now [label="Audited baseline: Unified 0.34.3\nPrivate client transport / native worker protocol\nExisting AHP / ACP architecture is not yet implemented", fillcolor="#fef3c7", color="#d97706"];
+  p0 [label="0 · Define and prove the boundaries\nPin sources · capability inventory · owner contracts\nHost / client / agent fixtures · compare existing host work"];
+  p1 [label="1 · Insert ports around current behavior\nOne command owner · durable session → engine binding\nNative runtime adapter · client transport / view-state port", fillcolor="#e0e7ff", color="#4f46e5"];
+  p2 [label="2 · One complete replacement path\nExisting UI → AHP host → Converge ACP\nReal code change · stream / steer / cancel · inspect evidence\nOld native sessions keep their original owner", fillcolor="#dcfce7", color="#16a34a", penwidth=2];
+  p3 [label="3 · Extract qualified repository owners\nIndependent fixtures and packages · no private source imports\nDistribution composes a matched, versioned system", fillcolor="#e0e7ff", color="#4f46e5"];
+  host [label="Host / native adapter\nAdmission and recovery\nHistory and capability parity", fillcolor="#eef2ff"];
+  ui [label="Experience / components\nStorybook library\nStable host-facing interfaces", fillcolor="#eff6ff"];
+  domain [label="4 · Collaboration\nNamed agent / project / discussions\nDistinct people and scoped access", fillcolor="#f5f3ff"];
+  harness [label="Coding capability\nFresh workers · context / models\nHard-task quality and evidence", fillcolor="#f0fdf4"];
+  p5 [label="5 · Independent improvements and further replacements\nCapability owners · optional protocols · agent workshop\nStable defaults · measured candidates · explicit adoption", fillcolor="#dcfce7", color="#16a34a"];
+  finish [label="Retire each old path after qualified replacement\nOne writer per fact · supported user journeys preserved\nUnified becomes distribution and composition"];
+  rule [shape=note, label="CUTOVER RULE\nRetain the old service behind a bridge\nor drain it before replacing its host.\nRollback routes / versions; never overwrite new writes.", fillcolor="#fff7ed", color="#ea580c", fontsize=11];
+  now -> p0 -> p1 -> p2 -> p3;
+  p3 -> host;
+  p3 -> ui;
+  p3 -> domain;
+  p3 -> harness;
+  {rank=same; host; ui; domain; harness;}
+  host -> p5;
+  ui -> p5;
+  domain -> p5;
+  harness -> p5;
+  p5 -> finish;
+  rule -> p2 [style=dashed, arrowhead=none, constraint=false];
+  {rank=same; p2; rule;}
+}

@@ -1,0 +1,48 @@
+{
+  "scope": "Sanitized architecture proposal and revision-bound source audit; no implementation or deployment change",
+  "repositories": {
+    "amplifier-unified": {
+      "commit": "924acff405de367ac408f7e9b2b9cc7ea4baa47a"
+    },
+    "converge-bootstrap": {
+      "commit": "e04e9fb9fc4ff3ae238fd98b4def34f360f61e1f"
+    },
+    "converge-acp": {
+      "commit": "41d3ea88f46267574376e75e035dc1fb9f928a33"
+    },
+    "converge-models": {
+      "commit": "bfe8a4f5772294c064f63588a5c7c84e8609c4d1"
+    },
+    "converge-context": {
+      "commit": "513df4e4db286bd95a288c719124bc5cf48ac3c8"
+    },
+    "converge-strategy": {
+      "commit": "e7fa39601247047369cfdf751a096c040715491f"
+    }
+  },
+  "new_work": "Candidate architecture package only; component revisions identify source baselines, not deployed state",
+  "primary_protocol_sources": [
+    "https://microsoft.github.io/agent-host-protocol/",
+    "https://agentclientprotocol.com/protocol/v1/prompt-turn",
+    "https://agentclientprotocol.com/protocol/v1/session-setup",
+    "https://agentclientprotocol.com/protocol/v2/prompt-lifecycle",
+    "https://modelcontextprotocol.io/extensions/apps/overview",
+    "https://a2a-protocol.org/latest/specification/",
+    "https://a2ui.org/"
+  ],
+  "reports": [
+    "evidence/unified-source-audit.md"
+  ],
+  "limits": [
+    "Source review does not establish deployed behavior or full protocol conformance.",
+    "Full native feature parity inventory remains an implementation prerequisite.",
+    "Host-owner reuse comparison remains open; naming does not block fixture work.",
+    "October 24 implementation tests and model comparisons were not rerun.",
+    "Converge component source is not bundled here; see harness-profile.md for the summarized source profile and limits."
+  ],
+  "status": "candidate / WIP; non-governing; discussion only",
+  "packaged_date": "2026-10-29",
+  "review_date": "2026-10-28",
+  "packaging_base_commit": "213c03d53e2e1040881f764e284fa3eb7a6728a0",
+  "audited_unified_commit": "924acff405de367ac408f7e9b2b9cc7ea4baa47a"
+}

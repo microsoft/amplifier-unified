@@ -1,0 +1,62 @@
+// Candidate / WIP. Discussion only; not governing current work.
+digraph Architecture {
+  graph [rankdir=TB, bgcolor="#f8fafc", pad="0.35", nodesep="0.35", ranksep="0.6", fontname="DejaVu Sans", fontsize=19, label="Target system · independently owned, composed through contracts\nCANDIDATE / WIP · discussion only · not governing current work", labelloc=t];
+  node [shape=box, style="rounded,filled", fillcolor=white, color="#64748b", penwidth=1.2, fontname="DejaVu Sans", fontsize=12, margin="0.16,0.12"];
+  edge [color="#64748b", arrowsize=0.7, fontname="DejaVu Sans", fontsize=10];
+
+  people [label="People and devices\nStrong defaults · private drafts"];
+  ui [label="Unified experience\nWeb / native / terminal\nOwns presentation and local view state", fillcolor="#dbeafe", color="#2563eb"];
+  components [label="UI component library\nStorybook · props and events\nIndependent component owner", fillcolor="#dbeafe", color="#2563eb"];
+  apps [label="Interactive capabilities\nMCP Apps · scoped resources\nA2UI catalog as a candidate", fillcolor="#dbeafe", color="#2563eb"];
+
+  host [label="Durable generic host\nPrincipals / authorization · admission receipts\nSubscriptions · engine/session bindings\nAHP server / ACP client", fillcolor="#e0e7ff", color="#4f46e5", penwidth=2];
+  collaboration [label="Collaboration domain\nNamed agents · projects / membership\nDiscussions · decisions · versioned work\nOwns intent and delivery", fillcolor="#ede9fe", color="#7c3aed"];
+  capabilities [label="Capability owners\nArtifacts / catalog · scheduling\nVoice / media · device operations\nScoped ports; optional to basic coding", fillcolor="#f1f5f9"];
+
+  subgraph cluster_agents {
+    label="Interchangeable agent boundary · each execution session stays with its engine";
+    fontsize=12; color="#cbd5e1"; style="rounded";
+    native [label="Native Amplifier ACP adapter\nExisting Core / Foundation / workers\nRetains native history and writer lock", fillcolor="#fef3c7", color="#d97706"];
+    converge [label="Converge ACP + coding runtime\nObserve → work → verify → reassess\nOwns attempts, actions and results", fillcolor="#dcfce7", color="#16a34a", penwidth=2];
+    peer [label="Other compatible agent\nExplicit capability profile\nIndependent implementation", fillcolor="#f1f5f9"];
+    {rank=same; native; converge; peer;}
+  }
+
+  subgraph cluster_runtime {
+    label="Coding runtime composition · separate owners, no requirement for a service per box";
+    fontsize=12; color="#bbf7d0"; style="rounded";
+    strategy [label="Strategy\nBounded next-work proposals\nFresh workers share parent budget", fillcolor="#f0fdf4", color="#16a34a"];
+    context [label="Context\nSource-preserving request views\nRetrieval / compaction proposals", fillcolor="#f0fdf4", color="#16a34a"];
+    models [label="Models\nProvider / model recipes\nStreaming · thinking · token admission", fillcolor="#f0fdf4", color="#16a34a"];
+    execution [label="Execution owner\nIsolated candidates / runners\nScoped effects and receipts", fillcolor="#f0fdf4", color="#16a34a"];
+    verification [label="Verification owner\nExact-candidate checks\nCoverage, evidence, unresolved needs", fillcolor="#f0fdf4", color="#16a34a"];
+    {rank=same; strategy; context; models;}
+    {rank=same; execution; verification;}
+  }
+
+  distribution [label="Distribution + interop\nPinned composition · separate dev / stable state\nUser journeys · compatible peer fixtures", fillcolor="#f1f5f9"];
+  learning [label="Context intelligence / learning\nAuthorized observations → candidate improvements\nComparative evaluation before adoption", fillcolor="#f1f5f9"];
+
+  people -> ui;
+  components -> ui [label="components"];
+  apps -> ui [label="scoped UI"];
+  {rank=same; components; ui; apps;}
+  ui -> host [label="AHP · scoped state and commands", penwidth=2, color="#4f46e5"];
+  host -> collaboration [dir=both, label="intent / events"];
+  host -> capabilities [dir=both, label="capability ports"];
+  {rank=same; collaboration; host; capabilities;}
+  host -> native [label="ACP + qualified extensions"];
+  host -> converge [label="ACP v1 + live control profile", penwidth=2, color="#16a34a"];
+  host -> peer [label="ACP"];
+  converge -> strategy;
+  converge -> context;
+  converge -> models;
+  strategy -> execution [style=invis];
+  context -> verification [style=invis];
+  converge -> execution;
+  converge -> verification;
+  verification -> execution [label="run checks", constraint=false];
+  execution -> distribution [style=dotted, arrowhead=none, label="composition evidence"];
+  verification -> learning [style=dotted, label="outcome observations"];
+  {rank=same; distribution; learning;}
+}
