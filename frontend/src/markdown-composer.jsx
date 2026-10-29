@@ -9,7 +9,9 @@ import {clipboardPaste} from './clipboard-paste';
 import {resizeComposer,observeComposerLayout} from './composer';
 import './composer-formatting.css';
 
-export function MarkdownComposer({value,document:documentValue,onChange,onSend,onFiles,onReveal,quoteApi,disabled=false,readOnly=false,pasteDisabled=false,editorRef}){
+const quoteCount=doc=>{let count=0;doc.forEach(node=>{if(node.type.name==='reference')count++;});return count;};
+
+export function MarkdownComposer({value,document:documentValue,onChange,onSend,onFiles,onReveal,onQuoteRemoved,quoteApi,disabled=false,readOnly=false,pasteDisabled=false,editorRef}){
  const host=useRef(null),editor=useRef(null),latest=useRef(null),published=useRef(value),publishedDocument=useRef(documentValue);
  const toolbar=useRef(null),refresh=useRef(()=>{}),dismissed=useRef(null);
  const insertionMode=useRef('caret');
@@ -19,7 +21,7 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
   let href='';view.state.doc.nodesBetween(view.state.selection.from,view.state.selection.to,node=>{const mark=node.marks.find(mark=>mark.type.name==='link');if(mark)href=mark.attrs.href;});
   setLink(href);setLinkError('');setLinkOpen(true);
  };
- latest.current={value,onChange,onSend,onFiles,onReveal,disabled,readOnly,pasteDisabled};
+ latest.current={value,onChange,onSend,onFiles,onReveal,onQuoteRemoved,disabled,readOnly,pasteDisabled};
  useLayoutEffect(()=>{
   const editable=()=>!latest.current.disabled&&!latest.current.readOnly;
   const view=new EditorView(host.current,{
@@ -27,8 +29,10 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
    nodeViews:{reference:(node,view,getPos)=>quoteNodeView(node,view,getPos,()=>latest.current)},
    attributes:{role:'textbox','aria-label':'Message Amplifier','aria-multiline':'true','data-action':'view.update','data-private':'true','data-view-label':'Message Amplifier',class:'a-markdown-composer',spellcheck:'true'},
    dispatchTransaction(transaction){
-    view.updateState(view.state.apply(transaction));
-    if(transaction.docChanged){published.current=composerMarkdown(view.state.doc);publishedDocument.current=composerDocument(view.state.doc,!!publishedDocument.current);latest.current.onChange(published.current,publishedDocument.current);}
+    const before=view.state.doc;view.updateState(view.state.apply(transaction));
+    if(transaction.docChanged){published.current=composerMarkdown(view.state.doc);publishedDocument.current=composerDocument(view.state.doc,!!publishedDocument.current);latest.current.onChange(published.current,publishedDocument.current);
+     // The Remove quote control, keyboard deletion and undo all land here; report how many remain.
+     const left=quoteCount(view.state.doc);if(left<quoteCount(before))latest.current.onQuoteRemoved?.(left);}
     refreshQuoteControls(view);
     view.dom.dataset.empty=String(view.state.doc.childCount===1&&view.state.doc.firstChild.type.name==='paragraph'&&view.state.doc.firstChild.content.size===0);
     resizeComposer(view.dom);
