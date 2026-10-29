@@ -39,6 +39,10 @@ class Runtime:
     async def close(self): pass
 
 async def main():
+    worker_diagnostics = None
+    if os.environ.get('AMPLIFIER_TEST_WORKER_DIAGNOSTICS') == '1':
+        from browser_worker_diagnostics import WorkerDiagnostics
+        worker_diagnostics = WorkerDiagnostics()
     with tempfile.TemporaryDirectory(prefix='unified-issue-repro-') as directory:
         temp=Path(directory)
         os.environ.update(AMPLIFIER_HOME=str(temp/'native'), AMPLIFIER_WEB_HOME=str(temp/'app'),
@@ -88,6 +92,10 @@ async def main():
             def lifecycle(self,event):self.observer.lifecycle(event)
         async def control(request):
             args=await request.json(); op=args.get('op')
+            if op == 'inspect-work-diagnostics':
+                # Failure-only observation: do not publish, refresh or start a worker.
+                return web.json_response({'workProjection': copy.deepcopy(service.event_log_view.windows.status),
+                    'workers': worker_diagnostics.snapshot() if worker_diagnostics else []})
             if op == 'inspect-work-source':
                 # A read-only oracle: do not publish a frame or rebuild usage.
                 async with service.lock:
@@ -670,6 +678,8 @@ async def main():
         stopped=asyncio.Event()
         for sig in [signal.SIGTERM,signal.SIGINT]:asyncio.get_running_loop().add_signal_handler(sig,stopped.set)
         await stopped.wait();await runner.cleanup()
+    if worker_diagnostics:
+        await worker_diagnostics.close()
 
 if __name__ == '__main__':
     asyncio.run(main())
