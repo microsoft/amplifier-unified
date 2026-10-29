@@ -21,14 +21,19 @@ try{
  const artifact=(await action('canvas.show',{kind:'markdown',title:'Embedded diagrams',content})).result;
  const stages=page.locator('.a-diagram.embedded .a-diagram-stage');
  await expect(stages).toHaveCount(2);
+ // The 640px pane presents Details over an inert reader. Dismiss that sheet
+ // through its control before qualifying the reader's keyboard scrolling.
+ await page.getByRole('button',{name:'Close canvas details',exact:true}).click();
+ const reader=page.locator('.a-canvas-reader');
  for(const width of [1450,390]){
   await page.setViewportSize({width,height:1000});await action('view.update',{patch:{canvasFocused:width===390}});
+  await expect.poll(()=>reader.evaluate(el=>el.inert)).toBe(false);
   for(let i=0;i<2;i++){
    const stage=stages.nth(i);await stage.locator('img').waitFor();
    await expect.poll(()=>stage.locator('img').evaluate(img=>img.complete&&img.naturalHeight>0)).toBe(true);
    const bounds=await stage.evaluate(el=>({height:el.clientHeight,scroll:el.scrollHeight,width:el.clientWidth,scrollWidth:el.scrollWidth,touch:getComputedStyle(el).touchAction}));
    assert.ok(bounds.height<=650&&bounds.height>=160);assert.ok(bounds.scroll>bounds.height,'Tall content remains reachable inside the bounded stage');assert.ok(bounds.scrollWidth<=bounds.width+1);assert.equal(bounds.touch,'auto');
-   await stage.evaluate(el=>el.scrollTop=0);await stage.focus();await stage.press('ArrowDown');await expect.poll(()=>stage.evaluate(el=>el.scrollTop)).toBeGreaterThan(0);
+   await stage.evaluate(el=>el.scrollTop=0);await stage.focus();await expect(stage).toBeFocused();await stage.press('ArrowDown');await expect.poll(()=>stage.evaluate(el=>el.scrollTop)).toBeGreaterThan(0);
    await stage.press('Control+End');await stage.evaluate(el=>el.scrollTop=el.scrollHeight);
    assert.ok(await stage.evaluate(el=>el.scrollTop+el.clientHeight>=el.scrollHeight-1),'Bottom of diagram is reachable');
   }
@@ -40,8 +45,10 @@ try{
  await page.reload();await expect(stages).toHaveCount(2);
  await action('view.update',{patch:{canvasFocused:true,canvasControlsPinned:true,canvasControlsExpanded:true}});
  await action('canvas.show',{kind:'mermaid',title:'Standalone controls',content:mermaid});
+ await page.getByRole('button',{name:'Close canvas details',exact:true}).click();
+ await expect.poll(()=>reader.evaluate(el=>el.inert)).toBe(false);
  const standalone=page.locator('.a-diagram-stage');await standalone.locator('img').waitFor();
- await standalone.focus();await standalone.press('ArrowRight');
+ await standalone.focus();await expect(standalone).toBeFocused();await standalone.press('ArrowRight');
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().canvas.view.panX)).toBe(30);
  await page.getByRole('button',{name:'Fit',exact:true}).click();
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().canvas.view.panX)).toBe(0);
