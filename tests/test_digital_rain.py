@@ -5,6 +5,7 @@ import struct
 from importlib.resources import files
 
 import pytest
+import tinycss2
 
 from amplifier_web.service import validate_theme
 from test_canvas_apps import app, dispatch
@@ -34,6 +35,41 @@ def test_digital_rain_is_portable_and_has_three_original_tiles():
     assert "prefers-reduced-motion:reduce" in css
     assert "forced-colors:active" in css
     assert not re.search(r'conversation["\']?\]?\s*>\s*\*', css)
+
+
+def test_landing_art_reuses_tiles_without_owning_layout_or_busy_feedback():
+    css = source()
+    landing = css.split("/* Landing pages use their own background", 1)[1].split("*/", 1)[1]
+    assert 'background-image:var(--digital-rain-art)' in landing
+    assert 'background-size:512px 768px,704px 960px,896px 1152px' in landing
+    assert '.a-work-group-heading' in landing
+    assert '.a-nav-chat-title' in landing
+    assert '.a-workspace-label>span[data-scroll-title]' in landing
+    assert ':has(.a-work-tabs button[aria-pressed="true"]:not(:first-child))' in landing
+    assert 'data-decorations="off"' in landing
+    assert 'prefers-reduced-motion:reduce' in landing
+    assert 'forced-colors:active' in landing
+    assert 'animation:none' in landing and 'background-image:none' in landing
+
+    rules = tinycss2.parse_stylesheet(landing, skip_comments=True, skip_whitespace=True)
+    def inspect(rows):
+        for rule in rows:
+            assert rule.type != "error"
+            if rule.type == "at-rule":
+                inspect(tinycss2.parse_rule_list(rule.content, skip_comments=True, skip_whitespace=True))
+            elif rule.type == "qualified-rule":
+                selector = tinycss2.serialize(rule.prelude)
+                assert '[data-part="work-browser"]' in selector
+                assert not any(value in selector for value in ("aria-busy", "data-region-pending", "::before", "::after"))
+                declarations = tinycss2.parse_declaration_list(rule.content, skip_comments=True, skip_whitespace=True)
+                for declaration in declarations:
+                    assert declaration.type == "declaration"
+                    assert declaration.name not in {
+                        "position", "display", "height", "min-height", "max-height",
+                        "width", "min-width", "max-width", "overflow", "overflow-y",
+                        "padding", "margin", "transform", "z-index", "pointer-events",
+                    }
+    inspect(rules)
 
 
 def luminance(color):
