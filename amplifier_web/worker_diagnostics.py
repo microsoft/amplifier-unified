@@ -1,11 +1,14 @@
 """Bounded, redacted startup receipts. Their contents never enter public state."""
 from datetime import datetime, timezone
+from contextlib import contextmanager
+import asyncio
 import json
 import logging
 import os
 from pathlib import Path
 import re
 import traceback
+import time
 import uuid
 
 MAX_DETAIL_BYTES = 60_000
@@ -14,6 +17,65 @@ _SECRET_ASSIGNMENT = re.compile(
     r'''(?ix)(["']?(?:api[_-]?key|password|client[_-]?secret|access[_-]?token|refresh[_-]?token|id[_-]?token|authorization|cookie)["']?\s*[:=]\s*)
     (?:"[^"\n]*"|'[^'\n]*'|[^\s,;}]+)''')
 _RECEIPT = re.compile(r'^startup-[a-f0-9]{32}\.log$')
+
+
+class StartupTimings:
+    """Fixed-label private clocks, without arguments, configuration or history.
+
+    Nested phases overlap. CPU is process CPU, including any worker threads;
+    neither clock establishes provider latency or the host's ready observation.
+    """
+    PHASES = frozenset({'worker.bootstrap', 'worker.imports', 'worker.ownership',
+        'worker.recovery', 'manager.prepare', 'manager.config', 'manager.history.load',
+        'manager.bundle.load', 'manager.plan', 'manager.bundle.prepare',
+        'manager.providers', 'manager.history.repair', 'manager.session.create',
+        'manager.context.restore', 'manager.children', 'manager.settings',
+        'manager.provider.info', 'manager.checkpoint', 'manager.report',
+        'worker.controls.restore', 'worker.app.access', 'worker.ownership.register',
+        'worker.support', 'worker.ready'})
+    MAX_PHASES = 32
+
+    def __init__(self, *, started=None):
+        self.started = started or (time.monotonic_ns(), time.process_time_ns())
+        self.phases = []
+        self.attempt = uuid.uuid4().hex
+        self.started_at = datetime.now(timezone.utc).isoformat()
+
+    def _finish(self, row, started):
+        row.update(elapsedMs=round((time.monotonic_ns() - started[0]) / 1e6, 3),
+                   cpuMs=round((time.process_time_ns() - started[1]) / 1e6, 3))
+
+    @contextmanager
+    def phase(self, name, *, started=None):
+        started = started or (time.monotonic_ns(), time.process_time_ns())
+        row = {'phase': name, 'status': 'running',
+               'offsetMs': round((started[0] - self.started[0]) / 1e6, 3)}
+        if name in self.PHASES and len(self.phases) < self.MAX_PHASES:
+            self.phases.append(row)
+        try:
+            yield
+        except BaseException as error:
+            row.update(status='cancelled' if isinstance(error, asyncio.CancelledError) else 'failed',
+                       errorType=type(error).__name__[:100])
+            raise
+        else:
+            row['status'] = 'succeeded'
+        finally:
+            self._finish(row, started)
+
+    def snapshot(self, outcome='completed'):
+        result = {'schemaVersion': 1, 'outcome': outcome,
+                  'attemptId': self.attempt, 'workerPid': os.getpid(), 'startedAt': self.started_at,
+                  'phases': [dict(row) for row in self.phases]}
+        self._finish(result, self.started)
+        return result
+
+    def save(self, directory, outcome):
+        try:
+            from .deployment import write_private
+            write_private(Path(directory) / 'startup-timing.json', json.dumps(self.snapshot(outcome)))
+        except Exception:
+            pass  # Diagnostic storage must not change startup or cleanup outcomes.
 
 
 def redact_diagnostic(value):

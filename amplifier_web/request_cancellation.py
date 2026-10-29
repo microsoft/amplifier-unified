@@ -41,7 +41,7 @@ def references(owner, sid):
     # when other chats send messages. Bound the payload, disclose any overflow.
     # Always include the current generation's bounded input set before older
     # uncertain requests, so retained historical work cannot starve live intent.
-    active = (owner.service._session(sid).get('collaborationGeneration') or {}).get('inputIds', [])[-128:]
+    active = (owner.service._session(sid, hydrate=False).get('collaborationGeneration') or {}).get('inputIds', [])[-128:]
     priority = ','.join('?' for _ in active) or 'NULL'
     rows = owner.service.db.execute(f"""SELECT receipt FROM commands
         WHERE json_extract(receipt,'$.commandAction')='coordination.send'

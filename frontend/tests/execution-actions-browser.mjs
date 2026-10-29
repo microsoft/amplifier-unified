@@ -3,18 +3,19 @@ import {chromium,expect} from '@playwright/test';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
-import {mkdir,mkdtemp} from 'node:fs/promises';
+import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 const outputDir=process.env.AMPLIFIER_TEST_OUTPUT_DIR||await mkdtemp(join(tmpdir(),'amplifier-execution-actions-'));
 await mkdir(outputDir,{recursive:true});
-const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u',fileURLToPath(new URL('../../tests/fixtures/browser_detail_server.py',import.meta.url)),fileURLToPath(new URL('../../',import.meta.url))],{stdio:['ignore','pipe','pipe']});
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u',fileURLToPath(new URL('../../tests/fixtures/browser_detail_server.py',import.meta.url)),fileURLToPath(new URL('../../',import.meta.url))],{stdio:['ignore','pipe','pipe'],env:{...process.env,AMPLIFIER_TEST_WORKER_DIAGNOSTICS:'1'}});
 let log='';fixture.stderr.on('data',chunk=>log+=chunk);
 const port=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out: '+log)),30000);fixture.stdout.on('data',chunk=>{output+=chunk;const line=output.split('\n').find(row=>row.startsWith('{"port":'));if(line){clearTimeout(timer);resolve(JSON.parse(line).port)}});fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+': '+log))})});
 const base=`http://127.0.0.1:${port}`,headers={Authorization:'Bearer fixture-detail-token','content-type':'application/json'};
 const control=async body=>{const response=await fetch(base+'/api/fixture/control',{method:'POST',headers,body:JSON.stringify(body)});if(!response.ok)throw Error(await response.text()+' '+log);return response.json()};
 await control({op:'inspection'});await control({op:'inspection-actions'});await control({op:'inspection-finish'});
 const browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
+let workProjection;
 try{
  const page=await browser.newPage({viewport:{width:1300,height:1050},extraHTTPHeaders:headers}),errors=[];
  const fieldReads=[];page.on('request',r=>{if(r.url().includes('/api/conversation/detail?')){const params=new URL(r.url()).searchParams;if(params.get('part')==='nodes'&&params.has('field'))fieldReads.push(r.url())}});
@@ -24,7 +25,8 @@ try{
  // Wait for canonical groups before clicking; positional locators can retarget as history arrives.
  await expect.poll(async()=>{
   const value=await page.locator('.a-messages').getAttribute('data-work-projection');
-  return value?JSON.parse(value):null;
+  workProjection=value?JSON.parse(value):null;
+  return workProjection;
  }).toMatchObject({status:'ready',current:true,receipt:{scope:'recent-events'}});
  for(const id of ['inspect@question','inspect@long-answer']){
   const group=page.locator(`[data-group-id="${id}"] > button.a-execution-turn-line`);
@@ -84,4 +86,19 @@ try{
  await page.screenshot({path:join(outputDir,'actions-mobile.png')});
  assert.deepEqual(errors,[]);
  console.log('Canonical event-log command/result, patch, read, todo, app and nested worker payloads render; empty, error and legacy states are honest; shared expansion survives reload and mobile fits.');
-}catch(error){console.error(log);throw error}finally{await browser.close();fixture.kill()}
+}catch(error){
+ const failure={error:String(error),workProjection};
+ try{
+  const response=await fetch(base+'/api/fixture/control',{method:'POST',headers,
+   body:JSON.stringify({op:'inspect-work-diagnostics'}),signal:AbortSignal.timeout(2000)});
+  if(!response.ok)throw Error('Diagnostics HTTP '+response.status);
+  failure.fixture=await response.json();
+ }catch(diagnosticError){failure.diagnosticError=String(diagnosticError)}
+ console.error('Execution failure diagnostics:',JSON.stringify(failure));
+ const saved=await Promise.allSettled([
+  writeFile(join(outputDir,'failure.json'),JSON.stringify(failure,null,2)),
+  writeFile(join(outputDir,'fixture.stderr.log'),log),
+ ]);
+ for(const result of saved)if(result.status==='rejected')console.error('Diagnostic write failed:',result.reason);
+ console.error(log);throw error;
+}finally{await browser.close();fixture.kill()}

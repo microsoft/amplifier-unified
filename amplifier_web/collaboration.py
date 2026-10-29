@@ -404,7 +404,7 @@ class Collaboration:
             if not sid:
                 continue
             try:
-                session = self.service._session(sid)
+                session = self.service._session(sid, hydrate=False)
             except Exception:
                 continue
             value = self.current(sid)
@@ -438,7 +438,7 @@ class Collaboration:
             WHERE json_extract(receipt,'$.commandAction')='coordination.watch'
             AND json_extract(receipt,'$.senderSessionId')=? ORDER BY rowid DESC LIMIT 16""", (sid,)).fetchall()]
         return {"grants": [row for row in grants if sid in row["participants"]], "proposals": proposals, 'watches': watches,
-                "workspace": self.service._session(sid)["workspace"],
+                "workspace": self.service._session(sid, hydrate=False)["workspace"],
                 "requests": requests, "capturedAt": time.time(),
                 "continuation": {"supported": hasattr(self.service.runtime, "collaboration_input"),
                                  "qualification": "recipient declaration plus successful root terminal evidence",
@@ -1169,15 +1169,24 @@ class Collaboration:
             return database.execute('SELECT 1 FROM commands WHERE id=?', (identity,)).fetchone() is not None
 
     @contextmanager
-    def return_send_transaction(self, identity, source, target):
-        """Ordinary opted-in sends own one commit, under the service lock.
+    def return_send_transaction(self, identity, source, target, *, notify=False):
+        """Return-enabled sends and passive notifications own one commit.
 
-        Creation-owned sends retain their existing transaction owner. Only the
-        affected roots are snapshotted; a failed commit must not leave a phantom
-        message, recency change or request reference in a later publication.
+        Creation-owned sends retain their existing transaction owner. Under the
+        service lock a passive notification never awaits an adapter: snapshot
+        only its append and metadata, preserving unrelated cold bodies. Queue
+        sends keep their full affected-root rollback and post-commit scheduling.
         """
         sessions = {row['id']: row for row in (source, target)}
-        snapshots = {sid: copy.deepcopy(row) for sid, row in sessions.items()}
+        if notify:
+            messages = target['messages']
+            length = len(messages)
+            fields = ('historyManaged', 'coordinationReference', 'recentActivityAt',
+                      'navigationActivityAt', 'navigationActivityPending', 'navigationPostAdmissions')
+            snapshots = {sid: {key: copy.deepcopy(row[key]) for key in fields if key in row}
+                         for sid, row in sessions.items()}
+        else:
+            snapshots = {sid: copy.deepcopy(row) for sid, row in sessions.items()}
         self.service.db.commit()  # Preserve unrelated pending receipt work.
         self.service.db.execute('BEGIN IMMEDIATE')
         try:
@@ -1185,11 +1194,20 @@ class Collaboration:
         except BaseException:
             if not self.committed(identity):
                 self.service.db.rollback()
-                for sid, row in sessions.items():
-                    row.clear()
-                    row.update(snapshots[sid])
+                if notify:
+                    del messages[length:]
+                    for sid, row in sessions.items():
+                        for key in fields:
+                            if key in snapshots[sid]:
+                                row[key] = snapshots[sid][key]
+                            else:
+                                row.pop(key, None)
+                else:
+                    for sid, row in sessions.items():
+                        row.clear()
+                        row.update(snapshots[sid])
                 self.service.projections.invalidate(state=self.service.state, session_ids=set(sessions))
-            else:
+            elif not notify:
                 # A lost publication acknowledgement cannot abandon committed
                 # work or depend on the caller retrying to start the queue.
                 retained = self.receipt(identity)
@@ -1548,7 +1566,10 @@ class Collaboration:
             # Refuse unsupported return modes before hydration or fresh effects.
             if args.get('returnNotification') is True and args.get('mode', 'queue') != 'queue':
                 self.error('returnNotification:true requires queue mode; no input or wait was created.', 400)
-            await self.service.history.ensure_loaded(args["sessionId"])
+            if args.get('mode') == 'notify':
+                await self.service.history.ensure_loaded(args['sessionId'], hydrate=False)
+            else:
+                await self.service.history.ensure_loaded(args["sessionId"])
         prepared_artifacts = None
         if action == 'coordination.reply':
             from .result_artifacts import prepare
@@ -1641,7 +1662,8 @@ class Collaboration:
                 self.require_continuation()
                 receipt = None
             else:
-                target = self.authorize(source, args, cross_workspace=True)
+                target = self.authorize(source, args, cross_workspace=True,
+                                        hydrate=args.get('mode') != 'notify')
                 if args.get('resume') and source['workspace'] != target['workspace']:
                     self.error('Cross-workspace messaging does not authorize commissioned-member resume.')
                 reason = self.service.assignments.blocked(source)
@@ -1702,8 +1724,10 @@ class Collaboration:
                         ("creatorSessionId", "requestId", "outputNamespace", "configurationHash")}
                 wait = None
                 if not creation_owned:
+                    if mode == 'notify' or notify_return:
+                        recovery_boundary.enter_context(self.return_send_transaction(
+                            identity, source, target, notify=mode == 'notify'))
                     if notify_return:
-                        recovery_boundary.enter_context(self.return_send_transaction(identity, source, target))
                         wait = self.saved_wait(source, identity)
                     envelope['returnContract'] = {
                         'version': 1, 'requestId': identity, 'returnNotification': notify_return,

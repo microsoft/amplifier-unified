@@ -1083,8 +1083,11 @@ class AutomaticHistory:
                         session.update(historyLoading=False, historyError='Could not read the saved chat. Its original files are unchanged. Try Refresh.')
                         self.service._publish_changes(sessions={session_id}, detail_only=True)
 
-    async def ensure_loaded(self, session_id):
-        session = self.service._session(session_id)
+    async def ensure_loaded(self, session_id, *, hydrate=True):
+        # Passive append owners still verify the canonical native revision, but
+        # may resolve individual cold fields when used instead of loading every
+        # saved execution/configuration/catalog payload up front.
+        session = self.service._session(session_id, hydrate=hydrate)
         if session.get('nativeProject'):
             if session.get('historyReadOnlyReason'):
                 # A retained negative display classification can refuse work;
@@ -1106,6 +1109,6 @@ class AutomaticHistory:
             current_revision = await asyncio.to_thread(revision, source)
             if not session.get('historyLoaded', True) or session.get('historyLoading') or current_revision != session.get('nativeRevision'):
                 await self.load(session_id, only_if_changed=True, canonical=True)
-                session = self.service._session(session_id)
+                session = self.service._session(session_id, hydrate=hydrate)
             if session.get('historyError'):
                 raise ValueError(session['historyError'])

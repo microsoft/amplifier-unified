@@ -1,15 +1,27 @@
 """Canonical event updates retain durability without republishing the catalog."""
 import copy
+from contextlib import closing, contextmanager
 import json
 import sqlite3
 
 import pytest
 
 from amplifier_web.event_log_view import EventLogView, event_path
-from amplifier_web import state_records
+from amplifier_web import session_projection, state_records
 from test_automatic_history import app_factory
 from test_event_log_view import append
 from test_scoped_state_records import chats
+
+
+@contextmanager
+def committed_state(app):
+    # Prove scoped durability before close() can perform shutdown reconciliation.
+    # This reader neither shares the owner's transaction nor opens another host.
+    uri = (app.data_dir / 'app.sqlite3').as_uri() + '?mode=ro'
+    with closing(sqlite3.connect(uri, uri=True)) as db:
+        state = state_records.load(db)
+        session_projection.hydrate(app.data_dir, state, db)
+        yield {row['id']: row for row in state['sessions']}, db
 
 
 def model_event(row, number):
@@ -70,8 +82,13 @@ async def test_event_refresh_preserves_catalog_epoch_and_updates_browser_usage(a
     assert current['execution']['aggregateUsage']['totalTokens'] == 12
     assert row['execution']['turns'][0]['aggregateUsage']['totalTokens'] == 12
     assert app._history_local_revision == epoch
-    # Reload from committed records plus the authoritative event log.
-    await app.publishing.close()
+    with committed_state(app) as (saved, db):
+        assert saved[row['id']]['execution']['aggregateUsage']['totalTokens'] == 12
+        assert saved[row['id']]['messages'][0]['text'] == 'Exact 0'
+        private = json.loads(db.execute('SELECT value FROM client_views WHERE id=?', ('1',)).fetchone()[0])
+        assert private['drafts'][rows[1]['id']] == 'private-1'
+    # Retire the owner, including maintenance, before another host opens its DB.
+    await app.close()
     restored = app_factory(home=app.data_dir)
     recovered = restored._session(row['id'])
     await EventLogView(restored).refresh(row['id'])
@@ -99,7 +116,10 @@ async def test_event_refresh_failure_retains_retry_scope_and_pending_other_write
     monkeypatch.setattr(state_records, 'save', original)
     await app._flush_pending_progress()
     assert not app._progress_dirty
-    await app.publishing.close()
+    with committed_state(app) as (saved, _):
+        assert saved[rows[1]['id']]['messages'][0]['text'] == 'Pending other chat'
+        assert saved[rows[0]['id']]['execution']['aggregateUsage']['totalTokens'] == 6
+    await app.close()
     restored = app_factory(home=app.data_dir)
     assert restored._session(rows[1]['id'])['messages'][0]['text'] == 'Pending other chat'
     await EventLogView(restored).refresh(rows[0]['id'])
