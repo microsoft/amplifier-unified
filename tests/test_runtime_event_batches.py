@@ -110,6 +110,79 @@ async def test_partial_line_does_not_delay_commit_and_read_is_reaped():
     assert row['process'].stdout._waiter is None
 
 
+@pytest.mark.parametrize('count', [2, 16])
+async def test_buffered_collection_has_one_fairness_turn_under_replenished_load(count):
+    stream = asyncio.StreamReader()
+    frames = [f'{index}\n'.encode() for index in range(count)]
+    stream.feed_data(b''.join(frames) + b'barrier\n'); stream.feed_eof()
+    lines = BufferedLines(stream)
+    first = await lines.next()
+    turns = 0
+    running = True
+    loop = asyncio.get_running_loop()
+    def background():
+        nonlocal turns
+        turns += 1
+        if running:
+            loop.call_soon(background)
+    loop.call_soon(background)
+    try:
+        rows = await lines.collect(first, first, lambda line: line if line in frames else None)
+        # An always-ready background owner gets a turn, but not another turn
+        # for every already-buffered receipt. No wall-clock threshold is used.
+        assert 1 <= turns <= 2
+        assert rows == frames
+        assert await lines.next() == b'barrier\n'
+        assert await lines.next() == b''
+    finally:
+        running = False
+        await lines.close()
+
+
+async def test_late_read_is_retained_without_mutating_the_committed_prefix():
+    stream = asyncio.StreamReader()
+    stream.feed_data(b'first\nsecond\npar')
+    lines = BufferedLines(stream)
+    accepted = []
+    def accept(line):
+        accepted.append(line)
+        return line
+    rows = await lines.collect(await lines.next(), b'first\n', accept)
+    assert rows == [b'first\n', b'second\n']
+    stream.feed_data(b'tial\nafter\n'); stream.feed_eof()
+    await asyncio.sleep(0)
+    assert rows == [b'first\n', b'second\n'] and accepted == [b'second\n']
+    assert await lines.next() == b'partial\n'
+    assert await lines.next() == b'after\n'
+    assert await lines.next() == b''
+    await lines.close()
+
+
+@pytest.mark.parametrize('outcome', ['error', 'cancel', 'eof'])
+async def test_pending_read_outcome_remains_after_returned_prefix(outcome):
+    stream = asyncio.StreamReader()
+    stream.feed_data(b'first\npartial')
+    lines = BufferedLines(stream)
+    accepted = []
+    rows = await lines.collect(await lines.next(), b'first\n', accepted.append)
+    assert rows == [b'first\n'] and not lines.pending.done()
+    if outcome == 'error':
+        stream.set_exception(OSError('late read failed'))
+        with pytest.raises(OSError, match='late read failed'):
+            await lines.next()
+    elif outcome == 'cancel':
+        lines.pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await lines.next()
+    else:
+        stream.feed_eof()
+        assert await lines.next() == b'partial'
+        assert await lines.next() == b''
+    assert rows == [b'first\n'] and accepted == []
+    await lines.close()
+    assert stream._waiter is None
+
+
 async def test_repeated_cancellation_finishes_consumed_batch_but_not_bridge():
     entered, release, committed = asyncio.Event(), asyncio.Event(), []
     async def batch(rows):
