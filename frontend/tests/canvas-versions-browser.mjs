@@ -4,6 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const output=process.env.AMPLIFIER_TEST_ARTIFACTS;
@@ -20,7 +21,7 @@ try{
  const page=await browser.newPage({viewport:{width:1500,height:1050},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  const commands=[];page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'){const body=request.postDataJSON();commands.push(body?.action==='shell.command'?(body.args.command||body.args):body)}});
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.goto(url);await showFixtureConversation(page,{navPinned:false});await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const send=async text=>{await action('conversation.send',{text});await expect.poll(async()=>{const value=await state();return value.sessions.find(s=>s.id===value.selectedSessionId)?.status}).not.toBe('working')};
@@ -40,7 +41,7 @@ try{
  await expect(page.getByRole('combobox',{name:'Artifact version',exact:true})).toHaveValue('1');
  await expect(page.getByRole('heading',{name:'Original plan',exact:true})).toBeVisible();
  assert.equal((await state()).view.draft,'Keep this unsent draft');
- await page.reload();await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.reload();await showFixtureConversation(page,{navPinned:false});await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await expect(page.getByRole('combobox',{name:'Artifact version',exact:true})).toHaveValue('1');
  await expect(page.getByRole('heading',{name:'Original plan',exact:true})).toBeVisible();
  await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('latest');
@@ -74,7 +75,7 @@ try{
  await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('1');
     await page.getByRole('button',{name:'Load v1 — resets preview and runs its code',exact:true}).click();
  await expect(frame().getByRole('heading',{name:'Small first',exact:true})).toBeVisible();
- await page.reload();await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await page.reload();await showFixtureConversation(page,{navPinned:false});await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await expect(frame().getByRole('heading',{name:'Small first',exact:true})).toBeVisible();
  await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('latest');
     await page.getByRole('button',{name:'Load v2 — resets preview and runs its code',exact:true}).click();
