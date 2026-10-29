@@ -309,6 +309,11 @@ try{
  await page.setViewportSize({width:390,height:844});
  await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
  await action('view.update',{patch:{canvasFocused:true}});
+ // Details was opened for the source controls above. On narrow Canvas it is
+ // intentionally a covering sheet with an inert reader, not a missing Copy.
+ await page.getByRole('button',{name:'Close canvas details',exact:true}).click();
+ await expect(page.getByRole('region',{name:'Canvas details',exact:true})).toBeHidden();
+ await expect(page.locator('.a-canvas-reader')).not.toHaveAttribute('inert','');
  const touch=canvas.getByRole('button',{name:'Copy code block',exact:true});
  stage='narrow touch visibility';await save();
  await expect(touch).toBeVisible();
@@ -316,11 +321,13 @@ try{
  await expect(touch.locator('..')).toHaveCSS('opacity','1');
  const touchSentinel=await seedClipboard('narrow touch');
  stage='narrow touch clipboard';await save();
+ await page.screenshot({path:join(artifacts,'narrow-before-touch.png')});
  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:size.x+size.width/2,y:size.y+size.height/2}]});
  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
  await expect.poll(clipboard).toBe('new version\n');
  await expect(touch.locator('..').getByRole('status')).toHaveText('Copied.');
  evidence.copies.push({label:'narrow touch',sentinel:touchSentinel,expected:'new version\n',completed:true});
+ await page.screenshot({path:join(artifacts,'narrow-after-touch.png')});
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  console.log(JSON.stringify({pageErrors:errors,frameExceptions:exceptions}));
  assert.deepEqual(errors,[]);
