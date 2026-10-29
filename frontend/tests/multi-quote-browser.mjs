@@ -664,6 +664,8 @@ try{
  await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),originalSession);
  await expect(quotes).toHaveCount(1);await addedNotice.first().waitFor();
  await quotes.first().getByRole('button',{name:'Remove quote',exact:true}).click();await expect(quotes).toHaveCount(0);
+ // With no quote left, "Quote added" no longer describes the draft.
+ await expect(addedNotice).toHaveCount(0);
  assert.equal((await observe()).sends.length,2,'Quote/remove must not execute another turn');
  // The reported path (#1126): quote, send, then another chat. Sending takes the quote with it,
  // so its feedback ends there, in this chat, another chat and a new one.
@@ -697,6 +699,8 @@ try{
  await changedNotice.first().waitFor();await expect(addedNotice).toHaveCount(0);await expect(pendingNotice).toHaveCount(0);
  await expect(editor).toHaveText('Keep pending draft');await expect(quotes).toHaveCount(0);await expect(pendingFile).toBeVisible();
  await pendingFile.click();await editor.fill('');
+ // Editing without removing a quote leaves the refusal in place.
+ await expect(changedNotice.first()).toBeVisible();
  assert.equal((await observe()).sends.length,3,'A late quote must not execute another turn');
  assert.deepEqual(errors,[]);
  async function compareReference(){
