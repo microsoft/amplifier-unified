@@ -128,9 +128,10 @@ try{
  const span=canvas.locator('blockquote [data-canvas-source-start]').first();
  await span.evaluate(element=>{const range=document.createRange();range.selectNodeContents(element);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);document.dispatchEvent(new Event('selectionchange'))});
  await expect(page.getByRole('button',{name:'Reference in chat',exact:true})).toBeEnabled();
+ stage='reference action';
  const referenceResponse=page.waitForResponse(response=>{
   if(!response.url().endsWith('/api/actions'))return false;
-  try{return response.request().postDataJSON()?.action==='canvas.reference'}catch{return false}
+  try{const body=response.request().postDataJSON();return body?.action==='canvas.views.command'&&body.args?.action==='canvas.reference'}catch{return false}
  });
  await page.getByRole('button',{name:'Reference in chat',exact:true}).click();
  const response=await referenceResponse;assert.equal(response.status(),200);
