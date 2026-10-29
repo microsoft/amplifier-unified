@@ -189,7 +189,8 @@ test('canvas keyboard resize persists bounded width and header toggle hides thro
  assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{canvasWidth:460}}});
  await renderAct(async()=>root.root.findByProps({role:'separator'}).props.onKeyDown({key:'End',preventDefault(){}}));
  assert.equal(calls.at(-1).args.patch.canvasWidth,root.root.findByProps({role:'separator'}).props['aria-valuemax']);
- assert.equal(root.root.findAllByProps({'aria-label':'Close canvas panel'}).length,0);
+ await renderAct(async()=>root.root.findByProps({'aria-label':'Close canvas panel'}).props.onClick());
+ assert.deepEqual(calls.at(-1),{name:'canvas.visibility',args:{open:false}});
  const toggle=root.root.findByProps({'aria-label':'Hide canvas'});
  assert.equal(toggle.props['aria-expanded'],true);
  await renderAct(async()=>toggle.props.onClick());

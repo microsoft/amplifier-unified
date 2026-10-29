@@ -162,6 +162,7 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSur
   <div className="a-canvas-chrome">
    <header className="a-canvas-head"><CanvasTabs state={state} act={act} dispatch={dispatch} overview={overview} onOverview={()=>patch(act,{settingsCanvas:false,canvasControlsExpanded:false,canvasDraft:{...draft,library:true,open:false,browser:false}})}/>
     <button type="button" className="a-icon" aria-label={focused?'Exit canvas focus':'Focus canvas'} aria-pressed={focused} data-action="view.update" onClick={()=>patch(act,{canvasFocused:!focused})}>{focused?<Minimize2/>:<Maximize2/>}</button>
+    <button type="button" className="a-soft a-canvas-dismiss" aria-label="Close canvas panel" title="Return to chat — keeps open documents and edits" data-action="canvas.visibility" onClick={()=>act('canvas.visibility',{open:false})}><X aria-hidden="true"/><span>Close Canvas</span></button>
    </header>
   </div>
   <div ref={contentRef} className="a-canvas-content" data-details-overlay={detailsOverlay}>
