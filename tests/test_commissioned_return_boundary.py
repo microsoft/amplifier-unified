@@ -166,3 +166,44 @@ async def test_retained_report_remains_readable_after_authority_changes(app):
     retained = await app.dispatch('coordination.result', {'requestId': created['requestId']})
     assert retained['result']['qualified']
     assert source['task']['status'] == 'blocked' and len(app.runtime.inputs) == 1
+
+
+async def test_later_commissioned_report_then_atomic_optin_correction(app):
+    source, target, created = await commissioned_later_generation(app)
+    source['task']['revision'] = 2
+    await later_report(app, target, created)
+    await finish(app, target, created['initialInputId'], input_ids=['current-followup'])
+    first_return = created['subscription']['continuationId']
+    assert app.collaboration.receipt(first_return)['delivery'] == 'queued'
+
+    target['status'] = 'idle'
+    followup = await agent_action(app, source, 'coordination.send', {
+        'sessionId': target['id'], 'text': 'Correct the adjacent invariant.',
+        'returnNotification': True}, 'optin-correction')
+    second_return = followup['subscription']['continuationId']
+    assert second_return != first_return
+    assert followup['returnState']['subscription']['registered'] is True
+    assert 'creationOperationId' not in followup
+    assert followup['subscription']['taskContinuationEpoch'] == 1
+    await settled(app, 'optin-correction', 'accepted')
+    await generation(app, target, 'recipient-optin-correction', ['optin-correction'])
+    source['task']['revision'] = 3
+    before = copy.deepcopy(source['task'])
+    await agent_action(app, target, 'coordination.reply', {
+        'requestId': 'optin-correction', 'kind': 'result', 'outcome': 'success',
+        'references': ['urn:fixture:corrected-candidate'],
+        'text': 'Adjacent invariant corrected.'}, 'correction-report')
+    await finish(app, target, 'optin-correction')
+    for identity in (first_return, second_return):
+        source['status'] = 'idle'
+        await app.collaboration.drain(source['id'])
+        await settled(app, identity, 'accepted')
+    for identity in (created['initialInputId'], 'optin-correction'):
+        saved = await app.dispatch('coordination.result', {'requestId': identity}, include_state=False)
+        assert saved['result']['qualified']
+        assert saved['result']['receipt']['response']['requestId'] == identity
+        assert saved['result']['returnState']['notification']['status'] == 'accepted'
+    await app.collaboration.drain(source['id'])
+    assert [row[1] for row in app.runtime.inputs] == [
+        created['initialInputId'], 'optin-correction', first_return, second_return]
+    assert source['task'] == before
