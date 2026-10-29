@@ -57,7 +57,7 @@ jobs:
     # Leave setup and evidence-upload time around the unchanged 25-minute runner budget.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.revision || github.sha }}
       - name: Record the checked-out build source
@@ -77,17 +77,17 @@ jobs:
           --output output/browser-checks --initialize
           ${{ inputs.app004_qualification && '--app004-qualification' || '' }}
           ${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - run: uv sync --locked --group dev --group artifacts
       - name: Resolve the declared attachment-test runtime
         if: ${{ inputs.attachment_consumption }}
         id: attachment-runtime
         run: |
           python -c 'import tomllib; p=tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb")); print("revision=" + p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"])' >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         if: ${{ inputs.attachment_consumption }}
         with:
           repository: microsoft/amplifier-module-loop-live
@@ -105,7 +105,7 @@ jobs:
           'amplifier-module-tool-delegate @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate'
           'amplifier-module-tool-filesystem @ git+https://github.com/microsoft/amplifier-module-tool-filesystem@main'
           'amplifier-module-tool-apply-patch @ git+https://github.com/microsoft/amplifier-bundle-filesystem@main#subdirectory=modules/tool-apply-patch'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -115,7 +115,7 @@ jobs:
         id: frontend-build
       - name: Retain the successful production web build
         if: ${{ steps.frontend-build.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: browser-static-${{ steps.build-source.outputs.revision }}-${{ github.run_attempt }}
           path: amplifier_web/static/
@@ -160,7 +160,7 @@ jobs:
         run: exit 1
       - name: Retain scenario coverage and diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: extended-browser-evidence-${{ github.run_attempt }}
           path: |
@@ -176,19 +176,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Reject mixed selections
         if: ${{ inputs.canvas_qualification || inputs.multi_quote || inputs.peer_messages || inputs.compact_composer || inputs.attachment_consumption || inputs.mcp_boundary || inputs.destination_history || inputs.settings_close_diagnostic || inputs.app004_qualification }}
         run: exit 1
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - run: uv sync --locked --group dev
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -293,7 +293,7 @@ jobs:
       - name: Preserve every affected failure
         if: ${{ always() && (steps.host.outcome != 'success' || steps.units.outcome != 'success' || steps.source-browser.outcome != 'success' || steps.intersections.outcome != 'success' || steps.wheel.outcome != 'success' || steps.installed-browser.outcome != 'success') }}
         run: exit 1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: attachment-experience-${{ github.sha }}-${{ github.run_attempt }}
@@ -308,7 +308,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -327,12 +327,12 @@ jobs:
           sha256sum scripts/mcp_boundary_checks.sh scripts/browser_check_runner.py \
             frontend/tests/mcp-recovery-browser.mjs frontend/tests/mcp-clients-browser.mjs \
             uv.lock frontend/package-lock.json > output/browser-checks/mcp-boundary/inputs.sha256
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - run: uv sync --locked --group dev --group artifacts
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -431,7 +431,7 @@ jobs:
           PY
       - name: Retain positive and rejected negative evidence
         if: always() && steps.mcp-evidence.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mcp-boundary-${{ github.run_id }}-${{ github.run_attempt }}
           path: output/browser-checks/mcp-boundary-public/
@@ -451,7 +451,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -461,12 +461,12 @@ jobs:
         run: |
           test "$MIXED" != true
           python scripts/canvas_qualification.py initialize
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - run: uv sync --locked --group dev --group artifacts --no-build-package amplifier-core
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -481,7 +481,7 @@ jobs:
         if: always()
         id: retain
         run: python scripts/canvas_qualification.py retain
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always() && steps.retain.outcome == 'success'
         with:
           name: canvas-qualification-${{ github.sha }}-${{ github.run_attempt }}
@@ -493,7 +493,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -502,12 +502,12 @@ jobs:
         run: exit 1
       - name: Record fixed coverage before setup
         run: python scripts/compact_composer_checks.py --initialize
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - run: uv sync --locked --group dev --group artifacts
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -518,7 +518,7 @@ jobs:
         run: npm run build --prefix frontend
       - name: Retain exact built assets
         if: ${{ steps.compact-build.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: compact-static-${{ github.sha }}-${{ github.run_attempt }}
           path: amplifier_web/static/
@@ -540,7 +540,7 @@ jobs:
         run: uv run --no-sync python scripts/compact_composer_checks.py
       - name: Retain exact results and failures
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: compact-evidence-${{ github.sha }}-${{ github.run_attempt }}
           path: output/compact-composer/
@@ -556,7 +556,7 @@ jobs:
       - name: Reject mixed navigation selections
         if: ${{ inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.canvas_qualification || inputs.multi_quote || inputs.attachment_experience }}
         run: exit 1
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -604,13 +604,13 @@ jobs:
               'files': hashes}, indent=2))
           PY
           python scripts/browser_check_runner.py --plan output/destination-history/plan.json --output output/browser-checks --initialize
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - id: python_dependencies
         run: uv sync --locked --group dev --group artifacts
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -756,7 +756,7 @@ jobs:
           PY
       - name: Retain focused results including failures and unrun cases
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: destination-history-baseline-${{ github.run_attempt }}
           path: |
@@ -771,18 +771,18 @@ jobs:
       - name: Reject incompatible peer selections
         if: ${{ inputs.canvas_qualification || inputs.multi_quote || inputs.attachment_experience || inputs.compact_composer || inputs.destination_history || inputs.settings_close_diagnostic || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption }}
         run: exit 1
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
       - name: Freeze fixed peer qualification before dependency setup
         run: python scripts/peer_message_qualification.py --initialize
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - run: uv sync --locked --group dev --group artifacts
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -795,7 +795,7 @@ jobs:
         run: uv run --no-sync python scripts/peer_message_qualification.py
       - name: Retain exact peer results including failures and unrun checks
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: peer-messages-${{ github.sha }}-${{ github.run_attempt }}
           path: output/peer-messages/

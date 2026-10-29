@@ -24,15 +24,15 @@ jobs:
     # the former 25-minute job budget without a test assertion failure.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.revision || github.sha }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - run: uv sync --locked --group dev --group artifacts
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -179,7 +179,7 @@ jobs:
                       summary.write(line + '\n')
                       print(f"::notice title=Inline media physical acceptance::{row['phase']}: NOT_QUALIFIED")
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always() && steps.media_evidence.outcome == 'success'
         with:
           name: inline-media-${{ github.run_id }}
@@ -233,7 +233,7 @@ jobs:
       - name: Record qualified source
         if: success()
         run: git rev-parse HEAD > public-readiness-revision.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: public-readiness-${{ github.run_id }}
@@ -249,7 +249,7 @@ jobs:
           if-no-files-found: ignore
       - name: Upload owned browser evidence
         if: always() && steps.browser_evidence.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: public-readiness-browser-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.AMPLIFIER_TEST_ARTIFACTS }}/
@@ -261,7 +261,7 @@ jobs:
     env:
       INLINE_MEDIA_MODE: installed
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -285,12 +285,12 @@ jobs:
           printf '%s\n' \
             "INLINE_MEDIA_EVIDENCE_DIR=$RUNNER_TEMP/inline-media-diagnostic" \
             "INLINE_MEDIA_MP4=$RUNNER_TEMP/inline-media-diagnostic/synthetic.mp4" >> "$GITHUB_ENV"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - run: uv sync --locked --group dev --group artifacts
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -355,7 +355,7 @@ jobs:
           PY
       - name: Retain only sanitized JSON and synthetic screenshots
         if: always() && steps.diagnostic-evidence.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: installed-media-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
