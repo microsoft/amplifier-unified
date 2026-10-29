@@ -561,9 +561,12 @@ class HistoryDirectory:
         scoped = any(value is not None for value in (identity, public_ids, children_of, exact_parent))
         if scoped and native_root_workspace is not None:
             raise ValueError('Workspace candidates cannot replace an exact source scope.')
+        # Extract the admitted scalar overlay once per statement. Inlining it
+        # makes native ownership/parent lookups parse each live row's summary
+        # again for every catalog row, even when the query only needs counts.
         # Materialize this query's receipts so SQLite can index their keys;
         # joining json_each directly rescans every receipt for every notice.
-        local = prefix + f'''live_rows AS (SELECT {live_columns} FROM json_each(?)), stored_local_rows AS (
+        local = prefix + f'''live_rows AS MATERIALIZED (SELECT {live_columns} FROM json_each(?)), stored_local_rows AS (
             SELECT {columns} FROM live_rows {'WHERE ' + live_lookup if scoped else ''} UNION ALL
             SELECT {columns} FROM history_local_rows l
             WHERE {'(' + stored_lookup + ') AND ' if scoped else ''}l.id NOT IN (SELECT id FROM live_rows)),
