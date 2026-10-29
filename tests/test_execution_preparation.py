@@ -1,0 +1,210 @@
+import copy
+import json
+
+import pytest
+
+from amplifier_web import resource_files
+from amplifier_web.execution_preparation import ExecutionPreparation
+
+
+def tree():
+    return {'nodes': [{'id': str(i), 'text': 'é\\\"\n\t' * 200,
+                      'nested': {'values': [None, True, 1, 1.0, -0.0]}} for i in range(300)],
+            'turns': [], 'retiredUsageNodes': [], 'metadata': {'x': '漢字'}}
+
+
+def test_canonical_output_and_mutable_nested_aliases(monkeypatch):
+    value = tree()
+    cache = ExecutionPreparation()
+    assert cache.prepare('a', value) == resource_files.prepare(value)
+    calls = []
+    original = json.dumps
+    def observe(v, *args, **kwargs):
+        if type(v) is list:
+            calls.append(len(v))
+        return original(v, *args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(json, 'dumps', observe)
+        assert cache.prepare('a', value).text
+        assert calls == []
+        value['nodes'][140]['nested']['values'][0] = 'changed'
+        result = cache.prepare('a', value)
+        assert calls == [128]  # Only the changed fragment is encoded again.
+    assert result == resource_files.prepare(value)
+    value['nodes'].reverse()
+    assert cache.prepare('a', value) == resource_files.prepare(value)
+
+
+@pytest.mark.parametrize('before,after', [(True, 1), (1, 1.0), (0.0, -0.0), ('x', 'y')])
+def test_typed_mutations_cannot_reuse_previous_bytes(before, after):
+    value = {'nodes': [{'nested': [before]}]}
+    cache = ExecutionPreparation()
+    prior = cache.prepare('a', value)
+    value['nodes'][0]['nested'][0] = after
+    result = cache.prepare('a', value)
+    assert result == resource_files.prepare(value) and result != prior
+
+
+def test_sharing_custom_types_and_cycles_preserve_encoder_behavior():
+    shared = {'value': 'retained'}
+    value = {'nodes': [shared, shared]}
+    cache = ExecutionPreparation()
+    assert cache.prepare('a', value) == resource_files.prepare(value)
+    shared['value'] = 'updated'
+    assert cache.prepare('a', value) == resource_files.prepare(value)
+    class Custom(dict):
+        pass
+    value['nodes'][0] = Custom(value='custom')
+    assert cache.prepare('a', value) == resource_files.prepare(value)
+    value['nodes'][0] = value
+    with pytest.raises(ValueError, match='Circular'):
+        cache.prepare('a', value)
+
+
+def test_bounds_owner_replacement_and_eviction():
+    cache = ExecutionPreparation()
+    cache.MAX_BYTES = 30000
+    for i in range(5):
+        value = tree()
+        assert cache.prepare(str(i), value) == resource_files.prepare(value)
+        assert cache.bytes <= cache.MAX_BYTES
+    value = tree()
+    cache.MAX_BYTES = 1000000
+    assert cache.prepare('same', value) == resource_files.prepare(value)
+    replacement = copy.deepcopy(value)
+    replacement['nodes'][-1]['text'] = 'replacement'
+    assert cache.prepare('same', replacement) == resource_files.prepare(replacement)
+    cache.retain({'same'})
+    assert all(k[0] == 'same' for k in cache.entries)
+    cache.retain(())
+    assert cache.bytes == 0 and not cache.entries
+
+
+def test_custom_reducers_and_buffers_are_not_invoked():
+    class CustomList(list):
+        def __reduce_ex__(self, protocol):
+            raise AssertionError('Custom reduction must not run')
+        def __buffer__(self, flags):
+            raise AssertionError('Custom buffer must not run')
+    class CustomString(str):
+        def __getstate__(self):
+            raise AssertionError('Custom state must not run')
+        def __reduce__(self):
+            raise AssertionError('Custom reduction must not run')
+    for custom in (CustomList(['value']), CustomString('value')):
+        value = {'nodes': [custom]}
+        cache = ExecutionPreparation()
+        assert cache.prepare('a', value) == resource_files.prepare(value)
+        assert not cache.entries
+
+
+def test_large_cycles_and_bounded_witness_preserve_json_errors(monkeypatch):
+    from amplifier_web.execution_preparation import _witness, _BoundedBytes, Unsupported
+    cycle = ['x' * 100000]
+    cycle.append(cycle)
+    assert len(_witness(cycle)) < 110000
+    with pytest.raises(ValueError, match='Circular'):
+        ExecutionPreparation().prepare('a', {'nodes': cycle})
+    monkeypatch.setattr(_BoundedBytes, 'LIMIT', 100)
+    with pytest.raises(Unsupported):
+        _witness('x' * 1000)
+    value = {'nodes': [{'text': 'x' * 1000}]}
+    cache = ExecutionPreparation()
+    assert cache.prepare('a', value) == resource_files.prepare(value)
+    assert not cache.entries
+
+
+def test_retired_accounting_cache_observes_nested_edits_and_live_receipt_precedence():
+    from amplifier_web.session_projection import stored_execution
+    cache = ExecutionPreparation()
+    rows = [{'id': str(i), 'kind': 'llm', 'sessionId': 'a', 'revision': 1,
+             'producerId': 'p', 'rootSessionId': 'a', 'assignmentId': 'original',
+             'usage': {'inputTokens': 1}, 'assignmentReservation': {'tokens': 3}}
+            for i in range(200)]
+    tree = {'retiredUsageNodes': rows, 'nodes': [], 'turns': []}
+    def prepared():
+        return stored_execution(tree, _retired=lambda snapshot: cache.retired('a', snapshot))
+    assert prepared() == stored_execution(tree)
+    previous = cache.accounting['a'][1]
+    assert prepared() == stored_execution(tree) and cache.accounting['a'][1] is previous
+    rows[10]['usage']['inputTokens'] = 99
+    rows[20]['assignmentReservation']['tokens'] = 80
+    assert prepared() == stored_execution(tree)
+    assert previous[10]['usage']['inputTokens'] == 1
+    tree['nodes'].append({**copy.deepcopy(rows[10]), 'revision': 2, 'liveObservation': True,
+                          'assignmentId': 'replacement', 'usage': {'outputTokens': 50}})
+    assert prepared() == stored_execution(tree)
+    assert cache.accounting['a'][1][10]['usage'] == {'inputTokens': 99}
+    rows.reverse()
+    assert prepared() == stored_execution(tree)
+    cache.retain(())
+    assert not cache.accounting and cache.accounting_bytes == 0
+
+
+def test_retired_custom_values_and_nonstandard_keys_keep_original_projection():
+    from amplifier_web.session_projection import stored_execution
+    class Renamed(str):
+        def __deepcopy__(self, memo):
+            return 'changed-key'
+        def __reduce__(self):
+            raise AssertionError('Custom reducers must not run')
+    cache = ExecutionPreparation()
+    rows = [{'id': str(i), 'kind': 'llm', 'sessionId': 'a', 'revision': 1} for i in range(130)]
+    rows[0]['id'] = Renamed('original-key')
+    assert cache.retired('a', rows) is None
+    tree = {'retiredUsageNodes': rows, 'nodes': [{**rows[0], 'revision': 2, 'liveObservation': True}]}
+    assert stored_execution(tree, _retired=lambda snapshot: cache.retired('a', snapshot)) == stored_execution(tree)
+    rows[0]['id'] = '0'
+    rows[1]['revision'] = float('nan')
+    assert cache.retired('a', rows) is None
+    rows[1]['revision'] = 1
+    rows[0]['lifecycle'] = {'invalid': set(range(100))}
+    cache.retired('a', rows)
+    assert not cache.accounting
+
+
+def test_retired_memory_budget_eviction_and_replacement():
+    cache = ExecutionPreparation()
+    cache.MAX_BYTES = 20000
+    rows = [{'id': str(i), 'kind': 'llm', 'sessionId': 'a', 'revision': 1,
+             'usage': {'inputTokens': i}} for i in range(130)]
+    cache.retired('a', rows)
+    assert not cache.accounting
+    cache.MAX_BYTES = 300000
+    cache.retired('a', rows)
+    assert cache.accounting
+    for i in range(10):
+        cache.retired(str(i), copy.deepcopy(rows))
+        assert cache.accounting_bytes <= cache.MAX_BYTES
+    cache.retain(())
+    assert cache.accounting_bytes == 0
+
+
+def test_retired_snapshot_and_live_hook_order_match_uncached_projection():
+    from amplifier_web.session_projection import accounting_projection
+    def run(cached):
+        rows = [{'id': str(i), 'kind': 'llm', 'revision': 1,
+                 'usage': {'inputTokens': i}} for i in range(130)]
+        class Live(dict):
+            def get(self, key, default=None):
+                if key == 'liveObservation':
+                    rows[0]['usage']['inputTokens'] = 999
+                    rows.pop()
+                    rows.append({'id': 'new', 'kind': 'llm', 'revision': 1})
+                    return False
+                return super().get(key, default)
+        tree = {'nodes': [Live()], 'retiredUsageNodes': rows}
+        cache = ExecutionPreparation()
+        return accounting_projection(tree, _retired=(
+            lambda snapshot: cache.retired('a', snapshot)) if cached else None)
+    assert run(True) == run(False)
+    assert run(True)[0]['usage']['inputTokens'] == 999
+    assert run(True)[-1]['id'] == '129'
+
+
+def test_retired_tuple_does_not_retain_a_borrowed_container():
+    cache = ExecutionPreparation()
+    rows = [{'id': str(i), 'kind': 'llm', 'revision': 1,
+             'lifecycle': {'tuple': tuple(['stable', i])}} for i in range(130)]
+    assert cache.retired('a', rows)
+    assert not cache.accounting and cache.accounting_bytes == 0

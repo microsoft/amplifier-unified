@@ -83,6 +83,89 @@ def test_small_progress_writes_do_not_duplicate_large_message_body(app_factory, 
     assert cold_display.notifications(cold_display.ColdRecord(saved, app.db)) == cold_display.notifications(row)
 
 
+def test_committed_message_preparation_reused_during_advancing_execution(app_factory, monkeypatch):
+    app, rows = large_chat(app_factory)
+    row = rows[0]
+    encoded = []
+    original = resource_files.prepare
+    def observe(value):
+        if isinstance(value, list) and value and isinstance(value[0], dict) and 'text' in value[0]:
+            encoded.append(True)
+        return original(value)
+    monkeypatch.setattr(resource_files, 'prepare', observe)
+    for revision in range(3):
+        row['execution'] = {'nodes': [], 'turns': [], 'retiredUsageNodes': [
+            {'id': 'receipt', 'kind': 'llm', 'sessionId': row['id'], 'revision': revision,
+             'producerId': 'synthetic', 'usage': {'inputTokens': revision}}]}
+        app._publish(session_ids={row['id']}, detail_only=True, record_only=True)
+    assert encoded == [], 'Unchanged committed messages were canonically encoded again'
+    assert contents(app, row['id'])['messages'] == row['messages']
+    # The cache must still notice a borrowed equal-length nested edit.
+    row['messages'][0]['text'] = 'y' + row['messages'][0]['text'][1:]
+    app._publish(session_ids={row['id']}, detail_only=True, record_only=True)
+    assert encoded == [True]
+    assert contents(app, row['id'])['messages'] == row['messages']
+
+
+def test_failed_message_save_does_not_advance_preparation(app_factory, monkeypatch):
+    app, rows = large_chat(app_factory)
+    row = rows[0]
+    previous = app._message_preparation.entries[row['id']]
+    row['messages'][0]['text'] = 'changed before failed commit'
+    old = committed(app, row['id'])
+    with monkeypatch.context() as patch:
+        def fail(*args, **kwargs):
+            raise RuntimeError('synthetic save failure')
+        patch.setattr(state_records, 'save_working', fail)
+        with pytest.raises(RuntimeError, match='synthetic save failure'):
+            app._publish(session_ids={row['id']}, detail_only=True, record_only=True)
+    assert app._message_preparation.entries[row['id']] is previous
+    assert committed(app, row['id']) == old
+    app._publish(session_ids={row['id']}, detail_only=True, record_only=True)
+    assert app._message_preparation.entries[row['id']] is not previous
+    assert contents(app, row['id'])['messages'] == row['messages']
+
+
+def test_cached_messages_still_validate_files_and_readopt_collected_blob(app_factory):
+    app, rows = large_chat(app_factory)
+    row = rows[0]
+    reference = committed(app, row['id'])['_coldFields']['messages']
+    path = resource_files.root(app.db) / (reference['$resource'] + '.json')
+    original = path.read_text()
+    path.write_text('corrupt')
+    with pytest.raises(ValueError, match='conflicts'):
+        app._publish(session_ids={row['id']}, detail_only=True, record_only=True)
+    path.unlink()
+    app.db.execute('DELETE FROM state_resources WHERE id=?', (reference['$resource'],))
+    app.db.commit()
+    app._publish(session_ids={row['id']}, detail_only=True, record_only=True)
+    assert path.read_text() == original
+    assert contents(app, row['id'])['messages'] == row['messages']
+
+
+@pytest.mark.parametrize('cold', [False, True])
+def test_successful_inline_or_cold_save_retires_previous_preparation(app_factory, monkeypatch, cold):
+    app, rows = large_chat(app_factory)
+    row = rows[0]
+    previous = app._message_preparation.entries[row['id']]
+    if cold:
+        # The actual retirement seam saves the cold pointer while the resident
+        # field is still present; only after commit does it remove that field.
+        row[cold_display.MARKER] = {'messages': committed(app, row['id'])['_coldFields']['messages']}
+    else:
+        row['messages'] = [{'id': 'short', 'role': 'user', 'text': 'short'}]
+    with monkeypatch.context() as patch:
+        def fail(*args, **kwargs):
+            raise RuntimeError('synthetic save failure')
+        patch.setattr(state_records, 'save_working', fail)
+        with pytest.raises(RuntimeError, match='synthetic save failure'):
+            app._publish(session_ids={row['id']}, detail_only=True, record_only=True)
+    assert app._message_preparation.entries[row['id']] is previous
+    app._publish(session_ids={row['id']}, detail_only=True, record_only=True)
+    assert row['id'] not in app._message_preparation.entries
+    assert contents(app, row['id'])['messages'] == row['messages']
+
+
 async def test_same_identity_equal_length_nested_edit_survives_unclean_restart(app_factory):
     app, rows = large_chat(app_factory)
     row = rows[0]
@@ -446,3 +529,62 @@ def test_saved_message_reference_keeps_bounded_body_free_media_hints(app_factory
     assert hint['scope'] == (row.get('nativeIdentity') or row.get('runtimeSessionId') or row['id'])
     assert all('text' not in binding for binding in hint['bindings'])
     assert row['messages'] is messages and contents(app, row['id'])['messages'] == messages
+
+
+def test_execution_preparation_cannot_acknowledge_failed_save_or_skip_blob_validation(app_factory, monkeypatch):
+    from amplifier_web.session_projection import stored_execution
+    app, rows = large_chat(app_factory)
+    row = rows[0]
+    row['execution'] = {'nodes': [], 'turns': [], 'retiredUsageNodes': [
+        {'id': str(i), 'kind': 'llm', 'sessionId': row['id'], 'revision': 1,
+         'phase': 'completed', 'usage': {'inputTokens': i},
+         'assignmentReservation': {'tokens': 100}}
+        for i in range(130)]}
+    app._publish()
+    previous = contents(app, row['id'])['execution']
+    row['execution']['retiredUsageNodes'][10]['usage']['inputTokens'] = 999
+    with monkeypatch.context() as patch:
+        def fail(*a, **kw):
+            raise sqlite3.OperationalError('staging failed')
+        patch.setattr(state_records, 'save_working', fail)
+        with pytest.raises(sqlite3.OperationalError, match='staging failed'):
+            app._publish(session_ids={row['id']}, detail_only=True, record_only=True)
+    assert contents(app, row['id'])['execution'] == previous
+    assert app._progress_dirty
+    app._publish(session_ids={row['id']}, detail_only=True, record_only=True)
+    assert contents(app, row['id'])['execution'] == stored_execution(row['execution'])
+    reference = committed(app, row['id'])['_coldFields']['execution']
+    path = resource_files.root(app.db) / (reference['$resource'] + '.json')
+    correct = path.read_text()
+    path.write_text('{}')
+    with pytest.raises(ValueError, match='conflicts'):
+        app._publish(session_ids={row['id']}, detail_only=True, record_only=True)
+    path.unlink()
+    app.db.execute('DELETE FROM state_resources WHERE id=?', (reference['$resource'],))
+    app.db.commit()
+    app._publish(session_ids={row['id']}, detail_only=True, record_only=True)
+    assert path.read_text() == correct
+    assert contents(app, row['id'])['execution'] == stored_execution(row['execution'])
+
+
+def test_execution_cold_commit_releases_both_preparations(app_factory, monkeypatch):
+    app, rows = large_chat(app_factory)
+    row = rows[0]
+    row['execution'] = {'nodes': [], 'turns': [], 'retiredUsageNodes': [
+        {'id': str(i), 'kind': 'llm', 'sessionId': row['id'], 'revision': 1,
+         'usage': {'inputTokens': i}} for i in range(130)]}
+    app._publish()
+    cache = app._execution_preparation
+    assert row['id'] in cache.accounting
+    assert any(key[0] == row['id'] for key in cache.entries)
+    row[cold_display.MARKER] = {'execution': committed(app, row['id'])['_coldFields']['execution']}
+    with monkeypatch.context() as patch:
+        def fail(*args, **kwargs):
+            raise RuntimeError('synthetic cooling failure')
+        patch.setattr(state_records, 'save_working', fail)
+        with pytest.raises(RuntimeError, match='synthetic cooling failure'):
+            app._publish(session_ids={row['id']}, detail_only=True, record_only=True)
+    assert row['id'] in cache.accounting
+    app._publish(session_ids={row['id']}, detail_only=True, record_only=True)
+    assert row['id'] not in cache.accounting
+    assert not any(key[0] == row['id'] for key in cache.entries)
