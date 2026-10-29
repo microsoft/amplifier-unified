@@ -95,7 +95,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     service.profiling_host = ProfilingHost(service, config)
     if runtime is None:
         from .runtime import RuntimeManager
-        runtime = RuntimeManager(app_bridge=service.app_bridge, retention=config["runtime"])
+        runtime = RuntimeManager(app_bridge=service.app_bridge, retention=config["runtime"],
+                                 performance_diagnostics=service.performance_diagnostics)
         await service.install_runtime(runtime)
         service.state["runtime"]["available"] = True
     if hasattr(runtime, 'retention'):

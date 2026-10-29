@@ -183,13 +183,21 @@ async def install_app_access(coordinator, bridge):
             def __getattr__(self, name):
                 return getattr(self.original, name)
             async def execute(self, arguments):
+                from .performance_diagnostics import tool_scope
+                with tool_scope(coordinator, self.mounted_name) as timing:
+                    return await self._execute(arguments, timing)
+
+            async def _execute(self, arguments, timing):
+                from .performance_diagnostics import mark
                 # The engine has already awaited hooks/approval and installed
                 # its real per-task call ID. Nested dispatch also holds its
                 # original execution lock and validates the live lease first.
                 from .coordination_delivery import WORK_EXECUTION
                 dispatch = getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task(), {})
                 data = {**dispatch, 'tool_name': self.mounted_name, 'tool_input': copy.deepcopy(arguments)}
+                mark(timing, 'origin.start')
                 proof = await delivery.claim_effect_origin(data)
+                mark(timing, 'origin.end')
                 try:
                     from amplifier_module_tool_exec import ProgrammaticTool
                     dispatcher = coordinator.get_capability('tools.dispatch')
@@ -203,8 +211,12 @@ async def install_app_access(coordinator, bridge):
                              'active': True, 'leaseIssued': False, 'programmaticGuarded': guarded_program}
                 token = WORK_EXECUTION.set(execution)
                 try:
+                    mark(timing, 'check.start')
                     result = await self._work_check(self.mounted_name, arguments)
+                    mark(timing, 'check.end')
                     if not isinstance(result, dict) or result.get('allowed') is not True:
+                        if timing:
+                            timing.outcome = 'denied'
                         failure = result.get('checkFailure') if isinstance(result, dict) else None
                         if failure in ('timeout', 'connection'):
                             reason = 'timed out' if failure == 'timeout' else 'lost its connection'
@@ -214,7 +226,14 @@ async def install_app_access(coordinator, bridge):
                         return ToolResult(success=False, error={
                             'code': 'work_precondition_unavailable',
                             'message': 'Current Work requirements or host execution scope are unavailable.'})
-                    return await self.original.execute(arguments)
+                    mark(timing, 'body.start')
+                    try:
+                        result = await self.original.execute(arguments)
+                        if timing and getattr(result, 'success', None) is False:
+                            timing.outcome = 'failed'
+                        return result
+                    finally:
+                        mark(timing, 'body.end')
                 finally:
                     execution['active'] = False
                     WORK_EXECUTION.reset(token)
@@ -290,6 +309,18 @@ async def install_app_access(coordinator, bridge):
             'args':{'type':'object','description':'For get_state: {path?:JSON Pointer, offset?:integer, limit?:integer, revision?:integer, directoryRevision?:string}; omitted path returns a bounded overview with $statePath references. Versioned /sessions reads require both revision and directoryRevision from that overview; unversioned reads use the current directory. list_actions: {prefix?:string, offset?:integer, limit?:1..50, revision?:string}; follow nextOffset with the same prefix and revision. Oversized schemas include schemaRead: call list_actions with those arguments and follow nextSchemaOffset, concatenate schemaText and parse the complete JSON before dispatch. dispatch: {action, args, expectedRevision?, id?}. history: {action:list|search|read, query?:text, session_id?:id, scope?:workspace|all, include_children?:boolean, include_internal?:boolean, offset?:integer, limit?:1..50, text_offset?:integer, text_limit?:1..4000}; read requires session_id, search requires query. Follow next_offset and next_text_offset. Default scope is the calling workspace; reads do not select chats or start work.'}},
             'required':['operation'],'additionalProperties':False}
         async def execute(self, input):
+            from .performance_diagnostics import tool_scope, mark
+            with tool_scope(coordinator, self.name) as timing:
+                mark(timing, 'body.start')
+                try:
+                    result = await self._execute(input)
+                    if timing and result.success is False:
+                        timing.outcome = 'failed'
+                    return result
+                finally:
+                    mark(timing, 'body.end')
+
+        async def _execute(self, input):
             error = _app_control_input_error(input, self.input_schema['properties']['operation']['enum'])
             if error is not None:
                 return ToolResult(success=False, error=error)

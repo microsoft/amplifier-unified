@@ -44,6 +44,7 @@ class Worker:
         self.operation_controls = 0
         self.stop_revision = 0
         self.bridges = {}
+        self.bridge_timings = {}
         self.start_task = None
         self.tasks = set()
         self.shutdown = asyncio.Event()
@@ -104,6 +105,7 @@ class Worker:
             self.approval_contexts.pop(identity, None)
 
     async def bridge(self, operation, args):
+        from amplifier_web.performance_diagnostics import PhaseTiming, active_tool, TIMING_ENABLED
         timeout = 60
         if operation == "capacity.admit" and args.get('waitForCapacity'):
             # The host owns the configurable wait deadline; default waits
@@ -125,6 +127,15 @@ class Worker:
         facts = {'type': 'runtime.bridge', 'bridgeId': identity, 'operation': operation,
                  'generation_id': generation.get('id'), 'timeoutSeconds': timeout,
                  'runtimeSessionId': args.get('_runtimeSessionId')}
+        owner = active_tool()
+        timing = PhaseTiming(kind='bridge', bridgeId=identity, operation=operation,
+            runtimeSessionId=args.get('_runtimeSessionId'), generationId=generation.get('id'),
+            **({key: owner.facts[key] for key in ('invocationId', 'toolCallId')
+                if key in owner.facts} if owner else {})) if TIMING_ENABLED else None
+        if timing:
+            timing.mark('start')
+            self.bridge_timings[identity] = timing
+        outcome = 'completed'
         # Only operation names, never arguments or response bodies.
         action = args.get('action')
         if isinstance(action, str) and re.fullmatch(r'[a-z][a-z0-9_.]{0,79}', action):
@@ -138,11 +149,19 @@ class Worker:
 
         try:
             diagnostic('requested')
-            publish({"op": "bridge", "id": identity, "operation": operation, "args": args})
+            if timing:
+                timing.mark('write.start')
+            publish({"op": "bridge", "id": identity, "operation": operation, "args": args,
+                     **({'_timing': timing.snapshot()} if timing else {})})
+            if timing:
+                timing.mark('write.end')
             result = await asyncio.wait_for(future, timeout)
+            if timing:
+                timing.mark('resumed')
             diagnostic('completed', elapsedSeconds=round(time.monotonic() - started, 3))
             return result
         except TimeoutError as exc:
+            outcome = 'failed'
             if timeout is None:
                 raise
             diagnostic('timeout', elapsedSeconds=round(time.monotonic() - started, 3),
@@ -152,14 +171,17 @@ class Worker:
                 "(transport timeout, not normal coordination.wait expiry)."
             ) from exc
         except asyncio.CancelledError:
+            outcome = 'cancelled'
             cancelled = True
             diagnostic('cancelled', elapsedSeconds=round(time.monotonic() - started, 3))
             raise
         except Exception as exc:
+            outcome = 'failed'
             diagnostic('failed', errorType=type(exc).__name__,
                        elapsedSeconds=round(time.monotonic() - started, 3))
             raise
         finally:
+            self.bridge_timings.pop(identity, None)
             if operation == 'capacity.admit' and args.get('waitForCapacity'):
                 # A local future can disappear while this process stays alive.
                 # Fence the exact host-side wait, including a reply in transit.
@@ -167,6 +189,15 @@ class Worker:
             self.bridges.pop(identity, None)
             if not future.done():
                 future.cancel()
+            if timing:
+                timing.mark('end')
+                self.emit_timing(timing.snapshot(outcome))
+
+    def emit_timing(self, value):
+        try:
+            publish({'type': 'runtime.timing', 'timing': value})
+        except Exception:
+            pass
 
     def app_access_bridge(self, coordinator, *, assignment=None):
         lookup = getattr(coordinator, 'get_capability', None)
@@ -204,6 +235,10 @@ class Worker:
                     'inputCoverage': 'complete' if len(ids) <= 16 else 'overflow',
                     'stopRevision': self.stop_revision}
         coordinator.register_capability('web.work_origin_scope', origin_scope)
+        coordinator.register_capability('web.performance.emit', self.emit_timing)
+        coordinator.register_capability('web.performance.scope', lambda: {
+            'runtimeSessionId': coordinator.session_id,
+            'generationId': (getattr(self.runtime, 'generation', None) or {}).get('id')})
         watched = set()
         async def bridge(operation, args):
             ids = self.context_inputs if assigned is None else assigned
@@ -1260,6 +1295,9 @@ class Worker:
             if op == "bridge.result":
                 future = self.bridges.get(identity)
                 if future and not future.done():
+                    timing = getattr(self, 'bridge_timings', {}).get(identity)
+                    if timing:
+                        timing.mark('received')
                     if data.get("error"):
                         future.set_exception(RuntimeError(data["error"]))
                     else:
