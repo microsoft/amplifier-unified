@@ -8,6 +8,7 @@ import {McpAppViewer} from './mcp-app-viewer';
 import {A2UISurface} from './a2ui';
 import './canvas-workspace.css';
 import {useCanvasReloadGuard} from './canvas-reload-guard.jsx';
+import {hasLocalCanvasEdits} from './canvas-reload-guard.js';
 
 const Surface=({canvas,act})=><A2UISurface surface={canvas.surface} act={act}/>;
 // Every built-in format and every contributed renderer enters the same host.
@@ -80,18 +81,37 @@ export function Renderer({view,canvas,dispatch,recovery,connectionKey}){
 }
 
 function ResourceView({view,state,dispatch,recovery}){
- const [error,setError]=useState('');
+ const [error,setError]=useState(''),[choice,setChoice]=useState(null),[choosing,setChoosing]=useState(false),choicePending=useRef(false);
  const canvas=useMemo(()=>state.canvas?{...state.canvas,...(view.app?{app:view.app}:{}),...targetOf(view),renderIdentity:view.renderIdentity,view:view.view||state.canvas.view,renderReports:view.renderReports}:null,[state.canvas,view]);
  const server=state.smartTools?.servers?.find(row=>row.id===canvas?.mcp?.serverId);
  const connectionKey=JSON.stringify([server?.status,server?.catalogState,server?.catalogRevision,server?.account,server?.accountBinding,canvas?.mcp?.catalogRevision,canvas?.mcp?.contractFingerprint]);
  const run=async(action,args)=>{try{const result=await dispatch(action,args);setError(result?.result?.status==='deferred'?result.result.reason:'')}catch(error){setError(error.message)}};
+ const choose=async(version,confirmed=false)=>{
+  if(choicePending.current)return;
+  if(hasLocalCanvasEdits()){setError('Save or cancel unfinished Canvas edits before changing the preview.');return}
+  const executable=['html','babylon'].includes(canvas?.kind)&&!canvas?.app;
+  if(executable&&!confirmed&&(version??view.latestVersion)!==view.runningVersion){
+   setChoice({id:view.resourceId,version,exactVersion:version??view.latestVersion,target:targetOf(view)});return;
+  }
+  choicePending.current=true;setChoosing(true);
+  try{
+   const result=confirmed
+    ?await dispatch('canvas.views.loadVersion',{...choice.target,version:choice.exactVersion,followLatest:choice.version===null})
+    :await dispatch('canvas.select',{id:view.resourceId,...(version!=null?{version}:{})});
+   if(!result?.accepted)throw Error('The saved version was not selected.');
+   setChoice(null);setError('');
+  }catch(error){setError(error.unconfirmed?'Version load completion is unconfirmed. Check the current version before another Load.':error.message)}
+  finally{choicePending.current=false;setChoosing(false)}
+ };
+ useEffect(()=>{setChoice(null);setError('')},[view.resourceId,view.resourceRevision,view.generation]);
  return <CanvasViewControls label="Artifact controls"><section className="a-resource-view" data-canvas-view={view.viewId} aria-label="Artifact view">
   <CanvasControl><div className="a-resource-view-controls a-canvas-toolbar">
    <strong>{canvas?.title}</strong>
-   {!!view.versions?.length&&<><label>Version<select aria-label="Artifact version" value={view.selectedVersion??'latest'} onChange={event=>run('canvas.select',{id:view.resourceId,...(event.target.value==='latest'?{}:{version:Number(event.target.value)})})}>
+   {!!view.versions?.length&&<><label>Version<select aria-label="Artifact version" value={view.selectedVersion??'latest'} onChange={event=>choose(event.target.value==='latest'?null:Number(event.target.value))}>
     <option value="latest">Latest · Version {view.latestVersion}</option>
     {view.versions.slice().reverse().map(version=><option key={version.version} value={version.version}>Version {version.version}{version.createdAt?' · '+new Date(version.createdAt*1000).toLocaleString():''}</option>)}
-   </select></label>{view.selectedVersion!=null&&<><button type="button" className="a-link" onClick={()=>run('canvas.select',{id:view.resourceId})}>Go to Latest</button>{canvas?.app&&<button type="button" className="a-soft" onClick={()=>run('canvas.apps.restore',{id:view.resourceId,sessionId:canvas.sessionId,version:view.selectedVersion,expectedRevision:view.latestVersion,expectedStateRevision:view.latestStateRevision})}>Restore as new version</button>}{!canvas?.app&&!['mcp-app','browser','gif'].includes(canvas?.kind)&&<button type="button" className="a-soft" onClick={()=>run('canvas.versions.restore',{id:view.resourceId,sessionId:canvas.sessionId,version:view.selectedVersion,expectedRevision:view.latestVersion})}>Restore as new version</button>}</>}</>}
+   </select></label>{view.selectedVersion!=null&&<><button type="button" className="a-link" onClick={()=>choose(null)}>Go to Latest</button>{canvas?.app&&<button type="button" className="a-soft" onClick={()=>run('canvas.apps.restore',{id:view.resourceId,sessionId:canvas.sessionId,version:view.selectedVersion,expectedRevision:view.latestVersion,expectedStateRevision:view.latestStateRevision})}>Restore as new version</button>}{!canvas?.app&&!['mcp-app','browser','gif'].includes(canvas?.kind)&&<button type="button" className="a-soft" onClick={()=>run('canvas.versions.restore',{id:view.resourceId,sessionId:canvas.sessionId,version:view.selectedVersion,expectedRevision:view.latestVersion})}>Restore as new version</button>}</>}</>}
+   {choice?.id===view.resourceId&&<div role="group" aria-label="Confirm saved preview version"><p>Loading v{choice.exactVersion} resets the current preview, discards its local input and runs the saved code.</p><button type="button" className="a-soft" disabled={choosing} onClick={()=>setChoice(null)}>Keep current preview</button><button type="button" className="a-soft" disabled={choosing} onClick={()=>choose(choice.exactVersion,true)}>Load v{choice.exactVersion} — resets preview and runs its code</button></div>}
    <label>Open with<select aria-label="Open with" value={view.renderer} onFocus={()=>dispatch('canvas.views.inspect',{}).catch(()=>{})} onChange={event=>run('canvas.views.renderer',{...targetOf(view),renderer:event.target.value})}>
     {!view.available&&<option value={view.renderer}>Unavailable renderer</option>}
     {view.choices.map(choice=><option key={choice.id} value={choice.id}>{choice.label}</option>)}
