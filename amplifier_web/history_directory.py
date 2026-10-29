@@ -505,13 +505,15 @@ class HistoryDirectory:
             self._encoded_overlay = prior
         return prior[2:]
 
-    def effective(self, state=None, *, identity=None, public_ids=None, children_of=None, native_root_workspace=None, exact_parent=None, fields=None):
+    def effective(self, state=None, *, identity=None, public_ids=None, children_of=None, native_root_workspace=None, exact_parent=None, fields=None, notice_values=False):
         """Return effective rows with optional alias, exact-ID or child scope.
 
         exact_parent uses the child candidate indexes but preserves the agent
         overview's exact effective parent equality, including self-parent rows.
         fields limits the final UNION projection, after retaining every scalar
         needed by its canonical membership/suppression predicates.
+        notice_values exposes existing item payloads only to the attention
+        reader; ordinary catalog/count queries retain scalar notice columns.
         """
         if sum(value is not None for value in (identity, public_ids, children_of, exact_parent)) > 1:
             raise ValueError('Use one directory source scope per query.')
@@ -573,8 +575,9 @@ class HistoryDirectory:
             directory_notices AS (
                 SELECT json_extract(value,'$[0]') owner,json_extract(value,'$[2]') key,
                        json_extract(value,'$[3]') fingerprint,json_extract(value,'$[4]') is_error
+                       {",json_extract(value,'$[1]') slot,json_extract(value,'$[5]') value" if notice_values else ''}
                 FROM json_each(?) UNION ALL
-                SELECT owner,key,fingerprint,is_error FROM history_directory_notices n
+                SELECT owner,key,fingerprint,is_error{',slot,value' if notice_values else ''} FROM history_directory_notices n
                 WHERE {'n.owner IN (SELECT id FROM stored_local_rows) AND ' if scoped else ''}n.owner NOT IN (SELECT id FROM live_rows)),
             read_receipts AS MATERIALIZED (SELECT key,value FROM json_each(?)),
             notice_status AS (SELECT owner,MAX(COALESCE(r.value != n.fingerprint,1)) AS unread,

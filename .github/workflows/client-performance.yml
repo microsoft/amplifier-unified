@@ -5,6 +5,12 @@ on:
   pull_request:
     paths:
       - 'amplifier_web/browser_*.py'
+      - 'amplifier_web/attention.py'
+      - 'amplifier_web/directory_attention.py'
+      - 'amplifier_web/history_directory*.py'
+      - 'amplifier_web/state_projections.py'
+      - 'amplifier_web/shell_modules.py'
+      - 'amplifier_web/shell_components.py'
       - 'amplifier_web/state_transport.py'
       - 'amplifier_web/task_continuity.py'
       - 'amplifier_web/server_websocket.py'
@@ -15,6 +21,7 @@ on:
       - 'pyproject.toml'
       - 'uv.lock'
       - 'tests/test_browser_demand.py'
+      - 'tests/test_attention_demand.py'
       - 'tests/test_browser_task_history.py'
       - 'tests/test_browser_check_runner.py'
       - 'tests/test_state_transport.py'
@@ -64,6 +71,10 @@ jobs:
       - name: Presentation and view-report boundaries
         working-directory: frontend
         run: node --test tests/state-revision-presentation.test.mjs tests/state-transport.test.mjs tests/view-reporter.test.mjs
+      - name: Notice counts and demanded detail work
+        run: >-
+          uv run --no-sync pytest -q -s tests/test_attention_demand.py
+          --junitxml=output/client-performance/attention.xml
       - run: npm run build --prefix frontend
       - run: npx --prefix frontend playwright install --with-deps chromium
       - name: Observe idle updates, historical growth, panels and reconnect

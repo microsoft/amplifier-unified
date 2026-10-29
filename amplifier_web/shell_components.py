@@ -56,7 +56,7 @@ def snapshot(shell, client, instance):
         canvas = state.get('canvas', {})
         result['canvas'] = {key: copy.deepcopy(canvas[key]) for key in ('id', 'kind', 'title', 'open') if key in canvas}
     if 'attention.summary' in caps:
-        counts = service.projections.attention(state)
+        counts = service.projections.attention(state, session_ids=())
         result['attention'] = {key: copy.deepcopy(counts[key]) for key in ('total', 'unread', 'badgeUnread', 'sections') if key in counts}
     return result
 

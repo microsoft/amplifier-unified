@@ -76,6 +76,18 @@ def worker_history_count(state):
             and not view.get('settingsCanvas'))
 
 
+def attention_session_scope(state):
+    """Session notice bodies needed by this view; counts remain global."""
+    view = state.get('view', {})
+    page = settings_page(view, state.get('canvas'))
+    if not page and view.get('workSurface') == 'workspace' and view.get('workWorkspaceTab') == 'details' and view.get('workWorkspaceSettings'):
+        page = view['workWorkspaceSettings']
+    if view.get('panel') == 'activity' or page == 'chats':
+        return None
+    identity = state.get('selectedSessionId')
+    return (identity,) if identity else ()
+
+
 def project(result):
     view = result.get('view', {})
     panel, page = view.get('panel'), settings_page(view, result.get('canvas'))

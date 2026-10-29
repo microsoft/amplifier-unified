@@ -188,13 +188,24 @@ class StateProjections:
         result['messageAnnotations'] = display_annotations(row)
         return result
 
-    def attention(self, state):
+    def attention(self, state, *, session_ids=None):
         from .attention import snapshot
-        index = self.sessions(state)
         directory = self.directory
+        if directory is not None:
+            from .directory_attention import snapshot as directory_snapshot
+            scope = None if session_ids is None else tuple(sorted(set(session_ids)))
+            return self.get(('attention', scope), lambda: directory_snapshot(directory, state, scope))
+        index = self.sessions(state)
         return self.get(('attention',), lambda: snapshot({
-            **state, 'sessions': directory.attention_rows(state) if directory is not None else
-                [index.by_id[key] for key in index.attention_ids]}))
+            **state, 'sessions': [index.by_id[key] for key in index.attention_ids]}))
+
+    def attention_receipts(self, state, identities):
+        if self.directory is not None:
+            from .directory_attention import receipts
+            return receipts(self.directory, state, identities)
+        return [{key: item[key] for key in ('id', 'sessionId', 'fingerprint', 'read')}
+                for item in self.attention(state)['items'] if item.get('sessionId') in identities
+                and item['id'] in {prefix + item['sessionId'] for prefix in ('session:', 'completion:', 'unread:')}]
 
     @staticmethod
     def view_scope(state, keys):
@@ -362,7 +373,8 @@ class StateProjections:
 
     def browser(self, state, *, selected_context=False):
         from .browser_state import navigation, subagent_navigation
-        attention = self.attention(state)
+        from .browser_demand import attention_session_scope
+        attention = self.attention(state, session_ids=attention_session_scope(state) if selected_context else None)
         scoped = {**state, 'attention': attention}
         if selected_context:
             result = {'attention': attention, 'browserResources': ['selectedContext']}
@@ -397,7 +409,7 @@ class StateProjections:
             from .chat_navigation import navigation_activity
             from .session_navigation import is_agent_created
             from .navigation_summary import activity, task_blocked
-            attention = self.attention(state)
+            attention = self.attention(state, session_ids=())
             reviewed_errors = reviewed_session_errors(attention)
             fields = ('id', 'title', 'description', 'status', 'workspace', 'workspaceId', 'location',
                       'titleSource', 'nativeNameSource', 'autoName', 'naming', 'configurationBusy',
