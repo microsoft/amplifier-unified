@@ -2880,7 +2880,9 @@ class AppService:
                         from .settings_navigation import open_canvas
                         open_canvas(scoped, self.db)
                     else:
-                        canvas_command(scoped,action,args,origin)
+                        owner = self._session(sid) if sid else None
+                        file_root = (owner.get('workingDirectory') or owner.get('workspace')) if owner else None
+                        canvas_command(scoped,action,args,origin,file_root=file_root)
                     from .canvas_versions import assert_clean, reference, message_id
                     publication_message = message_id(scoped, sid)
                     if destination == 'inline':
