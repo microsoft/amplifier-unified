@@ -257,8 +257,12 @@ async def test_native_worker_ownership_faults_refuse_preview(app, tmp_path, monk
     assert files.exists() and all(path.exists() for path in owned.values())
 
 
-@pytest.mark.parametrize('owner', ['root', 'metadata', 'transfer'])
-async def test_native_workers_cannot_bypass_execution_or_metadata_ownership(app, owner):
+@pytest.mark.parametrize(('owner', 'refusal'), [
+    pytest.param('root', 'Another application owns this conversation. Close it there before deleting this chat.', id='root'),
+    pytest.param('metadata', 'Another application owns this conversation. Close it there before deleting this chat.', id='metadata'),
+    pytest.param('transfer', 'This task is fenced for transfer; it cannot change or start work here.', id='transfer'),
+])
+async def test_native_workers_cannot_bypass_execution_or_metadata_ownership(app, owner, refusal):
     from amplifier_foundation.session.shared_state import SharedSessionStore
     from filelock import FileLock
     row = await create(app); files = Path(row['workspace']); owned = worker_history(row)
@@ -273,12 +277,22 @@ async def test_native_workers_cannot_bypass_execution_or_metadata_ownership(app,
         child = next(path for identity, path in owned.items() if identity != row['id'])
         held = FileLock(child.parent/f'.{child.name}.metadata.lock')
         held.acquire(timeout=0)
+    before = {path: path.read_bytes() for directory in owned.values() for path in directory.rglob('*') if path.is_file()}
     value = await preview(app, row['id'])
     try:
-        with pytest.raises(AppError, match='Another application owns'):
+        # A root transfer fence is rejected by the service write boundary before
+        # deletion acquires locks; ownership conflicts reach deletion's lock check.
+        with pytest.raises(AppError) as caught:
             await delete(app, value)
+        assert str(caught.value) == refusal
         assert all(path.exists() for path in owned.values()) and files.exists()
         assert not store.checkpoint_path.exists()  # execution lock is required even without a checkpoint
+        assert all(path.read_bytes() == content for path, content in before.items())
+        assert app.db.execute('SELECT phase FROM managed_deletions WHERE id=?', (row['id'],)).fetchone()[0] == 'preview'
+        assert not managed_deletion.removed(app.db, row['id']) and not row.get('_deleting')
+        if owner == 'transfer':
+            assert store.transfer_fence_path in before
+            assert store.transfer_fence_path.read_bytes() == before[store.transfer_fence_path]
     finally:
         if held is not None:
             held.release()
