@@ -883,9 +883,13 @@ async def test_zip_symlink_and_special_file_library_protection(app, tmp_path):
             await dispatch(app, action, args)
     assert path.is_symlink() and packages.load(outside.read_bytes()).manifest['name'] == 'Paper'
     if hasattr(os, 'mkfifo'):
-        os.mkfifo(path.parent / 'pipe.zip')
-        errors = (await dispatch(app, 'theme.list', {}))['result']['errors']
-        assert {row['name'] for row in errors} == {path.name, 'pipe.zip'}
+        pipe = path.parent / 'pipe.zip'
+        os.mkfifo(pipe)
+        try:
+            errors = (await dispatch(app, 'theme.list', {}))['result']['errors']
+            assert {row['name'] for row in errors} == {path.name, 'pipe.zip'}
+        finally:
+            pipe.unlink(missing_ok=True)
 
 
 async def test_zip_import_rejects_symlink_library_directory(app, tmp_path):
