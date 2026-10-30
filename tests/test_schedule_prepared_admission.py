@@ -28,7 +28,7 @@ from amplifier_core.message_models import ChatResponse, TextBlock, Usage
 __amplifier_module_type__ = 'provider'
 class Provider:
     name = 'fixture'
-    def __init__(self, coordinator, config): self.coordinator, self.config = coordinator, config
+    def __init__(self, config=None, coordinator=None): self.coordinator, self.config = coordinator, config or {}
     def get_info(self): return ProviderInfo(id='fixture', display_name='Offline fixture', defaults={'model':'fixture'})
     async def list_models(self): return [{'id':'fixture'}]
     def parse_tool_calls(self, response): return []
@@ -37,7 +37,7 @@ class Provider:
             stream.write(json.dumps({'sessionId':self.coordinator.session_id, 'model':request.model})+'\\n')
         return ChatResponse(content=[TextBlock(text='SCHEDULE_ADMISSION_CONTROL')], usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2))
 async def mount(coordinator, config=None):
-    await coordinator.mount('providers', Provider(coordinator, config or {}), name='fixture')
+    await coordinator.mount('providers', Provider(config, coordinator), name='fixture')
 '''
 
 
@@ -99,8 +99,11 @@ async def test_prepared_first_and_second_occurrences_execute_once(tmp_path, monk
         result = await original_dispatch(action, args, **kwargs)
         if kwargs.get('origin') == 'scheduler' and action in {'session.create', 'task.create'}:
             target = args['id'] if action == 'session.create' else args['sessionId']
-            _, summary = template(app, app._session(target))
-            observations.append({'stage': action, 'sessionId': target, 'summary': summary})
+            configuration, summary = template(app, app._session(target))
+            # This fixture owns every value and has no credentials. Exact plans
+            # are diagnostic evidence here only; production receipts keep hashes.
+            observations.append({'stage': action, 'sessionId': target,
+                                 'summary': summary, 'configuration': configuration})
         return result
 
     app.dispatch = observed_dispatch
