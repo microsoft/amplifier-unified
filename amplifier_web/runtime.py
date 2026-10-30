@@ -187,7 +187,7 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         identity = event.get("sessionId") or event.get("session_id") or session_id
         root = event.get("rootSessionId") or event.get("root_session_id") or session_id
         return "runtime.generation", {**base, "sessionId": identity, "rootSessionId": root, "event": kind,
-            **{key: event[key] for key in ("generation_id", "input_ids", "initial_input_id",
+            **{key: event[key] for key in ("generation_id", "input_ids", "initial_input_id", "interruptionRevision",
                 "text", "nativeTerminal", "finalMessageRefs", "active_job_ids", "disposition", "error_type", "error_category", "error_code", "error_stage", "count_failure", "retryable", "accepted_input_ids", "scheduled_monitor_input_id", "scheduled_monitor_only", "observation_input_id", "observation_id") if key in event}}
     if kind == "collaboration.checkpoint":
         return "runtime.collaboration_checkpoint", {**base,
@@ -280,6 +280,7 @@ class RuntimeManager:
             or (session.get('workingDirectory') or session.get('workspace')) != current['directory']
         ):
             raise ValueError('The task execution folder changed before runtime admission. Retry from the current task state; no input was replayed.')
+        return current
 
     def pending_session_ids(self):
         return sorted({sid for sid, lock in self._locks.items() if lock.locked()} | {
@@ -407,7 +408,7 @@ class RuntimeManager:
             if not preserve_emit:
                 current["emit"] = emit
             current['start_session'] = {key: session[key] for key in (
-                'id', 'workspace', 'workingDirectory', 'executionRevision', 'bundle', 'selection',
+                'id', 'workspace', 'workingDirectory', 'executionRevision', 'interruptionRevision', 'bundle', 'selection',
                 'runtimeSessionId', 'nativeIdentity', 'forkContext') if key in session}
             await asyncio.wait_for(asyncio.shield(current["ready"]), self.startup_timeout)
             return
@@ -547,7 +548,7 @@ class RuntimeManager:
         row["heartbeat"] = asyncio.create_task(self._progress(sid, row))
         # The worker restores normal history from its checkpoint. Sending the
         # browser's execution logs, catalogs and attachment history is redundant.
-        config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','bundle','selection','forkContext','replaceSavedSelection','bundleReplacement') if key in session}
+        config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','interruptionRevision','bundle','selection','forkContext','replaceSavedSelection','bundleReplacement') if key in session}
         config['id'] = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
         if preserve_configuration:
             config['_preserveConfiguration'] = True
@@ -1059,7 +1060,7 @@ class RuntimeManager:
                 'task.pause', 'task.block', 'task.complete',
             }
         )
-        self._check_execution(sid, allow_fenced=safe)
+        execution = self._check_execution(sid, allow_fenced=safe)
         row = self.workers.get(sid)
         if not row or row["process"].returncode is not None:
             raise RuntimeError("Session is not running")
@@ -1079,7 +1080,11 @@ class RuntimeManager:
         if op not in {"park", "retire", "dependencies", "desktop.readiness", "delivery", "approval", "coordination.approval", "handoff.boundary"}:
             row["parked"] = False
         try:
-            await self._write(row, {"op": op, "id": identity, **args})
+            # Capture host authority at admission, before execution can emit a
+            # generation. Event arrival must never recapture a later Stop epoch.
+            interruption = (execution or row.get('start_session', {})).get('interruptionRevision', 0)
+            await self._write(row, {"op": op, "id": identity, **args,
+                                   "interruptionRevision": interruption})
         except (ValueError, TypeError):
             row["inflight"].discard(identity)
             row["pending"].pop(identity, None)
