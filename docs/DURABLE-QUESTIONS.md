@@ -60,6 +60,13 @@ and one delivery attempt. Cancellation or a hard exit during delivery preserves
 an `unknown` outcome; restart does not repeat uncertain work. A definite ownership
 rejection is reported separately as `rejected`.
 
+Exact positive input evidence also reconciles the saved question, including a
+late send acknowledgement or processed-input event after a timeout. Acceptance
+cannot be overwritten by a later timeout or cancellation. Restart repairs a
+stale question from an already retained accepted message without loading dormant
+history or starting a runtime. The saved answer, question revision, provenance
+and exact artifact references do not change.
+
 Current question projections appear in `session.questions` for the browser and
 agent state. All pending and unconfirmed records plus recent history are shown;
 older records remain available through the question read/list actions. Questions
@@ -77,7 +84,13 @@ unanswered state, including cancelled and superseded questions. The service does
 not infer dependencies among arbitrary tool calls or globally pause a session.
 
 When delivery is unknown, inspect the saved answer and current work before any
-deliberate continuation. There is no automatic retry/replay or cross-host delivery
+deliberate continuation. **Check delivery** uses the existing
+`conversation.delivery` action for that answer's exact input ID. It reads positive
+runtime/native-history evidence without resending or warming a worker. Missing
+or failed evidence leaves the answer visibly unconfirmed, including after
+reconnect; independent work can continue. An accepted input is not proof that
+the answer was processed or that dependent work completed.
+There is no automatic retry/replay or cross-host delivery
 reconciliation. Cross-host question transfer and operation-level dependency
 binding are integration work for the owning portability/continuation services.
 

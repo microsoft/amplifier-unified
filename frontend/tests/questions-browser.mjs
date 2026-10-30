@@ -380,6 +380,147 @@ try{
    sessionId:ready.sessionId,id:closed.result.id,expectedRevision:closed.result.revision,
   })).accepted,true);
  }
+ // Transport timeout is not a failed answer save. Exercise both reconciliation
+ // paths through the real service, with fresh chats and client-owned drafts.
+ for(const variant of [{mode:'event',width:1280,touch:false},{mode:'passive',width:390,touch:true}]){
+  const deliveryContext=await browser.newContext({viewport:{width:variant.width,height:900},hasTouch:variant.touch,
+   extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+  try{
+   const p=await deliveryContext.newPage();p.on('pageerror',error=>errors.push(error.message));
+   const seed=await p.request.post(ready.url+'/fixture/delivery-questions',{data:{mode:variant.mode}});
+   assert.equal(seed.status(),200,await seed.text());const data=await seed.json();
+   const observe=async()=>await (await p.request.get(ready.url+'/fixture/check',{params:{sessionId:data.sessionId}})).json();
+   const first=p.locator(`[data-question-id="${data.first.id}"]`),second=p.locator(`[data-question-id="${data.second.id}"]`);
+   const editor=p.getByRole('textbox',{name:'Message Amplifier',exact:true});
+   const activate=async control=>{
+    await control.scrollIntoViewIfNeeded();await expect(control).toBeEnabled();
+    if(variant.touch)await control.tap();
+    else{await control.focus();await expect(control).toBeFocused();await control.press('Enter')}
+   };
+   const bodyOf=request=>{const raw=request.postDataJSON();return raw.action==='shell.command'?raw.args:raw};
+   const editComposer=async text=>{
+    const saved=p.waitForResponse(response=>{
+     if(response.request().method()!=='POST'||!response.url().endsWith('/api/actions'))return false;
+     const body=bodyOf(response.request());return body.action==='view.update'&&body.args?.patch?.draft===text&&response.ok();
+    });
+    await editor.fill(text);await saved;
+   };
+   const screenshot=async label=>{if(output)await p.screenshot({path:join(output,`question-delivery-${variant.mode}-${variant.width}-${label}.png`)})};
+   const answer='**Use v1**.\n\nKeep the saved source.',nextAnswer='Keep this second question draft';
+   const draft='Keep this independent composer draft',unconfirmed='Answer saved. Delivery is unconfirmed; it has not been sent again.';
+   await p.goto(ready.url);await showFixtureConversation(p,{navPinned:false});
+   assert.equal((await p.evaluate(id=>window.amplifier.dispatch('session.select',{id}),data.sessionId)).accepted,true);
+   await expect(first).toBeVisible();await second.getByRole('textbox').fill(nextAnswer);
+   await editComposer(draft);await first.getByRole('textbox').fill(answer);
+   const before=await observe();
+   await activate(first.getByRole('button',{name:'Submit answer',exact:true}));
+   await expect(first.getByText(unconfirmed,{exact:true})).toBeVisible();
+   const saved=await observe(),record=saved.questions.find(row=>row.id===data.first.id);
+   assert.equal(record.status,'answered');assert.equal(record.delivery.status,'unknown');
+   assert.equal(record.delivery.inputId,data.inputId);assert.equal(record.answer.text,answer);
+   assert.equal(record.answer.questionRevision,1);assert.equal(record.answer.artifacts[0].version,1);
+   assert.equal(record.answer.artifacts[0].id,data.document.id);
+   assert.deepEqual(record.answer.artifacts,data.first.artifacts,'Answer freezes the exact original artifact binding');
+   assert.equal(saved.sent.length,before.sent.length+1,'One explicit answer makes one runtime send');
+   const exactMessage=rows=>rows.messages.filter(row=>row.inputId===data.inputId);
+   assert.equal(exactMessage(saved).length,1);assert.equal(exactMessage(saved)[0].delivery.status,'unknown');
+   await expect(editor).toHaveDraft(draft);await expect(second.getByRole('textbox')).toHaveValue(nextAnswer);
+   await first.scrollIntoViewIfNeeded();await screenshot('unknown');
+   await p.reload();await expect(first.getByText(unconfirmed,{exact:true})).toBeVisible();
+   await expect(second.getByRole('textbox')).toHaveValue(nextAnswer);await expect(editor).toHaveDraft(draft);
+   assert.deepEqual((await observe()).questions.find(row=>row.id===data.first.id),record,'Reload does not rewrite the saved answer or its unknown delivery');
+   assert.equal((await observe()).sent.length,saved.sent.length,'Reload cannot resend the saved answer');
+   const checkButton=first.getByRole('button',{name:'Check delivery',exact:true});
+   const checkDelivery=async()=>{
+    const response=p.waitForResponse(response=>{
+     if(response.request().method()!=='POST'||!response.url().endsWith('/api/actions'))return false;
+     const body=bodyOf(response.request());
+     return body.action==='conversation.delivery'&&body.args?.inputId===data.inputId&&body.args?.sessionId===data.sessionId;
+    });
+    await activate(checkButton);const result=await response;assert.equal(result.status(),200,await result.text());
+   };
+   const beforeProbe=await observe();await checkDelivery();
+   await expect(checkButton).toBeEnabled();await expect(first.getByText(unconfirmed,{exact:true})).toBeVisible();
+   const missing=await observe();
+   assert.deepEqual(missing.questions.find(row=>row.id===data.first.id),record,'Missing runtime evidence must remain unknown');
+   assert.deepEqual(missing.deliveryChecks.slice(beforeProbe.deliveryChecks.length),[{sessionId:data.sessionId,inputId:data.inputId}]);
+   assert.deepEqual(missing.sent,beforeProbe.sent);assert.deepEqual(missing.starts,beforeProbe.starts);
+   assert.deepEqual(missing.retries,[],'Check delivery is never a retry');
+   assert.ok(await first.evaluate(element=>element.scrollWidth<=element.clientWidth+1),'Unknown delivery card fits the viewport');
+   assert.ok(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Delivery controls do not create page overflow');
+   await screenshot('checked-unknown');
+   // The unresolved delivery must not lock navigation or an unrelated message.
+   await activate(p.getByRole('button',{name:'Home',exact:true}));
+   await expect.poll(()=>p.evaluate(()=>window.amplifier.getState().view.workSurface)).toBe('home');
+   await activate(p.getByRole('button',{name:'Back in navigation history',exact:true}));
+   await expect(first.getByText(unconfirmed,{exact:true})).toBeVisible();
+   await expect(editor).toHaveDraft(draft);await expect(second.getByRole('textbox')).toHaveValue(nextAnswer);
+   const independent='Independent message while delivery remains unknown';
+   await editComposer(independent);await activate(p.getByRole('button',{name:'Send message',exact:true}));
+   await expect(editor).toHaveDraft('');
+   await expect.poll(async()=>((await observe()).messages.find(row=>row.text===independent)||{}).delivery?.status).toBe('accepted');
+   assert.equal((await observe()).questions.find(row=>row.id===data.first.id).delivery.status,'unknown','Acceptance of a different input cannot confirm this answer');
+   await editComposer(draft);
+   const pendingBefore=(await observe()).questions.find(row=>row.id===data.second.id);
+   const pendingElement=await second.getByRole('textbox').elementHandle();
+   await second.getByRole('textbox').focus();
+   const beforeEvidence=await observe();
+   const evidence=await p.request.post(ready.url+'/fixture/delivery-evidence',{
+    data:{mode:variant.mode,sessionId:data.sessionId,inputId:data.inputId}});
+   assert.equal(evidence.status(),200,await evidence.text());
+   if(variant.mode==='passive'){
+    assert.equal((await observe()).questions.find(row=>row.id===data.first.id).delivery.status,'unknown','Seeding runtime evidence alone cannot update the question');
+    await checkDelivery();
+   }
+   await expect(first).toHaveCount(0);
+   await expect(second.getByRole('textbox')).toHaveValue(nextAnswer);await expect(editor).toHaveDraft(draft);
+   assert.equal(await pendingElement.evaluate(element=>element.isConnected),true,'Confirmation preserves the second question editor');
+   if(!variant.touch)await expect(second.getByRole('textbox')).toBeFocused();
+   await pendingElement.dispose();
+   await expect(p.locator('.a-question-notice')).toContainText('A question needs your answer');
+   const confirmed=await observe(),accepted=confirmed.questions.find(row=>row.id===data.first.id);
+   assert.equal(accepted.delivery.status,'accepted');assert.equal(accepted.delivery.inputId,data.inputId);
+   assert.deepEqual(accepted.answer,record.answer,'Confirmation changes delivery, not answer provenance or version');
+   assert.deepEqual(accepted.artifacts,record.artifacts);
+   assert.deepEqual(confirmed.questions.find(row=>row.id===data.second.id),pendingBefore);
+   assert.equal(exactMessage(confirmed).length,1);assert.equal(exactMessage(confirmed)[0].id,exactMessage(saved)[0].id);
+   assert.equal(exactMessage(confirmed)[0].delivery.status,'accepted');
+   assert.deepEqual(confirmed.sent,beforeEvidence.sent,'Late acceptance cannot send anything');
+   assert.deepEqual(confirmed.starts,beforeEvidence.starts);assert.deepEqual(confirmed.retries,[]);
+   assert.deepEqual(confirmed.deliveryChecks.slice(beforeEvidence.deliveryChecks.length),
+    variant.mode==='passive'?[{sessionId:data.sessionId,inputId:data.inputId}]:[],
+    'Only the explicit passive check probes the exact saved input');
+   assert.equal(confirmed.sent.filter(row=>row.inputId===data.inputId).length,1);
+   // Accepted answers leave the active warning but retain exact review/history.
+   await activate(p.getByRole('button',{name:'Chat',exact:true}));
+   await activate(p.getByRole('group',{name:'Chat',exact:true}).getByRole('button',{name:'Chat info',exact:true}));
+   await expect(p.getByRole('region',{name:'Conversation usage',exact:true}).getByRole('button',{name:'Refresh usage',exact:true})).toBeEnabled();
+   await activate(p.getByText('Questions & answers',{exact:true}));
+   await activate(p.locator('.a-question-history > summary'));
+   await activate(p.locator('.a-question-history .a-question-item > summary'));
+   await expect(first.getByText('Answer saved and delivered to Amplifier.',{exact:true})).toBeVisible();
+   await expect(first.getByRole('button',{name:'Check delivery',exact:true})).toHaveCount(0);
+   await activate(first.getByRole('button',{name:/^Preview here:/}));
+   await expect(first.getByRole('heading',{name:'Delivery document v1',exact:true})).toBeVisible();
+   await expect(first.getByRole('heading',{name:'Delivery document v2',exact:true})).toHaveCount(0);
+   assert.ok(await first.evaluate(element=>element.scrollWidth<=element.clientWidth+1),'Confirmed answer fits the viewport');
+   await first.scrollIntoViewIfNeeded();await screenshot('confirmed');
+   layoutChecks.push({label:'question-delivery-reconciliation',...variant,inputId:data.inputId,
+    answerSends:confirmed.sent.filter(row=>row.inputId===data.inputId).length,delivery:accepted.delivery.status});
+   await activate(first.getByRole('button',{name:/^Hide preview:/}));
+   const closed=p.waitForResponse(response=>{
+    if(response.request().method()!=='POST'||!response.url().endsWith('/api/actions'))return false;
+    const body=bodyOf(response.request());return body.action==='view.update'&&body.args?.patch?.panel===null&&response.ok();
+   });
+   await activate(p.getByRole('button',{name:'Close panel',exact:true}));await closed;
+   // Reload a confirmed answer too: the retained history must stay confirmed.
+   await p.reload();
+   await expect.poll(async()=>(await observe()).questions.find(row=>row.id===data.first.id).delivery.status).toBe('accepted');
+   await expect(first).toHaveCount(0);await expect(second).toBeVisible();
+   await expect(editor).toHaveDraft(draft);await expect(second.getByRole('textbox')).toHaveValue(nextAnswer);
+   assert.deepEqual((await observe()).sent,confirmed.sent,'Confirmed reload cannot replay work');
+  }finally{await deliveryContext.close()}
+ }
  assert.deepEqual(errors,[]);
- console.log('Durable questions browser passed: unique cards alongside handoff updates and reload, reconnect, explicit required/optional UI, option and free-text answers, cancellation, duplicate rejection, preserved draft, shared voice provenance, mobile layout.');
+ console.log('Durable questions browser passed: unique cards alongside handoff updates and reload, reconnect, explicit required/optional UI, option and free-text answers, cancellation, duplicate rejection, preserved draft, shared voice provenance, mobile layout, timeout retained across reload, late exact acceptance and passive delivery checks without replay on keyboard/touch.');
 }finally{if(output){await mkdir(output,{recursive:true});await writeFile(join(output,'layout-checks.json'),JSON.stringify(layoutChecks,null,2)+'\n')}await browser?.close();fixture.kill()}

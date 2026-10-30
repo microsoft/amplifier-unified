@@ -70,13 +70,63 @@ class Questions:
     def __init__(self, app):
         self.app = app
         self.store = QuestionStore(app.db)
-        for record in self.store.all():
+        records = self.store.all()
+        uncertain = {(r["sessionId"], r["delivery"].get("inputId")) for r in records
+                     if r.get("status") == "answered" and
+                     (r.get("delivery") or {}).get("status") in {"sending", "unknown"} and
+                     r["delivery"].get("inputId") == "question:" + r["id"] + ":answer"}
+        # Recovery uses only already resident evidence, once, not a transcript
+        # scan per question. Cold/native-only evidence uses conversation.delivery.
+        accepted = {(s["id"], m.get("inputId")) for s in app.state["sessions"]
+                    for m in s.get("messages", [])
+                    if (s["id"], m.get("inputId")) in uncertain and
+                    m.get("role") == "user" and
+                    (m.get("delivery") or {}).get("status") == "accepted"}
+        for record in records:
+            if (record["sessionId"], (record.get("delivery") or {}).get("inputId")) in accepted:
+                record["delivery"].update(status="accepted", updatedAt=time.time())
+                record["delivery"].pop("message", None)
+                self.store.put(record)
             if (record.get("delivery") or {}).get("status") == "sending":
                 record["delivery"].update(status="unknown", message="The app restarted before delivery was confirmed. The answer was saved; work was not replayed.", updatedAt=time.time())
                 self.store.put(record)
         self._projection_version = -1
         self._grouped = {}
         self.sync()
+
+    def for_input(self, session_id, input_id):
+        """Find one immutable answer by its exact session/input binding."""
+        from .service import AppError
+        if not isinstance(input_id, str) or not input_id.startswith("question:") or not input_id.endswith(":answer"):
+            return None
+        identity = input_id[len("question:"):-len(":answer")]
+        try:
+            record = self.store.get(session_id, identity)
+        except AppError as exc:
+            if exc.status == 404:
+                return None
+            raise
+        if (record["status"] != "answered" or not record.get("answer") or
+                (record.get("delivery") or {}).get("inputId") != input_id):
+            return None
+        return record
+
+    def accept_delivery(self, session_id, input_id):
+        """Apply exact positive input evidence; admission is not work completion.
+
+        The immutable answer's saved input binding is the authority, not a
+        caller's command ID, matching text, a later turn or session status.
+        Callers own the service lock and publication transaction.
+        """
+        record = self.for_input(session_id, input_id)
+        if record is None or record["delivery"]["status"] == "accepted":
+            return False
+        delivery = record["delivery"]
+        delivery.update(status="accepted", updatedAt=time.time())
+        delivery.pop("message", None)
+        self.store.put(record)
+        self.sync({session_id})
+        return True
 
     def sync(self, session_ids=None):
         if session_ids is not None:
@@ -278,11 +328,17 @@ class Questions:
             message = str(exc)
         async with self.app.lock:
             record = self.store.get(session["id"], question_id)
-            record["delivery"].update(status=status, updatedAt=time.time())
-            if message:
-                record["delivery"]["message"] = message
-            self.store.put(record)
-            self.sync({session['id']})
-            self.app._publish_changes(sessions={session['id']})
+            # A late timeout/cancellation cannot erase acceptance observed by
+            # the input event path while the send RPC was still outstanding.
+            if record["delivery"]["status"] != "accepted":
+                if status == "accepted":
+                    self.accept_delivery(session["id"], input_id)
+                else:
+                    record["delivery"].update(status=status, updatedAt=time.time())
+                    if message:
+                        record["delivery"]["message"] = message
+                    self.store.put(record)
+                    self.sync({session['id']})
+                self.app._publish_changes(sessions={session['id']})
         if cancelled:
             raise asyncio.CancelledError

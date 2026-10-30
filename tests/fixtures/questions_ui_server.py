@@ -12,11 +12,30 @@ class Runtime(fixture.Runtime):
     def __init__(self):
         super().__init__()
         self.sent = []
+        self.starts = []
+        self.retries = []
+        self.delivery_checks = []
+        self.timeout_inputs = set()
+        self.accepted_inputs = set()
+
+    async def start(self, session, emit, **kwargs):
+        self.starts.append(session['id'])
+        await super().start(session, emit, **kwargs)
 
     async def send(self, session, text, input_id, emit):
         self.sent.append({'sessionId': session['id'], 'inputId': input_id, 'text': text})
+        if (session['id'], input_id) in self.timeout_inputs:
+            raise TimeoutError('Synthetic answer acknowledgement timed out.')
         await asyncio.sleep(.15)
         await emit('runtime.status', {'sessionId': session['id'], 'status': 'idle'})
+
+    async def delivery(self, session, input_id):
+        self.delivery_checks.append({'sessionId': session['id'], 'inputId': input_id})
+        return 'accepted' if (session['id'], input_id) in self.accepted_inputs else 'unknown'
+
+    async def retry(self, session, text, input_id, emit):
+        self.retries.append({'sessionId': session['id'], 'inputId': input_id})
+        raise AssertionError('Delivery reconciliation must never retry an answer.')
 
 
 async def main(home):
@@ -66,10 +85,65 @@ async def main(home):
         return web.Response(text='reachable', headers={'Access-Control-Allow-Origin': '*'})
 
     async def check(request):
-        return web.json_response({'sent': runtime.sent, 'questions': service.questions.store.all(sid),
+        observed_sid = request.query.get('sessionId', sid)
+        return web.json_response({'sent': runtime.sent, 'questions': service.questions.store.all(observed_sid),
+                                 'starts': runtime.starts, 'retries': runtime.retries,
+                                 'deliveryChecks': runtime.delivery_checks,
+                                 'messages': [{key: message.get(key) for key in ('id', 'inputId', 'questionId', 'text', 'delivery')}
+                                              for message in service._session(observed_sid)['messages']
+                                              if message.get('role') == 'user'],
                                  'networkAttempts': len(network_attempts),
                                  'sessionIds': [session['id'] for session in service.state['sessions']],
                                  'selectedSessionId': service.state['selectedSessionId']})
+
+    async def delivery_questions(request):
+        if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+            raise web.HTTPForbidden()
+        mode = (await request.json()).get('mode')
+        if mode not in ('event', 'passive'):
+            raise web.HTTPBadRequest()
+        created = await service.dispatch('session.create', {
+            'title': f'Delivery reconciliation {mode}', 'workspace': str(home / 'workspace'),
+            'bundle': 'anchors', 'select': False})
+        target_sid = created['result']['sessionId']
+        document = (await service.app_bridge('dispatch', {'action': 'canvas.show', 'args': {
+            'kind': 'markdown', 'title': 'Delivery decision document', 'presentation': 'saved',
+            'content': '# Delivery document v1\n\nThe exact version reviewed with this answer.',
+        }}, target_sid))['result']
+        questions = []
+        for prompt, artifacts in [
+            ('Use the pinned document for this report?', [{'id': document['id'], 'version': 1}]),
+            ('What should the next report cover?', []),
+        ]:
+            questions.append((await service.app_bridge('dispatch', {'action': 'question.create', 'args': {
+                'prompt': prompt, 'required': True, 'dependency': 'Prepare this report',
+                'artifacts': artifacts,
+            }}, target_sid))['result'])
+        await service.app_bridge('dispatch', {'action': 'canvas.versions.revise', 'args': {
+            'id': document['id'], 'expectedRevision': 1, 'content': '# Delivery document v2',
+        }}, target_sid)
+        input_id = f"question:{questions[0]['id']}:answer"
+        runtime.timeout_inputs.add((target_sid, input_id))
+        return web.json_response({'sessionId': target_sid, 'first': questions[0],
+                                  'second': questions[1], 'document': document, 'inputId': input_id})
+
+    async def delivery_evidence(request):
+        if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+            raise web.HTTPForbidden()
+        args = await request.json()
+        key = (args.get('sessionId'), args.get('inputId'))
+        if (key not in runtime.timeout_inputs or args.get('mode') not in ('event', 'passive')
+                or not any((row['sessionId'], row['inputId']) == key for row in runtime.sent)):
+            raise web.HTTPBadRequest()
+        if args['mode'] == 'event':
+            await service.on_runtime_event('runtime.status', {
+                'sessionId': key[0], 'status': 'working', 'event': 'input.delivered', 'inputId': key[1]})
+            await service.on_runtime_event('runtime.status', {'sessionId': key[0], 'status': 'idle'})
+        else:
+            # Only seed the runtime's evidence. The real conversation.delivery
+            # action must read it and update the question; this route cannot.
+            runtime.accepted_inputs.add(key)
+        return web.json_response({'mode': args['mode'], 'sessionId': key[0], 'inputId': key[1]})
 
     async def propose_handoff(request):
         if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
@@ -114,6 +188,8 @@ async def main(home):
     app.router.add_post('/fixture/voice', voice)
     app.router.add_post('/fixture/handoff', propose_handoff)
     app.router.add_post('/fixture/reviews', reviews)
+    app.router.add_post('/fixture/delivery-questions', delivery_questions)
+    app.router.add_post('/fixture/delivery-evidence', delivery_evidence)
     app.router.add_get('/fixture/network-probe', network_probe)
     runner = web.AppRunner(app)
     await runner.setup()

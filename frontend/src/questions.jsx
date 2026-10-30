@@ -13,7 +13,7 @@ function QuestionCard({question,sessionId,state,dispatch,onPreviewChange,history
  const q=question,draftKey=JSON.stringify(['amplifier.questionDraft.v1',state.client?.hostInstanceId||globalThis.location?.origin||'local',sessionId,q.id,q.contentRevision||1]);
  const [text,setText]=useState(()=>{try{return q.status==='pending'?(sessionStorage.getItem(draftKey)||'').slice(0,8000):''}catch{return ''}});
  const [alternativeOpen,setAlternativeOpen]=useState(()=>!!text);
- const [busy,setBusy]=useState(false),[error,setError]=useState(''),[draftWarning,setDraftWarning]=useState('');
+ const [busy,setBusy]=useState(false),[error,setError]=useState(''),[draftWarning,setDraftWarning]=useState(''),[deliveryNote,setDeliveryNote]=useState('');
  const pending=useRef(false),request=useRef(null);
  const label=q.prompt.replace(/[#*_`]/g,'').slice(0,200),fileContext=useMemo(()=>({sessionId,act:dispatch}),[sessionId,dispatch]);
  const editText=value=>{
@@ -46,6 +46,15 @@ function QuestionCard({question,sessionId,state,dispatch,onPreviewChange,history
   try{const result=await dispatch('question.cancel',{sessionId,id:q.id,expectedRevision:q.revision,reason:'Skipped by the user'});if(!result?.accepted)throw Error(result?.error||'The question was not cancelled.')}
   catch(error){setError(error.message)}finally{pending.current=false;setBusy(false)}
  }
+ async function checkDelivery(){
+  if(pending.current)return;pending.current=true;setBusy(true);setError('');setDeliveryNote('');
+  try{
+   const result=await dispatch('conversation.delivery',{sessionId,inputId:q.delivery.inputId});
+   if(!result?.accepted)throw Error(result?.error||'Delivery could not be checked.');
+   setDeliveryNote(result.result?.delivery==='accepted'?'Amplifier received this answer. It was not sent again.':'Delivery is still unconfirmed. Nothing was sent again; other work can continue.');
+  }catch(error){setError(error.message||'Delivery could not be checked. Nothing was sent again.')}
+  finally{pending.current=false;setBusy(false)}
+ }
  const delivery=q.delivery?.status;
  const original=<>
   <Markdown text={q.prompt} className="a-question-prompt" userContent fileContext={fileContext}/>
@@ -64,6 +73,8 @@ function QuestionCard({question,sessionId,state,dispatch,onPreviewChange,history
   <div className="a-question-kind">{q.status==='pending'?(q.required?'Your answer is needed':'Optional question'):q.status==='answered'?'Answered':'Closed question'}</div>
   {q.status==='pending'?<div key="prompt">{original}</div>:<div key="answer" className="a-question-result" role="status">
    {q.status==='answered'?<><strong>Your answer:</strong><Markdown text={q.answer.text} userContent fileContext={fileContext}/><small>{delivery==='accepted'?'Answer saved and delivered to Amplifier.':delivery==='sending'?'Answer saved. Confirming delivery…':delivery==='rejected'?'Answer saved. Amplifier could not accept it.': 'Answer saved. Delivery is unconfirmed; it has not been sent again.'}</small>{q.delivery?.message&&delivery!=='accepted'&&<p>{q.delivery.message}</p>}</>:<small>{q.status==='superseded'?'Replaced by a newer question.':'Question cancelled without an answer.'}</small>}
+   {q.status==='answered'&&delivery==='unknown'&&q.delivery?.inputId&&<div className="a-dialog-actions"><button type="button" className="a-soft" disabled={busy} onClick={checkDelivery}>{busy?'Checking delivery…':'Check delivery'}</button></div>}
+   {deliveryNote&&delivery!=='accepted'&&<p>{deliveryNote}</p>}
   </div>}
   {!!q.artifacts?.length&&<div key="review-artifacts" className="a-question-artifacts" aria-label="Documents for this decision">{q.artifacts.map(ref=><ReviewArtifact key={`${ref.id}:${ref.version}`} reference={ref} question={q} state={state} dispatch={dispatch}
    onExpandedChange={expanded=>onPreviewChange(q.id,`${ref.id}:${ref.version}`,expanded)}/>)}</div>}

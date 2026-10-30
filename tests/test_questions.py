@@ -205,6 +205,217 @@ async def test_restart_of_uncertain_delivery_does_not_replay_answer(tmp_path):
         await restored.close()
 
 
+@pytest.mark.parametrize('event', ['runtime.delivery', 'runtime.status', 'check'])
+async def test_late_question_acceptance_reconciles_without_resend(tmp_path, event):
+    runtime = Runtime()
+    runtime.failure = TimeoutError('Lost answer acknowledgement')
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        artifact = (await app.dispatch('canvas.show', {
+            'kind': 'markdown', 'title': 'Proposal', 'content': '# Version one'}))['result']
+        q = await create_question(app, sid, artifacts=[{'id': artifact['id'], 'version': 1}])
+        second = await create_question(app, sid, prompt='A separate choice?')
+        await app.dispatch('view.update', {'patch': {'draft': 'Independent draft'}})
+        args = {'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': '**Summary**'}
+        original = (await app.dispatch('question.answer', args, command_id='lost-ack'))['result']
+        assert original['delivery']['status'] == 'unknown'
+        input_id = original['delivery']['inputId']
+        assert any(i['title'] == 'Answer saved; delivery needs attention' for i in app.get_state()['attention']['items'])
+        if event == 'check':
+            async def delivery(session, identity):
+                assert session['id'] == sid and identity == input_id
+                return 'accepted'
+            runtime.delivery = delivery
+            checked = await app.dispatch('conversation.delivery', {'sessionId': sid, 'inputId': input_id})
+            assert checked['result']['delivery'] == 'accepted'
+        else:
+            await app.on_runtime_event(event, {'sessionId': sid, 'inputId': input_id,
+                'delivery': 'accepted', 'event': 'input.delivered', 'status': 'working'})
+        saved = (await app.dispatch('question.read', {'sessionId': sid, 'id': q['id']}))['result']
+        assert saved['delivery']['status'] == 'accepted'
+        assert 'message' not in saved['delivery']
+        assert {k: v for k, v in saved.items() if k != 'delivery'} == {
+            k: v for k, v in original.items() if k != 'delivery'}
+        assert next(m for m in app._session()['messages'] if m.get('inputId') == input_id)['delivery']['status'] == 'accepted'
+        assert not any(i['title'] == 'Answer saved; delivery needs attention' for i in app.get_state()['attention']['items'])
+        listed = (await app.dispatch('question.list', {'sessionId': sid}))['result']['items']
+        assert next(r for r in listed if r['id'] == q['id']) == saved
+        assert next(r for r in listed if r['id'] == second['id'])['status'] == 'pending'
+        duplicate = await app.dispatch('question.answer', args, command_id='lost-ack')
+        assert duplicate['duplicate'] and duplicate['result'] == saved
+        # Neither an unrelated terminal event nor acceptance claims completion.
+        assert app._session()['execution']['turns'][-1]['phase'] != 'completed'
+        await app.on_runtime_event('runtime.status', {'sessionId': sid, 'status': 'idle', 'event': 'session.idle'})
+        assert app.questions.store.get(sid, q['id'])['delivery']['status'] == 'accepted'
+        assert len(runtime.sent) == 1 and app.state['view']['draft'] == 'Independent draft'
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('finish', ['timeout', 'cancel'])
+async def test_question_acceptance_wins_racing_send_finalizer(tmp_path, finish):
+    runtime = Runtime()
+    runtime.gate = asyncio.Event()
+    runtime.failure = TimeoutError('Late timeout')
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    task = None
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        q = await create_question(app, sid)
+        args = {'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': 'Summary'}
+        task = asyncio.create_task(app.dispatch('question.answer', args, command_id='racing-answer'))
+        for _ in range(100):
+            if runtime.sent:
+                break
+            await asyncio.sleep(.001)
+        assert len(runtime.sent) == 1
+        await app.on_runtime_event('runtime.delivery', {
+            'sessionId': sid, 'inputId': runtime.sent[0][2], 'delivery': 'accepted'})
+        if finish == 'cancel':
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            runtime.gate.set()
+            await task
+        assert app.questions.store.get(sid, q['id'])['delivery']['status'] == 'accepted'
+        assert (await app.dispatch('question.answer', args, command_id='racing-answer'))['result']['delivery']['status'] == 'accepted'
+        assert len(runtime.sent) == 1
+    finally:
+        runtime.gate.set()
+        if task and not task.done():
+            await task
+        await app.close()
+
+
+@pytest.mark.parametrize('stale_status', ['sending', 'unknown'])
+async def test_restart_reconciles_retained_question_acceptance(tmp_path, stale_status):
+    runtime = Runtime()
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    await app.dispatch('session.create', {})
+    sid = app._session()['id']
+    q = await create_question(app, sid)
+    args = {'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': 'Summary'}
+    saved = (await app.dispatch('question.answer', args, command_id='before-restart'))['result']
+    stale = copy.deepcopy(saved)
+    stale['delivery'].update(status=stale_status, message='Old unconfirmed report')
+    app.questions.store.put(stale)
+    app._publish_changes(sessions={sid})
+    await app.close()
+    restored = AppService(tmp_path, runtime, workspace=tmp_path)
+    try:
+        result = (await restored.dispatch('question.read', {'sessionId': sid, 'id': q['id']}))['result']
+        assert result['delivery']['status'] == 'accepted'
+        assert result['answer'] == saved['answer']
+        assert 'message' not in result['delivery']
+        assert len(runtime.sent) == 1
+    finally:
+        await restored.close()
+
+
+async def test_question_native_evidence_check_is_passive_without_message_projection(tmp_path):
+    from amplifier_web.runtime import RuntimeManager
+    from amplifier_web.session_files import sessions_dir
+    runtime = Runtime()
+    runtime.failure = TimeoutError('Lost acknowledgement')
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    probe = RuntimeManager()
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        q = await create_question(app, sid)
+        saved = (await app.dispatch('question.answer', {
+            'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': 'Summary'}))['result']
+        input_id = saved['delivery']['inputId']
+        app._session()['messages'] = []
+        runtime.delivery = probe.delivery
+        args = {'sessionId': sid, 'inputId': input_id}
+        assert (await app.dispatch('conversation.delivery', args))['result']['delivery'] == 'unknown'
+        path = sessions_dir(tmp_path) / sid / 'transcript.jsonl'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'role': 'user', 'content': 'Synthetic saved answer',
+            'metadata': {'amplifier_input': {'id': input_id}}}) + '\n')
+        assert (await app.dispatch('conversation.delivery', args))['result']['delivery'] == 'accepted'
+        assert app.questions.store.get(sid, q['id'])['delivery']['status'] == 'accepted'
+        assert len(runtime.sent) == 1 and not probe.workers
+    finally:
+        await probe.close()
+        await app.close()
+
+
+async def test_question_unknown_evidence_and_wrong_bindings_do_not_confirm(tmp_path):
+    runtime = Runtime()
+    runtime.failure = TimeoutError('Unknown outcome')
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        q = await create_question(app, sid)
+        pending = await create_question(app, sid)
+        args = {'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': 'Summary'}
+        saved = (await app.dispatch('question.answer', args))['result']
+        input_id = saved['delivery']['inputId']
+        await app.dispatch('session.create', {})
+        other = app._session()['id']
+        for target, identity in [(other, input_id), (sid, input_id + ':wrong'),
+                                 (sid, 'question:' + pending['id'] + ':answer')]:
+            await app.on_runtime_event('runtime.delivery', {
+                'sessionId': target, 'inputId': identity, 'delivery': 'accepted'})
+        await app.on_runtime_event('runtime.status', {'sessionId': sid, 'status': 'idle', 'event': 'session.idle'})
+        async def failed_probe(session, identity):
+            raise TimeoutError('No evidence')
+        runtime.delivery = failed_probe
+        assert (await app.dispatch('conversation.delivery', {'sessionId': sid, 'inputId': input_id}))['result']['delivery'] == 'unknown'
+        assert app.questions.store.get(sid, q['id']) == saved
+        assert app.questions.store.get(sid, pending['id'])['status'] == 'pending'
+        with pytest.raises(AppError, match='changed'):
+            await app.dispatch('question.answer', {**args, 'expectedRevision': 2})
+        # A stored binding mismatch cannot be repaired by a similar input ID.
+        mismatched = copy.deepcopy(saved)
+        mismatched['delivery']['inputId'] += ':other'
+        app.questions.store.put(mismatched)
+        assert not app.questions.accept_delivery(sid, input_id)
+        assert app.questions.store.get(sid, q['id']) == mismatched
+        assert len(runtime.sent) == 1
+    finally:
+        await app.close()
+
+
+async def test_question_acceptance_lookup_does_not_scan_unrelated_questions(tmp_path, monkeypatch):
+    runtime = Runtime()
+    runtime.failure = TimeoutError('Lost reply')
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        q = await create_question(app, sid)
+        saved = (await app.dispatch('question.answer', {
+            'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': 'Summary'}))['result']
+        # The changed reducer may project its affected session, never the whole
+        # question catalog or unrelated message bodies, even with large history.
+        for index in range(200):
+            record = {**q, 'id': f'historical-{index}', 'sessionId': 'unrelated',
+                      'prompt': 'x' * 8000, 'status': 'cancelled'}
+            app.questions.store.put(record)
+        reads = []
+        original = app.questions.store.all
+        def bounded(session_id=None):
+            reads.append(session_id)
+            assert session_id == sid
+            return original(session_id)
+        monkeypatch.setattr(app.questions.store, 'all', bounded)
+        assert app.questions.accept_delivery(sid, saved['delivery']['inputId'])
+        assert reads == [sid]
+        assert not app.questions.accept_delivery(sid, saved['delivery']['inputId'])
+        assert reads == [sid]
+        monkeypatch.setattr(app.questions.store, 'all', original)
+    finally:
+        await app.close()
+
+
 async def test_slow_answer_does_not_block_independent_work_or_navigation(tmp_path):
     runtime = Runtime()
     runtime.gate = asyncio.Event()
