@@ -153,6 +153,30 @@ states; static theme thumbnails and screenshots alone are insufficient.
 
 ### Appearance editing operations
 
+Styling packages use an ordinary ZIP with a root `appearance.json` declaring
+`type: "appearance"` and `formatVersion: 1`. Import validates the entire archive
+before any library write. Failed import preserves saved entries, selected
+appearance, client drafts and preferences. Import never applies the result.
+The version-1 manifest contains a stylesheet, optional attribution and declared
+image/font assets and license notices only. It cannot install code, components,
+layouts, capabilities, accounts or preferences. Unsupported versions and members
+fail explicitly; there is no generic archive execution or external asset fetch.
+
+The bundled `theme.import` action accepts exactly one of `css` or
+`packageBase64`. `theme.export` keeps CSS as its default and accepts explicit
+`format: "zip"` for a package download. An `id` selects a library version;
+omitting it exports committed styling, never a preview or editor draft.
+Version 1 accepts PNG/JPEG/WebP images, WOFF/WOFF2 fonts and UTF-8 text notices.
+Font assets require a declared bundled license reference.
+
+Bound decode, expanded member sizes, total expanded bytes and member count.
+Reject traversal, ambiguous names, links, special/encrypted members, corrupt
+streams and unsupported compression/types. Runtime CSS remains self-contained
+and subject to the existing validator and size limit. Package update/export
+retains assets and notices; stale fingerprints reject mutation of a changed
+package. CSS-only workflows retain their established semantics. License presence
+and metadata validation are not legal-rights certification.
+
 Saving, previewing, applying, importing, exporting and restoring an appearance
 report their current operation locally. Text-only editor actions use working
 labels in an unchanged button slot. Name/CSS fields and conflicting actions are
