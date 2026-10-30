@@ -338,8 +338,17 @@ async def main(home):
     # Windows event loops cannot register Unix signals; preserve fixture startup
     # there while POSIX qualification exercises graceful application teardown.
     shutdown_signals = (signal.SIGTERM, signal.SIGINT) if os.name == 'posix' else ()
+    def stop_requested(signum):
+        if '--shared-work' in sys.argv:
+            print(json.dumps({'sharedWorkSignal': {
+                'signal': signal.Signals(signum).name, 'at': time.monotonic()}}), flush=True)
+        stopped.set()
+
     for signum in shutdown_signals:
-        loop.add_signal_handler(signum, stopped.set)
+        if '--shared-work' in sys.argv:
+            loop.add_signal_handler(signum, stop_requested, signum)
+        else:
+            loop.add_signal_handler(signum, stopped.set)
     print(json.dumps({"url": url}), flush=True)
     try:
         await stopped.wait()
@@ -348,7 +357,8 @@ async def main(home):
             release_query_gate()
             await runner.cleanup()
             if '--shared-work' in sys.argv:
-                print(json.dumps({'sharedWorkCleanup': {'complete': True, 'at': time.monotonic()}}), flush=True)
+                print(json.dumps({'sharedWorkCleanup': {'complete': True,
+                    'at': time.monotonic(), **app['shared_work_wait_snapshot']()}}), flush=True)
         finally:
             for signum in shutdown_signals:
                 loop.remove_signal_handler(signum)
