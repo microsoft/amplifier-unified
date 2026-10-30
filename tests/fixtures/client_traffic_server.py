@@ -77,6 +77,15 @@ async def main(home):
                            voice=False, background_updates=False)
     app['control_token'] = 'fixture-client-traffic-token'
     service = app['service']
+    # There is no external native history in this fixture. Read its initial
+    # catalog once, then keep scheduled discovery out of causal-only samples.
+    # Selected transcript/work readers and all transport assertions stay live.
+    service.history.task.cancel()
+    await asyncio.gather(service.history.task, return_exceptions=True)
+    service.history.task = None
+    await service.history.refresh()
+    assert service.state['sharedHistory']['loading'] is False
+    assert service.state['sharedHistory'].get('error') is None
     runtime.service = service
     await service.dispatch('view.update', {'patch': {'setupJourney': 'done'}})
     result = await service.dispatch('session.create', {'title': 'Traffic fixture'})
