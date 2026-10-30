@@ -20,6 +20,8 @@ from amplifier_module_loop_live.host import HostAdapter
 from amplifier_module_loop_live.runtime import Input, Runtime
 from amplifier_module_loop_live.scope import JOB_CALL
 
+_CHILD_ADMISSION = contextvars.ContextVar("amplifier_unified_child_admission", default=None)
+
 _PERSISTENT = contextvars.ContextVar("amplifier_unified_persistent_child", default=False)
 _PREFERENCES_SOURCE = contextvars.ContextVar("amplifier_unified_preferences_source", default=None)
 _CALL_ROLE = contextvars.ContextVar("amplifier_unified_call_role", default=None)
@@ -250,6 +252,8 @@ class Children:
         self.store = store
         self.approvals = approvals
         self.rows = {}
+        self.admissions = {}
+        self.admission_gate = None
         self.prepared = {}
         self.sessions = {}
         self.reserved = 0
@@ -387,7 +391,27 @@ class Children:
             metadata.get("agent_name", "resumed"), overlay, provider_preferences=provider_preferences or retained_preferences,
             parent_messages=messages, resumed=True, session_metadata=metadata)
 
-    async def _execute(self, identity, instruction, parent, agent, overlay, *, tool_inheritance=None,
+    async def _execute(self, identity, instruction, parent, agent, overlay, **kwargs):
+        # Capture before preparation's first await. A checkout move must retain
+        # existing preparation too, not just children that already have UI rows.
+        dispatch = (getattr(parent.coordinator, "_tool_dispatch_contexts", {}).get(asyncio.current_task())
+                    or getattr(parent.coordinator, "_tool_dispatch_context", {}) or {})
+        call_id = JOB_CALL.get() or dispatch.get("tool_call_id") or (
+            (kwargs.get("session_metadata") or {}).get("tool_call_id") if not kwargs.get("resumed") else None)
+        entry = {"sessionId": identity, "parentSessionId": parent.session_id,
+                 "callId": call_id, "runId": str(uuid.uuid4()), "task": asyncio.current_task()}
+        if self.admission_gate:
+            self.admission_gate(entry)
+        self.admissions[entry["runId"]] = entry
+        token = _CHILD_ADMISSION.set((self, entry))
+        try:
+            return await self._execute_admitted(identity, instruction, parent, agent, overlay,
+                                                admission=entry, **kwargs)
+        finally:
+            self.admissions.pop(entry["runId"], None)
+            _CHILD_ADMISSION.reset(token)
+
+    async def _execute_admitted(self, identity, instruction, parent, agent, overlay, *, admission, tool_inheritance=None,
                        hook_inheritance=None, orchestrator_config=None, parent_messages=None,
                        provider_preferences=None, self_delegation_depth=0, session_metadata=None, resumed=False):
         from amplifier_foundation import Bundle, ProviderPreference, apply_provider_preferences_with_resolution
@@ -510,13 +534,8 @@ class Children:
                 SimpleNamespace(providers=plan.get("providers", []), agents=plan.get("agents", {})),
                 child_prepared, isolation=isolation)
         persistent = _PERSISTENT.get()
-        # Resume metadata belongs to the previous invocation. Use this task's
-        # dispatch identity, as the delegate tool itself does for its events.
-        dispatch = (getattr(parent.coordinator, "_tool_dispatch_contexts", {}).get(asyncio.current_task())
-                    or getattr(parent.coordinator, "_tool_dispatch_context", {}) or {})
-        call_id = JOB_CALL.get() or dispatch.get("tool_call_id") or (
-            (session_metadata or {}).get("tool_call_id") if not resumed else None)
-        row = {"sessionId": identity, "parentSessionId": parent.session_id, "callId": call_id, "runId": str(uuid.uuid4()),
+        call_id = admission["callId"]
+        row = {"sessionId": identity, "parentSessionId": parent.session_id, "callId": call_id, "runId": admission["runId"],
                "agent": agent, "status": "starting", "persistent": persistent, "report": "", "reports": 0,
                "routing": child_routing(parent, overlay, preferences, selection,
                                         preferences_source=preferences_source if routing_policy else None),

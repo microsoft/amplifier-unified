@@ -223,7 +223,9 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
                 "input.delivered": "working"}
     if kind in statuses:
         return "runtime.status", {**base, "status": statuses[kind], "event": kind,
-            **({"inputId": event["input_id"]} if "input_id" in event else {})}
+            **({"inputId": event["input_id"]} if "input_id" in event else {}),
+            **({'_handoffCompletion': event['_handoffCompletion']}
+               if kind == 'input.delivered' and isinstance(event.get('_handoffCompletion'), dict) else {})}
     if kind in {"provider.error", "persistence.failed", "command.rejected", "native.error"}:
         return "runtime.error", {**base, "error": event.get("reason") or event.get("error_type") or kind,
                                   "event": kind, "errorType": event.get("error_type")}
@@ -658,6 +660,8 @@ class RuntimeManager:
             except Exception as exc:
                 outcome = 'failed'
                 reply = {"op": "bridge.result", "id": data["id"], "error": str(exc)}
+                if isinstance(getattr(exc, '_handoff_disposition', None), dict):
+                    reply['_handoffDisposition'] = exc._handoff_disposition
             if row["process"].returncode is None:
                 if timing:
                     timing.mark('reply.start')
@@ -1278,14 +1282,14 @@ class RuntimeManager:
                 current.args = (f'Takeover did not complete ({result.status}). {result.message} {current}',)
                 raise current from None
 
-    async def handoff_boundary(self, session_id, request_id, *, cancel=False):
+    async def handoff_boundary(self, session_id, request_id, *, cancel=False, receipt=None):
         """Inspect only this existing worker; never warm or acquire a writer."""
         row = self.workers.get(session_id)
         if row is None:
             return {'ready': True, 'waitingFor': [], 'continuationAllowed': False}
         if row['process'].returncode is not None:
             raise RuntimeError('The old worker exited before confirming its saved boundary.')
-        return await self._request(session_id, 'handoff.boundary', request_id=request_id, cancel=cancel)
+        return await self._request(session_id, 'handoff.boundary', request_id=request_id, cancel=cancel, receipt=receipt)
 
     @contextmanager
     def stopped_boundary(self, session):

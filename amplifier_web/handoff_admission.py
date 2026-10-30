@@ -13,7 +13,7 @@ def worker_instance(service, sid):
     return f"{process.pid}:{worker['started_at']}"
 
 
-def finishing_turn(service, session, call):
+def finishing_turn(service, session, call, drain=None, child=None):
     """Read under app.lock; never clear fences, release a worker, or grant input.
 
     The durable receipt owns the exception. Legacy or uncertain receipts cannot
@@ -22,7 +22,7 @@ def finishing_turn(service, session, call):
     """
     sid = session['id']
     native = session.get('runtimeSessionId') or sid
-    if (call.get('sessionId') != native or call.get('rootSessionId') != native
+    if (call.get('rootSessionId') != native
             or call.get('lifecycle') == 'background'
             or session.get('fileAccessPending') or session.get('configurationPending')
             or session.get('configurationOperationFence')
@@ -42,11 +42,6 @@ def finishing_turn(service, session, call):
                 or record.get('release') or record.get('managerPlacement') or record.get('reconciles')
                 or not binding.get('workerInstance')
                 or binding['workerInstance'] != worker_instance(service, sid)
-                or not active.get('id') or active.get('terminal')
-                or binding.get('generationId') != active['id']
-                or record.get('sourceGenerationId') != active['id']
-                or binding.get('inputIds') != active.get('inputIds')
-                or input_id(call) not in record.get('sourceInputIds', [])
                 or binding.get('configurationRevision') != session.get('configurationPendingRevision', 0)
                 or session.get('executionRevision', 0) != record.get('executionRevision')
                 or session.get('workspace') != record.get('historyHome')
@@ -55,6 +50,33 @@ def finishing_turn(service, session, call):
             return False
         owner.check_host(record)
         owner.check_binding(record, session)
-        return True
+        if (isinstance(drain, dict) and drain.get('handoffId') == record['id']
+                and drain.get('finishingTurn') == binding):
+            # The private runtime bridge supplies this from its exact native
+            # boundary marker; public tool arguments cannot supply it.
+            if drain.get('kind') == 'root':
+                observed = service.runtime.workers[sid].get('handoffDrainInputs') or {}
+                additions = set(observed.get('byJob', {}).values()) if observed.get('handoffId') == record['id'] else set()
+                original = set(drain.get('inputIds') or [])
+                current = set(active.get('inputIds') or [])
+                return (call.get('sessionId') == native and not active.get('terminal')
+                        and drain.get('generationId') == active.get('id')
+                        and bool(original) and original <= current <= original | additions
+                        and input_id(call) in original)
+        if (isinstance(child, dict) and call.get('sessionId') != native
+                and child.get('sessionId') == call.get('sessionId') and child.get('runId')
+                and input_id(call) in record.get('sourceInputIds', [])):
+            snapshot = binding.get('nativeDrain') or {}
+            identity = {key: child.get(key) for key in ('sessionId', 'parentSessionId', 'runId', 'callId')}
+            job = child.get('job')
+            return (identity in snapshot.get('children', []) or
+                    isinstance(job, dict) and job in snapshot.get('jobs', [])
+                    and child.get('parentSessionId') == job.get('ownerSessionId')
+                    and child.get('callId') == job.get('callId'))
+        return (call.get('sessionId') == native and bool(active.get('id')) and not active.get('terminal')
+                and binding.get('generationId') == active['id']
+                and record.get('sourceGenerationId') == active['id']
+                and binding.get('inputIds') == active.get('inputIds')
+                and input_id(call) in record.get('sourceInputIds', []))
     except (KeyError, OSError, TypeError, ValueError):
         return False  # Missing/corrupt/changed provenance does not authorize a call.

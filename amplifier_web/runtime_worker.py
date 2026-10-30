@@ -118,6 +118,22 @@ class Worker:
             # Only valid bounded waits earn margin; host validation still applies.
             if type(wait_ms) is int and 0 <= wait_ms <= 60000:
                 timeout = max(timeout, wait_ms / 1000 + 5)
+        # These fields are host-produced, never accepted from tool arguments.
+        args = {key: value for key, value in args.items()
+                if key not in {'_handoffSnapshot', '_handoffDrain', '_nativeChild'}}
+        if operation == 'capacity.admit':
+            from amplifier_web.handoff_drain import witness, native_child
+            args.update(_handoffDrain=witness(self, args.get('call') or {}),
+                        _nativeChild=native_child(self, args.get('call') or {}))
+        handoff_marker = None
+        if (operation in {'dispatch', 'action.dispatch'} and args.get('action') == 'worktree.handoff'
+                and self.session and args.get('_runtimeSessionId') == self.session.session_id
+                and args.get('args', {}).get('sessionId') == self.session.session_id):
+            from amplifier_web.handoff_drain import begin
+            snapshot = await begin(self, args.get('id'))
+            if snapshot is not None:
+                args['_handoffSnapshot'] = snapshot
+                handoff_marker = self._handoff_boundary['id']
         identity = str(uuid.uuid4())
         future = asyncio.get_running_loop().create_future()
         self.bridges[identity] = future
@@ -151,11 +167,31 @@ class Worker:
             diagnostic('requested')
             if timing:
                 timing.mark('write.start')
-            publish({"op": "bridge", "id": identity, "operation": operation, "args": args,
-                     **({'_timing': timing.snapshot()} if timing else {})})
+            message = {"op": "bridge", "id": identity, "operation": operation, "args": args,
+                       **({'_timing': timing.snapshot()} if timing else {})}
+            if handoff_marker:
+                try:
+                    encode_message(message)  # Definite local rejection before any action bytes.
+                except Exception:
+                    from amplifier_web.handoff_boundary import inspect
+                    await inspect(self, handoff_marker, cancel=True)
+                    raise
+            publish(message)
             if timing:
                 timing.mark('write.end')
             result = await asyncio.wait_for(future, timeout)
+            if handoff_marker:
+                from amplifier_web.handoff_drain import finish
+                try:
+                    if isinstance(result, dict) and result.get('accepted') is True:
+                        await finish(self, result.get('result'))
+                    elif isinstance(result, dict) and result.get('accepted') is False:
+                        from amplifier_web.handoff_boundary import inspect
+                        await inspect(self, handoff_marker, cancel=True)
+                except Exception as exc:
+                    # Keep a known pending receipt; local setup failure does not
+                    # turn it into a failed action or authorize a retry.
+                    diagnostic('handoff-drain-unavailable', errorType=type(exc).__name__)
             if timing:
                 timing.mark('resumed')
             diagnostic('completed', elapsedSeconds=round(time.monotonic() - started, 3))
@@ -176,6 +212,12 @@ class Worker:
             diagnostic('cancelled', elapsedSeconds=round(time.monotonic() - started, 3))
             raise
         except Exception as exc:
+            if handoff_marker and isinstance(getattr(exc, '_handoff_disposition', None), dict):
+                from amplifier_web.handoff_drain import finish
+                try:
+                    await finish(self, exc._handoff_disposition)
+                except Exception as disposition_error:
+                    diagnostic('handoff-drain-unavailable', errorType=type(disposition_error).__name__)
             outcome = 'failed'
             diagnostic('failed', errorType=type(exc).__name__,
                        elapsedSeconds=round(time.monotonic() - started, 3))
@@ -428,6 +470,8 @@ class Worker:
         if root_generation and event.get('type') in {'input.delivered', 'steering.applied'} and event.get('input_id'):
             if event['input_id'] not in self.context_inputs:
                 self.context_inputs = (self.context_inputs + [event['input_id']])[-8:]
+        from amplifier_web.handoff_drain import observe as observe_handoff_drain
+        observe_handoff_drain(self, event)
         if self.naming:self.naming.observe(event)
         if self.telemetry:
             self.telemetry.lifecycle(event)
@@ -1325,7 +1369,10 @@ class Worker:
                     if timing:
                         timing.mark('received')
                     if data.get("error"):
-                        future.set_exception(RuntimeError(data["error"]))
+                        error = RuntimeError(data["error"])
+                        if isinstance(data.get('_handoffDisposition'), dict):
+                            error._handoff_disposition = data['_handoffDisposition']
+                        future.set_exception(error)
                     else:
                         future.set_result(data.get("result"))
                 return
@@ -1389,6 +1436,9 @@ class Worker:
                     result = await discover('worker', **({'verify': True} if data.get('verifyImports') is True else {}))
             elif op == 'handoff.boundary':
                 from amplifier_web.handoff_boundary import inspect
+                from amplifier_web.handoff_drain import finish
+                if not data.get('cancel'):
+                    await finish(self, data.get('receipt'))
                 result = await inspect(self, data['request_id'], data.get('cancel', False))
             elif op == "desktop.readiness":
                 if not self.controls:

@@ -4440,6 +4440,9 @@ class AppService:
                 activity.update({'phase': 'tools', 'label': 'Running tools'})
             session['progress'] = {key: payload[key] for key in ('phase', 'detail', 'elapsedSeconds') if key in payload}
         changed = self.collaboration.observe(session, kind, payload)
+        if payload.get('_handoffCompletion'):
+            from .handoff_drain import observe_host
+            observe_host(self, session, kind, payload)
         from .conversation_steering import observe as observe_steering
         observe_steering(self, session, kind, payload)
         return {session['id']} | changed
@@ -4830,6 +4833,9 @@ class AppService:
                     payload.get('preparationProgress') and payload.get('status') == 'starting')) or (
                 kind == 'execution.event' and payload.get('phase') in {'running', 'working', 'streaming'})
             collaboration_changed = self.collaboration.observe(session, kind, payload)
+            if payload.get('_handoffCompletion'):
+                from .handoff_drain import observe_host
+                observe_host(self, session, kind, payload)
             if (kind == 'runtime.generation' and root_generation
                     and payload.get('event') == 'generation.failed'
                     and session.get('status') not in {'stopped', 'stopping'}):
@@ -4989,6 +4995,17 @@ class AppService:
         binding_token = BINDING.set(args)
         try:
             return await self._bound_app_bridge(operation, args, session_id)
+        except Exception as exc:
+            if args.get('_handoffSnapshot') is not None:
+                from .handoff_drain import failed_disposition
+                try:
+                    async with self.lock:
+                        disposition = failed_disposition(self, session_id, operation, args)
+                    if disposition is not None:
+                        exc._handoff_disposition = disposition
+                except Exception:
+                    pass  # An unreadable receipt remains unknown, never absent.
+            raise
         finally:
             PRINCIPAL.reset(token)
             BINDING.reset(binding_token)
@@ -5000,7 +5017,7 @@ class AppService:
         transport = args
         args = {key: value for key, value in args.items()
                 if key not in {'_generationId', '_runtimeSessionId', '_inputBindings', '_inputClients',
-                               '_workOrigin', '_workDispatchGuarded', '_responseMode'}}
+                               '_workOrigin', '_workDispatchGuarded', '_responseMode', '_handoffSnapshot'}}
         from .workspace_work_effects import APP_EFFECT, app_request
         token = APP_EFFECT.set(app_request(operation, args, session_id))
         try:
