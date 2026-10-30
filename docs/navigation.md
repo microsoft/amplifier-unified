@@ -6,6 +6,10 @@ with Close, Escape, and trapped keyboard focus. Navigation fills the viewport,
 including narrow folded-phone displays, and respects display safe areas.
 Selecting a chat or New chat returns to the conversation. Desktop pin/width
 preferences survive resizing.
+While New chat is awaiting its host receipt, configuration controls and text
+entry are unavailable. The current chat and its saved draft remain owned by that
+chat; the new draft becomes editable only after navigation settles. A failed
+request restores the previous controls without applying edits to another chat.
 Workspace browsing stays in the drawer. Tap **…** for a details sheet with the
 full title, canonical session ID, path, and actions.
 

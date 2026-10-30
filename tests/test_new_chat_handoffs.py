@@ -83,7 +83,8 @@ async def test_direct_request_creates_and_starts_once_without_confirmation(hando
     assert target['workspace'] == args['workspace'] and target['bundle'] == args['bundle']
     assert target['selection'] == args['selection']
     assert not target.get('parentSessionId') and not target.get('collaboration')
-    assert not target.get('assignmentId') and not target.get('workingDirectory')
+    assert not target.get('assignmentId')
+    assert target['sessionKind'] == 'root' and target['workingDirectory'] == args['workspace']
     assert (await start(app, source, args))['status'] == 'accepted'
     assert len(app.state['sessions']) == 3 and runtime.sent == [(target['id'], args['text'], result['inputId'])]
     assert len([m for m in target['messages'] if m.get('role') == 'user']) == 1
@@ -207,7 +208,8 @@ async def test_review_create_and_send_once_preserves_clients_and_has_no_source_a
     assert target['workspace'] == args['workspace'] and target['bundle'] == args['bundle']
     assert target['selection'] == args['selection']
     assert not target.get('parentSessionId') and not target.get('collaboration')
-    assert not target.get('assignmentId') and not target.get('workingDirectory')
+    assert not target.get('assignmentId')
+    assert target['sessionKind'] == 'root' and target['workingDirectory'] == args['workspace']
     assert not (app.data_dir / 'sessions' / target['id'] / 'configuration.json').exists()
     assert len([m for m in target['messages'] if m.get('role') == 'user']) == 1
     assert app._session(source)['messages'] == source_before['messages']

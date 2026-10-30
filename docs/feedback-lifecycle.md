@@ -2,6 +2,12 @@
 
 The browser and agent use the same feedback actions. A feedback ID is the original submission request ID, never a guessed repository issue number. The host verifies the current GitHub owner, canonical issue URL and original feedback marker before a follow-up. Saved receipts and audit versions survive restarts; repository text is untrusted data.
 
+The [Full initial-publication path](feedback-excerpts.md#initial-publication-under-full-access)
+uses conversation-owned initial files/excerpts and retained standing authority.
+That support does not change the later-file client ownership and separate review
+described here. Direct text comments/corrections already work without a browser;
+the optional comparison UI is not a new prerequisite for those callers.
+
 - `feedback.get` reads the original report and bounded comment pages. Use a new request ID to refresh; exact retries return the same snapshot.
 - `feedback.reconcile` reads GitHub for an unknown original submission. Only a unique fresh owner/marker match binds the original receipt. No match or incomplete/ambiguous search leaves delivery unknown and never resends it.
 - `feedback.comment` appends the explicitly requested text. `feedback.update` adds a correction version as a comment, preserving the original report and maintainer changes. It does not replace the issue title or body. GitHub does not provide atomic conditional issue edits.
