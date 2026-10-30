@@ -2093,7 +2093,9 @@ class AppService:
             return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': result}
         if action == 'feedback.destination':
             from . import feedback as feedback_module
+            from . import feedback_context
             from .attachments import file_path as feedback_file_path
+            full_owner = caller_session_id if feedback_context.enabled(self, origin, caller_session_id) else None
             try:
                 repo = await feedback_module.github_api('repos/' + feedback_module.REPOSITORY, None)
                 if repo.get('full_name') != feedback_module.REPOSITORY or type(repo.get('id')) is not int or type(repo.get('private')) is not bool:
@@ -2104,7 +2106,8 @@ class AppService:
             # were exposed in the UI. This is a review, never upload consent.
             async with self.lock:
                 reviewed_files = []
-                for row in self.state.get('view', {}).get('feedbackDraft', {}).get('attachments', []):
+                staged = feedback_context.rows(self, full_owner) if full_owner else self.state.get('view', {}).get('feedbackDraft', {}).get('attachments', [])
+                for row in staged:
                     if row.get('excerpt'):
                         continue
                     try:
@@ -2942,6 +2945,10 @@ class AppService:
                     if args.get('id') or prepared_identity: session['id'] = args.get('id') or prepared_identity
                     if origin == 'scheduler' and args.get('inheritConfiguration', {}).get('scheduledRunId'):
                         source = self._session(args['inheritConfiguration']['sessionId'])
+                        run = self.schedules.store.run(source['id'], args['inheritConfiguration']['scheduledRunId'])
+                        # prepare qualified this exact source/run/destination under
+                        # the app lock. Persist its lineage before the first mount.
+                        session['scheduledOrigin'] = {'sessionId': source['id'], 'scheduleId': run['scheduleId'], 'runId': run['id']}
                         if self.assignments.current(source):
                             session['assignmentId'] = self.assignments.reserve_member(source, session['id'], command_id)
                             assignment = self.assignments.load(session['assignmentId'])
@@ -3523,15 +3530,16 @@ class AppService:
                     self.state.setdefault('canvas', {})['open'] = True
                 self.state["view"].update(patch)
             elif action == 'feedback.excerpt.stage':
-                diagnostic_result = self.feedback.excerpts.stage(args)
+                diagnostic_result = self.feedback.excerpts.stage(args, origin, caller_session_id)
             elif action in {"feedback.attachment.add","feedback.attachment.remove"}:
-                self.feedback.attachment_command(action,args)
+                diagnostic_result = self.feedback.attachment_command(action, args, origin, caller_session_id)
             elif action == "feedback.submit":
-                if self.feedback.accept(args):
+                if self.feedback.accept(args, origin, caller_session_id):
                     pending.append((self.feedback.send, (args['requestId'],)))
                 # Close only the submitting draft, atomically with durable acceptance.
                 view=self.state['view']
-                if view.get('panel')=='feedback' and view.get('feedbackDraft',{}).get('pending',{}).get('requestId')==args['requestId']:
+                accepted_payload = json.loads(self.db.execute('SELECT payload FROM feedback_requests WHERE id=?', (args['requestId'],)).fetchone()[0])
+                if not accepted_payload.get('_authority') and view.get('panel')=='feedback' and view.get('feedbackDraft',{}).get('pending',{}).get('requestId')==args['requestId']:
                     view['panel']=None
             elif action in {"feedback.edits.review", "feedback.get", "feedback.comment", "feedback.reconcile", "feedback.update", "feedback.close", "feedback.reopen",
                             "feedback.attachments.review", "feedback.attachments.add", "feedback.attachments.reconcile"}:
@@ -5300,12 +5308,16 @@ class AppService:
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id, include_state=not receipt_mode)
             elif args['action'] in {'session.exportDeliver', 'feedback.excerpt.stage'}:
                 from .agent_canvas import target
+                from . import feedback_context
                 requested = action_args.pop('clientId', input_origin['clientId'] if input_origin is not None else None)
-                canvas_client = target(self, session_id, requested, required=True, connected_only=True)[0]
-                if canvas_client is None:
-                    raise AppError('Open the calling conversation in a connected browser before delivering an export.', 409)
-                with self.clients.bind(canvas_client):
+                if args['action'] == 'feedback.excerpt.stage' and feedback_context.enabled(self, 'agent', session_id):
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), caller_session_id=session_id, include_state=not receipt_mode)
+                else:
+                    canvas_client = target(self, session_id, requested, required=True, connected_only=True)[0]
+                    if canvas_client is None:
+                        raise AppError('Open the calling conversation in a connected browser before delivering an export.', 409)
+                    with self.clients.bind(canvas_client):
+                        result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), caller_session_id=session_id, include_state=not receipt_mode)
             elif args['action'] in {'canvas.openFile', 'canvas.openAttachment', 'canvas.reference', 'message.reply', 'message.replyClear', 'message.reveal'}:
                 from .agent_canvas import target
                 canvas_client = target(self, session_id, action_args.get('clientId'), required=True, connected_only=args['action'] in MESSAGE_INTERACTIONS)[0]

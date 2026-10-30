@@ -550,6 +550,7 @@ class RuntimeManager:
         # browser's execution logs, catalogs and attachment history is redundant.
         config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','interruptionRevision','bundle','selection','forkContext','replaceSavedSelection','bundleReplacement') if key in session}
         config['id'] = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
+        config['ownerSessionId'] = sid  # Identity only; workers read current standing policy themselves.
         if preserve_configuration:
             config['_preserveConfiguration'] = True
         row['runtime_id'] = config['id']

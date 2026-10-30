@@ -64,8 +64,15 @@ try{
   return {task,control,panel:state.view.panel??null,revision:state.revision,commits:window.trafficCommits,allCommits:window.trafficAllCommits};
  },sid);
  const settled=async()=>{
-  await expect.poll(()=>page.evaluate(()=>Object.values(window.amplifier.getState().shellResources?.instances||{})
-   .every(value=>Object.keys(value.pending||{}).length===0))).toBe(true);
+  // Shell requests and selected work history settle on independent lanes.
+  // A causal-only sample must wait for the selected work receipt as well.
+  await expect.poll(()=>page.evaluate(sid=>{
+   const state=window.amplifier.getState();
+   const work=state.sessions.find(row=>row.id===sid)?.workProjection;
+   return Object.values(state.shellResources?.instances||{})
+    .every(value=>Object.keys(value.pending||{}).length===0)&&
+    work?.status==='ready'&&work.current===true&&work.receipt?.sessionId===sid;
+  },sid)).toBe(true);
   // Let the existing debounced view report settle, outside measurement.
   await page.waitForTimeout(450);
  };

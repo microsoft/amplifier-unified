@@ -225,14 +225,14 @@ def configure_skill_cache(bundle, registry_home):
                 apply(child.get("tools", []), child.get("agents", {}))
     apply(getattr(bundle, "tools", []), getattr(bundle, "agents", {}))
 
-def load_config(workspace, *, home=None, legacy_home=None, session_id=None, global_only=False):
+def load_config(workspace, *, home=None, legacy_home=None, session_id=None, global_only=False, owner_session_id=None):
     workspace = Path(workspace).expanduser().resolve(strict=True)
     shared = Path(legacy_home or amplifier_home()).expanduser().resolve()
     _load_keys(shared / "keys.env")
-    return read_config(workspace, home=home, shared_home=shared, session_id=session_id, global_only=global_only)
+    return read_config(workspace, home=home, shared_home=shared, session_id=session_id, global_only=global_only, owner_session_id=owner_session_id)
 
 
-def read_config(workspace, *, home=None, shared_home=None, session_id=None, global_only=False, settings_cache=None, registry_home=None):
+def read_config(workspace, *, home=None, shared_home=None, session_id=None, global_only=False, settings_cache=None, registry_home=None, owner_session_id=None):
     """Read runtime settings without loading keys, preparing caches or writing."""
     home = Path(home or app_home()).expanduser().resolve()
     workspace = Path(workspace).expanduser().resolve(strict=True)
@@ -248,4 +248,4 @@ def read_config(workspace, *, home=None, shared_home=None, session_id=None, glob
         return value
     from ..access_mode import read_mode
     return HostConfig(home, workspace, relocate(settings), registry_home, shared, global_only,
-                      read_mode(home, workspace, session_id))
+                      read_mode(home, workspace, session_id, owner_session_id=owner_session_id))

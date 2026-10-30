@@ -57,17 +57,21 @@ def object_sha(result):
     return value
 
 
-async def upload(repository, identity, files, github_api):
+async def upload(repository, identity, files, github_api, *, prepared_destination=None):
     """Upload already verified, bounded bytes, once per accepted submission."""
     prefix = "repos/" + repository
     # Refuse to upload attachments if this intended private destination changes.
-    target = await github_api(prefix, None)
+    # Full delivery supplies the same verified lookup after retaining its facts
+    # in the existing receipt. It is standing publication authority, not consent
+    # attributed to a human who did not review these files.
+    target = prepared_destination if prepared_destination is not None else await github_api(prefix, None)
     visibility = 'private' if target.get('private') is True else 'public' if target.get('private') is False else 'unknown'
     for row, _ in files:
         excerpt = row.get('excerpt')
         if excerpt:
             if (excerpt['repository'] != repository or excerpt['visibility'] != visibility
                     or target.get('full_name', '').casefold() != repository.casefold()
+                    or excerpt.get('repositoryId', target.get('id')) != target.get('id')
                     or row['sha256'] != excerpt['sha256']):
                 raise BeforeUploadError('The excerpt destination or visibility changed. Review it again. Nothing was sent.')
         elif row.get('uploadConsent'):
@@ -76,7 +80,7 @@ async def upload(repository, identity, files, github_api):
                     or target.get('full_name') != repository or consent.get('visibility') != visibility
                     or consent.get('sha256') != row['sha256']):
                 raise BeforeUploadError('The file destination or visibility changed. Review it again. Nothing was sent.')
-        elif visibility != 'private':
+        elif prepared_destination is None and visibility != 'private':
             raise BeforeUploadError('The attachment destination is no longer private. Nothing was sent.')
     tree = []
     for row, data in files:
