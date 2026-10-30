@@ -187,6 +187,39 @@ async def test_committed_payload_wins_over_mutable_view_without_loading_cold_his
     assert json.loads(path.read_text())['collaboration']['creatorSessionId'] == 'uncommitted-source'
 
 
+@pytest.mark.parametrize('fault', ['missing_file', 'corrupt_file', 'missing_index'])
+@pytest.mark.parametrize('mode', ['ask', 'full'])
+async def test_unavailable_source_payload_preserves_independent_policy(app, fault, mode):
+    from amplifier_web.resource_files import root
+    source, target = app.state['sessions']
+    if mode == 'full':
+        await save(app, scope='app')
+    link(app, target, source)
+    before = app.access_mode.snapshot(target)['revision']
+    manifest = json.loads(app.db.execute("SELECT value FROM state_records WHERE kind='session' AND id=?", (source['id'],)).fetchone()[0])
+    identity = manifest['$viewPayload']['$resource']
+    index = app.db.execute('SELECT value FROM state_resources WHERE id=?', (identity,)).fetchone()[0]
+    path = root(app.db) / (identity + '.json')
+    original = path.read_bytes()
+    try:
+        if fault == 'missing_file':
+            path.unlink()
+        elif fault == 'corrupt_file':
+            path.write_bytes(original[:-1] + b'!')
+        else:
+            app.db.execute('DELETE FROM state_resources WHERE id=?', (identity,))
+            app.db.commit()
+        assert both_modes(app, target) == (mode, mode)
+        report = app.access_mode.snapshot(target)
+        assert report['source'] == 'unavailable'
+        assert report['revision'] != before
+        assert both_modes(app, source) == (mode, mode)
+    finally:
+        path.write_bytes(original)
+        app.db.execute('INSERT OR REPLACE INTO state_resources VALUES (?,?)', (identity, index))
+        app.db.commit()
+
+
 async def test_current_worker_alias_uses_verified_host_owner_for_file_policy(app):
     source, target = app.state['sessions']
     await save(app, source)

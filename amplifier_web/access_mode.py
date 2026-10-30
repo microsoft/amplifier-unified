@@ -54,16 +54,26 @@ def _owner(db, identity):
         FROM state_records WHERE kind='session' AND id=? AND value!='null'""", (identity,)).fetchone()
     if not row or not isinstance(row[1], str):
         return None
+    owner = dict(zip(('id', 'workspace', 'nativeId', 'creator', 'request', 'scheduler', 'schedule', 'run', 'interruption'), row))
     if row[9] is None:
-        return dict(zip(('id', 'workspace', 'nativeId', 'creator', 'request', 'scheduler', 'schedule', 'run', 'interruption'), row))
+        return owner
     # The manifest's exact immutable resource owns the saved view. Its mutable
     # view.json presentation can be newer than the committed transaction.
     from .resource_files import detach, read_detached
-    reference = json.loads(row[9])
-    saved = read_detached(detach(db, reference['$resource']))
-    if not isinstance(saved, dict) or saved.get('id') != identity or not isinstance(saved.get('workspace'), str):
-        raise ValueError('The saved access-policy owner is invalid.')
-    creator, scheduler = saved.get('collaboration', {}), saved.get('scheduledOrigin', {})
+    try:
+        reference = json.loads(row[9])
+        if not isinstance(reference, dict) or not isinstance(reference.get('$resource'), str):
+            raise ValueError('The saved access-policy reference is invalid.')
+        saved = read_detached(detach(db, reference['$resource']))
+        if not isinstance(saved, dict) or saved.get('id') != identity or not isinstance(saved.get('workspace'), str):
+            raise ValueError('The saved access-policy owner is invalid.')
+        creator, scheduler = saved.get('collaboration', {}), saved.get('scheduledOrigin', {})
+        if not isinstance(creator, dict) or not isinstance(scheduler, dict):
+            raise ValueError('The saved access-policy relationships are invalid.')
+    except (OSError, ValueError):
+        # Expected unavailable resource evidence is not permission revocation.
+        # Retain its exact identity for diagnostics/revision, never use view.json.
+        return {**owner, 'unavailable': row[9]}
     return {'id': identity, 'workspace': saved['workspace'],
             'nativeId': saved.get('runtimeSessionId') or saved.get('nativeIdentity') or identity,
             'creator': creator.get('creatorSessionId'), 'request': creator.get('requestId'),
@@ -74,7 +84,7 @@ def _owner(db, identity):
 def _native_owner(db, workspace, session_id, owner_session_id=None):
     """The directory locates aliases; only canonical records supply lineage."""
     owner = _owner(db, owner_session_id or session_id)
-    if owner and owner['nativeId'] == session_id and owner['workspace'] == workspace:
+    if owner and owner['workspace'] == workspace and (owner['nativeId'] == session_id or owner.get('unavailable')):
         return owner
     if owner_session_id:
         return None  # A stale host identity is never a different owner's source.
@@ -85,7 +95,7 @@ def _native_owner(db, workspace, session_id, owner_session_id=None):
     if len(matches) != 1:
         return None
     owner = _owner(db, matches[0][0])
-    return owner if owner and owner['nativeId'] == session_id and owner['workspace'] == workspace else None
+    return owner if owner and owner['workspace'] == workspace and (owner['nativeId'] == session_id or owner.get('unavailable')) else None
 
 
 def policy(db, workspace, session_id, *, global_only=False, owner_session_id=None):
@@ -121,6 +131,8 @@ def policy(db, workspace, session_id, *, global_only=False, owner_session_id=Non
             owner = _native_owner(db, workspace, session_id, owner_session_id)
         if owner is None:
             return result()
+        if owner.get('unavailable'):
+            return unavailable('source payload unavailable')
         if owner['id'] in seen:
             return unavailable('cycle')
         seen.add(owner['id'])
