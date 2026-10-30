@@ -25,7 +25,9 @@ def open_file(service, args, origin, *, retained_file=None):
             or current_view.get('workWorkspaceTab') != 'files'):
         return {'status': 'unavailable', 'message': 'The file browser changed. Open the file from its workspace Files page.'}
     scoped = {**service.state, 'selectedSessionId': sid, 'selectedWorkspaceId': workspace_id}
-    file_root = None
+    # Workspace Files lists the registered workspace, not this chat's execution
+    # worktree. Its already-validated navigation must keep that same boundary.
+    file_root = session['workspace'] if args.get('showConversation') else None
     retained = None
     if args.get('referenceRequestId'):
         receipt = service.collaboration.receipt(args['referenceRequestId'])

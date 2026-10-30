@@ -339,8 +339,8 @@ def canvas_command(state, action, args, origin, *, file_root=None):
         canvas["surface"] = validate_surface(args.get("surface"))
     elif args.get("path"):
         owner = next((s for s in state['sessions'] if s['id'] == state.get('selectedSessionId')), {})
-        from .managed_chats import is_managed
-        root = file_root or (owner.get('workspace') if is_managed(owner) else next((w["path"] for w in state["workspaces"] if w["id"] == state["selectedWorkspaceId"]), None))
+        root = (file_root or owner.get('workingDirectory') or owner.get('workspace')
+                or next((w["path"] for w in state["workspaces"] if w["id"] == state["selectedWorkspaceId"]), None))
         if not root:
             _error("Choose a workspace first.")
         root = Path(root).resolve()
