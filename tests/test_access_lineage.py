@@ -153,6 +153,77 @@ async def test_current_worker_alias_uses_verified_host_owner_for_file_policy(app
         owner_session_id=target['id']).access_mode == 'ask'
 
 
+async def test_inherited_mode_controls_actual_native_file_mount_after_revocation(app, tmp_path):
+    filesystem = pytest.importorskip('amplifier_module_tool_filesystem')
+    pytest.importorskip('amplifier_module_loop_live')
+    pytest.importorskip('amplifier_module_context_simple')
+    from amplifier_core import AmplifierSession
+    source, target = app.state['sessions']
+    target.update(nativeIdentity='older-native-alias', runtimeSessionId='current-native-root')
+    link(app, target, source)
+    external = tmp_path.parent / (tmp_path.name + '-external')
+    external.mkdir()
+    bundle = SimpleNamespace(tools=[{'module': 'tool-filesystem'}], agents={})
+    async def write(name):
+        config = read_config(target['workspace'], home=app.data_dir, session_id=target['runtimeSessionId'],
+            owner_session_id=target['id'])
+        _apply_host_policy(bundle, config)
+        native = AmplifierSession({'session': {'orchestrator': {'module': 'loop-live',
+            'config': {'configured_bundle': True, 'native_provider': True}},
+            'context': {'module': 'context-simple'}}, 'providers': []})
+        try:
+            await native.initialize()
+            native.coordinator.register_capability('session.working_dir', target['workspace'])
+            await filesystem.mount(native.coordinator, bundle.tools[0]['config'])
+            return await native.coordinator.get('tools')['write_file'].execute({
+                'file_path': str(external / name), 'content': name})
+        finally:
+            await native.cleanup()
+    assert not (await write('before.txt')).success
+    await save(app, source)
+    assert (await write('full.txt')).success
+    await save(app, source, mode='ask')
+    assert not (await write('after.txt')).success
+    assert (external / 'full.txt').read_text() == 'full.txt'
+    assert not (external / 'before.txt').exists() and not (external / 'after.txt').exists()
+
+
+async def test_nested_sources_have_no_human_checkpoint_and_ignore_unrelated_history(app):
+    source = app.state['sessions'][0]
+    await save(app, source)
+    target = source
+    for index in range(20):
+        child = app._new_session({'title': 'Task ' + str(index)})
+        app.state['sessions'].append(child)
+        link(app, child, target, 'scheduled' if index % 2 else 'commissioned')
+        target = child
+    assert both_modes(app, target) == ('full', 'full')
+    unrelated = [('session', 'unrelated-' + str(index), 'deliberately-not-json') for index in range(512)]
+    def traced_read():
+        statements = []
+        app.db.set_trace_callback(statements.append)
+        try:
+            assert both_modes(app, target) == ('full', 'full')
+        finally:
+            app.db.set_trace_callback(None)
+        return statements
+    baseline = traced_read()
+    try:
+        # A broad source scan/JSON extraction would fail on these unrelated
+        # bodies. Exact canonical lookups must not visit them at all.
+        app.db.executemany('INSERT INTO state_records(kind,id,value) VALUES(?,?,?)', unrelated)
+        app.db.commit()
+        before = app.db.total_changes
+        assert traced_read() == baseline
+        assert app.db.total_changes == before
+    finally:
+        app.db.executemany('DELETE FROM state_records WHERE kind=? AND id=?',
+            [(kind, identity) for kind, identity, _ in unrelated])
+        app.db.commit()
+    await save(app, source, mode='ask')
+    assert both_modes(app, target) == ('ask', 'ask')
+
+
 async def test_real_commission_from_peer_origin_inherits_without_grant(collaboration_app):
     app = collaboration_app
     source = app.state['sessions'][0]
@@ -173,12 +244,20 @@ async def test_scheduled_root_inherits_after_host_restart_without_source_residen
     try:
         await save(app, app._session(sid))
         await create_schedule(app, sid, now[0])
+        first_mount_modes = []
+        original_control = runtime.control
+        async def control(identity, operation, args):
+            if identity != sid and identity not in runtime.workers:
+                first_mount_modes.append(read_mode(app.data_dir, app._session(identity)['workspace'], identity))
+            return await original_control(identity, operation, args)
+        runtime.control = control
         now[0] += 61
         await app.schedules.tick()
         await app.schedules.tick()
         run = app.schedules.store.runs(sid)[0]
         assert run['phase'] == 'accepted', run.get('detail')
         target_id = run['destinationSessionId']
+        assert first_mount_modes == ['full']
         assert both_modes(app, app._session(target_id)) == ('full', 'full')
     finally:
         await app.close()
@@ -188,6 +267,7 @@ async def test_scheduled_root_inherits_after_host_restart_without_source_residen
         restored.state['sessions'] = [row for row in restored.state['sessions'] if row['id'] != sid]
         target = restored._session(target_id, hydrate=False)
         assert both_modes(restored, target) == ('full', 'full')
+        assert sid not in {row['id'] for row in restored.state['sessions']}
         assert not restored.configuration_authority.rows(target_id)
     finally:
         await restored.close()
