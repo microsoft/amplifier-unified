@@ -52,7 +52,10 @@ work. Snapshot, locked preparation, execution, evidence export and owned cleanup
 do not require a separate `test_environments` approval, including in Ask when
 needed mode. Agents still need their current root execution binding and an
 unblocked task assignment. The adapter rechecks Stop, placement, owner and backend
-identity before effects. Host setup remains a separate `test_host_setup` grant.
+identity before effects. In Ask mode host setup uses a separate
+`test_host_setup` grant. Operator-selected Full access already authorizes setup,
+including native descendants and trusted system callers for an explicit owning
+conversation. No browser, human input or new approval is needed.
 Old test-only capability requests no longer create approval cards; stale cards
 are retired without running their operations.
 
@@ -120,8 +123,26 @@ The supported setup action writes a private `test-environments.json` file in the
 It identifies the exact managed core installation, qualified commit and local
 Docker Unix endpoint. The reviewed image digest is fixed by the app. The app
 reports disabled or unavailable when this setup is missing or does not match.
-Setup downloads approved dependencies only after an explicit user action or a
-scoped `test_host_setup` agent grant; ordinary inspection does not prompt.
+Setup downloads approved dependencies after an explicit user action, a scoped
+`test_host_setup` agent grant, or standing Full access; ordinary inspection does
+not prompt. Agent setup admission checks its real native binding, including a
+delegated child's assigned generation. A trusted system can act for an explicit
+Full conversation without inventing a native principal or human input.
+
+Accepted Full setup and cleanup continue after the originating turn finishes.
+They retain the existing captured access revision and Stop/placement boundary,
+rechecking before effects and after final validation before saving the runner.
+Revocation, including turning Full off and back on, does not renew accepted work.
+An interrupted effect remains uncertain; it is not replayed.
+
+The setup intent's conversation and workspace own its retained result. The
+original actor and captured authority remain separate attribution. A later
+authorized actor in that same Full conversation can inspect or clean up the
+original setup, or explicitly publish its already verified candidate, without
+impersonating the original child. The existing exact intent, backend identity,
+resource ownership and readiness checks still apply. Reconciliation and cleanup
+retain their own current actor; they do not replace the original setup actor.
+Ask-mode actor checks and routine environment operations are unchanged.
 
 Keep the exact managed core installation and configuration until all of its
 owned environments have been removed. Managed uninstall and replacement refuse

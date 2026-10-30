@@ -997,6 +997,43 @@ def read(app, sid, config, offset=0, limit=10):
     return result
 
 
+async def dispatch_full_setup(app, action, args, origin, caller, authority):
+    """Accept owned setup once; native turn completion is not revocation."""
+    from .service import AppError
+    # Reconciliation is observational in Ask. Full still captures its existing
+    # setup authority so a late observation cannot settle a revoked operation.
+    authority = authority or app.configuration_authority.capture(
+        'workspace.environments.setup', args, origin, caller)
+    source = app._session(args['sessionId'], hydrate=False)
+    if not authority or 'accessRevision' not in authority or authority['sessionId'] != source['id']:
+        raise AppError('Setup requires this conversation’s current Full access.', 403)
+    workspace = next((w for w in app.state['workspaces'] if w['id'] == args['workspaceId']), None)
+    if not workspace or source['workspace'] != workspace['path']:
+        raise AppError('Choose this conversation’s current workspace.', 403)
+    captured = tuple(source.get(key) for key in ('workspace', 'workingDirectory', 'executionRevision', 'interruptionRevision'))
+    actor = {'sessionId': source['id'], 'principal': authority.get('runtimeSessionId'),
+             'origin': origin, 'generationId': authority.get('generationId')}
+
+    async def guard():
+        async with app.lock:
+            current = app._session(source['id'], hydrate=False)
+            if captured != tuple(current.get(key) for key in ('workspace', 'workingDirectory', 'executionRevision', 'interruptionRevision')):
+                raise AppError('The task moved or stopped before environment admission.', 409)
+            app.configuration_authority.check(authority)
+            if blocked := app.assignments.blocked(current):
+                raise AppError(blocked, 409)
+
+    try:
+        await guard()
+        operation = {'workspace.environments.setup': setup.request,
+                     'workspace.environments.setup.cleanup': setup.cleanup,
+                     'workspace.environments.setup.reconcile': setup.reconcile}[action]
+        value = await operation(app, args, actor, guard=guard, authority=authority)
+        return {'accepted': True, 'result': value}
+    except (OSError, ValueError, sqlite3.Error, LockTimeout) as exc:
+        raise AppError(str(exc), 409) from None
+
+
 async def dispatch(app, action, args, origin, caller, authority):
     if action == 'workspace.environments.removal.read':
         return {'accepted': True, 'result': recovery.read_removal(app, args, origin, caller)}
@@ -1008,6 +1045,9 @@ async def dispatch(app, action, args, origin, caller, authority):
     if not user and sid != caller:
         raise AppError('Test environments belong to the calling conversation.', 403)
     source = app._session(sid, hydrate=False)
+    if (not user and app.access_mode.full(source) and action in {
+            'workspace.environments.setup', 'workspace.environments.setup.reconcile', 'workspace.environments.setup.cleanup'}):
+        return await dispatch_full_setup(app, action, args, origin, caller, authority)
     principal = source.get('runtimeSessionId') or source.get('nativeIdentity') or sid
     if source.get('sessionKind', 'root') != 'root' or not user and PRINCIPAL.get() != principal:
         raise AppError('Test environments require their host-bound root owner.', 403)

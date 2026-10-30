@@ -284,7 +284,15 @@ async def read(app):
             'operation': public(record) if record else None}
 
 
-async def request(app, args, actor, guard=None):
+def same_owner(record, args, actor, authority):
+    # A native actor is attribution, not a second lifetime owner. The domain
+    # dispatcher alone supplies checked Full authority for this conversation.
+    return (record['intent']['sessionId'] == args['sessionId']
+            and record['intent']['workspaceId'] == args['workspaceId']
+            and (record['actor'] == actor or authority is not None and 'accessRevision' in authority))
+
+
+async def request(app, args, actor, guard=None, *, authority=None):
     folder = root(app)
     identity = hashlib.sha256(json.dumps([args['sessionId'], args['requestId']], separators=(',', ':')).encode()).hexdigest()[:32]
     intent = {key: args[key] for key in ('workspaceId', 'sessionId', 'requestId', 'backend')}
@@ -293,11 +301,13 @@ async def request(app, args, actor, guard=None):
     path = folder / (identity + '.json')
     existing = read_json(path)
     if existing:
-        if existing['intent'] != intent or existing['actor'] != actor:
+        if existing['intent'] != intent or not same_owner(existing, args, actor, authority):
             raise ValueError('This setup request identity already belongs to another intent.')
         if existing['state'] in {'outcome_unknown', 'failed'} and not existing.get('cleanup') and existing.get('candidateConfiguration') and existing.get('proof', {}).get('probeRemoved') and identity not in getattr(app, '_test_setup_tasks', {}):
-            existing = await complete_retained(app, path, existing, guard)
+            existing = await complete_retained(app, path, existing, guard, actor=actor, authority=authority)
         observed = await readiness(app, force=True)
+        if authority is not None and guard:
+            await guard()
         # A crash after atomic publication can be settled by the exact retained
         # configuration and earlier successful disposable probe, without effects.
         if existing.get('candidateConfiguration') and existing.get('proof', {}).get('probeRemoved') and read_json(Path(app.data_dir) / 'test-environments.json') == existing['candidateConfiguration'] and observed['status'] == 'ready':
@@ -320,6 +330,8 @@ async def request(app, args, actor, guard=None):
             await guard()
         record = {'id': identity, 'intent': intent, 'actor': actor, 'backend': args['backend'], 'state': 'accepted',
                   'phase': 'checking', 'detail': 'Checking the local test runner.', 'createdAt': time.time(), 'updatedAt': time.time()}
+        if authority is not None:
+            record['authority'] = authority
         write_json(path, record)
         write_json(folder / 'latest.json', {'id': identity})
         tasks = getattr(app, '_test_setup_tasks', None)
@@ -334,7 +346,7 @@ async def request(app, args, actor, guard=None):
         raise
 
 
-async def complete_retained(app, path, record, guard):
+async def complete_retained(app, path, record, guard, *, actor=None, authority=None):
     """Explicit same-intent retry may publish its already verified candidate."""
     from .task_environments import validate_configuration_value, invoke
     lock = FileLock(str(root(app) / 'setup.lock'), timeout=0)
@@ -365,6 +377,8 @@ async def complete_retained(app, path, record, guard):
             raise ValueError('The runner selection changed before publication.')
         retain_verification(app, candidate, record['proof'])
         write_json(Path(app.data_dir) / 'test-environments.json', candidate)
+        if authority is not None:
+            record['completion'] = {'actor': actor, 'authority': authority, 'completedAt': time.time()}
         record.update(state='completed', phase='ready', detail='The earlier verified setup is now saved. Its install, image preparation and check were not repeated.', updatedAt=time.time())
         write_json(path, record)
         return record
@@ -398,6 +412,8 @@ async def _run(app, record, lock, guard):
             if not state.get('backendReachable'):
                 raise ValueError(state['reason'])
             if state['status'] == 'ready':
+                if guard:
+                    await guard()
                 record.update(state='completed', phase='ready', detail=state['reason'])
                 return
             if not state.get('available'):
@@ -442,6 +458,8 @@ async def _run(app, record, lock, guard):
         normalized, status, _ = await settled_thread(owner.validate_configuration_value, app, config)
         if status != 'ready' or not normalized:
             raise ValueError('The prepared runner did not pass host qualification.')
+        if guard:
+            await guard()
         if read_json(Path(app.data_dir) / 'test-environments.json') != config_before:
             raise ValueError('The runner configuration changed during setup. The new setup result was retained without replacing it.')
         retain_verification(app, config, proof)
@@ -640,11 +658,11 @@ async def setup_incus(base, selected, owned, record, step):
                     'probe': probe, 'offline': True, 'probeRemoved': True, 'checkedAt': time.time()}
 
 
-def original(app, args, actor):
+def original(app, args, actor, *, authority=None):
     identity = hashlib.sha256(json.dumps([args['sessionId'], args['requestId']], separators=(',', ':')).encode()).hexdigest()[:32]
     path = root(app, create=False) / (identity + '.json')
     row = read_json(path)
-    if not row or row['intent']['workspaceId'] != args['workspaceId'] or row['actor'] != actor:
+    if not row or not same_owner(row, args, actor, authority):
         raise ValueError('This setup result belongs to another root or workspace.')
     return path, row
 
@@ -742,8 +760,8 @@ def observe_partial(app, record):
             'instances': instances, 'project': project, 'images': images, 'network': network, 'prefix': prefix, 'env': env, 'observedResources': sorted(present)}
 
 
-async def reconcile(app, args, actor, guard=None):
-    path, record = original(app, args, actor)
+async def reconcile(app, args, actor, guard=None, *, authority=None):
+    path, record = original(app, args, actor, authority=authority)
     if guard:
         await guard()
     tasks = getattr(app, '_test_setup_tasks', {})
@@ -761,12 +779,16 @@ async def reconcile(app, args, actor, guard=None):
             record['cleanup'] = {'state': 'completed', 'observedAt': time.time(), 'resourcesAbsent': True}
         else:
             record.update(detail='The original setup still owns a disposable probe or unused network. Use Clean up interrupted setup before starting again.', updatedAt=time.time())
+    if guard:
+        await guard()
+    if authority is not None:
+        record['reconciliation'] = {'actor': actor, 'authority': authority, 'observedAt': time.time()}
     write_json(path, record)
     return {'operation': public(record), 'readiness': observed}
 
 
-async def cleanup(app, args, actor, guard=None):
-    path, record = original(app, args, actor)
+async def cleanup(app, args, actor, guard=None, *, authority=None):
+    path, record = original(app, args, actor, authority=authority)
     if record.get('cleanup'):
         return {'operation': public(record), 'duplicate': True}
     cleanup_allowed(app, record)
@@ -779,6 +801,8 @@ async def cleanup(app, args, actor, guard=None):
         if guard:
             await guard()
         record['cleanup'] = {'state': 'accepted', 'createdAt': time.time()}
+        if authority is not None:
+            record['cleanup'].update(actor=actor, authority=authority)
         write_json(path, record)
         tasks = getattr(app, '_test_setup_tasks', None)
         if tasks is None:
@@ -821,6 +845,8 @@ async def _cleanup(app, record, path, lock, guard):
         after = await settled_thread(observe_partial, app, record)
         if not after['absent']:
             raise ValueError('Disposable setup resource absence was not confirmed.')
+        if guard:
+            await guard()
         record.setdefault('originalState', record['state'])
         record.update(state='recovered', phase='retained', detail='Interrupted setup resources were removed. Packages, base images and private receipts are kept. A new setup request can proceed.')
         record['cleanup'].update(state='completed', resourcesAbsent=True)
