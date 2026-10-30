@@ -115,6 +115,12 @@ const pretty=v=>JSON.stringify(v,null,2);
 const nowLabel=value=>{try{return new Date(typeof value==='number'&&value<1e12?value*1000:value).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}catch{return ''}};
 function App(){
  const archiveRevision=useRef(0),archiveAction=useRef(null),[archiveFeedback,setArchiveFeedback]=useState({notice:null,pending:[]});
+ const canvasInputRevision=useRef(0),permissionHistoryFocus=useRef(null);
+ useEffect(()=>{
+  const supersede=()=>{canvasInputRevision.current++};
+  for(const name of ['pointerdown','keydown','input'])document.addEventListener(name,supersede,true);
+  return()=>{for(const name of ['pointerdown','keydown','input'])document.removeEventListener(name,supersede,true)};
+ },[]);
  const narrow=useNarrowScreen();
  const [creatingWorkspace,setCreatingWorkspace]=useState(false);
  const actionFeedback=useRef(createActionFeedback()),outsidePointer=useRef(false),panelReturnFocus=useRef(null),settingsNavigation=useRef(null),workspaceSettingsNavigation=useRef(null);
@@ -211,6 +217,12 @@ function App(){
   });
  },[acceptState]);
  const dispatch=useCallback((action,args={},meta={})=>{
+  const permissionHistory=action==='view.update'&&args.patch?.canvasDraft?.delivery==='permissions';
+  if(permissionHistory){
+   const key=crypto.randomUUID();
+   permissionHistoryFocus.current={key,sessionId:args.sessionId??latest.current?.selectedSessionId,revision:canvasInputRevision.current};
+   args={...args,patch:{...args.patch,canvasDraft:{...args.patch.canvasDraft,permissionHistoryKey:key}}};
+  }else if(action==='canvas.select'||action==='canvas.visibility'||isNavigationAction(action,args))canvasInputRevision.current++;
   const chatReference=action==='session.select'&&(args.chatReference||args.peerPreview);
   if(chatReference&&meta.chatReferenceIntent!==undefined&&meta.chatReferenceIntent!==archiveRevision.current)
    return Promise.resolve({accepted:false,superseded:true,error:'A newer navigation kept this chat reference from opening.'});
@@ -291,6 +303,14 @@ function App(){
   const dirtyBarrier=canvasDirtyBarrier.current;
   const execute=async()=>{
    if(meta.before)await meta.before;
+   if(meta.consumePermissionHistory){
+    // This is bundled presentation housekeeping, never a saved stale draft.
+    // Resolve after queued document changes; an older effect cannot restore Overview.
+    const current=serverState.current,draft=current?.view?.canvasDraft;
+    if(current?.selectedSessionId!==args.sessionId||!draft?.library||draft.delivery!=='permissions'||draft.permissionHistoryKey!==meta.consumePermissionHistory)
+     return {accepted:false,superseded:true};
+    args={sessionId:args.sessionId,patch:{canvasDraft:{...draft,delivery:null}}};
+   }
    // Navigation and answers have separate queues; neither may overtake an
    // already declared renderer edit when its transition can remove the view.
    if((navigation||['question.answer','question.cancel','question.supersede'].includes(action))&&dirtyBarrier)await dirtyBarrier;
@@ -329,12 +349,13 @@ function App(){
   // Optional plan summaries have their own exact read result; they must not
   // hold up browsing or ordered mutations while canonical files are read.
   const planRead=action==='session.plans';
-  // Permission-history reveal and Close Canvas must settle in click order.
-  const permissionHistory=action==='view.update'&&args.patch?.canvasDraft?.delivery==='permissions';
-  const queue=usesNavigationQueue(action,args)?navigationQueue:action==='call.mute'?voiceControlQueue:localVoiceControl||action.startsWith('coordination.')||meta.presentation||defaultsRead||choiceRead||planRead?{current:Promise.resolve()}:action==='canvas.visibility'||permissionHistory?canvasVisibilityQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
+  // Reveal joins document ordering AND visibility ordering without merging their
+  // queues globally. Capture the prior visibility tail before publishing this one.
+  const after=permissionHistory?canvasVisibilityQueue.current:catalogRead&&!choiceRead?commandQueue.current:null;
+  const queue=usesNavigationQueue(action,args)?navigationQueue:action==='call.mute'?voiceControlQueue:localVoiceControl||action.startsWith('coordination.')||meta.presentation||defaultsRead||choiceRead||planRead?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
   const queuedAt=performance.now();
   const timedExecute=()=>{const startedAt=performance.now();return Promise.resolve().then(execute).finally(()=>recordActionTiming(action,queuedAt,startedAt))};
-  const promise=enqueueSettings.current(queue,timedExecute,settingsDraftKey(action,args,meta),catalogRead&&!choiceRead?commandQueue.current:null).then(result=>{
+  const promise=enqueueSettings.current(queue,timedExecute,settingsDraftKey(action,args,meta),after).then(result=>{
    // Each caller owns an optimistic token even when several waiting editor
    // snapshots share the final request. Settle all callers after its receipt.
    if(pending)pendingView.current.settle(pending);
@@ -357,6 +378,7 @@ function App(){
    return result;
   }).catch(error=>{if(navigationToken){conversationNavigation.current.settle(navigationToken);if(serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}}if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}if(chatReference&&meta.chatReferenceIntent!==archiveRevision.current)error.navigationSuperseded=true;throw error}).finally(()=>{settleTracking();settleFeedback()});
   queue.current=promise.catch(()=>{});
+  if(permissionHistory)canvasVisibilityQueue.current=queue.current;
   if(action==='canvas.views.dirty'){
    canvasDirtyBarrier.current=promise;
    const settled=()=>{if(canvasDirtyBarrier.current===promise)canvasDirtyBarrier.current=null};
@@ -824,7 +846,10 @@ function App(){
     </div>
     </ComposerOwnership>
    </form>
-  </section><McpAppThemeProvider scheme={requestedScheme}><AgentCanvas suppressed={browsing||previewVisible} state={settingsState} act={act} dispatch={dispatch} settingsSurface={settingsSurface}/></McpAppThemeProvider>
+  </section><McpAppThemeProvider scheme={requestedScheme}><AgentCanvas suppressed={browsing||previewVisible} state={settingsState} act={act} dispatch={dispatch} settingsSurface={settingsSurface} permissionHistoryCurrent={key=>{
+   const intent=permissionHistoryFocus.current,current=latest.current;
+   return intent?.key===key&&intent.revision===canvasInputRevision.current&&intent.sessionId===current?.selectedSessionId&&current?.canvas?.open&&current?.view?.canvasDraft?.library&&!current?.view?.settingsCanvas;
+  }}/></McpAppThemeProvider>
   {previewVisible&&<PeerPreviewCanvas key={peerPreview.active.source.sourceId} active={peerPreview.active} onClose={peerPreview.close} state={layoutState} dispatch={dispatch}/>}</WorkspaceLayout>
   {creatingWorkspace&&<WorkspaceCreation state={state} act={act} onClose={()=>setCreatingWorkspace(false)}/>}
   <FeedbackNotice state={state} act={act}/>
