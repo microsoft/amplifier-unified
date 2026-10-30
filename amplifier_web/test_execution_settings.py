@@ -5,8 +5,8 @@ import json
 import os
 from pathlib import Path
 import stat
-import uuid
 from . import test_environment_profiles as profiles
+from .private_policy_file import write as write_policy_file
 
 OPTIONAL_CONCURRENCY_COUNTS = {'maxTaskChatsPerSource', 'maxEnvironmentsPerChat'}
 CONCURRENCY_DEFAULTS = {'maxTaskChatsPerSource': 0, 'maxEnvironmentsPerChat': 0,
@@ -112,28 +112,9 @@ def snapshot(app):
 
 
 def write(app, policy):
-    # Replacement is atomic; no partial policy is visible to admission.
     path = Path(app.data_dir) / 'test-execution.json'
-    temporary = path.with_name('.test-execution-' + uuid.uuid4().hex)
-    content = json.dumps(policy, sort_keys=True).encode()
-    if len(content) > 65536:
-        raise ValueError('The saved test execution settings exceed their supported bound.')
-    try:
-        with os.fdopen(os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), 'wb') as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        # Windows has no directory-open/fsync contract. The same portable
-        # replacement convention is used by the app's settings publishers.
-        if hasattr(os, 'O_DIRECTORY'):
-            descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
-    finally:
-        temporary.unlink(missing_ok=True)
+    write_policy_file(path, policy,
+        size_error='The saved test execution settings exceed their supported bound.')
 
 
 async def dispatch(app, action, args, authority):
