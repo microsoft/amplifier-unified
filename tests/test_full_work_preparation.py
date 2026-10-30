@@ -46,7 +46,7 @@ async def test_current_full_accepts_unverified_work_version_without_changing_byt
         prepared = await wrapped._prepare(request, commit=True)
         attempt = delivery.begin_work(prepared)
     if fault == 'metadata':
-        owner = app.state['sessions'][0]
+        owner = app._session(child['collaboration']['creatorSessionId'])
         creation = json.loads(app.db.execute("SELECT receipt FROM commands WHERE id='capture-delivered-pages'").fetchone()[0])
         item = (await read(app, owner, creation['result']['item']['id']))['item']
         await revise(app, owner, item, 'after-work-fitting', nextAction='Changed after fitting')
@@ -200,7 +200,7 @@ async def test_full_preparation_does_not_require_bounded_input_coverage(app):
 
 async def test_worker_full_policy_uses_verified_host_owner_with_native_alias(app):
     adapter, child, required, worker = await joined(app)
-    owner = app.state['sessions'][0]
+    owner = app._session(child['collaboration']['creatorSessionId'])
     await save(app, owner)
     child.update(nativeIdentity='older-native-alias', runtimeSessionId='current-native-root')
     app._publish_changes(sessions={child['id']})
