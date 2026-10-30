@@ -7,9 +7,9 @@ import {mkdir,writeFile,mkdtemp,readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import {chromium,expect as baseExpect} from '@playwright/test';
+import {chromium,expect as baseExpect,request as httpRequest} from '@playwright/test';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
-import {assertPassiveActions,bounded,createWorkObserver,passiveWorkReads,unknownCleanupValue} from './shared-work-test-helpers.mjs';
+import {assertPassiveActions,assertWorkWaitTermination,bounded,createWorkObserver,observeCompletion,passiveWorkReads,requireCompletion,unknownCleanupValue,workWaitProbeIds} from './shared-work-test-helpers.mjs';
 
 const actionTimeoutMs=7000,navigationTimeoutMs=15000;
 const expect=baseExpect.configure({timeout:actionTimeoutMs});
@@ -51,28 +51,37 @@ catch(error){if(seed.exitCode===null)seed.kill('SIGKILL');await bounded(seedClos
 assert.equal(seedReceipt.code,0);assert.equal(seedReceipt.signal,null);assert.match(seedOutput,/"sharedWorkSeed"/);
 await writeFile(path.join(output,'cold-seed.json'),JSON.stringify({receipt:seedReceipt,output:seedOutput})+'\n');
 const fixture=spawn(python,fixtureArgs,fixtureOptions);
-// An admitted HTTP Work wait is shielded from transport cancellation and can
-// naturally take 30s. Keep escalation a failure; allow its actual drain first.
-const stop=ownFixture(fixture,{label:'Shared Work fixture',timeoutMs:40000});
+// Passive observations retire at the real host fence, not at their 30s deadline.
+// Keep the ordinary strict 10s shutdown / 2s forced-reap failure semantics.
+const stop=ownFixture(fixture,{label:'Shared Work fixture'});
 const headers={Authorization:'Bearer fixture-browser-control-token'};
 const launch={headless:true,timeout:15000,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]};
-let browser,peerBrowser,touchBrowser,originalError,result,page,fixtureUrl;
-const termination={fixturePid:fixture.pid,browserDisconnectedAt:null,peerBrowserDisconnectedAt:null,touchBrowserDisconnectedAt:null,closeRequestedAt:null,fixtureClose:null,workWaits:[],cleanupComplete:null,observationErrors:[]};
+let browser,peerBrowser,touchBrowser,originalError,result,page,fixtureUrl,probeClient,shutdownCompletion;
+const termination={fixturePid:fixture.pid,browserDisconnectedAt:null,peerBrowserDisconnectedAt:null,touchBrowserDisconnectedAt:null,closeRequestedAt:null,fixtureClose:null,workWaits:[],shutdownSignals:[],shutdownFences:[],wireWaits:[],cleanupComplete:null,observationErrors:[]};
+const observationError=message=>{if(termination.observationErrors.length<16)termination.observationErrors.push(message)};
+const retain=(target,value,cap)=>{if(target.length<cap)target.push(value);else observationError('Fixture observation capacity exceeded')};
 let observationBuffer='';
 fixture.stdout.on('data',chunk=>{
  observationBuffer+=String(chunk);
- if(observationBuffer.length>65536){termination.observationErrors.push('Fixture observation exceeded 64KiB');observationBuffer='';return}
  let end;
  while((end=observationBuffer.indexOf('\n'))>=0){
   const line=observationBuffer.slice(0,end);observationBuffer=observationBuffer.slice(end+1);
   if(!line.trim())continue;
   try{
+   assert.ok(line.length<=65536,'Fixture observation line exceeded 64KiB');
    const row=JSON.parse(line);
-   if(row.workWait){if(termination.workWaits.length<200)termination.workWaits.push(row.workWait);else if(!termination.observationErrors.length)termination.observationErrors.push('Wait observation overflow')}
-   if(row.sharedWorkCleanup)termination.cleanupComplete=row.sharedWorkCleanup;
-  }catch{if(termination.observationErrors.length<10)termination.observationErrors.push('Malformed fixture observation')}
+   if(row.workWait)retain(termination.workWaits,row.workWait,800);
+   if(row.sharedWorkSignal)retain(termination.shutdownSignals,row.sharedWorkSignal,4);
+   if(row.sharedWorkFence)retain(termination.shutdownFences,row.sharedWorkFence,4);
+   if(row.sharedWorkCleanup){
+    if(termination.cleanupComplete)observationError('Duplicate cleanup observation');
+    termination.cleanupComplete=row.sharedWorkCleanup;
+   }
+  }catch{observationError('Malformed fixture observation')}
  }
+ if(observationBuffer.length>65536){observationError('Fixture observation exceeded 64KiB');observationBuffer=''}
 });
+fixture.stdout.once('end',()=>{if(observationBuffer.trim())observationError('Incomplete fixture observation at EOF')});
 fixture.once('close',(code,signal)=>{termination.fixtureClose={code,signal,at:Date.now()}});
 try {
  const url=await new Promise((resolve,reject)=>{
@@ -440,6 +449,34 @@ try {
  await bounded(peer.close(),actionTimeoutMs,'Peer page close');
  await bounded(page.close(),actionTimeoutMs,'Primary page close');
  observer.assertHealthy();
+ // Deliberate, separate HTTP controls after the UI is quiescent. No browser
+ // context owns these requests; closing the browsers must not abort the 503 probe.
+ probeClient=await httpRequest.newContext({extraHTTPHeaders:{...headers,'X-Amplifier-State-Transport':'delta-v1'}});
+ const waitScope={workspaceId:manifest.workspace.id,limit:1};
+ const listed=await probeClient.post(url+'/api/actions',{data:{action:'workspace.work.list',args:waitScope},timeout:actionTimeoutMs,maxRetries:0});
+ assert.equal(listed.status(),200);
+ const listing=await listed.json();assert.equal(listing.accepted,true);
+ assert.match(listing.result.observationVersion,/^[a-f0-9]{64}$/);
+ const waitArgs={...waitScope,afterVersion:listing.result.observationVersion,waitMs:30000};
+ const waitProbe=commandId=>observeCompletion((async()=>{
+  const response=await probeClient.post(url+'/api/actions',{
+   data:{id:commandId,action:'workspace.work.wait',args:waitArgs},timeout:40000,maxRetries:0});
+  const body=await response.body();assert.ok(body.length<=65536,'Bounded control wait response');
+  const value=JSON.parse(body.toString());
+  const receipt={commandId,status:response.status(),...Object.fromEntries(
+   ['accepted','code','changed','timedOut'].map(key=>[key,value[key]??null]))};
+  termination.wireWaits.push(receipt);return receipt;
+ })());
+ const natural=await requireCompletion(waitProbe(workWaitProbeIds.natural));
+ assert.equal(natural.status,200);assert.equal(natural.accepted,true);
+ assert.equal(natural.changed,false);assert.equal(natural.timedOut,true);
+ assert.equal(termination.shutdownFences.length,0);
+ // Wait for the actual dispatch record, not just the outgoing request event.
+ await expect.poll(()=>termination.workWaits.some(row=>row.commandId===workWaitProbeIds.natural&&row.phase==='returned')).toBe(true);
+ shutdownCompletion=waitProbe(workWaitProbeIds.shutdown);
+ await expect.poll(()=>termination.workWaits.some(row=>row.commandId===workWaitProbeIds.shutdown&&row.phase==='entered')).toBe(true);
+ assert.ok(!termination.workWaits.some(row=>row.commandId===workWaitProbeIds.shutdown&&row.phase!=='entered'),'Shutdown probe must still be pending');
+ assert.equal(termination.shutdownFences.length,0);
  result={status:'passed',fidelity:{mode:fidelityBaseline?'before-change-capture':'approved-gap-check',nextAction:!fidelityBaseline,readableEvidence:!fidelityBaseline},sourceFixture:!installed,installedWheel:!!installedIdentity,installedIdentity,launchOptions:launch,
   homeEntry:{via:'ordinary Continue chat',sessionId:manifest.ownerSessionId,selectionActions:entrySelects.length,
    surface:'chat',runtimeCallbackCounts:entryObservation.runtimeCallbackCounts},
@@ -468,22 +505,32 @@ try {
 }
 finally {
  termination.closeRequestedAt=Date.now();
+ let teardownError;
  try{
   await finishFixture({label:'Shared Work fixture',close:[['touch browser',()=>touchBrowser?.close()],['peer browser',()=>peerBrowser?.close()],['browser',()=>browser?.close()]],stop,originalError});
-  try{
-   assert.deepEqual(termination.observationErrors,[]);
-   assert.ok(termination.cleanupComplete,'Real runner.cleanup must return');
-   const entered=termination.workWaits.filter(row=>row.phase==='entered');
-   assert.ok(entered.length>0,'Real Work wait entered before teardown');
-   for(const row of entered)assert.ok(termination.workWaits.some(end=>end.id===row.id&&end.phase==='returned'),'Wait must drain, not be cancelled: '+row.id);
-   assert.ok(termination.workWaits.some(row=>row.phase==='returned'&&row.timedOut===true),'Observe natural long-poll deadline');
-   assert.ok(!termination.workWaits.some(row=>['cancelled','failed'].includes(row.phase)),'No hidden wait cancellation');
-  }catch(error){if(originalError)console.error('Work wait drain verification failed:',error);else throw error}
+  assert.ok(shutdownCompletion,'Known shutdown request was not started');
+  await bounded(requireCompletion(shutdownCompletion),actionTimeoutMs,'Shutdown wire receipt');
+  termination.verdict=assertWorkWaitTermination(termination);
+ }catch(error){
+  teardownError=error;termination.verificationError={name:error.name,message:error.message};
+  if(originalError)console.error('Work wait drain verification failed:',error);
  }
  finally{
-  try{await writeFile(path.join(output,'termination.json'),JSON.stringify(termination,null,2)+'\n')}
-  catch(error){if(originalError)console.error('Termination evidence unavailable:',error.message);else throw error}
+  try{await bounded(Promise.resolve().then(()=>probeClient?.dispose()),actionTimeoutMs,'Probe client dispose')}
+  catch(error){
+   termination.probeDisposeError={name:error.name,message:error.message};
+   if(originalError||teardownError)console.error('Probe client disposal failed:',error);
+   teardownError??=error;
+  }
+  finally{
+   try{await writeFile(path.join(output,'termination.json'),JSON.stringify(termination,null,2)+'\n')}
+   catch(error){
+    if(originalError||teardownError)console.error('Termination evidence unavailable:',error.message);
+    teardownError??=error;
+   }
+  }
  }
+ if(teardownError&&!originalError)throw teardownError;
 }
 await writeFile(path.join(output,'result.json'),JSON.stringify(result,null,2)+'\n');
 console.log(JSON.stringify(result));
