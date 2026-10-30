@@ -604,9 +604,9 @@ async def test_bad_package_never_allocates_storage_or_changes_css(app):
     assert not (app.data_dir / 'themes').exists() and app.state['theme'] == before
 
 
-def notice_css(value):
+def notice_css(value, **meta):
     return theme_library.portable(theme_library.MARKER + json.dumps({
-        packages.NOTICE_KEY: value,
+        **meta, packages.NOTICE_KEY: value,
     }) + ' */\n#amp-one{color:red}', 'Paper')
 
 
@@ -645,6 +645,93 @@ async def test_identical_license_merge_and_nonconflicting_notices_survive_copies
     for path, body in retained.items():
         assert copied_zip.files[path].decode() == body
     assert theme_library.metadata(copied_zip.css)[0][packages.NOTICE_KEY] == retained
+
+
+@pytest.mark.parametrize('update_kind', ['header-free', 'retained-header', 'identical-notice', 'new-notice'])
+@pytest.mark.parametrize('manifest_author', [True, False])
+async def test_css_update_retains_full_notice_union_in_read_css_and_zip_exports(app, update_kind, manifest_author):
+    retained = {'licenses/OFL.txt': LICENSE, 'licenses/Additional.txt': 'Additional required attribution.\n'}
+    manifest = deepcopy(MANIFEST)
+    if not manifest_author:
+        del manifest['author']
+    author = manifest.get('author', 'Portable Contributors')
+    source = notice_css(retained, author=author)
+    saved = await imported(app, packageBase64=encoded(raw_zip(contents(source, manifest))))
+    original = await read(app, saved)
+    assert theme_library.metadata(original['css'])[0][packages.NOTICE_KEY] == retained
+    assert 'licenses/Additional.txt' not in manifest['licenses']
+    expected = dict(retained)
+    css = '#amp-one{color:blue}'
+    if update_kind == 'retained-header':
+        css = original['css'] + '\n' + css
+    elif update_kind == 'identical-notice':
+        css = notice_css({'licenses/Additional.txt': retained['licenses/Additional.txt']}) + '\n' + css
+    elif update_kind == 'new-notice':
+        incoming = {'licenses/New.txt': 'New required attribution.\n'}
+        expected.update(incoming)
+        css = notice_css(incoming) + '\n' + css
+    before_theme = deepcopy(app.state['theme'])
+    updated = (await dispatch(app, 'theme.update', {
+        'id': saved['id'], 'expectedFingerprint': saved['fingerprint'],
+        'name': 'Updated Paper', 'css': css,
+    }))['result']
+    current = await read(app, updated)
+    css_export = (await exported(app, updated, 'css'))['result']['css']
+    zip_export = (await exported(app, updated))['result']
+    raw = base64.b64decode(zip_export['base64'], validate=True)
+    package = packages.load(raw)
+    for value in (current['css'], css_export, package.css):
+        meta, body = theme_library.metadata(value)
+        assert meta[packages.NOTICE_KEY] == expected and meta['author'] == author
+        assert meta['name'] == 'Updated Paper'
+        assert body == theme_library.metadata(css)[1]
+        assert value.count(theme_library.MARKER) == 1
+    assert current['fingerprint'] == updated['fingerprint'] == hashlib.sha256(raw).hexdigest()
+    assert package.manifest['licenses'] == MANIFEST['licenses']
+    for path in ('assets/paper.png', 'assets/body.woff', 'licenses/OFL.txt'):
+        assert package.files[path] == contents()[path]
+    assert app.state['theme'] == before_theme
+
+
+@pytest.mark.parametrize('incoming,match', [
+    ({'licenses/Additional.txt': 'A different attribution.\n'}, 'conflicting license'),
+    ({'licenses/additional.txt': 'Additional required attribution.\n'}, 'conflict by case'),
+    ({'licenses/ADDITIONAL.txt': 'A different attribution.\n'}, 'conflict by case'),
+    ({'licenses/ofl.txt': LICENSE}, 'conflict by case'),
+])
+async def test_css_update_rejects_prior_notice_body_and_case_conflicts_atomically(app, incoming, match):
+    retained = {'licenses/OFL.txt': LICENSE, 'licenses/Additional.txt': 'Additional required attribution.\n'}
+    saved = await imported(app, packageBase64=encoded(raw_zip(contents(notice_css(retained)))))
+    path = Path(saved['directory']) / saved['id'][6:]
+    before, original = path.read_bytes(), await read(app, saved)
+    before_theme = deepcopy(app.state['theme'])
+    with pytest.raises(AppError, match=match):
+        await dispatch(app, 'theme.update', {
+            'id': saved['id'], 'expectedFingerprint': saved['fingerprint'],
+            'name': 'Conflicting', 'css': notice_css(incoming),
+        })
+    assert path.read_bytes() == before and list(path.parent.iterdir()) == [path]
+    assert await read(app, saved) == original
+    assert app.state['theme'] == before_theme
+
+
+@pytest.mark.parametrize('retained,incoming,match', [
+    ({f'licenses/Old-{i}.txt': 'Required attribution.\n' for i in range(124)},
+     {'licenses/New-1.txt': 'New attribution.\n', 'licenses/New-2.txt': 'Other attribution.\n'},
+     'too many retained'),
+    ({'licenses/Old.txt': 'L' * 550_000}, {'licenses/New.txt': 'N' * 550_000}, '1 MB'),
+])
+async def test_css_update_validates_combined_notice_bounds_before_publication(app, retained, incoming, match):
+    saved = await imported(app, packageBase64=encoded(raw_zip(contents(notice_css(retained)))))
+    path = Path(saved['directory']) / saved['id'][6:]
+    before, original = path.read_bytes(), await read(app, saved)
+    with pytest.raises(AppError, match=match):
+        await dispatch(app, 'theme.update', {
+            'id': saved['id'], 'expectedFingerprint': saved['fingerprint'],
+            'name': 'Too many notices', 'css': notice_css(incoming),
+        })
+    assert path.read_bytes() == before and list(path.parent.iterdir()) == [path]
+    assert await read(app, saved) == original
 
 
 async def test_unchanged_zip_listings_compile_once_cache_only_metadata_and_full_read_recompiles(app, monkeypatch):

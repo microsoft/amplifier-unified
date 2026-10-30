@@ -326,17 +326,39 @@ def notices(css):
     return value
 
 
-def compile_css(css, manifest, files):
-    """Rewrite URL tokens/URL-bearing string forms, not text or regex matches."""
-    from .service import validate_theme
-    from .theme_library import metadata, portable, MARKER
+def merge_notices(*sources):
+    """Merge validated notice maps without replacing existing attribution."""
+    retained = {}
+    paths = {}
+    for source in sources:
+        for name, notice in source.items():
+            if name in retained and retained[name] != notice:
+                reject('conflicting license notice bodies for ' + name)
+            if name.casefold() in paths and paths[name.casefold()] != name:
+                reject('license notice paths conflict by case.')
+            retained[name] = notice
+            paths[name.casefold()] = name
+    if len(retained) > MEMBER_COUNT - 2:
+        reject('too many retained license notices for a portable appearance.')
+    return retained
+
+
+def stylesheet_metadata(css):
+    from .theme_library import metadata
     if not css.strip():
         reject('the stylesheet is empty.')
     if len(css.encode('utf-8')) > CSS_LIMIT:
         reject('the source stylesheet exceeds the 1 MB runtime limit.')
     if '</style' in css.lower():
         reject('a stylesheet must contain CSS only.')
-    _, body = metadata(css)
+    return metadata(css)
+
+
+def compile_css(css, manifest, files):
+    """Rewrite URL tokens/URL-bearing string forms, not text or regex matches."""
+    from .service import validate_theme
+    from .theme_library import portable, MARKER
+    meta, body = stylesheet_metadata(css)
     try:
         rules = tinycss2.parse_stylesheet(body, skip_comments=False, skip_whitespace=False)
     except RecursionError:
@@ -406,17 +428,9 @@ def compile_css(css, manifest, files):
                 if children:
                     visit(children, depth + 1)
     visit(rules)
-    meta, _ = metadata(css)
-    retained = dict(notices(css))
-    for name in manifest.get('licenses', []):
-        notice = files[name].decode('utf-8')
-        if name in retained and retained[name] != notice:
-            reject('conflicting license notice bodies for ' + name)
-        if any(path.casefold() == name.casefold() and path != name for path in retained):
-            reject('license notice paths conflict by case.')
-        retained[name] = notice
-    if len(retained) > MEMBER_COUNT - 2:
-        reject('too many retained license notices for a portable appearance.')
+    retained = merge_notices(notices(css), {
+        name: files[name].decode('utf-8') for name in manifest.get('licenses', [])
+    })
     if sum(len(body.encode('utf-8')) for body in retained.values()) > CSS_LIMIT:
         reject('compiled CSS including license notices exceeds the 1 MB runtime limit.')
     if retained:
@@ -493,12 +507,24 @@ def encode(files):
 
 
 def with_metadata(package, name=None, description=None, css=None):
+    from .theme_library import metadata, MARKER
     manifest, files = dict(package.manifest), dict(package.files)
     if name is not None:
         manifest['name'] = name.strip()
     if description is not None:
         manifest['description'] = description
     if css is not None:
+        meta, body = stylesheet_metadata(css)
+        previous, _ = metadata(package.css)
+        retained = merge_notices(notices(package.css), notices(css))
+        if retained:
+            meta[NOTICE_KEY] = retained
+        if 'author' not in meta and 'author' in previous:
+            meta['author'] = previous['author']
+        # Preserve attribution carried only by the validated portable header,
+        # not just the license files declared in the original manifest.
+        header = MARKER + json.dumps(meta, ensure_ascii=True).replace('*/', '*\\/').replace('<', '\\u003c') + ' */\n'
+        css = header + body
         files[manifest['stylesheet']] = css.encode('utf-8')
     files['appearance.json'] = json.dumps(manifest, ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode('utf-8')
     return validate_files(files)
