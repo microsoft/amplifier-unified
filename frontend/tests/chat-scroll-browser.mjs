@@ -4,14 +4,14 @@ import {readComposerDraft} from './composer-test-helpers.mjs';
 // Vite serves source directly, so this regression does not rebuild static assets.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {once} from 'node:events';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u','-c',`
-import asyncio, json, sys, tempfile
+import asyncio, json, signal, sys, tempfile
 from pathlib import Path
 from aiohttp import web
 sys.path.insert(0, ${JSON.stringify(fileURLToPath(new URL('../../tests/fixtures',import.meta.url)))})
@@ -37,6 +37,9 @@ class ScrollRuntime(fixture.ChatRuntime):
   return {'accepted':True,'inputId':input_id}
 fixture.fixture.Runtime=ScrollRuntime
 async def main():
+ stopped=asyncio.Event()
+ loop=asyncio.get_running_loop()
+ for sig in (signal.SIGTERM,signal.SIGINT):loop.add_signal_handler(sig,stopped.set)
  with tempfile.TemporaryDirectory(prefix='amplifier-scroll-ui-') as home:
   app=await fixture.fixture.main(Path(home))
   service=app['service']
@@ -64,15 +67,20 @@ async def main():
    await service.on_runtime_event('assistant.message', {'sessionId':session['id'], 'text':'Fresh reply received while this tab was hidden.'})
    return web.json_response({'ok':True})
   app.router.add_post('/api/fixture/hidden-reply', hidden_reply)
-  runner=web.AppRunner(app);await runner.setup()
-  site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
-  port=site._server.sockets[0].getsockname()[1]
-  app['allowed_origins']=app['allowed_origins']|{f'http://127.0.0.1:{port}'}
-  print(json.dumps({'port':port}),flush=True)
-  try:await asyncio.Event().wait()
+  runner=web.AppRunner(app)
+  try:
+   await runner.setup()
+   site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
+   port=site._server.sockets[0].getsockname()[1]
+   app['allowed_origins']=app['allowed_origins']|{f'http://127.0.0.1:{port}'}
+   print(json.dumps({'port':port}),flush=True)
+   await stopped.wait()
   finally:await runner.cleanup()
 asyncio.run(main())
 `],{stdio:['ignore','pipe','pipe']});
+const stopFixture=ownFixture(fixture,{label:'Scroll fixture'});
+const fixtureReceipts={exit:null,close:null};
+for(const event of ['exit','close'])fixture.once(event,(code,signal)=>{fixtureReceipts[event]={pid:fixture.pid,code,signal}});
 let fixtureLog='',fixtureOutput='';const fixtureAcks=[],sendTrace=[],transports=[];
 const acceptedCanonical=(messages,inputId)=>messages.length===1&&messages[0].role==='user'&&
  messages[0].inputId===inputId&&messages[0].id!==inputId&&messages[0].delivery==='accepted';
@@ -83,7 +91,7 @@ const abortHeldSend=async route=>{
  try{await route.abort('failed');sendTrace.push({phase:'aborted',inputId})}
  catch(error){routeAbortFailed=true;sendTrace.push({phase:'abort-gap',inputId,errorClass:error.name})}
 };
-fixture.stderr.on('data',chunk=>{fixtureLog+=chunk});
+fixture.stderr.on('data',chunk=>{fixtureLog=(fixtureLog+chunk).slice(-8192)});
 fixture.stdout.on('data',chunk=>{
  fixtureOutput+=chunk;
  const lines=fixtureOutput.split('\n');fixtureOutput=lines.pop();
@@ -550,23 +558,34 @@ try{
  console.log('Chat navigator tooltip removal, visible turns, preview placement/resize and scroll browser checks passed: delayed send receipt, reply start anchoring, jump button, streaming scrollback, draft preservation and reading position on chat switch/reload.');
 }catch(error){primaryFailure=error;throw error}
 finally{
- await finishScrollFlow(primaryFailure?'failed':'scenario-passed');
- for(const route of [...heldSendRoutes.keys()])await abortHeldSend(route);
+ let cleanupFailure,heldRoutesSettled=false;
  try{
-  const sse=await page?.evaluate(()=>{const evidence=window.scrollAckEvidence;if(!evidence)return null;
-   evidence.sample();evidence.unsubscribe();delete window.scrollAckEvidence;return {rows:evidence.rows,gaps:evidence.gaps}});
-  console.log('SCROLL-SEND-ACK-EVIDENCE',JSON.stringify({requests:sendTrace,fixture:fixtureAcks,transports,stream:sse}));
- }catch(error){console.error('SCROLL-SEND-ACK-EVIDENCE-GAP',error.name)}
- const cleanupErrors=[];
- const clean=async(phase,action)=>{try{await action()}catch(error){cleanupErrors.push({phase,error});}};
- // An unsuccessful abort is not permission to continue the held request.
- if(!routeAbortFailed)await clean('unroute',()=>page?.unrouteAll({behavior:'ignoreErrors'}));
- await clean('browser-close',()=>browser?.close());
- await clean('vite-close',()=>vite?.close());
- await clean('fixture-exit',async()=>{if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit')}});
- try{console.log('SCROLL-CLEANUP',JSON.stringify({routeAbortFailed,errors:cleanupErrors.map(({phase,error})=>({phase,errorClass:error.name}))}))}catch{}
+  await finishFixture({label:'Scroll fixture',close:[
+   ['scroll-flow evidence',()=>finishScrollFlow(primaryFailure?'failed':'scenario-passed')],
+   ['held-send aborts',async()=>{
+    for(const route of [...heldSendRoutes.keys()])await abortHeldSend(route);
+    heldRoutesSettled=true;
+   }],
+   ['scroll-send ack evidence',async()=>{
+    try{
+     const sse=await page?.evaluate(()=>{const evidence=window.scrollAckEvidence;if(!evidence)return null;
+      evidence.sample();evidence.unsubscribe();delete window.scrollAckEvidence;return {rows:evidence.rows,gaps:evidence.gaps}});
+     console.log('SCROLL-SEND-ACK-EVIDENCE',JSON.stringify({requests:sendTrace,fixture:fixtureAcks,transports,stream:sse}));
+    }catch(error){console.error('SCROLL-SEND-ACK-EVIDENCE-GAP',error.name)}
+   }],
+   // An unsuccessful or still-pending abort is not permission to forward a request.
+   ['unroute',()=>{if(!routeAbortFailed&&heldRoutesSettled)return page?.unrouteAll({behavior:'ignoreErrors'})}],
+   ['browser-close',()=>browser?.close()],
+   ['vite-close',()=>vite?.close()],
+  ],stop:stopFixture});
+ }catch(error){cleanupFailure=error;console.error(error)}
+ try{
+  console.log('SCROLL-CLEANUP',JSON.stringify({routeAbortFailed,heldRoutesSettled,fixture:fixtureReceipts,
+   errors:(cleanupFailure?.errors||[]).map(error=>({errorClass:error.name,message:error.message}))}));
+  if(primaryFailure||routeAbortFailed||cleanupFailure)console.error('SCROLL-FIXTURE-STDERR',fixtureLog);
+ }catch{}
  if(!primaryFailure){
   if(routeAbortFailed)throw Error('Held send route abort was not confirmed');
-  if(cleanupErrors.length)throw cleanupErrors[0].error;
+  if(cleanupFailure)throw cleanupFailure;
  }
 }

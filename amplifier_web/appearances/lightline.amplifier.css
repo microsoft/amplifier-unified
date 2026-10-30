@@ -28,6 +28,7 @@
  --ll-paths:linear-gradient(90deg,transparent 0 7%,var(--ll-trace) 7% calc(7% + 1px),transparent calc(7% + 1px) 92%,var(--ll-trace) 92% calc(92% + 1px),transparent calc(92% + 1px)),linear-gradient(0deg,transparent 0 48px,var(--ll-trace) 48px 49px,transparent 49px 96px);
  --a-font:var(--ll-ui);
  --a-chrome-bg:var(--ll-header);--a-chrome-ink:var(--a-ink);
+ --a-radius:8px;
  --a-panel-gap:6px;--a-panel-radius:8px;--a-panel-border-width:1px;--a-panel-line:var(--a-line);--a-panel-shadow:none;
  --a-card-radius:7px;--a-control-radius:5px;--a-composer-radius:10px;--a-message-radius:8px;
  --a-card-line:var(--a-line);--a-composer-line:var(--ll-edge);--a-surface-shadow:none;

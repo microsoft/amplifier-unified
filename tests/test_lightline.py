@@ -17,7 +17,7 @@ from test_canvas_apps import app, dispatch
 from test_digital_rain import luminance
 
 
-CANDIDATE_SHA256 = "b5b8c804d89ca226304d9f8c47273926e0e8ba51fe6015a40be4a73a736af9a6"
+CANDIDATE_SHA256 = "a51a7455730e5123ef9e1df182971fa0aa30d75b4fd34f67311a5e9902e31dd5"
 PALETTE = {
     "bg": "#efefec", "surface": "#fffffc", "ink": "#242a2e",
     "accent": "#315d6b", "line": "#a0a8aa",
@@ -112,6 +112,7 @@ def test_lightline_authored_light_and_dark_scheme_tokens():
         if token in PALETTE:
             assert pair[1] == PALETTE[token]
     assert root["--a-navigation-art"] == root["--a-conversation-art"] == root["--a-canvas-art"] == "none"
+    assert root["--a-radius"] == "8px", "Dialogs and work panels use the intentional shared corner token"
 
 
 @pytest.mark.parametrize("mode", [0, 1], ids=["light", "dark"])

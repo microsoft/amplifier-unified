@@ -125,9 +125,9 @@ try{
   const sample=await locator.evaluate(el=>{
    const s=getComputedStyle(el),ancestors=[];
    for(let node=el;node;node=node.parentElement){const v=getComputedStyle(node);
-    ancestors.push({background:v.backgroundColor,opacity:Number(v.opacity)})}
+    ancestors.push({background:v.backgroundColor,image:v.backgroundImage,opacity:Number(v.opacity)})}
    return {color:s.color,outline:s.outlineColor,outlineStyle:s.outlineStyle,outlineWidth:parseFloat(s.outlineWidth),
-    focusVisible:el.matches(':focus-visible'),ancestors};
+    outlineOffset:parseFloat(s.outlineOffset),focusVisible:el.matches(':focus-visible'),ancestors};
   });
   let bg=[255,255,255,1];for(const row of [...sample.ancestors].reverse())bg=over(rgb(row.background),bg);
   const opacity=sample.ancestors.reduce((v,row)=>v*row.opacity,1);
@@ -141,8 +141,20 @@ try{
   const value=await colors(locator,label);
   assert.equal(value.focusVisible,true,label+' receives keyboard :focus-visible');
   assert.notEqual(value.outlineStyle,'none');assert.ok(value.outlineWidth>=2);
-  assert.ok(ratio(rgb(value.outline),value.background)>=3,label+' focus outline contrast');
-  return {label,contrast:value.contrast,outline:value.outline,outlineWidth:value.outlineWidth};
+  assert.ok(value.outlineOffset>=0,label+' focus ring is outside the control');
+  // An offset ring sits on the surrounding surface, not the button's own fill.
+  // Composite the ancestor paint separately; reject an uncovered image rather
+  // than inventing flat-color contrast over artwork.
+  const surrounding=value.ancestors.slice(1),opaque=surrounding.findIndex(row=>rgb(row.background)[3]===1);
+  assert.ok(opaque>=0,label+' surrounding paint has an opaque backing');
+  const visible=surrounding.slice(0,opaque+1);
+  assert.ok(visible.every(row=>row.image==='none'),label+' surrounding ring paint is not image-dependent');
+  let background=[255,255,255,1];for(const row of [...visible].reverse())background=over(rgb(row.background),background);
+  const ring=rgb(value.outline);ring[3]*=value.opacity;
+  const outlineContrast=ratio(over(ring,background),background);
+  assert.ok(outlineContrast>=3,`${label} external focus outline contrast ${outlineContrast.toFixed(2)}`);
+  return {label,contrast:value.contrast,outline:value.outline,outlineWidth:value.outlineWidth,
+   surroundingBackground:background,outlineContrast};
  };
  const apply=async theme=>{
   await action('theme.apply',{name:theme.name,css:theme.css});
@@ -241,9 +253,22 @@ try{
   const normal=await paint();assert.equal(normal.animation,'none','Lightline paint is static');
   await settled();assert.deepEqual(await paint(),normal,'Static paint across actual frames');
   await page.emulateMedia({reducedMotion:'reduce'});await settled();assert.deepEqual(await paint(),normal);
+  let baseline;
+  if(surface==='chat'){
+   await checkFade('decorations-on middle','middle',{above:true,below:true});
+   const middle=await layout();
+   await checkFade('decorations-on end','end',{above:true,below:false});
+   baseline={middle,end:await layout()};
+  }
   await presentation({decorations:false});await expect(app).toHaveAttribute('data-decorations','off');
   await expect.poll(async()=>(await paint()).image).toBe('none');
   const disabled=await paint();assert.equal(disabled.animation,'none');
+  if(surface==='chat'){
+   await checkFade('decorations-off middle','middle',{above:true,below:true});
+   assert.deepEqual(await layout(),baseline.middle,'Artwork off preserves native middle geometry and functional fade');
+   await checkFade('decorations-off end','end',{above:true,below:false});
+   assert.deepEqual(await layout(),baseline.end,'Artwork off leaves final content opaque without moving controls');
+  }
   await presentation({decorations:true});await page.emulateMedia({reducedMotion:'no-preference'});
   await expect.poll(paint).toEqual(normal);
   report.cases.push({kind:'media',surface,scheme:await app.getAttribute('data-theme-scheme'),normal,disabled});
