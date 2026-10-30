@@ -58,7 +58,8 @@ async def test_rejected_child_options_preserve_retained_history_before_effects(t
     runtime=SimpleNamespace(inbox=asyncio.Queue())
     children=Children(runtime,SessionStore(tmp_path/'children'),None)
     config={'agents':{'worker':{}}}
-    parent=SimpleNamespace(session_id='parent',coordinator=SimpleNamespace(config=config))
+    parent=SimpleNamespace(session_id='parent',coordinator=SimpleNamespace(
+        config=config,get_capability=lambda name: None))
     children.prepared['parent']=object()
     children.rows={f'completed-{index}':{'status':'completed','reportId':f'report-{index}'} for index in range(256)}
     original=copy.deepcopy(children.rows)
