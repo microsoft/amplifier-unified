@@ -55,14 +55,10 @@ def finishing_turn(service, session, call, drain=None, child=None):
             # The private runtime bridge supplies this from its exact native
             # boundary marker; public tool arguments cannot supply it.
             if drain.get('kind') == 'root':
-                observed = service.runtime.workers[sid].get('handoffDrainInputs') or {}
-                additions = set(observed.get('byJob', {}).values()) if observed.get('handoffId') == record['id'] else set()
-                original = set(drain.get('inputIds') or [])
-                current = set(active.get('inputIds') or [])
                 return (call.get('sessionId') == native and not active.get('terminal')
                         and drain.get('generationId') == active.get('id')
-                        and bool(original) and original <= current <= original | additions
-                        and input_id(call) in original)
+                        and drain.get('inputIds') == active.get('inputIds')
+                        and input_id(call) in active.get('inputIds', []))
         if (isinstance(child, dict) and call.get('sessionId') != native
                 and child.get('sessionId') == call.get('sessionId') and child.get('runId')
                 and input_id(call) in record.get('sourceInputIds', [])):

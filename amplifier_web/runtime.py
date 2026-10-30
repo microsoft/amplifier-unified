@@ -223,9 +223,7 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
                 "input.delivered": "working"}
     if kind in statuses:
         return "runtime.status", {**base, "status": statuses[kind], "event": kind,
-            **({"inputId": event["input_id"]} if "input_id" in event else {}),
-            **({'_handoffCompletion': event['_handoffCompletion']}
-               if kind == 'input.delivered' and isinstance(event.get('_handoffCompletion'), dict) else {})}
+            **({"inputId": event["input_id"]} if "input_id" in event else {})}
     if kind in {"provider.error", "persistence.failed", "command.rejected", "native.error"}:
         return "runtime.error", {**base, "error": event.get("reason") or event.get("error_type") or kind,
                                   "event": kind, "errorType": event.get("error_type")}

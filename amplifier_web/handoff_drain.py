@@ -31,6 +31,29 @@ def native_child(worker, call):
     return result
 
 
+def own_target(worker, args):
+    """Omitted and host-supplied aliases identify this worker, never a peer."""
+    if not worker.session or args.get('_runtimeSessionId') != worker.session.session_id:
+        return False
+    owner = (worker.start_config or {}).get('ownerSessionId')
+    return args.get('args', {}).get('sessionId') in {None, worker.session.session_id, owner}
+
+
+async def late_reply(worker, data):
+    """A lost waiter does not discard the exact command's later disposition."""
+    marker = getattr(worker, '_handoff_boundary', None) or {}
+    drain = marker.get('drain') or {}
+    if data.get('id') != drain.get('bridgeId') or not drain.get('bridgeId'):
+        return
+    result = data.get('result')
+    if isinstance(data.get('_handoffDisposition'), dict):
+        await finish(worker, data['_handoffDisposition'])
+    elif isinstance(result, dict) and result.get('accepted') is True:
+        await finish(worker, result.get('result'))
+    elif isinstance(result, dict) and result.get('accepted') is False:
+        await finish(worker, {'id': marker['id'], 'phase': 'absent'})
+
+
 async def begin(worker, command_id):
     """Freeze new delegation before sending the action, without cancelling work.
 
@@ -123,7 +146,8 @@ async def finish(worker, receipt):
             and not receipt.get('reconciles') and not receipt.get('release')
             and receipt.get('finishingTurn', {}).get('nativeDrain') == marker['drain']['snapshot']):
         marker['drain']['binding'] = copy.deepcopy(receipt['finishingTurn'])
-    elif receipt.get('phase') in {'absent', 'rejected', 'applied'}:
+    elif (receipt.get('phase') in {'rejected', 'applied'}
+          or receipt.get('phase') == 'absent' and not marker['drain']['binding']):
         from .handoff_boundary import inspect
         await inspect(worker, marker['id'], cancel=True)
 
@@ -140,8 +164,6 @@ def observe(worker, event):
         if (sid == root and loop.jobs.get(identity) is job and job.get('call_id') == event['call_id']
                 and job.get('status') in {'returned', 'failed', 'cancelled'}):
             drain['inputs'][event['input_id']] = event['call_id']
-            event['_handoffCompletion'] = {'handoffId': marker['id'], 'jobId': identity,
-                                           'callId': event['call_id']}
             break
 
 
@@ -179,7 +201,7 @@ def failed_disposition(service, sid, operation, args):
     if (operation not in {'dispatch', 'action.dispatch'} or args.get('action') != 'worktree.handoff'
             or not isinstance(args.get('_handoffSnapshot'), dict) or not args.get('id')
             or PRINCIPAL.get() != (session.get('runtimeSessionId') or sid)
-            or args.get('args', {}).get('sessionId') not in {sid, session.get('runtimeSessionId')}):
+            or args.get('args', {}).get('sessionId') not in {None, sid, session.get('runtimeSessionId')}):
         return None
     identity = str(uuid.uuid5(uuid.NAMESPACE_URL, 'worktree-handoff:' + args['id']))
     path = service.worktrees.receipt_dir / (identity + '.json')
@@ -191,33 +213,3 @@ def failed_disposition(service, sid, operation, args):
             return {'id': identity, 'phase': 'absent'}
         return None
     return receipt_disposition(service.worktrees.read(sid, identity))
-
-
-def observe_host(service, session, kind, payload):
-    """Bound completion additions to one live worker and its pending receipt."""
-    evidence = payload.get('_handoffCompletion')
-    if (kind != 'runtime.status' or payload.get('event') != 'input.delivered'
-            or not isinstance(evidence, dict) or not payload.get('inputId')):
-        return
-    try:
-        from .handoff_admission import finishing_turn
-        record = service.worktrees.read(session['id'], evidence['handoffId'])
-        binding = record.get('finishingTurn') or {}
-        native = session.get('runtimeSessionId') or session['id']
-        job = {'ownerSessionId': native, 'jobId': evidence.get('jobId'), 'callId': evidence.get('callId')}
-        if job not in binding.get('nativeDrain', {}).get('jobs', []):
-            return
-        active = session.get('collaborationGeneration') or {}
-        call = {'rootSessionId': native, 'sessionId': native, 'admissionInputId': payload['inputId']}
-        proof = {'handoffId': record['id'], 'finishingTurn': binding, 'kind': 'root',
-                 'generationId': active.get('id'), 'inputIds': active.get('inputIds')}
-        if not finishing_turn(service, session, call, proof):
-            return
-        worker = service.runtime.workers[session['id']]
-        state = worker.get('handoffDrainInputs')
-        if not state or state['handoffId'] != record['id']:
-            state = worker['handoffDrainInputs'] = {'handoffId': record['id'], 'byJob': {}}
-        # One input per captured job; repeated or changed evidence cannot add IDs.
-        state['byJob'].setdefault(evidence['jobId'], payload['inputId'])
-    except (KeyError, OSError, TypeError, ValueError):
-        return

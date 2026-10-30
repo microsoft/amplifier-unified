@@ -4440,9 +4440,6 @@ class AppService:
                 activity.update({'phase': 'tools', 'label': 'Running tools'})
             session['progress'] = {key: payload[key] for key in ('phase', 'detail', 'elapsedSeconds') if key in payload}
         changed = self.collaboration.observe(session, kind, payload)
-        if payload.get('_handoffCompletion'):
-            from .handoff_drain import observe_host
-            observe_host(self, session, kind, payload)
         from .conversation_steering import observe as observe_steering
         observe_steering(self, session, kind, payload)
         return {session['id']} | changed
@@ -4833,9 +4830,6 @@ class AppService:
                     payload.get('preparationProgress') and payload.get('status') == 'starting')) or (
                 kind == 'execution.event' and payload.get('phase') in {'running', 'working', 'streaming'})
             collaboration_changed = self.collaboration.observe(session, kind, payload)
-            if payload.get('_handoffCompletion'):
-                from .handoff_drain import observe_host
-                observe_host(self, session, kind, payload)
             if (kind == 'runtime.generation' and root_generation
                     and payload.get('event') == 'generation.failed'
                     and session.get('status') not in {'stopped', 'stopping'}):

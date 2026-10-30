@@ -31,7 +31,7 @@ async def test_native_child_and_return_observation_settle_before_move(app, child
     events, admissions = [], []
     projection = None
     transmitted, root_second = asyncio.Event(), asyncio.Event()
-    second_delivered = asyncio.Event()
+    second_delivered, second_returned = asyncio.Event(), asyncio.Event()
     started_children = set()
     worker = Worker()
     control = controls(sid)
@@ -45,6 +45,9 @@ async def test_native_child_and_return_observation_settle_before_move(app, child
             await app.on_runtime_event(*normalized)
         if event['type'] == 'generation.finished':
             first_finished.set()
+        if event['type'] == 'job.returned' and event.get('call_id') == 'child-two':
+            second_returned.set()
+            app.coordination.notify()
         if event['type'] == 'input.delivered' and event.get('call_id') == 'child-two':
             second_delivered.set()
             app.coordination.notify()
@@ -184,7 +187,8 @@ async def test_native_child_and_return_observation_settle_before_move(app, child
                 await child_started.wait()
                 return ChatResponse(content=[], tool_calls=[ToolCall(id='move-once', name='move', arguments={})])
             if self.calls >= (3 if child_phase in {'already-waiting', 'in-transit'} else 4):
-                observed.set()
+                if child_phase != 'root-waiter' or second_delivered.is_set():
+                    observed.set()
             return ChatResponse(content=[TextBlock(text='The current work is saved.')])
 
     if child_phase == 'already-waiting':
@@ -192,12 +196,12 @@ async def test_native_child_and_return_observation_settle_before_move(app, child
         await limits(app, saved, maxConcurrentCalls=1)
     provider, move = Provider(), Move()
     if child_phase == 'root-waiter':
-        # Hold the real host capacity waiter until both native results have
-        # joined its generation. Only the availability timing is controlled.
+        # Hold the host capacity waiter until the second native job returns.
+        # Native input delivery still owns its request/turn boundary.
         original_admission = app.assignments.admission
         def capacity_after_both(session, row):
             result = original_admission(session, row)
-            if first_finished.is_set() and row.get('sessionId') == sid and not second_delivered.is_set():
+            if first_finished.is_set() and row.get('sessionId') == sid and not second_returned.is_set():
                 return {**result, 'allowed': False, 'waiting': True, 'reasons': ['Fixture capacity is occupied.']}
             return result
         monkeypatch.setattr(app.assignments, 'admission', capacity_after_both)
@@ -215,7 +219,7 @@ async def test_native_child_and_return_observation_settle_before_move(app, child
             pytest.fail(str({'admissions': admissions, 'events': [event for event in events
                 if event['type'] in {'generation.started', 'generation.finished', 'generation.detached', 'job.returned', 'job.cancelled'}],
                 'nativeError': repr(task.exception()) if task.done() and not task.cancelled() else None}))
-        assert provider.calls == (3 if child_phase in {'already-waiting', 'in-transit'} else 4)
+        assert provider.calls == (3 if child_phase in {'already-waiting', 'in-transit'} else 5 if child_phase == 'root-waiter' else 4)
         assert not any(event['type'] in {'generation.failed', 'generation.detached', 'job.cancelled'} for event in events), str({'admissions': admissions, 'events': [e for e in events if e['type'] in {'generation.failed', 'generation.detached', 'job.cancelled', 'job.returned'}], 'binding': move.receipt.get('finishingTurn')})
         assert sum(event['type'] == 'job.returned' for event in events) == (2 if child_phase == 'root-waiter' else 1)
         if child_phase == 'root-waiter':

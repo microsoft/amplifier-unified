@@ -126,15 +126,17 @@ class Worker:
             args.update(_handoffDrain=witness(self, args.get('call') or {}),
                         _nativeChild=native_child(self, args.get('call') or {}))
         handoff_marker = None
+        from amplifier_web.handoff_drain import own_target
         if (operation in {'dispatch', 'action.dispatch'} and args.get('action') == 'worktree.handoff'
-                and self.session and args.get('_runtimeSessionId') == self.session.session_id
-                and args.get('args', {}).get('sessionId') == self.session.session_id):
+                and own_target(self, args)):
             from amplifier_web.handoff_drain import begin
             snapshot = await begin(self, args.get('id'))
             if snapshot is not None:
                 args['_handoffSnapshot'] = snapshot
                 handoff_marker = self._handoff_boundary['id']
         identity = str(uuid.uuid4())
+        if handoff_marker:
+            self._handoff_boundary['drain'].setdefault('bridgeId', identity)
         future = asyncio.get_running_loop().create_future()
         self.bridges[identity] = future
         cancelled = False
@@ -1375,6 +1377,18 @@ class Worker:
                         future.set_exception(error)
                     else:
                         future.set_result(data.get("result"))
+                else:
+                    from amplifier_web.handoff_drain import late_reply
+                    try:
+                        await late_reply(self, data)
+                    except Exception as exc:
+                        # A failed cleanup keeps the marker; it cannot change a
+                        # completed action or make an unknown move retryable.
+                        try:
+                            publish({'type': 'runtime.bridge', 'bridgeId': identity,
+                                     'phase': 'handoff-drain-unavailable', 'errorType': type(exc).__name__})
+                        except Exception:
+                            pass
                 return
             if op == "resume":
                 if not self.session or not self.execution or self.execution.done():

@@ -16,7 +16,8 @@ def identity(command='move'):
 
 
 @pytest.mark.parametrize('after_commit', [False, True])
-async def test_failed_handler_reports_exact_absence_or_committed_receipt(app, monkeypatch, after_commit):
+@pytest.mark.parametrize('omitted', [False, True])
+async def test_failed_handler_reports_exact_absence_or_committed_receipt(app, monkeypatch, after_commit, omitted):
     session = app._session()
     sid = session['id']
     target = await checkout(app, sid)
@@ -26,6 +27,8 @@ async def test_failed_handler_reports_exact_absence_or_committed_receipt(app, mo
             '_generationId': session['collaborationGeneration']['id'],
             '_inputBindings': [{'inputId': 'originating-input'}],
             '_handoffSnapshot': {'children': [], 'jobs': []}}
+    if omitted:
+        args['args'].pop('sessionId')
     if after_commit:
         original = app._bound_app_bridge
         async def fail_after_handler(*values):
@@ -118,3 +121,92 @@ async def test_failed_disposition_cleanup_does_not_replace_original_error(worker
         await value.bridge('dispatch', {'action': 'worktree.handoff', 'id': 'move',
             '_runtimeSessionId': 'root', 'args': {'sessionId': 'root', 'id': None}})
     assert children.admission_gate and value._handoff_boundary['id'] == identity()
+
+
+@pytest.mark.parametrize('target', ['native', 'omitted', 'canonical', 'peer'])
+async def test_only_own_handoff_forms_freeze_native_admission(worker, monkeypatch, target):
+    value, children = worker
+    value.start_config = {'ownerSessionId': 'canonical-owner'}  # Host start configuration, not tool input.
+    sent = []
+    def publish(message):
+        if message.get('op') == 'bridge':
+            sent.append(message)
+            value.bridges[message['id']].set_result({'accepted': False})
+    monkeypatch.setattr('amplifier_web.runtime_worker.publish', publish)
+    values = {'id': 'checkout'}
+    if target != 'omitted':
+        values['sessionId'] = {'native': 'root', 'canonical': 'canonical-owner', 'peer': 'different-chat'}[target]
+    await value.bridge('action.dispatch', {'action': 'worktree.handoff', 'id': 'move',
+        '_runtimeSessionId': 'root', 'args': values})
+    assert ('_handoffSnapshot' in sent[0]['args']) is (target != 'peer')
+    assert getattr(value, '_handoff_boundary', None) is None and children.admission_gate is None
+
+
+@pytest.mark.parametrize('ending', ['cancel', 'timeout'])
+@pytest.mark.parametrize('reply', ['absent', 'pending', 'mismatch', 'unknown'])
+async def test_exact_late_reply_reconciles_after_bridge_waiter_is_gone(worker, monkeypatch, ending, reply):
+    value, children = worker
+    sent, messages = asyncio.Event(), []
+    def publish(message):
+        if message.get('op') == 'bridge':
+            messages.append(message)
+            sent.set()
+    monkeypatch.setattr('amplifier_web.runtime_worker.publish', publish)
+    if ending == 'timeout':
+        original_wait = asyncio.wait_for
+        async def short_wait(awaitable, timeout):
+            return await original_wait(awaitable, 0.001)
+        monkeypatch.setattr('amplifier_web.runtime_worker.asyncio.wait_for', short_wait)
+    task = asyncio.create_task(value.bridge('dispatch', {'action': 'worktree.handoff', 'id': 'move',
+        '_runtimeSessionId': 'root', 'args': {}}))
+    await sent.wait()
+    if ending == 'cancel':
+        task.cancel()
+    with pytest.raises(asyncio.CancelledError if ending == 'cancel' else TimeoutError):
+        await task
+    assert not value.bridges and children.admission_gate
+    response = {'op': 'bridge.result', 'id': messages[0]['id'], 'error': 'late validation failure'}
+    if reply == 'absent':
+        response['_handoffDisposition'] = {'id': identity(), 'phase': 'absent'}
+    elif reply == 'mismatch':
+        response['_handoffDisposition'] = {'id': identity(), 'phase': 'absent'}
+        response['id'] = 'unrelated-bridge'
+    elif reply == 'pending':
+        response.pop('error')
+        response['result'] = {'accepted': True, 'result': {'id': identity(), 'phase': 'pending',
+            'finishingTurn': {'nativeDrain': messages[0]['args']['_handoffSnapshot']}}}
+    await value._command_serial(response)
+    assert len(messages) == 1  # No request replay.
+    if reply == 'absent':
+        assert value._handoff_boundary is None and children.admission_gate is None
+    else:
+        assert value._handoff_boundary and children.admission_gate
+        if reply == 'pending':
+            assert value._handoff_boundary['drain']['binding']
+            # A stale no-effect reply cannot erase an already-known durable move.
+            await value._command_serial({'op': 'bridge.result', 'id': messages[0]['id'],
+                'error': 'old validation failure', '_handoffDisposition': {'id': identity(), 'phase': 'absent'}})
+            assert value._handoff_boundary['drain']['binding']
+
+
+async def test_partial_hook_installation_releases_its_own_gate(worker, monkeypatch):
+    value, children = worker
+    hooks = value.session.coordinator.hooks
+    original, removed = hooks.register, []
+    def failing_registration(event, handler, **kwargs):
+        if kwargs.get('name') == 'unified-checkout-drain':
+            raise RuntimeError('fixture registration failure')
+        undo = original(event, handler, **kwargs)
+        def unregister():
+            removed.append(event)
+            undo()
+        return unregister
+    from types import SimpleNamespace
+    coordinator = value.session.coordinator
+    value.session = SimpleNamespace(session_id=value.session.session_id, coordinator=SimpleNamespace(
+        hooks=SimpleNamespace(register=failing_registration), session_state=coordinator.session_state,
+        get=coordinator.get, get_capability=coordinator.get_capability))
+    with pytest.raises(RuntimeError, match='registration failure'):
+        await begin(value, 'move')
+    assert value._handoff_boundary is None and children.admission_gate is None
+    assert removed == ['orchestrator:goal_progress']
