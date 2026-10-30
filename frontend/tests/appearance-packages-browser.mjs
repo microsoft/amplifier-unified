@@ -14,6 +14,7 @@ import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
+import {createAppearanceRequestObserver} from './appearance-request-observer.mjs';
 
 const root=realpathSync(fileURLToPath(new URL('../../',import.meta.url)));
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
@@ -168,13 +169,17 @@ function zip(mode,...args){
  return JSON.parse(result.stdout);
 }
 let browser,page,fixture,stop,failure,releaseImport,heldImport,importCalls=0,holdFinishedImport=false,finishedImportReceipt,finishedImportReleased=false,importRouteError;
-const pageErrors=[],assetFailures=[],assetChecks=[],actions=[];
+const pageErrors=[],assetFailures=[],assetChecks=[],requestObserver=createAppearanceRequestObserver(),actions=requestObserver.actions;
 const state=()=>page.evaluate(()=>window.amplifier.getState());
-const action=(name,args={})=>page.evaluate(async([name,args])=>{
- const receipt=await window.amplifier.dispatch(name,args);
- if(receipt.accepted!==true)throw Error(receipt.error||name+' rejected');
+const action=async(name,args={})=>{
+ const receipt=await page.evaluate(async([name,args])=>{
+  const receipt=await window.amplifier.dispatch(name,args);
+  if(receipt.accepted!==true)throw Error(receipt.error||name+' rejected');
+  return receipt;
+ },[name,args]);
+ requestObserver.assertHealthy();
  return receipt;
-},[name,args]);
+};
 const list=async()=>(await action('theme.list')).result.items;
 const read=async id=>(await action('theme.read',{id})).result;
 const button=name=>page.getByRole('button',{name,exact:true});
@@ -195,7 +200,10 @@ async function preserved(){
   selected:await page.getByRole('button',{name:/^Preview /,pressed:true}).getAttribute('aria-label')};
 }
 function actionResponse(name){
- return page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action===name);
+ return page.waitForResponse(response=>{
+  try{return requestObserver.matches(response.request(),name)}
+  catch(error){requestObserver.record(error,{stage:'response-predicate'});return false}
+ });
 }
 function assertImportPayload(payload,file,expectedKey){
  assert.equal(Object.hasOwn(payload.args,'packageBase64'),expectedKey==='packageBase64');
@@ -210,7 +218,8 @@ function assertImportPayload(payload,file,expectedKey){
 async function upload(file,expectedKey,{rejected=false}={}){
  const pending=actionResponse('theme.import');
  await page.locator('#theme-import').setInputFiles(file);
- const response=await pending,payload=response.request().postDataJSON(),receipt=await response.json();
+ const response=await pending,payload=requestObserver.inspect(response.request()),receipt=await response.json();
+ requestObserver.assertHealthy();
  assertImportPayload(payload,file,expectedKey);
  if(rejected){assert.equal(receipt.accepted,false);await expect(alert()).toContainText(/Invalid appearance package/i)}
  else{assert.ok(response.ok());assert.equal(receipt.accepted,true);await expect(notice()).toContainText('added to your library. Select it to preview.')}
@@ -222,7 +231,8 @@ async function download(name,args,filename){
  await button(name).click();
  const [file,result]=await Promise.all([pending,response]);
  assert.equal((await result.json()).accepted,true);
- assert.deepEqual(result.request().postDataJSON().args,args,'Export must target the selected entry, or committed current appearance, exactly.');
+ requestObserver.assertHealthy();
+ assert.deepEqual(requestObserver.inspect(result.request()).args,args,'Export must target the selected entry, or committed current appearance, exactly.');
  assert.equal(await file.failure(),null);
  const path=join(artifacts,filename);await file.saveAs(path);
  const bytes=readFileSync(path);
@@ -410,20 +420,25 @@ try{
  page.setDefaultTimeout(10000);
  page.on('pageerror',error=>pageErrors.push(error.message));
  page.on('request',request=>{
-  if(request.url().endsWith('/api/actions')){const body=request.postDataJSON();actions.push({action:body.action,argsKeys:Object.keys(body.args||{})})}
-  if(new URL(request.url()).pathname.includes('/assets/pixel.png'))assetFailures.push('Dangling local asset request: '+request.url());
+  requestObserver.observe(request);
+  try{
+   if(new URL(request.url()).pathname.includes('/assets/pixel.png'))assetFailures.push('Dangling local asset request: '+request.url());
+  }catch(error){requestObserver.record(error,{stage:'request-asset-projection'})}
  });
  page.on('response',response=>{
-  const address=new URL(response.url());
-  if(address.origin!==url||!address.pathname.startsWith('/assets/')||!['script','stylesheet'].includes(response.request().resourceType()))return;
-  assetChecks.push((async()=>{
-   assert.ok(response.ok(),'Production asset HTTP status');
-   const name='amplifier_web/static'+decodeURIComponent(address.pathname),bytes=await response.body(),digest=sha256(bytes);
-   assert.equal(digest,report.buildFiles[name],'Served bytes must equal the retained build hash.');
-   report.servedAssets.push({path:name,sha256:digest,type:response.request().resourceType()});
-  })().catch(error=>assetFailures.push(error.message)));
+  try{
+   const address=new URL(response.url());
+   if(address.origin!==url||!address.pathname.startsWith('/assets/')||!['script','stylesheet'].includes(response.request().resourceType()))return;
+   assetChecks.push((async()=>{
+    assert.ok(response.ok(),'Production asset HTTP status');
+    const name='amplifier_web/static'+decodeURIComponent(address.pathname),bytes=await response.body(),digest=sha256(bytes);
+    assert.equal(digest,report.buildFiles[name],'Served bytes must equal the retained build hash.');
+    report.servedAssets.push({path:name,sha256:digest,type:response.request().resourceType()});
+   })().catch(error=>assetFailures.push(error.message)));
+  }catch(error){requestObserver.record(error,{stage:'response-asset-projection'})}
  });
  await page.goto(url);await showFixtureConversation(page);
+ requestObserver.assertHealthy();
  await action('session.create');
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  await composer.fill('Keep this synthetic conversation draft.');
@@ -454,22 +469,26 @@ try{
  const beforeImport=await preserved();
  let hold=true;
  await page.route('**/api/actions',async route=>{
-  if(route.request().postDataJSON()?.action!=='theme.import')return route.continue();
-  importCalls++;
-  if(holdFinishedImport){
-   holdFinishedImport=false;
-   try{
+  try{
+   const body=requestObserver.inspect(route.request());
+   if(body?.action!=='theme.import')return await route.continue();
+   importCalls++;
+   if(holdFinishedImport){
+    holdFinishedImport=false;
     const response=await route.fetch({timeout:10000}),receipt=await response.json();
     assert.ok(response.ok(),'Hold only an actual successful import response.');
     assert.equal(receipt.accepted,true);
     finishedImportReceipt=receipt;
     await new Promise(resolveGate=>releaseImport=resolveGate);
     await route.fulfill({response});finishedImportReleased=true;
-   }catch(error){importRouteError=error;await route.abort().catch(()=>{})}
-   return;
+    return;
+   }
+   if(hold){heldImport=body;await new Promise(resolveGate=>releaseImport=resolveGate)}
+   await route.continue();
+  }catch(error){
+   importRouteError=error;requestObserver.record(error,{stage:'import-route'});
+   await route.abort().catch(()=>{});
   }
-  if(hold){heldImport=route.request().postDataJSON();await new Promise(resolveGate=>releaseImport=resolveGate)}
-  return route.continue();
  });
  const pendingImport=upload(packageFile,'packageBase64');
  // Attach rejection handling immediately while the original request is held.
@@ -519,7 +538,8 @@ try{
  assert.equal(JSON.parse(newerEditor).entry.id,legacyEntry.id);
  releaseImport();releaseImport=null;
  const lateResult=await lateResponse;
- assertImportPayload(lateResult.request().postDataJSON(),lateFile,'packageBase64');
+ requestObserver.assertHealthy();
+ assertImportPayload(requestObserver.inspect(lateResult.request()),lateFile,'packageBase64');
  assert.equal((await lateResult.json()).accepted,true);
  await list();
  assert.equal(finishedImportReleased,true);if(importRouteError)throw importRouteError;
@@ -639,6 +659,7 @@ try{
  assert.equal(actions.filter(row=>row.action==='theme.import').length,7,'Exactly seven intentional imports overall; no delayed duplicate or replay.');
  if(importRouteError)throw importRouteError;
  await Promise.all(assetChecks);
+ requestObserver.assertHealthy();
  assert.ok(report.servedAssets.some(row=>row.type==='script'),'Observe a production script, not a mock page.');
  assert.ok(report.servedAssets.some(row=>row.type==='stylesheet'),'Observe production styles.');
  assert.deepEqual(pageErrors,[]);assert.deepEqual(assetFailures,[]);
@@ -677,6 +698,8 @@ try{
  if(browser&&!report.browser.closeResolved){
   report.cleanupError??='Browser close did not resolve within the fixture lifecycle budget.';failure??=Error(report.cleanupError);
  }
+ report.requestObserver=requestObserver.evidence();
+ try{requestObserver.assertHealthy()}catch(error){failure??=error;report.observerError=error.message}
  report.status=failure?'failed':'passed';writeReport();
  console.log(JSON.stringify({status:report.status,artifacts,report:join(artifacts,'report.json'),phases:report.phases}));
 }
