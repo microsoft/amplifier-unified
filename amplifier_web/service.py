@@ -17,11 +17,13 @@ from weakref import WeakValueDictionary
 
 from jsonschema import validate, ValidationError
 import tinycss2
+from .errors import AppError
 from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background, interrupt_unfinished, restore_voice_usage
 from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, work_paused
 from .managed_chats import LOCATION
 from .attachments import MAX_ENCODED_BYTES
 from .performance_diagnostics import PerformanceDiagnostics, measured, TimedLock
+from .action_schema import schema, string
 
 
 def settle_stream(session):
@@ -36,15 +38,6 @@ def settle_stream(session):
             **({'streamId': identity} if identity else {}),
             **({'inputId': input_id} if input_id else {}),
         })
-
-
-def string(limit=16000):
-    return {"type": "string", "maxLength": limit}
-
-
-def schema(properties=None, required=None):
-    properties = properties or {}
-    return {"type": "object", "properties": properties, "required": list(properties) if required is None else required, "additionalProperties": False}
 
 
 def command_fingerprint(action, args, origin, client_id):
@@ -264,14 +257,6 @@ from .access_mode import definitions as access_mode_definitions
 ACTION_DEFINITIONS.update(access_mode_definitions(schema, string))
 
 
-class AppError(Exception):
-    def __init__(self, message, status=400, *, code=None, receipt=None):
-        super().__init__(message)
-        self.status = status
-        self.code = code
-        self.receipt = receipt
-
-
 def validate_theme(css):
     """Reject network-bearing or malformed skins; assets must travel with the file."""
     if not css.strip():
@@ -374,18 +359,26 @@ from .computer_visual import ComputerVisuals, definitions as computer_visual_def
 ACTION_DEFINITIONS.update(computer_visual_definitions(schema, string))
 from .worktrees import definitions as worktree_definitions
 ACTION_DEFINITIONS.update(worktree_definitions(schema, string))
+
+
+def _register_actions(definitions):
+    """Register schemas once and retain their exact names for routing."""
+    ACTION_DEFINITIONS.update(definitions)
+    return frozenset(definitions)
+
+
 from .workspace_resources import definitions as resource_reservation_definitions
-ACTION_DEFINITIONS.update(resource_reservation_definitions(schema, string))
+RESOURCE_RESERVATION_ACTIONS = _register_actions(resource_reservation_definitions(schema, string))
 from .task_environments import definitions as environment_definitions
-ACTION_DEFINITIONS.update(environment_definitions(schema, string))
+ENVIRONMENT_ACTIONS = _register_actions(environment_definitions(schema, string))
 from .test_capacity_settings import definitions as test_capacity_definitions
-ACTION_DEFINITIONS.update(test_capacity_definitions(schema, string))
+TEST_CAPACITY_ACTIONS = _register_actions(test_capacity_definitions(schema, string))
 from .registered_test_runners import definitions as test_runner_definitions
-ACTION_DEFINITIONS.update(test_runner_definitions(schema, string))
+TEST_RUNNER_ACTIONS = _register_actions(test_runner_definitions(schema, string))
 from .test_execution_settings import definitions as test_execution_definitions
-ACTION_DEFINITIONS.update(test_execution_definitions(schema, string))
+TEST_EXECUTION_ACTIONS = _register_actions(test_execution_definitions(schema, string))
 from .test_queue import definitions as test_queue_definitions
-ACTION_DEFINITIONS.update(test_queue_definitions(schema, string))
+TEST_QUEUE_ACTIONS = _register_actions(test_queue_definitions(schema, string))
 from .portability import definitions as portability_definitions
 ACTION_DEFINITIONS.update(portability_definitions(schema, string))
 ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
@@ -466,11 +459,11 @@ for _access, _actions in {
         *canvas_view_definitions(schema, string), *canvas_app_definitions(schema, string),
         *canvas_version_definitions(schema, string),
         *publishing_definitions(schema, string),
-        *resource_reservation_definitions(schema, string),
-        *environment_definitions(schema, string),
-        *test_queue_definitions(schema, string),
-        *test_capacity_definitions(schema, string),
-        *test_runner_definitions(schema, string),
+        *RESOURCE_RESERVATION_ACTIONS,
+        *ENVIRONMENT_ACTIONS,
+        *TEST_QUEUE_ACTIONS,
+        *TEST_CAPACITY_ACTIONS,
+        *TEST_RUNNER_ACTIONS,
         *assignment_definitions(schema, string),
         *workspace_work_definitions(schema, string),
         *handoff_definitions(schema, string),
@@ -1664,7 +1657,7 @@ class AppService:
         if not setup.get('scaffolded'):
             raise AppError('This workspace starter is still preparing. Wait for its readiness result before starting a chat.', 409)
 
-    def _new_session(self, args):
+    def _new_session(self, args, *, new_root=False):
         from .shared_settings import read_settings
         workspace = self._session_destination(args)
         try:
@@ -1682,7 +1675,12 @@ class AppService:
         except ValueError as exc:
             raise AppError(str(exc)) from None
         now = time.time()
-        return self.cold_display.record({**({'selection': chosen} if chosen else {}), **({'location': {'kind': 'managed'}} if args.get('location', {}).get('kind') == 'managed' else {}), "id": str(uuid.uuid4()), "title": args.get("title") or "New chat", "titleSource":"manual" if args.get("title") and args["title"] not in {"New chat","New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": [], '_collaborationHostInstanceId': self.instance_id, **({'sessionKind': 'internal', 'sessionPurpose': args['purpose']} if args.get('purpose') else {})})
+        # Only ordinary public creation establishes placement proof. This
+        # constructor also builds historical import views under existing IDs.
+        placement = ({'sessionKind': 'internal', 'sessionPurpose': args['purpose']} if args.get('purpose')
+                     else {'sessionKind': 'root', 'workingDirectory': workspace,
+                           'executionRevision': 0, 'interruptionRevision': 0} if new_root else {})
+        return self.cold_display.record({**({'selection': chosen} if chosen else {}), **({'location': {'kind': 'managed'}} if args.get('location', {}).get('kind') == 'managed' else {}), "id": str(uuid.uuid4()), "title": args.get("title") or "New chat", "titleSource":"manual" if args.get("title") and args["title"] not in {"New chat","New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": [], '_collaborationHostInstanceId': self.instance_id, **placement})
 
     def _reusable_internal(self, candidate):
         """An idle internal session for the same purpose, folder and bundle."""
@@ -2040,21 +2038,21 @@ class AppService:
             if retained is not None:
                 return retained
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
-        if action in test_runner_definitions(schema, string):
+        if action in TEST_RUNNER_ACTIONS:
             from .registered_test_runners import dispatch as test_runner_dispatch
             return await test_runner_dispatch(self, action, args, configuration_authority)
-        if action in test_capacity_definitions(schema, string):
+        if action in TEST_CAPACITY_ACTIONS:
             from .test_capacity_settings import dispatch as test_capacity_dispatch
             return await test_capacity_dispatch(self, action, args, configuration_authority)
-        if action in test_execution_definitions(schema, string):
+        if action in TEST_EXECUTION_ACTIONS:
             from .test_execution_settings import dispatch as test_execution_dispatch
             return await test_execution_dispatch(self, action, args, configuration_authority)
-        if action in test_queue_definitions(schema, string):
+        if action in TEST_QUEUE_ACTIONS:
             return await self.test_queue.dispatch(action, args, origin, caller_session_id, configuration_authority)
-        if action in environment_definitions(schema, string):
+        if action in ENVIRONMENT_ACTIONS:
             from .task_environments import dispatch as environment_dispatch
             return await environment_dispatch(self, action, args, origin, caller_session_id, configuration_authority)
-        if action in resource_reservation_definitions(schema, string):
+        if action in RESOURCE_RESERVATION_ACTIONS:
             from .workspace_resources import dispatch_reservation
             return await dispatch_reservation(self, action, args, origin, command_id, caller_session_id)
         if action.startswith("profiling."):
@@ -2397,6 +2395,9 @@ class AppService:
                 snapshot = copy.deepcopy(self._session(args['id']))
                 captured_at = time.time()
             prepared_health = await asyncio.to_thread(inspect_session, self.data_dir, snapshot)
+            bridge_events = await asyncio.to_thread(self.diagnostics.bridge_events, snapshot)
+            prepared_health['timeline'] = [row for row in prepared_health['timeline']
+                                          if row.get('type') != 'runtime.bridge'] + bridge_events
             prepared_health['capturedAt'] = captured_at
             prepared_health['host'] = {**getattr(self.update_manager, 'running_identity', {}), 'hostInstanceId': self.instance_id}
             prepared_health['recentRequests'] = list(getattr(self, 'request_timings', []))[-30:]
@@ -2934,7 +2935,8 @@ class AppService:
                 from .session_creation import prepare, apply
                 try:
                     inherited = prepare(self, args, origin, caller_session_id)
-                    session = self._new_session({**args, 'workspace': prepared_workspace} if prepared_workspace else args)
+                    session = self._new_session({**args, 'workspace': prepared_workspace} if prepared_workspace else args,
+                                                new_root=True)
                     if args.get('id') or prepared_identity: session['id'] = args.get('id') or prepared_identity
                     if origin == 'scheduler' and args.get('inheritConfiguration', {}).get('scheduledRunId'):
                         source = self._session(args['inheritConfiguration']['sessionId'])
@@ -4414,6 +4416,11 @@ class AppService:
         if kind == 'runtime.timing':
             self.performance_diagnostics.record_runtime_timing(payload.get('sessionId'), payload.get('timing'))
             return set()
+        if kind == 'runtime.bridge':
+            # Observation, not conversation state. Its existing diagnostic
+            # owner retains the facts without a session save or publication.
+            self.diagnostics.runtime_event(kind, payload, session)
+            return set()
         self.event_log_view.invalidate({session['id']}, notify=False)
         self.diagnostics.runtime_event(kind, payload, session)
         from .chat_navigation import runtime_activity
@@ -4430,9 +4437,6 @@ class AppService:
             if activity['activeTools'] and not payload.get('detail'):
                 activity.update({'phase': 'tools', 'label': 'Running tools'})
             session['progress'] = {key: payload[key] for key in ('phase', 'detail', 'elapsedSeconds') if key in payload}
-        else:  # normalized runtime.bridge diagnostic; never execute its operation
-            session.setdefault('runtimeEvents', []).append({'type': kind, **payload, 'at': time.time()})
-            session['runtimeEvents'] = session['runtimeEvents'][-100:]
         changed = self.collaboration.observe(session, kind, payload)
         from .conversation_steering import observe as observe_steering
         observe_steering(self, session, kind, payload)
@@ -4459,7 +4463,7 @@ class AppService:
                     observed = self._apply_runtime_receipt(session, kind, payload)
                     if observed is not None:
                         changed.update(observed)
-                        detail_only &= kind in {'execution.event', 'runtime.timing'}
+                        detail_only &= kind in {'execution.event', 'runtime.timing', 'runtime.bridge'}
             except Exception:
                 # Preserve the applied prefix and unknown partial observer
                 # effects before stopping. Neither prefix nor tail is replayed.
@@ -4472,6 +4476,13 @@ class AppService:
             # Disposable diagnostics must not hydrate a session, acquire its
             # state lock, dirty progress or trigger another durable publication.
             self.performance_diagnostics.record_runtime_timing(payload.get('sessionId'), payload.get('timing'))
+            return
+        if kind == 'runtime.bridge':
+            try:
+                session = self._session(payload.get('rootSessionId') or payload.get('sessionId'), hydrate=False)
+            except AppError:
+                return
+            self.diagnostics.runtime_event(kind, payload, session)
             return
         if kind == 'image.generated':
             from .image_results import attach_completed
@@ -4811,7 +4822,7 @@ class AppService:
                     session.get('status') in {'idle', 'stopped', 'interrupted'}):
                 from .chat_navigation import settle_activity
                 settle_activity(session)
-            progress = kind in {'assistant.delta', 'runtime.tool', 'runtime.bridge'} or (
+            progress = kind in {'assistant.delta', 'runtime.tool'} or (
                 kind == 'worker.updated' and payload.get('activityOnly')) or (
                 kind == 'runtime.status' and (payload.get('activityOnly') or
                     payload.get('preparationProgress') and payload.get('status') == 'starting')) or (
@@ -5008,6 +5019,19 @@ class AppService:
             return await self._app_bridge(operation, args, session_id, input_origin=origin)
 
     async def _app_bridge(self, operation, args, session_id, *, input_origin=None):
+        if operation == 'context.prepare':
+            from .preparation_context import OPERATIONS, SECTION_TIMEOUT
+            async def read(name):
+                try:
+                    value = await asyncio.wait_for(self._app_bridge(
+                        name, args if name == 'context.manifest' else {},
+                        session_id, input_origin=input_origin), SECTION_TIMEOUT)
+                    return name, {'available': True, 'value': value}
+                except Exception:
+                    # Partial coverage remains explicit; one unavailable source
+                    # must not turn other current sections into empty context.
+                    return name, {'available': False}
+            return dict(await asyncio.gather(*(read(name) for name in OPERATIONS)))
         if operation == 'work.effect.check':
             from .workspace_work_effects import check
             from .performance_diagnostics import active_bridge, mark
@@ -5243,7 +5267,7 @@ class AppService:
                     result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
-            compact_domain_receipt = args['action'] in SETTINGS_ACTIONS or args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.', 'outputs.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
+            compact_domain_receipt = args['action'] in SETTINGS_ACTIONS or args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.', 'outputs.')) or args['action'] == 'runtime.provenance' or args['action'] in RESOURCE_RESERVATION_ACTIONS
             task_action = action_args.get('operation') if args['action'] == 'runtime.control' else args['action']
             compact_task_receipt = isinstance(task_action, str) and task_action in task_definitions(schema, string)
             compact_domain_receipt = compact_domain_receipt or compact_task_receipt

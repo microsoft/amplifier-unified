@@ -16,6 +16,28 @@ function storageSize(value){
 const removalStates=new Set(['admitting','running','completed','failed','outcome_unknown']);
 const exactKeys=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key));
 const boundedRemoval=(value,bound)=>new TextEncoder().encode(JSON.stringify(value)).length<=bound;
+// Bundled producer: environment_retention.validation_diagnostic. Diagnostics
+// explain retained evidence; they never authorize cleanup or relax identity.
+const verificationReasons=new Set(['invalid_header','metadata_limit','name_limit','sparse_entry',
+ 'missing_terminator','trailing_data','incomplete_footer','unsafe_path','archive_type','archive_limit',
+ 'member_limit','selection_mismatch','selected_size_limit','missing_root','duplicate_entry','invalid_size',
+ 'unsupported_type','ancestor_traversal','ancestor_replaced','symbolic_target','hard_target','symbolic_cycle',
+ 'receipt_mismatch','archive_format']);
+const verificationTypes=new Set(['file','directory','symbolic','hard','fifo','character','block','sparse','other']);
+function removalVerification(value){
+ if(exactKeys(value,['status']))return ['not_retained','unverified'].includes(value.status);
+ if(!value||typeof value!=='object'||Array.isArray(value)||value.status!=='recorded'||value.version!==1||
+  !verificationReasons.has(value.reasonCode)||
+  !exactKeys(value,['status','version','reasonCode',...(Object.hasOwn(value,'memberType')?['memberType']:[]),
+   ...(Object.hasOwn(value,'relativePath')?['relativePath']:[])]))return false;
+ if(Object.hasOwn(value,'memberType')&&!verificationTypes.has(value.memberType))return false;
+ if(Object.hasOwn(value,'relativePath')){
+  const path=value.relativePath;
+  if(typeof path!=='string'||path.length>256||path.match(/^(?:workspace|artifacts)(?:\/[A-Za-z0-9_.-]+)*$/)?.[0]!==path||
+   path.split('/').some(part=>part==='.'||part==='..'))return false;
+ }
+ return true;
+}
 function removalPage(value,target,offset){
  if(!exactKeys(value,['version','sessionId','id','revision','items','nextOffset'])||value.version!==1||
   value.sessionId!==target.sessionId||value.id!==target.id||value.revision!==target.expectedRevision||
@@ -29,13 +51,13 @@ function removalPage(value,target,offset){
  return value;
 }
 function removalResult(value,target){
- if(!exactKeys(value,['version','sessionId','id','revision','original','status','code','executor','physical','continuationAvailable','riskDecisionAvailable'])||
+ if(!exactKeys(value,['version','sessionId','id','revision','original','status','code','executor','physical','continuationAvailable','riskDecisionAvailable','verification'])||
   value.version!==1||value.sessionId!==target.sessionId||value.id!==target.id||value.revision!==target.expectedRevision||
   !exactKeys(value.original,['requestId','state'])||value.original.requestId!==target.originalRequestId||
   !removalStates.has(value.original.state)||value.status!=='held'||
   !['original_binding_missing','original_binding_unverified'].includes(value.code)||
   value.executor!=='unobserved'||value.physical!=='not_observed'||value.continuationAvailable!==false||
-  value.riskDecisionAvailable!==false||!boundedRemoval(value,4096))
+  value.riskDecisionAvailable!==false||!removalVerification(value.verification)||!boundedRemoval(value,4096))
   throw Error('Removal result changed or does not match this environment. Inspect it again.');
  return value;
 }
@@ -73,6 +95,15 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
    const cleared=clearPending();
    if(live.current){setRequest(result.request||null);setRemoving(null);await refresh();if(!cleared)setError('The response was received, but this tab could not clear its saved request. Check the same request after browser storage is available.')}
   }catch(e){if(e.confirmed)clearPending();if(live.current)setError(e.message||'No confirmed response. Check the same request before trying another change.')}
+  finally{inFlight.current=false;if(mounted.current)setBusy(false)}
+ };
+ const cancelCheck=async(requestId)=>{
+  if(inFlight.current||!active||readOnly)return;
+  inFlight.current=true;setBusy(true);setError('');
+  const visible=()=>live.current&&current.current.key===key;
+  // Cancellation is idempotent by check ID; an older request keeps its own recovery receipt.
+  try{unwrap(await act('workspace.tests.cancel',{workspaceId,sessionId,requestId}));if(visible())await refresh()}
+  catch(e){if(visible()){await refresh();if(visible())setError(e.message||'Cancellation was not confirmed. Check the current status before trying again.')}}
   finally{inFlight.current=false;if(mounted.current)setBusy(false)}
  };
  const rows=page?.items||[],capability=page?.capability,setup=page?.setup,setupOwned=!setup?.operation?.sessionId||(setup.operation.sessionId===sessionId&&setup.operation.workspaceId===workspaceId),profiles=capability?.profiles||[],profile=profiles.find(row=>row.id===draft.profileId)||profiles[0],controlsBlocked=busy||!!draft.pending||!active||readOnly,blocked=controlsBlocked||capability?.status!=='ready';
@@ -152,7 +183,7 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
      {checkOutput.truncatedAtSource&&<p>The command output reached its capture limit.</p>}
      {checkOutput.nextOffset!=null&&<button type="button" className="a-link" onClick={()=>readCheck(check.id,checkOutput.nextOffset)}>Next output page</button>}
     </div>}
-    {!readOnly&&['queued','starting','preparing','checking'].includes(check.status)&&!check.cancelRequested&&<button type="button" className="a-soft" disabled={busy||!active} onClick={()=>mutate('workspace.tests.cancel',{requestId:check.id})}>Cancel check</button>}
+    {!readOnly&&['queued','starting','preparing','checking'].includes(check.status)&&!check.cancelRequested&&<button type="button" className="a-soft" disabled={busy||!active} onClick={()=>cancelCheck(check.id)}>Cancel check</button>}
     <details><summary>Check details</summary><pre className="a-state-view">{JSON.stringify(check,null,2)}</pre></details>
    </li>)}</ul>
   </section>}

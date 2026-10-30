@@ -7,7 +7,7 @@ from .peer_scope import participant_matches, valid_binding
 
 
 def open_file(service, args, origin, *, retained_file=None):
-    from .service import AppError
+    from .errors import AppError
     sid = args['sessionId']
     session = next((row for row in service.state['sessions'] if row['id'] == sid), None)
     if not session or service.state.get('selectedSessionId') != sid:
@@ -105,7 +105,7 @@ def open_attachment(service, args, origin):
     from pathlib import Path
     from .attachments import file_path
     from .workspace_canvas import MAX_TEXT, EXTENSIONS
-    from .service import AppError
+    from .errors import AppError
     session = next((row for row in service.state['sessions'] if row['id'] == args['sessionId']), None)
     if not session or service.state.get('selectedSessionId') != session['id']:
         raise AppError('The chat changed. Open the attachment from its original chat.')
