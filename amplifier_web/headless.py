@@ -78,8 +78,14 @@ async def run(args, *, config=None):
                 return {**payload,'commandId':identity}
         async def answer_approvals(snapshot,identity):
             session=next((s for s in snapshot['sessions'] if s['id']==identity),{})
-            for approval in session.get('approvals',[]):
-                if approval.get('status')!='pending':continue
+            pending=[approval for approval in session.get('approvals',[]) if approval.get('status')=='pending']
+            if not pending:return
+            access=await dispatch('access.get',{'sessionId':identity})
+            if access['result']['mode']=='full':
+                # The host owns standing decisions and exact waiter delivery.
+                # A terminal must not race that decision with a prompt or Deny.
+                return
+            for approval in pending:
                 decision='deny'
                 if sys.stdin.isatty():
                     print(approval.get('prompt','Approval required'),file=sys.stderr)

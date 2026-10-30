@@ -119,6 +119,77 @@ async def test_headless_approval_stays_scoped_when_browser_switches(aiohttp_serv
     assert service._session(other)['approvals'][0]['status'] == 'pending'
     assert service.state['selectedSessionId'] == other
 
+@pytest.mark.parametrize('interactive', [False, True])
+async def test_full_access_headless_leaves_pending_decisions_to_host(aiohttp_server, tmp_path, capsys, monkeypatch, interactive):
+    import io
+
+    class NoInput(io.StringIO):
+        def isatty(self):
+            return interactive
+
+        def readline(self, *args):
+            raise AssertionError('Full access must not ask for terminal input')
+
+    class ApprovalRuntime(Runtime):
+        def __init__(self):
+            super().__init__()
+            self.responses = []
+
+        async def send(self, session, text, input_id, emit):
+            self.admitted = (session, text, input_id, emit)
+            await emit('approval.requested', {'sessionId': session['id'], 'id': 'permission',
+                'prompt': 'Allow target tool?', 'options': ['allow', 'deny']})
+
+        async def approval(self, session_id, approval_id, decision):
+            self.responses.append((session_id, approval_id, decision))
+            await super().send(*self.admitted)
+
+    runtime = ApprovalRuntime()
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=runtime, voice=False, background_updates=False)
+    service = app['service']
+    await service.dispatch('session.create', {'title': 'Unattended task'})
+    target = service._session()['id']
+    access = (await service.dispatch('access.get', {'sessionId': target}))['result']
+    await service.dispatch('access.set', {'sessionId': target, 'scope': 'session',
+        'mode': 'full', 'expectedRevision': access['revision']})
+    settled = await asyncio.gather(*list(service.tasks), return_exceptions=True)
+    assert all(result is None or isinstance(result, asyncio.CancelledError) for result in settled)
+    observed = asyncio.Event()
+    responses = []
+    dispatch, settle = service.dispatch, service.access_mode.settle
+
+    async def observe(action, args, *positional, **kwargs):
+        result = await dispatch(action, args, *positional, **kwargs)
+        if action == 'access.get':
+            observed.set()
+        elif action == 'approval.respond':
+            responses.append(args)
+        return result
+
+    async def pending_settle(sid):
+        # Hold the host decision until the terminal sees the pending request.
+        # The terminal must consult standing mode rather than answer it itself.
+        await asyncio.wait_for(observed.wait(), 2)
+        await settle(sid)
+
+    monkeypatch.setattr(service, 'dispatch', observe)
+    monkeypatch.setattr(service.access_mode, 'settle', pending_settle)
+    monkeypatch.setattr('sys.stdin', NoInput())
+    server = await aiohttp_server(app)
+    args = Namespace(port=server.port, data_dir=str(tmp_path), workspace=str(tmp_path),
+        resume=target, command='run', prompt='Unattended work', bundle=None,
+        provider=None, model=None, max_tokens=None, timeout=3, output_format='json')
+    assert await run(args) == 0
+    output = capsys.readouterr()
+    assert json.loads(output.out)['response'] == 'Test transport result'
+    assert 'Allow this operation?' not in output.err
+    assert responses == []
+    assert runtime.responses == [(target, 'permission', 'allow')]
+    approval = service._session(target)['approvals'][0]
+    assert approval['status'] == 'allow' and approval['approvedBy'] == 'full-access'
+
+
 async def test_management_result_correlates_exact_command(tmp_path):
     from amplifier_web.service import AppService
     from amplifier_web.management import Management
