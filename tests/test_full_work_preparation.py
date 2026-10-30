@@ -196,3 +196,20 @@ async def test_full_preparation_does_not_require_bounded_input_coverage(app):
     attempt = next(reversed(adapter.delivery.attempts.values()))
     assert attempt['coverage']['complete'] is False
     assert attempt['coverage']['effectAuthorized'] is False
+
+
+async def test_worker_full_policy_uses_verified_host_owner_with_native_alias(app):
+    adapter, child, required, worker = await joined(app)
+    owner = app.state['sessions'][0]
+    await save(app, owner)
+    child.update(nativeIdentity='older-native-alias', runtimeSessionId='current-native-root')
+    app._publish_changes(sessions={child['id']})
+    adapter.coordinator.session_id = child['runtimeSessionId']
+    worker.start_config = {'ownerSessionId': child['id']}
+    current_full = adapter.coordinator.get_capability('web.work_full_access')
+    assert current_full()
+    worker.start_config['ownerSessionId'] = owner['id']
+    assert not current_full()
+    worker.start_config['ownerSessionId'] = child['id']
+    await save(app, owner, mode='ask')
+    assert not current_full()

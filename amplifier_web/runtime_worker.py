@@ -247,7 +247,8 @@ class Worker:
             from amplifier_web.access_mode import read_mode
             import sqlite3
             try:
-                return read_mode(self.home, self.workspace, self.session.coordinator.session_id) == 'full'
+                return read_mode(self.home, self.workspace, self.session.coordinator.session_id,
+                    owner_session_id=(self.start_config or {}).get('ownerSessionId')) == 'full'
             except (OSError, ValueError, sqlite3.Error):
                 return False
         coordinator.register_capability('web.work_full_access', current_full_access)
