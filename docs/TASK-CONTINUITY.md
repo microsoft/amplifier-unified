@@ -56,7 +56,13 @@ checks and charges one saved task turn before submission; an uncertain submissio
 retains that charge rather than making a retry free.
 
 The recipient may inspect, reply, defer or decline within its existing authority.
-Only a separate valid owner decision can resume its objective. A human-recorded
+Only a separate valid owner decision can resume its objective. Within a standing
+delegation, the owning agent may make that decision after verifying that its own
+recorded dependency block is resolved; another user approval is not required.
+User pause or Stop still requires the user's instruction to resume. Resuming
+preserves required limits, used turns, unanswered questions and uncertain effects;
+it does not classify those unresolved conditions as successful or authorized.
+A human-recorded
 block, missing provenance, a block recorded from a paused task, Stop, failure,
 completion or cancellation does not receive this exception. Old records can use
 their exact retained agent-origin status changes; reason text is never classified
