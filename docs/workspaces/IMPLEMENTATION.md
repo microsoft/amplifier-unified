@@ -437,6 +437,15 @@ and agent actions use the same authority. Only the user can detach a settled
 conversation, retaining all previously attributed usage and late corrections.
 Stop never deletes files, cleans resources or claims to undo external effects.
 
+Finished member participation can now be closed by the assignment owner through
+`assignment.retire`. The current-member ceiling excludes retired, detached and
+never-created entries while their cumulative usage and membership evidence stay
+retained. Retirement requires settled work and completed local/shared tasks,
+with native ownership held through the commit. It does not archive or stop a
+chat. Existing adoption can readmit the same retired chat after a fresh review,
+capacity check and human instruction; the new membership boundary fences old
+requests and automatic returns. See [member closeout and reuse](assignment-adoption.md#finishing-and-reusing-a-member-chat).
+
 Qualification includes failure injection before commit and after acknowledgment
 loss, preparation/Stop races, concurrent cross-root reservations, restart,
 late-result suppression and native finite/resumed/persistent/nested child mounts.

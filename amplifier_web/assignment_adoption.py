@@ -24,7 +24,8 @@ def inspect(app, source, target):
     reason = None
     if current:
         reason = 'This chat already belongs to an assignment. Detach it there before adding it here.'
-    elif target['id'] in assignment['members']:
+    elif (target['id'] in assignment['members']
+          and assignment['members'][target['id']]['status'] != 'retired'):
         reason = 'This assignment retains an earlier membership for that chat. Keep its history; use a separate assignment.'
     elif target['id'] in app.state.get('conversationOrganization', {}).get('archived', {}):
         reason = 'Unarchive the chat before adding it.'
@@ -84,7 +85,7 @@ def checked(app, source, target, args, origin):
     return human
 
 
-async def retire_idle(app, source, target, args, origin, identity, digest):
+async def retire_idle(app, source, target, args, origin, identity, digest, *, validate=checked):
     """Use ordinary acknowledged idle retirement, never ask a foreign owner to yield.
 
     Retirement preserves the chat's idle state and saved task. It can await
@@ -105,7 +106,7 @@ async def retire_idle(app, source, target, args, origin, identity, digest):
             if app.collaboration.duplicate(identity, digest):
                 return
             target = app.collaboration.authorize(source, {'sessionId': sid})
-            checked(app, source, target, args, origin)
+            validate(app, source, target, args, origin)
             row = runtime.workers.get(sid)
             if row and row['process'].returncode is None:
                 if target.get('status') != 'idle' or not retention.eligible(row) or retention.protected(sid):
@@ -155,12 +156,16 @@ async def dispatch(assignments, action, args, origin, command_id, caller):
             except (OSError, RuntimeError, ValueError) as exc:
                 collaboration.error(f'Could not confirm that this chat has stopped. {exc}', 409)
             async with assignments.mutation(source, identity, additional=(target['id'],)):
+                previous = assignments.current(source)['members'].get(target['id'], {})
                 assignments.reserve_member(source, target['id'], identity)
                 value = assignments.current(source)
                 membership = {'status': 'bound', 'role': 'adopted',
                               'adoptedBySessionId': source['id'], 'adoptionOperationId': identity,
                               'adoptedAt': time.time(), 'authorityOrigin': origin,
                               'sourceMessageId': human['id'] if human else None}
+                if previous.get('status') == 'retired':
+                    membership.update(joinedAt=time.time(),
+                                      previousRetirementId=previous['retirementOperationId'])
                 value['members'][target['id']] = membership
                 target['assignmentId'] = value['id']
                 assignments.save(value)
