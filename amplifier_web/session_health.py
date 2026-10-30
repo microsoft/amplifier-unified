@@ -17,7 +17,7 @@ def current_terminal_failure(session):
         if row.get('sessionId', session['id']) == session['id']
         and row.get('rootSessionId', session['id']) == session['id']), {})
     if (not failure or not active.get('id') or not active.get('terminal')
-            or active.get('completed') or terminal.get('event') != 'generation.failed'
+            or active.get('completed') or terminal.get('event') not in {'generation.failed', 'generation.detached'}
             or terminal.get('generation_id') != active['id']
             or set(terminal.get('input_ids') or []) != set(active.get('inputIds') or [])):
         return False
@@ -25,7 +25,8 @@ def current_terminal_failure(session):
         return (failure['generationId'] == active['id']
             and set(failure.get('inputIds') or []) == set(terminal.get('input_ids') or []))
     # A legacy generic exit has no binding to improve. Keep its saved diagnosis
-    # while warming; peer recovery still requires its separate exact receipts.
+    # while warming; fresh peer recovery still requires human authority and
+    # the native stopped-owner boundary, not replay of these historical inputs.
     return (failure.get('category') == 'unknown'
         and isinstance(failure.get('recordedAt'), (int, float))
         and isinstance(terminal.get('at'), (int, float))

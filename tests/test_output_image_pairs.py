@@ -108,8 +108,10 @@ class Runtime:
             get=lambda kind: self.tools if kind == 'tools' else None,
             register_capability=self.capabilities.__setitem__, mount=mount, hooks=self.hooks)
         async def bridge(operation, args):
-            if operation == 'context.manifest':return {'surfaces': [], 'inputIds': list(self.epoch)}
-            if operation == 'memory.context':return {'items': []}
+            # Mirror the worker envelope for both preparation and revalidation;
+            # let the real host own the manifest instead of replacing one read.
+            if operation.startswith('context.'):
+                args = {**args, '_contextInputs': list(self.epoch), '_contextBindings': []}
             return await pair.app.app_bridge(operation, args, pair.sid)
         await install_app_access(coordinator, bridge)
         self.delivery = self.capabilities['web.surface_delivery']

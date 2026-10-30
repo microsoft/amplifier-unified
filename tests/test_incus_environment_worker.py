@@ -89,6 +89,51 @@ def test_artifact_recovery_keeps_stopped_instance_and_exports_only_artifacts(tmp
     assert state['instance'] == 'Stopped' and state['launch'] == 'stopped'
 
 
+@pytest.mark.parametrize('action', ['remove', 'finishCleanup'])
+@pytest.mark.parametrize('boundary', ['filter', 'verify'])
+@pytest.mark.parametrize('diagnostic_write_fails', [False, True])
+def test_retention_validation_reason_keeps_stopped_owner(tmp_path, backend, monkeypatch, action, boundary, diagnostic_write_fails):
+    import tarfile
+    calls, state = backend
+    state.update(instance='Stopped', launch='stopped')
+    value = payload(tmp_path, action)
+    item = tarfile.TarInfo('artifacts/fixture-pipe')
+    item.type = tarfile.FIFOTYPE
+    original_export = worker.export_selected
+    def export(config, env, name, destination, **kwargs):
+        if boundary == 'filter':
+            # Use the real streaming verifier with synthetic headers only.
+            from test_environment_retention import backup, ROOTS
+            return worker.common.retention.filter_incus_stream(
+                backup(ROOTS + [(item.name, item.type, '')]), destination, name,
+                archive_only=kwargs.get('archive_only', False))
+        archives = original_export(config, env, name, destination, **kwargs)
+        with tarfile.open(destination / 'artifacts.tar', 'a') as archive:
+            archive.addfile(item)
+        return archives
+    monkeypatch.setattr(worker, 'export_selected', export)
+    original_write = Path.write_text
+    def write(path, *args, **kwargs):
+        if diagnostic_write_fails and path.name == 'incomplete.json':
+            raise OSError('private diagnostic storage')
+        return original_write(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'write_text', write)
+    result = worker.execute_call(value)
+    assert result['verification'] == {'version': 1, 'reasonCode': 'unsupported_type',
+        'memberType': 'fifo', 'relativePath': 'artifacts/fixture-pipe'}
+    assert result['phase'] == ('preserving' if boundary == 'filter' else 'verifying')
+    assert result['code'] == ('preservation_failed' if boundary == 'filter' else 'archive_verification_failed')
+    assert result['status'] == 'stopped' and result['effectAdmitted'] is False
+    assert not any(args[0] in {'exec', 'stop', 'destroy', 'launch'} for _, args in calls)
+    assert state['instance'] == 'Stopped' and state['launch'] == 'stopped'
+    assert not list(tmp_path.glob('retained-*/retention.json'))
+    saved = list(tmp_path.glob('retained-*/incomplete.json'))
+    assert bool(saved) is not diagnostic_write_fails
+    if saved:
+        assert json.loads(saved[0].read_text())['verification'] == result['verification']
+    assert str(tmp_path) not in json.dumps(result) and 'private diagnostic' not in json.dumps(result)
+
+
 @pytest.mark.parametrize('change', ['running', 'foreign', 'failed-export'])
 def test_artifact_recovery_never_runs_or_removes_instance_on_failure(tmp_path, backend, change):
     calls, state = backend

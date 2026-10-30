@@ -16,7 +16,7 @@ ATTENTION = {"error", "failed", "interrupted", "cancelled", "stopped"}
 
 
 def definitions():
-    from .service import schema, string
+    from .action_schema import schema, string
     target = {"sessionId": string(200), "workerId": string(200)}
     return {
         "coordination.review": ("Read a bounded page for reviewing saved workspace work before continuing. Does not load history, start workers, inspect files or change responsibility. The source must be the calling root; cursors stay bound to its workspace. Results are observations, never permission or a readiness certificate.", schema({"sessionId": string(200), "after": string(2048), "limit": {"type": "integer", "minimum": 1, "maximum": 20}}, ["sessionId"])),

@@ -1,4 +1,4 @@
-"""Only a returned export-limit receipt qualifies; generic uncertainty stays held."""
+"""Returned legacy export-limit evidence stays qualified; uncertainty stays held."""
 import asyncio
 import copy
 import threading
@@ -6,7 +6,7 @@ import threading
 import pytest
 
 from amplifier_web import task_environments as owner
-from amplifier_web.test_environment_legacy import returned_export_limit
+from amplifier_web.test_environment_legacy import returned_preservation_failure
 from amplifier_web.service import AppError
 from amplifier_web.operation_requests import OperationRequests
 from test_configuration_authority import app
@@ -34,7 +34,7 @@ def retained_pair():
 def test_only_exact_returned_receipt_qualifies_without_rewriting_it():
     row, original = retained_pair()
     before = copy.deepcopy((row, original))
-    proof = returned_export_limit(row, original)
+    proof = returned_preservation_failure(row, original)
     assert proof['kind'] == 'returned-legacy-export-limit'
     assert proof['originalRequestId'] == 'original' and len(proof['originalSha256']) == 64
     assert (row, original) == before
@@ -68,7 +68,7 @@ def test_uncertain_or_mismatched_legacy_results_stay_held(case):
     elif case == 'removed': row['guestRemoved'] = True
     elif case == 'no-source-identity': row['snapshot'].pop('snapshot_tree')
     elif case == 'foreign-owner': row['owner']['sessionId'] = 'foreign'
-    assert returned_export_limit(row, original) is None
+    assert returned_preservation_failure(row, original) is None
 
 
 async def legacy_failure(app, monkeypatch):
@@ -98,7 +98,9 @@ async def test_qualified_cleanup_commits_binding_and_preserves_original(app, bac
         assert action == 'finishCleanup'
         calls.append(action)
         request = app.operations.requests.read(current['sessionId'], args['requestId'])
-        assert request['legacyCleanupQualification'] == returned_export_limit(current, original)
+        proof = returned_preservation_failure(current, original)
+        assert proof['kind'] == 'returned-legacy-export-limit'
+        assert request['legacyCleanupQualification'] == proof
         assert app.operations.requests.read(current['sessionId'], original['requestId']) == original
         return {'ok': True, 'status': 'removed', 'universeId': current['universeId'],
                 'retention': {'verified': True, 'archiveOnly': True}}
@@ -159,7 +161,9 @@ async def test_common_route_commits_qualification_before_invocation(app, backend
     def invoke(config, home, current, action, arguments):
         saved = app.operations.requests.read(current['sessionId'], args['requestId'])
         assert saved['resourceId'] == row['id']
-        assert saved['legacyCleanupQualification'] == returned_export_limit(current, original)
+        proof = returned_preservation_failure(current, original)
+        assert proof['kind'] == 'returned-legacy-export-limit'
+        assert saved['legacyCleanupQualification'] == proof
         calls.append(action)
         return {'ok': True, 'status': 'removed', 'universeId': current['universeId'],
                 'retention': {'verified': True}}
@@ -291,7 +295,7 @@ async def pending_legacy_preparation(app, monkeypatch):
     assert saved['guestRemoved'] and saved['preparationPending']
     assert result['request']['state'] == 'outcome_unknown'
     assert calls == ['finishCleanup']
-    assert returned_export_limit(saved, original) is None
+    assert returned_preservation_failure(saved, original) is None
     return result, original, calls
 
 

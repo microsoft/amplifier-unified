@@ -55,16 +55,17 @@ async def test_terminal_retention_requires_the_current_exact_root(app, change):
     assert target == before
 
 
-@pytest.mark.parametrize('bound', [False, True])
-async def test_warming_preserves_recovery_evidence_until_exact_admission(app, bound):
-    source, target, human, old_input = await historical_failure(app)
+@pytest.mark.parametrize('bound,event', [(False, 'generation.failed'),
+                                       (False, 'generation.detached'), (True, 'generation.failed')])
+async def test_warming_preserves_recovery_evidence_until_exact_admission(app, bound, event):
+    source, target, human, old_input = await historical_failure(app, event, native=not bound)
     if bound:
         await terminal(app, target, identity='generation-helper', inputs=[old_input])
         await app.on_runtime_event('runtime.error', {'sessionId': target['id'],
             'error': 'Manager turn failed', 'errorType': 'RuntimeError'})
         await app.on_runtime_event('runtime.ended', {'sessionId': target['id']})
     failure = copy.deepcopy(target['failure'])
-    old_receipt = copy.deepcopy(app.collaboration.receipt(old_input))
+    old_receipt = app.db.execute('SELECT receipt FROM commands WHERE id=?', (old_input,)).fetchone()
     assignment = copy.deepcopy(app.assignments.current(source))
     original = app.runtime.collaboration_input
 
@@ -82,7 +83,7 @@ async def test_warming_preserves_recovery_evidence_until_exact_admission(app, bo
     receipt = await settled(app, 'resume-member', 'accepted')
     assert receipt['humanResume']['failedRecovery']['failure'] == failure
     assert target['failure'] == failure
-    assert app.collaboration.receipt(old_input) == old_receipt
+    assert app.db.execute('SELECT receipt FROM commands WHERE id=?', (old_input,)).fetchone() == old_receipt
     assert app.assignments.current(source) == assignment
     assert len(app.runtime.inputs) == 1 and app.runtime.inputs[0][1] == 'resume-member'
     await generation(app, target, 'fresh-generation', ['resume-member'])

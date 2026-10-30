@@ -1444,14 +1444,18 @@ mutation bridges retain their existing completion behavior.
 
 Some older workers saved a generic unknown failure without its generation ID.
 Guarded peer recovery may retain separate terminal evidence instead of changing
-that failure: the latest root event must be a failed generation, its input IDs
-must exactly match the host-observed delivered inputs, and every input must have
-its accepted peer receipt for that member. The generic failure must follow that
-terminal. A fresh owner human request and native stopped-owner proof are still
-required. Later input, terminal, Stop or configuration changes invalidate the
-prepared recovery. A retained explicit safety terminal blocks recovery even if
-an older projection hid it. This admits one new reconciliation request; no old
-input, operation or provider call is replayed and no failure cause is inferred.
+that failure: the latest root event must be a failed or detached generation,
+its input IDs must exactly match the current host-observed terminal generation,
+and the generic failure must follow that terminal. This witnesses the stopped
+turn, not delivery, success or authority of its old inputs. Native service inputs
+need no peer receipt; missing or unknown old receipts stay unchanged. A fresh
+owner human request and native stopped-owner proof are still required. Later
+input, terminal, Stop or configuration changes invalidate the prepared recovery.
+Warming retains the same failure until a new generation actually starts. A saved
+explicit safety halt in the current root generation still blocks recovery even
+if a later detach or older generic projection hid it. This uses bounded retained
+lifecycle records, not transcript scans. It admits one new reconciliation request;
+no old input, operation or provider call is replayed and no failure cause is inferred.
 
 ## Explicit responsibility for existing chats
 
