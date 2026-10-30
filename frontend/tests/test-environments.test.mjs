@@ -259,10 +259,61 @@ const removalDiscovery=(overrides={})=>({version:1,sessionId:'a',id:'env',revisi
 const removalHeld=(overrides={})=>({version:1,sessionId:'a',id:'env',revision:8,
  original:{requestId:'original-remove',state:'outcome_unknown'},status:'held',
  code:'original_binding_unverified',executor:'unobserved',physical:'not_observed',
- continuationAvailable:false,riskDecisionAvailable:false,...overrides});
+ continuationAvailable:false,riskDecisionAvailable:false,verification:{status:'not_retained'},...overrides});
 const inspectArgs={workspaceId:'w',sessionId:'a',id:'env',expectedRevision:8};
 const originalArgs={...inspectArgs,originalRequestId:'original-remove'};
 const requireButton=(root,label)=>{const found=button(root,label);assert.ok(found,`Missing actual component control: ${label}`);return found};
+
+const recordedVerification={status:'recorded',version:1,reasonCode:'unsupported_type',memberType:'fifo',relativePath:'artifacts/fixture-pipe'};
+for(const [label,verification,valid] of [
+ ['not retained',{status:'not_retained'},true],
+ ['unverified',{status:'unverified'},true],
+ ['recorded minimal',{status:'recorded',version:1,reasonCode:'archive_format'},true],
+ ['recorded full',recordedVerification,true],
+ ['recorded type only',{status:'recorded',version:1,reasonCode:'symbolic_cycle',memberType:'symbolic'},true],
+ ['recorded path only',{status:'recorded',version:1,reasonCode:'missing_root',relativePath:'workspace'},true],
+ ['missing',undefined,false],['null',null,false],['array',[],false],
+ ['unknown status',{status:'success'},false],
+ ['extra absent detail',{status:'not_retained',reasonCode:'unsupported_type'},false],
+ ['unknown reason',{...recordedVerification,reasonCode:'SYNTHETIC_PRIVATE_VALUE'},false],
+ ['wrong version',{...recordedVerification,version:'1'},false],
+ ['missing reason',{status:'recorded',version:1},false],
+ ['unknown type',{...recordedVerification,memberType:'socket'},false],
+ ['null type',{...recordedVerification,memberType:null},false],
+ ['extra content',{...recordedVerification,content:'SYNTHETIC_PRIVATE_VALUE'},false],
+ ['link target',{...recordedVerification,linkTarget:'/SYNTHETIC_PRIVATE_VALUE'},false],
+ ['absolute path',{...recordedVerification,relativePath:'/SYNTHETIC_PRIVATE_VALUE'},false],
+ ['parent path',{...recordedVerification,relativePath:'workspace/../SYNTHETIC_PRIVATE_VALUE'},false],
+ ['dot path',{...recordedVerification,relativePath:'workspace/.'},false],
+ ['newline path',{...recordedVerification,relativePath:'workspace/file\n'},false],
+ ['other root',{...recordedVerification,relativePath:'other/file'},false],
+ ['long path',{...recordedVerification,relativePath:'workspace/'+'x'.repeat(247)},false],
+ ['empty path',{...recordedVerification,relativePath:''},false],
+ ['null path',{...recordedVerification,relativePath:null},false],
+]){
+ test(`passive verification ${label} is ${valid?'accepted without effects':'rejected without rendering details'}`,async()=>{
+  let root;const calls=[];
+  storage.set(key,JSON.stringify({command:'retained draft',pending:null}));const saved=storage.get(key);
+  const dispatch=async(action,args)=>{
+   calls.push({action,args});
+   if(action==='workspace.environments.read')return accepted({items:[removalResource]});
+   if(action===removalList)return accepted(removalDiscovery());
+   if(action===removalRead){const value=removalHeld({verification});if(label==='missing')delete value.verification;return accepted(value)}
+   throw Error('Unexpected effect: '+action);
+  };
+  try{
+   await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',act:dispatch,active:true,readOnly:true}))});
+   await act(async()=>requireButton(root,'Inspect original removal').props.onClick());
+   await act(async()=>requireButton(root,'Read original removal original-remove').props.onClick());
+   if(valid){assert.match(text(root.toJSON()),/Removal remains held/);assert.doesNotMatch(text(root.toJSON()),/does not match/)}
+   else{assert.match(text(root.toJSON()),/does not match/);assert.doesNotMatch(text(root.toJSON()),/Removal remains held/)}
+   assert.doesNotMatch(text(root.toJSON()),/SYNTHETIC_PRIVATE_VALUE/);
+   assert.equal(button(root,'Continue removal'),undefined);assert.equal(button(root,'Replace removal'),undefined);
+   assert.equal(storage.get(key),saved);
+   assert.deepEqual(calls,[read,{action:removalList,args:inspectArgs},{action:removalRead,args:originalArgs}]);
+  }finally{await act(async()=>root?.unmount())}
+ });
+}
 
 for(const readOnly of [false,true])test(`original removal inspection is passive with readOnly=${readOnly} and a later stop`,async()=>{
  let root;const calls=[],pending={action:'workspace.environments.remove',args:{requestId:'browser-pending-not-original'},id:'saved-command'};

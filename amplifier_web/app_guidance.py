@@ -143,11 +143,13 @@ async def install_app_access(coordinator, bridge):
     from .memory_delivery import MemoryDelivery, POLICY as MEMORY_POLICY
     from .coordination_delivery import CoordinationDelivery
     from .reaction_delivery import ReactionDelivery
+    from .preparation_context import PreparationContext
+    context = PreparationContext(bridge)
     # Keep selected visual evidence after general workspace observations.
-    delivery = MemoryDelivery(OutputImageDelivery(VoiceVisualDelivery(CoordinationDelivery(
-        ReactionDelivery(SurfaceDelivery(bridge), bridge), bridge,
+    delivery = context.wrap(MemoryDelivery(OutputImageDelivery(VoiceVisualDelivery(CoordinationDelivery(
+        ReactionDelivery(SurfaceDelivery(context.read), context.read), context.read,
         origin_scope=coordinator.get_capability('web.work_origin_scope')),
-        bridge), bridge), bridge)
+        bridge), context.read), context.read))
     coordinator.register_capability('web.surface_delivery', delivery)
     # Observation only. The service's effect policy must independently decide
     # applicability and permissions; absent producer wiring is not a grant.
@@ -319,6 +321,13 @@ async def install_app_access(coordinator, bridge):
                     return result
                 finally:
                     mark(timing, 'body.end')
+
+        def allows_concurrent_execution(self, input):
+            # These operations retain their canonical host read/revision checks
+            # and do not mutate this mounted tool's delivery state. Dispatch,
+            # image receipts and focus changes retain adapter serialization.
+            return isinstance(input, dict) and input.get('operation') in (
+                'get_state', 'list_actions', 'history')
 
         async def _execute(self, input):
             error = _app_control_input_error(input, self.input_schema['properties']['operation']['enum'])

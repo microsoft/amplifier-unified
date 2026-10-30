@@ -173,7 +173,7 @@ def diagnostics(app, source, rows, truncated):
     bridge = [{'operationId': digest(row.get('bridgeId')), 'phase': state(row.get('phase')),
         'at': number(row.get('at')), 'elapsedMs': round(row['elapsedSeconds']*1000, 2)
         if number(row.get('elapsedSeconds')) is not None else None}
-        for row in dict.get(source, 'runtimeEvents', [])[-100:] if row.get('type') == 'runtime.bridge'][-32:]
+        for row in app.diagnostics.bridge_events(source)]
     sampled = app.performance_diagnostics.snapshot()
     lag = [{key: number(row.get(key)) for key in ('at', 'delayMs')}
            for row in sampled.get('eventLoopDelays', [])[-30:]]
