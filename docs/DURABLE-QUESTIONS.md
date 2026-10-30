@@ -25,9 +25,22 @@ Discover exact schemas using `app_control` with `operation: "list_actions"` and
 
 Agent calls are bound to the calling conversation; `sessionId` is supplied by
 the bridge if omitted. Agents conveying a text or voice answer must cite
-`sourceMessageId` from an actual user message recorded after the question in
-that conversation. The service saves its source text and, for call transcripts,
-voice and item IDs. A generated answer receipt cannot serve as user provenance.
+`sourceMessageId` from an actual user message recorded after the question. The
+answer can be in that conversation or carried by an existing delivered
+`coordination.send`: also provide its `sourceRequestId`, and the host derives the
+source chat from the retained receipt. The exact human input must belong to that
+send's admitted source lineage and precede the handoff. The receipt must target
+the question owner; both participant locations and interruption revisions must
+still match. Queued, uncertain, cancelled and foreign handoffs cannot supply an
+answer, and this route cannot resume a stopped or failed recipient. Managed chats
+and other workspaces in the same installation use the same path.
+
+The service saves source text, the original chat and handoff identities, and,
+for call transcripts, voice and item IDs. The question still belongs to its
+recipient; no peer may mutate an unrelated question, manufacture a human answer,
+change permissions or reset a task budget. This records a decision already made
+by the user instead of requiring a duplicate click in another chat. A generated
+answer receipt cannot serve as user provenance.
 Agent-authored or unattributed messages cannot be used as human answers, even
 when they appear with the user role. New UI and voice inputs carry host-owned
 origin metadata through edits. Older unattributed inputs require a fresh explicit
@@ -86,6 +99,10 @@ binding are integration work for the owning portability/continuation services.
 `tests/test_questions.py` covers restart and hard process exit, stable receipts,
 wrong-session/stale/superseded answers, input validation, provenance, permission
 separation, independent work and draft preservation.
+`tests/test_question_handoffs.py` adds real service/transport-bound handoffs,
+original human provenance, cross-workspace/managed locations, changed Stop and
+location boundaries, supersession and exactly-once answer admission. The runtime
+is scripted; these checks do not claim live-model cooperation.
 
 After installing frontend dependencies and building, run
 `node frontend/tests/questions-browser.mjs`. It exercises the actual UI, service,
