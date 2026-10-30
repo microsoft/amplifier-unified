@@ -20,7 +20,12 @@ import tempfile
 TOKEN = 'fixture-browser-control-token'
 HTML = ('<!doctype html>\r\n<meta charset="utf-8">\r\n'
         '<h1>Original résumé α — 雪</h1>\r\n'
-        '<script>document.body.dataset.fileControlsExecuted="yes";</script>\r\n')
+        '<label>Unfinished preview note <input id="preview-note"></label>\r\n'
+        '<script>\r\n'
+        'window.fileControlsExecutions=(window.fileControlsExecutions||0)+1;\r\n'
+        'document.body.dataset.fileControlsExecuted=String(window.fileControlsExecutions);\r\n'
+        'document.body.dataset.fileControlsToken=Array.from(crypto.getRandomValues(new Uint32Array(4))).join("-");\r\n'
+        '</script>\r\n')
 MARKDOWN = '# Adjacent notes α\r\n\r\nDifferent bytes from the HTML.\r\n'
 SAVED = '# Saved only note\r\n\r\nNo filesystem source — café.\r\n'
 OUTSIDE = '# Earlier workspace file\r\n\r\nNow outside the working folder.\r\n'

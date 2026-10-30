@@ -24,9 +24,12 @@ const fixturePath=resolve(process.env.FILE_CONTROLS_FIXTURE||join(root,'tests/fi
 const python=process.env.AMPLIFIER_TEST_PYTHON||process.env.FIXTURE_PYTHON||join(root,'.venv/bin/python');
 const fixture=spawn(python,['-u',fixturePath],{cwd:dirname(fixturePath),stdio:['ignore','pipe','pipe']});
 const stop=ownFixture(fixture,{label:'Generated file controls fixture'});
-const records=[],checks=[],geometry=[],downloads=[],requests=[],commands=[],errors=[];
-let logs='',lineBuffer='',browser,page,ready,seed,failure,cleanup,timer;
+const records=[],checks=[],geometry=[],downloads=[],requests=[],commands=[],errors=[],screenshotErrors=[];
+const pageLabels=new WeakMap(),routeCleanups=new Set();
+let logs='',lineBuffer='',browser,page,ready,seed,failure,cleanup,timer,running;
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
+const errorEvidence=error=>error&&({name:error.name,message:error.message,stack:error.stack,
+ ...(error.errors?{causes:error.errors.map(errorEvidence)}:{})});
 fixture.stderr.on('data',chunk=>{logs=(logs+chunk).slice(-65536)});
 const startup=new Promise((resolveReady,reject)=>{
  const timeout=setTimeout(()=>reject(Error('File controls fixture startup exceeded 15 seconds')),15000);
@@ -53,12 +56,12 @@ async function identity(target){
  return target.evaluate(()=>{const s=window.amplifier.getState();return {clientId:s.client.id,sessionId:s.selectedSessionId}});
 }
 async function fixturePost(target,suffix){
- const response=await target.request.post(ready.url+'/fixture/file-controls/'+suffix,{data:await identity(target)});
+ const response=await target.request.post(ready.url+'/fixture/file-controls/'+suffix,{data:await identity(target),timeout:5000});
  assert.equal(response.status(),200,`Fixture ${suffix}: ${await response.text()}`);
  return response.json();
 }
 async function fixtureRead(target){
- const response=await target.request.get(ready.url+'/fixture/file-controls');
+ const response=await target.request.get(ready.url+'/fixture/file-controls',{timeout:5000});
  assert.equal(response.status(),200);
  return response.json();
 }
@@ -68,6 +71,29 @@ function card(target,row){
 function detailsFor(target,row){return card(target,row).locator('details.a-canvas-file-path')}
 const button=(details,name)=>details.getByRole('button',{name,exact:true});
 const names=['Copy full path','Copy relative path','Download saved file'];
+
+async function bounded(promise,timeout,message){
+ let timer;
+ try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(message)),timeout)})])}
+ finally{clearTimeout(timer)}
+}
+// Observe rejection immediately, even before the driver reaches wait(). Keep the
+// error as a tagged outcome and rethrow it from the awaited gate, never ignore it.
+function observedGate(label){
+ let resolve,reject;
+ const outcome=new Promise((yes,no)=>{resolve=yes;reject=no}).then(value=>({value}),error=>({error}));
+ return {resolve,reject,async wait(){
+  const result=await bounded(outcome,8000,`${label} exceeded 8 seconds`);
+  if(result.error)throw result.error;
+  return result.value;
+ }};
+}
+async function placement(target,restore=false){
+ const response=await target.request.post(ready.url+'/fixture/file-controls/placement',{
+  data:{...await identity(target),restore},timeout:5000});
+ assert.equal(response.status(),200,`Fixture placement: ${await response.text()}`);
+ return response.json();
+}
 
 async function openDetails(target,row,mode='click'){
  const details=detailsFor(target,row),summary=details.locator('summary');
@@ -92,6 +118,7 @@ async function controlsOracle(details,row){
  for(const [name,present] of [
   ['Copy full path',!!expected.absolute],['Copy relative path',!!expected.relative],['Download saved file',true]]){
   assert.equal(await button(details,name).count(),present?1:0,`Required control mismatch: ${name}`);
+  if(present)assert.equal(await button(details,name).evaluate(node=>node.tagName),'BUTTON',`${name} must be a native button`);
  }
  const codes=await details.locator('code').allTextContents();
  for(const value of Object.values(expected))assert.ok(codes.includes(value),`Missing displayed path/base: ${value}`);
@@ -114,10 +141,14 @@ async function copy(target,details,name,expected,trigger){
 // Save the browser's actual download before checking the independently seeded
 // bytes/hash/name. This same oracle must reject the corrupted-download control.
 async function saveAndVerify(target,details,row,label,trigger=control=>control.click()){
+ return saveControlAndVerify(target,button(details,'Download saved file'),row,label,trigger);
+}
+async function saveControlAndVerify(target,control,row,label,trigger=control=>control.click()){
+ assert.equal(await control.evaluate(node=>node.tagName),'BUTTON','Exercise the rendered native download control');
  const event=target.waitForEvent('download',{timeout:5000});
  // Attach both rejection handlers immediately, including when a failed gesture
  // leaves the download wait to time out during cleanup.
- const [download]=await Promise.all([event,trigger(button(details,'Download saved file'))]);
+ const [download]=await Promise.all([event,trigger(control)]);
  assert.equal(await download.failure(),null);
  assert.equal(download.suggestedFilename(),row.filename,'Filename must describe the saved source');
  const path=join(evidence,label+'-'+row.filename);
@@ -128,7 +159,7 @@ async function saveAndVerify(target,details,row,label,trigger=control=>control.c
  assert.equal(observed.sha256,row.sha256,'Saved file SHA-256 mismatch');
  assert.equal(bytes.length,row.byteLength,'Saved file byte length mismatch');
  assert.deepEqual(bytes,Buffer.from(row.body,'utf8'),'Saved file changed original Unicode/CRLF bytes');
- await expect(details.locator('.a-saved-file-download [role="status"]')).toHaveText('Download started. Check your browser’s downloads.');
+ await expect(control.locator('..').getByRole('status')).toHaveText('Download started. Check your browser’s downloads.');
  return observed;
 }
 
@@ -148,9 +179,12 @@ async function preserved(target,draft){
  assert.equal(await target.getByRole('textbox',{name:'Message Amplifier',exact:true}).innerText(),draft);
 }
 
-async function measure(target,details,label){
- for(const control of [details.locator('summary'),...names.map(name=>button(details,name))]){
+async function measureControls(target,controls,label){
+ for(const control of controls){
   await control.scrollIntoViewIfNeeded();
+  // The inspector has a sticky heading. Center within real scroll containers
+  // before hit testing rather than accepting a button covered by that heading.
+  await control.evaluate(node=>node.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'}));
   const measured=await control.evaluate(node=>{
    const r=node.getBoundingClientRect(),inset=3;
    const points=[[r.left+inset,r.top+inset],[r.right-inset,r.top+inset],
@@ -164,6 +198,9 @@ async function measure(target,details,label){
   assert.ok(measured.corners.every(point=>point.reachable),`${label} ${measured.name}: obscured/offscreen corner`);
  }
  assert.ok(await target.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Document horizontal overflow');
+}
+async function measure(target,details,label){
+ await measureControls(target,[details.locator('summary'),...names.map(name=>button(details,name))],label);
  assert.ok(await details.evaluate(node=>node.scrollWidth<=node.clientWidth),'File-details horizontal overflow');
  await target.screenshot({path:join(evidence,label+'-controls.png')});
  await details.locator('summary').scrollIntoViewIfNeeded();
@@ -171,19 +208,21 @@ async function measure(target,details,label){
 }
 async function cornerTap(control,corner){
  await control.scrollIntoViewIfNeeded();
+ await control.evaluate(node=>node.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'}));
  const bounds=await control.boundingBox();assert.ok(bounds);
  await control.tap({position:corner==='top-left'?{x:3,y:3}:{x:bounds.width-3,y:bounds.height-3}});
 }
 
-async function connect(options){
+async function connect(options,label='desktop'){
  const context=await browser.newContext({viewport:{width:1440,height:1000},acceptDownloads:true,
   extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'},...options});
  await context.grantPermissions(['clipboard-read','clipboard-write'],{origin:ready.url});
- const target=await context.newPage();target.setDefaultTimeout(4000);target.setDefaultNavigationTimeout(10000);
+ const target=await context.newPage();pageLabels.set(target,label);
+ target.setDefaultTimeout(4000);target.setDefaultNavigationTimeout(10000);
  target.on('pageerror',error=>errors.push(error.message));
  target.on('request',request=>{
   const pathname=new URL(request.url()).pathname;
-  if(pathname.startsWith('/api/canvas/'))requests.push({path:pathname,query:new URL(request.url()).search});
+  if(pathname.startsWith('/api/canvas/'))requests.push({client:label,path:pathname,query:new URL(request.url()).search});
   if(request.method()==='POST'&&pathname==='/api/actions'){
    const payload=request.postDataJSON();commands.push(payload?.action==='shell.command'?(payload.args.command||payload.args):payload);
   }
@@ -203,6 +242,140 @@ async function connect(options){
  await target.goto(ready.url);
  await target.waitForFunction(()=>window.amplifier?.getState()?.client?.id);
  return target;
+}
+
+const documentRequests=target=>requests.filter(row=>row.path.endsWith('/document')&&row.client===pageLabels.get(target));
+async function previewState(target,row){
+ return target.evaluate(id=>{
+  const s=window.amplifier.getState(),c=s.canvas;
+  return {selected:s.selectedSessionId,draft:s.view.draft,
+   canvas:{id:c.id,version:c.selectedVersion,readOnly:c.readOnlyVersion},
+   views:(s.canvasWorkspace?.views||[]).filter(view=>view.resourceId===id).map(view=>({
+    viewId:view.viewId,resourceId:view.resourceId,resourceRevision:view.resourceRevision,generation:view.generation,
+    selectedVersion:view.selectedVersion
+   })),iframeSightings:window.__fileControlsFrames||[]};
+ },row.id);
+}
+const executionMarker=frame=>frame.evaluate(()=>({
+ count:window.fileControlsExecutions,executed:document.body.dataset.fileControlsExecuted,
+ token:document.body.dataset.fileControlsToken
+}));
+
+async function startPreview(target,row,draft,label){
+ // A separate, deliberate preview SETUP, after the card-only no-document oracle.
+ // Never classify this canvas.select or its document request as a download.
+ const before=documentRequests(target).length;
+ await action(target,'view.update',{patch:{canvasWidth:900,canvasControlsExpanded:false,canvasFocused:false}});
+ await action(target,'canvas.select',{id:row.id,sessionId:seed.sessionId,version:row.version,presentation:'canvas'});
+ const panel=target.locator('#workspace-canvas');
+ await expect(panel).toBeVisible();
+ const locator=panel.locator('.a-canvas-workspace iframe.a-canvas-html');
+ await expect(locator).toHaveCount(1);
+ const element=await locator.elementHandle();
+ try{
+  const frame=await element.contentFrame();assert.ok(frame,'Primary HTML frame must be attached');
+  await expect(frame.getByRole('heading',{name:'Original résumé α — 雪',exact:true})).toBeVisible();
+  await frame.waitForFunction(()=>window.fileControlsExecutions===1&&document.body.dataset.fileControlsToken,undefined,{timeout:4000});
+  const input=frame.getByRole('textbox',{name:'Unfinished preview note',exact:true});
+  const unfinished=`Unsubmitted ${label} note — ${randomUUID()}`;
+  await input.fill(unfinished);
+  const marker=await executionMarker(frame);
+  assert.equal(marker.count,1);assert.equal(marker.executed,'1');
+  assert.match(marker.token,/^\d+-\d+-\d+-\d+$/,'Fixture script must have generated a fresh execution token');
+  const state=await previewState(target,row);
+  assert.equal(state.selected,seed.sessionId);assert.equal(state.draft,draft);
+  assert.deepEqual(state.canvas,{id:row.id,version:row.version,readOnly:true});
+  assert.equal(state.views.length,1);assert.equal(state.views[0].viewId,'primary');
+  const documents=documentRequests(target);
+  assert.equal(documents.length,before+1,'Preview setup must load exactly one document');
+  assert.equal(documents.at(-1).path,`/api/canvas/${row.id}/document`);
+  const retained={target,row,panel,locator,element,frame,input,unfinished,marker,state,documents,commandStart:commands.length,label};
+  checks.push({check:'deliberate saved-v1 preview setup, not a download',label,marker,state,documents});
+  await previewPreserved(retained);
+  return retained;
+ }catch(error){await element.dispose();throw error}
+}
+async function previewPreserved(retained){
+ const {target,row,locator,element,frame,input,unfinished,marker,state,documents}=retained;
+ assert.equal(await element.evaluate(node=>node.isConnected),true,'Running preview iframe was removed');
+ assert.equal(await locator.evaluate((node,original)=>node===original,element),true,'Running preview iframe was replaced');
+ assert.equal(await target.locator('iframe').count(),1,'A second preview frame was mounted');
+ assert.deepEqual(await executionMarker(frame),marker,'Preview execution marker changed: script reran or frame reloaded');
+ assert.equal(await input.inputValue(),unfinished,'Unfinished preview input changed');
+ assert.deepEqual(await previewState(target,row),state,'File controls changed selection, draft, renderer lease or frame attributes');
+ assert.deepEqual(documentRequests(target),documents,'File controls issued an extra HTML document request');
+ assert.deepEqual(commands.slice(retained.commandStart).filter(row=>
+  ['canvas.select','canvas.views.inline','conversation.send','session.send'].includes(row?.action)),[],
+ 'File controls selected/mounted a preview or sent input');
+}
+async function tabTo(target,control){
+ // Traverse the real tab order; do not turn a missing/unreachable control into
+ // a pass by clicking via evaluate or directly focusing the destination.
+ for(let step=0;step<16;step++){
+  if(await control.evaluate(node=>node===document.activeElement))return;
+  await target.keyboard.press('Tab');
+ }
+ throw Error(`Native keyboard traversal did not reach ${await control.getAttribute('aria-label')||await control.innerText()}`);
+}
+async function usePreviewControls(retained,label,mode){
+ const {target,panel,row}=retained;
+ const primary=panel.locator('.a-canvas-primary-actions').getByRole('button',{name:'Download canvas source',exact:true});
+ const toggle=panel.getByRole('button',{name:'Canvas details',exact:true});
+ const inspector=panel.getByRole('region',{name:'Canvas details',exact:true});
+ await expect(inspector).toBeHidden();
+ await expect(primary).toBeVisible();
+ assert.equal(await primary.evaluate(node=>node.tagName),'BUTTON');
+ await measureControls(target,[primary,toggle],label+'-primary-before');
+ if(mode==='keyboard'){
+  // Copy precedes Download in the actual primary action row.
+  await panel.locator('.a-canvas-primary-actions').getByRole('button',{name:'Copy canvas source',exact:true}).focus();
+  await target.keyboard.press('Tab');await expect(primary).toBeFocused();
+  await saveControlAndVerify(target,primary,row,label+'-primary-v1',()=>target.keyboard.press('Enter'));
+ }else await saveControlAndVerify(target,primary,row,label+'-primary-v1',control=>cornerTap(control,'bottom-right'));
+ await previewPreserved(retained);
+ await measureControls(target,[primary,toggle],label+'-primary-after');
+ await target.screenshot({path:join(evidence,label+'-primary.png')});
+ if(mode==='keyboard'){
+  // Download temporarily disables its button. Re-anchor after completion so a
+  // browser's native disabled-control blur is not mistaken for wrong tab order.
+  await expect(primary).toBeEnabled();await primary.focus();
+  await target.keyboard.press('Tab');await expect(toggle).toBeFocused();await target.keyboard.press('Enter');
+ }else await toggle.tap();
+ await expect(inspector).toBeVisible();
+ await expect(panel.locator('.a-canvas-content')).toHaveAttribute('data-details-overlay',mode==='keyboard'?'false':'true');
+ const details=inspector.locator('details.a-canvas-file-path'),summary=details.locator('summary');
+ await expect(summary).toHaveText('File details');
+ // This is the existing right-rail portal, not the similarly named chat card.
+ assert.equal(await details.count(),1);
+ if(mode==='keyboard'){
+  await expect(inspector.getByRole('button',{name:'Close canvas details',exact:true})).toBeFocused();
+  await tabTo(target,summary);
+  if(!await details.evaluate(node=>node.open))await target.keyboard.press('Enter');
+ }else if(!await details.evaluate(node=>node.open))await summary.tap();
+ await expect(details.getByText(`Saved version ${row.version}`,{exact:true})).toBeVisible();
+ await controlsOracle(details,row);
+ for(const [name,value] of [[names[0],row.filePaths.absolute],[names[1],row.filePaths.relative]]){
+  if(mode==='keyboard'){
+   await tabTo(target,button(details,name));await expect(button(details,name)).toBeFocused();
+   await copy(target,details,name,value,()=>target.keyboard.press('Enter'));
+  }else await copy(target,details,name,value,control=>cornerTap(control,name===names[0]?'top-left':'bottom-right'));
+  await previewPreserved(retained);
+ }
+ if(mode==='keyboard'){
+  await tabTo(target,button(details,names[2]));await expect(button(details,names[2])).toBeFocused();
+  await saveAndVerify(target,details,row,label+'-rail-v1',()=>target.keyboard.press('Enter'));
+ }else await saveAndVerify(target,details,row,label+'-rail-v1',control=>cornerTap(control,'bottom-right'));
+ await previewPreserved(retained);
+ await measure(target,details,label+'-rail');
+ const close=inspector.getByRole('button',{name:'Close canvas details',exact:true});
+ if(mode==='keyboard'){
+  await button(details,names[2]).focus();await target.keyboard.press('Escape');
+ }else await close.tap();
+ await expect(inspector).toBeHidden();
+ await previewPreserved(retained);
+ await target.screenshot({path:join(evidence,label+'-retained-preview.png')});
+ checks.push({check:'right-rail paths/download and primary Download preserve running saved-v1 HTML',label,mode,
+  marker:retained.marker,unfinished:retained.unfinished,documents:documentRequests(target),state:await previewState(target,row)});
 }
 
 async function run(){
@@ -312,39 +485,75 @@ async function run(){
  assert.notEqual(adjacent.sha256,html.sha256,'Adjacent specimen must detect cross-file confusion');
  checks.push({check:'adjacent Markdown stays distinct; direct saved-only has no paths; outside-current-base has no relative-copy control'});
  // Open disclosure survives placement changes, but never retains a stale base.
- await page.request.post(ready.url+'/fixture/file-controls/placement',{data:await identity(page)});
+ await placement(page);
  await expect(button(details,'Copy relative path')).toHaveCount(0);
  await expect(details.getByText(html.filePaths.relative,{exact:true})).toHaveCount(0);
  await expect(details.getByText(html.filePaths.absolute,{exact:true})).toBeVisible();
- await page.request.post(ready.url+'/fixture/file-controls/placement',{data:{...await identity(page),restore:true}});
+ await placement(page,true);
  await expect(button(details,'Copy relative path')).toBeVisible();
  await controlsOracle(details,html);
- // Delay an old metadata response across two placement revisions.
+ // Hold only the FIRST matching request. Playwright 1.63.0 auto-continues a held
+ // route if unroute runs early, so fulfill and await delivery BEFORE unregistering.
+ // Later metadata requests must continue while the old receipt is held.
  await details.locator('summary').click();
- let releaseMetadata,metadataAccepted,metadataDelivered;
+ let releaseMetadata,metadataHeld=false,metadataClosing=false,metadataCleanup;
+ const metadataCallbacks=new Set(),metadataErrors=[];
  const metadataGate=new Promise(resolve=>{releaseMetadata=resolve});
- const acceptedGate=new Promise(resolve=>{metadataAccepted=resolve});
- const deliveredGate=new Promise(resolve=>{metadataDelivered=resolve});
- const delayMetadata=async route=>{
-  const data=route.request().postDataJSON();
-  if(data?.action!=='canvas.versions.inspect'||data.args?.id!==html.id)return route.continue();
-  const response=await route.fetch();metadataAccepted();await metadataGate;await route.fulfill({response});metadataDelivered();
+ const acceptedGate=observedGate('Old metadata acceptance'),deliveredGate=observedGate('Old metadata delivery');
+ const delayMetadata=route=>{
+  const pending=(async()=>{
+   try{
+    const data=route.request().postDataJSON();
+    if(metadataClosing||metadataHeld||data?.action!=='canvas.versions.inspect'||data.args?.id!==html.id){
+     await route.continue();return;
+    }
+    metadataHeld=true; // Synchronous, before route.fetch yields.
+    const response=await route.fetch({timeout:5000});
+    assert.equal(response.status(),200,'Held metadata request failed');
+    acceptedGate.resolve();await metadataGate;
+    await route.fulfill({response});deliveredGate.resolve();
+   }catch(error){
+    acceptedGate.reject(error);
+    let deliveredError=error;
+    try{await route.abort()}catch(abortError){deliveredError=new AggregateError([error,abortError],'Metadata route and abort failed')}
+    // Even a later continue failure, after a gate settled, is retained and
+    // thrown by drainMetadata. No rejected callback is left unobserved.
+    metadataErrors.push(deliveredError);deliveredGate.reject(deliveredError);
+   }
+  })();
+  metadataCallbacks.add(pending);
+  return pending;
  };
+ // Idempotent: the local finally and the overall deadline cleanup share this
+ // release. A callback failure is rethrown by an awaited gate, including cleanup.
+ const drainMetadata=()=>metadataCleanup??=(async()=>{
+  metadataClosing=true;releaseMetadata();
+  const failures=[];
+  try{if(metadataHeld)await deliveredGate.wait()}catch(error){failures.push(error)}
+  try{await page.unroute('**/api/actions',delayMetadata)}catch(error){failures.push(error)}
+  try{await bounded(Promise.all([...metadataCallbacks]),8000,'Metadata callbacks did not settle')}catch(error){failures.push(error)}
+  failures.push(...metadataErrors);
+  if(failures.length)throw new AggregateError([...new Set(failures)],'Metadata interceptor failed');
+ })();
  await page.route('**/api/actions',delayMetadata);
+ routeCleanups.add(drainMetadata);
  try{
-  await details.locator('summary').click();await acceptedGate;
-  await page.unroute('**/api/actions',delayMetadata);
-  await page.request.post(ready.url+'/fixture/file-controls/placement',{data:await identity(page)});
+  await details.locator('summary').click();await acceptedGate.wait();
+  assert.equal(metadataHeld,true);
+  await placement(page);
   await expect.poll(()=>page.evaluate(()=>{const s=window.amplifier.getState();return s.sessions.find(row=>row.id===s.selectedSessionId)?.workingDirectory})).toBe(seed.workspace);
   await expect(button(details,'Copy relative path')).toHaveCount(0);
   // The app serializes actions; release the old receipt before expecting the
   // replacement metadata request to finish. Assert after both deliveries.
-  releaseMetadata();await deliveredGate;
+  releaseMetadata();await deliveredGate.wait();
   await expect(details).toContainText('No relative path:');
   await expect(details.getByText(seed.workspace,{exact:true})).toBeVisible();
   await expect(button(details,'Copy relative path')).toHaveCount(0);
- }finally{releaseMetadata();await page.unroute('**/api/actions',delayMetadata)}
- await page.request.post(ready.url+'/fixture/file-controls/placement',{data:{...await identity(page),restore:true}});
+  await expect(details.getByText(html.filePaths.relative,{exact:true})).toHaveCount(0);
+ }finally{
+  try{await drainMetadata()}finally{routeCleanups.delete(drainMetadata)}
+ }
+ await placement(page,true);
  await expect(button(details,'Copy relative path')).toBeVisible();
  checks.push({check:'open details refreshes current working folder and rejects delayed prior-placement metadata'});
  const desktopCommands=commands.slice(controlsStart);
@@ -353,7 +562,7 @@ async function run(){
 
  // A real touch-enabled context, not just a resized desktop. Reuse the same
  // retained artifact and positive oracles at both narrow widths.
- const mobile=await connect({viewport:{width:390,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:1});
+ const mobile=await connect({viewport:{width:390,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:1},'touch');
  await action(mobile,'session.select',{id:seed.sessionId});
  await showFixtureConversation(mobile,{navPinned:false});
  await action(mobile,'canvas.select',{id:seed.unrelated.id,sessionId:seed.sessionId,version:1,presentation:'canvas'});
@@ -376,31 +585,76 @@ async function run(){
  }
  assert.deepEqual(commands.slice(touchStart).filter(row=>['canvas.select','canvas.views.inline','conversation.send','session.send'].includes(row?.action)),[]);
  checks.push({check:'390px/320px emulated touch, actual corner taps, 44px targets, four-corner hit testing and saved PNGs'});
+ // End the card-only phase here. The unrelated read-only Canvas and no-document
+ // assertions above remain strict; the next phase intentionally opens our HTML.
+ assert.deepEqual(requests.filter(row=>row.path.endsWith('/document')),[],'Card details/download must not request an HTML document');
+ checks.push({check:'card-only phase completed with zero document requests and unrelated historical Canvas retained'});
+ const desktopPreview=await startPreview(page,html,draft,'desktop');
+ try{
+  // Meaningful negatives for the same retained-preview oracle, without a second
+  // renderer or a deliberate reload that would invalidate the original handle.
+  await desktopPreview.input.evaluate(node=>{node.value='Synthetic lost input'});
+  try{await assert.rejects(()=>previewPreserved(desktopPreview),/Unfinished preview input changed/)}
+  finally{await desktopPreview.input.evaluate((node,value)=>{node.value=value},desktopPreview.unfinished)}
+  await desktopPreview.frame.evaluate(()=>{document.body.dataset.fileControlsToken='Synthetic rerun token'});
+  try{await assert.rejects(()=>previewPreserved(desktopPreview),/Preview execution marker changed/)}
+  finally{await desktopPreview.frame.evaluate(value=>{document.body.dataset.fileControlsToken=value},desktopPreview.marker.token)}
+  await previewPreserved(desktopPreview);
+  checks.push({check:'negative controls: lost input and changed execution token rejected by the same retained-preview oracle'});
+  await usePreviewControls(desktopPreview,'desktop-preview','keyboard');
+ }finally{await desktopPreview.element.dispose()}
+ await mobile.setViewportSize({width:390,height:844});
+ const touchPreview=await startPreview(mobile,html,mobileDraft,'touch');
+ try{
+  for(const width of [390,320]){
+   await mobile.setViewportSize({width,height:width===390?844:740});
+   assert.ok(await mobile.evaluate(()=>navigator.maxTouchPoints>0));
+   await previewPreserved(touchPreview);
+   await usePreviewControls(touchPreview,`touch-${width}-preview`,'touch');
+  }
+ }finally{await touchPreview.element.dispose()}
  const final=await fixtureRead(page);
  assert.deepEqual(final.sent,[]);assert.equal(final.sourceDeleted,true);assert.equal(final.sourceExists,false);
  assert.equal(final.newer.revision,2);
- assert.deepEqual(requests.filter(row=>row.path.endsWith('/document')),[],'No HTML document request is allowed for details/download');
+ assert.equal(requests.filter(row=>row.path.endsWith('/document')).length,2,
+  'Only the two deliberate preview setups may request HTML; all copy/download phases must retain them');
  assert.deepEqual(errors,[]);
 }
 
 try{
- await Promise.race([run(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Focused file-controls proof exceeded 60 seconds')),60000)})]);
+ running=run();
+ await Promise.race([running,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Focused file-controls proof exceeded 120 seconds')),120000)})]);
 }catch(error){
  failure=error;
- if(page&&!page.isClosed())await page.screenshot({path:join(evidence,'failure.png'),timeout:3000}).catch(()=>{});
+ for(const target of (browser?.contexts()||[]).flatMap(context=>context.pages()).filter(target=>!target.isClosed())){
+  const label=pageLabels.get(target)||'unknown';
+  try{await target.screenshot({path:join(evidence,`failure-${label}.png`),timeout:3000})}
+  catch(error){screenshotErrors.push({client:label,error:errorEvidence(error)})}
+ }
 }finally{
  clearTimeout(timer);
  try{
-  await finishFixture({label:'Generated file controls fixture',close:[['browser',()=>browser?.close()]],stop:async()=>{cleanup=await stop()}});
+  await finishFixture({label:'Generated file controls fixture',
+   close:[...Array.from(routeCleanups,release=>['held metadata response',release]),['browser',()=>browser?.close()]],
+   stop:async()=>{cleanup=await stop()}});
   assert.equal(records.find(row=>row.cleanup)?.cleanup.homeRemoved,true,'Fixture-owned state/socket directory was not removed');
  }catch(error){failure=failure?new AggregateError([failure,error],'File controls proof and cleanup failed'):error}
- await writeFile(join(evidence,'fixture.log'),logs);
- await writeFile(join(evidence,'observations.json'),JSON.stringify({passed:!failure,error:failure?.stack,
+ // A deadline is not cancellation. Closing the browser settles outstanding
+ // driver calls; await the run before freezing evidence, including its finally.
+ if(running)try{await bounded(running,10000,'Driver did not settle after fixture cleanup')}
+ catch(error){if(error!==failure)failure=failure?new AggregateError([failure,error],'File controls proof did not settle cleanly'):error}
+ const writes=await Promise.allSettled([
+  writeFile(join(evidence,'fixture.log'),logs),
+  writeFile(join(evidence,'observations.json'),JSON.stringify({passed:!failure,error:failure?.stack,failure:errorEvidence(failure),screenshotErrors,
   installed:ready&&{packageRoot:ready.packageRoot,verified:ready.installedVerified,staticSha256:ready.staticSha256},
-  seed,checks,geometry,downloads,requests,cleanup,fixtureCleanup:records.find(row=>row.cleanup)?.cleanup,
+  seed,checks,geometry,downloads,requests,commands,errors,cleanup,fixtureCleanup:records.find(row=>row.cleanup)?.cleanup,
   limits:['Synthetic runtime and fixture bearer authentication; no provider, login, remote server or physical touch-device claim.',
    'Clipboard/403/wrong-byte faults are deliberate test injections; positive clipboard reads and downloaded files are real browser results.',
-   'PNG capture and measured reachability do not claim independent human visual review.']},null,2)+'\n');
+   'The two later HTML previews execute deliberately as setup; copy/download must retain each original frame and execution token.',
+   'Exact-byte identity covers ordinary saved UTF-8 HTML/Markdown, not Babylon engine-prepending exports.',
+   'PNG capture and measured reachability do not claim independent human visual review.']},null,2)+'\n')]);
+ const writeErrors=writes.filter(row=>row.status==='rejected').map(row=>row.reason);
+ if(writeErrors.length)failure=new AggregateError([...(failure?[failure]:[]),...writeErrors],'File controls evidence write failed');
  const entries=await readdir(evidence,{withFileTypes:true});
  assert.ok(entries.every(entry=>entry.isFile()),'Export only ordinary evidence files, never fixture sockets/profile/state');
 }
