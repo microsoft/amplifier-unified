@@ -104,6 +104,32 @@ record. Update them when workload or contract changes, with a reason and retaine
 comparison. Link that evidence from the PR; passing one fixture is not a claim
 about all histories, platforms, provider behavior or deployed user latency.
 
+## Agent preparation and tool reads
+
+`tests/test_runtime_progress_backpressure.py` grows retained worker reports from
+one to 475 with a large saved task body. Bridge diagnostics must produce zero
+conversation saves/publications while remaining inspectable in pending and
+durable diagnostic capture. Terminal execution receipts still commit immediately.
+Inspection reads a bounded indexed diagnostic tail; absent or disabled capture
+does not mean an operation succeeded. Historical captures retain their normal
+retention policy.
+
+`tests/test_preparation_context.py` checks one host preparation read per request,
+explicit partial coverage, isolated concurrent requests and cancellation. The
+existing surface/reaction/coordination/memory owners still construct their own
+sections; unavailable data retains each consumer's existing behavior. The snapshot
+expires after fitting and does not replace memory or Work revalidation at send.
+The native surface/awareness probes check selective images, fresh per-request
+observations and clean durable history through the real runtime.
+
+`tests/test_app_control_validation.py` exercises the mounted app tool with the
+loop-live execution wrapper. Only host-declared independent reads may overlap;
+dispatch and context/delivery mutations keep their ordering. Loop-live's real
+engine checks preserve hook denial, delayed-approval revocation, cancellation,
+call identity and default serialization. No model-provided flag grants this
+behavior. Compare overlapping waits with a serial baseline; do not claim remote
+provider latency or end-to-end live improvement from a synthetic transport.
+
 ## Maintained client smoke
 
 `frontend/tests/client-traffic-browser.mjs` uses the real server and built client

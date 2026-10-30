@@ -283,3 +283,93 @@ def test_recovery_archive_keeps_path_type_and_size_bounds(tmp_path, monkeypatch,
     with pytest.raises(ValueError):
         retention.filter_incus_stream(backup(ROOTS + [entry]), tmp_path, 'owned', archive_only=True)
     assert not (tmp_path / 'retention.json').exists()
+
+
+@pytest.mark.parametrize('archive_only', [False, True])
+@pytest.mark.parametrize('kind,reason,member_type', [
+    (tarfile.FIFOTYPE, 'unsupported_type', 'fifo'),
+    (tarfile.CHRTYPE, 'unsupported_type', 'character'),
+    (tarfile.BLKTYPE, 'unsupported_type', 'block'),
+])
+def test_validation_diagnostic_preserves_special_entry_rejection(tmp_path, archive_only, kind, reason, member_type):
+    # Only archive headers, never a real FIFO/device in the test filesystem.
+    path = tmp_path / 'workspace.tar'
+    raw = raw_header('workspace') + raw_header('workspace/special', kind) + bytes(1024)
+    path.write_bytes(raw)
+    with pytest.raises(retention.ValidationFailure) as caught:
+        retention.inspect_archive(path, 'workspace', archive_only=archive_only)
+    assert caught.value.diagnostic == {'version': 1, 'reasonCode': reason,
+        'memberType': member_type, 'relativePath': 'workspace/special'}
+    assert path.read_bytes() == raw and not (tmp_path / 'special').exists()
+
+
+@pytest.mark.parametrize('case,reason', [
+    ('duplicate', 'duplicate_entry'), ('traversal', 'unsafe_path'),
+    ('header', 'invalid_header'), ('footer', 'incomplete_footer'),
+    ('trailing', 'trailing_data'), ('members', 'member_limit'),
+    ('size', 'selected_size_limit'), ('root', 'missing_root'),
+])
+def test_validation_diagnostic_names_exact_bounded_failure(tmp_path, monkeypatch, case, reason):
+    root = raw_header('workspace')
+    raw = root + bytes(1024)
+    if case == 'duplicate':
+        raw = root + root + bytes(1024)
+    elif case == 'traversal':
+        raw = root + raw_header('workspace/../private-secret') + bytes(1024)
+    elif case == 'header':
+        raw = root + b'invalid'.ljust(512, b'x') + bytes(1024)
+    elif case == 'footer':
+        raw = root + bytes(512)
+    elif case == 'trailing':
+        raw = root + bytes(1024) + b'private-secret'.ljust(512, b'x')
+    elif case == 'members':
+        monkeypatch.setattr(retention, 'MEMBER_LIMIT', 0)
+    elif case == 'size':
+        monkeypatch.setattr(retention, 'RECOVERY_LIMIT', 0)
+        raw = root + raw_header('workspace/large', tarfile.REGTYPE, 1) + b'x'.ljust(512, b'\0') + bytes(1024)
+    elif case == 'root':
+        raw = raw_header('workspace/nested') + bytes(1024)
+    path = tmp_path / 'workspace.tar'
+    path.write_bytes(raw)
+    with pytest.raises(retention.ValidationFailure) as caught:
+        retention.inspect_archive(path, 'workspace', archive_only=True)
+    diagnostic = retention.validation_failure_diagnostic(caught.value)
+    assert diagnostic['reasonCode'] == reason
+    assert len(json.dumps(diagnostic).encode()) < 1024
+    assert str(tmp_path) not in json.dumps(diagnostic) and 'private-secret' not in json.dumps(diagnostic)
+    assert path.read_bytes() == raw
+
+
+@pytest.mark.parametrize('change,reason', [('negative', 'invalid_size'), ('sparse', 'sparse_entry')])
+def test_validation_diagnostic_does_not_accept_sparse_or_negative_members(change, reason):
+    item = tarfile.TarInfo('workspace/member')
+    if change == 'negative':
+        item.size = -1
+    else:
+        item.pax_headers['GNU.sparse.map'] = '0,1'
+    with pytest.raises(retention.ValidationFailure) as caught:
+        retention.validate_member(item, item.name, {}, {}, set(), archive_only=True)
+    assert caught.value.diagnostic['reasonCode'] == reason
+
+
+@pytest.mark.parametrize('path', ['/host/private', 'workspace/../private', 'workspace/a\nsecret',
+                                  'workspace/' + 'x' * 300, 'workspace/token=secret', 'elsewhere/file'])
+def test_validation_diagnostic_omits_unsafe_names_and_arbitrary_details(path):
+    item = tarfile.TarInfo(path)
+    item.type, item.linkname = tarfile.FIFOTYPE, '/host/private-target'
+    failure = retention.ValidationFailure('unsupported_type', 'private exception text', item=item, name=path)
+    assert failure.diagnostic == {'version': 1, 'reasonCode': 'unsupported_type', 'memberType': 'fifo'}
+    assert retention.validation_failure_diagnostic(ValueError('private exception')) is None
+    assert retention.validation_failure_diagnostic(tarfile.ReadError('private exception')) == {
+        'version': 1, 'reasonCode': 'archive_format'}
+    assert retention.validation_diagnostic({'version': 1, 'reasonCode': 'private arbitrary'}) is None
+    assert retention.validation_diagnostic({**failure.diagnostic, 'linkTarget': item.linkname}) is None
+
+
+def test_validation_diagnostic_never_includes_symbolic_target():
+    item = tarfile.TarInfo('workspace/link')
+    item.type, item.linkname = tarfile.SYMTYPE, '/private/token'
+    with pytest.raises(retention.ValidationFailure) as caught:
+        retention.validate_member(item, item.name, {}, {}, set())
+    assert caught.value.diagnostic == {'version': 1, 'reasonCode': 'symbolic_target',
+        'memberType': 'symbolic', 'relativePath': 'workspace/link'}
