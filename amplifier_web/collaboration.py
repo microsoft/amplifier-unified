@@ -27,7 +27,6 @@ MAX_PAIR_MESSAGES_PER_MINUTE = 32
 MAX_SENDER_INPUTS = 16
 MAX_ASSIGNMENT_INPUTS = 32
 MAX_RESPONSE_REVISIONS = 32
-MAX_CAUSAL_HOPS = 16
 DEFAULT_QUEUE_SECONDS = 86400
 REPORT_OUTCOMES = {'failed', 'deferred', 'declined', 'question', 'conflict', 'cancelled'}
 
@@ -377,10 +376,6 @@ class Collaboration:
                 if receipt.get('commandAction') == 'coordination.send' and receipt.get('target', {}).get('sessionId') == source['id']:
                     depth = max(depth, receipt.get('causalDepth', 0))
         return depth + 1
-
-    def require_causal_depth(self, depth):
-        if depth > MAX_CAUSAL_HOPS:
-            self.error('This causal peer-input chain reached 16 hops. Inspect the retained work and wait for explicit human direction; changing IDs or wording does not reset the bound.', 429)
 
     def require_message_rate(self, source, target):
         count = self.service.db.execute("""SELECT count(*) FROM commands
@@ -1227,8 +1222,12 @@ class Collaboration:
         """Commit at most one guarded input for a meaningful outcome revision."""
         wait = request['subscription']
         versioned = wait.get('notificationVersion') == 2
-        if request.get('protocol') != PROTOCOL or wait.get('status') not in (
-                {'waiting', 'claimed', 'backpressured'} if versioned else {'waiting'}):
+        # Only this retired implementation limit is recoverable. The separate
+        # outcome-revision limit, explicit cancellation and Stop stay unchanged.
+        hop_limited = (versioned and wait.get('status') == 'limit_reached'
+            and wait.get('detail') == 'The causal peer-input chain reached 16 hops; its report remains inspectable.')
+        if request.get('protocol') != PROTOCOL or (not hop_limited and wait.get('status') not in (
+                {'waiting', 'claimed', 'backpressured'} if versioned else {'waiting'})):
             return
         response = continuation_outcome(request)
         if response is None:
@@ -1255,11 +1254,6 @@ class Collaboration:
             return
         producer = outcome_sender(request)
         depth = max(request.get('causalDepth', 0), response.get('causalDepth', 0))+1
-        if depth > MAX_CAUSAL_HOPS:
-            wait.update(status='limit_reached', open=False, detail='The causal peer-input chain reached 16 hops; its report remains inspectable.')
-            self.save(request['requestId'], request)
-            self.service.db.commit()
-            return
         # A report remains durable even if its independent notification cannot
         # commit. The payload and claim below are one transaction.
         self.save(request['requestId'], request)
@@ -1362,6 +1356,16 @@ class Collaboration:
     def start(self):
         """One recovery pass over known unsubmitted queues, not a scheduler."""
         self.watches.start()
+        # Reconsider only saved waits stopped by the removed hop count. Normal
+        # outcome idempotency and current task/Stop admission guards still apply.
+        for (encoded,) in self.service.db.execute('''SELECT receipt FROM commands
+                WHERE json_extract(receipt,'$.commandAction') IN
+                    ('coordination.send','coordination.watch','worktree.handoff','workspace.tests.submit')
+                AND json_extract(receipt,'$.subscription.status')='limit_reached'
+                AND json_extract(receipt,'$.subscription.notificationVersion')=2
+                AND json_extract(receipt,'$.subscription.detail')=?''',
+                ('The causal peer-input chain reached 16 hops; its report remains inspectable.',)).fetchall():
+            self.enqueue_continuation(json.loads(encoded))
         for (encoded,) in self.service.db.execute('''SELECT receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='coordination.send'
                 AND json_extract(receipt,'$.subscription.status') IN ('waiting','claimed','backpressured')
@@ -1690,7 +1694,6 @@ class Collaboration:
                 self.require_message_rate(source['id'], target['id'])
                 depth = self.causal_depth(source, lineage, origin)
                 if mode != 'notify':
-                    self.require_causal_depth(depth)
                     self.require_inbox_slot(target['id'], source['id'],
                         source.get('assignmentId') or (source.get('collaboration') or {}).get('assignmentId'),
                         slots=2 if notify_return and source['id'] == target['id'] else 1)
@@ -1877,7 +1880,6 @@ class Collaboration:
                     self.error(f"The limit of {maximum} outstanding task chats per source has been reached. Adjust Advanced execution limits in Settings to change it.", 409)
             if not args['title'].strip() or not args['text'].strip():
                 self.error('Enter a task title and brief.', 400)
-            self.require_causal_depth(self.causal_depth(source, lineage, origin))
             notify = args.get('returnNotification', True)
             if notify:
                 self.require_inbox_slot(source['id'])
