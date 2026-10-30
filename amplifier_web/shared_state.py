@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from dataclasses import dataclass
-import hashlib
 import os
 from pathlib import Path
 
@@ -71,13 +70,6 @@ class ActivationGate:
     @property
     def current_valid(self) -> bool:
         return self._active is not None and self._current.get() is self._active
-
-
-def workspace_snapshot_path(workspace: Path, home: Path) -> Path:
-    """Return the app-owned snapshot path for an imported workspace."""
-
-    digest = hashlib.sha256(str(workspace.expanduser().resolve()).encode()).hexdigest()[:20]
-    return home.expanduser().resolve() / "config" / "workspaces" / (digest + ".yaml")
 
 
 def configuration_paths(workspace: Path, session_id: str, home: Path) -> tuple[Path, ...]:

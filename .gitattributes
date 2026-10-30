@@ -1,0 +1,55 @@
+# Review context only. These attributes do not exclude files from Git or packages.
+# Unknown paths stay visible; scripts/source_context.py --check reports them.
+* source-context=unclassified
+/*.md source-context=documentation
+/LICENSE source-context=documentation
+/.gitignore source-context=configuration
+/.gitattributes source-context=configuration
+/AGENTS.md source-context=guidance
+/amplifier_*/** source-context=source
+/frontend/** source-context=source
+/packages/** source-context=source
+/examples/** source-context=source
+/scripts/** source-context=tooling
+/.github/** source-context=tooling
+/tests/** source-context=tests
+/frontend/tests/** source-context=tests
+/scripts/**/tests/** source-context=tests
+/docs/** source-context=documentation
+/contracts/** source-context=contracts
+/context/** source-context=guidance
+/skills/** source-context=guidance
+/behaviors/** source-context=guidance
+/bundle.yaml source-context=guidance
+/assets/** source-context=assets
+/plans/** source-context=documentation
+
+# Authored configuration and guides remain discoverable beside their consumers.
+pyproject.toml source-context=configuration
+package.json source-context=configuration
+README.md source-context=documentation
+/frontend/vite.config.js source-context=configuration
+/amplifier_web/runtime_deps/compatibility.txt source-context=configuration
+/amplifier_web/THIRD_PARTY_NOTICES.txt source-context=documentation
+uv.lock source-context=locks
+package-lock.json source-context=locks
+*.png source-context=assets
+*.jpg source-context=assets
+*.jpeg source-context=assets
+*.gif source-context=assets
+*.ico source-context=assets
+*.webp source-context=assets
+*.mp4 source-context=assets
+
+# Known retained evidence. Dated documentation can still govern current work;
+# do not classify all validation docs or JSON test inputs as historical.
+/output/** source-context=evidence
+/docs/architecture/evidence/** source-context=evidence
+/BUILD-NOTES.md source-context=evidence
+/docs/settings-inventory.csv source-context=evidence
+/frontend/tests/standard-ux-controls.json source-context=evidence linguist-generated=true
+/frontend/tests/standard-ux-inventory.json source-context=evidence linguist-generated=true
+
+# Built delivery, including copied source, vendor resources and license notices.
+# Preserve committed bytes and existing source/build/installed parity checks.
+/amplifier_web/static/** source-context=generated linguist-generated=true

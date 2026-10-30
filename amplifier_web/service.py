@@ -17,11 +17,13 @@ from weakref import WeakValueDictionary
 
 from jsonschema import validate, ValidationError
 import tinycss2
+from .errors import AppError
 from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background, interrupt_unfinished, restore_voice_usage
 from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, work_paused
 from .managed_chats import LOCATION
 from .attachments import MAX_ENCODED_BYTES
 from .performance_diagnostics import PerformanceDiagnostics, measured, TimedLock
+from .action_schema import schema, string
 
 
 def settle_stream(session):
@@ -36,15 +38,6 @@ def settle_stream(session):
             **({'streamId': identity} if identity else {}),
             **({'inputId': input_id} if input_id else {}),
         })
-
-
-def string(limit=16000):
-    return {"type": "string", "maxLength": limit}
-
-
-def schema(properties=None, required=None):
-    properties = properties or {}
-    return {"type": "object", "properties": properties, "required": list(properties) if required is None else required, "additionalProperties": False}
 
 
 def command_fingerprint(action, args, origin, client_id):
@@ -262,14 +255,6 @@ from .configuration_authority import definitions as configuration_authority_defi
 ACTION_DEFINITIONS.update(configuration_authority_definitions(schema, string))
 from .access_mode import definitions as access_mode_definitions
 ACTION_DEFINITIONS.update(access_mode_definitions(schema, string))
-
-
-class AppError(Exception):
-    def __init__(self, message, status=400, *, code=None, receipt=None):
-        super().__init__(message)
-        self.status = status
-        self.code = code
-        self.receipt = receipt
 
 
 def validate_theme(css):

@@ -12,7 +12,7 @@ from amplifier_operations.journal import ACTIVE
 
 
 def definitions():
-    from .service import schema, string
+    from .action_schema import schema, string
 
     common = {"sessionId": string(200), "id": string(200)}
     read = {
