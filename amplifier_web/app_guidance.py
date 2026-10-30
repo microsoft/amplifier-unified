@@ -4,7 +4,7 @@ import copy
 import weakref
 import json
 import re
-from .coordination_guidance import READ_GUIDANCE
+from .coordination_guidance import PLANNING_GUIDANCE, READ_GUIDANCE
 
 CANVAS_GUIDANCE = '''Chats may have location.kind=managed: Amplifier owns their per-chat files folder and uses app/global settings. This is managed storage, not an OS sandbox; existing tool authority still applies. Use session.draft or session.create with location:{kind:"managed"} and no workspace path. Do not register that private folder as a workspace. Existing chat history and artifacts stay durable; restarting never replays work.
 
@@ -55,7 +55,7 @@ message.reply {sessionId,messageId,clientId?} places an immutable excerpt above 
 Root bundles are selected through the shared bundle actions. bundle.preview {sessionId,bundle} shows changes in that session's bundlePreview; bundle.switch and bundle.fork {sessionId,bundle} can apply directly without preview. If a preview was reviewed, include its previewId and the same bundle to reject changed configuration. These actions require idle work, preserve history, and do not replay tools. An unavailable model pin requires explicit resetModel:true. Root changes reset old module edits, modes, and budget overrides. bundle.default {scope:app|workspace|shared,bundle:string|null,workspace?:path} sets a new-conversation default or clears that override. Inspect bundleDefaults for the effective choice: explicit conversation, workspace, Unified app, then shared Amplifier defaults. Do not change a shared default when the user requests only this app. Read final bundleChange state; an accepted receipt alone is not completion.
 '''
 
-CANVAS_GUIDANCE += '\n' + READ_GUIDANCE + '\n'
+CANVAS_GUIDANCE += '\n' + READ_GUIDANCE + '\n' + PLANNING_GUIDANCE + '\n'
 
 CANVAS_GUIDANCE += '''
 When queued work in an existing root needs a result, use coordination.send with

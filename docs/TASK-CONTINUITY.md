@@ -16,6 +16,25 @@ rather than replaced. Task actions return authoritative state, unlike a queued
 management acknowledgement. Linked operation IDs are observations; unknown
 outcomes remain unknown until their actual evidence is reconciled.
 
+## Planning and required limits
+
+A standing user request to complete work includes ordinary corrections,
+verification and agreed handoffs within its scope. Managers can revise their own
+planning checkpoints without requesting fresh user approval. The optional
+`maxTurns` field is an enforced limit, not an estimate; guidance therefore omits
+it unless a hard limit is required. Explicit user, commissioning-owner and host
+limits remain effective. An agent-origin record can contain a user's limit, and
+unknown historical provenance is not reclassified as an adjustable plan.
+
+The existing exact-revision `task.update` action can revise an authorized limit
+without resetting accumulated goal turns or deleting corrections and evidence.
+A completed objective remains immutable; `task.create` can record an already
+authorized follow-up and retains the completed task in history. Neither action
+supplies permission, resolves a pending user choice or overrides Stop. This is
+operating guidance for existing controls, not a new grant or automatic migration.
+
+## Continuation and recovery
+
 The existing goal controller performs continuation. The task revision applies at
 the next `provider:request` boundary during running work. Pause/block/completion
 clear the current goal immediately; the optional loop-live continuation guard
