@@ -140,6 +140,14 @@ record through paged details. It checks frame/projection growth, application-roo
 rendering, view-report feedback, current controls and unchanged canonical history.
 Its byte budgets are scoped to that fixture; timings are diagnostic.
 
+Causal-only samples wait for both shell requests and the selected conversation's
+current, ready work receipt. The fixture verifies one initial native-catalog
+read and stops only its periodic discovery loop: no external native history is
+being added. Selected transcript/work readers remain active, and material frames
+are never removed from a measurement. Delayed work reads must finish before
+sampling; removing the revision-only render guard must still fail the unchanged
+render assertion. See the [readiness follow-up receipt](client-traffic-readiness-20261030.json).
+
 `tests/test_attention_demand.py` holds the viewed/resident set fixed while
 growing acknowledged notice owners and their resolved-question history. Routine
 views read existing notice facts without decoding unrelated session summaries;
