@@ -439,13 +439,24 @@ class Collaboration:
                                  "qualification": "recipient declaration plus successful root terminal evidence",
                                  "independentArtifactVerification": False}}
 
-    def active_binding(self, source):
+    def active_binding(self, source, *, allow_descendant=False):
+        """Validate current native work; root identity remains the default.
+
+        An opted-in effect may accept an actual descendant principal only when
+        its trusted bridge supplies the owner's admitted generation. This does
+        not grant root identity or infer authority from a human input role.
+        """
         binding = BINDING.get() or {}
         native = source.get("runtimeSessionId") or source.get("nativeIdentity") or source["id"]
         active = source.get("collaborationGeneration") or {}
-        if (PRINCIPAL.get() != native or not binding.get("_generationId")
+        principal = PRINCIPAL.get()
+        descendant = (allow_descendant and isinstance(principal, str) and bool(principal)
+            and binding.get('_runtimeSessionId') == principal)
+        if (principal != native and not descendant or not binding.get("_generationId")
                 or binding["_generationId"] != active.get("id") or active.get("terminal")):
             self.error("Collaboration requires the current transport-bound root generation.")
+        if active.get('interruptionRevision', 0) != source.get('interruptionRevision', 0):
+            self.error('The current transport-bound generation crossed Stop.')
         return binding, active
 
     def current_human_input(self, source):
@@ -1085,7 +1096,25 @@ class Collaboration:
                 or payload.get("sessionId", session["id"]) != session["id"]):
             return changed
         if payload.get("event") == "generation.started":
-            session["collaborationGeneration"] = {"id": payload.get("generation_id"), "inputIds": [], "terminal": False}
+            identity = payload.get('generation_id')
+            active = session.get('collaborationGeneration') or {}
+            if not isinstance(identity, str) or not identity or active.get('id') == identity:
+                return changed  # Duplicate starts never reset inputs, terminal state or Stop authority.
+            history = session.get('generations', [])
+            # The service appends this observation before calling this reducer.
+            # Earlier starts/terminals remain evidence, never fresh admission.
+            if history and history[-1].get('generation_id') == identity and history[-1].get('event') == 'generation.started':
+                history = history[:-1]
+            if any(row.get('generation_id') == identity for row in history):
+                return changed
+            # Native input admission must capture the owner's durable Stop
+            # revision. Arrival time cannot bless an event delayed across Stop.
+            # Legacy missing epochs are usable only before the first Stop.
+            interruption = payload.get('interruptionRevision', 0)
+            if type(interruption) is not int or interruption != session.get('interruptionRevision', 0):
+                return changed
+            session["collaborationGeneration"] = {"id": identity, "inputIds": [], "terminal": False,
+                'interruptionRevision': interruption}
             session['_collaborationHostInstanceId'] = self.service.instance_id
             return changed
         active = session.get("collaborationGeneration") or {}
