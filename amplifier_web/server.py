@@ -20,6 +20,14 @@ from .tls import ca_bytes
 from .request_timing import request_timing
 
 
+# These exact actions only observe revisions; they never admit the work being
+# observed. Do not infer cancellation safety from an action's name or suffix.
+_READ_ONLY_WAIT_ACTIONS = frozenset({
+    "workspace.work.wait", "assignment.tasks.wait", "coordination.wait",
+    "operations.wait", "recall.wait",
+})
+
+
 def _set_response_headers(response: web.StreamResponse, request: web.Request) -> web.StreamResponse:
     path = request.path
     # Some browsers do not include ws/wss in CSP self. Name only this validated
@@ -144,6 +152,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         service.update_manager.task = asyncio.create_task(service.update_manager.loop())
     streams = set()
     call_waiters = set()
+    action_waiters = set()
 
     async def state(request):
         session_id = request.query.get('sessionId')
@@ -374,10 +383,26 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             require_safe_transport(request)
         compact = request.get('companion_device') or request.headers.get('X-Amplifier-State-Transport') == 'delta-v1'
         from .device_pairing import command_admission
+        read_wait = isinstance(payload["action"], str) and payload["action"] in _READ_ONLY_WAIT_ACTIONS
+        if read_wait and service.closed:
+            raise AppError("The host is shutting down.", 503, code="host_shutdown")
+        # No yield between the fence check and ownership registration. A wait
+        # cannot enter after shutdown snapshots this set, including requests
+        # whose JSON body arrived across that boundary.
         task = service._task(service.dispatch(payload["action"], payload.get("args", {}), origin="ui",
                                         command_id=payload.get("id"), expected_revision=payload.get("expectedRevision"),
                                         include_state=not compact, admission_check=command_admission(request)))
-        result = await asyncio.shield(task)
+        if read_wait:
+            action_waiters.add(task)
+            task.add_done_callback(action_waiters.discard)
+        try:
+            result = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if read_wait and service.closed and task.cancelled():
+                # A retired observation is not an accepted/timed-out result.
+                # Effectful dispatches retain their independent shielding.
+                raise AppError("The host is shutting down.", 503, code="host_shutdown") from None
+            raise
         # Reads and validated no-ops can be complete without a state publication.
         # Consume this marker in both transports; clients never author it.
         state_independent = result.get('_stateIndependent') is True
@@ -768,7 +793,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
 
     async def shutdown(app):
         service.begin_shutdown()
-        waiting = list(streams | call_waiters)
+        waiting = list(streams | call_waiters | action_waiters)
         for task in waiting:
             task.cancel()
         await asyncio.gather(*waiting, return_exceptions=True)
