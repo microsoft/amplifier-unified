@@ -28,6 +28,11 @@ BUSY = 'Finish or stop this chat’s active work and pending interactions before
 UNOWNED = 'The saved chat ownership could not be verified. Its files were preserved.'
 
 
+def shared_identity(identity):
+    """Foundation's shared execution/checkpoint address, not a native worker ID."""
+    return isinstance(identity, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]{0,127}', identity) is not None
+
+
 def initialize(db):
     db.execute('CREATE TABLE IF NOT EXISTS managed_deletions (id TEXT PRIMARY KEY, token TEXT UNIQUE, phase TEXT NOT NULL, value TEXT NOT NULL)')
 
@@ -211,7 +216,17 @@ def _paths(app, marker, sessions, ids):
     for identity in ids:
         validate_id(identity)
         paths.append(app.data_dir/'sessions'/identity)
-    for identity in native_ids:
+    # Native workers run under their verified root's execution lease. Their IDs
+    # need not be shared-store addresses. Keep every native path in the plan;
+    # only checkpoint/lease addresses use Foundation's stricter root grammar.
+    shared_ids = {identity for identity in native_ids if shared_identity(identity)}
+    if marker['id'] not in shared_ids or any(identity not in native_meta for identity in native_ids - shared_ids):
+        raise ValueError(UNOWNED)
+    for identity in native_ids - shared_ids:
+        fence = _safe(native/identity/'transfer-fence.json')
+        if fence.exists():
+            raise ValueError('A native worker has a transfer fence. Its history was preserved.')
+    for identity in sorted(shared_ids):
         store = SharedSessionStore(folder, identity)
         _safe(store.checkpoint_path)
         if store.checkpoint_path.exists():
@@ -225,7 +240,7 @@ def _paths(app, marker, sessions, ids):
             if ci.exists() and any(item.name not in native_ids for item in ci.iterdir()):
                 raise ValueError('Unexpected capture history uses this folder. Its files were preserved.')
             paths.extend(ci/identity for identity in native_ids)
-    return list(dict.fromkeys(paths)), project, native_ids
+    return list(dict.fromkeys(paths)), project, native_ids, shared_ids
 
 
 def _scrub_local(record, ids, artifacts):
@@ -338,9 +353,10 @@ def plan(app, sid, history=None):
     if history is not None:
         from .history_cleanup import scope
         row, marker, sessions, ids, paths, project, native_ids = scope(app, history)
+        shared_ids = native_ids  # history cleanup refuses unsupported identities
     else:
         row, marker, sessions, ids = _scope(app, sid)
-        paths, project, native_ids = _paths(app, marker, sessions, ids)
+        paths, project, native_ids, shared_ids = _paths(app, marker, sessions, ids)
     artifacts = [item for item in app.state.get('canvasArtifacts', []) if _owned(item, ids)]
     artifact_ids = [item['id'] for item in artifacts]
     owned_rows = _app_rows(app, ids)
@@ -395,14 +411,17 @@ def plan(app, sid, history=None):
         paths.append(app.data_dir/'attachments'/identity)
     entries = [entry for path in paths if (entry := _inventory(path))]
     from amplifier_foundation.session.shared_state import SharedSessionStore
-    coordination = [str((SharedSessionStore.from_identity({'version':1, 'workspace':marker['workspace'], 'sessionId':identity}) if history is not None else SharedSessionStore(marker['workspace'], identity)).checkpoint_path.with_name('session.lock')) for identity in sorted(native_ids)]
+    coordination = [str((SharedSessionStore.from_identity({'version':1, 'workspace':marker['workspace'], 'sessionId':identity}) if history is not None else SharedSessionStore(marker['workspace'], identity)).checkpoint_path.with_name('session.lock')) for identity in sorted(shared_ids)]
+    native = amplifier_home()/'projects'/project/'sessions'
+    metadata_locks = [str(_safe(native/f'.{identity}.metadata.lock')) for identity in sorted(native_ids)
+                      if (native/identity).is_dir()]
     review_identity = {'scope': 'project' if history is not None and not history.get('nativeId') else 'session',
                        'workspace': marker['workspace'],
                        'sessionId': history.get('nativeId') if history is not None else row['id']}
     if row.get('reviewActivityAt') is not None:
         review_identity['lastActivityAt'] = row['reviewActivityAt']
     return {**provisional, 'reviewIdentity': review_identity, 'id': sid, 'title': row['title'], 'rootId': marker['id'], 'project': project, 'coordinationLocks': coordination,
-        'nativeIds': sorted(native_ids), 'paths': entries,
+        'nativeIds': sorted(native_ids), 'sharedIds': sorted(shared_ids), 'metadataLocks': metadata_locks, 'paths': entries,
         'contentStamp': hashlib.sha256(_json([sessions, artifacts, owned_rows]).encode()).hexdigest(), 'resourceIds': resources, 'attachmentIds': attachments,
         'rows': [[table, identity] for table, identity, _ in owned_rows],
         'summary': {'conversationCount': len(native_ids) if history is not None else 1, 'workerCount': max(0, len(native_ids)-1),
@@ -480,10 +499,15 @@ def _hold(plan):
     from amplifier_foundation.session.shared_state import SharedSessionStore
     held = []
     try:
-        for identity in plan['nativeIds']:
+        for identity in plan.get('sharedIds', plan['nativeIds']):
             store = (SharedSessionStore.from_identity({'version':1, 'workspace':plan['workspace'], 'sessionId':identity}) if plan.get('preserveWorkspace') else SharedSessionStore(plan['workspace'], identity))
             _safe(store.checkpoint_path)
             held.append(store.acquire(app='amplifier-unified', operation='managed-chat-delete'))
+        # These sibling flocks match Foundation metadata_lock's filelock protocol,
+        # not execution ownership. Root leases above exclude native execution;
+        # metadata exclusion also covers cooperating idle naming writers.
+        for path in plan.get('metadataLocks', []):
+            held.append(_RecoveryLock(path, create=True))
         return held
     except Exception:
         for item in reversed(held):
@@ -492,11 +516,13 @@ def _hold(plan):
 
 
 class _RecoveryLock:
-    """Reacquire an existing stable lock after its workspace was quarantined."""
-    def __init__(self, path):
+    """Thread-neutral metadata flock, or an existing confirmed-recovery lock."""
+    def __init__(self, path, *, create=False):
         import fcntl
-        self.fd = os.open(_safe(path), os.O_RDWR | os.O_NOFOLLOW)
+        self.fd = os.open(_safe(path), os.O_RDWR | os.O_NOFOLLOW | (os.O_CREAT if create else 0), 0o600)
         try:
+            if not stat.S_ISREG(os.fstat(self.fd).st_mode):
+                raise ValueError('The saved lock is not a regular file.')
             fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BaseException:
             os.close(self.fd)
@@ -513,12 +539,27 @@ def _recovery_hold(plan):
     # workspace just to acquire its lock would reintroduce resume/import paths.
     held = []
     try:
-        for path in plan['coordinationLocks']:
+        for path in [*plan['coordinationLocks'], *plan.get('metadataLocks', [])]:
             held.append(_RecoveryLock(path))
         return held
     except BaseException:
         for item in reversed(held):
             item.release()
+        raise
+
+
+async def _acquire(plan):
+    # Cancelling to_thread does not stop acquisition. Keep the task alive and
+    # release its eventual handles even if the request ends before it returns.
+    task = asyncio.create_task(asyncio.to_thread(_hold, plan))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        def release_result(finished):
+            if not finished.cancelled() and finished.exception() is None:
+                for item in reversed(finished.result()):
+                    item.release()
+        task.add_done_callback(release_result)
         raise
 
 
@@ -698,7 +739,7 @@ async def dispatch(app, action, args, origin, include_state, history=None):
                 if history is not None:
                     result.update(description='Permanently delete the reviewed sessions and their worker history from both CLI and Unified, along with their unshared saved outputs and attachments. Project working files and CLI configuration remain.', preserved=['Project working files and Git history', 'CLI settings and credentials', 'Other sessions, shared outputs, memories, exports and backups'])
                 return {'accepted':True, 'result':result}
-            if current != {key:value[key] for key in current}:
+            if current != {key:value.get(key) for key in current}:
                 raise ValueError('The chat changed since this preview. Review it again before deleting.')
             for identity in current['ids']:
                 app.canvas_views.guard_transition('session.delete', {'id': identity})
@@ -714,7 +755,7 @@ async def dispatch(app, action, args, origin, include_state, history=None):
                 await asyncio.gather(task, return_exceptions=True)
             if app.runtime:
                 await app.runtime.stop(identity)
-        held = await asyncio.to_thread(_hold, value)
+        held = await _acquire(value)
         # A runtime may checkpoint during retirement. Any changed content needs
         # a fresh user preview; stable shared locks keep other hosts out now.
         for item in value['paths']:
