@@ -168,7 +168,7 @@ def visible_ids(directory, state, identities, *, notices=False, roots=False):
 def revision(directory,state):
     # effective freezes each admitted row once; a snapshot uses its already
     # frozen overlay and pinned DB views, never mutable service state.
-    sql,params = directory.effective(state)
+    sql,params = directory.effective(state, fields={'id'})
     native = (0,0,0,0,0)
     if directory._native_path:
         saved = directory.db.execute('SELECT observation_sessions,observation_membership,navigation,workspace,root_navigation '
@@ -184,7 +184,10 @@ def revision(directory,state):
     versions = (directory.db.execute('PRAGMA main.data_version').fetchone()[0],
                 directory.db.execute('PRAGMA history_native.data_version').fetchone()[0]
                 if directory._native_path else None)
-    stamp = (directory._native_path, native, tuple(sorted(local.items())),
+    # The scalar SQL no longer carries retained summary bodies. Their prepared
+    # overlay generation still fences public facts present only in the summary
+    # (for example location/naming), including in-place edits without a save.
+    stamp = (directory._native_path, native, tuple(sorted(local.items())), directory._live_revision,
              layout[0] if layout else None, versions, sql, tuple(params),
              tuple(state.get('pinnedSessionIds', ())))
     reusable = directory.snapshot or not directory.db.in_transaction
