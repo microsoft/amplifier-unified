@@ -244,8 +244,11 @@ false` instead of trapping the user in an error. Raw API configuration requests
 without a native waiter may still survive a host restart when otherwise valid.
 
 Retired cards show the observed reason and **Dismiss old request**, rather than
-unusable decision buttons. Dismissal preserves the exact request in collapsed
-permission history. Pending counts still derive from current pending records;
+unusable decision buttons. Dismissal preserves the exact request in
+**Permissions history**, opened on demand from chat in the Canvas overview.
+Pending decisions and undismissed old requests remain in chat. History is read-only;
+opening or closing it does not change permissions or restart work.
+Pending counts still derive from current pending records;
 an old request is not an outstanding approval. An already-allowed grant is never
 revoked merely because a lagging card still looks pending after restart.
 

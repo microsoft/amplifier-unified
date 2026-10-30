@@ -3515,7 +3515,7 @@ class AppService:
                     patch['canvasDraft'] = {**patch.get('canvasDraft', self.state['view'].get('canvasDraft', {})), 'library': False}
                 elif patch.get('settingsCanvas') is False and self.state.get('canvas', {}).get('kind') == 'settings':
                     patch['canvasDraft'] = {**patch.get('canvasDraft', self.state['view'].get('canvasDraft', {})), 'library': True}
-                if patch.get('canvasDraft', {}).get('delivery') in {'outputs','publishing'}:
+                if patch.get('canvasDraft', {}).get('delivery') in {'outputs','publishing','permissions'}:
                     self.state.setdefault('canvas', {})['open'] = True
                 self.state["view"].update(patch)
             elif action == 'feedback.excerpt.stage':

@@ -1,6 +1,7 @@
 import './composer-test-helpers.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
+import {once} from 'node:events';
 import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -65,8 +66,22 @@ try{
  const dismissed=(await call('capability.read',{sessionId:sid,id:'capability:old'},'check-dismissed')).result.request;
  assert.equal(dismissed.status,'revoked');assert.equal(dismissed.dismissed,true);
  assert.equal((await inspect()).attention.length,1);
- await page.getByText('Permission history (1)',{exact:true}).click();
+ const historyEntry=()=>page.getByRole('button',{name:/^Permissions history \(/});
+ const panel=page.locator('#workspace-canvas'),history=panel.locator('[data-overview-section="permissions"]');
+ const closeHistory=async()=>{
+  await panel.getByRole('button',{name:'Close canvas panel',exact:true}).click();
+  await expect(panel).toBeHidden();
+  await expect(page.locator('#canvas-toggle')).toBeFocused();
+ };
+ const recordsBefore=(await inspect()).approvals;
+ await historyEntry().focus();await page.keyboard.press('Enter');
+ await expect(history).toHaveAttribute('open','');
+ await expect(history.locator('summary')).toBeFocused();
  await expect(page.locator('[data-permission-history-id="capability:old"]')).toContainText('Dismissed old request');
+ await expect(page.locator('[data-part="conversation"] [data-permission-history-id]')).toHaveCount(0);
+ await page.screenshot({path:join(output,'history-desktop.png'),animations:'disabled'});
+ await closeHistory();
+ assert.deepEqual((await inspect()).approvals,recordsBefore,'Passive history keeps exact audit records');
  await page.reload();
  await expect(composer).toHaveDraft('Keep this private draft');
  await expect(current.getByRole('button',{name:'Allow',exact:true})).toBeEnabled();
@@ -96,10 +111,81 @@ try{
  await page.screenshot({path:join(output,'narrow-actions.png'),animations:'disabled'});
  await current.getByRole('button',{name:'Dismiss old request'}).click();
  await expect(current).toHaveCount(0);
- await page.getByText('Permission history (2)',{exact:true}).click();
+ await expect(page.locator('[data-part="approvals"]')).toHaveCount(0);
+ await expect(historyEntry()).toBeVisible();
+ const compact=await historyEntry().boundingBox();
+ assert.ok(compact.height>=44&&compact.height<=60,'Compact entry retains a touch-size target');
+ await page.screenshot({path:join(output,'history-only-narrow-chat.png'),animations:'disabled'});
+ await historyEntry().click();
+ await expect(history).toBeVisible();
  await expect(page.locator('[data-permission-history-id="capability:current"]')).toContainText('Keep this note in history');
+ await page.screenshot({path:join(output,'history-narrow.png'),animations:'disabled'});
+ await closeHistory();
  await page.reload();
  await expect(composer).toHaveDraft('Keep this private draft');
+ await expect(page.locator('[data-part="approvals"]')).toHaveCount(0);
+ // A new independent permission still arrives in chat after history-only state.
+ await page.request.post(url+'/fixture',{data:{change:'later'}});
+ const later=page.locator('[data-approval-id="capability:later"]');
+ await expect(later.getByRole('button',{name:'Allow',exact:true})).toBeEnabled();
+ await expect(later.getByRole('button',{name:'Deny',exact:true})).toBeEnabled();
+ await later.getByRole('button',{name:'Deny',exact:true}).click();
+ await expect(later).toHaveCount(0);
+ await expect(historyEntry()).toHaveText('Permissions history (3)');
+ // Touch activation in a real narrow touch context; no synthetic DOM click.
+ const touchContext=await browser.newContext({viewport:{width:390,height:844},hasTouch:true,isMobile:true,extraHTTPHeaders:{Authorization:'Bearer fixture-approval-control-token'}});
+ const touch=await touchContext.newPage();
+ await touch.goto(url);await showFixtureConversation(touch);
+ await touch.getByRole('button',{name:'Permissions history (3)',exact:true}).tap();
+ await expect(touch.locator('#workspace-canvas [data-permission-history-id="capability:later"]')).toContainText('Permission denied');
+ assert.equal(await touch.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+ await touch.screenshot({path:join(output,'history-touch.png'),animations:'disabled'});
+ await touch.getByRole('button',{name:'Close canvas panel',exact:true}).tap();
+ await expect(touch.locator('#workspace-canvas')).toBeHidden();await touchContext.close();
+ // Dirty renderer-local edits survive history browsing. Replacement still refuses.
+ await page.setViewportSize({width:1400,height:900});
+ const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
+ await action('canvas.show',{kind:'markdown',title:'Unfinished document',content:'# Retained original'});
+ const manifest={id:'example.permission-editor',label:'Permission history test editor',version:'1.0.0',apiVersion:'1.0',profile:'trusted-native-renderer-v1',stateSchema:'canvas-view-v1',resourceKinds:['markdown'],capabilities:['canvas.resource.read','canvas.view.update']};
+ const source='export default ({React})=>function Editor({host}){const [text,setText]=React.useState("");const [mount]=React.useState(()=>crypto.randomUUID());return React.createElement("label",null,"Retained local edit",React.createElement("input",{"data-mount":mount,value:text,onChange:event=>{setText(event.target.value);host.setDirty(true)}}))}';
+ const staged=await action('shell.packages.stage',{manifest,source}),digest=staged.result.digest;
+ assert.equal((await action('shell.packages.validate',{digest})).result.status,'passed');
+ await panel.getByRole('button',{name:'Canvas details',exact:true}).click();
+ await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(digest);
+ const edit=page.getByLabel('Retained local edit', {exact:true});
+ await edit.fill('Keep unsaved permission review edit');
+ await panel.getByRole('button',{name:'Close canvas details',exact:true}).click();
+ const views=async()=>(await action('canvas.views.inspect')).result.views;
+ await expect.poll(async()=>(await views()).find(row=>row.viewId==='primary').dirty).toBe(true);
+ const beforeView=(await views()).find(row=>row.viewId==='primary'),mount=await edit.getAttribute('data-mount');
+ await historyEntry().click();await expect(history).toBeVisible();await expect(edit).toBeHidden();
+ const refusal=await action('canvas.show',{kind:'text',title:'Must not replace',content:'not accepted'}).then(value=>({value}),error=>({error:error.message}));
+ assert.match(refusal.error,/viewer edit/);
+ await panel.getByRole('tab',{name:'Unfinished document',exact:true}).click();
+ await expect(edit).toHaveValue('Keep unsaved permission review edit');
+ assert.equal(await edit.getAttribute('data-mount'),mount);
+ const afterView=(await views()).find(row=>row.viewId==='primary');
+ for(const key of ['viewId','resourceId','resourceRevision','generation','dirty'])assert.equal(afterView[key],beforeView[key],key);
+ await expect(composer).toHaveDraft('Keep this private draft');
+ await page.screenshot({path:join(output,'retained-dirty-editor.png'),animations:'disabled'});
+ // Newer Close wins even when the history opening request is slow.
+ let releaseHistory,historyHeld=false;
+ const gate=new Promise(resolve=>{releaseHistory=resolve});
+ const holdHistory=async route=>{
+  const raw=route.request().postDataJSON(),body=raw?.action==='shell.command'?(raw.args.command||raw.args):raw;
+  if(body?.action==='view.update'&&body.args?.patch?.canvasDraft?.delivery==='permissions'){historyHeld=true;await gate}
+  await route.continue();
+ };
+ await page.route('**/api/actions',holdHistory);
+ await historyEntry().click();
+ await expect.poll(()=>historyHeld).toBe(true);
+ await panel.getByRole('button',{name:'Close canvas panel',exact:true}).click();
+ await expect(panel).toBeHidden();
+ releaseHistory();
+ await expect(historyEntry()).toBeEnabled();
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().canvas.open)).toBe(false);
+ await page.unroute('**/api/actions',holdHistory);
+ assert.equal((await views()).find(row=>row.viewId==='primary').dirty,true);
  const final=await inspect();
  assert.deepEqual(final.starts,[]);assert.deepEqual(final.inputs,[]);assert.deepEqual(final.controls,[]);assert.deepEqual(final.decisions,[]);
  assert.equal(final.approvals.filter(r=>r.status==='pending').length,0);
@@ -107,9 +193,17 @@ try{
  assert.deepEqual(errors,[]);
  const report={passed:true,source:final.source,authoritySha256:final.authoritySha256,coldState:true,
   passiveReview:true,twoTabs:true,scopeRace:true,expiryRace:true,exactDismiss:true,adjacentCycle:true,
-  keyboard:true,narrow:true,reload:true,privateDraft:true,scriptedRuntime:true,realProvider:false};
+  keyboard:true,narrow:true,touch:true,reload:true,privateDraft:true,canvasHistory:true,laterPermission:true,dirtyRefusal:true,retainedEditor:true,lateClose:true,scriptedRuntime:true,realProvider:false};
  await writeFile(join(output,'report.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({output,...report}));
 }catch(error){
  if(page){await page.screenshot({path:join(output,'failure.png'),fullPage:true}).catch(()=>{});await writeFile(join(output,'failure.txt'),(await page.locator('body').innerText().catch(()=>''))+'\n'+error.stack)}
  console.error(JSON.stringify({output,passed:false,error:error.message}));throw error;
-}finally{await browser?.close();fixture.kill('SIGTERM')}
+}finally{
+ await browser?.close();
+ if(fixture.exitCode===null&&fixture.signalCode===null){
+  const ended=once(fixture,'exit');fixture.kill('SIGTERM');
+  const timer=setTimeout(()=>fixture.kill('SIGKILL'),5000);
+  try{await ended}finally{clearTimeout(timer)}
+ }
+ await writeFile(join(output,'cleanup.json'),JSON.stringify({exitCode:fixture.exitCode,signal:fixture.signalCode}));
+}

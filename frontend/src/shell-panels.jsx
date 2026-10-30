@@ -2,6 +2,7 @@ import {conversationHistoryPending} from './history-window.js';
 import {OutputSettings} from './outputs';
 import {PublishingSettings} from './publishing';
 import {ChatOverview} from './work-overview';
+import {PermissionHistory,approvalGroups} from './approval-card';
 import {NavigationOpen,useModalFocus,navigationExpanded} from './responsive-navigation';
 import {CanvasControlsHost,CanvasPrimaryActionsHost} from './canvas-controls';
 import {CanvasOverviewSection,useCanvasReading,useCanvasOverviewState} from './canvas-overview-state';
@@ -144,14 +145,14 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSur
  useModalFocus(panel,focused,()=>controls?closeControls():patch(actRef.current,{canvasFocused:false}),'#canvas-toggle');
  useEffect(()=>{if(focused)panel.current?.querySelector('[aria-label="Exit canvas focus"]')?.focus({preventScroll:true})},[focused]);
  useEffect(()=>{
-  if(!canvas.open||!draft.library||!['outputs','publishing'].includes(draft.delivery))return;
-  const id=draft.delivery==='outputs'?'review':'publishing';
+  if(!visible||!overview||!draft.library||!['outputs','publishing','permissions'].includes(draft.delivery))return;
+  const id=draft.delivery==='outputs'?'review':draft.delivery;
   setOverviewDraft({sections:{...overviewDraft.sections,[id]:true}});
   // Consume the existing navigation target only after its visible destination
   // has been reached. Clearing it earlier cancels this frame via optimistic state.
   const timer=requestAnimationFrame(()=>{const section=panel.current?.querySelector(`[data-overview-section="${id}"]`);section?.scrollIntoView({block:'nearest',behavior:'instant'});section?.querySelector('summary')?.focus({preventScroll:true});patch(actRef.current,{canvasDraft:{...draft,delivery:null}})});
   return()=>cancelAnimationFrame(timer);
- },[canvas.open,draft.library,draft.delivery]);
+ },[visible,overview,state.selectedSessionId,draft.library,draft.delivery]);
  if(!mounted.current)return null;
  const latestEvent=canvas.events?.at(-1);
  return <CanvasPrimaryActionsHost.Provider value={actionsHost}><CanvasControlsHost.Provider value={controlsHost}><aside ref={panel} id="workspace-canvas" className="a-canvas-panel" hidden={suppressed||!canvas.open||!state.selectedSessionId} inert={suppressed||!canvas.open||!state.selectedSessionId} aria-hidden={suppressed||!canvas.open||!state.selectedSessionId||undefined} data-part="canvas" data-mode={overview?'overview':'artifact'} data-focused={focused} data-controls={controls} data-pinned={!!view.canvasControlsPinned} aria-label="Canvas" role={focused?'dialog':undefined} aria-modal={focused||undefined} aria-owns={focused?'canvas-toggle':undefined} onKeyDown={event=>{
@@ -179,6 +180,7 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSur
    {canvas.kind!=='settings'&&!!state.canvasWorkspace?.views?.length&&<McpAppVisibilityProvider visible={!suppressed&&!!canvas.open&&!draft.library&&!settings}><CanvasWorkspace state={state} dispatch={dispatch} hidden={!!draft.library}/></McpAppVisibilityProvider>}
    <div ref={overviewRef} className="a-canvas-overview-page" role="region" aria-label="Chat overview" tabIndex={0} hidden={!overview} inert={!overview}>
     <ChatOverview state={overviewState} act={act} changeDraft={changeDraft} onSectionChange={sectionChange} onFilter={filter=>setOverviewDraft({filter})}/>
+    <div className="a-chat-overview"><CanvasOverviewSection id="permissions" title="Permissions history" summary={approvalGroups(state.sessions?.find(row=>row.id===state.selectedSessionId)).history.length} draft={overviewDraft} onChange={sectionChange} defaultOpen={false} lazy><PermissionHistory session={state.sessions?.find(row=>row.id===state.selectedSessionId)}/></CanvasOverviewSection></div>
     <section className="a-canvas-delivery" aria-label="Output actions">
      <CanvasOverviewSection id="review" title="Outputs & review" draft={overviewDraft} onChange={sectionChange} defaultOpen={draft.delivery==='outputs'} lazy><OutputSettings session={state.sessions?.find(row=>row.id===state.selectedSessionId)} state={state} act={act}/></CanvasOverviewSection>
      <CanvasOverviewSection id="publishing" title="Publishing" draft={overviewDraft} onChange={sectionChange} defaultOpen={draft.delivery==='publishing'} lazy><PublishingSettings session={state.sessions?.find(row=>row.id===state.selectedSessionId)} state={state} act={dispatch}/></CanvasOverviewSection>

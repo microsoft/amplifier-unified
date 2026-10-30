@@ -77,17 +77,43 @@ function CapabilityApprovalCard({approval,sessionId,dispatch,freshnessKey}){
  </div>;
 }
 
-export function ApprovalPanel({session,act,dispatch,freshnessKey}){
+export function approvalGroups(session){
  const approvals=session?.approvals||[];
  const pending=approvals.filter(row=>row.status==='pending'||!row.status);
  const retired=approvals.filter(row=>row.id?.startsWith('capability:')&&row.status==='expired'&&!row.dismissedAt);
  const history=approvals.filter(row=>row.id?.startsWith('capability:')&&!pending.includes(row)&&!retired.includes(row));
+ return {pending,retired,history};
+}
+
+// Read the same retained rows as chat, in their saved order. No grant lookup,
+// runtime hydration or decision controls belong in this presentation.
+export function PermissionHistory({session}){
+ const {history}=approvalGroups(session);
+ return <div className="a-permission-history">
+  <p className="a-caption">Saved permission decisions for this chat. Reading history does not request permission or restart work.</p>
+  {!history.length&&<p>No permission history yet.</p>}
+  {history.map(row=><article key={row.id} data-permission-history-id={row.id}><strong>{row.dismissedAt?'Dismissed old request':row.status==='allow'?'Permission allowed':row.status==='deny'||row.status==='denied'?'Permission denied':row.status}</strong><p>{row.prompt}</p>{row.detail&&<p>{row.detail}</p>}{row.comment&&<p>Note: {row.comment}</p>}{row.dismissalComment&&<p>History-only note: {row.dismissalComment}</p>}</article>)}
+ </div>;
+}
+
+export function ApprovalPanel({session,act,dispatch,freshnessKey,canvasDraft}){
+ const {pending,retired,history}=approvalGroups(session);
+ const [error,setError]=useState(''),[opening,setOpening]=useState(false);
+ const openHistory=async()=>{
+  setOpening(true);setError('');
+  try{
+   const receipt=await dispatch('view.update',{sessionId:session.id,patch:{settingsCanvas:false,canvasControlsExpanded:false,canvasDraft:{...canvasDraft,library:true,open:false,browser:false,delivery:'permissions'}}});
+   if(!receipt?.accepted)throw Error(receipt?.error||'Permission history could not be opened. Nothing was retried.');
+  }catch(e){setError(e.message)}finally{setOpening(false)}
+ };
  if(!pending.length&&!retired.length&&!history.length)return null;
- return <section className="a-card a-approvals" data-part="approvals">
-  {(pending.length>0||retired.length>0)&&<div className="a-card-header"><h2>{pending.length?'Needs your attention':'Previous permission requests'}</h2></div>}
+ return <>
+ {(pending.length>0||retired.length>0)&&<section className="a-card a-approvals" data-part="approvals">
+  <div className="a-card-header"><h2>{pending.length?'Needs your attention':'Previous permission requests'}</h2></div>
   {[...pending,...retired].map(approval=><ApprovalCard key={`${session.id}:${approval.id}`} approval={approval} sessionId={session.id} act={act} dispatch={dispatch} freshnessKey={freshnessKey}/>)}
-  {history.length>0&&<details><summary>Permission history ({history.length})</summary>{history.map(row=><div key={row.id} data-permission-history-id={row.id}><strong>{row.dismissedAt?'Dismissed old request':row.status==='allow'?'Permission allowed':row.status==='deny'||row.status==='denied'?'Permission denied':row.status}</strong><p>{row.prompt}</p>{row.detail&&<p>{row.detail}</p>}{row.comment&&<p>Note: {row.comment}</p>}{row.dismissalComment&&<p>History-only note: {row.dismissalComment}</p>}</div>)}</details>}
- </section>;
+ </section>}
+ {history.length>0&&<div className="a-permission-history-entry"><button type="button" className="a-link" aria-controls="workspace-canvas" disabled={opening} onClick={openHistory}>Permissions history ({history.length})</button>{error&&<p role="alert">{error}</p>}</div>}
+ </>;
 }
 
 export function ApprovalCard({approval,sessionId,act,dispatch,freshnessKey}){
