@@ -17,6 +17,7 @@ from amplifier_web.runtime_worker import Worker
 from test_collaborative_workspaces import app
 from test_coordination_delivery import installed_work_adapter
 from test_work_invocation import retained_bytes
+from test_access_mode import save
 
 
 async def joined(app):
@@ -37,11 +38,14 @@ async def joined(app):
 
 
 @pytest.mark.parametrize('fault', ['none', 'uncovered', 'opaque', 'host_stop'])
-async def test_native_early_tool_reaches_real_host_precondition(app, tmp_path, monkeypatch, fault):
+@pytest.mark.parametrize('mode', ['ask', 'full'])
+async def test_native_early_tool_reaches_real_host_precondition(app, tmp_path, monkeypatch, fault, mode):
     from amplifier_module_provider_openai import OpenAIProvider
     from amplifier_web.native_provider import install_native
     from amplifier_module_loop_live.scope import LIVE_OWNER
     adapter, child, required, worker = await joined(app)
+    if mode == 'full':
+        await save(app, child)
     if fault != 'uncovered':
         await adapter.fill(required)
     c = adapter.coordinator
@@ -107,14 +111,18 @@ async def test_native_early_tool_reaches_real_host_precondition(app, tmp_path, m
     await wrapped.request_budget(request)
     await wrapped.complete(request)
     assert len(sent) == len(results) == 1
-    assert effects == ([{'instruction': 'fixture'}] if fault == 'none' else [])
+    allowed = fault == 'none' or mode == 'full' and fault in {'uncovered', 'opaque'}
+    assert effects == ([{'instruction': 'fixture'}] if allowed else [])
     assert host.state['sends'][-1]['outcome'] != 'not_sent'
 
 
 @pytest.mark.parametrize('fault', ['none', 'uncovered', 'same_batch_read', 'host_stop', 'reused_parent'])
-async def test_programmatic_inner_pin_uses_real_service_not_synthetic_policy(app, fault):
+@pytest.mark.parametrize('mode', ['ask', 'full'])
+async def test_programmatic_inner_pin_uses_real_service_not_synthetic_policy(app, fault, mode):
     from amplifier_module_tool_exec import ProgrammaticTool
     adapter, child, required, worker = await joined(app)
+    if mode == 'full':
+        await save(app, child)
     pin_dispatches, pin_results = [], []
     actual_host = worker.bridge
     async def observed_host(operation, arguments):
@@ -152,16 +160,70 @@ async def test_programmatic_inner_pin_uses_real_service_not_synthetic_policy(app
             return await adapter.loop._execute_tool_only(ToolCall(id='nested-parent', name='tool_exec', arguments={'code':code}), adapter.tools, adapter.hooks, None, c)
     before = retained_bytes(app)
     await execute()
-    if fault in {'none','reused_parent'}:
+    if fault in {'none','reused_parent'} or mode == 'full' and fault in {'uncovered', 'same_batch_read'}:
         assert 'nested-real-pin' in retained_bytes(app) and child['id'] in app._state['pinnedSessionIds']
         assert len(pin_dispatches) == 1
         if fault == 'reused_parent':
             after=retained_bytes(app);await execute();assert retained_bytes(app)==after
-            # A recovery-capable container can reach the host, but the reused
-            # origin must be refused before ordinary receipt deduplication.
-            assert len(pin_dispatches) == 2
-            assert pin_dispatches[-1]['_workOrigin']['complete'] is False
-            assert pin_results[-1]['denied'] is True
-            assert pin_results[-1]['code'] == 'work_coverage_unavailable'
+            # Known native consumption refuses the repeated container before
+            # inner dispatch, independently of Ask or Full coverage policy.
+            assert len(pin_dispatches) == 1
     else:
         assert 'nested-real-pin' not in retained_bytes(app) and retained_bytes(app)==before
+
+
+async def test_full_native_dispatch_is_consumed_but_new_call_can_read_exact_command_receipt(app):
+    adapter, child, _, worker = await joined(app)
+    await save(app, child)
+    arguments = {'operation': 'dispatch', 'args': {'action': 'session.rename',
+        'args': {'id': child['id'], 'title': 'Exact retained effect'}, 'id': 'native-exact-command'}}
+    dispatched = []
+    host = worker.bridge
+    async def observed(operation, args):
+        result = await host(operation, args)
+        if operation == 'dispatch' and args.get('id') == 'native-exact-command':
+            dispatched.append(result)
+        return result
+    worker.bridge = observed
+    identity = 'first-native-call'
+    class Provider:
+        async def complete(self, value, **kw):
+            return SimpleNamespace(model_dump=lambda: {'content': [{'type': 'tool_call',
+                'id': identity, 'name': 'app_control', 'input': arguments}]})
+    provider = adapter.capabilities['web.provider_transform'](Provider())
+    async def execute():
+        return await adapter.loop._execute_tool_only(ToolCall(id=identity, name='app_control', arguments=arguments),
+            adapter.tools, adapter.hooks, None, adapter.coordinator)
+    await provider.complete(adapter.request())
+    await execute()
+    assert len(dispatched) == 1 and dispatched[0]['accepted']
+    before = retained_bytes(app)
+    await execute()
+    assert len(dispatched) == 1 and retained_bytes(app) == before
+    identity = 'fresh-native-call-for-exact-retry'
+    await provider.complete(adapter.request())
+    await execute()
+    assert len(dispatched) == 2 and dispatched[1]['duplicate']
+    assert retained_bytes(app) == before and child['title'] == 'Exact retained effect'
+
+
+async def test_full_native_unknown_tool_outcome_does_not_repeat_consumed_call(app):
+    adapter, child, _, _ = await joined(app)
+    await save(app, child)
+    effects = []
+    class UnknownEffect:
+        name = 'write_file'
+        async def execute(self, value):
+            effects.append(value)
+            raise RuntimeError('Effect entered; acknowledgement lost.')
+    await adapter.coordinator.mount('tools', UnknownEffect(), name='write_file')
+    arguments = {'path': 'synthetic-owned-effect'}
+    class Provider:
+        async def complete(self, value, **kw):
+            return SimpleNamespace(model_dump=lambda: {'content': [{'type': 'tool_call',
+                'id': 'unknown-native-call', 'name': 'write_file', 'input': arguments}]})
+    await adapter.capabilities['web.provider_transform'](Provider()).complete(adapter.request())
+    for _ in range(2):
+        await adapter.loop._execute_tool_only(ToolCall(id='unknown-native-call', name='write_file', arguments=arguments),
+            adapter.tools, adapter.hooks, None, adapter.coordinator)
+    assert effects == [arguments]

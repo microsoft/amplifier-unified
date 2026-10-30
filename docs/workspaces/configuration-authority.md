@@ -245,6 +245,14 @@ idempotent saves. New native workers read only the three exact policy records.
 Full access preauthorizes configuration effects at all scopes and ordinary
 allow/deny tool permissions. Pending valid permission requests are answered once;
 questions, expired requests, lost workers and old tool effects are never replayed.
+For Work-associated execution it also accepts partial or inferred Work context:
+missing fitted-content proof does not add a permission gate or restrict the set
+of supported actions. The shared Work policy reuses current native generation and
+Stop checks for roots and trusted descendants, preserving their actual identities.
+Coverage remains explicitly unknown or partial when not established; it is not
+verification or success. Action owners still enforce their own factual inputs,
+revisions, receipts and recovery. This does not establish descendant support or
+complete deferred-effect cancellation in every individual action owner.
 Existing root ownership, execution identity, Stop, resource ownership, capacity,
 retention and recovery checks remain in force. A trusted root remains responsible
 for evaluating peer messages. Configuration commits recheck the captured mode

@@ -197,6 +197,14 @@ async def install_app_access(coordinator, bridge):
                 from .coordination_delivery import WORK_EXECUTION
                 dispatch = getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task(), {})
                 data = {**dispatch, 'tool_name': self.mounted_name, 'tool_input': copy.deepcopy(arguments)}
+                # Consumption is observed execution identity, independent of
+                # whether Full accepts missing fitted-context assurance.
+                if dispatch.get('tool_call_id') in delivery.executed_calls:
+                    if timing:
+                        timing.outcome = 'denied'
+                    return ToolResult(success=False, error={
+                        'code': 'tool_call_already_consumed',
+                        'message': 'This native tool call was already consumed. Its outcome was not replayed.'})
                 mark(timing, 'origin.start')
                 proof = await delivery.claim_effect_origin(data)
                 mark(timing, 'origin.end')
@@ -343,6 +351,10 @@ async def install_app_access(coordinator, bridge):
                 # execution identity; calls without that seam stay unbound.
                 dispatch = getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task(), {})
                 execution_id = dispatch.get('tool_call_id')
+                if input['operation'] == 'dispatch' and execution_id in delivery.executed_calls:
+                    return ToolResult(success=False, error={
+                        'code': 'tool_call_already_consumed',
+                        'message': 'This native tool call was already consumed. Inspect its command receipt before retrying.'})
                 # Preserve the exact model body for the worker's Work witness.
                 # The worker supplies response preferences as private transport.
                 result = await bridge(input['operation'], input.get('args', {}))
