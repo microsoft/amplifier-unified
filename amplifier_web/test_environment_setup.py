@@ -105,7 +105,9 @@ def write_json(path, value):
 
 
 def public(record):
-    return {**{key: record[key] for key in ('id', 'state', 'phase', 'detail', 'backend', 'createdAt', 'updatedAt', 'proof', 'cleanup') if key in record},
+    return {**{key: record[key] for key in ('id', 'state', 'phase', 'detail', 'backend', 'createdAt', 'updatedAt', 'proof') if key in record},
+            **({'cleanup': {key: value for key, value in record['cleanup'].items()
+                            if key not in {'actor', 'authority'}}} if 'cleanup' in record else {}),
             **{key: record['intent'][key] for key in ('sessionId', 'workspaceId')},
             'canComplete': record.get('state') in {'outcome_unknown', 'failed'} and bool(record.get('candidateConfiguration') and record.get('proof', {}).get('probeRemoved')) and not record.get('cleanup')}
 
@@ -284,15 +286,17 @@ async def read(app):
             'operation': public(record) if record else None}
 
 
-def same_owner(record, args, actor, authority):
+def same_owner(record, args, actor, authority, origin=None):
     # A native actor is attribution, not a second lifetime owner. The domain
-    # dispatcher alone supplies checked Full authority for this conversation.
+    # dispatcher alone supplies checked Full authority or trusted UI origin.
+    # Neither value comes from the public action arguments.
     return (record['intent']['sessionId'] == args['sessionId']
             and record['intent']['workspaceId'] == args['workspaceId']
-            and (record['actor'] == actor or authority is not None and 'accessRevision' in authority))
+            and (record['actor'] == actor or origin in {'ui', 'user'}
+                 or authority is not None and 'accessRevision' in authority))
 
 
-async def request(app, args, actor, guard=None, *, authority=None):
+async def request(app, args, actor, guard=None, *, authority=None, origin=None):
     folder = root(app)
     identity = hashlib.sha256(json.dumps([args['sessionId'], args['requestId']], separators=(',', ':')).encode()).hexdigest()[:32]
     intent = {key: args[key] for key in ('workspaceId', 'sessionId', 'requestId', 'backend')}
@@ -301,10 +305,10 @@ async def request(app, args, actor, guard=None, *, authority=None):
     path = folder / (identity + '.json')
     existing = read_json(path)
     if existing:
-        if existing['intent'] != intent or not same_owner(existing, args, actor, authority):
+        if existing['intent'] != intent or not same_owner(existing, args, actor, authority, origin):
             raise ValueError('This setup request identity already belongs to another intent.')
         if existing['state'] in {'outcome_unknown', 'failed'} and not existing.get('cleanup') and existing.get('candidateConfiguration') and existing.get('proof', {}).get('probeRemoved') and identity not in getattr(app, '_test_setup_tasks', {}):
-            existing = await complete_retained(app, path, existing, guard, actor=actor, authority=authority)
+            existing = await complete_retained(app, path, existing, guard, actor=actor, authority=authority, origin=origin)
         observed = await readiness(app, force=True)
         if authority is not None and guard:
             await guard()
@@ -346,7 +350,7 @@ async def request(app, args, actor, guard=None, *, authority=None):
         raise
 
 
-async def complete_retained(app, path, record, guard, *, actor=None, authority=None):
+async def complete_retained(app, path, record, guard, *, actor=None, authority=None, origin=None):
     """Explicit same-intent retry may publish its already verified candidate."""
     from .task_environments import validate_configuration_value, invoke
     lock = FileLock(str(root(app) / 'setup.lock'), timeout=0)
@@ -377,8 +381,9 @@ async def complete_retained(app, path, record, guard, *, actor=None, authority=N
             raise ValueError('The runner selection changed before publication.')
         retain_verification(app, candidate, record['proof'])
         write_json(Path(app.data_dir) / 'test-environments.json', candidate)
-        if authority is not None:
-            record['completion'] = {'actor': actor, 'authority': authority, 'completedAt': time.time()}
+        if authority is not None or origin in {'ui', 'user'}:
+            record['completion'] = {'actor': {**actor, **({'origin': origin} if origin else {})},
+                                    'authority': authority, 'completedAt': time.time()}
         record.update(state='completed', phase='ready', detail='The earlier verified setup is now saved. Its install, image preparation and check were not repeated.', updatedAt=time.time())
         write_json(path, record)
         return record
@@ -658,11 +663,11 @@ async def setup_incus(base, selected, owned, record, step):
                     'probe': probe, 'offline': True, 'probeRemoved': True, 'checkedAt': time.time()}
 
 
-def original(app, args, actor, *, authority=None):
+def original(app, args, actor, *, authority=None, origin=None):
     identity = hashlib.sha256(json.dumps([args['sessionId'], args['requestId']], separators=(',', ':')).encode()).hexdigest()[:32]
     path = root(app, create=False) / (identity + '.json')
     row = read_json(path)
-    if not row or not same_owner(row, args, actor, authority):
+    if not row or not same_owner(row, args, actor, authority, origin):
         raise ValueError('This setup result belongs to another root or workspace.')
     return path, row
 
@@ -760,8 +765,8 @@ def observe_partial(app, record):
             'instances': instances, 'project': project, 'images': images, 'network': network, 'prefix': prefix, 'env': env, 'observedResources': sorted(present)}
 
 
-async def reconcile(app, args, actor, guard=None, *, authority=None):
-    path, record = original(app, args, actor, authority=authority)
+async def reconcile(app, args, actor, guard=None, *, authority=None, origin=None):
+    path, record = original(app, args, actor, authority=authority, origin=origin)
     if guard:
         await guard()
     tasks = getattr(app, '_test_setup_tasks', {})
@@ -776,19 +781,20 @@ async def reconcile(app, args, actor, guard=None, *, authority=None):
         if partial['absent']:
             record.setdefault('originalState', record['state'])
             record.update(state='recovered', phase='retained', detail='No disposable setup resources remain. Installed packages, base images and receipts are kept; a new setup request can proceed.', updatedAt=time.time())
-            record['cleanup'] = {'state': 'completed', 'observedAt': time.time(), 'resourcesAbsent': True}
+            record.setdefault('cleanup', {}).update(state='completed', observedAt=time.time(), resourcesAbsent=True)
         else:
             record.update(detail='The original setup still owns a disposable probe or unused network. Use Clean up interrupted setup before starting again.', updatedAt=time.time())
     if guard:
         await guard()
-    if authority is not None:
-        record['reconciliation'] = {'actor': actor, 'authority': authority, 'observedAt': time.time()}
+    if authority is not None or origin in {'ui', 'user'}:
+        record['reconciliation'] = {'actor': {**actor, **({'origin': origin} if origin else {})},
+                                    'authority': authority, 'observedAt': time.time()}
     write_json(path, record)
     return {'operation': public(record), 'readiness': observed}
 
 
-async def cleanup(app, args, actor, guard=None, *, authority=None):
-    path, record = original(app, args, actor, authority=authority)
+async def cleanup(app, args, actor, guard=None, *, authority=None, origin=None):
+    path, record = original(app, args, actor, authority=authority, origin=origin)
     if record.get('cleanup'):
         return {'operation': public(record), 'duplicate': True}
     cleanup_allowed(app, record)
@@ -801,8 +807,8 @@ async def cleanup(app, args, actor, guard=None, *, authority=None):
         if guard:
             await guard()
         record['cleanup'] = {'state': 'accepted', 'createdAt': time.time()}
-        if authority is not None:
-            record['cleanup'].update(actor=actor, authority=authority)
+        if authority is not None or origin in {'ui', 'user'}:
+            record['cleanup'].update(actor={**actor, **({'origin': origin} if origin else {})}, authority=authority)
         write_json(path, record)
         tasks = getattr(app, '_test_setup_tasks', None)
         if tasks is None:

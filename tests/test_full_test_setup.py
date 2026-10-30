@@ -154,6 +154,129 @@ async def test_later_full_child_observes_and_cleans_original_unknown_setup(mount
     assert [command[-2:] for command in effects] == [['stop', 'owned-probe'], ['rm', 'owned-probe']]
     assert backend.calls == ['probe'] and len(set(observed)) == 1
     backend.installed.assert_awaited_once()
+    # A subsequent observation belongs to its own actor and must not erase the
+    # actual cleanup caller or expose the captured authority in public status.
+    cleanup = deepcopy(retained['cleanup'])
+    args = arguments(h.app, h.source)
+    args.pop('backend')
+    reconciled = await h.app.dispatch('workspace.environments.setup.reconcile', args,
+        origin='system', caller_session_id=h.source['id'])
+    latest = record(h.app)
+    assert latest['cleanup']['actor'] == cleanup['actor']
+    assert latest['cleanup']['authority'] == cleanup['authority']
+    assert latest['cleanup']['createdAt'] == cleanup['createdAt']
+    assert latest['reconciliation']['actor']['origin'] == 'system'
+    assert latest['reconciliation']['actor']['principal'] is None
+    assert latest['actor'] == original['actor'] and latest['authority'] == original['authority']
+    public_cleanup = reconciled['result']['operation']['cleanup']
+    assert 'actor' not in public_cleanup and 'authority' not in public_cleanup
+    assert public_cleanup['state'] == 'completed' and public_cleanup['resourcesAbsent']
+    assert public_cleanup['createdAt'] == cleanup['createdAt']
+    assert len(effects) == 2 and backend.calls == ['probe']
+
+
+@pytest.mark.parametrize('initiator', ['root', 'child'])
+@pytest.mark.parametrize('revoked', [False, True])
+async def test_ui_recovers_same_conversation_full_setup_after_actor_or_mode_changes(
+        mounted, backend, monkeypatch, tmp_path, initiator, revoked):
+    h = mounted
+    await save(h.app)
+    backend.unknown = True
+    args = arguments(h.app, h.source)
+
+    async def start(control):
+        result = await dispatch(control, 'workspace.environments.setup', args, 'full-setup')
+        assert result.success, result.error
+
+    if initiator == 'root':
+        await start(h.parent.coordinator.get('tools')['app_control'])
+    else:
+        async def execute(self, prompt, context, providers, tools, hooks, coordinator):
+            await start(tools['app_control'])
+            return 'accepted'
+        h.install_execute(execute)
+        await h.registry.spawn('worker', 'setup', h.parent, sub_session_id='child')
+    original = deepcopy(await settle(h.app))
+    assert original['actor']['principal'] == ('native-root' if initiator == 'root' else 'child')
+    if revoked:
+        await save(h.app, mode='ask')
+        denied = await dispatch(h.parent.coordinator.get('tools')['app_control'],
+            'workspace.environments.setup', args, 'ask-retry')
+        assert not denied.success and 'Configuration authority is required' in str(denied.error)
+
+    retry = await h.app.dispatch('workspace.environments.setup', args)
+    assert retry['result']['duplicate'] and retry['result']['operation']['state'] == 'outcome_unknown'
+    effects = []
+    monkeypatch.setattr(setup, 'observe_partial', lambda app, row: {
+        'backend': 'docker', 'absent': bool(effects), 'prefix': ['controlled-docker'],
+        'probe': {'name': 'owned-probe'}, 'observedResources': ['probe']})
+    monkeypatch.setattr(setup, 'command', lambda argv, **kw: effects.append(argv) or '')
+    recovery = {key: value for key, value in args.items() if key != 'backend'}
+    # Operator origin does not turn a different target into the original owner.
+    peer = next(row for row in h.app.state['sessions'] if row['id'] != h.source['id'])
+    h.app.state['workspaces'].append({**h.app.state['workspaces'][0],
+        'id': 'foreign-workspace', 'path': str(tmp_path / 'foreign')})
+    for action in ('reconcile', 'cleanup'):
+        for foreign in ({**recovery, 'sessionId': peer['id']},
+                        {**recovery, 'workspaceId': 'foreign-workspace'}):
+            with pytest.raises(AppError):
+                await h.app.dispatch('workspace.environments.setup.' + action, foreign)
+    assert record(h.app) == original and effects == []
+
+    reconciled = await h.app.dispatch('workspace.environments.setup.reconcile', recovery)
+    assert reconciled['result']['operation']['state'] == 'outcome_unknown'
+    accepted = await h.app.dispatch('workspace.environments.setup.cleanup', recovery)
+    assert accepted['accepted']
+    retained = await settle(h.app)
+    assert retained['state'] == 'recovered'
+    assert retained['actor'] == original['actor'] and retained['authority'] == original['authority']
+    assert retained['cleanup']['actor']['origin'] == 'ui' and retained['cleanup']['authority'] is None
+    cleanup = deepcopy(retained['cleanup'])
+    observed = await h.app.dispatch('workspace.environments.setup.reconcile', recovery)
+    final = record(h.app)
+    assert final['cleanup']['actor'] == cleanup['actor'] and final['cleanup']['authority'] is None
+    assert final['reconciliation']['actor']['origin'] == 'ui'
+    public_cleanup = observed['result']['operation']['cleanup']
+    assert 'actor' not in public_cleanup and 'authority' not in public_cleanup
+    assert public_cleanup['state'] == 'completed' and public_cleanup['resourcesAbsent']
+    assert len(effects) == 2 and backend.calls == ['probe']
+    backend.installed.assert_awaited_once()
+
+
+async def test_ui_publishes_verified_child_candidate_after_revocation_without_replaying(mounted, backend, monkeypatch):
+    h = mounted
+    await save(h.app)
+    prepare = setup.setup_docker
+
+    async def prepare_then_revoke(*args):
+        candidate, proof = await prepare(*args)
+        await save(h.app, mode='ask')
+        return candidate, proof
+
+    monkeypatch.setattr(setup, 'setup_docker', prepare_then_revoke)
+    args = arguments(h.app, h.source)
+
+    async def execute(self, prompt, context, providers, tools, hooks, coordinator):
+        result = await dispatch(tools['app_control'], 'workspace.environments.setup', args, 'child-candidate')
+        assert result.success, result.error
+        return 'accepted'
+
+    h.install_execute(execute)
+    await h.registry.spawn('worker', 'setup', h.parent, sub_session_id='child')
+    original = deepcopy(await settle(h.app))
+    assert original['state'] == 'outcome_unknown' and original['proof']['probeRemoved']
+    assert original['actor']['principal'] == 'child' and not h.app.access_mode.full(h.source)
+    assert not (h.app.data_dir / 'test-environments.json').exists()
+    monkeypatch.setattr(owner, 'invoke', lambda *args: {
+        'ok': True, 'capacity': {'scope': {'daemon': 'controlled-daemon'}}})
+    completed = await h.app.dispatch('workspace.environments.setup', args)
+    final = record(h.app)
+    assert completed['result']['duplicate'] and final['state'] == 'completed'
+    assert final['actor'] == original['actor'] and final['authority'] == original['authority']
+    assert final['completion']['actor']['origin'] == 'ui' and final['completion']['authority'] is None
+    assert setup.read_json(h.app.data_dir / 'test-environments.json') == original['candidateConfiguration']
+    assert backend.calls == ['probe']
+    backend.installed.assert_awaited_once()
 
 
 async def test_trusted_system_full_setup_has_explicit_owner_and_no_fake_native_actor(app, backend):

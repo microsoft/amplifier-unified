@@ -1081,11 +1081,11 @@ async def dispatch(app, action, args, origin, caller, authority):
                 async with app.lock:
                     guard()
             if action == 'workspace.environments.setup.reconcile':
-                value = await setup.reconcile(app, args, actor)
+                value = await setup.reconcile(app, args, actor, origin=origin if user else None)
             else:
                 guard()
                 operation = setup.request if action == 'workspace.environments.setup' else setup.cleanup
-                value = await operation(app, args, actor, guard=setup_guard)
+                value = await operation(app, args, actor, guard=setup_guard, origin=origin if user else None)
             return {'accepted': True, 'result': value}
         if action.endswith('.read'):
             offset, limit = args.get('offset', 0), args.get('limit', 10)
