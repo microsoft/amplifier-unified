@@ -6,7 +6,7 @@ import {startSettingsFixture} from './settings-fixture.mjs';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const {base,stop}=await startSettingsFixture({SETTINGS_RELEASE_FIXTURE:'1'});
-let browser,page,failure;const errors=[];
+let browser,page,failure,releaseDraft;const errors=[];
 const state=()=>page.request.get(base+'/api/state').then(r=>r.json());
 try{
  browser=await chromium.launch({headless:true});
@@ -138,7 +138,41 @@ try{
  await page.screenshot({animations:'disabled',path:'/tmp/amplifier-settings-focused.png'});
  assert.equal(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
  await page.getByRole('button',{name:'Close settings',exact:true}).click();
+ const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
+ const previousText=await composer.innerText();
+ const previousChat=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
+ let draftRequested;const requested=new Promise(resolve=>{draftRequested=resolve}),held=new Promise(resolve=>{releaseDraft=resolve});
+ const mutations=[];
+ const holdDraft=async route=>{const request=route.request().postDataJSON();if(request.action==='session.draft'){draftRequested();await held}else if(['conversation.configure','view.update'].includes(request.action))mutations.push(request);await route.continue()};
+ await page.route('**/api/actions',holdDraft);
  await page.getByRole('button',{name:'New chat',exact:true}).click();
+ await requested;
+ const options=page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true});
+ await expect(options).toBeDisabled();await expect(composer).toHaveAttribute('aria-readonly','true');
+ // Real input events while the destination is pending cannot mutate the old
+ // chat or create an optimistic edit that the draft receipt would discard.
+ await options.click({force:true});await composer.press('x');
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),previousChat);
+ assert.equal(await composer.innerText(),previousText);
+ assert.equal(await page.getByRole('dialog',{name:'Chat options',exact:true}).count(),0);
+ assert.equal(mutations.some(row=>row.action==='conversation.configure'||Object.hasOwn(row.args?.patch||{},'draft')),false);
+ releaseDraft();await page.waitForFunction(()=>window.amplifier.getState().selectedSessionId===null&&!window.amplifier.getState().draftNavigationPending);
+ await page.unroute('**/api/actions',holdDraft);
+ await expect(composer).toHaveAttribute('aria-readonly','false');
+ const draftSaved=page.waitForResponse(response=>{if(response.request().method()!=='POST'||new URL(response.url()).pathname!=='/api/actions')return false;const request=response.request().postDataJSON();return request?.action==='view.update'&&request.args?.patch?.draft==='Keep the new chat draft'&&response.ok()});
+ await composer.fill('Keep the new chat draft');await draftSaved;
+ // The same fence also protects an already editable, unsent draft. Its text
+ // remains intact while reopening it; no keystroke is accepted and discarded.
+ let returning;const returnRequested=new Promise(resolve=>{returning=resolve}),returnHeld=new Promise(resolve=>{releaseDraft=resolve});
+ const holdReturn=async route=>{if(route.request().postDataJSON().action==='session.draft'){returning();await returnHeld}await route.continue()};
+ await page.route('**/api/actions',holdReturn);
+ const openNavigation=page.getByRole('button',{name:'Open navigation',exact:true});if(await openNavigation.isVisible())await openNavigation.click();
+ await page.getByRole('button',{name:'New chat',exact:true}).click();await returnRequested;
+ await expect(options).toBeDisabled();await expect(composer).toHaveAttribute('aria-readonly','true');await composer.press('x');
+ assert.equal(await composer.innerText(),'Keep the new chat draft');
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().view.draft),'Keep the new chat draft');
+ releaseDraft();await page.waitForFunction(()=>!window.amplifier.getState().draftNavigationPending);await page.unroute('**/api/actions',holdReturn);
+ await expect(composer).toHaveAttribute('aria-readonly','false');assert.equal(await composer.innerText(),'Keep the new chat draft');
  await page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
  await showComposerOption(page,'bundle');
  await page.getByLabel('Registered root bundles',{exact:true}).selectOption('fixture-root');
@@ -162,6 +196,7 @@ try{
  await expect(attach).toHaveCount(0);
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.newSessionDraft.workspace)).toBe(workspace+'/project');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().view.newSessionDraft.bundle),'fixture-root','attaching a browsed folder preserves the selected bundle');
+ assert.equal(await composer.innerText(),'Keep the new chat draft');
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'appearance'}}));
  await openSettingsPage(page,'custom-appearance');
  const data=await page.evaluateHandle(()=>{const transfer=new DataTransfer();transfer.items.add(new File(['#amp-one { --a-accent: purple; }'],'dropped.amplifier.css',{type:'text/css'}));return transfer});
@@ -178,4 +213,4 @@ try{
  try{await page.screenshot({animations:'disabled',path:'/tmp/amplifier-settings-failure.png'})}catch(captureError){console.error('Failure screenshot unavailable:',captureError.message)}
  try{const view=await page.evaluate(()=>window.amplifier?.getState?.());console.error(JSON.stringify({pageErrors:errors,locationListing:view?.locationListing,locationPicker:view?.view?.locationPicker}))}catch(diagnosticError){console.error('Settings diagnostics unavailable:',diagnosticError.message)}
  throw error;
-}finally{await finishFixture({label:"Settings fixture",close:[["Settings browser",()=>browser?.close()]],stop,originalError:failure})}
+}finally{releaseDraft?.();await finishFixture({label:"Settings fixture",close:[["Settings browser",()=>browser?.close()]],stop,originalError:failure})}
