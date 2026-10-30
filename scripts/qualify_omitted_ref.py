@@ -19,6 +19,58 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 LOOP = 'amplifier-module-loop-live'
+FAILURE_CLASSIFIER_VERSION = 1
+FAILURE_SCAN_BYTES = 64 * 1024
+# Fixed diagnostic signatures, not root-cause proof. Never return matched text.
+FAILURE_SIGNATURES = {
+    'manifest': r'^(?:error: |  Caused by: )?(?:TOML parse error|Failed to parse `pyproject\.toml`)',
+    'dependency-conflict': r'^[ \t]*(?:error: |\u00d7 )?No solution found when resolving dependencies',
+    'transport-auth': r'^(?:fatal: (?:Authentication failed|could not read Username|unable to access)|error: (?:Failed to download|Failed to fetch)|Permission denied \(publickey\))',
+    'unavailable-wheel': r'^error: (?:No binary distribution found|No compatible wheel found)',
+    'build': r'^[ \t]*(?:error: |\u00d7 )?(?:Failed to build |The build backend returned an error)',
+}
+
+
+def command_log_facts(log, returncode):
+    """Hash the full log with bounded memory; classify only complete small logs.
+
+    Unrecognized, ambiguous, oversized or undecodable output stays unknown.
+    Only fixed category strings leave this function, never paths or source text.
+    An unknown command outcome is not classified from possibly partial output.
+    """
+    sha, size = hashlib.sha256(), 0
+    try:
+        with log.open('rb') as stream:
+            sample = stream.read(FAILURE_SCAN_BYTES + 1)
+            sha.update(sample)
+            size += len(sample)
+            for chunk in iter(lambda: stream.read(FAILURE_SCAN_BYTES), b''):
+                sha.update(chunk)
+                size += len(chunk)
+    except OSError:
+        # Diagnostic IO must not replace the original command outcome.
+        return {'returncode': returncode, 'rawLogSha256': None, 'rawLogBytes': None,
+                'rawLogExported': False, 'classifierVersion': FAILURE_CLASSIFIER_VERSION,
+                'captureError': 'log-read-failed',
+                **({'failureCategory': 'unknown'} if returncode != 0 else {})}
+    facts = {'returncode': returncode, 'rawLogSha256': sha.hexdigest(),
+             'rawLogBytes': size, 'rawLogExported': False,
+             'classifierVersion': FAILURE_CLASSIFIER_VERSION,
+             'classificationBytes': min(size, FAILURE_SCAN_BYTES),
+             'classificationTruncated': size > FAILURE_SCAN_BYTES}
+    if returncode == 0:
+        return facts
+    categories = set()
+    if type(returncode) is int and returncode > 0 and size <= FAILURE_SCAN_BYTES:
+        try:
+            text = sample.decode('utf-8')
+        except UnicodeDecodeError:
+            pass
+        else:
+            categories = {category for category, pattern in FAILURE_SIGNATURES.items()
+                          if re.search(pattern, text, re.MULTILINE | re.IGNORECASE)}
+    facts['failureCategory'] = next(iter(categories)) if len(categories) == 1 else 'unknown'
+    return facts
 
 
 def digest(path):
@@ -47,7 +99,7 @@ def main():
 
     def run(label, command, *, cwd=ROOT, env=None, timeout=900):
         log = raw_logs / (label + '.log')
-        record = {'label': label, 'command': list(map(str, command)), 'cwd': str(cwd)}
+        record = {'label': label, 'returncode': None}
         status['commands'].append(record)
         save(output / 'status.json', status)
         try:
@@ -58,9 +110,7 @@ def main():
             if result.returncode:
                 raise RuntimeError(label + ' failed')
         finally:
-            if log.exists():
-                record.update(rawLogSha256=digest(log), rawLogBytes=log.stat().st_size,
-                              rawLogExported=False)
+            record.update(command_log_facts(log, record['returncode']))
             save(output / 'status.json', status)
 
     try:
@@ -150,7 +200,10 @@ Path(sys.argv[1]).write_text(json.dumps({'python':sys.executable,'prefix':sys.pr
         run('real-worker-adoption', command, env=fixture_env, timeout=1200)
         status.update(status='passed', modelCalls=0)
     except BaseException as error:
-        status.update(status='failed', errorType=type(error).__name__)
+        status.update(status='failed', errorType=type(error).__name__,
+                      classifierVersion=FAILURE_CLASSIFIER_VERSION,
+                      failureCategory=(status['commands'][-1].get('failureCategory', 'unknown')
+                                       if status['commands'] else 'unknown'))
         # Do not print traceback/source excerpts from the private dependency.
         print('Omitted-ref qualification failed; see the bounded status receipt.', file=sys.stderr)
         return 1
