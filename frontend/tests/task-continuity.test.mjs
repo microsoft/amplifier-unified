@@ -1,5 +1,6 @@
 import nodeTest from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import React,{act} from 'react';
 import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
@@ -25,6 +26,23 @@ const projection=(revision=3,extra={})=>({status:'available',task:{
  artifactRefs:['artifact-one'],artifactRefsCount:1,completionEvidence:[],completionEvidenceCount:0,blockedReason:null,
  ...extra},historyCount:0,historyRef:{action:'task.history',args:{sessionId:'owner'}},goal:null,
  detailRequired:false,detailRefs:[],continuity:{supported:false,status:'not_observed_cold'},continuationSupported:null});
+const missingProjection=(revision,values)=>{
+ const result=projection(revision);
+ result.detailRequired=true;
+ result.detailRefs=Object.entries(values).map(([field,value])=>{
+  result.task[field]=null;result.task[field+'Count']=Array.from(value).length;
+  return {action:'task.detail',args:{sessionId:'owner',taskId:'task-one',expectedRevision:revision,field}};
+ });
+ return result;
+};
+// task.detail offsets and totals are Unicode code points; lists travel as JSON.
+const detailPage=(args,value)=>{
+ const valueText=typeof value==='string'?value:JSON.stringify(value),characters=Array.from(valueText);
+ const end=Math.min(args.offset+args.limit,characters.length);
+ return {taskId:args.taskId,revision:args.expectedRevision,field:args.field,historyRevision:null,
+  offset:args.offset,total:characters.length,sha256:createHash('sha256').update(valueText).digest('hex'),
+  text:characters.slice(args.offset,end).join(''),truncated:end<characters.length,nextOffset:end<characters.length?end:null};
+};
 const deferred=()=>{let resolve;const promise=new Promise(r=>{resolve=r});return {promise,resolve}};
 async function flush(){await act(async()=>{await Promise.resolve()})}
 async function click(root,action){await act(async()=>{await button(root,action).props.onClick()})}
@@ -75,6 +93,98 @@ test('bounded null fields never fall back to stale full task details or authoriz
   assert.deepEqual(calls.map(x=>x[0]),['task.get'],'No implicit task.detail, runtime.control or warm reads');
   assert.deepEqual(state,before,'Bounded display does not replace canonical state');
  }finally{await close(root)}
+});
+
+test('explicit paged details display exact current fields and allow completion without changing the cold projection',async()=>{
+ const values={objective:'Review 🧭 the retained report. '.repeat(180),questionIds:['question-one','question-two'],
+  corrections:[{revision:2,at:2,origin:'user',text:'Keep the exact candidate. '.repeat(110)}]};
+ const value=missingProjection(3,values),before=structuredClone(value),calls=[];let root;
+ const dispatch=async(action,args)=>{
+  calls.push([action,args]);
+  return accepted(action==='task.detail'?detailPage(args,values[args.field]):action==='task.complete'?projection(4,{status:'completed',objective:values.objective}):value);
+ };
+ try{
+  root=await open(dispatch);await click(root,'task.get');
+  await act(async()=>root.root.findByProps({id:'task-evidence'}).props.onChange({target:{value:'The retained report was verified'}}));
+  assert.equal(button(root,'task.complete').props.disabled,true);
+  assert.deepEqual(calls.map(([action])=>action),['task.get']);
+  await click(root,'task.detail');
+  assert.equal(root.root.findByType('strong').children.join(''),values.objective);
+  assert.ok(text(root).includes(values.corrections[0].text));assert.match(text(root),/Questions: question-one, question-two/);
+  assert.equal(button(root,'task.complete').props.disabled,false);
+  assert.equal(root.root.findAllByProps({'data-action':'task.detail'}).length,0);
+  const pages=calls.filter(([action])=>action==='task.detail');
+  assert.deepEqual(pages.filter(([,args])=>args.field==='objective').map(([,args])=>args.offset),[0,2000,4000]);
+  assert.ok(pages.every(([,args])=>args.taskId==='task-one'&&args.expectedRevision===3&&args.limit===2000));
+  assert.deepEqual(value,before,'Exact details remain private to the reader');
+  const applied=structuredClone(value);applied.task.appliedRevision=3;
+  await act(async()=>root.update(render({runtimeControl:{owner:{'task.get':applied}}},session,dispatch)));
+  assert.equal(root.root.findByType('strong').children.join(''),values.objective,'An applied boundary does not change the task revision');
+  assert.doesNotMatch(text(root),/applies at the next request/);
+  await click(root,'task.complete');
+  assert.deepEqual(calls.at(-1),['task.complete',{sessionId:'owner',expectedRevision:3,condition:values.objective,evidence:['The retained report was verified']}]);
+  assert.match(text(root),/Task completed · revision 4/);
+  assert.ok(calls.every(([action])=>['task.get','task.detail','task.complete'].includes(action)),'No history or runtime hydration');
+ }finally{await close(root)}
+});
+
+for(const mismatch of ['revision','sha256'])test('a stale detail page '+mismatch+' cannot combine with current content, and an explicit retry recovers',async()=>{
+ const values={objective:'Exact current objective. '.repeat(200)},calls=[];let root,fail=true;
+ const dispatch=async(action,args)=>{
+  calls.push([action,args]);
+  const page=detailPage(args,values.objective);
+  if(fail&&args.offset){fail=false;page[mismatch]=mismatch==='revision'?2:'stale-content-hash'}
+  return accepted(page);
+ };
+ try{
+  root=await open(dispatch,{runtimeControl:{owner:{'task.get':missingProjection(3,values)}}});
+  await act(async()=>root.root.findByProps({id:'task-evidence'}).props.onChange({target:{value:'Verified'}}));
+  await click(root,'task.detail');
+  assert.match(text(root),/detail page changed/);assert.match(text(root),/Task objective not loaded/);
+  assert.equal(button(root,'task.complete').props.disabled,true);assert.equal(calls.length,2,'Stop before fetching another stale page');
+  await click(root,'task.detail');
+  assert.equal(root.root.findByType('strong').children.join(''),values.objective);
+  assert.equal(button(root,'task.complete').props.disabled,false);
+  assert.ok(calls.every(([action])=>action==='task.detail'),'Retry needs no read acknowledgment or unrelated request');
+ }finally{await close(root)}
+});
+
+test('a new task revision invalidates loaded fields and stops an in-flight old page',async()=>{
+ const values={3:{objective:'Previous private objective. '.repeat(200)},4:{objective:'New objective. '.repeat(180)},5:{objective:'Latest objective. '.repeat(180)}};
+ const old=deferred(),started=deferred(),calls=[];let root,request;
+ const dispatch=async(action,args)=>{
+  calls.push([action,args]);
+  if(args.expectedRevision===3&&args.offset){started.resolve();return old.promise}
+  return accepted(detailPage(args,values[args.expectedRevision].objective));
+ };
+ try{
+  root=await open(dispatch,{runtimeControl:{owner:{'task.get':missingProjection(3,values[3])}}});
+  await act(async()=>{request=button(root,'task.detail').props.onClick();await started.promise});
+  await act(async()=>root.update(render({runtimeControl:{owner:{'task.get':missingProjection(4,values[4])}}},session,dispatch)));
+  old.resolve(accepted(detailPage(calls.at(-1)[1],values[3].objective)));await request;await flush();
+  assert.match(text(root),/revision 4/);assert.doesNotMatch(text(root),/Previous private objective/);
+  assert.match(text(root),/changed while loading details/);assert.equal(calls.length,2);
+  await click(root,'task.detail');
+  assert.equal(root.root.findByType('strong').children.join(''),values[4].objective);
+  await act(async()=>root.update(render({runtimeControl:{owner:{'task.get':missingProjection(5,values[5])}}},session,dispatch)));
+  assert.match(text(root),/Task objective not loaded/);assert.doesNotMatch(text(root),/New objective/);
+  assert.equal(button(root,'task.complete').props.disabled,true);
+  await click(root,'task.detail');
+  assert.equal(root.root.findByType('strong').children.join(''),values[5].objective);
+ }finally{old.resolve({accepted:false});await request;await close(root)}
+});
+
+test('a delayed detail page cannot follow the reader into another chat',async()=>{
+ const values={objective:'Old private objective. '.repeat(200)},old=deferred();let root,request;
+ const dispatch=()=>old.promise;
+ try{
+  root=await open(dispatch,{runtimeControl:{owner:{'task.get':missingProjection(3,values)}}});
+  await act(async()=>{request=button(root,'task.detail').props.onClick()});
+  await act(async()=>root.update(render({}, {id:'other'},dispatch)));
+  old.resolve(accepted(detailPage({taskId:'task-one',expectedRevision:3,field:'objective',offset:0,limit:2000},values.objective)));await request;await flush();
+  assert.doesNotMatch(text(root),/Old private objective|revision 3/);
+  assert.equal(button(root,'task.get').props.disabled,false);
+ }finally{old.resolve({accepted:false});await request;await close(root)}
 });
 
 test('available task:null clears a stale cached task; unavailable does not masquerade as empty',async()=>{
@@ -244,10 +354,15 @@ test('host restart invalidates an in-flight observation even when the chat id is
 });
 
 test('a current owner read binds canonical alias provenance without a warm action',async()=>{
- const calls=[];let root;const value=projection(5);value.historyRef.args.sessionId='native-owner';
+ const calls=[],objective='Exact canonical owner objective. '.repeat(80);let root;
+ const value=missingProjection(5,{objective});value.historyRef.args.sessionId='native-owner';
+ value.detailRefs[0].args.sessionId='native-owner';
  try{
-  root=await open(async(...args)=>{calls.push(args);return accepted(value)}, {},{id:'display-owner',runtimeSessionId:'native-owner'});
+  root=await open(async(action,args)=>{calls.push([action,args]);return accepted(action==='task.detail'?detailPage(args,objective):value)}, {},{id:'display-owner',runtimeSessionId:'native-owner'});
   await click(root,'task.get');assert.match(text(root),/revision 5/);
   assert.deepEqual(calls,[['task.get',{sessionId:'display-owner'}]]);
+  await click(root,'task.detail');
+  assert.equal(root.root.findByType('strong').children.join(''),objective);
+  assert.ok(calls.slice(1).every(([action,args])=>action==='task.detail'&&args.sessionId==='native-owner'));
  }finally{await close(root)}
 });
