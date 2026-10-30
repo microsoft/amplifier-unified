@@ -4,20 +4,45 @@ This is an opt-in contract. Ordinary prompt schedules are unchanged. Unsupported
 
 ## Shared actions and authority
 
-- `observation.qualify`: trusted operator/UI action only; unavailable through the agent bridge. It records an explicit source-review qualification for one already installed, connected MCP tool. `readOnlyHint` alone is insufficient. Qualification is not a sandbox or proof of remote implementation behavior.
+- `observation.qualify`: trusted operator/UI action or an authenticated agent/system action under Full access. It records a source-review qualification for one already installed, connected MCP tool. `readOnlyHint` alone is insufficient. The submitted review assertions and evidence retain their actual origin and captured access revision; they are not independent verification, human approval, a sandbox or proof of remote implementation behavior.
 - `observation.observers`: list qualified descriptors and current eligibility, without connecting or preparing a provider.
 - `observation.preview`: review `{sessionId, observerId, target, scope, sourceId, args, intervalSeconds, durationSeconds, readTimeoutSeconds}` against persisted task authority. `sourceId` is the exact source URI derived by the extension from the target. The host treats it as an identity, never fetches it.
-- `observation.create`: those same fields plus `{requestId, sourceMessageId, previewHash}`. Agent calls must cite the actual human request. Stable `requestId` is mandatory. The host checks an existing request and its exact original intent **before** preview validation, so a retry returns the original paused/expired/finished watch without rearming it. `durationSeconds` becomes an absolute expiry only on first creation.
+- `observation.create`: those same fields plus `{requestId, sourceMessageId, previewHash}`. Full access needs no human `sourceMessageId`; in Ask when needed, agent calls must cite the actual human request. Stable `requestId` is mandatory. The host checks an existing request and its exact original intent **before** preview validation, so a retry returns the original paused/expired/finished watch without rearming it. `durationSeconds` becomes an absolute expiry only on first creation.
 - `observation.request`: `{sessionId,requestId}` returns the prior creation receipt without replay.
 - `observation.list`, `observation.read`, `observation.report`: scoped watch/history reads; `report` is read-only, never a source-authored status submission.
 - `observation.pause`, `observation.cancel`: `{sessionId,id,expectedRevision,requestId}`. They suppress checks and unadmitted handoffs, not watched product work.
-- `observation.resume`: fresh preview and renewed human authority, with exact revision/request identity. Unknown admission or a terminal result cannot be resumed; no replay or terminal deduplication reset.
+- `observation.resume`: fresh preview under still-valid Full access or renewed human authority, with exact revision/request identity. A Full watch can resume after a normal pause without a new human request. It cannot renew its own revoked access revision or cross its original Stop boundary. Unknown admission or a terminal result cannot be resumed; no replay or terminal deduplication reset.
 
-The bridge supplies caller origin; an `origin` value in tool arguments cannot authorize qualification. Source observations and scheduled/background messages cannot authorize watches. A source callback receives no action dispatcher, provider executor or presentation capability.
+The bridge supplies caller origin; an `origin` value in tool arguments cannot authorize qualification. Source observations and scheduled/background messages do not themselves grant authority. An authenticated agent or system acts under the owner's saved Full preference, retaining agent/system attribution rather than a fabricated human request. A source callback receives no action dispatcher, provider executor or presentation capability.
+
+Full watch authorization uses the existing watch record with its owner and captured
+`accessRevision`. Preview binds that revision; creation/resume and subsequent
+read dispatch, returned-result acceptance and handoff admission use the existing
+access-mode resolver and task/Stop/execution guards. Changing Full to Ask, then
+back to Full, does not renew the old watch. An explicit fresh trusted request may
+create new work. Existing watches are not migrated or automatically rearmed.
+No browser, question answer or new permission record is needed to authorize an
+unattended watch with `presentationRequest` omitted.
+
+Agent entry also uses the shared [current native generation authority](native-generation-authority.md).
+Qualification, preview and fresh create/resume require the actual caller's current
+generation and delivered input binding at its original Stop revision. The existing
+authorization record keeps `runtimeSessionId`, `generationId` and `inputIds`
+separate from the owning `sessionId`. A stopped worker cannot choose a new request
+ID to regain authority, even before its terminal event arrives or after a duplicate
+start/status event. Reading the original idempotent receipt still does not replay
+anything. Fresh trusted host system work is independent of the stopped worker's
+binding; current agent work can proceed with a new correctly admitted generation.
+Neither path requires human input or reattributes an agent as the root or user.
+
+Required unanswered task questions remain factual dependencies in this slice;
+Full observation authority does not answer them or turn an agent choice into a
+human answer. The existing human-only answer route is a separate autonomous
+decision follow-up, so this slice does not claim complete Full-access parity.
 
 ## Qualified descriptor
 
-A qualification binds `installationId`, `connectionId`, `toolName`, exact input/output schema hashes, connection configuration fingerprint, account binding, `implementationRevision`, `requestArgument` (normally `observation`), target/scope schemas, and reviewed installed-file digests. The operator records `source-enforced-read` or `reviewed-trusted-read` with immutable review evidence, provider-free and concurrent-read-safe assertions. The source must enforce exact record ownership/scope and perform no product mutation. Stdio retains its OS process privileges. Remote read scope must be enforced by the remote service.
+A qualification binds `installationId`, `connectionId`, `toolName`, exact input/output schema hashes, connection configuration fingerprint, account binding, `implementationRevision`, `requestArgument` (normally `observation`), target/scope schemas, and reviewed installed-file digests. The authorized reviewer records `source-enforced-read` or `reviewed-trusted-read` with immutable review evidence, provider-free and concurrent-read-safe assertions. The host checks the installed bytes, identity, schemas, connection/account and evidence shape; it does not independently establish the truth of the review assertions. Qualification retains that submitted assessment after access changes; it supplies no watch authority. Each watch needs its own still-valid authorization. The source must enforce exact record ownership/scope and perform no product mutation. Stdio retains its OS process privileges. Remote read scope must be enforced by the remote service.
 
 V1 supports only the already connected registration (`connectionPolicy: existing-only`). No installation, login, account acceptance, reconnect, source change or grant expansion is inferred. Missing/changed qualification requires review. Account identity is either verified connector identity or an explicitly qualified local process/configuration; unknown remote identity is not upgraded to verified identity.
 
@@ -59,7 +84,7 @@ All shared dispatch calls use Unified's normal `{accepted:true,result:...}` enve
 | --- | --- |
 | qualify | `{observer: QualifiedDescriptor}` |
 | observers | `{observers: [{...QualifiedDescriptor,eligible:boolean,reason:string|null}]}` |
-| preview | `{previewHash,binding,handoff,expiresInSeconds}`; binding includes exact task/native session/stop/execution revisions plus the original configuration |
+| preview | `{previewHash,binding,handoff,expiresInSeconds}`; binding includes exact task/native session/stop/execution revisions plus the original configuration; the hash also binds current Full authority where used |
 | create/resume/pause/cancel | `{watch: Watch,duplicate:boolean}` |
 | request | `{watch: Watch|null}` |
 | list | `{watches: Watch[]}` |
@@ -67,7 +92,7 @@ All shared dispatch calls use Unified's normal `{accepted:true,result:...}` enve
 
 A Watch contains `id`, `requestId` (original creation), `revision`, `sessionId`, original configuration, `authorization`, `taskId`, `taskRevision`, `nativeSessionId`, `interruptionRevision`, `executionRevision`, `status`, `createdAt`, `updatedAt`, `nextDue`, `expiresAt`, `sequence`, `cursor`, and optional `lastResult`, `terminal`, `reason`. Status is `active`, `paused`, `cancelled`, `needs_review`, or `ended`. Read occurrences include `id`, `watchId`, `sessionId`, `watchRevision`, `phase`, timestamps and optional validated `result`. Handoffs contain stable `id`/`inputId`, `watchId`, `phase`, exact `outcome`, and admission receipt where known. Phase is `pending`, `waiting_worker`, `submitting`, `accepted`, `suppressed`, or `unknown`; `accepted` is not proof of a completed provider response.
 
-Qualification and first watch creation are distinct. Qualified descriptors do not grant authority to watch an arbitrary user's target. The source must validate exact scope and owner bindings on every read; target/source schemas and the human watch review further narrow host dispatch.
+Qualification and first watch creation are distinct. Qualified descriptors do not grant authority to watch an arbitrary user's target. The source must validate exact scope and owner bindings on every read; target/source schemas and the exact watch preview further narrow host dispatch.
 
 ## Optional exact browser presentation
 

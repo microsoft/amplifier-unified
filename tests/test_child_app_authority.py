@@ -38,7 +38,9 @@ async def test_mounted_child_app_access_has_own_principal(tmp_path, monkeypatch,
     parent.coordinator.register_capability('session.working_dir', str(tmp_path))
     worker = Worker()
     worker.session = parent
-    worker.runtime = SimpleNamespace(generation={'id': 'root-generation', 'input_ids': ['original-input']})
+    worker.runtime = SimpleNamespace(generation={'id': 'root-generation', 'input_ids': ['original-input']},
+                                     closed=False, stop_requested=False)
+    worker.activation_gate = SimpleNamespace(current_valid=True)
     worker.context_inputs = ['original-input']
     worker.context_bindings = {'original-input': {'clientId': 'original-client', 'targets': []}}
     worker.bridge = AsyncMock(return_value={'accepted': True})
@@ -57,7 +59,7 @@ async def test_mounted_child_app_access_has_own_principal(tmp_path, monkeypatch,
         assert result.success, result.error
         _, envelope = worker.bridge.call_args.args
         assert envelope['_runtimeSessionId'] == coordinator.session_id
-        assert '_generationId' not in envelope
+        assert envelope['_generationId'] == 'root-generation'
         assert envelope['_inputBindings'] == [{'inputId': 'original-input', 'clientId': 'original-client'}]
         if mode in {'nested', 'nested-reprepare'} and coordinator.session_id == 'child':
             worker.context_inputs = ['unrelated-later-input']

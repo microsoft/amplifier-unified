@@ -17,7 +17,8 @@ TRANSPORT_FIELDS = {'_generationId', '_runtimeSessionId', '_inputBindings', '_in
 def coordinator(session_id):
     capabilities = {}
     return SimpleNamespace(session_id=session_id, get_capability=capabilities.get,
-                           register_capability=capabilities.__setitem__)
+                           register_capability=capabilities.__setitem__,
+                           cancellation=SimpleNamespace(is_cancelled=False))
 
 
 @pytest.fixture
@@ -33,9 +34,11 @@ async def worker_bridge(tmp_path, monkeypatch):
     for client in ('old-browser', 'input-browser'):
         app.clients.attach(client)
     monkeypatch.setattr(app.history, 'refresh', AsyncMock())
-    worker = Worker.__new__(Worker)
+    worker = Worker()
     worker.session = SimpleNamespace(coordinator=coordinator('native-root'))
-    worker.runtime = SimpleNamespace(generation={'id': 'generation-root', 'input_ids': ['input-1']})
+    worker.runtime = SimpleNamespace(generation={'id': 'generation-root', 'input_ids': ['input-1']},
+                                     closed=False, stop_requested=False)
+    worker.activation_gate = SimpleNamespace(current_valid=True)
     worker.context_inputs = ['input-1']
     worker.context_bindings = {
         'input-1': {'clientId': 'input-browser', 'targets': [{'surfaceId': 'surface-1'}]}}
@@ -178,7 +181,7 @@ async def test_context_operations_retain_worker_specific_bindings(worker_bridge,
     assert seen[-1] == [{'clientId': 'input-browser', 'targets': []}]
 
 
-async def test_child_transport_cannot_borrow_root_principal_or_generation(worker_bridge, monkeypatch):
+async def test_child_transport_keeps_assigned_generation_without_borrowing_root_principal(worker_bridge, monkeypatch):
     app, root, worker, envelopes = worker_bridge
     child = worker.app_access_bridge(coordinator('native-child'))
     worker.context_inputs = ['later-input']
@@ -187,7 +190,10 @@ async def test_child_transport_cannot_borrow_root_principal_or_generation(worker
     async def inspect(operation, args, session_id, **options):
         assert not TRANSPORT_FIELDS.intersection(args)
         assert PRINCIPAL.get() == 'native-child'
-        assert '_generationId' not in BINDING.get()
+        assert BINDING.get()['_generationId'] == 'generation-root'
+        binding, active = app.collaboration.active_binding(root, allow_descendant=True)
+        assert binding['_runtimeSessionId'] == 'native-child'
+        assert active['id'] == 'generation-root'
         assert BINDING.get()['_inputBindings'] == [{'inputId': 'input-1', 'clientId': 'input-browser'}]
         assert app.clients.current.get() == 'input-browser'
         app.collaboration.source({}, 'agent', session_id)
