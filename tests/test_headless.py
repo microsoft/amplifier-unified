@@ -250,7 +250,6 @@ async def test_full_access_headless_leaves_pending_decisions_to_host(aiohttp_ser
     assert approval['status'] == 'allow' and approval['approvedBy'] == 'full-access'
 
 
-
 async def test_management_result_correlates_exact_command(tmp_path):
     from amplifier_web.service import AppService
     from amplifier_web.management import Management
