@@ -7,8 +7,11 @@ it qualifies packaged resource loading, not full host startup or browser design.
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
+import hashlib
 import importlib.metadata
+from importlib.resources import files
 import json
 import os
 from pathlib import Path
@@ -82,18 +85,41 @@ async def _loader_probe(root, workspace, *, deferred=False, omitted=False):
 if __name__ == "__main__":
     assert sys.argv[1] == "--installed-probe" and sys.flags.isolated
     installed = Path(sys.argv[2]).resolve(strict=True)
+    expected = json.loads(sys.argv[4])
     sys.path.insert(0, str(installed))
     import amplifier_web
+    from amplifier_web import theme_library
     from amplifier_web.builtin_behaviors import resource_root
 
     assert Path(amplifier_web.__file__).resolve().is_relative_to(installed)
     distribution = importlib.metadata.distribution("amplifier-unified")
+    assert Path(distribution.locate_file("")).resolve(strict=True) == installed
     direct = json.loads(distribution.read_text("direct_url.json") or "{}")
     assert not direct.get("dir_info", {}).get("editable")
     assert resource_root().resolve() == installed / "amplifier_web/bundle_data"
+    records = {str(path): path for path in distribution.files}
     for entry in ("SKILL.md", "examples.md", "quiet-study.json"):
-        assert "amplifier_web/bundle_data/skills/appearance-authoring/" + entry in {
-            str(path) for path in distribution.files}
+        assert "amplifier_web/bundle_data/skills/appearance-authoring/" + entry in records
+    resource = Path(files("amplifier_web").joinpath("appearances", "lightline.amplifier.css"))
+    for relative, actual in (("amplifier_web/theme_library.py", Path(theme_library.__file__)),
+                             (expected["resource"], resource)):
+        actual = actual.resolve(strict=True)
+        assert actual.is_relative_to(installed)
+        record = records[relative]
+        assert actual == Path(distribution.locate_file(record)).resolve(strict=True)
+        assert record.hash and record.hash.mode == "sha256"
+        assert record.hash.value == base64.urlsafe_b64encode(
+            hashlib.sha256(actual.read_bytes()).digest()).decode("ascii").rstrip("=")
+    data = resource.read_bytes()
+    assert hashlib.sha256(data).hexdigest() == expected["sha256"]
+    # Resource presets need no AppService, user library or provider configuration.
+    lightline = theme_library.preset(None, "lightline")
+    css = lightline.pop("css")
+    assert lightline == expected["metadata"]
+    assert css.encode("utf-8") == data
+    assert theme_library.fingerprint(css) == expected["sha256"]
+    assert theme_library.metadata(css)[0] == {
+        key: expected["metadata"][key] for key in ("name", "description")}
     asyncio.run(_loader_probe(resource_root(), Path(sys.argv[3])))
     print("APPEARANCE_SKILL_INSTALLED_OK")
     raise SystemExit(0)
@@ -185,8 +211,19 @@ async def test_app_shell_discovery_preserves_selected_loader_policy(tmp_path, mo
 
 def test_wheel_installed_loader_outside_checkout(tmp_path):
     from hatchling.builders.wheel import WheelBuilder
+    from amplifier_web import theme_library
 
     checkout = Path(__file__).resolve().parents[1]
+    assert Path(theme_library.__file__).resolve() == checkout / "amplifier_web/theme_library.py"
+    resource = checkout / "amplifier_web/appearances/lightline.amplifier.css"
+    # Capture checkout expectations before building; the isolated probe imports
+    # only the installed package and receives these independent values as JSON.
+    expected = {
+        "resource": resource.relative_to(checkout).as_posix(),
+        "sha256": hashlib.sha256(resource.read_bytes()).hexdigest(),
+        "metadata": {"id": "builtin:lightline", "source": "built-in",
+                     **theme_library.RESOURCE_PRESETS["lightline"]},
+    }
     wheels = tmp_path / "wheels"
     wheels.mkdir()
     wheel = Path(next(WheelBuilder(str(checkout)).build(directory=str(wheels))))
@@ -201,7 +238,8 @@ def test_wheel_installed_loader_outside_checkout(tmp_path):
     environment.update(HOME=str(tmp_path / "home"), AMPLIFIER_HOME=str(tmp_path / "home/.amplifier"))
     probe_python = os.environ.get("UNIFIED_APPEARANCE_PROBE_PYTHON", sys.executable)
     result = subprocess.run([probe_python, "-I", "-B", str(Path(__file__).resolve()),
-                             "--installed-probe", str(target), str(tmp_path / "unrelated")],
+                             "--installed-probe", str(target), str(tmp_path / "unrelated"),
+                             json.dumps(expected)],
                             cwd=tmp_path, env=environment,
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr

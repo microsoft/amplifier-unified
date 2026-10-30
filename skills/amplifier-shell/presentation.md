@@ -51,6 +51,18 @@ Read [the theme contract](../../docs/shell/themes.md) for both palettes,
 background values, preview scope, the separate `presentation.decorations`
 preference, and verification. Discover the installed action schemas first.
 
+For custom skins, use [appearance-authoring](../appearance-authoring/SKILL.md).
+Inspect the baseline CSS and actual DOM before overriding message bodies, the
+inner composer surface or logo filters; preserve outer actions and layout.
+Transcript overflow fades are a shared primitive, not theme-owned artwork:
+inherit the conditional defaults and preserve focus, forced colors, scrollbar
+gutter, navigator and composer. Do not add permanent masks or reposition children
+to accommodate them. Keep background artwork separate and away from controls.
+
+Lightline is an included static architectural appearance, not a forced selection.
+Bundled additions and shared-style updates must leave saved user copies, committed
+custom CSS and independent presentation/accessibility preferences untouched.
+
 A theme chooser is an agent-created conversation surface demonstration, not a
 required shipped app. Reuse its surface ID while refining it and preserve its
 state. Use host preview/apply actions for both user and agent selections.
