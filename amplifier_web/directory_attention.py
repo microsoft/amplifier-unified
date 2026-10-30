@@ -38,7 +38,8 @@ def receipts(directory, state, identities):
 class DirectoryAttention:
     def __init__(self, directory, state, *, correct_approvals=True):
         self.directory = directory
-        sql, params = directory.effective(state, fields={'id', 'title', 'workspace', 'ordinal'}, notice_values=True)
+        sql, params = directory.effective(state, fields={'id', 'title', 'workspace', 'ordinal'},
+                                         notice_values=True, local_only=True)
         sql += ''', visible_notices AS (
             SELECT n.*,d.title,d.workspace,d.ordinal FROM directory_notices n
             JOIN directory_rows d ON d.id=n.owner)'''

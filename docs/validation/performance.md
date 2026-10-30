@@ -46,6 +46,10 @@ Hold the active/viewed set fixed while growing the historical input when testing
 independence from history. Exercise cold misses and warm reuse when either changes.
 Use synthetic fixtures that preserve the relevant size, shape and event sequence;
 an empty history or mocked-away persistence cannot qualify that cost.
+Vary independent inputs separately: a fixed notice set in a growing native
+catalog exposes different query work than a growing notice set without native
+history. Inspect the executed query plan and work counts; selecting a few fields
+or joining a small result does not prevent an earlier full materialization.
 
 Prefer stable work assertions at the affected boundary: rows read or visited,
 records copied/encoded, queries, publications, frames/bytes, retained cache bytes
@@ -114,6 +118,11 @@ retains all notices for review and mark-all. Neither path claims constant-time
 global counts or a total byte bound. The check records SQLite work and diagnostic
 CPU alongside decode/visit counts, and preserves native naming, workspace,
 suppression, current read receipts and transaction boundaries.
+Its native-catalog case keeps 220 notice owners and two residents fixed while
+growing unrelated native rows from 300 to 27,000. Selected notices, visible read
+receipts and explicit Activity must preserve their exact results without growing
+SQL work with that unrelated history. This covers canonical native metadata for
+local notice owners without scanning native-only rows that have no notices.
 
 The additive Extended browser registration runs after publication. The separate
 `Client performance smoke` workflow selects affected PR paths and supports manual
