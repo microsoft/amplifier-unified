@@ -1078,6 +1078,53 @@ def test_cleanup_failure_rejects_arbitrary_backend_codes(code):
     assert 'private' not in json.dumps(result)
 
 
+@pytest.mark.parametrize('action', ['remove', 'finishCleanup'])
+@pytest.mark.parametrize('diagnostic_write_fails', [False, True])
+def test_archive_verification_reason_survives_without_destroy(library, tmp_path, monkeypatch, action, diagnostic_write_fails):
+    lib, calls = library
+    value = payload(tmp_path, action)
+    monkeypatch.setattr(worker.shutil, 'disk_usage', lambda root: SimpleNamespace(free=20 * 1024**3))
+    monkeypatch.setattr(worker, 'docker_reconcile', lambda *args: {
+        'status': 'stopped', 'observation': {'ownership': 'matched'}})
+    original_export = lib.export_files
+    def export(identity, source, destination, **kwargs):
+        receipt = original_export(identity, source, destination, **kwargs)
+        if source == '/artifacts':
+            with tarfile.open(destination, 'a') as archive:
+                item = tarfile.TarInfo('artifacts/fixture-pipe')
+                item.type = tarfile.FIFOTYPE
+                archive.addfile(item)
+            receipt.bytes = destination.stat().st_size
+            receipt.sha256 = hashlib.sha256(destination.read_bytes()).hexdigest()
+        return receipt
+    lib.export_files = export
+    original_write = worker.write_private_record
+    def write(path, record):
+        if diagnostic_write_fails and path.name == 'removal-failed.json':
+            raise OSError('private persistence failure')
+        return original_write(path, record)
+    monkeypatch.setattr(worker, 'write_private_record', write)
+    result = removal_main(monkeypatch, value)
+    assert result['verification'] == {'version': 1, 'reasonCode': 'unsupported_type',
+        'memberType': 'fifo', 'relativePath': 'artifacts/fixture-pipe'}
+    assert result['code'] == 'archive_verification_failed' and result['phase'] == 'verifying'
+    assert result['status'] == 'stopped' and result['effectAdmitted'] is False
+    assert result['removal'] == {'version': 1, 'phase': 'verify-exports',
+        'code': 'phase_failed', 'destroyEffect': 'not_dispatched'}
+    assert not any(name == 'destroy' for name, *_ in calls)
+    directory = worker.removal_directory(value)
+    assert (directory / 'artifacts.tar').is_file()
+    assert not (directory / 'retention.json').exists()
+    assert not (directory / 'destroy-dispatched.json').exists()
+    if not diagnostic_write_fails:
+        saved = json.loads((directory / 'removal-failed.json').read_text())
+        assert saved['verification'] == result['verification']
+        assert saved['binding'] == worker.removal_binding(value, 'owned', value['expectedBackendIdentity'])
+    else:
+        assert not (directory / 'removal-failed.json').exists()
+    assert str(tmp_path) not in json.dumps(result) and 'private persistence' not in json.dumps(result)
+
+
 @pytest.mark.parametrize('profile_id', ['linux-python', 'python-project', 'browser-test'])
 def test_manual_execution_uses_selected_profile_not_caller_overrides(library, tmp_path, profile_id):
     lib, calls = library
