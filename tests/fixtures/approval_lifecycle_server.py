@@ -84,6 +84,15 @@ async def main(home):
             raise web.HTTPUnauthorized()
         if request.method == 'POST':
             body = await request.json()
+            if body['change'] == 'later':
+                grant = {'id':'capability:later', 'sessionId':sid, 'workspace':session['workspace'],
+                         'interruptionRevision':1, 'revision':1, 'status':'pending', 'createdAt':time.time(),
+                         'effects':['file_access'], 'scopes':['session'], 'reason':'Later independent permission',
+                         'nativeWait':False}
+                service.configuration_authority.save(grant)
+                service._session(sid)['approvals'].append({'id':grant['id'],'status':'pending','prompt':grant['reason']})
+                service._publish_changes(sessions={sid})
+                return web.json_response({'created':grant['id']})
             grant = service.configuration_authority.record('capability:current')
             if body['change'] == 'expire':
                 grant['expiresAt'] = time.time()-1
