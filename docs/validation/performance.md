@@ -39,6 +39,14 @@ An object identity, list length or file size alone does not prove unchanged nest
 content. Count cache-validation work too. Moving a full scan to another process
 changes responsiveness, but does not by itself reduce total work or memory.
 
+Saved output records own their immutable bodies. Their list/read/image actions
+must not hydrate or copy the conversation transcript to validate output ownership.
+An output write retains its location and execution revision across an asynchronous
+read, then rechecks that revision, transfer authority and any explicit source
+message before committing. The output tests guard against unrelated history
+traversal and exercise changes during that read; do not replace these fences with
+a full conversation snapshot.
+
 ## Keep a meaningful regression check
 
 Choose a small case and a representative larger case for the affected operation.
