@@ -42,10 +42,20 @@ try{
  await panel.getByLabel('Evidence that the objective is complete (one per line)').fill('Report checked against corrected measurements');
  await panel.getByRole('button',{name:'Complete task with evidence'}).click();
  await expect(panel.getByRole('status')).toContainText('Task completed');
+ const detailedObjective='Verify the complete saved task. '.repeat(90);
+ await panel.getByLabel('Task objective',{exact:true}).fill(detailedObjective);
+ await panel.getByRole('button',{name:'Save task',exact:true}).click();
+ await expect(panel.getByRole('button',{name:'Load missing details',exact:true})).toBeVisible();
+ await panel.getByLabel('Evidence that the objective is complete (one per line)').fill('Checked every part of the saved objective');
+ await expect(panel.getByRole('button',{name:'Complete task with evidence'})).toBeDisabled();
+ await panel.getByRole('button',{name:'Load missing details',exact:true}).click();
+ await expect(panel.getByText(detailedObjective.trim(),{exact:true})).toBeVisible();
+ await panel.getByRole('button',{name:'Complete task with evidence'}).click();
+ await expect(panel.getByRole('status')).toContainText('Task completed');
  await page.setViewportSize({width:390,height:844});
  await panel.getByRole('status').scrollIntoViewIfNeeded();
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  await page.screenshot({path:'/tmp/unified-task-continuity-mobile.png'});
  assert.deepEqual(errors,[]);
- console.log('Saved task browser passed: create, correction, pause, worker restart, agent update, resume, block, evidence completion, mobile layout.');
+ console.log('Saved task browser passed: create, correction, pause, worker restart, agent update, resume, block, evidence completion, omitted-detail loading and completion, mobile layout.');
 }finally{await browser?.close();fixture.kill()}
