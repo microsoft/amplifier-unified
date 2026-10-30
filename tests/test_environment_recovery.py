@@ -1176,52 +1176,218 @@ async def test_verification_projection_does_not_accept_cleanup_as_original(app, 
     assert calls == [] and removal_read_snapshot(app, cleanup['resource']) == before
 
 
-async def test_worker_validation_receipt_survives_host_save_and_passive_read(app, backend, library, monkeypatch):
-    """Real verifier -> worker receipt -> host journal -> guarded projection."""
+@pytest.mark.parametrize('backend_kind', ['docker', 'incus'])
+async def test_worker_validation_receipt_survives_host_save_and_passive_read(app, backend, library, monkeypatch, backend_kind):
+    """Public native root -> real rejection -> closed/reopened host -> saved read."""
     import hashlib
     import tarfile
+    from types import SimpleNamespace
+    from amplifier_web import incus_environment_worker as incus_worker
+    from amplifier_web import session_projection, state_records
+    from amplifier_web.service import AppService
+    from test_configuration_authority import Runtime
+
+    peer = app.state['sessions'][0]
+    created = await app.dispatch('session.create', {
+        'title': 'Fresh diagnostic owner', 'workspace': peer['workspace'], 'select': False},
+        command_id='receipt-owner-create', include_state=False)
+    source = app._session(created['result']['sessionId'])
+    source['collaborationGeneration'] = {'id': 'receipt-generation', 'inputIds': ['receipt-input'], 'terminal': False}
+    await app.on_runtime_event('runtime.status', {
+        'sessionId': source['id'], 'status': 'working', 'runtimeSessionId': 'receipt-native-runtime'})
+    # These facts come only from the public producer/event, not fixture updates.
+    placement = {'sessionKind': 'root', 'workingDirectory': peer['workspace'],
+                 'executionRevision': 0, 'interruptionRevision': 0}
+    assert {key: source[key] for key in placement} == placement
+    assert source['runtimeSessionId'] == 'receipt-native-runtime'
+    transport = copy.deepcopy(source)
+    if backend_kind == 'incus':
+        config = {'python': '/managed/python', 'backend': 'incus', 'incus': {
+            'executable': '/qualified/fixture', 'incusExecutable': '/usr/bin/incus',
+            'project': 'tests', 'configDir': '/fixture/incus', 'admissionDir': '/fixture/admission',
+            'image': 'a' * 64}}
+        monkeypatch.setattr(owner, 'configuration', lambda app: (config, 'ready', 'Controlled Incus fixture'))
+        original_invoke = owner.invoke
+        def prepare_incus(configured, home, raw, action, args):
+            assert action in {'prepare', 'start', 'stop'}
+            value = original_invoke(configured, home, raw, action, args)
+            return {**value, 'universeId': incus_worker.identity({
+                'rootOwner': raw['sessionId'], 'operationId': raw['launchOperationId']}),
+                'backendIdentity': {'backend': 'incus', 'daemon': 'owned-daemon', 'project': 'tests'}}
+        monkeypatch.setattr(owner, 'invoke', prepare_incus)
     row = (await start(app, 'receipt-start'))['resource']
     row = (await act(app, 'stop', row, 'receipt-stop'))['resource']
     lib, effects = library
+    incus_calls = []
     folder = Path(row['retention']['path'])
     (folder / 'source.tar').write_bytes(b'synthetic snapshot')
+    def append_fifo(path):
+        # Inert tar metadata only; never create a physical FIFO in the guest.
+        with tarfile.open(path, 'a') as archive:
+            member = tarfile.TarInfo('artifacts/fixture-pipe')
+            member.type = tarfile.FIFOTYPE
+            archive.addfile(member)
     original_export = lib.export_files
     def export(identity, source, destination, **kwargs):
         receipt = original_export(identity, source, destination, **kwargs)
         if source == '/artifacts':
-            with tarfile.open(destination, 'a') as archive:
-                member = tarfile.TarInfo('artifacts/fixture-pipe')
-                member.type = tarfile.FIFOTYPE
-                archive.addfile(member)
+            append_fifo(destination)
             receipt.bytes = destination.stat().st_size
             receipt.sha256 = hashlib.sha256(destination.read_bytes()).hexdigest()
         return receipt
     lib.export_files = export
     monkeypatch.setattr(worker, 'docker_json', lambda *args: {'ID': 'owned-daemon'})
+    if backend_kind == 'incus':
+        monkeypatch.setattr(incus_worker, 'validate_configuration', lambda value: value)
+        monkeypatch.setattr(incus_worker.shutil, 'disk_usage', lambda root: SimpleNamespace(free=20 * 1024**3))
+        raw = owner.get(app.data_dir, row['sessionId'], row['id'])
+        def cli(config, env, args, timeout=30):
+            incus_calls.append(('cli', args))
+            if args == ['capacity']:
+                return {'scope': {'daemon': 'owned-daemon', 'project': 'tests'},
+                        'storage': {'free_bytes': 20 * 1024**3}}
+            assert args == ['launch-status', raw['launchOperationId']], 'No launch or destroy is allowed'
+            return {'state': 'stopped', 'name': raw['universeId'],
+                    'owner_root': source['id'], 'instance_status': 'Stopped'}
+        def incus(config, env, args, timeout=30):
+            incus_calls.append(('incus', args))
+            if args == ['query', '/1.0']:
+                value = {'environment': {'project': 'tests', 'certificate_fingerprint': 'owned-daemon'}}
+            else:
+                assert args == ['query', '/1.0/instances/' + raw['universeId']], 'No guest effects are allowed'
+                value = {'status': 'Stopped', 'config': {'user.dtu.managed-by': 'amplifier-digital-twin',
+                    'user.dtu.owner-root': source['id'], 'user.dtu.request-id': raw['launchOperationId']}}
+            return {'exit_code': 0, 'stdout': json.dumps(value), 'stderr': '', 'truncated': False}
+        def export_selected(config, env, identity, destination, **kwargs):
+            from test_environment_retention import backup, ROOTS
+            incus_calls.append(('export', identity))
+            archives = worker.retention.filter_incus_stream(backup(ROOTS), destination, identity,
+                                                            archive_only=kwargs.get('archive_only', False))
+            append_fifo(destination / 'artifacts.tar')
+            return archives
+        monkeypatch.setattr(incus_worker, 'cli', cli)
+        monkeypatch.setattr(incus_worker, 'incus', incus)
+        monkeypatch.setattr(incus_worker, 'export_selected', export_selected)
     def invoke(config, home, raw, action, args):
         assert action == 'remove'
-        return worker.execute_call({
+        payload = {
             'action': action, 'root': str(folder), 'rootOwner': raw['sessionId'],
             'operationId': raw['launchOperationId'], 'universeId': raw['universeId'],
-            'expectedBackendIdentity': raw['backendIdentity'], 'dockerHost': config['dockerHost'],
+            'expectedBackendIdentity': raw['backendIdentity'],
             'requestId': args['requestId'], 'resourceId': raw['id'], 'resourceRevision': raw['revision'],
             'admissionRevision': args['expectedRevision'], 'backendKey': raw['backendKey'],
-            'snapshot': raw['snapshot']})
+            'snapshot': raw['snapshot']}
+        if backend_kind == 'incus':
+            return incus_worker.execute_call({**payload, 'incus': config['incus']})
+        return worker.execute_call({**payload, 'dockerHost': config['dockerHost']})
     monkeypatch.setattr(owner, 'invoke', invoke)
     failed = await act(app, 'remove', row, 'receipt-remove')
     row, original = failed['resource'], failed['request']
     assert original['state'] == 'failed'
-    assert original['result']['removal']['destroyEffect'] == 'not_dispatched'
+    diagnostic = {'version': 1, 'reasonCode': 'unsupported_type',
+                  'memberType': 'fifo', 'relativePath': 'artifacts/fixture-pipe'}
+    assert original['result']['verification'] == diagnostic
+    assert original['result']['code'] == 'archive_verification_failed'
+    assert original['result']['phase'] == 'verifying' and original['result']['effectAdmitted'] is False
+    if backend_kind == 'docker':
+        assert original['result']['removal']['destroyEffect'] == 'not_dispatched'
+    else:
+        assert sum(kind == 'export' for kind, _ in incus_calls) == 1
+        assert not any(args[0] == 'destroy' for kind, args in incus_calls if kind == 'cli')
     assert not any(name == 'destroy' for name, *_ in effects)
+    assert row['status'] == 'stopped'
+    owned = owner.get(app.data_dir, source['id'], row['id'])
+    assert owned['owner'] == {'sessionId': source['id'], 'principal': source['runtimeSessionId']}
+    assert owned['backendType'] == backend_kind and owned['status'] != 'retired'
+    args = removal_read_args(app, row, original)
+    await app.on_runtime_event('runtime.status', {'sessionId': source['id'], 'status': 'idle'})
+    app._state['selectedSessionId'] = peer['id']
     app._save()
     before = removal_read_snapshot(app, row)
-    calls = forbid_removal_read_effects(app, monkeypatch)
-    source = app.state['sessions'][0]
-    observed = (await agent(app, source, REMOVAL_READ, removal_read_args(app, row, original), 'receipt-read'))['result']
-    assert observed['verification'] == {'status': 'recorded', 'version': 1,
-        'reasonCode': 'unsupported_type', 'memberType': 'fifo', 'relativePath': 'artifacts/fixture-pipe'}
-    assert observed['status'] == 'held' and not observed['continuationAvailable']
-    assert not calls and removal_read_snapshot(app, row) == before
+    home, workspace = app.data_dir, app.default_workspace
+    old_db, old_requests, old_journal = app.db, app.operations.requests, app.operations.requests.journal
+    await app.close()
+    with pytest.raises(recovery.sqlite3.ProgrammingError):
+        old_db.execute('SELECT 1')
+    with pytest.raises(recovery.sqlite3.ProgrammingError):
+        old_journal.db.execute('SELECT 1')
+    restored = AppService(home, Runtime(), workspace=workspace)
+    try:
+        assert restored.db is not old_db and restored.operations.requests is not old_requests
+        assert restored.operations.requests.journal is not old_journal
+        assert restored.operations.requests.journal.db is not old_journal.db
+        assert restored.operations.requests.read(source['id'], original['requestId']) == original
+        assert owner.get(home, source['id'], row['id']) == owned
+        saved, controls = state_records.load_owner(restored.db, source['id'])
+        assert {key: saved[key] for key in placement} == placement
+        assert saved['runtimeSessionId'] == source['runtimeSessionId']
+        # Force the saved-state path even if startup kept this owner resident.
+        restored._state['sessions'][:] = [item for item in restored._state['sessions'] if item['id'] != source['id']]
+        restored._state['selectedSessionId'] = peer['id']
+        restored.projections.invalidate()
+        assert removal_read_snapshot(restored, row) == before
+        overlay = [item['id'] for item in restored._state['sessions']]
+        db_changes = restored.db.total_changes
+        journal_changes = restored.operations.requests.journal.db.total_changes
+        visits = []
+        read_request = restored.operations.requests.read
+        ledger_connections = []
+        connect = recovery.sqlite3.connect
+        def readonly_ledger(database, *values, **options):
+            assert database.endswith('reservations.sqlite3?mode=ro')
+            assert not values and options == {'uri': True, 'timeout': 0}
+            connection = connect(database, **options)
+            ledger_connections.append(connection)
+            return connection
+        def reopened_read(sid, identity):
+            visits.append((sid, identity))
+            return read_request(sid, identity)
+        def forbidden(*args, **kwargs):
+            pytest.fail('Saved native diagnostic read must not hydrate, admit, persist or call a backend')
+        with monkeypatch.context() as guard:
+            calls = forbid_removal_read_effects(restored, guard)
+            guard.setattr(old_requests, 'read', forbidden)
+            guard.setattr(restored.operations.requests, 'read', reopened_read)
+            guard.setattr(recovery.sqlite3, 'connect', readonly_ledger)
+            for method in ('_session', '_admit_session', '_save'):
+                guard.setattr(restored, method, forbidden)
+            guard.setattr(restored.history, 'refresh', forbidden)
+            guard.setattr(restored.cold_display, 'hydrate', forbidden)
+            guard.setattr(session_projection, 'hydrate', forbidden)
+            guard.setattr(state_records, 'load_owner', forbidden)
+            guard.setattr(restored.test_queue, 'start', forbidden)
+            guard.setattr(worker, 'execute_call', forbidden)
+            guard.setattr(incus_worker, 'execute_call', forbidden)
+            observed = (await agent(restored, transport, REMOVAL_READ, args, 'reopened-native-read',
+                                    _runtimeSessionId=source['runtimeSessionId']))['result']
+            assert observed == {'version': 1, 'sessionId': source['id'], 'id': row['id'],
+                'revision': row['revision'], 'original': {'requestId': original['requestId'], 'state': 'failed'},
+                'status': 'held', 'code': 'original_binding_unverified', 'executor': 'unobserved',
+                'physical': 'not_observed', 'continuationAvailable': False, 'riskDecisionAvailable': False,
+                'verification': {'status': 'recorded', **diagnostic}}
+            assert visits == [(source['id'], original['requestId'])] * 2
+            assert len(ledger_connections) == 1
+            for altered, principal, status in [
+                (args, 'unrelated-child', 403),
+                ({**args, 'sessionId': peer['id']}, source['runtimeSessionId'], 403),
+                ({**args, 'expectedRevision': row['revision'] - 1}, source['runtimeSessionId'], 409),
+            ]:
+                with pytest.raises(AppError) as caught:
+                    await agent(restored, transport, REMOVAL_READ, altered, 'reopened-refusal',
+                                _runtimeSessionId=principal)
+                assert caught.value.status == status
+            assert visits == [(source['id'], original['requestId'])] * 2
+            assert len(ledger_connections) == 2  # Exact read and stale revision; neither foreign principal.
+            assert ledger_connections[0] is not ledger_connections[1]
+        assert not calls and not restored.runtime.calls
+        assert restored.db.total_changes == db_changes
+        assert restored.operations.requests.journal.db.total_changes == journal_changes
+        assert [item['id'] for item in restored._state['sessions']] == overlay
+        assert restored._state['selectedSessionId'] == peer['id']
+        assert state_records.load_owner(restored.db, source['id']) == (saved, controls)
+        assert removal_read_snapshot(restored, row) == before
+    finally:
+        await restored.close()
 
 
 def test_public_removal_read_declares_only_host_resolved_identity_and_revision():
