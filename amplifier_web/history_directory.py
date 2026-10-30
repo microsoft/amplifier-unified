@@ -505,7 +505,7 @@ class HistoryDirectory:
             self._encoded_overlay = prior
         return prior[2:]
 
-    def effective(self, state=None, *, identity=None, public_ids=None, children_of=None, native_root_workspace=None, exact_parent=None, fields=None, notice_values=False):
+    def effective(self, state=None, *, identity=None, public_ids=None, children_of=None, native_root_workspace=None, exact_parent=None, fields=None, notice_values=False, local_only=False):
         """Return effective rows with optional alias, exact-ID or child scope.
 
         exact_parent uses the child candidate indexes but preserves the agent
@@ -514,6 +514,9 @@ class HistoryDirectory:
         needed by its canonical membership/suppression predicates.
         notice_values exposes existing item payloads only to the attention
         reader; ordinary catalog/count queries retain scalar notice columns.
+        local_only retains canonical native metadata and suppression for local
+        owners, but excludes native-only rows. Notices belong to local owners;
+        joining them must not materialize unrelated native catalog rows first.
         """
         if sum(value is not None for value in (identity, public_ids, children_of, exact_parent)) > 1:
             raise ValueError('Use one directory source scope per query.')
@@ -626,7 +629,7 @@ class HistoryDirectory:
                       json.dumps(state.get('attentionRead', {}), separators=(',', ':'))]
         if self._native_path:
             parameters.append(self._native_namespace)
-        if self._native_path:
+        if self._native_path and not local_only:
             native = '''native_rows AS (
                 SELECT CASE WHEN EXISTS(SELECT 1 FROM history_native.native_rows d
                     WHERE d.namespace=n.namespace AND d.identity=n.identity AND d.project!=n.project)

@@ -232,3 +232,57 @@ def test_visible_receipts_do_not_decode_unrelated_approval_payloads(tmp_path, mo
     monkeypatch.setattr(DirectoryAttention, 'decode', lambda *args: pytest.fail('receipt-only read decoded a body'))
     assert receipts(directory, state, {'owner'}) == expected
     assert receipts(directory, state, set()) == []
+
+
+def test_notice_reads_do_not_scan_unrelated_native_catalog(tmp_path):
+    """Notice owners and unrelated native history are independent scale axes."""
+    from amplifier_web.directory_attention import snapshot, receipts
+    from test_history_directory_exact_ids import native_fixture
+    work = []
+    for native_count in (300, 27000):
+        root = tmp_path / str(native_count)
+        root.mkdir()
+        state, directory, _, project, workspace = native_fixture(root, native_count, 0)
+        rows = [{'id': f'owner-{i}', 'title': f'Conversation {i}', 'status': 'idle',
+                 'workspace': str(workspace), 'nativeProject': project,
+                 'nativeIdentity': f'saved-{i:05d}', 'historyManaged': True,
+                 'completion': {'id': f'response-{i}'}} for i in range(220)]
+        for row in rows[::2]:
+            item = attention.session_item_at(row, {}, 1)
+            state['attentionRead'][item['id']] = item['fingerprint']
+        directory.sync(rows, state)
+        directory.db.commit()
+        state['sessions'] = rows[:2]
+        state['selectedSessionId'] = 'owner-0'
+        expected = legacy(directory, state)
+        selected = {**expected, 'items': [item for item in expected['items']
+                                        if item.get('sessionId') == 'owner-0']}
+        expected_receipts = [{key: item[key] for key in ('id', 'sessionId', 'fingerprint', 'read')}
+                             for item in expected['items'] if item.get('sessionId') == 'owner-0']
+        observations = []
+        for label, operation, wanted in (
+                ('selected', lambda: snapshot(directory, state, {'owner-0'}), selected),
+                ('receipts', lambda: receipts(directory, state, {'owner-0'}), expected_receipts),
+                ('activity', lambda: snapshot(directory, state), expected)):
+            vm = 0
+            def progress():
+                nonlocal vm
+                vm += 1000
+                return 0
+            directory.db.set_progress_handler(progress, 1000)
+            started = time.thread_time_ns()
+            try:
+                actual = operation()
+            finally:
+                cpu = (time.thread_time_ns() - started) / 1e6
+                directory.db.set_progress_handler(None, 0)
+            assert actual == wanted
+            observations.append({'operation': label, 'vm': vm, 'cpuMs': cpu})
+        assert state['sessions'] == rows[:2] and not directory.db.in_transaction
+        work.append({'nativeRows': native_count, 'noticeOwners': 220, 'observations': observations})
+        directory.close()
+    print(json.dumps({'nativeNoticeDemand': work}))
+    for small, large in zip(work[0]['observations'], work[1]['observations']):
+        # A fixed notice set needs the same indexed native metadata lookups;
+        # 90x unrelated history must not introduce a catalog materialization.
+        assert large['vm'] <= small['vm'] * 1.25 + 2000, large
