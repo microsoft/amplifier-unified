@@ -314,3 +314,31 @@ async def test_headless_tool_uses_one_hidden_internal_session(aiohttp_server, tm
     assert [call[0] for call in runtime.calls] == [internal[0]['id']] * 2
     assert service.state['selectedSessionId'] == visible
     assert [row['id'] for row in service.state['sessions'] if is_top_level(row)] == [visible]
+
+async def test_hidden_tool_permission_uses_operator_access_lookup(aiohttp_server, tmp_path, capsys, monkeypatch):
+    import io
+
+    class ToolRuntime(Runtime):
+        async def control(self, sid, operation, values):
+            self.waiter = asyncio.get_running_loop().create_future()
+            await service.on_runtime_event('approval.requested', {'sessionId': sid,
+                'id': 'tool-permission', 'prompt': 'Allow tool?', 'options': ['allow', 'deny']})
+            decision = await asyncio.wait_for(self.waiter, 2)
+            return {'decision': decision}
+
+        async def approval(self, sid, identity, decision):
+            assert service._session(sid)['sessionKind'] == 'internal'
+            assert identity == 'tool-permission'
+            self.waiter.set_result(decision)
+
+    runtime = ToolRuntime()
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=runtime, voice=False, background_updates=False)
+    service = app['service']
+    server = await aiohttp_server(app)
+    monkeypatch.setattr('sys.stdin', io.StringIO(''))
+    args = Namespace(port=server.port, data_dir=str(tmp_path), workspace=str(tmp_path),
+                     command='tool', name='read_file', args='{}', bundle=None, resume=None, timeout=3)
+    assert await run(args) == 0
+    assert json.loads(capsys.readouterr().out) == {'decision': 'deny'}
+
