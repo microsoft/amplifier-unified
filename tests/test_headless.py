@@ -9,6 +9,66 @@ from amplifier_web.server import create_app
 from amplifier_web.headless import _existing_host, run
 from test_service import Runtime
 
+async def test_access_command_saves_without_chat_or_work_and_respects_overrides(aiohttp_server, tmp_path, capsys):
+    runtime = Runtime()
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=runtime, voice=False, background_updates=False)
+    service = app['service']
+    server = await aiohttp_server(app)
+    args = Namespace(port=server.port, data_dir=str(tmp_path), workspace=str(tmp_path),
+                     command='access', mode='full', scope='app', session=None, json=True)
+    before = [row['id'] for row in service.state['sessions']]
+    assert await run(args) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['mode'] == 'full' and result['source'] == 'app'
+    assert [row['id'] for row in service.state['sessions']] == before
+    assert not runtime.sent
+    await service.dispatch('session.create', {'title': 'Explicit Ask'})
+    target = service._session()['id']
+    args.scope, args.session, args.mode = 'session', target, 'ask'
+    assert await run(args) == 0
+    assert json.loads(capsys.readouterr().out)['mode'] == 'ask'
+    args.scope, args.mode = 'app', 'full'
+    assert await run(args) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['mode'] == 'ask' and result['source'] == 'session'
+    args.scope, args.mode = 'session', 'inherit'
+    assert await run(args) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['mode'] == 'full' and result['source'] == 'app'
+    args.scope, args.session, args.mode = 'app', None, 'ask'
+    assert await run(args) == 0
+    assert json.loads(capsys.readouterr().out)['mode'] == 'ask'
+    assert not runtime.sent
+
+
+@pytest.mark.parametrize('resume', [False, True])
+async def test_run_full_preference_precedes_work_and_remains_saved(aiohttp_server, tmp_path, capsys, resume):
+    class InspectRuntime(Runtime):
+        async def send(self, session, *args):
+            assert service.access_mode.full(session)
+            await super().send(session, *args)
+
+    runtime = InspectRuntime()
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=runtime, voice=False, background_updates=False)
+    service = app['service']
+    target = None
+    if resume:
+        await service.dispatch('session.create', {'title': 'Existing task'})
+        target = service._session()['id']
+    server = await aiohttp_server(app)
+    args = Namespace(port=server.port, data_dir=str(tmp_path), workspace=str(tmp_path),
+                     command='run', resume=target, access='full', prompt='Work unattended',
+                     bundle=None, provider=None, model=None, max_tokens=None, timeout=5, output_format='json')
+    assert await run(args) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['response'] == 'Test transport result'
+    assert target is None or result['sessionId'] == target
+    mode = service.access_mode.snapshot(service._session(result['sessionId']))
+    assert mode['mode'] == 'full' and mode['source'] == 'session'
+
+
 async def test_headless_json_is_same_runtime_with_target_session(aiohttp_server,tmp_path,capsys):
     runtime=Runtime()
     app=await create_app(tmp_path, preload_providers=False,workspace=tmp_path,runtime=runtime,voice=False,background_updates=False)
@@ -304,12 +364,13 @@ async def test_headless_tool_uses_one_hidden_internal_session(aiohttp_server, tm
     server = await aiohttp_server(app)
     for _ in range(2):
         args = Namespace(port=server.port, data_dir=str(tmp_path), workspace=str(tmp_path), resume=None,
-                         command='tool', name='read_file', args='{"path": "x"}', bundle=None, timeout=5)
+                         command='tool', name='read_file', args='{"path": "x"}', bundle=None, timeout=5, access='full')
         assert await run(args) == 0
         assert json.loads(capsys.readouterr().out) == {'ok': True}
     internal = [row for row in service.state['sessions'] if row.get('sessionPurpose') == 'terminal-tool']
     assert len(internal) == 1
     assert internal[0]['sessionKind'] == 'internal'
+    assert service.access_mode.full(internal[0])
     assert not is_top_level(internal[0])
     assert [call[0] for call in runtime.calls] == [internal[0]['id']] * 2
     assert service.state['selectedSessionId'] == visible
