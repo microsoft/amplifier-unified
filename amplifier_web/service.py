@@ -4078,7 +4078,12 @@ class AppService:
         from .message_delivery import find_message
         async with self.lock:
             session = copy.deepcopy(self._session(sid))
+            question = self.questions.for_input(sid, input_id)
         message = find_message(session, input_id)
+        if message is None and question is not None:
+            # The answer record survives a cold/pruned message projection.
+            # Its exact input binding permits a passive evidence probe, not send.
+            message = {'delivery': question['delivery']}
         if message is None:
             return {'delivery': 'not_saved', 'message': 'This app has no saved copy. You can try sending the original message again with the same delivery identity.'}
         if message.get('steering'):
@@ -4126,6 +4131,10 @@ class AppService:
         return {'delivery': 'accepted', 'resent': not bool(isinstance(result, dict) and result.get('duplicate'))}
 
     def _delivery(self, session, input_id, status):
+        # Question command IDs differ from their immutable answer input IDs.
+        # Reconcile their canonical record even after its message left the view.
+        if status == 'accepted' and (questions := getattr(self, 'questions', None)):
+            questions.accept_delivery(session['id'], input_id)
         message = next((row for row in session['messages'] if row.get('inputId') == input_id and row.get('role') == 'user'), None)
         row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
         receipt = json.loads(row[0]) if row else {}
