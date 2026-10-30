@@ -26,7 +26,7 @@ def definitions(schema, string):
             schema({**common, "readRequestId": identity, "title": {**string(200), "minLength": 1}, "body": {**string(16000), "minLength": 1}}, ["requestId", "feedbackId", "readRequestId", "title", "body"]),
         ),
         **{action: (
-            f"{label} the user's own feedback under standing Full or an explicit request. Full agent/child/system callers need no browser or new human confirmation; accepted writes retain source authority and recheck Full/Stop. expectedRevision comes from a fresh feedback.get. Changes only issue state; preserves title, body and all comments. Exact retries never repeat a remote mutation; unknown outcomes require a fresh read, not replay.",
+            f"{label} the user's own feedback under standing Full or an explicit request. expectedRevision comes from a fresh feedback.get. Changes only issue state; preserves title, body and all comments. Exact retries never repeat a remote mutation; unknown outcomes require a fresh read, not replay.",
             schema({**common, "expectedRevision": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}, ["requestId", "feedbackId", "expectedRevision"]),
         ) for action, label in (("feedback.close", "Close"), ("feedback.reopen", "Reopen"))},
         "feedback.reconcile": (
@@ -34,7 +34,7 @@ def definitions(schema, string):
             schema(common, ["requestId", "feedbackId"]),
         ),
         "feedback.update": (
-            "Publish corrected title/description as a versioned correction COMMENT on the user's own feedback under standing Full or an explicit request. Full agent/child/system callers need no browser or new human confirmation; accepted writes retain source authority and recheck Full/Stop. Preserves the original issue and maintainer edits: GitHub cannot atomically revision-check an issue replacement. expectedRevision comes from a fresh feedback.get report or an owner-bound feedback.edits.review. With reviewRequestId, exact title/body/revision and attached client must match that one-use review. Exact request retries never post twice; unknown writes are not replayed. Does not close/reopen or edit anyone's text.",
+            "Publish corrected title/description as a versioned correction COMMENT on the user's own feedback under standing Full or an explicit request. Preserves the original issue and maintainer edits: GitHub cannot atomically revision-check an issue replacement. expectedRevision comes from a fresh feedback.get report or an owner-bound feedback.edits.review. With reviewRequestId, exact title/body/revision and attached client must match that one-use review. Exact request retries never post twice; unknown writes are not replayed. Does not close/reopen or edit anyone's text.",
             schema({**common, "title": {**string(200), "minLength": 1}, "body": {**string(16000), "minLength": 1},
                     "expectedRevision": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "reviewRequestId": identity}, ["requestId", "feedbackId", "title", "body", "expectedRevision"]),
         ),
@@ -43,7 +43,7 @@ def definitions(schema, string):
             schema({**common, "page": {"type": "integer", "minimum": 1, "maximum": 10000}}, ["requestId", "feedbackId"]),
         ),
         "feedback.comment": (
-            "Append exact follow-up text to the user's own feedback under standing Full or an explicit request. Full agent/child/system callers need no browser or new human confirmation; accepted writes retain source authority and recheck Full/Stop. feedbackId is the original feedback.submit requestId. Reuse requestId and identical body after a lost response; never start a new request merely to retry. Read /feedback/followups for durable status and canonical URLs. Unknown outcomes are not reposted. Does not edit, close, reopen, or attach files.",
+            "Append exact follow-up text to the user's own feedback under standing Full or an explicit request. feedbackId is the original feedback.submit requestId. Reuse requestId and identical body after a lost response; never start a new request merely to retry. Read /feedback/followups for durable status and canonical URLs. Unknown outcomes are not reposted. Does not edit, close, reopen, or attach files.",
             schema({**common, "body": {**string(16000), "minLength": 1}}, ["requestId", "feedbackId", "body"]),
         ),
     }
