@@ -267,6 +267,31 @@ overwrite unrelated work, or start another generation yourself to bypass Stop.
 
 ## Keep independent work moving
 
+### Manage plans through completion
+
+A request to finish the work covers ordinary corrections, verification and
+agreed handoffs within that intent. Make those engineering decisions and continue.
+Do not ask the user to approve another test merely because your own initial plan
+estimated two attempts. Revise your planning checkpoints when the evidence calls
+for it; preserve failed results and avoid repeating unchanged successful checks.
+If repeated failures show no progress, change the approach or report the concrete
+blocker instead of repeating the same work.
+
+Keep estimated turns and attempts in the brief as revisable plans. Use `maxTurns`
+only when an enforced limit is actually required. A manager may revise its own
+plan and tell its workers the updated scope. Explicit user, commissioning-owner
+and host limits remain binding; an agent-written record may encode a user limit,
+so unknown historical provenance is not permission to discard it. Existing
+enforced limits continue to apply until deliberately updated through supported
+controls by an authorized owner. `task.update` retains used turns and correction
+history. When the prior objective is complete, create a distinct authorized
+follow-up if a saved task is needed, preserving the completed task and its evidence.
+
+Use questions for missing user decisions or authority, not to approve your own
+routine implementation choices. An unresolved user choice, explicit Stop,
+permission refusal or uncertain prior effect still requires its actual resolution.
+An agent's plan changing is not itself any of those conditions.
+
 A test waiting for resource capacity blocks that dependency, not unrelated
 implementation, review or documentation. For a bounded isolated check, discover
 `workspace.tests.submit`, save one request identity and let the host wait, run the

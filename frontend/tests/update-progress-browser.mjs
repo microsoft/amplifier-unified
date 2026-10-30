@@ -1,3 +1,4 @@
+import {fixturePython} from './fixture-python.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {resolve} from 'node:path';
@@ -5,7 +6,7 @@ import {writeFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {openSettingsPage} from './browser-settings.mjs';
-const python=process.env.UNIFIED_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url));
+const python=fixturePython(process.env.UNIFIED_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)));
 const output=process.env.UNIFIED_BROWSER_EVIDENCE||(process.env.AMPLIFIER_TEST_ARTIFACTS+'/update-progress');if(!process.env.UNIFIED_BROWSER_EVIDENCE&&!process.env.AMPLIFIER_TEST_ARTIFACTS)throw Error('Owned artifact directory required');
 const fixture=spawn(python,['-u',fileURLToPath(new URL('../../tests/fixtures/update_progress_server.py',import.meta.url))]);
 let browser,page,log='';const result={status:'pending',syntheticTransitions:true,realHTTPAndSSE:true,paidCalls:0};

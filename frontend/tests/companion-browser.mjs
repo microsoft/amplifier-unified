@@ -1,9 +1,10 @@
+import {fixturePython} from './fixture-python.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {chromium, expect} from '@playwright/test';
 
-const fixture = spawn(fileURLToPath(new URL('../../.venv/bin/python', import.meta.url)),
+const fixture = spawn(fixturePython(fileURLToPath(new URL('../../.venv/bin/python', import.meta.url))),
  [fileURLToPath(new URL('../../tests/fixtures/companion_ui_server.py', import.meta.url))],
  {stdio: ['ignore', 'pipe', 'inherit']});
 let browser;

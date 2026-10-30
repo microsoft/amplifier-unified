@@ -1,3 +1,4 @@
+import {fixturePython} from './fixture-python.mjs';
 // Compare production navigation on the same disposable fixture and machine.
 // Pass a clean baseline checkout; this script never builds or edits it.
 import {spawn} from 'node:child_process';
@@ -9,7 +10,7 @@ const root=fileURLToPath(new URL('../../',import.meta.url)),baseline=process.arg
 if(!baseline)throw Error('Pass the baseline checkout directory.');
 const browser=await chromium.launch({headless:true});
 async function measure(directory){
- const fixture=spawn(root+'.venv/bin/python',['-u',directory+'/tests/fixtures/chat_library_server.py'],{stdio:['ignore','pipe','pipe']});
+ const fixture=spawn(fixturePython(root+'.venv/bin/python'),['-u',directory+'/tests/fixtures/chat_library_server.py'],{stdio:['ignore','pipe','pipe']});
  let log='';fixture.stderr.on('data',chunk=>log+=chunk);
  try{
   const port=await new Promise((resolve,reject)=>{

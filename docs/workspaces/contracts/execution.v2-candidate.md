@@ -644,9 +644,12 @@ expiration remains an inspectable failed dependency without executing the input.
 Accepted substantive inputs are never silently coalesced or dropped. Informational
 notices still do not start execution; unsupported safe-boundary delivery remains
 an adapter limitation rather than cancellation and resend. Host-retained causal
-input lineage bounds a peer-driven chain to 16 hops regardless of new command IDs
-or wording. A new actual human input resets that bound; observations, peer text
-and model assertions of approval do not.
+input lineage records the depth of peer-driven work for provenance and diagnosis;
+its age does not impose a fixed-hop requirement for human intervention. A new
+actual human input resets the recorded depth; observations, peer text and model
+assertions of approval do not. Per-pair message rates, inbox capacity, assignment
+and task limits, Stop, and exact input idempotency still govern admission. A
+long-running delegated task can continue and return results within those limits.
 
 ### Managed resource observations — 2026-10-14
 

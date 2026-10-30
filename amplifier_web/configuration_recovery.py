@@ -2,7 +2,7 @@
 
 The native receipt is private, authenticated by a per-attempt host secret, and
 written independently of the transport reply. This is not a permission system:
-every admission still checks the original grant and target at the host.
+every admission still checks the original authority and target at the host.
 """
 from __future__ import annotations
 
@@ -210,10 +210,14 @@ def validate_recovery(management, session, record, attempt, observed, action, ar
     recovery_authority = None
     if origin not in {"ui", "user"}:
         authority = record["request"]["authority"]
-        grant = service.configuration_authority.record(authority["grantId"])
-        peers = service.configuration_authority.peer_authorities(
-            session, grant, authority["effect"], authority["scope"])
-        recovery_authority = {**authority, "peerGrants": authority.get("peerGrants", []) + peers}
+        # Full access also uses authorization="grant". Its original mode
+        # revision is checked above and again at application; only narrow
+        # grants need an additional peer-lineage ceiling for this recovery.
+        if "accessRevision" not in authority:
+            grant = service.configuration_authority.record(authority["grantId"])
+            peers = service.configuration_authority.peer_authorities(
+                session, grant, authority["effect"], authority["scope"])
+            recovery_authority = {**authority, "peerGrants": authority.get("peerGrants", []) + peers}
     effect = record["state"]["effect"]
     if action.endswith(".reconcile"):
         if attempt:
@@ -302,7 +306,7 @@ def command(management, action, args, origin, caller):
     elif action.endswith(".resume"):
         if recovery_authority is not None:
             # Preserve current request lineage as an additional ceiling, never
-            # replace the original grant or source binding.
+            # replace the original authority or source binding.
             record.setdefault("resumptions", []).append(recovery_authority)
             write_private(management.configuration_record_path(session["id"], operation), json.dumps(record))
         record = management.configuration_transition(session, operation,

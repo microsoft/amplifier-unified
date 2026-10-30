@@ -201,10 +201,15 @@ async def process_boundary(tmp_path, monkeypatch, request):
         app._publish()
         app.management = Management(app)
         runtime.app_bridge = app.app_bridge
+        full_access = getattr(request, "param", None) == "full"
+        if full_access:
+            report = (await app.dispatch("access.get", {"sessionId": owner["id"]}))["result"]
+            await app.dispatch("access.set", {"sessionId": owner["id"], "scope": "session",
+                "mode": "full", "expectedRevision": report["revision"]})
         await asyncio.wait_for(runtime.start(owner, app.on_runtime_event), 12)
         ready = await runtime.control(owner["id"], "configuration.inspect", {})
         assert ready["plan"]["tools"][0]["config"]["limit"] == 1
-        authorized = await grant(app, ["runtime_configuration"], ["session"])
+        authorized = None if full_access else await grant(app, ["runtime_configuration"], ["session"])
         yield SimpleNamespace(app=app, owner=owner, runtime=runtime, authorized=authorized)
     finally:
         await asyncio.wait_for(app.close(), 12)

@@ -408,7 +408,6 @@ class TestQueue:
                     'actor': {'sessionId': source['id'],
                         'principal': source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']}}}
             receipt['job']['runnerCandidates'] = registered_runners.retain_candidates(self.app, config, args['profileId'])
-            owner.require_causal_depth(receipt['causalDepth'])
             owner.insert(identity, digest, receipt)
             self.app.db.commit()
         self.start()

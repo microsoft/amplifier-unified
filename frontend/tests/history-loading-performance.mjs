@@ -1,3 +1,4 @@
+import {fixturePython} from './fixture-python.mjs';
 // Production UI, real saved JSONL, cold application cache and warm reopen.
 // The OS file cache is warm from fixture creation; remote conditions are emulated.
 import {spawn} from 'node:child_process';
@@ -6,7 +7,7 @@ import {writeFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium} from '@playwright/test';
 const root=fileURLToPath(new URL('../../',import.meta.url));
-const fixture=spawn(root+'.venv/bin/python',['-u',root+'tests/fixtures/history_loading_server.py'],{stdio:['ignore','pipe','inherit']});
+const fixture=spawn(fixturePython(root+'.venv/bin/python'),['-u',root+'tests/fixtures/history_loading_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser;
 const result={scenario:'Synthetic saved JSONL; warm OS cache; production UI; no providers',cases:[]};
 try{

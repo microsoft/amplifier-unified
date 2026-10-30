@@ -221,6 +221,46 @@ async def test_notify_to_blocked_task_never_gets_input_exception_or_wakes(task_a
     assert ctx.owner.coordinator.session_state["goal"] is None
 
 
+@pytest.mark.parametrize("capacity_denied", [False, True])
+async def test_owner_resumes_resolved_agent_block_without_resetting_limits(task_app, capacity_denied):
+    ctx = task_app
+    await block(ctx)
+    before = copy.deepcopy(ctx.owner.tasks.record())
+    policy = copy.deepcopy(ctx.owner.capacity.policy)
+    selection, draft = ctx.app.state["selectedSessionId"], ctx.app.state["view"]["draft"]
+    await send(ctx, "resolved-dependency", text="The requested dependency result is ready for your inspection.")
+    await settled(ctx.app, "resolved-dependency", "accepted")
+    assert ctx.owner.tasks.record() == before, 'the handoff itself must not resume the objective'
+
+    # Script the native blocked-input reservation and the owner's independent
+    # verification decision; peer prose alone does not make that decision.
+    ctx.owner.tasks.reserve_peer_input("resolved-dependency")
+    await generation(ctx.app, ctx.target, "inspect-resolved-dependency", ["resolved-dependency"])
+    await mutate(ctx, "task.update", correction="Verified the retained dependency artifact against its source.",
+                 artifactRefs=["urn:fixture:verified-dependency"])
+    used = ctx.owner.tasks.record()["goalState"]["turns_used"]
+    assert used == 3
+    denial = {"budgetRevision": policy["revision"], "state": "paused"} if capacity_denied else None
+    ctx.owner.capacity.last_denial = copy.deepcopy(denial)
+    before_inputs = list(ctx.app.runtime.inputs)
+    result = await mutate(ctx, "task.resume")
+    assert result["task"]["status"] == "active"
+    resumed = ctx.owner.tasks.record()
+
+    assert resumed["status"] == "active" and resumed["blockedReason"] is None
+    for key in ("id", "objective", "constraints", "maxTurns", "questionIds", "operationIds"):
+        assert resumed[key] == before[key]
+    assert resumed["goalState"]["turns_used"] == used
+    assert ctx.owner.coordinator.session_state["goal"]["turns_used"] == used
+    assert ctx.owner.coordinator.session_state["goal"]["cap"] == before["maxTurns"]
+    assert resumed["artifactRefs"] == ["urn:fixture:verified-dependency"]
+    assert resumed["changes"][-1]["origin"] == "agent"
+    assert ctx.owner.capacity.policy == policy and ctx.owner.capacity.last_denial == denial
+    assert await ctx.owner.tasks.continuation_allowed() is (not capacity_denied)
+    assert ctx.app.runtime.inputs == before_inputs, 'task.resume must not itself send or replay an input'
+    assert ctx.app.state["selectedSessionId"] == selection and ctx.app.state["view"]["draft"] == draft
+
+
 @pytest.mark.parametrize("patch", [
     {"mode": "notify"},
     {"mode": "steer"},

@@ -1,3 +1,4 @@
+import {fixturePython} from './fixture-python.mjs';
 // Production UI and shared actions with synthetic audio/signaling. No device or API call.
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
@@ -5,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const root=fileURLToPath(new URL('../../',import.meta.url));
-const fixture=spawn(root+'.venv/bin/python',[root+'tests/fixtures/voice_visual_ui_server.py'],{stdio:['ignore','pipe','inherit']});
+const fixture=spawn(fixturePython(root+'.venv/bin/python'),[root+'tests/fixtures/voice_visual_ui_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser;
 try {
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timed out')),20000);fixture.once('exit',()=>reject(Error('Fixture exited')));fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const data=JSON.parse(line);if(data.url){clearTimeout(timer);resolve(data.url)}}catch{}})});

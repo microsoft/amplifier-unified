@@ -149,7 +149,6 @@ class Watches:
                 else:
                     self.owner.require_continuation()
                     depth = self.owner.causal_depth(source, lineage, origin)
-                    self.owner.require_causal_depth(depth)
                     target = self.owner.authorize(source, {'sessionId': args['targetSessionId']}, hydrate=False)
                     if target['id'] == source['id']:
                         self.owner.error('Observe another conversation; self-watches cannot start continuation loops.', 409)

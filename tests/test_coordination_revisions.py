@@ -276,7 +276,7 @@ async def test_watch_lost_commit_ack_exact_retry_retains_single_observation(app,
     assert not app.runtime.inputs
 
 
-async def test_causal_limit_uses_host_input_lineage_and_real_human_input_resets_it(app):
+async def test_deep_peer_chain_keeps_lineage_without_requiring_human_continue(app):
     source, target = app.state['sessions']
     target['status'] = 'working'
     await send(app, 'ancestor', mode='notify')
@@ -284,14 +284,117 @@ async def test_causal_limit_uses_host_input_lineage_and_real_human_input_resets_
     ancestor.update(causalDepth=16, target={'sessionId': source['id']})
     app.collaboration.save('ancestor', ancestor)
     await generation(app, source, 'peer-loop', ['ancestor'])
-    with pytest.raises(AppError, match='16 hops'):
-        await send(app, 'different-id-and-text', text='Entirely different text')
+    continued = await send(app, 'different-id-and-text', text='Continue the delegated work')
+    assert continued['delivery'] == 'queued' and continued['causalDepth'] == 17
+    assert continued['sourceInputIds'] == ['ancestor']
     # Information does not start another model turn and remains available.
     assert (await send(app, 'loop-note', mode='notify'))['delivery'] == 'notified'
     app._message(source, 'user', 'Continue with this new human direction', inputId='actual-human', inputOrigin='user')
     await generation(app, source, 'human-turn', ['actual-human', 'ancestor'])
     accepted = await send(app, 'after-human')
     assert accepted['causalDepth'] == 0
+
+
+async def test_deep_report_still_returns_once_without_requiring_human_continue(app):
+    source, target = app.state['sessions']
+    await declared_result(app)
+    request = app.collaboration.receipt('result-request')
+    request['causalDepth'] = 40
+    app.collaboration.save(request['requestId'], request)
+    wait = await subscribe(app)
+    await finish(app, target, 'result-request')
+    identity = wait['result']['continuationId']
+    returned = app.collaboration.receipt(identity)
+    assert returned['causalDepth'] == 41
+    assert returned['dependencySatisfied'] is True
+    source['status'] = 'idle'
+    await app.collaboration.drain(source['id'])
+    await settled(app, identity, 'accepted')
+    app.collaboration.enqueue_continuation(app.collaboration.receipt('result-request'))
+    assert len([row for row in app.runtime.inputs if row[1] == identity]) == 1
+
+
+async def test_deep_peer_chain_can_commission_a_task_without_resetting_provenance(app):
+    from test_coordination_generation import source_plan
+    source, _ = app.state['sessions']
+    source_plan(app, source)
+    await send(app, 'ancestor', mode='notify')
+    ancestor = app.collaboration.receipt('ancestor')
+    ancestor.update(causalDepth=40, target={'sessionId': source['id']})
+    app.collaboration.save('ancestor', ancestor)
+    await generation(app, source, 'peer-followup', ['ancestor'])
+    created = await agent_action(app, source, 'coordination.create',
+        {'title': 'Delegated follow-up', 'text': 'Complete the remaining authorized correction'}, 'deep-create')
+    await settled(app, 'deep-create', 'created')
+    brief = await settled(app, created['initialInputId'], 'accepted')
+    assert brief['causalDepth'] == 41
+    assert brief['sourceInputIds'] == ['ancestor']
+
+
+async def test_deep_peer_chain_can_watch_without_waking_the_target(app):
+    source, target = app.state['sessions']
+    await send(app, 'ancestor', mode='notify')
+    ancestor = app.collaboration.receipt('ancestor')
+    ancestor.update(causalDepth=40, target={'sessionId': source['id']})
+    app.collaboration.save('ancestor', ancestor)
+    await generation(app, source, 'peer-followup', ['ancestor'])
+    before = copy.deepcopy(target['messages'])
+    await watch(app)
+    assert app.collaboration.receipt('watch')['causalDepth'] == 41
+    await app.on_runtime_event('runtime.status', {'sessionId': target['id'], 'status': 'working'})
+    result = app.collaboration.receipt('watch')
+    assert result['watch']['status'] == 'changed'
+    assert app.collaboration.receipt(result['subscription']['continuationId'])['causalDepth'] == 42
+    assert target['messages'] == before and not app.runtime.inputs
+
+
+@pytest.mark.parametrize('change', ['none', 'stop', 'task', 'revision-limit'])
+async def test_restart_recovers_only_valid_waits_held_by_old_hop_limit(app, monkeypatch, change):
+    source, target = app.state['sessions']
+    source['task'] = {'id': 'original-task', 'revision': 1, 'continuationEpoch': 1, 'status': 'active'}
+    await declared_result(app)
+    wait = await subscribe(app)
+    enqueue = app.collaboration.enqueue_continuation
+    monkeypatch.setattr(app.collaboration, 'enqueue_continuation', lambda request: None)
+    await finish(app, target, 'result-request')
+    request = app.collaboration.receipt('result-request')
+    request['causalDepth'] = 40
+    request['subscription'].update(status='limit_reached', open=False,
+        detail='The causal peer-input chain reached 16 hops; its report remains inspectable.')
+    if change == 'stop':
+        source['interruptionRevision'] = 1
+    elif change == 'task':
+        source['task'] = {'id': 'another-task', 'revision': 1, 'continuationEpoch': 1, 'status': 'active'}
+    elif change == 'revision-limit':
+        request['subscription']['detail'] = 'Automatic outcome notification limit reached; inspect the retained result.'
+    app.collaboration.save('result-request', request)
+    app._publish()
+    monkeypatch.setattr(app.collaboration, 'enqueue_continuation', enqueue)
+    await app.close()
+    reopened = AppService(app.data_dir, Runtime(), workspace=app.default_workspace)
+    reopened.runtime.app = reopened
+    try:
+        reopened._session(source['id'])['status'] = 'idle'
+        reopened.collaboration.start()
+        identity = wait['result']['continuationId']
+        if change == 'none':
+            returned = await settled(reopened, identity, 'accepted')
+            assert returned['causalDepth'] == 41 and returned['dependencySatisfied']
+            reopened.collaboration.start()
+            await reopened.collaboration.drain(source['id'])
+            assert [row[1] for row in reopened.runtime.inputs] == [identity]
+        else:
+            await reopened.collaboration.drain(source['id'])
+            assert not reopened.runtime.inputs
+            if change == 'revision-limit':
+                assert reopened.collaboration.receipt('result-request')['subscription']['status'] == 'limit_reached'
+            elif change == 'stop':
+                assert reopened.collaboration.receipt('result-request')['subscription']['status'] == 'suppressed'
+            else:
+                assert reopened.collaboration.receipt(identity)['delivery'] == 'suppressed'
+        assert reopened.collaboration.receipt('result-request')['response']['qualified'] is True
+    finally:
+        await reopened.close()
 
 
 @pytest.mark.parametrize('patch', [

@@ -20,6 +20,24 @@ READ_GUIDANCE = (
     "the normal action's current admission result to determine whether it may run."
 )
 
+PLANNING_GUIDANCE = (
+    "When the user delegates completion, carry the work through ordinary "
+    "corrections, verification and agreed handoffs within that intent. Managers "
+    "may revise their own planning checkpoints and worker attempt estimates; "
+    "do not turn those plans into fresh user approval requirements. Use a hard "
+    "task maxTurns only for an actual required limit, not as a routine planning "
+    "estimate. Existing user, commissioning-owner and host limits remain binding. "
+    "An agent-origin record can still encode a user limit; do not reclassify "
+    "historical limits whose source is unknown. Revise an authorized saved task "
+    "through task.update, preserving used turns, failed attempts and evidence. "
+    "A completed task stays completed; an authorized follow-up can use a new "
+    "explicit objective without asking the user to approve ordinary repair again. "
+    "An unanswered product decision, explicit Stop, unavailable permission or "
+    "uncertain prior effect is different from an adjustable plan. Reconcile "
+    "uncertain effects before further action. Ask for an actual missing decision "
+    "or authority, not permission to change your own implementation approach."
+)
+
 
 def assignment_orientation(session, summary, principal):
     """Offer one exact passive read, without loading members at every call."""
