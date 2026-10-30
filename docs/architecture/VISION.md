@@ -75,6 +75,20 @@ Reconnect restores state through upstream rules and never assumes tool work is
 safe to repeat. Old sessions remain native-resumable when qualified, otherwise
 inspectable with a clear limitation. Saved configuration is not mounted behavior.
 
+### 10. Standing authorization enables unattended work
+An operator can accept the risks of Full access once and authorize agents to use
+all supported capabilities without recurring human approvals. That choice covers
+delegation, collaboration, files, configuration, review, publication and recovery,
+including work initiated by trusted systems with no human in the loop. Clients
+offer a direct way to set it, inspect it and revoke it. Ask when needed remains
+available. A missing browser or human message is not a permission boundary.
+
+Full access follows trusted work relationships across turns and restarts. Actual
+Stop, revoked authority, execution ownership and honest effect receipts still
+govern work. These are controls and correctness requirements, not substitute
+approval ceremonies. The [standing authorization contract](../workspaces/configuration-authority.md#unattended-full-access-direction)
+defines this direction separately from demonstrated implementation.
+
 ## What this deliberately resists
 
 - A global application snapshot as the default read, update or persistence unit.
@@ -100,5 +114,6 @@ inspectable with a clear limitation. Saved configuration is not mounted behavior
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-30 | Make operator-selected Full access cover unattended and system-delegated work. | User-requested standing authorization and removal of recurring human gates. |
 | 2026-10-29 | Make scaling and semantic preservation explicit in performance evidence. | [Implementation and review guidance](../validation/performance.md); user-requested regression safeguards. |
 | 2026-10-02 | Initial destination for protocol adoption and decomposition. | [Design packet and source assessment](README.md). |

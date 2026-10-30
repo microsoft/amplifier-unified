@@ -66,6 +66,10 @@ its user's unfinished settings edits. Device capabilities remain device-specific
 An interface presents the host's actual permissions, ownership and capabilities.
 A new display does not grant new execution authority. Public operations give
 agents the same meaningful actions and outcomes available through client controls.
+An operator can choose Full access once for unattended work, including trusted
+system requests and delegation. Clients must not add approval prompts to that
+saved choice or require a human to remain connected. The host reports the
+effective preference and supports revocation and Stop through the same controls.
 
 ### 7. Clients can advance independently
 A shared behavioral change has a clear home and named consumers. Teams can improve

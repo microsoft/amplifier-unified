@@ -16,6 +16,25 @@ rather than replaced. Task actions return authoritative state, unlike a queued
 management acknowledgement. Linked operation IDs are observations; unknown
 outcomes remain unknown until their actual evidence is reconciled.
 
+## Planning and required limits
+
+A standing user request to complete work includes ordinary corrections,
+verification and agreed handoffs within its scope. Managers can revise their own
+planning checkpoints without requesting fresh user approval. The optional
+`maxTurns` field is an enforced limit, not an estimate; guidance therefore omits
+it unless a hard limit is required. Explicit user, commissioning-owner and host
+limits remain effective. An agent-origin record can contain a user's limit, and
+unknown historical provenance is not reclassified as an adjustable plan.
+
+The existing exact-revision `task.update` action can revise an authorized limit
+without resetting accumulated goal turns or deleting corrections and evidence.
+A completed objective remains immutable; `task.create` can record an already
+authorized follow-up and retains the completed task in history. Neither action
+supplies permission, resolves a pending user choice or overrides Stop. This is
+operating guidance for existing controls, not a new grant or automatic migration.
+
+## Continuation and recovery
+
 The existing goal controller performs continuation. The task revision applies at
 the next `provider:request` boundary during running work. Pause/block/completion
 clear the current goal immediately; the optional loop-live continuation guard
@@ -37,7 +56,13 @@ checks and charges one saved task turn before submission; an uncertain submissio
 retains that charge rather than making a retry free.
 
 The recipient may inspect, reply, defer or decline within its existing authority.
-Only a separate valid owner decision can resume its objective. A human-recorded
+Only a separate valid owner decision can resume its objective. Within a standing
+delegation, the owning agent may make that decision after verifying that its own
+recorded dependency block is resolved; another user approval is not required.
+User pause or Stop still requires the user's instruction to resume. Resuming
+preserves required limits, used turns, unanswered questions and uncertain effects;
+it does not classify those unresolved conditions as successful or authorized.
+A human-recorded
 block, missing provenance, a block recorded from a paused task, Stop, failure,
 completion or cancellation does not receive this exception. Old records can use
 their exact retained agent-origin status changes; reason text is never classified

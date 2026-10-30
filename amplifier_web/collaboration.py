@@ -27,7 +27,6 @@ MAX_PAIR_MESSAGES_PER_MINUTE = 32
 MAX_SENDER_INPUTS = 16
 MAX_ASSIGNMENT_INPUTS = 32
 MAX_RESPONSE_REVISIONS = 32
-MAX_CAUSAL_HOPS = 16
 DEFAULT_QUEUE_SECONDS = 86400
 REPORT_OUTCOMES = {'failed', 'deferred', 'declined', 'question', 'conflict', 'cancelled'}
 
@@ -378,10 +377,6 @@ class Collaboration:
                     depth = max(depth, receipt.get('causalDepth', 0))
         return depth + 1
 
-    def require_causal_depth(self, depth):
-        if depth > MAX_CAUSAL_HOPS:
-            self.error('This causal peer-input chain reached 16 hops. Inspect the retained work and wait for explicit human direction; changing IDs or wording does not reset the bound.', 429)
-
     def require_message_rate(self, source, target):
         count = self.service.db.execute("""SELECT count(*) FROM commands
             WHERE json_extract(receipt,'$.commandAction')='coordination.send'
@@ -695,6 +690,8 @@ class Collaboration:
             self.enqueue_continuation(receipt)
 
     def creation_guard(self, receipt, *, for_reply=False):
+        if reason := self.service.assignments.request_membership_reason(receipt):
+            return reason
         if receipt.get('assignmentId'):
             reason = self.service.assignments.blocked(identity=receipt['assignmentId'])
             if reason:
@@ -744,6 +741,8 @@ class Collaboration:
                 return 'The queued request expired before runtime admission.'
             if receipt.get("protocol") != PROTOCOL:
                 return "Legacy coordination is read-only; automatic admission is suppressed."
+            if reason := self.service.assignments.request_membership_reason(receipt):
+                return reason
             from .updates import work_paused
             if work_paused(self.service.state):
                 return "Host work is paused for an update; peer admission is suppressed."
@@ -761,6 +760,8 @@ class Collaboration:
                     return reason
             if receipt.get('dependencyRequestId'):
                 dependency = self.receipt(receipt['dependencyRequestId'])
+                if reason := self.service.assignments.request_membership_reason(dependency):
+                    return reason
                 if dependency.get('cancellation'):
                     return 'The requester cancelled the originating request; no new automatic return is admitted.'
                 if dependency.get('commandAction') == 'workspace.tests.submit':
@@ -860,8 +861,11 @@ class Collaboration:
                             if row.get('outcomeRevision') == revision), None)
             if current is not None and current.get('qualified') is not snapshot.get('qualified'):
                 return False
-            if receipt.get('dependencySatisfied') and request.get('outcomeRevision', revision) > revision:
-                return False  # A later report superseded the old successful dependency.
+            if request.get('outcomeRevision', revision) > revision:
+                # A later meaningful outcome replaces the queued wake, including
+                # an old question/failure. Full reports remain in their receipts.
+                # Staged success does not advance outcomeRevision before sealing.
+                return False
             return revision <= wait.get('lastClaimedRevision', 0) and identity == receipt.get('requestId')
         return wait.get('status') == 'claimed' and wait.get('continuationId') == receipt.get('requestId')
 
@@ -900,6 +904,7 @@ class Collaboration:
         if sid in self.draining:
             return
         self.draining.add(sid)
+        freed_return = False
         try:
             self.resume_outcomes(sid)
             rows = self.fair_rows(sid)
@@ -918,6 +923,7 @@ class Collaboration:
                         self.observe_admission(receipt)
                         self.publish_receipt(receipt)
                         self.cancel_expiry(identity)
+                        freed_return = freed_return or bool(receipt.get('dependencyRequestId'))
                         continue
                     if (target.get("status") in BUSY or target.get('configurationBusy')
                             or target.get('pendingConfiguration', {}).get('phase') in {'queued', 'applying'}
@@ -973,6 +979,10 @@ class Collaboration:
                     break
         finally:
             self.draining.discard(sid)
+        if freed_return:
+            # The newest outcome may have been backpressured by the old queued
+            # return. Reuse the released slot now; no unrelated event is needed.
+            self.resume_outcomes(sid)
 
     def admission(self, sid, args):
         receipt = self.receipt(args["inputId"])
@@ -1256,8 +1266,12 @@ class Collaboration:
         """Commit at most one guarded input for a meaningful outcome revision."""
         wait = request['subscription']
         versioned = wait.get('notificationVersion') == 2
-        if request.get('protocol') != PROTOCOL or wait.get('status') not in (
-                {'waiting', 'claimed', 'backpressured'} if versioned else {'waiting'}):
+        # Only this retired implementation limit is recoverable. The separate
+        # outcome-revision limit, explicit cancellation and Stop stay unchanged.
+        hop_limited = (versioned and wait.get('status') == 'limit_reached'
+            and wait.get('detail') == 'The causal peer-input chain reached 16 hops; its report remains inspectable.')
+        if request.get('protocol') != PROTOCOL or (not hop_limited and wait.get('status') not in (
+                {'waiting', 'claimed', 'backpressured'} if versioned else {'waiting'})):
             return
         response = continuation_outcome(request)
         if response is None:
@@ -1277,6 +1291,7 @@ class Collaboration:
             return
         sender = self.service._session(request['senderSessionId'])
         if (self.service.assignments.blocked(sender, request.get('assignmentId'))
+                or self.service.assignments.request_membership_reason(request)
                 or wait.get('interruptionRevision') != sender.get('interruptionRevision', 0)):
             wait.update(status='suppressed', open=False, detail='The saved wait was interrupted; late evidence remains inspectable.')
             self.save(request['requestId'], request)
@@ -1284,11 +1299,6 @@ class Collaboration:
             return
         producer = outcome_sender(request)
         depth = max(request.get('causalDepth', 0), response.get('causalDepth', 0))+1
-        if depth > MAX_CAUSAL_HOPS:
-            wait.update(status='limit_reached', open=False, detail='The causal peer-input chain reached 16 hops; its report remains inspectable.')
-            self.save(request['requestId'], request)
-            self.service.db.commit()
-            return
         # A report remains durable even if its independent notification cannot
         # commit. The payload and claim below are one transaction.
         self.save(request['requestId'], request)
@@ -1391,6 +1401,16 @@ class Collaboration:
     def start(self):
         """One recovery pass over known unsubmitted queues, not a scheduler."""
         self.watches.start()
+        # Reconsider only saved waits stopped by the removed hop count. Normal
+        # outcome idempotency and current task/Stop admission guards still apply.
+        for (encoded,) in self.service.db.execute('''SELECT receipt FROM commands
+                WHERE json_extract(receipt,'$.commandAction') IN
+                    ('coordination.send','coordination.watch','worktree.handoff','workspace.tests.submit')
+                AND json_extract(receipt,'$.subscription.status')='limit_reached'
+                AND json_extract(receipt,'$.subscription.notificationVersion')=2
+                AND json_extract(receipt,'$.subscription.detail')=?''',
+                ('The causal peer-input chain reached 16 hops; its report remains inspectable.',)).fetchall():
+            self.enqueue_continuation(json.loads(encoded))
         for (encoded,) in self.service.db.execute('''SELECT receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='coordination.send'
                 AND json_extract(receipt,'$.subscription.status') IN ('waiting','claimed','backpressured')
@@ -1719,7 +1739,6 @@ class Collaboration:
                 self.require_message_rate(source['id'], target['id'])
                 depth = self.causal_depth(source, lineage, origin)
                 if mode != 'notify':
-                    self.require_causal_depth(depth)
                     self.require_inbox_slot(target['id'], source['id'],
                         source.get('assignmentId') or (source.get('collaboration') or {}).get('assignmentId'),
                         slots=2 if notify_return and source['id'] == target['id'] else 1)
@@ -1906,7 +1925,6 @@ class Collaboration:
                     self.error(f"The limit of {maximum} outstanding task chats per source has been reached. Adjust Advanced execution limits in Settings to change it.", 409)
             if not args['title'].strip() or not args['text'].strip():
                 self.error('Enter a task title and brief.', 400)
-            self.require_causal_depth(self.causal_depth(source, lineage, origin))
             notify = args.get('returnNotification', True)
             if notify:
                 self.require_inbox_slot(source['id'])

@@ -34,7 +34,7 @@ def definitions(schema, string):
         "question.create": ("Ask a durable question in this conversation. Use Markdown and artifacts:[{id,version}] from saved Canvas receipts when review material informs the answer; versions are exact, not Latest. required=true blocks only the named dependency. This never grants permission. Keep a stable command ID for retries.", schema({"sessionId": identity["sessionId"], **content}, ["sessionId", "prompt", "required", "dependency"])),
         "question.list": ("Read this conversation's saved questions without selecting it or starting work. Pending is not answered, regardless of elapsed time.", schema({"sessionId": identity["sessionId"], "status": {"enum": ["pending", "answered", "cancelled", "superseded"]}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 50}}, ["sessionId"])),
         "question.read": ("Read one exact question, its answer provenance and separate runtime delivery state.", schema(identity)),
-        "question.answer": ("Record an explicit answer once for this question revision. Choose optionId or text. Agents must cite sourceMessageId from a user message or voice transcript in this conversation. Answering never grants permission. Duplicate answers never replay work.", schema({**identity, **revision, "optionId": string(100), "text": string(8000), "sourceMessageId": string(200)}, ["sessionId", "id", "expectedRevision"])),
+        "question.answer": ("Record an explicit answer once for this question revision. Choose optionId or text. Cite the actual user's sourceMessageId. For an answer delivered from another chat, also supply sourceRequestId from that coordination.send; the host verifies the original human input and exact handoff. Do not ask the user to repeat an answer already delivered this way. Answering does not grant tool permissions or reset budgets. Duplicate answers never replay work.", schema({**identity, **revision, "optionId": string(100), "text": string(8000), "sourceMessageId": string(200), "sourceRequestId": string(200)}, ["sessionId", "id", "expectedRevision"])),
         "question.cancel": ("Cancel a pending question at the exact revision. Cancellation is not an answer and does not authorize the dependent work.", schema({**identity, **revision, "reason": string(1000)}, ["sessionId", "id", "expectedRevision"])),
         "question.supersede": ("Replace a pending question atomically. Late answers to the old question are rejected. The replacement has its own ID and revision.", schema({**identity, **revision, **content}, ["sessionId", "id", "expectedRevision", "prompt", "required", "dependency"])),
     }
@@ -190,6 +190,53 @@ class Questions:
             raise AppError("This question's saved artifact changed; no replacement was displayed.", 409)
         return ref
 
+    def _answer_source(self, session, args, record):
+        """An existing delivered handoff can carry the user's original answer.
+
+        This records a decision, not a new permission grant. The receiving chat
+        still owns its question. Do not infer human authorship from peer prose,
+        and do not use an unrelated message merely because the agent can read it.
+        """
+        from .collaboration import PROTOCOL
+        from .peer_scope import participant_matches
+        from .service import AppError
+
+        source_session, request = session, None
+        if args.get('sourceRequestId'):
+            if not args.get('sourceMessageId'):
+                raise AppError('Cite the original human sourceMessageId with this handoff.', 409)
+            request = self.app.collaboration.receipt(args['sourceRequestId'])
+            if (request.get('commandAction') != 'coordination.send'
+                    or request.get('protocol') != PROTOCOL
+                    or request.get('target', {}).get('sessionId') != session['id']
+                    or request.get('senderSessionId') == session['id']
+                    or request.get('delivery') not in {'accepted', 'applied', 'notified'}
+                    or request.get('cancellation')
+                    or session.get('status') in {'stopping', 'interrupted', 'stopped', 'error', 'cancelled', 'failed'}):
+                raise AppError('Use an exact delivered handoff to this conversation for the answer.', 409)
+            source_session = self.app._session(request['senderSessionId'], hydrate=False)
+            if (not participant_matches(request, source_session)
+                    or not participant_matches(request, session)
+                    or request.get('sourceInterruptionRevision') != source_session.get('interruptionRevision', 0)
+                    or request.get('interruptionRevision') != session.get('interruptionRevision', 0)):
+                raise AppError('This answer handoff changed location or was interrupted. Read the current request.', 409)
+
+        source = next((m for m in source_session['messages']
+                       if m['id'] == args.get('sourceMessageId') and m.get('role') == 'user'), None)
+        if source is None:
+            raise AppError('Answer provenance must reference an original user message in this conversation or its delivered handoff.', 409)
+        if source.get('inputOrigin') not in {'ui', 'user', 'voice'}:
+            raise AppError('Answer provenance needs a verified user input; agent-authored or unattributed messages cannot answer for the user.', 409)
+        if source.get('questionId'):
+            raise AppError("Use the user's original response, not a generated question-answer receipt.", 409)
+        if source.get('createdAt', 0) < record['createdAt']:
+            raise AppError('The user response must follow this question.', 409)
+        if request and (not source.get('inputId')
+                        or source['inputId'] not in request.get('sourceInputIds', [])
+                        or source.get('createdAt', 0) > request.get('acceptedAt', 0)):
+            raise AppError('The handoff must retain this exact human response in its admitted input lineage.', 409)
+        return source, source_session['id']
+
     def dispatch(self, action, args, origin, client_id, pending):
         from .service import AppError
         app = self.app
@@ -224,21 +271,16 @@ class Questions:
             if (has_option and option is None) or (has_text and (not record["allowFreeText"] or not text.strip())):
                 raise AppError("Use an offered option or an allowed nonempty free-text answer.")
             source = None
-            if args.get("sourceMessageId"):
-                source = next((m for m in session["messages"] if m["id"] == args["sourceMessageId"] and m.get("role") == "user"), None)
-                if source is None:
-                    raise AppError("Answer provenance must reference a user message in this conversation.", 409)
-                if source.get('inputOrigin') not in {'ui', 'user', 'voice'}:
-                    raise AppError("Answer provenance needs a verified user input; agent-authored or unattributed messages cannot answer for the user.", 409)
-                if source.get("questionId"):
-                    raise AppError("Use the user's original response, not a generated question-answer receipt.", 409)
-                if source.get("createdAt", 0) < record["createdAt"]:
-                    raise AppError("The user response must follow this question.", 409)
+            source_session_id = session['id']
+            if args.get("sourceMessageId") or args.get('sourceRequestId'):
+                source, source_session_id = self._answer_source(session, args, record)
             if origin == "agent" and source is None:
                 raise AppError("An agent must cite the user's answer with sourceMessageId; it cannot answer on the user's behalf.", 409)
             provenance = {"origin": origin, "clientId": client_id, "via": "call" if source and source.get("via") == "call" else "chat" if source else "ui"}
             if source:
                 provenance.update(messageId=source["id"], text=source.get("text", ""), inputOrigin=source['inputOrigin'], voiceId=source.get("voiceId"), voiceItemId=source.get("voiceItemId"))
+                if args.get('sourceRequestId'):
+                    provenance.update(sourceSessionId=source_session_id, sourceRequestId=args['sourceRequestId'])
             input_id = "question:" + record["id"] + ":answer"
             record.update(status="answered", answer={"text": text, "optionId": option["id"] if option else None,
                 "questionRevision": record["revision"], "answeredAt": time.time(), "provenance": provenance,

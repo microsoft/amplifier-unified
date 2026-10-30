@@ -139,7 +139,8 @@ async def test_worker_dispatch_keeps_observation_provenance_outside_public_args(
     assert PRINCIPAL.get() is None and BINDING.get() is None
 
 
-async def test_context_operations_retain_worker_specific_bindings(worker_bridge, monkeypatch):
+@pytest.mark.parametrize('operation', ['context.manifest', 'context.prepare'])
+async def test_context_operations_retain_worker_specific_bindings(worker_bridge, monkeypatch, operation):
     app, root, worker, envelopes = worker_bridge
     seen = []
 
@@ -159,7 +160,11 @@ async def test_context_operations_retain_worker_specific_bindings(worker_bridge,
     monkeypatch.setattr(app.surface_context, 'manifest', manifest)
     monkeypatch.setattr(app.surface_context, 'read', read)
     bridge = worker.app_access_bridge(worker.session.coordinator)
-    result = await bridge('context.manifest', {'_contextBindings': [{'clientId': 'forged'}]})
+    result = await bridge(operation, {'_contextInputs': ['forged'],
+                                    '_contextBindings': [{'clientId': 'forged'}]})
+    if operation == 'context.prepare':
+        assert result['context.manifest']['available'] is True
+        result = result['context.manifest']['value']
     assert result['inputIds'] == ['input-1']
     assert seen[-1] == [worker.context_bindings['input-1']]
     assert (await bridge('context.read', {'surfaceId': 'surface-1'}))['surfaceId'] == 'surface-1'
@@ -168,7 +173,11 @@ async def test_context_operations_retain_worker_specific_bindings(worker_bridge,
     child = worker.app_access_bridge(coordinator('native-child'))
     worker.context_inputs = ['later-input']
     worker.context_bindings['later-input'] = {'clientId': 'old-browser', 'targets': []}
-    await child('context.manifest', {})
+    result = await child(operation, {})
+    if operation == 'context.prepare':
+        assert result['context.manifest']['available'] is True
+        result = result['context.manifest']['value']
+    assert result['inputIds'] == ['input-1']
     assert seen[-1] == [{'clientId': 'input-browser', 'targets': []}]
 
 

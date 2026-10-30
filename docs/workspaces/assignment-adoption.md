@@ -31,6 +31,29 @@ attribution; detachment retains charged usage and revokes manager control.
 Detached historical membership is not recycled into a new authority epoch:
 use a different assignment to establish a new relationship.
 
+## Finishing and reusing a member chat
+
+The assignment owner can use `assignment.retire` for a finished helper. This
+releases its current member slot without archiving the chat, deleting files,
+forgetting its membership or subtracting any attributed usage. Running workers,
+unsettled inputs or checks, unfinished saved tasks and shared task claims prevent
+retirement. A native ownership check protects the transition. User Stop and
+unknown operation outcomes are not cleared.
+
+`maxMembers` counts current bound members and reservations. Retired, detached
+and never-created records remain available as history without occupying those
+slots. The brief and assignment controls distinguish current and retained
+membership counts.
+
+For a later follow-up, the existing `assignment.adoption` / `assignment.adopt`
+path can add a retired chat to the same assignment again after a fresh review.
+It rechecks capacity and native ownership, records a new membership boundary,
+and retains the previous retirement receipt. Inputs and automatic returns from
+before readmission remain historical; they cannot restart the chat. Prior
+spending continues to count, and adoption itself sends no input. The current
+agent adoption requirement for an admitted human instruction still applies;
+this does not add a new approval screen or silently broaden that requirement.
+
 Lost replies retry the same operation ID. A stale review needs a fresh
 inspection; a failed durable save restores the target and assignment together.
 No running work is stopped to make adoption possible. A known parked idle worker

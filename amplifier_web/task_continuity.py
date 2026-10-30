@@ -269,7 +269,8 @@ def definitions(schema, string):
     fields = {"objective": {**string(16000), "minLength": 1}, "constraints": strings,
               "correction": {**string(8000), "minLength": 1}, "questionIds": strings,
               "operationIds": strings, "artifactRefs": strings,
-              "maxTurns": {"type": ["integer", "null"], "minimum": 1}}
+              "maxTurns": {"type": ["integer", "null"], "minimum": 1,
+                           "description": "Optional enforced turn limit, not a planning estimate. Omit unless a hard limit is required. Changing an authorized limit retains turns already used; preserve explicit user and owner limits."}}
     return {
         "task.get": ("Read the saved task, applied revision, goal controller, and compaction checkpoint status. Reading never starts model work.", schema(sid)),
         "task.history": ("Read bounded retained task identities, or changes for an exact taskId. Historical corrections remain required detail; reading does not grant authority.", schema({
@@ -283,8 +284,8 @@ def definitions(schema, string):
             ["sessionId", "taskId", "expectedRevision", "field"])),
         "task.receipt": ("Read one exact saved task mutation receipt without resubmitting it. Missing evidence is not permission to replay.", schema({
             **sid, "commandId": string(200)}, ["sessionId", "commandId"])),
-        "task.create": ("Set a durable objective with explicit dependencies and constraints, reusing this session's goal controller. Does not send a message or schedule work.", schema({**sid, **revision, **fields}, ["sessionId", "expectedRevision", "objective"])),
-        "task.update": ("Revise the task at its exact revision. Corrections are retained; running work applies changes at the next request boundary.", schema({**sid, **revision, **fields}, ["sessionId", "expectedRevision"])),
+        "task.create": ("Set an authorized durable objective with dependencies and constraints, reusing this session's goal controller. An authorized follow-up preserves the completed objective in history. Does not send a message or schedule work.", schema({**sid, **revision, **fields}, ["sessionId", "expectedRevision", "objective"])),
+        "task.update": ("Revise the task at its exact revision within existing authority. Managers may revise their own plans; preserve explicit user and owner limits. Corrections and used turns are retained; running work applies changes at the next request boundary.", schema({**sid, **revision, **fields}, ["sessionId", "expectedRevision"])),
         "task.pause": ("Pause future goal continuation at the exact task revision when the user asks. Current work may finish; no side effect is rolled back.", schema({**sid, **revision}, ["sessionId", "expectedRevision"])),
         "task.resume": ("Deliberately re-enable a paused or blocked task. Never infer resume from elapsed time or an unanswered question. Does not automatically send input.", schema({**sid, **revision}, ["sessionId", "expectedRevision"])),
         "task.block": ("Record why dependent work cannot proceed. A blocked question never counts as approval.", schema({**sid, **revision, "reason": {**string(4000), "minLength": 1}}, ["sessionId", "expectedRevision", "reason"])),
