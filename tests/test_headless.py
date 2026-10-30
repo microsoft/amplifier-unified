@@ -341,4 +341,3 @@ async def test_hidden_tool_permission_uses_operator_access_lookup(aiohttp_server
                      command='tool', name='read_file', args='{}', bundle=None, resume=None, timeout=3)
     assert await run(args) == 0
     assert json.loads(capsys.readouterr().out) == {'decision': 'deny'}
-
