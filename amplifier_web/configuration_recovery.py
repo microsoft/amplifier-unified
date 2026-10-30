@@ -201,8 +201,6 @@ def validate_recovery(management, session, record, attempt, observed, action, ar
         and record["state"]["stage"] == "interrupted")
     if record["state"]["phase"] != "error" and not interrupted:
         raise ValueError("Only a settled failed configuration operation can be reconciled or resumed.")
-    if origin not in {"ui", "user"} and record["request"]["authorization"] != "grant":
-        raise ValueError("Agent recovery requires the original retained agent authority, not a UI or internal origin.")
     task = management.pending_config_tasks.get(session["id"])
     if task is not None and not task.done() or management.lock.locked():
         raise ValueError("The original configuration task has not settled.")
@@ -210,10 +208,17 @@ def validate_recovery(management, session, record, attempt, observed, action, ar
     recovery_authority = None
     if origin not in {"ui", "user"}:
         authority = record["request"]["authority"]
-        # Full access also uses authorization="grant". Its original mode
-        # revision is checked above and again at application; only narrow
-        # grants need an additional peer-lineage ceiling for this recovery.
-        if "accessRevision" not in authority:
+        if record["request"]["authorization"] != "grant":
+            if not service.access_mode.full(session):
+                raise ValueError("Full access is required to continue an operator-started configuration operation.")
+            # The original UI/internal request stays immutable. Existing
+            # resumptions retain current Full as an additional effect boundary;
+            # neither an old revoked grant nor a stopped request is renewed.
+            recovery_authority = service.configuration_authority.capture(
+                "configuration.apply", {"sessionId": session["id"]}, origin, session["id"])
+        # Original Full was checked above; only narrow grants need an
+        # additional peer-lineage ceiling for this recovery.
+        elif "accessRevision" not in authority:
             grant = service.configuration_authority.record(authority["grantId"])
             peers = service.configuration_authority.peer_authorities(
                 session, grant, authority["effect"], authority["scope"])
@@ -304,6 +309,8 @@ def command(management, action, args, origin, caller):
         "generationId": native_binding.get("_generationId"),
         "interruptionRevision": session.get("interruptionRevision", 0),
         "inputIds": input_ids, "inputCoverage": "complete" if input_ids else "unavailable"}
+    if recovery_authority is not None and "accessRevision" in recovery_authority:
+        recovery_source["accessRevision"] = recovery_authority["accessRevision"]
     if action.endswith(".reconcile"):
         # Cancellation leaves its original applying/interrupted evidence intact
         # until the host task settles and an explicit reconciliation observes
