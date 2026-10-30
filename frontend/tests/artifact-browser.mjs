@@ -1,9 +1,10 @@
+import {fixturePython} from './fixture-python.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {createServer} from 'node:http';
 import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
-const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/chat_ui_server.py',import.meta.url))],{stdio:'inherit'});
+const fixture=spawn(fixturePython(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url))),[fileURLToPath(new URL('../../tests/fixtures/chat_ui_server.py',import.meta.url))],{stdio:'inherit'});
 const demo=createServer((req,res)=>{res.setHeader('Content-Type','text/html');res.end('<h1>Launched app</h1><button onclick="this.textContent=\'It works\'">Try demo</button><p id="isolation"></p><script>try{parent.document.title;document.getElementById("isolation").textContent="UNSAFE"}catch(e){document.getElementById("isolation").textContent="Isolated from Amplifier"}</script>')});
 await new Promise(resolve=>demo.listen(0,'127.0.0.1',resolve));
 for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8958/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
