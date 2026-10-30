@@ -310,7 +310,12 @@ They retain system attribution and unavailable input coverage. A system request
 that carries a native binding still has to validate that binding. Saved mode,
 Stop and target checks remain effective at the delayed configuration owner.
 
-Managed test-host setup remains a separate native-child implementation gap.
+Managed test-host setup, its retained reconciliation and interrupted-setup cleanup
+also accept qualified Full descendants and trusted system callers. Their existing
+conversation/workspace intent owns the result; the original actor and authority
+remain recorded. Accepted background work can outlive a turn, with current Full,
+Stop, placement and resource checks before effects and final publication. Routine
+environment resource operations remain a separate native-child implementation gap.
 Recovery of an operation originally authorized by UI or internal code also remains
 unavailable to agents/systems in this batch. That original-operation gate is a
 remaining Full parity gap, not an intended recurring approval requirement; future
