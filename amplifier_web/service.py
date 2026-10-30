@@ -2940,6 +2940,10 @@ class AppService:
                     if args.get('id') or prepared_identity: session['id'] = args.get('id') or prepared_identity
                     if origin == 'scheduler' and args.get('inheritConfiguration', {}).get('scheduledRunId'):
                         source = self._session(args['inheritConfiguration']['sessionId'])
+                        run = self.schedules.store.run(source['id'], args['inheritConfiguration']['scheduledRunId'])
+                        # prepare qualified this exact source/run/destination under
+                        # the app lock. Persist its lineage before the first mount.
+                        session['scheduledOrigin'] = {'sessionId': source['id'], 'scheduleId': run['scheduleId'], 'runId': run['id']}
                         if self.assignments.current(source):
                             session['assignmentId'] = self.assignments.reserve_member(source, session['id'], command_id)
                             assignment = self.assignments.load(session['assignmentId'])

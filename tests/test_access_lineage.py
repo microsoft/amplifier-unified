@@ -1,5 +1,6 @@
 """Standing choices follow retained task sources, never copied Full flags."""
 import json
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -258,12 +259,15 @@ async def test_scheduled_root_inherits_after_host_restart_without_source_residen
     target_id = None
     try:
         await save(app, app._session(sid))
-        await create_schedule(app, sid, now[0])
+        record, _ = await create_schedule(app, sid, now[0])
         first_mount_modes = []
+        first_mount_origins = []
         original_control = runtime.control
         async def control(identity, operation, args):
             if identity != sid and identity not in runtime.workers:
                 first_mount_modes.append(read_mode(app.data_dir, app._session(identity)['workspace'], identity))
+                saved = app.db.execute("SELECT value FROM state_records WHERE kind='session' AND id=?", (identity,)).fetchone()
+                first_mount_origins.append(json.loads(saved[0]).get('scheduledOrigin'))
             return await original_control(identity, operation, args)
         runtime.control = control
         now[0] += 61
@@ -273,6 +277,7 @@ async def test_scheduled_root_inherits_after_host_restart_without_source_residen
         assert run['phase'] == 'accepted', run.get('detail')
         target_id = run['destinationSessionId']
         assert first_mount_modes == ['full']
+        assert first_mount_origins == [{'sessionId': sid, 'scheduleId': record['id'], 'runId': run['id']}]
         assert both_modes(app, app._session(target_id)) == ('full', 'full')
     finally:
         await app.close()
@@ -286,3 +291,29 @@ async def test_scheduled_root_inherits_after_host_restart_without_source_residen
         assert not restored.configuration_authority.rows(target_id)
     finally:
         await restored.close()
+
+
+@pytest.mark.parametrize('mismatch', ['source', 'run', 'destination'])
+async def test_scheduled_origin_requires_the_reserved_source_run_and_destination(tmp_path, monkeypatch, mismatch):
+    app, runtime, now, sid = await schedule_fixture(tmp_path, monkeypatch)
+    try:
+        record, _ = await create_schedule(app, sid, now[0])
+        now[0] += 61
+        assert app.schedules.store.acquire(now[0])
+        run = app.schedules.store.claim(sid, record['id'], now[0])
+        destination = str(uuid.uuid4())
+        app.schedules.store.transition(sid, run['id'], ['claimed'], 'creating', now[0], destinationSessionId=destination)
+        identity = str(uuid.uuid4()) if mismatch == 'destination' else destination
+        source_id = str(uuid.uuid4()) if mismatch == 'source' else sid
+        run_id = str(uuid.uuid4()) if mismatch == 'run' else run['id']
+        with pytest.raises(AppError, match='does not belong|matching new-task reservation'):
+            await app.dispatch('session.create', {'id': identity, 'select': False,
+                'workspace': record['newTaskConfiguration']['workspace'],
+                'bundle': record['newTaskConfiguration']['bundle'],
+                'inheritConfiguration': {'sessionId': source_id, 'scheduledRunId': run_id,
+                    'configurationHash': record['newTaskConfiguration']['configurationHash']}},
+                origin='scheduler', command_id='invalid-scheduled-source')
+        assert {row['id'] for row in app.state['sessions']} == {sid}
+        assert not runtime.workers and not runtime.inputs
+    finally:
+        await app.close()

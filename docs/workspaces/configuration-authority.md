@@ -204,7 +204,9 @@ Records live in the existing host command database with revision-checked,
 idempotent saves. New native workers read exact policy and task-source records.
 
 Commissioned and new-task scheduled roots inherit through their retained creator
-or scheduled-origin relationship. The receiving chat's explicit choice wins.
+or scheduled-origin relationship. The scheduler's validated source/run relationship
+is saved with the new root, before its first native preparation. The receiving
+chat's explicit choice wins.
 Otherwise a source chat's specific choice follows the task ahead of workspace
 and app defaults. At a cross-workspace relationship, an explicit destination
 workspace choice wins before source inheritance. Removing a chat override restores
