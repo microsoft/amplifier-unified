@@ -365,7 +365,20 @@ async def test_ineligible_receipts_do_not_gain_yield_authority(native_wait, chan
             receipt.pop("dependencyRequestId")
         f.app.collaboration.save(f.parent.continuation_id, receipt)
     before, changes = saved_receipts(f), f.app.db.total_changes
-    assert await f.ready() is False
+    if change == "stop":
+        # A stale transport-bound generation is rejected by the host before
+        # eligibility is evaluated. The goal hook must preserve its state.
+        with pytest.raises(AppError, match="crossed Stop") as rejected:
+            await f.ready()
+        assert rejected.value.status == 403
+        goal = f.coordinator.session_state["goal"]
+        before_goal = copy.deepcopy(goal)
+        await f.worker.controls.tasks.yield_to_peer("orchestrator:goal_progress", {
+            "state": "continuing", "condition": goal["condition"], "turn": goal["turns_used"]})
+        assert f.coordinator.session_state["goal"] is goal
+        assert goal == before_goal
+    else:
+        assert await f.ready() is False
     assert saved_receipts(f) == before and f.app.db.total_changes == changes
     assert f.parent.continuation_id not in f.worker.runtime.accepted
 
