@@ -161,9 +161,24 @@ async def test_omitted_ref_qualifies_and_activates_two_generations(tmp_path, mon
     app = AppService(home, runtime, workspace=tmp_path)
     manager = app.update_manager = updates.UpdateManager(app)
     store = SharedSourceStore(home / 'source-store')
-    failure = manager.directory / 'prior-failure.json'
-    failure.write_text('{"status":"failed","attemptId":"retained-fixture-failure"}')
-    failure_bytes = failure.read_bytes()
+    failed_attempt = manager.diagnostics.begin('ecosystem', attempt_id='a' * 32)
+    manager.diagnostics.record('ecosystem-source-preflight', 'failed',
+                               reason='runtime-source-unbound', package='amplifier-fixture')
+    await app.diagnostics.flush()
+
+    async def retained_failure():
+        await app.diagnostics.flush()
+        before = None
+        while True:
+            page = app.diagnostics.read(stream='updates', before=before, limit=30)
+            for item in page['items']:
+                if item['data'].get('attemptId') == failed_attempt:
+                    return item
+            before = page['nextBefore']
+            assert before is not None, 'The durable prior failed attempt was lost'
+
+    failure_record = await retained_failure()
+    assert failure_record['data']['status'] == 'failed'
     retained = []
     try:
         # A real pre-updater installation supplies inventory; no fabricated graph
@@ -229,7 +244,8 @@ async def test_omitted_ref_qualifies_and_activates_two_generations(tmp_path, mon
             # Maintenance is not under test; settle its task before another cycle.
             manager.cleanup_task.cancel()
             await asyncio.gather(manager.cleanup_task, return_exceptions=True)
-            assert failure.read_bytes() == failure_bytes
+            assert await retained_failure() == failure_record
+            assert 'lastFailure' not in manager.diagnostics.state
             for old_stage, receipts, old_project, old_graph, old_payload, revision, source_files in retained:
                 assert files(old_stage) == receipts
                 qualification.verify_recorded(old_project, old_stage)
