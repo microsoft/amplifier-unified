@@ -19,6 +19,15 @@ const page=await browser.newPage();await page.setContent('<button>Ready</button>
 JS
 cp /opt/unified-prepared/execution-contract.json /artifacts/provider1201/execution-contract.json
 sha256sum uv.lock frontend/package-lock.json frontend/src/chat-controls.jsx tests/test_draft_defaults.py frontend/tests/chat-controls.test.mjs frontend/tests/provider-selection-browser.mjs tests/fixtures/provider_selection_scenario.py tests/fixtures/empty_host_ui_server.py scripts/qualify_provider_selection.sh > /artifacts/provider1201/source-sha256.txt
+python - <<'PY'
+import hashlib,json
+from pathlib import Path
+root=Path('amplifier_web/static')
+assert not any(path.is_symlink() for path in root.rglob('*'))
+files={str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(root.rglob('*')) if path.is_file()}
+Path('/artifacts/provider1201/committed-static.json').write_text(json.dumps(files,indent=2)+'\n')
+PY
+export PROVIDER_SELECTION_STATIC_MANIFEST=/artifacts/provider1201/committed-static.json
 # Keep independent results even when a check fails. Never silently retry it.
 set +e
 python -m pytest -q --tb=short tests/test_draft_defaults.py tests/test_provider_selection_lifecycle.py tests/test_selected_provider.py tests/test_new_chat.py tests/test_provider_recovery.py tests/test_provider_isolation.py tests/test_bundle_selection.py::test_scoped_defaults_persist_and_do_not_retarget_existing_chats > /artifacts/provider1201/python.log 2>&1
@@ -56,6 +65,15 @@ set +e
 npm run build --prefix frontend > /artifacts/provider1201/build.log 2>&1
 build_result=$?
 if [ "$build_result" -eq 0 ]; then
+  python - <<'PY' > /artifacts/provider1201/static-parity.json
+import hashlib,json
+from pathlib import Path
+expected=json.loads(Path('/artifacts/provider1201/committed-static.json').read_text())
+actual={str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in Path('amplifier_web/static').rglob('*') if path.is_file()}
+assert actual==expected, {'missing': sorted(expected.keys()-actual.keys()), 'extra': sorted(actual.keys()-expected.keys()), 'changed': [name for name in expected if name in actual and expected[name]!=actual[name]]}
+print(json.dumps({'committedEqualsRebuild':True,'fileCount':len(actual),'manifestSha256':hashlib.sha256(Path('/artifacts/provider1201/committed-static.json').read_bytes()).hexdigest()}))
+PY
+  parity_result=$?
   node frontend/tests/provider-selection-browser.mjs > /artifacts/provider1201/browser.log 2>&1
   browser_result=$?
   node frontend/tests/draft-provider-refresh-browser.mjs > /artifacts/provider1201/adjacent-browser.log 2>&1
@@ -63,6 +81,7 @@ if [ "$build_result" -eq 0 ]; then
 else
   browser_result=125
   adjacent_result=125
+  parity_result=125
 fi
 set -e
 # Installed package boundary: fresh venv, exact wheel, prepared dependency paths
@@ -81,6 +100,9 @@ site=pathlib.Path(subprocess.check_output([python,'-c','import sysconfig; print(
 with zipfile.ZipFile(wheel) as archive:
     files={name:hashlib.sha256(archive.read(name)).hexdigest() for name in archive.namelist() if not name.endswith('/') and not name.endswith('.dist-info/RECORD')}
 identity={'wheelSha256':hashlib.sha256(wheel.read_bytes()).hexdigest(),'files':files,'static':{name:sha for name,sha in files.items() if name.startswith('amplifier_web/static/')}}
+committed=json.loads((out/'committed-static.json').read_text())
+assert identity['static']==committed, 'Wheel static payload differs from committed candidate'
+identity['committedStaticParity']=True
 (out/'installed-identity.json').write_text(json.dumps(identity,indent=2))
 fixtures=pathlib.Path('/artifacts/installed-fixtures');fixtures.mkdir()
 for name in ['empty_host_ui_server.py','configured_browser.py','provider_selection_scenario.py']:
@@ -91,6 +113,6 @@ set +e
 (cd /artifacts && env -u PYTHONPATH AMPLIFIER_TEST_INSTALLED=1 AMPLIFIER_TEST_INSTALLED_IDENTITY=/artifacts/provider1201/installed-identity.json AMPLIFIER_TEST_PYTHON=/artifacts/installed/bin/python AMPLIFIER_TEST_ARTIFACTS=/artifacts/installed-proof PROVIDER_SELECTION_FIXTURE=/artifacts/installed-fixtures/empty_host_ui_server.py node /workspace/frontend/tests/provider-selection-browser.mjs) > /artifacts/provider1201/installed-browser.log 2>&1
 installed_result=$?
 set -e
-printf 'python=%s frontend=%s negative_expected_nonzero=%s build=%s browser=%s adjacent=%s installed=%s\n' "$python_result" "$frontend_result" "$negative_result" "$build_result" "$browser_result" "$adjacent_result" "$installed_result" | tee /artifacts/provider1201/results.txt
+printf 'python=%s frontend=%s negative_expected_nonzero=%s build=%s static_parity=%s browser=%s adjacent=%s installed=%s\n' "$python_result" "$frontend_result" "$negative_result" "$build_result" "$parity_result" "$browser_result" "$adjacent_result" "$installed_result" | tee /artifacts/provider1201/results.txt
 cat /artifacts/provider1201/python.log /artifacts/provider1201/frontend.log /artifacts/provider1201/browser.log /artifacts/provider1201/installed-browser.log
-[ "$python_result" -eq 0 ] && [ "$frontend_result" -eq 0 ] && [ "$negative_result" -ne 0 ] && [ "$build_result" -eq 0 ] && [ "$browser_result" -eq 0 ] && [ "$adjacent_result" -eq 0 ] && [ "$installed_result" -eq 0 ]
+[ "$python_result" -eq 0 ] && [ "$frontend_result" -eq 0 ] && [ "$negative_result" -ne 0 ] && [ "$build_result" -eq 0 ] && [ "$parity_result" -eq 0 ] && [ "$browser_result" -eq 0 ] && [ "$adjacent_result" -eq 0 ] && [ "$installed_result" -eq 0 ]
