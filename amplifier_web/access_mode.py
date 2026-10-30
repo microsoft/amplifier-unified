@@ -94,6 +94,12 @@ def policy(db, workspace, session_id, *, global_only=False, owner_session_id=Non
                      'revision': digest({'overrides': original, 'lineage': lineage}) if lineage else digest(original),
                      'overrides': original}
             return value
+        def unavailable(reason):
+            # A broken source cannot supply authority or erase the operator's
+            # independently applicable receiving workspace/app preference.
+            lineage.append({'unavailable': reason, 'owner': owner})
+            return result(next((row['mode'] for row in original.values()
+                                if row['mode'] != 'inherit'), 'ask'), 'unavailable')
         if global_only or scope == 'session':
             return result()
         if owner is None:
@@ -101,10 +107,10 @@ def policy(db, workspace, session_id, *, global_only=False, owner_session_id=Non
         if owner is None:
             return result()
         if owner['id'] in seen:
-            return result('ask', 'unavailable')
+            return unavailable('cycle')
         seen.add(owner['id'])
         if owner['creator'] and owner['scheduler']:
-            return result('ask', 'unavailable')
+            return unavailable('ambiguous source')
         source_id = owner['creator'] or owner['scheduler']
         if not source_id:
             return result()
@@ -114,7 +120,7 @@ def policy(db, workspace, session_id, *, global_only=False, owner_session_id=Non
                 source_id, owner['request'] if owner['creator'] else [owner['schedule'], owner['run']]]
         if source is None:
             lineage.append({'relationship': edge, 'source': None})
-            return result('ask', 'unavailable')
+            return unavailable('missing source')
         if source['workspace'] != owner['workspace'] and records['workspace']['mode'] != 'inherit':
             return result(records['workspace']['mode'], 'inherited' if lineage else 'workspace')
         workspace, session_id = source['workspace'], source['nativeId']

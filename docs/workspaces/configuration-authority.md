@@ -209,6 +209,10 @@ Otherwise a source chat's specific choice follows the task ahead of workspace
 and app defaults. At a cross-workspace relationship, an explicit destination
 workspace choice wins before source inheritance. Removing a chat override restores
 this inheritance; it does not copy Full access into the receiving chat.
+Missing, cyclic or ambiguous source relationships fall back to the receiving
+chat's independently applicable workspace/app preference, or Ask by default.
+They cannot supply inherited Full or erase an operator's existing broad Full
+choice. The unavailable relationship remains in the revision and source diagnostic.
 
 Host checks and native file preparation use one resolver. It reads only the
 requested owners and their source chain; directory rows locate aliases but never

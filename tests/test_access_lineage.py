@@ -112,13 +112,28 @@ async def test_source_stop_fences_captured_effect_without_changing_saved_mode(ap
         app.configuration_authority.check(authority)
 
 
-async def test_missing_and_cyclic_source_cannot_borrow_app_full(app):
+@pytest.mark.parametrize('kind', ['missing', 'cyclic', 'ambiguous'])
+async def test_unavailable_source_preserves_independent_workspace_and_app_choice(app, kind):
     source, target = app.state['sessions']
-    await save(app, scope='app')
-    link(app, target, {'id': 'missing-source'})
+    link(app, target, {'id': 'missing-source'} if kind == 'missing' else source)
+    if kind == 'cyclic':
+        link(app, source, target)
+    elif kind == 'ambiguous':
+        link(app, target, source, 'scheduled')
     assert both_modes(app, target) == ('ask', 'ask')
-    link(app, target, source)
-    link(app, source, target)
+    assert app.access_mode.snapshot(target)['source'] == 'unavailable'
+    await save(app, scope='app')
+    assert both_modes(app, target) == ('full', 'full')
+    assert app.access_mode.snapshot(target)['source'] == 'unavailable'
+    revision = app.access_mode.snapshot(target)['revision']
+    target['collaboration']['requestId'] = 'changed-source-relationship'
+    app._publish_changes(sessions={target['id']})
+    assert not app.access_mode.full(target, revision)
+    await save(app, target, scope='workspace', mode='ask')
+    assert both_modes(app, target) == ('ask', 'ask')
+    await save(app, target, scope='workspace', mode='full')
+    assert both_modes(app, target) == ('full', 'full')
+    await save(app, target, mode='ask')
     assert both_modes(app, target) == ('ask', 'ask')
     await save(app, target)
     assert both_modes(app, target) == ('full', 'full')
