@@ -12,7 +12,7 @@ import yaml
 from amplifier_web.builtin_behaviors import APPENDED_DEFAULTS
 from amplifier_web.host.config import _KEY_FILE_VALUES, _load_keys, app_home, load_config, prepare_registry, merge, expand_environment, HostConfig, WORK_SOURCE, PRECONFIGURED_BUNDLES
 from amplifier_web.host.session import live_plan, repair_interrupted_receipts, redact, _apply_settings
-from amplifier_web.shared_state import configuration_paths, workspace_snapshot_path
+from amplifier_web.shared_state import configuration_paths
 
 
 class HostSettingsTests(unittest.TestCase):
@@ -55,21 +55,23 @@ class HostSettingsTests(unittest.TestCase):
 
             load_config(workspace, home=home, legacy_home=legacy)
 
-            snapshot = workspace_snapshot_path(workspace, home)
-            self.assertFalse(snapshot.exists())
+            legacy_snapshots = home / "config" / "workspaces"
+            self.assertFalse(legacy_snapshots.exists())
             paths = configuration_paths(workspace, "session-id", home)
             self.assertIn(Path(os.environ["AMPLIFIER_HOME"]) / "settings.yaml", paths)
             self.assertIn(workspace.resolve() / ".amplifier" / "settings.local.yaml", paths)
-            self.assertNotIn(snapshot, paths)
+            self.assertFalse(any(legacy_snapshots in path.parents for path in paths))
 
-    def test_workspace_snapshot_is_stable_through_symlink_aliases(self):
+    def test_configuration_inputs_are_stable_through_symlink_aliases(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             workspace=root/'workspace';workspace.mkdir()
             alias=root/'alias';alias.symlink_to(workspace,target_is_directory=True)
             home=root/'home';home.mkdir()
             home_alias=root/'home-alias';home_alias.symlink_to(home,target_is_directory=True)
-            self.assertEqual(workspace_snapshot_path(alias,home_alias),workspace_snapshot_path(workspace,home))
+            self.assertEqual(
+                [path.resolve() for path in configuration_paths(alias, 'session-id', home_alias)],
+                [path.resolve() for path in configuration_paths(workspace, 'session-id', home)])
 
     def test_keys_file_refreshes_a_value_it_previously_loaded(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):

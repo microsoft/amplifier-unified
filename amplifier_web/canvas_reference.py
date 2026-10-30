@@ -21,7 +21,7 @@ def definitions(schema, string):
 
 
 def command(service, args):
-    from .service import AppError
+    from .errors import AppError
     from .canvas_versions import definition, reference
     from .state_storage import resource
     state = service.state

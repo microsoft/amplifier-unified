@@ -601,9 +601,14 @@ def execute_call(payload, *, _engine_owner=None):
                 retained = (common.retention.verify_artifacts(archives) if artifacts_only
                             else common.retention.verify_retention(root, archives, mode))
                 common.retain_manifest(destination, archives)
-            except Exception:
-                (destination / 'incomplete.json').write_text(json.dumps({'status': 'unknown', 'environmentPreserved': True,
-                    'policy': mode, 'partialArchives': [str(path) for path in destination.glob('*.tar')]}))
+            except Exception as exc:
+                verification = common.retention.validation_failure_diagnostic(exc)
+                try:
+                    (destination / 'incomplete.json').write_text(json.dumps({'status': 'unknown', 'environmentPreserved': True,
+                        'policy': mode, 'partialArchives': [str(path) for path in destination.glob('*.tar')],
+                        **({'verification': verification} if verification is not None else {})}))
+                except OSError:
+                    pass  # Losing a diagnostic must not replace the primary failure.
                 raise
             if artifacts_only:
                 return {'ok': True, 'universeId': name, 'status': 'stopped', 'archives': archives,
@@ -637,9 +642,13 @@ def execute_call(payload, *, _engine_owner=None):
                 'code': exc.code, 'effectAdmitted': exc.admitted,
                 'admissionDenied': action == 'start' and not exc.admitted and exc.code in {'execution_capacity', 'retained_capacity', 'storage_pressure', 'storage_unknown', 'admission_busy'}, 'capacity': exc.details.get('capacity'), 'message': str(exc)}
 
-    except (OSError, ValueError, common.retention.tarfile.TarError):
+    except (OSError, ValueError, common.retention.tarfile.TarError) as exc:
         if phase is not None:
-            return common.cleanup_failure(payload, phase, name)
+            result = common.cleanup_failure(payload, phase, name)
+            verification = common.retention.validation_failure_diagnostic(exc)
+            if phase in {'preserving', 'verifying'} and verification is not None:
+                result['verification'] = verification
+            return result
         raise
 
 

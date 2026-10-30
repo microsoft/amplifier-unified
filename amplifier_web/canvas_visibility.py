@@ -4,7 +4,7 @@ import json
 
 
 def update(service, args, command_id, fingerprint, *, include_state):
-    from .service import AppError
+    from .errors import AppError
     identity = service.clients.current.get()
     if identity is None:
         raise AppError('Attach a client before changing Canvas visibility.', 409)

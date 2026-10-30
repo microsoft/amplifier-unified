@@ -27,12 +27,6 @@ def returned_preservation_failure(row, original):
     return _returned_binding(row, original)
 
 
-def returned_export_limit(row, original):
-    """Retain the narrower legacy predicate for existing callers."""
-    proof = returned_preservation_failure(row, original)
-    return proof if proof and proof['kind'] == 'returned-legacy-export-limit' else None
-
-
 def completed_preservation_failure(row, original, removal):
     """Revalidate the saved exception for dependency-only cleanup.
 
