@@ -135,7 +135,9 @@ class AccessMode:
             raise AppError('Only the user can manage app-wide access defaults.', 403)
         if not global_only and not args.get('sessionId'):
             raise AppError('Choose a chat or the app-wide access settings.', 400)
-        session = None if global_only else self.service.configuration_authority.source(args, origin, caller)
+        session = None if global_only else (
+            self.service._session(args['sessionId']) if origin in {'ui', 'user'}
+            else self.service.configuration_authority.source(args, origin, caller))
         def snapshot():
             return policy(self.service.db, '/', '', global_only=True) if global_only else self.snapshot(session)
         if action == 'access.get':

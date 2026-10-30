@@ -1,3 +1,4 @@
+import {fixturePython} from './fixture-python.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Actual separately built JavaScript identities; synthetic rollout, no installer.
 import './composer-test-helpers.mjs';
@@ -15,7 +16,7 @@ const identity=tree=>JSON.parse(readFileSync(tree+'/build.json'));
 const oldBuild=identity(oldTree),newBuild=identity(newTree);assert.notEqual(oldBuild.id,newBuild.id);
 const entry=tree=>readFileSync(tree+'/index.html','utf8').match(/src="(\/assets\/app-[^"]+\.js)"/)[1];
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
-const fixture=spawn(root+'.venv/bin/python',['-u',root+'tests/fixtures/build_swap_ui_server.py',root,oldTree,newTree],{stdio:['ignore','pipe','inherit']});
+const fixture=spawn(fixturePython(root+'.venv/bin/python'),['-u',root+'tests/fixtures/build_swap_ui_server.py',root,oldTree,newTree],{stdio:['ignore','pipe','inherit']});
 let browser;
 try{
  const ready=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),15000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exit '+code))});fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const row=JSON.parse(line);if(row.port){clearTimeout(timer);resolve(row)}}catch{}})});

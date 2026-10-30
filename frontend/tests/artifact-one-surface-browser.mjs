@@ -1,3 +1,4 @@
+import {fixturePython} from './fixture-python.mjs';
 // Focused presentation acceptance. Run only against the isolated fixture.
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
@@ -15,7 +16,7 @@ const reservation=createServer();
 await new Promise((resolve,reject)=>{reservation.once('error',reject);reservation.listen(0,'127.0.0.1',resolve)});
 const port=reservation.address().port,base=`http://127.0.0.1:${port}`;
 await new Promise((resolve,reject)=>reservation.close(error=>error?reject(error):resolve()));
-const fixture=spawn(process.env.FIXTURE_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[process.env.ARTIFACT_FIXTURE||fileURLToPath(new URL('../../tests/fixtures/inline_artifacts_server.py',import.meta.url)),String(port)],{stdio:'inherit'});
+const fixture=spawn(fixturePython(process.env.FIXTURE_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url))),[process.env.ARTIFACT_FIXTURE||fileURLToPath(new URL('../../tests/fixtures/inline_artifacts_server.py',import.meta.url)),String(port)],{stdio:'inherit'});
 const stop=ownFixture(fixture,{label:'Artifact presentation fixture'});
 let browser,page,failure;const errors=[];
 const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);

@@ -22,7 +22,7 @@ worktree, resource and usage records remain authoritative.
 | --- | --- | --- |
 | A Authority | Actual root/child identity, intersected file policy, reusable scoped configuration grants, per-chat write settings and inherited-default reset, native approval continuation, delayed revocation and common registered-history scope | Supported native consumers and effect families only; no OS, tenant or arbitrary executable-code confinement |
 | B Requests and continuations | Coherent peer creation, retained retry identities, later-generation replies, revision notifications and expiring one-shot watches | Notifications report outcomes; only qualified terminal evidence satisfies a dependency |
-| C Bounded messaging | Destination/sender/assignment limits, fair admission, queue expiry, causal-hop bounds and authenticated peer lineage | Safe tool-boundary informational delivery is adapter-specific; unsupported steering does not become cancel-and-resend |
+| C Bounded messaging | Destination/sender/assignment limits, fair admission, queue expiry, message rates and authenticated peer lineage | Safe tool-boundary informational delivery is adapter-specific; unsupported steering does not become cancel-and-resend |
 | D Placement and resources | Explicit per-repository copies, phase-aware handoff, cooperative reservations, owner observations and retained task-owned scratch folders, browser-profile directories and SQLite files | Explicit dependency mappings; no automatic environment inference, running browser confinement, database servers or arbitrary preview discovery |
 | E Awareness and cooperation | Bounded active-work packets, advisory file intent, supported file-tool source checks, replacement of volatile guidance and optional shared assignment tasks with atomic exclusive claims | Task claims assign responsibility, not file access; no universal external-writer detection or filesystem fence |
 | F Results and integration | Retained exact reported bytes, scoped artifact reads, loaded-origin observations, explicit integration responsibility, recorded candidates and native validation/collection per repository | Qualification covers the chosen commands and observed versions; semantic correctness, complete subprocess imports and publication are not inferred |
@@ -437,6 +437,15 @@ and agent actions use the same authority. Only the user can detach a settled
 conversation, retaining all previously attributed usage and late corrections.
 Stop never deletes files, cleans resources or claims to undo external effects.
 
+Finished member participation can now be closed by the assignment owner through
+`assignment.retire`. The current-member ceiling excludes retired, detached and
+never-created entries while their cumulative usage and membership evidence stay
+retained. Retirement requires settled work and completed local/shared tasks,
+with native ownership held through the commit. It does not archive or stop a
+chat. Existing adoption can readmit the same retired chat after a fresh review,
+capacity check and human instruction; the new membership boundary fences old
+requests and automatic returns. See [member closeout and reuse](assignment-adoption.md#finishing-and-reusing-a-member-chat).
+
 Qualification includes failure injection before commit and after acknowledgment
 loss, preparation/Stop races, concurrent cross-root reservations, restart,
 late-result suppression and native finite/resumed/persistent/nested child mounts.
@@ -845,7 +854,13 @@ generation, delivered input and digest. Unrelated background jobs no longer
 invalidate a proven manager result. Missing anchors, unrelated inputs and
 background-only dispositions never qualify. Rejected/unknown terminal evidence
 notifies without becoming success. A later meaningful report suppresses an
-unsubmitted earlier success notification; both receipts remain inspectable.
+unsubmitted earlier notification, including a question, deferral or failure;
+both reports and their notification receipts remain inspectable. A merely staged
+success does not replace an earlier notification until its terminal evidence
+arrives. Already accepted or uncertain inputs are never rewritten or replayed. Retiring
+a queued return releases its inbox slot for a newer backpressured outcome without
+waiting for an unrelated event. Reading a result remains passive; it does not
+mean that the model reviewed it or retire a same-revision notification.
 New subscriptions claim at most one continuation per meaningful revision, capped
 at 32 notifications. Old single-notification waits retain their original policy.
 
@@ -860,9 +875,15 @@ Inbox admission retains the existing 64-slot destination bound, including saved
 reply/watch slots, and adds 16 pending inputs per sender and 32 per assignment.
 Pending senders rotate using durable admission order. Accepted substantive input
 remains retained when a caller-selected deadline expires. The default and maximum
-queue duration is one day; callers can choose a shorter deadline. A causal chain
-is bounded to 16 peer-input hops using host-retained input provenance, independently
-of command IDs or wording. Only actual new human input resets that bound.
+queue duration is one day; callers can choose a shorter deadline. Causal depth
+remains recorded from host-retained input provenance, independently of command
+IDs or wording, but does not stop authorized work after an arbitrary number of
+handoffs. Only actual new human input resets the recorded depth. Existing pair
+message rates, inbox capacity, assignment/task limits and Stop still apply. On
+restart, current-protocol versioned waits bearing the exact retired hop-limit
+diagnostic are reconsidered through normal outcome and admission checks. Stops,
+changed objectives, already admitted or uncertain inputs and the separate
+32-revision limit are not reopened or replayed.
 Publication failure tests distinguish a rolled-back notification from a committed
 claim with a lost acknowledgement. Neither loses the underlying report or creates
 an extra model turn on retry.

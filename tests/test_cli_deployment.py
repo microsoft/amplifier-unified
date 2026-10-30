@@ -9,6 +9,28 @@ from amplifier_web.cli import _config, _parse, _server_overrides
 from amplifier_web.deployment import config_path, load_server_config, save_server_config
 
 
+@pytest.mark.parametrize('command', ['run', 'continue', 'tool'])
+def test_unattended_access_flags_are_explicit_and_exclusive(monkeypatch, command):
+    arguments = [command, 'fixture-tool'] if command == 'tool' else [command]
+    monkeypatch.setattr(sys, 'argv', ['amplifier-unified', *arguments, '--yolo'])
+    assert _parse().access == 'full'
+    monkeypatch.setattr(sys, 'argv', ['amplifier-unified', *arguments, '--access', 'ask'])
+    assert _parse().access == 'ask'
+    monkeypatch.setattr(sys, 'argv', ['amplifier-unified', *arguments, '--yolo', '--access', 'ask'])
+    with pytest.raises(SystemExit):
+        _parse()
+
+
+def test_access_command_requires_explicit_target_for_nonglobal_policy(monkeypatch):
+    monkeypatch.setattr(sys, 'argv', ['amplifier-unified', 'access', 'full'])
+    assert _parse().scope == 'app'
+    monkeypatch.setattr(sys, 'argv', ['amplifier-unified', 'access', 'full', '--scope', 'workspace'])
+    with pytest.raises(SystemExit):
+        _parse()
+    monkeypatch.setattr(sys, 'argv', ['amplifier-unified', 'access', 'status', '--scope', 'session', '--session', 'target'])
+    assert _parse().session == 'target'
+
+
 def test_config_cli_sets_and_resets_server_setting(tmp_path, capsys):
     _config(Namespace(config_command="set", key="session_ttl_seconds", value="120"), tmp_path)
     assert load_server_config(tmp_path)["session_ttl_seconds"] == 120
