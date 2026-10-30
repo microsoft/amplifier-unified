@@ -11,7 +11,8 @@ import {createHash,randomUUID} from 'node:crypto';
 import {mkdir,mkdtemp,readFile,readdir,writeFile} from 'node:fs/promises';
 import {dirname,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {chromium,expect} from '@playwright/test';
+import {expect} from '@playwright/test';
+import {launchOwner,ownerPage,closeOwner,desktopOptions,touchOptions} from './file-controls-browser-topology.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 
@@ -25,8 +26,8 @@ const python=process.env.AMPLIFIER_TEST_PYTHON||process.env.FIXTURE_PYTHON||join
 const fixture=spawn(python,['-u',fixturePath],{cwd:dirname(fixturePath),stdio:['ignore','pipe','pipe']});
 const stop=ownFixture(fixture,{label:'Generated file controls fixture'});
 const records=[],checks=[],geometry=[],downloads=[],requests=[],commands=[],errors=[],screenshotErrors=[];
-const pageLabels=new WeakMap(),routeCleanups=new Set();
-let logs='',lineBuffer='',browser,page,ready,seed,failure,cleanup,timer,running;
+const pageLabels=new WeakMap(),routeCleanups=new Set(),browserOwners=[];
+let logs='',lineBuffer='',page,ready,seed,failure,cleanup,timer,running;
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
 const errorEvidence=error=>error&&({name:error.name,message:error.message,stack:error.stack,
  ...(error.errors?{causes:error.errors.map(errorEvidence)}:{})});
@@ -213,12 +214,8 @@ async function cornerTap(control,corner){
  await control.tap({position:corner==='top-left'?{x:3,y:3}:{x:bounds.width-3,y:bounds.height-3}});
 }
 
-async function connect(options,label='desktop'){
- const context=await browser.newContext({viewport:{width:1440,height:1000},acceptDownloads:true,
-  extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'},...options});
- await context.grantPermissions(['clipboard-read','clipboard-write'],{origin:ready.url});
- const target=await context.newPage();pageLabels.set(target,label);
- target.setDefaultTimeout(4000);target.setDefaultNavigationTimeout(10000);
+async function connect(owner,options){
+ const label=owner.label,target=await ownerPage(owner,ready.url,options);pageLabels.set(target,label);
  target.on('pageerror',error=>errors.push(error.message));
  target.on('request',request=>{
   const pathname=new URL(request.url()).pathname;
@@ -334,6 +331,17 @@ async function usePreviewControls(retained,label,mode){
  }else await saveControlAndVerify(target,primary,row,label+'-primary-v1',control=>cornerTap(control,'bottom-right'));
  await previewPreserved(retained);
  await measureControls(target,[primary,toggle],label+'-primary-after');
+ const notice=primary.locator('..').getByRole('status');
+ await expect(notice).toBeVisible();
+ const feedback=await notice.evaluate(node=>{
+  const r=node.getBoundingClientRect(),bar=node.closest('.a-canvas-artifact-toolbar').getBoundingClientRect();
+  const range=document.createRange();range.selectNodeContents(node);
+  const lines=[...range.getClientRects()].map(rect=>rect.toJSON());
+  return {rect:r.toJSON(),bar:bar.toJSON(),lines,contained:r.left>=bar.left&&r.right<=bar.right&&r.bottom<=bar.bottom&&
+   r.right<=innerWidth&&r.bottom<=innerHeight&&lines.every(line=>line.left>=r.left-1&&line.right<=r.right+1&&line.bottom<=r.bottom+1)};
+ });
+ geometry.push({label:label+'-visible-feedback',...feedback});
+ assert.ok(feedback.contained&&feedback.lines.length>0,'Download completion feedback must remain visible and bounded');
  await target.screenshot({path:join(evidence,label+'-primary.png')});
  if(mode==='keyboard'){
   // Download temporarily disables its button. Re-anchor after completion so a
@@ -381,8 +389,8 @@ async function usePreviewControls(retained,label,mode){
 async function run(){
  ready=await startup;
  if(process.env.AMPLIFIER_TEST_INSTALLED==='1'||process.env.AMPLIFIER_TEST_PACKAGE_ROOT)assert.equal(ready.installedVerified,true);
- browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS?['--single-process','--no-zygote','--disable-gpu']:[]});
- page=await connect({});
+ const desktopOwner=await launchOwner('desktop',browserOwners);
+ page=await connect(desktopOwner,desktopOptions);
  await action(page,'session.create',{title:'Generated file controls'});
  await showFixtureConversation(page,{navPinned:false});
  seed=await fixturePost(page,'seed');
@@ -562,7 +570,8 @@ async function run(){
 
  // A real touch-enabled context, not just a resized desktop. Reuse the same
  // retained artifact and positive oracles at both narrow widths.
- const mobile=await connect({viewport:{width:390,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:1},'touch');
+ const touchOwner=await launchOwner('touch',browserOwners);
+ const mobile=await connect(touchOwner,touchOptions);
  await action(mobile,'session.select',{id:seed.sessionId});
  await showFixtureConversation(mobile,{navPinned:false});
  await action(mobile,'canvas.select',{id:seed.unrelated.id,sessionId:seed.sessionId,version:1,presentation:'canvas'});
@@ -626,16 +635,16 @@ try{
  await Promise.race([running,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Focused file-controls proof exceeded 120 seconds')),120000)})]);
 }catch(error){
  failure=error;
- for(const target of (browser?.contexts()||[]).flatMap(context=>context.pages()).filter(target=>!target.isClosed())){
+ for(const target of browserOwners.flatMap(owner=>owner.browser?.contexts()||[]).flatMap(context=>context.pages()).filter(target=>!target.isClosed())){
   const label=pageLabels.get(target)||'unknown';
   try{await target.screenshot({path:join(evidence,`failure-${label}.png`),timeout:3000})}
   catch(error){screenshotErrors.push({client:label,error:errorEvidence(error)})}
  }
 }finally{
- clearTimeout(timer);
+ clearTimeout(timer);browserOwners.closing=true;
  try{
   await finishFixture({label:'Generated file controls fixture',
-   close:[...Array.from(routeCleanups,release=>['held metadata response',release]),['browser',()=>browser?.close()]],
+   close:[...Array.from(routeCleanups,release=>['held metadata response',release]),...browserOwners.map(owner=>[`${owner.label} browser`,()=>closeOwner(owner)])],
    stop:async()=>{cleanup=await stop()}});
   assert.equal(records.find(row=>row.cleanup)?.cleanup.homeRemoved,true,'Fixture-owned state/socket directory was not removed');
  }catch(error){failure=failure?new AggregateError([failure,error],'File controls proof and cleanup failed'):error}
@@ -648,6 +657,7 @@ try{
   writeFile(join(evidence,'observations.json'),JSON.stringify({passed:!failure,error:failure?.stack,failure:errorEvidence(failure),screenshotErrors,
   installed:ready&&{packageRoot:ready.packageRoot,verified:ready.installedVerified,staticSha256:ready.staticSha256},
   seed,checks,geometry,downloads,requests,commands,errors,cleanup,fixtureCleanup:records.find(row=>row.cleanup)?.cleanup,
+  browserCleanup:browserOwners.map(owner=>({label:owner.label,closed:owner.closed,connected:owner.browser?.isConnected()??false})),
   limits:['Synthetic runtime and fixture bearer authentication; no provider, login, remote server or physical touch-device claim.',
    'Clipboard/403/wrong-byte faults are deliberate test injections; positive clipboard reads and downloaded files are real browser results.',
    'The two later HTML previews execute deliberately as setup; copy/download must retain each original frame and execution token.',
