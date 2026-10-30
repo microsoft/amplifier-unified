@@ -315,7 +315,15 @@ also accept qualified Full descendants and trusted system callers. Their existin
 conversation/workspace intent owns the result; the original actor and authority
 remain recorded. Accepted background work can outlive a turn, with current Full,
 Stop, placement and resource checks before effects and final publication. Routine
-environment resource operations remain a separate native-child implementation gap.
+environment start, execution, stopping, reconciliation, artifact export and owned
+cleanup likewise accept current Full native descendants and explicit trusted
+system callers. Accepted operations retain the captured Full/Stop boundary while
+the conversation's canonical execution identity continues to own the resource and
+request fingerprint. New Full request receipts record the actual caller
+separately; exact retries preserve original attribution and never repeat an
+uncertain effect. Passive removal inspection keeps its bounded cold-owner read
+path. See [test environments](test-environments.md) for this domain's exact scope;
+this does not expand generic task-resource or queued-check admission.
 Recovery of an operation originally authorized by UI or internal code also remains
 unavailable to agents/systems in this batch. That original-operation gate is a
 remaining Full parity gap, not an intended recurring approval requirement; future
@@ -389,8 +397,10 @@ checks. Agents cannot enable Full access.
 
 Routine managed test snapshot, preparation, execution, export and owned cleanup
 are task-authorized workspace work, including in Ask when needed mode. They retain
-owner, generation, Stop, assignment, placement and backend identity checks. Host
-setup and broader configuration administration keep their separate grants.
+owner, generation admission, Stop, assignment, placement and backend identity
+checks. Full accepted work can outlive its originating turn while its captured
+authority remains valid. Ask-mode host setup and broader configuration
+administration keep their separate grants.
 
 Pending capability cards are retired after Stop, workspace change or expiry, and
 native waits expire after host replacement. Legacy test-only cards also retire.

@@ -50,14 +50,34 @@ action retains its bounded synchronous semantics. See the
 Routine testing in an already configured managed runner is authorized workspace
 work. Snapshot, locked preparation, execution, evidence export and owned cleanup
 do not require a separate `test_environments` approval, including in Ask when
-needed mode. Agents still need their current root execution binding and an
-unblocked task assignment. The adapter rechecks Stop, placement, owner and backend
-identity before effects. In Ask mode host setup uses a separate
+needed mode. Ask-mode agents retain their current root execution binding. Full
+mode also admits mounted native children, including nested, resumed and persistent
+children, through their actual current assigned generation. Trusted system calls
+name an explicit owning conversation; they do not invent a native actor or human
+input. A system call carrying a native binding must validate it. Task assignment,
+placement, owner and backend checks still apply. In Ask mode host setup uses a separate
 `test_host_setup` grant. Operator-selected Full access already authorizes setup,
 including native descendants and trusted system callers for an explicit owning
 conversation. No browser, human input or new approval is needed.
 Old test-only capability requests no longer create approval cards; stale cards
 are retired without running their operations.
+
+An admitted Full routine operation can outlive its originating turn. Before each
+backend effect, it rechecks the captured Full revision, Stop boundary, placement
+and canonical execution owner. Turning Full off and back on does not renew that
+operation. The conversation and its canonical execution identity continue to own
+the environment and request fingerprint. New Full requests separately retain the
+actual origin, native principal when present, and assigned generation. A later
+authorized child, root agent, system or UI caller can retrieve the exact original
+receipt without changing that attribution or replaying the effect. Legacy request
+fingerprints and receipts remain unchanged. Different arguments still require a
+different request identity.
+
+Passive removal inspection keeps its bounded, read-only ledger and cold-owner
+metadata path. A current Full descendant may inspect its owning conversation's
+resource; a trusted system may name that Full owner directly. These reads neither
+hydrate cold history nor create requests or invoke the backend. Existing passive
+root and UI reads remain available without admitting fresh work.
 
 The action interface and durable ownership are independent of the DTU library.
 The initial backend boundary is a host-owned `prepare/start/read/execute/stop/remove`
@@ -142,7 +162,8 @@ original setup, or explicitly publish its already verified candidate, without
 impersonating the original child. The existing exact intent, backend identity,
 resource ownership and readiness checks still apply. Reconciliation and cleanup
 retain their own current actor; they do not replace the original setup actor.
-Ask-mode actor checks and routine environment operations are unchanged.
+Ask-mode setup actor checks are unchanged. Routine environment operations use the
+shared resource and request ownership described above.
 
 Keep the exact managed core installation and configuration until all of its
 owned environments have been removed. Managed uninstall and replacement refuse

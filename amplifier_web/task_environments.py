@@ -446,7 +446,7 @@ def require_resolved_removal(app, row, exclude_request_id=None, legacy=None):
         raise ValueError('The original removal remains unresolved. Inspect its retained evidence; a new request cannot repeat it.')
 
 
-def begin_removal(app, row, action, args, actor):
+def begin_removal(app, row, action, args, actor, *, attribution=None):
     """Serialize fresh admission with the physical owner without awaiting."""
     lock = FileLock(str(app.data_dir / 'workspace-resources' / ('environment-' + row['id'] + '.lock')), timeout=0)
     try:
@@ -454,14 +454,14 @@ def begin_removal(app, row, action, args, actor):
     except LockTimeout:
         # Preserve existing concurrent-admission receipts: effect() will refuse
         # under the same lock without modifying the active owner's resource.
-        return app.operations.requests.begin(row['sessionId'], action, args, actor, resource_id=row['id'])
+        return app.operations.requests.begin(row['sessionId'], action, args, actor, resource_id=row['id'], attribution=attribution)
     try:
         current = get(app.data_dir, row['sessionId'], row['id'])
         if current['revision'] != args['expectedRevision']:
             raise ValueError('The environment changed. Inspect its current revision.')
         legacy = legacy_cleanup_qualification(app, current, action.rsplit('.', 1)[-1], args)
         require_resolved_removal(app, current, args['requestId'], legacy)
-        request, fresh = app.operations.requests.begin(row['sessionId'], action, args, actor, resource_id=row['id'])
+        request, fresh = app.operations.requests.begin(row['sessionId'], action, args, actor, resource_id=row['id'], attribution=attribution)
         if fresh:
             request = app.operations.requests.finish(request, 'admitting', resourceId=row['id'],
                 **({'legacyCleanupQualification': legacy} if legacy else {}))
@@ -1040,7 +1040,7 @@ async def dispatch(app, action, args, origin, caller, authority):
     if action == 'workspace.environments.removal.list':
         return {'accepted': True, 'result': recovery.read_removal(app, args, origin, caller, listing=True)}
     from .service import AppError
-    from .collaboration import PRINCIPAL
+    from .collaboration import BINDING, PRINCIPAL
     sid, user = args['sessionId'], origin in {'ui', 'user'}
     if not user and sid != caller:
         raise AppError('Test environments belong to the calling conversation.', 403)
@@ -1049,7 +1049,15 @@ async def dispatch(app, action, args, origin, caller, authority):
             'workspace.environments.setup', 'workspace.environments.setup.reconcile', 'workspace.environments.setup.cleanup'}):
         return await dispatch_full_setup(app, action, args, origin, caller, authority)
     principal = source.get('runtimeSessionId') or source.get('nativeIdentity') or sid
-    if source.get('sessionKind', 'root') != 'root' or not user and PRINCIPAL.get() != principal:
+    full_revision = None
+    attribution = None
+    if not user and app.access_mode.full(source):
+        app.configuration_authority.source(args, origin, caller,
+            active=not action.endswith('.read') or origin == 'system', allow_descendant=True)
+        full_revision = app.access_mode.snapshot(source)['revision']
+        attribution = {'sessionId': sid, 'origin': origin, 'principal': PRINCIPAL.get(),
+                       'generationId': (BINDING.get() or {}).get('_generationId')}
+    elif source.get('sessionKind', 'root') != 'root' or not user and PRINCIPAL.get() != principal:
         raise AppError('Test environments require their host-bound root owner.', 403)
     workspace = next((w for w in app.state['workspaces'] if w['id'] == args['workspaceId']), None)
     if not workspace or source['workspace'] != workspace['path']:
@@ -1063,7 +1071,12 @@ async def dispatch(app, action, args, origin, caller, authority):
         if captured != tuple(current.get(key) for key in ('workspace', 'workingDirectory', 'executionRevision', 'interruptionRevision')):
             raise AppError('The task moved or stopped before environment admission.', 409)
         if not user:
-            app.collaboration.active_binding(current)
+            if full_revision is not None:
+                if (not app.access_mode.full(current, full_revision)
+                        or (current.get('runtimeSessionId') or current.get('nativeIdentity') or sid) != principal):
+                    raise AppError('Full access or its execution owner changed before the next environment effect.', 409)
+            else:
+                app.collaboration.active_binding(current)
             if blocked := app.assignments.blocked(current):
                 raise AppError(blocked, 409)
         app.configuration_authority.check(authority)
@@ -1104,6 +1117,8 @@ async def dispatch(app, action, args, origin, caller, authority):
                 'setup': setup_state,
                 'checks': [app.test_queue.public(item) for item in app.test_queue.rows(sid=sid, limit=20)]}}
         guard()
+        # The conversation remains the resource/request owner across native actors.
+        # Keep its historical fingerprint; actual Full attribution is separate.
         actor = {'sessionId': sid, 'principal': principal}
         previous = app.operations.requests.existing(sid, action, args, actor)
         if previous:
@@ -1143,8 +1158,8 @@ async def dispatch(app, action, args, origin, caller, authority):
             app.operations.notify()
             return {'accepted': True, 'result': {'resource': public(app.data_dir, row),
                     'request': row['lastOperation'], 'preparationRecovery': True}}
-        request, fresh = (begin_removal(app, row, action, args, actor) if action.rsplit('.', 1)[-1] in {'remove', 'finishCleanup'}
-                          else app.operations.requests.begin(sid, action, args, actor))
+        request, fresh = (begin_removal(app, row, action, args, actor, attribution=attribution) if action.rsplit('.', 1)[-1] in {'remove', 'finishCleanup'}
+                          else app.operations.requests.begin(sid, action, args, actor, attribution=attribution))
         if not fresh:
             return {'accepted': True, 'duplicate': True, 'result': {'request': request, 'resource': None}}
         try:
