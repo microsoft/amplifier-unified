@@ -9,6 +9,66 @@ from amplifier_web.server import create_app
 from amplifier_web.headless import _existing_host, run
 from test_service import Runtime
 
+async def test_access_command_saves_without_chat_or_work_and_respects_overrides(aiohttp_server, tmp_path, capsys):
+    runtime = Runtime()
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=runtime, voice=False, background_updates=False)
+    service = app['service']
+    server = await aiohttp_server(app)
+    args = Namespace(port=server.port, data_dir=str(tmp_path), workspace=str(tmp_path),
+                     command='access', mode='full', scope='app', session=None, json=True)
+    before = [row['id'] for row in service.state['sessions']]
+    assert await run(args) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['mode'] == 'full' and result['source'] == 'app'
+    assert [row['id'] for row in service.state['sessions']] == before
+    assert not runtime.sent
+    await service.dispatch('session.create', {'title': 'Explicit Ask'})
+    target = service._session()['id']
+    args.scope, args.session, args.mode = 'session', target, 'ask'
+    assert await run(args) == 0
+    assert json.loads(capsys.readouterr().out)['mode'] == 'ask'
+    args.scope, args.mode = 'app', 'full'
+    assert await run(args) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['mode'] == 'ask' and result['source'] == 'session'
+    args.scope, args.mode = 'session', 'inherit'
+    assert await run(args) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['mode'] == 'full' and result['source'] == 'app'
+    args.scope, args.session, args.mode = 'app', None, 'ask'
+    assert await run(args) == 0
+    assert json.loads(capsys.readouterr().out)['mode'] == 'ask'
+    assert not runtime.sent
+
+
+@pytest.mark.parametrize('resume', [False, True])
+async def test_run_full_preference_precedes_work_and_remains_saved(aiohttp_server, tmp_path, capsys, resume):
+    class InspectRuntime(Runtime):
+        async def send(self, session, *args):
+            assert service.access_mode.full(session)
+            await super().send(session, *args)
+
+    runtime = InspectRuntime()
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=runtime, voice=False, background_updates=False)
+    service = app['service']
+    target = None
+    if resume:
+        await service.dispatch('session.create', {'title': 'Existing task'})
+        target = service._session()['id']
+    server = await aiohttp_server(app)
+    args = Namespace(port=server.port, data_dir=str(tmp_path), workspace=str(tmp_path),
+                     command='run', resume=target, access='full', prompt='Work unattended',
+                     bundle=None, provider=None, model=None, max_tokens=None, timeout=5, output_format='json')
+    assert await run(args) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['response'] == 'Test transport result'
+    assert target is None or result['sessionId'] == target
+    mode = service.access_mode.snapshot(service._session(result['sessionId']))
+    assert mode['mode'] == 'full' and mode['source'] == 'session'
+
+
 async def test_headless_json_is_same_runtime_with_target_session(aiohttp_server,tmp_path,capsys):
     runtime=Runtime()
     app=await create_app(tmp_path, preload_providers=False,workspace=tmp_path,runtime=runtime,voice=False,background_updates=False)
@@ -118,6 +178,78 @@ async def test_headless_approval_stays_scoped_when_browser_switches(aiohttp_serv
     assert service._session(target)['approvals'][0]['status'] == 'deny'
     assert service._session(other)['approvals'][0]['status'] == 'pending'
     assert service.state['selectedSessionId'] == other
+
+@pytest.mark.parametrize('interactive', [False, True])
+async def test_full_access_headless_leaves_pending_decisions_to_host(aiohttp_server, tmp_path, capsys, monkeypatch, interactive):
+    import io
+
+    class NoInput(io.StringIO):
+        def isatty(self):
+            return interactive
+
+        def readline(self, *args):
+            raise AssertionError('Full access must not ask for terminal input')
+
+    class ApprovalRuntime(Runtime):
+        def __init__(self):
+            super().__init__()
+            self.responses = []
+
+        async def send(self, session, text, input_id, emit):
+            self.admitted = (session, text, input_id, emit)
+            await emit('approval.requested', {'sessionId': session['id'], 'id': 'permission',
+                'prompt': 'Allow target tool?', 'options': ['allow', 'deny']})
+
+        async def approval(self, session_id, approval_id, decision):
+            self.responses.append((session_id, approval_id, decision))
+            await super().send(*self.admitted)
+
+    runtime = ApprovalRuntime()
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=runtime, voice=False, background_updates=False)
+    service = app['service']
+    await service.dispatch('session.create', {'title': 'Unattended task'})
+    target = service._session()['id']
+    access = (await service.dispatch('access.get', {'sessionId': target}))['result']
+    await service.dispatch('access.set', {'sessionId': target, 'scope': 'session',
+        'mode': 'full', 'expectedRevision': access['revision']})
+    settled = await asyncio.gather(*list(service.tasks), return_exceptions=True)
+    assert all(result is None or isinstance(result, asyncio.CancelledError) for result in settled)
+    observed = asyncio.Event()
+    responses = []
+    dispatch, settle = service.dispatch, service.access_mode.settle
+
+    async def observe(action, args, *positional, **kwargs):
+        result = await dispatch(action, args, *positional, **kwargs)
+        if action == 'access.get':
+            observed.set()
+        elif action == 'approval.respond':
+            responses.append(args)
+        return result
+
+    async def pending_settle(sid):
+        # Hold the host decision until the terminal sees the pending request.
+        # The terminal must consult standing mode rather than answer it itself.
+        await asyncio.wait_for(observed.wait(), 2)
+        await settle(sid)
+
+    monkeypatch.setattr(service, 'dispatch', observe)
+    monkeypatch.setattr(service.access_mode, 'settle', pending_settle)
+    monkeypatch.setattr('sys.stdin', NoInput())
+    server = await aiohttp_server(app)
+    args = Namespace(port=server.port, data_dir=str(tmp_path), workspace=str(tmp_path),
+        resume=target, command='run', prompt='Unattended work', bundle=None,
+        provider=None, model=None, max_tokens=None, timeout=3, output_format='json')
+    assert await run(args) == 0
+    output = capsys.readouterr()
+    assert json.loads(output.out)['response'] == 'Test transport result'
+    assert 'Allow this operation?' not in output.err
+    assert responses == []
+    assert runtime.responses == [(target, 'permission', 'allow')]
+    approval = service._session(target)['approvals'][0]
+    assert approval['status'] == 'allow' and approval['approvedBy'] == 'full-access'
+
+
 
 async def test_management_result_correlates_exact_command(tmp_path):
     from amplifier_web.service import AppService
@@ -233,13 +365,41 @@ async def test_headless_tool_uses_one_hidden_internal_session(aiohttp_server, tm
     server = await aiohttp_server(app)
     for _ in range(2):
         args = Namespace(port=server.port, data_dir=str(tmp_path), workspace=str(tmp_path), resume=None,
-                         command='tool', name='read_file', args='{"path": "x"}', bundle=None, timeout=5)
+                         command='tool', name='read_file', args='{"path": "x"}', bundle=None, timeout=5, access='full')
         assert await run(args) == 0
         assert json.loads(capsys.readouterr().out) == {'ok': True}
     internal = [row for row in service.state['sessions'] if row.get('sessionPurpose') == 'terminal-tool']
     assert len(internal) == 1
     assert internal[0]['sessionKind'] == 'internal'
+    assert service.access_mode.full(internal[0])
     assert not is_top_level(internal[0])
     assert [call[0] for call in runtime.calls] == [internal[0]['id']] * 2
     assert service.state['selectedSessionId'] == visible
     assert [row['id'] for row in service.state['sessions'] if is_top_level(row)] == [visible]
+
+async def test_hidden_tool_permission_uses_operator_access_lookup(aiohttp_server, tmp_path, capsys, monkeypatch):
+    import io
+
+    class ToolRuntime(Runtime):
+        async def control(self, sid, operation, values):
+            self.waiter = asyncio.get_running_loop().create_future()
+            await service.on_runtime_event('approval.requested', {'sessionId': sid,
+                'id': 'tool-permission', 'prompt': 'Allow tool?', 'options': ['allow', 'deny']})
+            decision = await asyncio.wait_for(self.waiter, 2)
+            return {'decision': decision}
+
+        async def approval(self, sid, identity, decision):
+            assert service._session(sid)['sessionKind'] == 'internal'
+            assert identity == 'tool-permission'
+            self.waiter.set_result(decision)
+
+    runtime = ToolRuntime()
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=runtime, voice=False, background_updates=False)
+    service = app['service']
+    server = await aiohttp_server(app)
+    monkeypatch.setattr('sys.stdin', io.StringIO(''))
+    args = Namespace(port=server.port, data_dir=str(tmp_path), workspace=str(tmp_path),
+                     command='tool', name='read_file', args='{}', bundle=None, resume=None, timeout=3)
+    assert await run(args) == 0
+    assert json.loads(capsys.readouterr().out) == {'decision': 'deny'}

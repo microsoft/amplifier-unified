@@ -58,8 +58,9 @@ async def run(args, *, config=None):
         base = await _existing_host(client, _connection_origins(args, config), expected)
         if base is None:
             from .server import create_app
+            passive = {'background_work': False, 'preload_providers': False, 'voice': False} if args.command == 'access' else {}
             runner = web.AppRunner(await create_app(data_dir, workspace=args.workspace, background_updates=False,
-                                                    server_config=config))
+                                                    server_config=config, **passive))
             await runner.setup(); site = web.TCPSite(runner, "127.0.0.1", 0); await site.start()
             port = site._server.sockets[0].getsockname()[1]; base = f"http://127.0.0.1:{port}"
         async def state(identity=None):
@@ -76,10 +77,23 @@ async def run(args, *, config=None):
                 payload=await response.json()
                 if response.status>=400:raise RuntimeError(payload.get('error','Action failed'))
                 return {**payload,'commandId':identity}
+        async def access_preference(target, mode):
+            current = (await dispatch('access.get', {
+                key: value for key, value in target.items() if key != 'scope' or value == 'app'}))['result']
+            if mode != 'status':
+                current = (await dispatch('access.set', {
+                    **target, 'mode': mode, 'expectedRevision': current['revision']}))['result']
+            return current
         async def answer_approvals(snapshot,identity):
             session=next((s for s in snapshot['sessions'] if s['id']==identity),{})
-            for approval in session.get('approvals',[]):
-                if approval.get('status')!='pending':continue
+            pending=[approval for approval in session.get('approvals',[]) if approval.get('status')=='pending']
+            if not pending:return
+            access=await dispatch('access.get',{'sessionId':identity})
+            if access['result']['mode']=='full':
+                # The host owns standing decisions and exact waiter delivery.
+                # A terminal must not race that decision with a prompt or Deny.
+                return
+            for approval in pending:
                 decision='deny'
                 if sys.stdin.isatty():
                     print(approval.get('prompt','Approval required'),file=sys.stderr)
@@ -98,6 +112,17 @@ async def run(args, *, config=None):
                 if management.get('phase')=='ready' and value is not None:return value
                 await asyncio.sleep(.2)
         try:
+            if args.command == 'access':
+                target = {'scope': args.scope}
+                if args.session:
+                    target['sessionId'] = args.session
+                current = await access_preference(target, args.mode)
+                if args.json:
+                    print(json.dumps(current, ensure_ascii=False))
+                else:
+                    saved = current['overrides'][args.scope]['mode']
+                    print(f"{args.scope.capitalize()} preference: {saved}. Effective access: {current['mode']} ({current['source']}).")
+                return 0
             snapshot=await state()
             identity=getattr(args,'resume',None)
             if args.command=='continue' and not identity:
@@ -119,6 +144,8 @@ async def run(args, *, config=None):
                 # title, so generated naming stays enabled.
                 result=await dispatch('session.create',{'workspace':args.workspace,'bundle':bundle})
                 identity=result['state']['selectedSessionId']
+            if getattr(args, 'access', None):
+                await access_preference({'sessionId': identity, 'scope': 'session'}, args.access)
             if getattr(args,'provider',None) or getattr(args,'model',None):
                 await control(identity,'provider.select',{'provider':args.provider,'model':args.model})
             if getattr(args,'max_tokens',None):await control(identity,'budget.set',{'maxOutputTokens':args.max_tokens})

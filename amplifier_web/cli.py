@@ -48,12 +48,19 @@ def _parse() -> argparse.Namespace:
         command.add_argument("--max-tokens", type=int)
         command.add_argument("--output-format", choices=["text", "json", "json-trace"], default="text")
         command.add_argument("--timeout", type=int, default=3600)
+        _access_options(command)
     command = subcommands.add_parser("tool", help="Invoke one configured tool with normal policy checks")
     command.add_argument("name")
     command.add_argument("--args", default="{}")
     command.add_argument("--bundle", "-B")
     command.add_argument("--resume")
     command.add_argument("--timeout", type=int, default=3600)
+    _access_options(command)
+    access = subcommands.add_parser("access", help="Read or save standing access without starting work")
+    access.add_argument("mode", nargs="?", choices=["status", "ask", "full", "inherit"], default="status")
+    access.add_argument("--scope", choices=["app", "workspace", "session"], default="app")
+    access.add_argument("--session", help="Exact chat ID; required for workspace or session scope")
+    access.add_argument("--json", action="store_true")
     tui = subcommands.add_parser("tui", help="Attach the optional terminal client to an existing service")
     tui.add_argument('tui_command', nargs='?', choices=['open', 'install', 'status'], default='open')
     tui.add_argument('--setup-file', help='Install a private setup file downloaded from the service setup page')
@@ -88,7 +95,18 @@ def _parse() -> argparse.Namespace:
     service.add_argument("--wait", type=int, choices=range(0, 121), default=0, metavar="SECONDS", help="Wait up to this many seconds for service readiness (status only)")
     completion = subcommands.add_parser("completion", help="Print shell completion setup")
     completion.add_argument("shell", choices=["bash", "zsh", "fish"])
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.command == "access" and args.scope != "app" and not args.session:
+        parser.error("access --scope workspace/session requires --session ID")
+    return args
+
+
+def _access_options(parser):
+    access = parser.add_mutually_exclusive_group()
+    access.add_argument("--access", choices=["ask", "full", "inherit"],
+                        help="Save this task's access preference before starting work")
+    access.add_argument("--yolo", dest="access", action="store_const", const="full",
+                        help="Accept the risks of Full access for this task; persists until changed")
 
 
 def _server_overrides(args: argparse.Namespace) -> dict:
@@ -114,13 +132,13 @@ def _server_overrides(args: argparse.Namespace) -> dict:
 
 
 def _print_completion(shell: str) -> None:
-    words = "serve tui run continue tool doctor reset config service setup-tls completion --port --workspace --data-dir --no-open --bind --host --public-origin --tls-cert --tls-key --session-ttl --version"
+    words = "serve tui run continue tool access doctor reset config service setup-tls completion --port --workspace --data-dir --no-open --bind --host --public-origin --tls-cert --tls-key --session-ttl --version"
     if shell == "bash":
         print('complete -W "' + words + '" amplifier-unified')
     elif shell == "zsh":
-        print('#compdef amplifier-unified\n_arguments "1:command:(serve tui run continue tool doctor reset config service setup-tls)"')
+        print('#compdef amplifier-unified\n_arguments "1:command:(serve tui run continue tool access doctor reset config service setup-tls)"')
     else:
-        print('complete -c amplifier-unified -f -a "serve tui run continue tool doctor reset config service setup-tls"')
+        print('complete -c amplifier-unified -f -a "serve tui run continue tool access doctor reset config service setup-tls"')
 
 
 def _config(args, data_dir: Path) -> None:
@@ -442,7 +460,7 @@ def main():
     background_launch = args.command is None and not _server_overrides(args)
     config = load_server_config(data_dir, overrides=_server_overrides(args))
     args.port, args.data_dir = config["port"], str(data_dir)
-    if args.command in {"run", "continue", "tool"}:
+    if args.command in {"run", "continue", "tool", "access"}:
         os.environ["AMPLIFIER_WEB_HOME"] = str(data_dir)
         from .settings_migration import migrate_settings
         migrate_settings(data_dir, [args.workspace])

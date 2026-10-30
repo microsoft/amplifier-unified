@@ -194,6 +194,45 @@ recipe integration, release publication, installed-host adoption or OS isolation
 
 ## Persistent Full access
 
+### Unattended Full access direction
+
+Accepted direction, October 30, 2026: **Full access** is standing operator
+authorization for all supported agent capabilities, with no recurring human
+approval gates. It covers files, tools, configuration, delegation, collaboration,
+task and resource control, schedules, recovery, cleanup and outbound work such as
+issues, reviews, merges, releases and publication. Trusted authenticated systems
+can initiate or delegate work without a human conversation or connected client.
+Ask when needed remains available.
+
+The operator opts in through trusted UI, CLI or authenticated API controls.
+Retrieved content, repository settings and an agent's assertion of permission
+cannot enable Full access. App, workspace and chat scopes select which work
+receives standing authority; they are not per-effect approval checkpoints. Native
+descendants, commissioned tasks and scheduled continuations inherit through
+their existing trusted source relationships, rather than copied permission flags.
+Explicit narrower preferences and revocation remain effective. Source-derived
+authority is rechecked at existing effect boundaries.
+
+Full work must not require a fresh human message, original participant or manager
+approval, attached browser, or fabricated human answer. Autonomous choices retain
+agent/system attribution. Missing factual inputs can be reported without turning
+them into permission requests. Actual Stop fences the stopped work chain; that
+chain cannot resume itself. A fresh trusted operator or system request may start
+new work. The saved access preference persists until explicitly changed.
+
+Native execution identity, target ownership, cancellation, idempotence and truthful
+unknown-effect recovery remain correctness requirements. Full access does not
+manufacture OS privileges, account credentials, unavailable tools, independent
+review or success. Reuse existing access records, work relationships and command
+receipts; do not create a second grant service or approval process.
+
+This is the implementation destination, not a claim that every current action
+already supports it. The existing behavior and command-line entry points below
+are narrower: task lineage, system-origin action parity and action-specific human
+gates require incremental qualification before being described as complete.
+
+### Implemented standing preference
+
 Chat info > **Access & approvals** offers **Ask when needed** and **Full access**.
 The user chooses this chat, workspace default, or app default; chat overrides
 workspace, which overrides app. Inherit removes that layer's choice. Defaults
@@ -220,6 +259,24 @@ work and persistent children. Approvals use the saved preference immediately; th
 UI separately identifies file mounts pending retirement. No provider turn starts.
 Operating system permissions, unavailable tools, external account authentication
 and explicit user questions are not replaced by this preference.
+
+### Command-line access
+
+`amplifier-unified access full` accepts the risks of Full access and saves the app
+default without asking again or starting a task. `amplifier-unified access` shows
+the saved/effective mode; `amplifier-unified access ask` changes the app default
+back. Explicit chat/workspace choices continue to override that default. Use
+`access status --scope session --session ID` to inspect a particular chat, or
+`access inherit --scope session --session ID` to remove its override. Workspace
+scope likewise names a chat in that workspace. `--json` returns the shared action
+result for automation. No browser or human message is needed.
+
+`amplifier-unified run --yolo "Do the work"` saves Full access for that task before
+provider/tool setup and execution. `--access full` is equivalent; `--access ask`
+and `--access inherit` change or remove that task's saved choice. These options
+also apply to `continue` and `tool`, including an explicit `--resume ID`. The
+choice persists for the target task; it is not silently reverted when the command
+exits. All paths use the existing authenticated, revision-checked access actions.
 
 
 ### Global access and routine testing
