@@ -51,6 +51,10 @@ accepted execution -> runtime admission -> working -> safely evictable when idle
    Review includes work before response filtering and serialization. A required
    full-history operation, such as recovery validation, declares its trigger and
    scaling inputs; it must not become repeated background work for unrelated updates.
+   Runtime diagnostic observations use their diagnostic owner; they do not dirty
+   conversation history merely to make an inspection view current. Preparation
+   reuses a request-scoped observation within one fitted request, without reusing
+   it across requests or replacing transport-time authority/revocation checks.
    Broken: a small update scales with unrelated stored histories. Affected: multi-session hosts.
 
 6. **WS6 — Discover without rereading history.** New native writers publish incremental
@@ -84,6 +88,7 @@ Which directory freshness policy handles offline mounts without noisy catalog ch
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-30 | Clarify diagnostic ownership and request-scoped preparation under WS5. | Focused runtime progress and preparation checks in [performance validation](../docs/validation/performance.md). |
 | 2026-10-29 | Clarify current-state/history projection and accountable full-history work in WS3/WS5. | [Performance validation](../docs/validation/performance.md); user-requested guardrails. |
 | 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
 | 2026-10-02 | Initial WS1–6. | [Scale requirements and measurements](../docs/architecture/evidence.md). |

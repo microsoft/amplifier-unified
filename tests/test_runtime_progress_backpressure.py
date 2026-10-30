@@ -186,10 +186,25 @@ async def test_terminal_execution_event_flushes_pending_global_changes(app_facto
     assert checkpoint['revision'] == app.state['revision']
 
 
-async def test_bridge_diagnostics_coalesce_without_repeated_durable_writes(app_factory, monkeypatch):
+@pytest.mark.parametrize('retained', [1, 475])
+async def test_bridge_diagnostics_do_not_dirty_or_publish_history(app_factory, monkeypatch, retained):
     app = app_factory()
+    from amplifier_web.diagnostics import Diagnostics
+    monkeypatch.setattr(app.diagnostics, 'record', Diagnostics.record.__get__(app.diagnostics))
     await app.dispatch('session.create', {})
     sid = app.state['selectedSessionId']
+    session = app._session(sid)
+    session['workers'] = [{'id': f'old-{i}', 'status': 'completed', 'report': 'x' * 4096}
+                          for i in range(retained)]
+    session['task'] = {'corrections': 'x' * 1_000_000}
+    app._publish_changes(sessions={sid})
+    revision = app.state['revision']
+    queue = app.subscribe()
+    lookup = app._session
+    def no_hydrate(identity, *, hydrate=True):
+        assert hydrate is False
+        return lookup(identity, hydrate=False)
+    monkeypatch.setattr(app, '_session', no_hydrate)
     saves = []
     original = app._save
     def save():
@@ -201,8 +216,13 @@ async def test_bridge_diagnostics_coalesce_without_repeated_durable_writes(app_f
             'bridgeId': str(number), 'operation': 'context.manifest', 'phase': 'completed'})
     assert saves == []
     await app._flush_pending_progress()
-    assert saves == [True]
-    assert len([row for row in app._session(sid)['runtimeEvents'] if row['type'] == 'runtime.bridge']) == 12
+    assert saves == [] and app.state['revision'] == revision and queue.empty()
+    assert not any(row.get('type') == 'runtime.bridge' for row in session.get('runtimeEvents', []))
+    assert len(app.diagnostics.bridge_events(session)) == 12
+    await app.diagnostics.flush()
+    assert len(app.diagnostics.bridge_events(session)) == 12
+    assert len(session['workers']) == retained and len(session['task']['corrections']) == 1_000_000
+    app.unsubscribe(queue)
 
 
 async def test_phase_timings_never_hydrate_dirty_or_persist_state(app_factory, monkeypatch):

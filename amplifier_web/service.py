@@ -2397,6 +2397,9 @@ class AppService:
                 snapshot = copy.deepcopy(self._session(args['id']))
                 captured_at = time.time()
             prepared_health = await asyncio.to_thread(inspect_session, self.data_dir, snapshot)
+            bridge_events = await asyncio.to_thread(self.diagnostics.bridge_events, snapshot)
+            prepared_health['timeline'] = [row for row in prepared_health['timeline']
+                                          if row.get('type') != 'runtime.bridge'] + bridge_events
             prepared_health['capturedAt'] = captured_at
             prepared_health['host'] = {**getattr(self.update_manager, 'running_identity', {}), 'hostInstanceId': self.instance_id}
             prepared_health['recentRequests'] = list(getattr(self, 'request_timings', []))[-30:]
@@ -4414,6 +4417,11 @@ class AppService:
         if kind == 'runtime.timing':
             self.performance_diagnostics.record_runtime_timing(payload.get('sessionId'), payload.get('timing'))
             return set()
+        if kind == 'runtime.bridge':
+            # Observation, not conversation state. Its existing diagnostic
+            # owner retains the facts without a session save or publication.
+            self.diagnostics.runtime_event(kind, payload, session)
+            return set()
         self.event_log_view.invalidate({session['id']}, notify=False)
         self.diagnostics.runtime_event(kind, payload, session)
         from .chat_navigation import runtime_activity
@@ -4430,9 +4438,6 @@ class AppService:
             if activity['activeTools'] and not payload.get('detail'):
                 activity.update({'phase': 'tools', 'label': 'Running tools'})
             session['progress'] = {key: payload[key] for key in ('phase', 'detail', 'elapsedSeconds') if key in payload}
-        else:  # normalized runtime.bridge diagnostic; never execute its operation
-            session.setdefault('runtimeEvents', []).append({'type': kind, **payload, 'at': time.time()})
-            session['runtimeEvents'] = session['runtimeEvents'][-100:]
         changed = self.collaboration.observe(session, kind, payload)
         from .conversation_steering import observe as observe_steering
         observe_steering(self, session, kind, payload)
@@ -4459,7 +4464,7 @@ class AppService:
                     observed = self._apply_runtime_receipt(session, kind, payload)
                     if observed is not None:
                         changed.update(observed)
-                        detail_only &= kind in {'execution.event', 'runtime.timing'}
+                        detail_only &= kind in {'execution.event', 'runtime.timing', 'runtime.bridge'}
             except Exception:
                 # Preserve the applied prefix and unknown partial observer
                 # effects before stopping. Neither prefix nor tail is replayed.
@@ -4472,6 +4477,13 @@ class AppService:
             # Disposable diagnostics must not hydrate a session, acquire its
             # state lock, dirty progress or trigger another durable publication.
             self.performance_diagnostics.record_runtime_timing(payload.get('sessionId'), payload.get('timing'))
+            return
+        if kind == 'runtime.bridge':
+            try:
+                session = self._session(payload.get('rootSessionId') or payload.get('sessionId'), hydrate=False)
+            except AppError:
+                return
+            self.diagnostics.runtime_event(kind, payload, session)
             return
         if kind == 'image.generated':
             from .image_results import attach_completed
@@ -4811,7 +4823,7 @@ class AppService:
                     session.get('status') in {'idle', 'stopped', 'interrupted'}):
                 from .chat_navigation import settle_activity
                 settle_activity(session)
-            progress = kind in {'assistant.delta', 'runtime.tool', 'runtime.bridge'} or (
+            progress = kind in {'assistant.delta', 'runtime.tool'} or (
                 kind == 'worker.updated' and payload.get('activityOnly')) or (
                 kind == 'runtime.status' and (payload.get('activityOnly') or
                     payload.get('preparationProgress') and payload.get('status') == 'starting')) or (
@@ -5008,6 +5020,19 @@ class AppService:
             return await self._app_bridge(operation, args, session_id, input_origin=origin)
 
     async def _app_bridge(self, operation, args, session_id, *, input_origin=None):
+        if operation == 'context.prepare':
+            from .preparation_context import OPERATIONS, SECTION_TIMEOUT
+            async def read(name):
+                try:
+                    value = await asyncio.wait_for(self._app_bridge(
+                        name, args if name == 'context.manifest' else {},
+                        session_id, input_origin=input_origin), SECTION_TIMEOUT)
+                    return name, {'available': True, 'value': value}
+                except Exception:
+                    # Partial coverage remains explicit; one unavailable source
+                    # must not turn other current sections into empty context.
+                    return name, {'available': False}
+            return dict(await asyncio.gather(*(read(name) for name in OPERATIONS)))
         if operation == 'work.effect.check':
             from .workspace_work_effects import check
             from .performance_diagnostics import active_bridge, mark

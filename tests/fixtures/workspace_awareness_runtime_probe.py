@@ -23,6 +23,11 @@ async def run():
     observation = {'peer': 'AWARENESS_FIRST_PEER', 'revision': 1}
 
     async def bridge(operation, args):
+        if operation == 'context.prepare':
+            return {name: {'available': True, 'value': await bridge(name, args)}
+                    for name in ('context.manifest', 'message.reactions.context', 'coordination.current', 'memory.context')}
+        if operation == 'message.reactions.context':
+            return {}
         if operation == 'coordination.current':
             reads.append(dict(observation))
             return {'awareness': dict(observation)}

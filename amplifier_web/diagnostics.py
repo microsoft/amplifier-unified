@@ -510,6 +510,42 @@ class Diagnostics:
             items.append(item)
         return {'items':items,'nextBefore':items[-1]['seq'] if items and len(rows)>len(items) else None,'format':'context-intelligence','schemaVersion':'1.0.0'}
 
+    def bridge_events(self, session):
+        """Explicit inspection of a bounded diagnostic tail, never hot state.
+
+        Reuse pending/durable capture records. Limit the indexed per-session
+        scan before filtering so large histories cannot expand this read.
+        Old conversation-owned observations remain inspectable during upgrade.
+        """
+        from .session_files import read_event
+        from .support_diagnostics import event_detail
+        identities = {session['id'], session.get('runtimeSessionId') or session['id']}
+        rows = {str(row.get('bridgeId')) + ':' + str(row.get('phase')):
+                event_detail(row) for row in session.get('runtimeEvents', [])[-100:]
+                if row.get('type') == 'runtime.bridge'}
+        pending = list(self.pending)
+        records = []
+        try:
+            with self._db() as db:
+                for identity in identities:
+                    records.extend((row['id'], row['at'], row['data']) for row in db.execute(
+                        'SELECT id,at,data FROM (SELECT id,at,data,event FROM records '
+                        'WHERE session=? ORDER BY seq DESC LIMIT 256) WHERE event=?',
+                        (identity, 'runtime:bridge')))
+        except (OSError, sqlite3.Error):
+            pass  # Missing diagnostic coverage is not a conversation failure.
+        records.extend((identity, at, data) for identity, at, _, sid, _, event, data, _ in pending
+                       if sid in identities and event == 'runtime:bridge')
+        for _, at, value in sorted(records, key=lambda row: row[1]):
+            try:
+                value = json.loads(value) if isinstance(value, str) else value
+                value = read_event(value)['data'] if '$event' in value else value
+                row = event_detail({**value, 'type': 'runtime.bridge', 'at': at})
+                rows[str(row.get('bridgeId')) + ':' + str(row.get('phase'))] = row
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+        return sorted(rows.values(), key=lambda row: row.get('at', 0))[-32:]
+
     async def command(self,action,args):
         if action=='diagnostics.configure':
             if ('config' in args) == ('patch' in args):
