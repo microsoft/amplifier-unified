@@ -46,6 +46,7 @@ try{
  await panel.getByLabel('Task objective',{exact:true}).fill(detailedObjective);
  await panel.getByRole('button',{name:'Save task',exact:true}).click();
  await expect(panel.getByRole('button',{name:'Load missing details',exact:true})).toBeVisible();
+ await panel.getByText('Record a blocker or completion',{exact:true}).click();
  await panel.getByLabel('Evidence that the objective is complete (one per line)').fill('Checked every part of the saved objective');
  await expect(panel.getByRole('button',{name:'Complete task with evidence'})).toBeDisabled();
  await panel.getByRole('button',{name:'Load missing details',exact:true}).click();
