@@ -72,6 +72,17 @@ def test_landing_art_reuses_tiles_without_owning_layout_or_busy_feedback():
     inspect(rules)
 
 
+def test_assistant_box_excludes_action_row_in_all_color_modes():
+    css = source()
+    body = ".a-message.a-assistant>.a-message-body"
+    assert f"{body}{{box-sizing:border-box;background:#041009ed" in css
+    assert f'#amp-one[data-theme-scheme="light"] {body}{{background:#fbfefced' in css
+    assert f"#amp-one:not([data-theme-scheme]) {body}{{background:#fbfefced" in css
+    assert f"@media(max-width:760px){{#amp-one {body}{{padding:12px}}" in css
+    assert ".a-message.a-assistant{background:transparent!important;border:0!important" in css
+    assert ".a-message.a-assistant>.a-message-actions{background:transparent;border:0;box-shadow:none}" in css
+
+
 def luminance(color):
     channels = [int(color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
     linear = [value / 12.92 if value <= .04045 else ((value + .055) / 1.055) ** 2.4 for value in channels]
