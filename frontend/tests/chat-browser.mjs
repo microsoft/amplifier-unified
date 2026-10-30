@@ -21,11 +21,11 @@ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42
  await page.locator('#chat-provider').waitFor();
  await showComposerOption(page,'model');
  await page.locator('#chat-model').selectOption('fixture-vision');
- await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.catalog']?.selection?.model==='fixture-vision'));
+ await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.catalog']?.effective?.model==='fixture-vision'));
  await showComposerOption(page,'effort');
  await page.locator('#chat-effort').press('End');
  await page.waitForFunction(()=>window.amplifier.getState().view.composerModel?.effort==='high');
- await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.catalog']?.pinned&&c['configuration.catalog']?.selection?.effort==='high'));
+ await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.catalog']?.pinned&&c['configuration.catalog']?.effective?.effort==='high'));
  // A host view refresh during a pointer gesture must not restore the old
  // effort before pointer-up. The selected value persists on release/reopen.
  const slider=page.locator('#chat-effort'),box=await slider.boundingBox();
@@ -34,9 +34,9 @@ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42
  await action('view.update',{patch:{composerModel:await page.evaluate(()=>({...window.amplifier.getState().view.composerModel}))}});
  assert.equal(await slider.getAttribute('aria-valuetext'),'low');
  await page.mouse.up();
- await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.catalog']?.selection?.effort==='low'));
+ await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.catalog']?.effective?.effort==='low'));
  await slider.press('End');
- await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.catalog']?.selection?.effort==='high'));
+ await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.catalog']?.effective?.effort==='high'));
  await page.getByRole('button',{name:'Close chat options'}).click();
  assert.match(await page.getByRole('button',{name:'Model and reasoning settings'}).innerText(),/fixture-vision/);
  assert.match(await page.getByRole('button',{name:'Model and reasoning settings'}).innerText(),/fixture-vision \(high\)/);
