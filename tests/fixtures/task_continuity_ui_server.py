@@ -11,9 +11,9 @@ from test_task_continuity import controls
 
 
 class Runtime(fixture.Runtime):
-    def __init__(self):
+    def __init__(self, sid):
         super().__init__()
-        self.worker = controls('fixture-task')
+        self.worker = controls(sid)
     async def control(self, sid, operation, args):
         if operation.startswith('task.'): return await self.worker.perform(operation, args)
         return await super().control(sid, operation, args)
@@ -23,14 +23,14 @@ class Runtime(fixture.Runtime):
 async def main(home):
     app = await fixture.main(home)
     service = app['service']
-    runtime = Runtime()
+    sid = service._session()['id']
+    runtime = Runtime(sid)
     service.runtime = runtime
     app['runtime'] = runtime
-    sid = service._session()['id']
     await service.dispatch('view.update', {'patch': {'panel': 'settings', 'settingsSection': 'runtime', 'runtimeDraft': {'tab': 'direction'}}})
     async def restart(request):
         await runtime.worker.close()
-        runtime.worker = controls('fixture-task')
+        runtime.worker = controls(sid)
         await runtime.worker.restore()
         return web.json_response((await service.app_bridge('dispatch', {'action': 'task.get', 'args': {}}, sid))['result'])
     async def agent(request):
