@@ -233,7 +233,9 @@ Failed or uncertain reads defer to the next ordinary naming tick. Fixed-name
 `naming.candidates.*` diagnostics expose read duration, decoded rows, SQL steps
 and deferrals without recording conversation content.
 
-Directory SQL also reuses one encoding of its private admitted scalar overlay
-until that overlay changes. Mutable application rows are prepared afresh at
+Directory SQL reuses at most one scalar encoding and one full-summary encoding
+of its private admitted overlay until that overlay changes. Metadata-only queries
+omit retained bodies before binding SQL parameters; authorized detail reads still
+receive the complete summary. Mutable application rows are prepared afresh at
 their existing boundary; native generations, deletion rules and read receipts
 are still checked for each read. This retains no per-page history cache.
