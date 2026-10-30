@@ -74,6 +74,76 @@ async def test_external_references_truthful_versions_and_local_comments(app):
     assert len((await app.dispatch('outputs.read',{'sessionId':sid,'id':row['id']}))['result']['comments'])==1
 
 
+@pytest.mark.parametrize('action', ['outputs.list', 'outputs.read', 'outputs.image', 'outputs.images'])
+async def test_saved_output_reads_do_not_traverse_conversation_bodies(app, monkeypatch, action):
+    from pathlib import Path
+    from test_output_images import png
+    source = app._session()
+    rows = []
+    for index in range(2):
+        path = Path(source['workspace']) / f'page-{index}.png'
+        path.write_bytes(png(width=3 + index))
+        rows.append((await app.dispatch('outputs.attach', {
+            'sessionId': source['id'], 'kind': 'file', 'title': path.name, 'path': path.name},
+            include_state=False))['result'])
+
+    class UnrelatedHistory(list):
+        def __iter__(self):
+            raise AssertionError('A saved output read traversed unrelated chat history')
+
+        def __deepcopy__(self, memo):
+            raise AssertionError('A saved output read copied unrelated chat history')
+
+    original = source['messages']
+    source['messages'] = UnrelatedHistory(original)
+    def no_hydration(row):
+        raise AssertionError('A saved output read hydrated unrelated chat history')
+    monkeypatch.setattr(app.cold_display, 'hydrate', no_hydration)
+    args = {'sessionId': source['id']}
+    if action in {'outputs.read', 'outputs.image'}:
+        args['id'] = rows[0]['id']
+    if action == 'outputs.image':
+        args['sha256'] = rows[0]['sha256']
+    if action == 'outputs.images':
+        args['images'] = [{'id': row['id'], 'sha256': row['sha256']} for row in rows]
+    try:
+        receipt = await app.dispatch(action, args, include_state=False)
+        assert receipt['accepted']
+        result = receipt['result']
+        if action == 'outputs.list':
+            assert {row['id'] for row in result['items']} == {row['id'] for row in rows}
+        elif action == 'outputs.images':
+            assert [row['id'] for row in result['images']] == [row['id'] for row in rows]
+        else:
+            assert result['id'] == rows[0]['id'] and result['sha256'] == rows[0]['sha256']
+        assert not app.runtime.sent and not app.runtime.started
+    finally:
+        source['messages'] = original
+
+
+@pytest.mark.parametrize('change', ['execution', 'message', 'transfer'])
+async def test_output_snapshot_rechecks_authority_after_read(app, monkeypatch, change):
+    import amplifier_web.outputs as outputs
+    source = app._session()
+    mid = source['messages'][0]['id']
+    source['executionRevision'] = 7
+    fence = ['initial']
+    monkeypatch.setattr(app.portability, 'write_context', lambda sid: fence[0])
+    async def read_snapshot(*args):
+        if change == 'execution':
+            source['executionRevision'] += 1
+        elif change == 'message':
+            source['messages'].clear()
+        else:
+            fence[0] = 'transferred'
+        return {'text': 'Retained diff', 'mode': 'unstaged'}
+    monkeypatch.setattr(outputs, 'git_snapshot', read_snapshot)
+    with pytest.raises(AppError, match='execution folder changed|original message changed|task moved'):
+        await app.dispatch('outputs.review', {'sessionId': source['id'], 'mode': 'unstaged',
+                                            'messageId': mid}, include_state=False)
+    assert not app.outputs.store.list(source['id'])['items']
+
+
 async def test_actual_git_diff_exact_lines_and_no_source_mutations(app):
     from pathlib import Path
     root=Path(app._session()['workspace']);sid=app._session()['id']
