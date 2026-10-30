@@ -319,7 +319,14 @@ class ConfigurationAuthority:
             if args.get('sessionId', caller) != caller:
                 self.error('Configuration grants belong to the calling conversation.')
             if active:
-                self.service.collaboration.active_binding(source, allow_descendant=allow_descendant)
+                from .collaboration import BINDING, PRINCIPAL
+                # Fresh trusted system work has an explicit conversation owner,
+                # not an invented native generation. A transported worker still
+                # has to satisfy its actual binding, even with system origin.
+                system = (allow_descendant and origin == 'system' and not PRINCIPAL.get()
+                          and not BINDING.get() and self.service.access_mode.full(source))
+                if not system:
+                    self.service.collaboration.active_binding(source, allow_descendant=allow_descendant)
         return source
 
     def continuation_inputs(self, original):

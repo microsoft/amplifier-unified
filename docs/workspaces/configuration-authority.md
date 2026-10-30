@@ -296,10 +296,26 @@ effect checks; the finite child finishing does not itself revoke accepted work.
 Ask-mode discrete grants remain root-owned, and children cannot grant/request/revoke
 those root grants or change access mode. Other collaboration consumers keep their
 strict root default. Existing child file-policy composition is unchanged.
-This shared configuration consumer does not yet remove the separate native-child
-gates in managed test-host setup, patch placement or configuration operation
-recovery. Those are remaining implementation gaps toward Full parity, not intended
-recurring approval requirements. Work and provider admission use their respective
+The configuration operation and patch-placement owners accept qualified Full
+descendants through this same source check. They validate the calling conversation
+themselves. A Full patch bind retains the explicit `bind-to-execution` choice,
+exact observed placement/configuration revisions and original effect authority;
+it requires no human `sourceMessageId`. Ask retains its existing human-choice and
+discrete-grant behavior. Passive root observations and exact retained binding
+receipts remain readable without admitting another effect.
+
+Fresh trusted system configuration requests may use an explicit calling owner and
+current Full without inventing a native principal, generation or human input.
+They retain system attribution and unavailable input coverage. A system request
+that carries a native binding still has to validate that binding. Saved mode,
+Stop and target checks remain effective at the delayed configuration owner.
+
+Managed test-host setup remains a separate native-child implementation gap.
+Recovery of an operation originally authorized by UI or internal code also remains
+unavailable to agents/systems in this batch. That original-operation gate is a
+remaining Full parity gap, not an intended recurring approval requirement; future
+recovery must preserve the original request and use the existing current recovery
+authority and attempt evidence. Work and provider admission use their respective
 canonical owners; this consumer adds no exception or duplicate permission policy.
 
 Full access preauthorizes configuration effects at all scopes and ordinary

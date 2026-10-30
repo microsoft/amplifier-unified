@@ -248,7 +248,8 @@ def recovery_status(management, session, record, attempt, observed, origin):
     for verb, key in (("reconcile", "canReconcile"), ("resume", "canResume")):
         try:
             if origin not in {"ui", "user"}:
-                management.service.collaboration.active_binding(session)
+                management.service.configuration_authority.source(
+                    {"sessionId": session["id"]}, origin, session["id"], active=True, allow_descendant=True)
             validate_recovery(management, session, record, attempt, observed,
                 "configuration.operation." + verb, {"expectedRevision": record["revision"]}, origin)
             status[key] = True
@@ -270,11 +271,8 @@ def command(management, action, args, origin, caller):
     service = management.service
     session = service._session(args["sessionId"])
     if origin not in {"ui", "user"}:
-        source = service.collaboration.source({}, origin, caller)
-        if source["id"] != session["id"]:
-            raise ValueError("Configuration recovery belongs to the original root.")
-        if not action.endswith(".read"):
-            service.collaboration.active_binding(source)
+        service.configuration_authority.source(args, origin, caller,
+            active=not action.endswith(".read"), allow_descendant=True)
     pending = session.get("pendingConfiguration", {})
     operation = args.get("operationId") or pending.get("operationId")
     include_recovery = action.endswith(".read") and args.get("includeRecovery")

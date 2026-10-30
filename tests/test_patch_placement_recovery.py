@@ -28,8 +28,7 @@ READ = 'configuration.patchPlacement.read'
 BIND = 'configuration.patchPlacement.bind'
 MODULE = 'patch-fixture'
 SECRET = 'synthetic-secret-must-never-enter-placement-projection'
-PEER_REFUSAL = ('A user must explicitly perform this peer mutation; collaboration '
-                'does not grant stop, worker or settings authority.')
+PEER_REFUSAL = 'Configuration grants belong to the calling conversation.'
 CHILD_REFUSAL = ROOT_SCOPE_MESSAGE
 
 
