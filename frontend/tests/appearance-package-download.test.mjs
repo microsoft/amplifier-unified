@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {download} from '../src/api.js';
+import {downloadBlobContent} from '../src/appearance-library.js';
 
 function replace(target,key,value){
  const descriptor=Object.getOwnPropertyDescriptor(target,key);
@@ -34,6 +35,34 @@ test('malformed binary payloads fail instead of downloading JSON',()=>{
  assert.throws(()=>download('broken.zip',{base64:'not base64'},'application/zip'),/binary download payload is invalid/);
  assert.throws(()=>download('broken.zip',{base64:42},'application/zip'),/binary download payload is invalid/);
  assert.throws(()=>download('broken.zip','plain text','application/zip'),/binary download payload is invalid/);
+});
+
+test('binary decoder preserves full-size and near-boundary ZIP payloads',()=>{
+ for(const length of [3_999_998,3_999_999,4_000_000]){
+  const bytes=Buffer.alloc(length);
+  for(let index=0;index<length;index++)bytes[index]=index%251;
+  const decoded=downloadBlobContent({base64:bytes.toString('base64')},'application/zip');
+  assert.ok(decoded instanceof Uint8Array);
+  assert.equal(decoded.byteLength,length);
+  assert.deepEqual(Buffer.from(decoded),bytes);
+ }
+});
+
+test('binary decoder rejects over-limit bytes and malformed full-size encodings',()=>{
+ const valid=Buffer.alloc(4_000_000,0xa5).toString('base64');
+ const extra=Buffer.alloc(4_000_001,0xa5).toString('base64');
+ assert.equal(extra.length,valid.length,'Decoded-size fencing must be independent of encoded length.');
+ for(const base64 of [
+  extra,
+  Buffer.alloc(4_000_003,0xa5).toString('base64'),
+  valid.slice(0,-4)+'!!!!',
+  valid.slice(0,-4)+' A==',
+  valid.slice(0,4)+'='+valid.slice(5),
+  valid.slice(0,-4)+'pR==', // Same byte as pQ==, but noncanonical padding bits.
+  valid.slice(0,-1),
+ ]){
+  assert.throws(()=>downloadBlobContent({base64},'application/zip'),/binary download payload is invalid/);
+ }
 });
 
 test('text and ordinary JSON downloads retain their original bytes',async()=>{

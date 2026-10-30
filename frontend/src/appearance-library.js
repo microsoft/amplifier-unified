@@ -6,6 +6,7 @@ export function appearanceMutationTarget(entry){
 
 const CSS_IMPORT_LIMIT=1_000_000;
 const PACKAGE_IMPORT_LIMIT=4_000_000;
+const PACKAGE_BASE64_LIMIT=Math.ceil(PACKAGE_IMPORT_LIMIT/3)*4;
 const BASE64_CHUNK_SIZE=0x8000;
 
 function appearanceFallbackName(fileName){
@@ -38,10 +39,12 @@ export async function appearanceImportFileArgs(file){
 
 function decodeBase64(value){
  const invalid=()=>Error('The binary download payload is invalid.');
- if(typeof value!=='string'||!value||value.length%4!==0||!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value))throw invalid();
+ // A flat alphabet scan avoids repeating a group once per quartet on large
+ // downloads. atob checks padding; the round-trip check rejects noncanonical bits.
+ if(typeof value!=='string'||!value||value.length>PACKAGE_BASE64_LIMIT||value.length%4!==0||/[^A-Za-z0-9+/=]/.test(value))throw invalid();
  let binary;
  try{binary=atob(value)}catch{throw invalid()}
- if(btoa(binary)!==value)throw invalid();
+ if(binary.length>PACKAGE_IMPORT_LIMIT||btoa(binary)!==value)throw invalid();
  const bytes=new Uint8Array(binary.length);
  for(let index=0;index<binary.length;index++)bytes[index]=binary.charCodeAt(index);
  return bytes;

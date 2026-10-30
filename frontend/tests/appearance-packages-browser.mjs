@@ -32,10 +32,11 @@ assert.ok(!within(root,artifactRoot),'Synthetic archives and retained evidence m
 const artifacts=mkdtempSync(join(artifactRoot,'appearance-packages-'));
 const report={status:'running',executionContract,contractSha256:sha256(contractBytes),
  tools:{python,node:process.execPath,nodeRealpath:realpathSync(process.execPath),nodeVersion:process.version},
- limits:{compiledCssBytes:1_000_000,packageBytes:4_000_000,packageBase64Characters:5_333_336,uncompressedBytes:8_000_000,members:128},
+ limits:{compiledCssBytes:1_000_000,packageBytes:4_000_000,packageBase64Characters:5_333_336,uncompressedBytes:8_000_000,members:128,successScreenshots:5},
  phases:[],downloads:[],screenshots:[],fixture:{events:[]},browser:{},servedAssets:[],
  limitations:['Synthetic PNG and license only; no external assets, fonts or aesthetic acceptance.',
-  'Source and served-build hashes are observed separately; the release owner must attest the build came from this source.']};
+  'Source and served-build hashes are observed separately; the release owner must attest the build came from this source.',
+  'One extra success screenshot retains the no-art control and actual artwork separately, alongside the three existing narrow preference states.']};
 writeFileSync(join(artifacts,'execution-contract.json'),contractBytes);
 const writeReport=()=>writeFileSync(join(artifacts,'report.json'),JSON.stringify(report,null,2)+'\n');
 function treeHashes(paths,{source=false}={}){
@@ -62,9 +63,16 @@ report.sourceFiles=sourceHashes();report.buildFiles=staticHashes();writeReport()
 // Python stdlib alone writes and inspects REAL ZIP bytes. Never extract archives,
 // synthesize a download Blob, or ask the backend under test to verify itself.
 const zipProgram=String.raw`
-import base64, hashlib, json, pathlib, re, sys, zipfile
+import base64, binascii, hashlib, json, pathlib, re, struct, sys, zipfile, zlib
 mode, directory = sys.argv[1], pathlib.Path(sys.argv[2])
-pixel = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+# Deterministic opaque RGB quadrants, not a transparent/black placeholder.
+# Generate with stdlib; no image assets, image library or production helper.
+colors = ((229, 37, 117), (18, 190, 213), (242, 173, 31), (94, 62, 205))
+def png_chunk(kind, data):
+ return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", binascii.crc32(kind + data) & 0xffffffff)
+rows = b"".join(b"\0" + b"".join(bytes(colors[(y // 16) * 2 + x // 16]) for x in range(32)) for y in range(32))
+pixel = (b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", struct.pack(">IIBBBBB", 32, 32, 8, 2, 0, 0, 0))
+         + png_chunk(b"IDAT", zlib.compress(rows)) + png_chunk(b"IEND", b""))
 notice = "Synthetic example asset license.\nPermission is granted to use this test pixel for qualification.\n"
 manifest = {"type":"appearance","formatVersion":1,"name":"Package studio",
  "description":"Synthetic packaged palette and embedded pixel.","author":"Synthetic author",
@@ -75,6 +83,7 @@ css = '''#amp-one {
  --a-muted:#536475; --a-line:#cbd5df; --a-accent:#365a83;
  background-color:var(--a-bg); color:var(--a-ink);
  background-image:url("assets/pixel.png");
+ --a-conversation-art:url("assets/pixel.png");
 }
 #amp-one[data-theme-scheme="dark"] {
  --a-bg:#16212d; --a-surface:#1d2c3b; --a-ink:#e8eef5;
@@ -223,9 +232,10 @@ async function download(name,args,filename){
  return {path,bytes};
 }
 async function screenshot(name){
- assert.ok(report.screenshots.length<4,'At most four success screenshots.');
+ assert.ok(report.screenshots.length<report.limits.successScreenshots,'At most five success screenshots: paired paint proof and three narrow states.');
  const path=join(artifacts,name+'.png');
- await page.screenshot({path,animations:'disabled',timeout:10000});report.screenshots.push(path);
+ const bytes=await page.screenshot({path,scale:'css',animations:'disabled',timeout:10000});report.screenshots.push(path);
+ return {path,bytes};
 }
 async function embeddedPaint(pixelBase64){
  await expect.poll(()=>page.locator('#amp-one').evaluate(node=>getComputedStyle(node).backgroundImage)).toContain('data:image/png;base64,'+pixelBase64);
@@ -236,7 +246,126 @@ async function embeddedPaint(pixelBase64){
   const pixel=new Image();pixel.src=match[1];await pixel.decode();
   return {url:match[1],width:pixel.naturalWidth,height:pixel.naturalHeight};
  });
- assert.deepEqual(actual,{url:'data:image/png;base64,'+pixelBase64,width:1,height:1});
+ assert.deepEqual(actual,{url:'data:image/png;base64,'+pixelBase64,width:32,height:32});
+}
+// This is additional to embeddedPaint: computed style + decoding the asset alone
+// says nothing about occlusion. Only pixels of a real PAGE screenshot can pass.
+// No visible canvas, injected style, cover removal or mocked backend is used.
+const paintColors=[[229,37,117],[18,190,213],[242,173,31],[94,62,205]];
+async function exposedConversationGeometry(previous=null){
+ return page.evaluate(previous=>{
+  const root=document.querySelector('#amp-one'),conversation=root?.querySelector('[data-part="conversation"]');
+  if(!root?.classList.contains('a-approachable-shell')||!conversation)throw Error('Pixel proof unavailable: expected production conversation surface.');
+  const box=conversation.getBoundingClientRect(),style=getComputedStyle(conversation);
+  if(style.backgroundOrigin!=='padding-box'||style.backgroundClip!=='border-box'||style.backgroundPosition!=='0% 0%'||
+   style.backgroundSize!=='100% 240px'||style.backgroundRepeat!=='no-repeat'||style.opacity!=='1'||style.transform!=='none')
+   throw Error('Pixel proof unavailable: conversation artwork cascade differs from the documented 100% × 240px padding-box contract.');
+  const left=box.left+parseFloat(style.borderLeftWidth),top=box.top+parseFloat(style.borderTopWidth);
+  const width=box.width-parseFloat(style.borderLeftWidth)-parseFloat(style.borderRightWidth);
+  // Choose BEFORE inspecting colored pixels. Every pixel in each 5×5 patch
+  // must hit the actual conversation element, not a child or covering surface.
+  const exposed=(x,y)=>{
+   for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){
+    if(x+dx<0||y+dy<0||x+dx>=innerWidth||y+dy>=innerHeight||
+     document.elementFromPoint(x+dx+.5,y+dy+.5)!==conversation)return false;
+   }
+   return true;
+  };
+  const geometry={box:{x:box.x,y:box.y,width:box.width,height:box.height},viewport:{width:innerWidth,height:innerHeight},points:[]};
+  if(previous){
+   if(JSON.stringify(geometry.box)!==JSON.stringify(previous.box)||JSON.stringify(geometry.viewport)!==JSON.stringify(previous.viewport))
+    throw Error('Pixel proof unavailable: conversation geometry changed between control and artwork screenshots.');
+   for(const point of previous.points){
+    if(!exposed(point.x,point.y))throw Error('Pixel proof unavailable: a real surface now covers the selected conversation patch.');
+    geometry.points.push(point);
+   }
+  }else{
+   for(let quadrant=0;quadrant<4;quadrant++){
+    const xs=quadrant%2?[.9,.8,.7,.6]:[.1,.2,.3,.4],ys=quadrant<2?[30,50,70,90]:[150,170,190,210];
+    let found;
+    for(const yOffset of ys){
+     for(const fraction of xs){
+      const x=Math.floor(left+width*fraction),y=Math.floor(top+yOffset);
+      if(exposed(x,y)){found={quadrant,x,y};break}
+     }
+     if(found)break;
+    }
+    if(!found)throw Error('Pixel proof unavailable: no uncovered 5×5 conversation patch in artwork quadrant '+quadrant+'. No covers were changed.');
+    geometry.points.push(found);
+   }
+  }
+  return {...geometry,backgroundImage:style.backgroundImage,backgroundColor:style.backgroundColor};
+ },previous);
+}
+async function screenshotPixels(bytes,points){
+ // The PNG is the saved Playwright PAGE screenshot, never the original asset.
+ // OffscreenCanvas reads that immutable screenshot; it is not added to the DOM.
+ // package-lock has no PNG decoder; locked Pillow is an optional artifacts
+ // group, not a browser-test prerequisite. Use the already-required Chromium.
+ return page.evaluate(async({base64,points})=>{
+  if(typeof createImageBitmap!=='function'||typeof OffscreenCanvas!=='function')
+   throw Error('Pixel proof unavailable: this Chromium lacks screenshot PNG decode/readback.');
+  const bytes=Uint8Array.from(atob(base64),value=>value.charCodeAt(0));
+  const image=await createImageBitmap(new Blob([bytes],{type:'image/png'}));
+  try{
+   const canvas=new OffscreenCanvas(image.width,image.height),context=canvas.getContext('2d',{willReadFrequently:true});
+   if(!context)throw Error('Pixel proof unavailable: screenshot PNG decoder/readback is unavailable.');
+   context.drawImage(image,0,0);
+   return {width:image.width,height:image.height,patches:points.map(point=>({
+    ...point,rgba:Array.from(context.getImageData(point.x-2,point.y-2,5,5).data),
+   }))};
+  }finally{image.close()}
+ },{base64:bytes.toString('base64'),points});
+}
+async function actualConversationPaint(pixelBase64){
+ const committed={...(await state()).theme},before=await appearanceSnapshot();
+ const editorBefore=await page.evaluate(()=>sessionStorage.getItem('amplifier.appearance-editor.v1'));
+ assert.equal(before.preview.active,false,'Pixel proof starts from the actual applied/reloaded package.');
+ assert.notEqual(before.presentation.decorations,false,'Artwork must not be disabled for the paint proof.');
+ report.pixelProof={status:'checking',colors:paintColors,
+  decoder:'Chromium createImageBitmap + OffscreenCanvas over saved page screenshot PNG bytes',
+  contract:'docs/shell/themes.md --a-conversation-art; frontend/src/main-refresh.css .a-conversation'};
+ await expect(page.locator('#amp-one')).not.toHaveAttribute('data-decorations','off');
+ const controlCss=committed.css+'\n#amp-one{--a-conversation-art:none}\n';
+ await action('theme.preview',{name:'Synthetic no-art control',css:controlCss});
+ await expect.poll(async()=>(await state()).view.themeDraft).toBe(controlCss);
+ await expect.poll(()=>page.locator('[data-part="conversation"]').evaluate(node=>getComputedStyle(node).backgroundImage)).toBe('none');
+ const controlGeometry=await exposedConversationGeometry();
+ report.pixelProof.controlGeometry=controlGeometry;
+ const control=await screenshot('desktop-package-no-art-control');
+ await exposedConversationGeometry(controlGeometry);
+ const controlPixels=await screenshotPixels(control.bytes,controlGeometry.points);
+ await action('theme.preview',{name:committed.name,css:committed.css});
+ await expect.poll(async()=>(await state()).view.themeDraft).toBe(committed.css);
+ await embeddedPaint(pixelBase64);
+ await expect.poll(()=>page.locator('[data-part="conversation"]').evaluate(node=>getComputedStyle(node).backgroundImage)).toContain('data:image/png;base64,'+pixelBase64);
+ const artworkGeometry=await exposedConversationGeometry(controlGeometry);
+ const artwork=await screenshot('desktop-package-preview');
+ await exposedConversationGeometry(controlGeometry);
+ const artworkPixels=await screenshotPixels(artwork.bytes,artworkGeometry.points);
+ Object.assign(report.pixelProof,{control:{path:control.path,sha256:sha256(control.bytes),pixels:controlPixels},
+  artwork:{path:artwork.path,sha256:sha256(artwork.bytes),pixels:artworkPixels},artworkGeometry});
+ assert.deepEqual([controlPixels.width,controlPixels.height],[controlGeometry.viewport.width,controlGeometry.viewport.height],'Screenshot pixels must use CSS-pixel geometry.');
+ assert.deepEqual([artworkPixels.width,artworkPixels.height],[controlPixels.width,controlPixels.height]);
+ const background=controlGeometry.backgroundColor.match(/^rgb\((\d+), (\d+), (\d+)\)$/);
+ assert.ok(background,'Pixel proof requires an opaque, flat non-image conversation control.');
+ const baselineRgb=background.slice(1).map(Number),near=(a,b)=>a.every((channel,index)=>Math.abs(channel-b[index])<=1);
+ for(let quadrant=0;quadrant<4;quadrant++){
+  const expected=paintColors[quadrant],baseline=controlPixels.patches[quadrant].rgba,painted=artworkPixels.patches[quadrant].rgba;
+  for(let offset=0;offset<painted.length;offset+=4){
+   assert.equal(baseline[offset+3],255);assert.equal(painted[offset+3],255);
+   assert.ok(near(baseline.slice(offset,offset+3),baselineRgb),'The no-image control patch must actually show the opaque conversation surface.');
+   assert.ok(!near(baseline.slice(offset,offset+3),expected),'The no-image control must reject the artwork color.');
+   assert.ok(near(painted.slice(offset,offset+3),expected),'Packaged PNG is absent, hidden or mispainted in real conversation quadrant '+quadrant);
+  }
+ }
+ await action('view.update',{patch:{themePreview:false}});
+ await expect.poll(async()=>(await state()).view.themePreview).toBe(false);
+ assert.deepEqual((await state()).theme,committed,'The paint/control previews cannot apply another theme.');
+ assert.deepEqual(await appearanceSnapshot(),before,'Paint proof must restore presentation and preview state.');
+ assert.equal(await page.evaluate(()=>sessionStorage.getItem('amplifier.appearance-editor.v1')),editorBefore,'Paint proof cannot replace the editor.');
+ report.pixelProof.status='passed';
+ report.phases.push('actual-conversation-pixels-versus-same-geometry-no-art-control');
 }
 async function visibleControl(control){
  await control.scrollIntoViewIfNeeded();await expect(control).toBeVisible();await expect(control).toBeEnabled();
@@ -459,7 +588,6 @@ try{
  report.downloads.at(-1).zip=zip('verify',editedZip.path,JSON.stringify({name:renamed,description,author:'Synthetic author',asset:true,license:true,embedded:true,marker:'synthetic-package-edit'}));
  await button('Preview').click();await embeddedPaint(synthetic.pixelBase64);
  await expect.poll(()=>page.locator('#amp-one').evaluate(node=>getComputedStyle(node).getPropertyValue('--a-accent').trim())).toBe('#587a9b');
- await screenshot('desktop-package-preview');
  report.phases.push('preview-real-paint-and-byte-verified-selected-exports-update');
 
  // 4. Apply/reload must paint embedded CSS with no local URL. Current ZIP is
@@ -471,6 +599,7 @@ try{
  assert.equal((await state()).selectedSessionId,selected);
  await expect(composer).toHaveDraft('Keep this synthetic conversation draft.');
  await embeddedPaint(synthetic.pixelBase64);
+ await actualConversationPaint(synthetic.pixelBase64);
  await openSettingsPage(page,'custom-appearance');
  await button('Edit '+renamed).click();
  const committedAfterExport={...(await state()).theme};
@@ -525,6 +654,7 @@ try{
  report.status='checks-passed-awaiting-cleanup';
 }catch(error){
  failure=error;report.status='failed';report.error=error.stack||String(error);
+ if(report.pixelProof?.status==='checking')report.pixelProof.status='failed';
  if(page&&!page.isClosed())try{
   const path=join(artifacts,'failure.png');await page.screenshot({path,timeout:2000,animations:'disabled'});report.failureScreenshot=path;
  }catch(captureError){report.failureScreenshotError=captureError.message}
