@@ -359,18 +359,26 @@ from .computer_visual import ComputerVisuals, definitions as computer_visual_def
 ACTION_DEFINITIONS.update(computer_visual_definitions(schema, string))
 from .worktrees import definitions as worktree_definitions
 ACTION_DEFINITIONS.update(worktree_definitions(schema, string))
+
+
+def _register_actions(definitions):
+    """Register schemas once and retain their exact names for routing."""
+    ACTION_DEFINITIONS.update(definitions)
+    return frozenset(definitions)
+
+
 from .workspace_resources import definitions as resource_reservation_definitions
-ACTION_DEFINITIONS.update(resource_reservation_definitions(schema, string))
+RESOURCE_RESERVATION_ACTIONS = _register_actions(resource_reservation_definitions(schema, string))
 from .task_environments import definitions as environment_definitions
-ACTION_DEFINITIONS.update(environment_definitions(schema, string))
+ENVIRONMENT_ACTIONS = _register_actions(environment_definitions(schema, string))
 from .test_capacity_settings import definitions as test_capacity_definitions
-ACTION_DEFINITIONS.update(test_capacity_definitions(schema, string))
+TEST_CAPACITY_ACTIONS = _register_actions(test_capacity_definitions(schema, string))
 from .registered_test_runners import definitions as test_runner_definitions
-ACTION_DEFINITIONS.update(test_runner_definitions(schema, string))
+TEST_RUNNER_ACTIONS = _register_actions(test_runner_definitions(schema, string))
 from .test_execution_settings import definitions as test_execution_definitions
-ACTION_DEFINITIONS.update(test_execution_definitions(schema, string))
+TEST_EXECUTION_ACTIONS = _register_actions(test_execution_definitions(schema, string))
 from .test_queue import definitions as test_queue_definitions
-ACTION_DEFINITIONS.update(test_queue_definitions(schema, string))
+TEST_QUEUE_ACTIONS = _register_actions(test_queue_definitions(schema, string))
 from .portability import definitions as portability_definitions
 ACTION_DEFINITIONS.update(portability_definitions(schema, string))
 ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
@@ -451,11 +459,11 @@ for _access, _actions in {
         *canvas_view_definitions(schema, string), *canvas_app_definitions(schema, string),
         *canvas_version_definitions(schema, string),
         *publishing_definitions(schema, string),
-        *resource_reservation_definitions(schema, string),
-        *environment_definitions(schema, string),
-        *test_queue_definitions(schema, string),
-        *test_capacity_definitions(schema, string),
-        *test_runner_definitions(schema, string),
+        *RESOURCE_RESERVATION_ACTIONS,
+        *ENVIRONMENT_ACTIONS,
+        *TEST_QUEUE_ACTIONS,
+        *TEST_CAPACITY_ACTIONS,
+        *TEST_RUNNER_ACTIONS,
         *assignment_definitions(schema, string),
         *workspace_work_definitions(schema, string),
         *handoff_definitions(schema, string),
@@ -2025,21 +2033,21 @@ class AppService:
             if retained is not None:
                 return retained
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
-        if action in test_runner_definitions(schema, string):
+        if action in TEST_RUNNER_ACTIONS:
             from .registered_test_runners import dispatch as test_runner_dispatch
             return await test_runner_dispatch(self, action, args, configuration_authority)
-        if action in test_capacity_definitions(schema, string):
+        if action in TEST_CAPACITY_ACTIONS:
             from .test_capacity_settings import dispatch as test_capacity_dispatch
             return await test_capacity_dispatch(self, action, args, configuration_authority)
-        if action in test_execution_definitions(schema, string):
+        if action in TEST_EXECUTION_ACTIONS:
             from .test_execution_settings import dispatch as test_execution_dispatch
             return await test_execution_dispatch(self, action, args, configuration_authority)
-        if action in test_queue_definitions(schema, string):
+        if action in TEST_QUEUE_ACTIONS:
             return await self.test_queue.dispatch(action, args, origin, caller_session_id, configuration_authority)
-        if action in environment_definitions(schema, string):
+        if action in ENVIRONMENT_ACTIONS:
             from .task_environments import dispatch as environment_dispatch
             return await environment_dispatch(self, action, args, origin, caller_session_id, configuration_authority)
-        if action in resource_reservation_definitions(schema, string):
+        if action in RESOURCE_RESERVATION_ACTIONS:
             from .workspace_resources import dispatch_reservation
             return await dispatch_reservation(self, action, args, origin, command_id, caller_session_id)
         if action.startswith("profiling."):
@@ -5228,7 +5236,7 @@ class AppService:
                     result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
-            compact_domain_receipt = args['action'] in SETTINGS_ACTIONS or args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.', 'outputs.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
+            compact_domain_receipt = args['action'] in SETTINGS_ACTIONS or args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.', 'outputs.')) or args['action'] == 'runtime.provenance' or args['action'] in RESOURCE_RESERVATION_ACTIONS
             task_action = action_args.get('operation') if args['action'] == 'runtime.control' else args['action']
             compact_task_receipt = isinstance(task_action, str) and task_action in task_definitions(schema, string)
             compact_domain_receipt = compact_domain_receipt or compact_task_receipt
