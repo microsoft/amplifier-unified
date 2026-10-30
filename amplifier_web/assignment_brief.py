@@ -113,7 +113,8 @@ def read(owner, source, args, lookup):
     result = {'assignmentId': value['id'], 'assignmentRevision': value['revision'],
         'ownerSessionId': value['ownerSessionId'], 'status': value['status'],
         'canManage': source['id'] == value['ownerSessionId'], 'observedAt': time.time(),
-        'totalMembers': len(identities), 'members': [], 'nextAfter': None,
+        'totalMembers': len(identities), 'activeMemberCount': owner.active_member_count(value),
+        'members': [], 'nextAfter': None,
         'taskListRef': {'action': 'assignment.tasks.list', 'args': {'sessionId': source['id']}},
         'coverage': 'Current retained member metadata and latest direct requester-owned request per member. No history or runtime was loaded. Progress may change between pages.',
         'authority': 'Orientation only. Previews do not replace exact task constraints, corrections, Shared Work or evidence; idle is not completion.'}

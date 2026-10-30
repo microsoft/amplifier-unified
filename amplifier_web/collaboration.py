@@ -679,6 +679,8 @@ class Collaboration:
             self.enqueue_continuation(receipt)
 
     def creation_guard(self, receipt, *, for_reply=False):
+        if reason := self.service.assignments.request_membership_reason(receipt):
+            return reason
         if receipt.get('assignmentId'):
             reason = self.service.assignments.blocked(identity=receipt['assignmentId'])
             if reason:
@@ -728,6 +730,8 @@ class Collaboration:
                 return 'The queued request expired before runtime admission.'
             if receipt.get("protocol") != PROTOCOL:
                 return "Legacy coordination is read-only; automatic admission is suppressed."
+            if reason := self.service.assignments.request_membership_reason(receipt):
+                return reason
             from .updates import work_paused
             if work_paused(self.service.state):
                 return "Host work is paused for an update; peer admission is suppressed."
@@ -745,6 +749,8 @@ class Collaboration:
                     return reason
             if receipt.get('dependencyRequestId'):
                 dependency = self.receipt(receipt['dependencyRequestId'])
+                if reason := self.service.assignments.request_membership_reason(dependency):
+                    return reason
                 if dependency.get('cancellation'):
                     return 'The requester cancelled the originating request; no new automatic return is admitted.'
                 if dependency.get('commandAction') == 'workspace.tests.submit':
@@ -1256,6 +1262,7 @@ class Collaboration:
             return
         sender = self.service._session(request['senderSessionId'])
         if (self.service.assignments.blocked(sender, request.get('assignmentId'))
+                or self.service.assignments.request_membership_reason(request)
                 or wait.get('interruptionRevision') != sender.get('interruptionRevision', 0)):
             wait.update(status='suppressed', open=False, detail='The saved wait was interrupted; late evidence remains inspectable.')
             self.save(request['requestId'], request)
