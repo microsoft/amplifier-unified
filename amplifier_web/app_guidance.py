@@ -148,7 +148,8 @@ async def install_app_access(coordinator, bridge):
     # Keep selected visual evidence after general workspace observations.
     delivery = context.wrap(MemoryDelivery(OutputImageDelivery(VoiceVisualDelivery(CoordinationDelivery(
         ReactionDelivery(SurfaceDelivery(context.read), context.read), context.read,
-        origin_scope=coordinator.get_capability('web.work_origin_scope')),
+        origin_scope=coordinator.get_capability('web.work_origin_scope'),
+        full_access=coordinator.get_capability('web.work_full_access')),
         bridge), context.read), context.read))
     coordinator.register_capability('web.surface_delivery', delivery)
     # Observation only. The service's effect policy must independently decide
@@ -199,7 +200,7 @@ async def install_app_access(coordinator, bridge):
                 data = {**dispatch, 'tool_name': self.mounted_name, 'tool_input': copy.deepcopy(arguments)}
                 # Consumption is observed execution identity, independent of
                 # whether Full accepts missing fitted-context assurance.
-                if dispatch.get('tool_call_id') in delivery.executed_calls:
+                if delivery.call_consumed(dispatch.get('tool_call_id')):
                     if timing:
                         timing.outcome = 'denied'
                     return ToolResult(success=False, error={
@@ -351,7 +352,7 @@ async def install_app_access(coordinator, bridge):
                 # execution identity; calls without that seam stay unbound.
                 dispatch = getattr(coordinator, '_tool_dispatch_contexts', {}).get(asyncio.current_task(), {})
                 execution_id = dispatch.get('tool_call_id')
-                if input['operation'] == 'dispatch' and execution_id in delivery.executed_calls:
+                if input['operation'] == 'dispatch' and delivery.call_consumed(execution_id):
                     return ToolResult(success=False, error={
                         'code': 'tool_call_already_consumed',
                         'message': 'This native tool call was already consumed. Inspect its command receipt before retrying.'})

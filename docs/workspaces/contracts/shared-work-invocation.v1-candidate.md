@@ -232,9 +232,20 @@ remains mandatory. Work mutations and claims about a particular promise, candida
 independent check or publication retain their own revision and provenance checks.
 Actual Stop/revocation, execution and resource ownership, required factual inputs,
 exact retries and unknown-effect recovery remain with their existing owners.
+Provider preparation applies the same current Full policy through the worker's
+existing local policy reader, without another host request. It preserves fitted
+bytes and the captured native generation/input/Stop scope while allowing stale
+or unavailable Work-version assurance. Skipping that assurance leaves coverage
+unavailable, never complete. Native send admission rechecks current Full when
+preparation relied on it.
 An actual native call already present in the adapter's consumed-call set cannot
 execute again, independently of coverage completeness. A new native call may
 inspect or exactly retry an app command through that command's canonical receipt.
+Consumed IDs survive Work observation recovery and proof-retention overflow.
+They are retained for the actual native generation and cleared when that native
+generation or Stop epoch changes; their count does not impose a tool permission
+ceiling. Bounded request/proof observations remain separate from this execution
+evidence. A very long generation therefore retains one ID per consumed call.
 This policy does not qualify every consumer for descendants or establish that
 every delayed external effect already has complete cancellation coverage.
 

@@ -22,9 +22,20 @@ from test_workspace_work import create, read, revise, source, workspace_id
 
 async def commissioned_full(app):
     owner = app.state['sessions'][0]
+    # Select standing policy before commissioning, as an unattended operator
+    # would. Finish the fixture's existing turn through its lifecycle first,
+    # so the real settings owner can retire the old file policy before restart.
+    inputs = list(owner['collaborationGeneration']['inputIds'])
+    await app.on_runtime_event('runtime.generation', {
+        'sessionId': owner['id'], 'rootSessionId': owner['id'],
+        'generation_id': owner['collaborationGeneration']['id'], 'event': 'generation.finished',
+        'input_ids': inputs, 'disposition': 'manager_turn_finished', 'active_job_ids': []})
+    await app.on_runtime_event('runtime.status', {'sessionId': owner['id'], 'status': 'idle'})
+    await save(app, owner, scope='app', identity='operator-full')
+    assert not owner.get('fileAccessPending')
+    await generation(app, owner, 'full-owner-generation', inputs)
     item = await prepared_work(app, owner, 'full-work')
     created, target = await assert_available_commission(app, owner, item, 'full-work-commission')
-    await save(app, target, scope='app', identity='operator-full')
     return owner, item, created, target
 
 

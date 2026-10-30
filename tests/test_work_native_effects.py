@@ -25,6 +25,7 @@ async def joined(app):
     c = adapter.coordinator
     c.cancellation.is_cancelled = False
     worker = Worker()
+    worker.home, worker.workspace = app.data_dir, child['workspace']
     worker.session = SimpleNamespace(coordinator=c)
     worker.runtime = SimpleNamespace(generation={'id': required['generationId'],
         'input_ids': list(required['inputIds'])}, closed=False, stop_requested=False)
@@ -34,6 +35,7 @@ async def joined(app):
     worker.bridge = bridge
     adapter.dispatch_bridge = worker.app_access_bridge(c)
     adapter.delivery.begin_work.__self__.origin_scope = c.get_capability('web.work_origin_scope')
+    adapter.delivery.begin_work.__self__.full_access = c.get_capability('web.work_full_access')
     return adapter, child, required, worker
 
 
