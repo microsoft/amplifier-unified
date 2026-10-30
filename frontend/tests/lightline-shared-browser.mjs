@@ -368,7 +368,7 @@ try{
    await shot(`lightline-chat-${scheme}-${width}`);
    // Sidebar opens through shared view state, never by fabricating classes.
    await action('view.update',{patch:{navExpanded:true,navPinned:false,navMode:'browse'}});
-   const nav=page.locator('[data-part="navigation"]');await expect(nav).toBeVisible();
+   const nav=page.locator('[data-part="navigation"]');await expect(nav.locator(':scope > .a-nav-rail')).toBeVisible();
    await expect.poll(()=>nav.locator('.a-nav-chat:not(.a-nav-chat-rename):visible').count()).toBeGreaterThan(0);
    await expect.poll(()=>nav.locator('.a-workspace-row:visible').count()).toBeGreaterThan(0);
    const capsules=await nav.locator('.a-nav-chat:not(.a-nav-chat-rename):visible,.a-workspace-row:visible').evaluateAll(nodes=>
