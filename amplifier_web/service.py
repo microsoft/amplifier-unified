@@ -1657,7 +1657,7 @@ class AppService:
         if not setup.get('scaffolded'):
             raise AppError('This workspace starter is still preparing. Wait for its readiness result before starting a chat.', 409)
 
-    def _new_session(self, args):
+    def _new_session(self, args, *, new_root=False):
         from .shared_settings import read_settings
         workspace = self._session_destination(args)
         try:
@@ -1675,7 +1675,12 @@ class AppService:
         except ValueError as exc:
             raise AppError(str(exc)) from None
         now = time.time()
-        return self.cold_display.record({**({'selection': chosen} if chosen else {}), **({'location': {'kind': 'managed'}} if args.get('location', {}).get('kind') == 'managed' else {}), "id": str(uuid.uuid4()), "title": args.get("title") or "New chat", "titleSource":"manual" if args.get("title") and args["title"] not in {"New chat","New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": [], '_collaborationHostInstanceId': self.instance_id, **({'sessionKind': 'internal', 'sessionPurpose': args['purpose']} if args.get('purpose') else {})})
+        # Only ordinary public creation establishes placement proof. This
+        # constructor also builds historical import views under existing IDs.
+        placement = ({'sessionKind': 'internal', 'sessionPurpose': args['purpose']} if args.get('purpose')
+                     else {'sessionKind': 'root', 'workingDirectory': workspace,
+                           'executionRevision': 0, 'interruptionRevision': 0} if new_root else {})
+        return self.cold_display.record({**({'selection': chosen} if chosen else {}), **({'location': {'kind': 'managed'}} if args.get('location', {}).get('kind') == 'managed' else {}), "id": str(uuid.uuid4()), "title": args.get("title") or "New chat", "titleSource":"manual" if args.get("title") and args["title"] not in {"New chat","New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": [], '_collaborationHostInstanceId': self.instance_id, **placement})
 
     def _reusable_internal(self, candidate):
         """An idle internal session for the same purpose, folder and bundle."""
@@ -2930,7 +2935,8 @@ class AppService:
                 from .session_creation import prepare, apply
                 try:
                     inherited = prepare(self, args, origin, caller_session_id)
-                    session = self._new_session({**args, 'workspace': prepared_workspace} if prepared_workspace else args)
+                    session = self._new_session({**args, 'workspace': prepared_workspace} if prepared_workspace else args,
+                                                new_root=True)
                     if args.get('id') or prepared_identity: session['id'] = args.get('id') or prepared_identity
                     if origin == 'scheduler' and args.get('inheritConfiguration', {}).get('scheduledRunId'):
                         source = self._session(args['inheritConfiguration']['sessionId'])
