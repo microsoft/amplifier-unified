@@ -418,12 +418,14 @@ class ConfigurationAuthority:
         if self.service.access_mode.full(source):
             from .collaboration import BINDING, PRINCIPAL
             binding = BINDING.get() or {}
+            # Missing or overflowed transport is not a proven empty assignment.
+            input_ids = [row['inputId'] for row in binding.get('_inputBindings', []) if row.get('inputId')]
             return {'accessRevision': self.service.access_mode.snapshot(source)['revision'],
                     'sessionId': source['id'], 'workspace': source['workspace'],
                     'interruptionRevision': source.get('interruptionRevision', 0), 'effect': effect, 'scope': scope,
                     'origin': origin, 'runtimeSessionId': PRINCIPAL.get(),
                     'generationId': binding.get('_generationId'),
-                    'inputIds': [row['inputId'] for row in binding.get('_inputBindings', []) if row.get('inputId')]}
+                    'inputIds': input_ids, 'inputCoverage': 'complete' if input_ids else 'unavailable'}
         from .service import AppError
         grant, peer_grants, failure = None, [], None
         for candidate in self.eligible(source):

@@ -138,6 +138,7 @@ async def test_mounted_full_configuration_and_own_reads_keep_actual_actor(mounte
         assert authority['sessionId'] == h.source['id'] and authority['origin'] == 'agent'
         assert authority['generationId'] == 'generation-1'
         assert authority['inputIds'] == ['assigned-input'] and authority['interruptionRevision'] == 0
+        assert authority['inputCoverage'] == 'complete'
         assert h.envelopes[-1]['_runtimeSessionId'] == actor
         assert saved_permissions(h)['overrides']['tool-filesystem']['config']['allowed_write_paths'] == args['allowed']
         # A lost acknowledgement observes the exact receipt; no second effect.
@@ -170,6 +171,51 @@ async def test_mounted_full_configuration_and_own_reads_keep_actual_actor(mounte
         h.approval_prompt.assert_not_awaited()
     finally:
         _PERSISTENT.reset(token)
+
+
+async def test_mounted_full_child_input_overflow_stays_unavailable_without_blocking_write(mounted):
+    h = mounted
+    await save(h.app)
+    assigned = ['assigned-' + str(i) for i in range(17)]
+    h.worker.runtime.generation['input_ids'] = list(assigned)
+    h.source['collaborationGeneration']['inputIds'] = list(assigned)
+    h.worker.context_inputs = list(assigned)
+    h.worker.context_bindings = {identity: {'clientId': None, 'targets': []} for identity in assigned}
+    completed = []
+
+    async def execute(self, prompt, context, providers, tools, hooks, coordinator):
+        control = tools['app_control']
+        result = await dispatch(control, 'permissions.save', permissions(h.source), 'overflow-write')
+        assert result.success, result.error
+        assert (await finished(h.app, 'overflow-write'))['phase'] == 'ready'
+        assert saved_permissions(h)['overrides']['tool-filesystem']['config']['allowed_write_paths'] == ['/delegated-output']
+        authority = next(value for key, value in h.authorities if key == 'overflow-write')
+        assert authority['runtimeSessionId'] == coordinator.session_id == 'child'
+        assert authority['sessionId'] == h.source['id'] and authority['origin'] == 'agent'
+        assert authority['generationId'] == 'generation-1' and authority['interruptionRevision'] == 0
+        assert authority['inputIds'] == [] and authority['inputCoverage'] == 'unavailable'
+        assert h.envelopes[-1]['_inputBindings'] == []
+        # The same bounded observation must survive in the durable operation,
+        # without borrowing the root's complete input list to fill it in.
+        h.source['status'] = 'working'
+        plan = {'providers': [{'module': 'provider-fixture'}],
+                'session': {'orchestrator': {'module': 'loop-live'}, 'context': {'module': 'context-simple'}}}
+        queued = await dispatch(control, 'configuration.apply', {
+            'id': h.source['id'], 'config': plan, 'whenIdle': True}, 'overflow-queued')
+        assert queued.success, queued.error
+        assert (await finished(h.app, 'overflow-queued'))['phase'] == 'ready'
+        record = h.app.management.configuration_record(h.source['id'], h.source['pendingConfiguration']['operationId'])
+        retained = record['request']['authority']
+        assert retained['runtimeSessionId'] == 'child' and retained['generationId'] == 'generation-1'
+        assert retained['inputIds'] == [] and retained['inputCoverage'] == 'unavailable'
+        assert not h.source['approvals'] and h.app.configuration_authority.rows(h.source['id']) == []
+        h.approval_prompt.assert_not_awaited()
+        completed.append(True)
+        return 'configured'
+
+    h.install_execute(execute)
+    await h.registry.spawn('worker', 'configure with the assigned context', h.parent, sub_session_id='child')
+    assert completed == [True]
 
 
 async def test_mounted_child_inherits_source_full_and_retains_queued_configuration(mounted, monkeypatch):

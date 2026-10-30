@@ -286,7 +286,10 @@ The source check explicitly opts into the native child's current assigned
 generation and captured Stop boundary. Finite, nested, resumed and persistent
 mounts keep their actual principal and original assigned inputs. They do not
 impersonate the root or borrow an unrelated later input. New Full configuration
-receipts retain actor, owner, origin, generation and assigned input IDs separately.
+receipts retain actor, owner, origin, generation and the bounded assigned-input
+observation separately. An empty native input envelope records unavailable input
+coverage, not a verified empty assignment; its cause and count are not inferred
+from the root's later inputs. This observation adds no permission gate under Full.
 Accepted delayed work keeps its captured Full revision and the existing final
 effect checks; the finite child finishing does not itself revoke accepted work.
 
