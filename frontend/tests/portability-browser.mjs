@@ -1,3 +1,4 @@
+import {fixturePython} from './fixture-python.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir} from 'node:fs/promises';
@@ -11,7 +12,7 @@ import {openChatAdvancedPage} from './browser-chat-pages.mjs';
 // scope deliberately stops before account checks and destination activation;
 // separate service/process acceptance owns the complete two-host protocol.
 const expect=playwrightExpect.configure({timeout:30000});
-const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),
+const fixture=spawn(fixturePython(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url))),
  [fileURLToPath(new URL('../../tests/fixtures/portability_ui_server.py',import.meta.url))],
  {stdio:['ignore','pipe','inherit']});
 const screenshots=process.env.PORTABILITY_SCREENSHOT_DIR;

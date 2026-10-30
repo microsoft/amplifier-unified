@@ -1,3 +1,4 @@
+import {fixturePython} from './fixture-python.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {readComposerDraft} from './composer-test-helpers.mjs';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
@@ -5,7 +6,7 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
-const fixture=spawn(process.env.UNIFIED_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/demand_ui_server.py',import.meta.url))],{stdio:'inherit'});
+const fixture=spawn(fixturePython(process.env.UNIFIED_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url))),[fileURLToPath(new URL('../../tests/fixtures/demand_ui_server.py',import.meta.url))],{stdio:'inherit'});
 const stopFixture=ownFixture(fixture,{label:'Demand fixture'});
 let browser,primary;
 try{

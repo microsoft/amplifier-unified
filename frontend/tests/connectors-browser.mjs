@@ -1,3 +1,4 @@
+import {fixturePython} from './fixture-python.mjs';
 import {openSettingsPage} from './browser-settings.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -6,7 +7,7 @@ import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 
 const origin='http://127.0.0.1:8989', headers={Authorization:'Bearer fixture-browser-control-token'};
-const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/connectors_ui_server.py',import.meta.url))],{stdio:['ignore','ignore','pipe']});
+const fixture=spawn(fixturePython(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url))),[fileURLToPath(new URL('../../tests/fixtures/connectors_ui_server.py',import.meta.url))],{stdio:['ignore','ignore','pipe']});
 let fixtureError='';fixture.stderr.on('data',chunk=>{fixtureError+=chunk.toString()});
 let browser;
 try {

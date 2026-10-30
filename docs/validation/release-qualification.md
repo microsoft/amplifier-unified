@@ -66,6 +66,16 @@ spacing and ASCII escaping do not discard otherwise valid saved notes.
 
 ## Preparing a version change
 
+Browser fixture launchers honor `AMPLIFIER_TEST_PYTHON` as one executable path.
+Use the prepared environment's Python path when source and dependencies live
+separately; a checkout-local `.venv` is not required. Pass the path as an environment
+value without shell quoting inside the value or additional command arguments.
+Existing per-fixture `FIXTURE_PYTHON` / `UNIFIED_TEST_PYTHON` overrides remain
+fallbacks when the common setting is unset or empty, followed by the existing
+checkout-local path. New launchers should use `fixturePython` from
+`frontend/tests/fixture-python.mjs`. This chooses only the interpreter; readiness,
+fixture arguments, browser installation and product assertions stay separate.
+
 The frontend embeds the package version from `pyproject.toml` in both its
 JavaScript bundle and `static/build.json`. After updating the Python package
 versions (including the local `amplifier-unified` entry in `uv.lock`) and release

@@ -1,3 +1,4 @@
+import {fixturePython} from './fixture-python.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Private canonical JSONL history, real browser/host; no external provider.
 import './composer-test-helpers.mjs';
@@ -11,7 +12,7 @@ import {StandardUxEvidence} from './standard-ux-evidence.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url)),output=process.env.AMPLIFIER_TEST_ARTIFACTS;
 if(!output)throw Error('Owned artifact path required');await mkdir(output,{recursive:true});
 const evidence=new StandardUxEvidence(output,{baseline:'bc98c0ad8',data:'Synthetic canonical 305-row native history',runtime:'Production HTTP/SSE host; synthetic inert runtime',timings:'Shared-load functional only'});
-const fixture=spawn(root+'.venv/bin/python',['-u',root+'tests/fixtures/browser_detail_server.py',root],{stdio:['ignore','pipe','pipe']});let browser,peerBrowser,page,releaseRead,log='',failed=false;fixture.stderr.on('data',c=>log+=c);
+const fixture=spawn(fixturePython(root+'.venv/bin/python'),['-u',root+'tests/fixtures/browser_detail_server.py',root],{stdio:['ignore','pipe','pipe']});let browser,peerBrowser,page,releaseRead,log='',failed=false;fixture.stderr.on('data',c=>log+=c);
 try{
  const port=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exit '+code))});fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const row=JSON.parse(line);if(row.port){clearTimeout(timer);resolve(row.port)}}catch{}})});
  const base=`http://127.0.0.1:${port}`,headers={Authorization:'Bearer fixture-detail-token','content-type':'application/json'};
