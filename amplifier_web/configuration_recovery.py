@@ -248,7 +248,8 @@ def recovery_status(management, session, record, attempt, observed, origin):
     for verb, key in (("reconcile", "canReconcile"), ("resume", "canResume")):
         try:
             if origin not in {"ui", "user"}:
-                management.service.collaboration.active_binding(session)
+                management.service.configuration_authority.source(
+                    {"sessionId": session["id"]}, origin, session["id"], active=True, allow_descendant=True)
             validate_recovery(management, session, record, attempt, observed,
                 "configuration.operation." + verb, {"expectedRevision": record["revision"]}, origin)
             status[key] = True
@@ -270,11 +271,8 @@ def command(management, action, args, origin, caller):
     service = management.service
     session = service._session(args["sessionId"])
     if origin not in {"ui", "user"}:
-        source = service.collaboration.source({}, origin, caller)
-        if source["id"] != session["id"]:
-            raise ValueError("Configuration recovery belongs to the original root.")
-        if not action.endswith(".read"):
-            service.collaboration.active_binding(source)
+        service.configuration_authority.source(args, origin, caller,
+            active=not action.endswith(".read"), allow_descendant=True)
     pending = session.get("pendingConfiguration", {})
     operation = args.get("operationId") or pending.get("operationId")
     include_recovery = action.endswith(".read") and args.get("includeRecovery")
@@ -296,12 +294,22 @@ def command(management, action, args, origin, caller):
         return public(record, observed)
     effect, recovery_authority = validate_recovery(
         management, session, record, attempt, observed, action, args, origin)
+    from .collaboration import BINDING, PRINCIPAL
+    native_binding = (BINDING.get() or {}) if origin not in {"ui", "user"} else {}
+    input_ids = [row["inputId"] for row in native_binding.get("_inputBindings", []) if row.get("inputId")]
+    # Attribute this explicit recovery in private transition history. The
+    # original request and its authority remain immutable, including its actor.
+    recovery_source = {"action": action, "origin": origin, "sessionId": session["id"],
+        "runtimeSessionId": PRINCIPAL.get() if origin not in {"ui", "user"} else None,
+        "generationId": native_binding.get("_generationId"),
+        "interruptionRevision": session.get("interruptionRevision", 0),
+        "inputIds": input_ids, "inputCoverage": "complete" if input_ids else "unavailable"}
     if action.endswith(".reconcile"):
         # Cancellation leaves its original applying/interrupted evidence intact
         # until the host task settles and an explicit reconciliation observes
         # this attempt. Classification is not permission to replay the write.
         record = management.configuration_transition(session, operation, phase="error", stage="reconciled",
-            effect=effect, recoveryRequired=False)
+            effect=effect, recoveryRequired=False, recovery_source=recovery_source)
         management.settle_configuration_fence(session, operation)
     elif action.endswith(".resume"):
         if recovery_authority is not None:
@@ -310,7 +318,8 @@ def command(management, action, args, origin, caller):
             record.setdefault("resumptions", []).append(recovery_authority)
             write_private(management.configuration_record_path(session["id"], operation), json.dumps(record))
         record = management.configuration_transition(session, operation,
-            phase="queued", stage="queued", effect="none", error=None, recoveryRequired=False)
+            phase="queued", stage="queued", effect="none", error=None, recoveryRequired=False,
+            recovery_source=recovery_source)
         # Queue acceptance is not native admission. Accepted work may finish;
         # apply_queued rechecks authority and atomically claims the idle fence.
         management.schedule_configuration(session["id"])
