@@ -1,5 +1,9 @@
 # Contributor operating guidance
 
+For source discovery, use the [source and ownership map](docs/source-context.md).
+`python scripts/source_context.py` summarizes tracked inputs without reading
+their bodies; select relevant owners, contracts and tests before expanding context.
+
 ## Assess scope and design before taking on issues or PRs
 
 User direction, October 13, 2026: an issue or PR is a proposal, not an automatic
