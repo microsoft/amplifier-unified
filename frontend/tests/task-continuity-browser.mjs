@@ -1,4 +1,4 @@
-import {openSettingsPage} from './browser-settings.mjs';
+import {openChatAdvancedPage} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -11,9 +11,7 @@ try{
  const context=await browser.newContext({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(ready.url);
- await expect(page.locator('.a-settings-experience')).toBeVisible();
- await openSettingsPage(page,'runtime');
- await page.getByRole('button',{name:'Goals & modes',exact:true}).click();
+ await openChatAdvancedPage(page,'Work & automation');
  const panel=page.getByRole('region',{name:'Saved task'});
  await expect(panel).toBeVisible();
  await panel.getByLabel('Task objective',{exact:true}).fill('Produce the verified report');
@@ -27,7 +25,7 @@ try{
  await expect(panel.getByRole('status')).toContainText('Task paused');
  const restored=await (await page.request.post(ready.url+'/fixture/restart')).json();
  assert.equal(restored.task.status,'paused');assert.equal(restored.goal,null);
- await page.reload();await expect(page.locator('.a-settings-experience')).toBeVisible();await openSettingsPage(page,'runtime');await expect(panel.getByRole('status')).toContainText('Task paused');
+ await page.reload();await openChatAdvancedPage(page,'Work & automation');await expect(panel.getByRole('status')).toContainText('Task paused');
  const corrected=await (await page.request.post(ready.url+'/fixture/agent')).json();
  assert.equal(corrected.task.operationIds[0],'uncertain-operation');
  await panel.getByText('Saved corrections (2)',{exact:true}).click();
