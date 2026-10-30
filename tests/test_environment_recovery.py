@@ -13,6 +13,7 @@ from amplifier_web import test_environment_recovery as recovery
 from amplifier_web.service import AppError
 from test_configuration_authority import app, grant, revoke
 from test_coordination_generation import agent
+from test_coordination_generation import app as collaboration_app, until
 from test_task_environments import backend, scope, start, act
 from test_test_queue import queue, submit, drive, record
 from test_test_environment_worker import library, Failure, worker
@@ -962,9 +963,431 @@ def assert_unverified_removal_read(value, row, original, code='original_binding_
         'status': 'held', 'code': code,
         'executor': 'unobserved', 'physical': 'not_observed',
         'continuationAvailable': False, 'riskDecisionAvailable': False,
+        'verification': {'status': 'not_retained'},
     }
     assert len(json.dumps(value).encode()) < 4096
     assert 'SYNTHETIC_' not in json.dumps(value)
+
+
+@pytest.mark.parametrize('legacy_creation_shape', [False, True])
+async def test_ordinary_creation_runtime_binding_and_cold_removal_read(app, backend, monkeypatch, legacy_creation_shape):
+    """Positive case never supplies placement proof; old producer shape fails."""
+    from contextlib import closing
+    from amplifier_web import state_records, session_projection
+    peer = app.state['sessions'][0]
+    if legacy_creation_shape:
+        create = app._new_session
+        def old_producer(args, **kwargs):
+            row = create(args, **kwargs)
+            for field in ('sessionKind', 'workingDirectory', 'executionRevision', 'interruptionRevision'):
+                row.pop(field, None)
+            return row
+        monkeypatch.setattr(app, '_new_session', old_producer)
+    receipt = await app.dispatch('session.create', {
+        'title': 'Ordinary removal owner', 'workspace': peer['workspace'], 'select': False},
+        command_id='ordinary-owner-create', include_state=False)
+    source = app._session(receipt['result']['sessionId'])
+    source['collaborationGeneration'] = {'id': 'ordinary-generation', 'inputIds': ['ordinary-input'], 'terminal': False}
+    await app.on_runtime_event('runtime.status', {
+        'sessionId': source['id'], 'status': 'working', 'runtimeSessionId': 'ordinary-runtime'})
+    assert source['runtimeSessionId'] == 'ordinary-runtime'
+    fields = ('sessionKind', 'workingDirectory', 'executionRevision', 'interruptionRevision')
+    expected = {'sessionKind': 'root', 'workingDirectory': peer['workspace'],
+                'executionRevision': 0, 'interruptionRevision': 0}
+    produced = {key: source[key] for key in fields if key in source}
+    row = (await start(app, 'ordinary-start'))['resource']
+    row = (await act(app, 'stop', row, 'ordinary-stop'))['resource']
+    with monkeypatch.context() as fault:
+        fault.setattr(owner, 'invoke', lambda *args: {
+            'ok': False, 'status': 'stopped', 'universeId': row['universeId'],
+            'code': 'archive_verification_failed', 'phase': 'verifying', 'effectAdmitted': False})
+        failure = await act(app, 'remove', row, 'ordinary-remove')
+    row, original = failure['resource'], failure['request']
+    assert original['state'] == 'failed'
+    args = removal_read_args(app, row, original)
+    assert owner.get(app.data_dir, source['id'], row['id'])['owner'] == {
+        'sessionId': source['id'], 'principal': 'ordinary-runtime'}
+    for residency in ('resident', 'cold'):
+        if residency == 'cold':
+            app._save()
+            with closing(recovery.sqlite3.connect((app.data_dir / 'app.sqlite3').as_uri() + '?mode=ro',
+                                                 uri=True, timeout=0)) as reopened:
+                saved, _ = state_records.load_owner(reopened, source['id'])
+            assert {key: saved[key] for key in fields if key in saved} == ({} if legacy_creation_shape else expected)
+            app._state['sessions'].remove(source)
+            app._state['selectedSessionId'] = peer['id']
+            app.projections.invalidate()
+        before = removal_read_snapshot(app, row)
+        overlay = [item['id'] for item in app._state['sessions']]
+        selected, changes = app._state['selectedSessionId'], app.db.total_changes
+        def forbidden(*args, **kwargs):
+            pytest.fail('Passive owner inspection hydrated, admitted or wrote')
+        with monkeypatch.context() as guard:
+            calls = forbid_removal_read_effects(app, guard)
+            for method in ('_session', '_admit_session', '_save'):
+                guard.setattr(app, method, forbidden)
+            guard.setattr(app.history, 'refresh', forbidden)
+            guard.setattr(app.cold_display, 'hydrate', forbidden)
+            guard.setattr(session_projection, 'hydrate', forbidden)
+            guard.setattr(state_records, 'load_owner', forbidden)
+            if legacy_creation_shape:
+                with pytest.raises(AppError, match='Owner placement metadata is unavailable') as caught:
+                    await agent(app, source, REMOVAL_READ, args, 'ordinary-read-' + residency,
+                                _runtimeSessionId='ordinary-runtime')
+                assert caught.value.status == 403
+            else:
+                result = await agent(app, source, REMOVAL_READ, args, 'ordinary-read-' + residency,
+                                     _runtimeSessionId='ordinary-runtime')
+                assert_unverified_removal_read(result['result'], row, original)
+        assert calls == [] and removal_read_snapshot(app, row) == before
+        assert app.db.total_changes == changes
+        assert [item['id'] for item in app._state['sessions']] == overlay
+        assert app._state['selectedSessionId'] == selected
+    # On the old producer the positive case fails at the actual owner guard,
+    # not just at a fixture-shape assertion before the consumer is exercised.
+    assert produced == ({} if legacy_creation_shape else expected)
+
+
+@pytest.mark.parametrize('kind', ['workspace', 'managed', 'internal'])
+async def test_new_owner_placement_uses_actual_creation_folder(app, kind):
+    import uuid
+    explicit = str(uuid.uuid4())
+    args = {'title': 'Placement', 'id': explicit, 'select': False}
+    if kind == 'managed':
+        args['location'] = {'kind': 'managed'}
+    else:
+        args['workspace'] = str(app.default_workspace)
+    if kind == 'internal':
+        args['purpose'] = 'terminal-tool'
+    result = await app.dispatch('session.create', args, command_id='placement-create', include_state=False)
+    source = app._session(result['result']['sessionId'])
+    assert source['id'] == explicit
+    if kind == 'internal':
+        assert source['sessionKind'] == 'internal'
+        assert 'executionRevision' not in source and 'workingDirectory' not in source
+    else:
+        assert source['sessionKind'] == 'root'
+        assert source['workingDirectory'] == source['workspace']
+        assert Path(source['workingDirectory']).is_dir()
+        assert source['executionRevision'] == source['interruptionRevision'] == 0
+        if kind == 'managed':
+            assert source['workspace'] != str(app.default_workspace)
+            assert source['location'] == {'kind': 'managed'}
+
+
+def test_import_view_constructor_does_not_invent_root_placement(app):
+    source = app._new_session({'title': 'Historical import view', 'workspace': str(app.default_workspace)})
+    assert not {'sessionKind', 'workingDirectory', 'executionRevision', 'interruptionRevision'} & source.keys()
+
+
+async def test_commissioned_owner_placement_preserves_inherited_execution_folder(collaboration_app):
+    app = collaboration_app
+    source = app.state['sessions'][0]
+    folder = Path(source['workspace']) / 'separate-execution'
+    folder.mkdir()
+    source.update(workingDirectory=str(folder), executionRevision=7, interruptionRevision=3)
+    receipt = await agent(app, source, 'coordination.create',
+        {'title': 'Placement child', 'text': 'Synthetic placement check'}, 'placement-child')
+    await until(lambda: len(app.runtime.inputs) == 1)
+    child = app._session(receipt['sessionId'])
+    assert child['workspace'] == source['workspace']
+    assert child['workingDirectory'] == str(folder) != child['workspace']
+    assert child['sessionKind'] == 'root'
+    assert child['executionRevision'] == child['interruptionRevision'] == 0
+    assert child['selection'] == source['selection']
+
+
+@pytest.mark.parametrize('caller', ['owner', 'child', 'foreign'])
+async def test_incomplete_owner_reason_requires_authenticated_identity_before_resource_lookup(app, monkeypatch, caller):
+    from amplifier_web import task_resources
+    source, peer = app.state['sessions']
+    await app.on_runtime_event('runtime.status', {
+        'sessionId': source['id'], 'status': 'working', 'runtimeSessionId': 'metadata-runtime'})
+    source.pop('executionRevision', None)
+    before = dict(source)
+    def forbidden(*args, **kwargs):
+        pytest.fail('An incomplete owner must not inspect resource existence')
+    monkeypatch.setattr(task_resources, 'get', forbidden)
+    calls = forbid_removal_read_effects(app, monkeypatch)
+    with pytest.raises(AppError, match='Removal inspection requires the recorded root owner') as caught:
+        await agent(app, source, REMOVAL_READ, {
+            **scope(app), 'sessionId': peer['id'] if caller == 'foreign' else source['id'],
+            'id': '00000000-0000-0000-0000-000000000001', 'expectedRevision': 1,
+            'originalRequestId': 'does-not-exist'}, 'metadata-refusal',
+            _runtimeSessionId='metadata-runtime' if caller != 'child' else 'unrelated-child')
+    assert caught.value.status == 403
+    assert ('Owner placement metadata is unavailable' in str(caught.value)) is (caller == 'owner')
+    assert dict(source) == before and not calls
+
+
+@pytest.mark.parametrize('cause', ['recorded', 'old', 'malformed', 'unsafe-name'])
+async def test_retained_verification_projection_is_passive_not_cleanup_authority(app, backend, monkeypatch, cause):
+    row = (await start(app, 'diagnostic-start'))['resource']
+    row = (await act(app, 'stop', row, 'diagnostic-stop'))['resource']
+    diagnostic = {'version': 1, 'reasonCode': 'unsupported_type',
+                  'memberType': 'fifo', 'relativePath': 'artifacts/fixture-pipe'}
+    if cause == 'malformed':
+        diagnostic['reasonCode'] = 'private exception'
+    if cause == 'unsafe-name':
+        diagnostic['relativePath'] = '/host/private-secret'
+    result = {'ok': False, 'status': 'stopped', 'universeId': row['universeId'],
+              'code': 'archive_verification_failed', 'phase': 'verifying', 'effectAdmitted': False,
+              'removal': {'version': 1, 'phase': 'verify-exports', 'code': 'phase_failed',
+                          'destroyEffect': 'not_dispatched'},
+              **({'verification': diagnostic} if cause != 'old' else {})}
+    with monkeypatch.context() as fault:
+        fault.setattr(owner, 'invoke', lambda *args: result)
+        failed = await act(app, 'remove', row, 'diagnostic-remove')
+    assert failed['request']['state'] == 'failed'
+    row, original = failed['resource'], failed['request']
+    args = removal_read_args(app, row, original)
+    before = removal_read_snapshot(app, row)
+    calls = forbid_removal_read_effects(app, monkeypatch)
+    source = app.state['sessions'][0]
+    read = (await agent(app, source, REMOVAL_READ, args, 'diagnostic-read'))['result']
+    expected = ({'status': 'not_retained'} if cause == 'old' else {'status': 'unverified'}
+                if cause == 'malformed' else {'status': 'recorded', 'version': 1,
+                    'reasonCode': 'unsupported_type', 'memberType': 'fifo',
+                    **({'relativePath': 'artifacts/fixture-pipe'} if cause == 'recorded' else {})})
+    assert read['verification'] == expected
+    assert read['status'] == 'held' and read['executor'] == 'unobserved'
+    assert read['physical'] == 'not_observed'
+    assert read['continuationAvailable'] is read['riskDecisionAvailable'] is False
+    assert 'private' not in json.dumps(read) and len(json.dumps(read).encode()) < 4096
+    assert calls == [] and removal_read_snapshot(app, row) == before
+
+
+async def test_verification_projection_does_not_accept_cleanup_as_original(app, backend, monkeypatch):
+    row = (await start(app, 'original-start'))['resource']
+    row = (await act(app, 'stop', row, 'original-stop'))['resource']
+    with monkeypatch.context() as fault:
+        fault.setattr(owner, 'invoke', lambda *args: {'ok': False, 'status': 'stopped',
+            'universeId': row['universeId'], 'code': 'archive_verification_failed',
+            'phase': 'verifying', 'effectAdmitted': False})
+        removed = await act(app, 'remove', row, 'original-remove')
+        cleanup = await act(app, 'finishCleanup', removed['resource'], 'original-cleanup',
+                            previousRequestId='original-remove')
+    source = app.state['sessions'][0]
+    before = removal_read_snapshot(app, cleanup['resource'])
+    calls = forbid_removal_read_effects(app, monkeypatch)
+    with pytest.raises(AppError, match='not bound to this resource'):
+        await agent(app, source, REMOVAL_READ,
+            removal_read_args(app, cleanup['resource'], cleanup['request']), 'wrong-original')
+    assert calls == [] and removal_read_snapshot(app, cleanup['resource']) == before
+
+
+@pytest.mark.parametrize('backend_kind', ['docker', 'incus'])
+async def test_worker_validation_receipt_survives_host_save_and_passive_read(app, backend, library, monkeypatch, backend_kind):
+    """Public native root -> real rejection -> closed/reopened host -> saved read."""
+    import hashlib
+    import tarfile
+    from types import SimpleNamespace
+    from amplifier_web import incus_environment_worker as incus_worker
+    from amplifier_web import session_projection, state_records
+    from amplifier_web.service import AppService
+    from test_configuration_authority import Runtime
+
+    peer = app.state['sessions'][0]
+    created = await app.dispatch('session.create', {
+        'title': 'Fresh diagnostic owner', 'workspace': peer['workspace'], 'select': False},
+        command_id='receipt-owner-create', include_state=False)
+    source = app._session(created['result']['sessionId'])
+    source['collaborationGeneration'] = {'id': 'receipt-generation', 'inputIds': ['receipt-input'], 'terminal': False}
+    await app.on_runtime_event('runtime.status', {
+        'sessionId': source['id'], 'status': 'working', 'runtimeSessionId': 'receipt-native-runtime'})
+    # These facts come only from the public producer/event, not fixture updates.
+    placement = {'sessionKind': 'root', 'workingDirectory': peer['workspace'],
+                 'executionRevision': 0, 'interruptionRevision': 0}
+    assert {key: source[key] for key in placement} == placement
+    assert source['runtimeSessionId'] == 'receipt-native-runtime'
+    transport = copy.deepcopy(source)
+    if backend_kind == 'incus':
+        config = {'python': '/managed/python', 'backend': 'incus', 'incus': {
+            'executable': '/qualified/fixture', 'incusExecutable': '/usr/bin/incus',
+            'project': 'tests', 'configDir': '/fixture/incus', 'admissionDir': '/fixture/admission',
+            'image': 'a' * 64}}
+        monkeypatch.setattr(owner, 'configuration', lambda app: (config, 'ready', 'Controlled Incus fixture'))
+        original_invoke = owner.invoke
+        def prepare_incus(configured, home, raw, action, args):
+            assert action in {'prepare', 'start', 'stop'}
+            value = original_invoke(configured, home, raw, action, args)
+            return {**value, 'universeId': incus_worker.identity({
+                'rootOwner': raw['sessionId'], 'operationId': raw['launchOperationId']}),
+                'backendIdentity': {'backend': 'incus', 'daemon': 'owned-daemon', 'project': 'tests'}}
+        monkeypatch.setattr(owner, 'invoke', prepare_incus)
+    row = (await start(app, 'receipt-start'))['resource']
+    row = (await act(app, 'stop', row, 'receipt-stop'))['resource']
+    lib, effects = library
+    incus_calls = []
+    folder = Path(row['retention']['path'])
+    (folder / 'source.tar').write_bytes(b'synthetic snapshot')
+    def append_fifo(path):
+        # Inert tar metadata only; never create a physical FIFO in the guest.
+        with tarfile.open(path, 'a') as archive:
+            member = tarfile.TarInfo('artifacts/fixture-pipe')
+            member.type = tarfile.FIFOTYPE
+            archive.addfile(member)
+    original_export = lib.export_files
+    def export(identity, source, destination, **kwargs):
+        receipt = original_export(identity, source, destination, **kwargs)
+        if source == '/artifacts':
+            append_fifo(destination)
+            receipt.bytes = destination.stat().st_size
+            receipt.sha256 = hashlib.sha256(destination.read_bytes()).hexdigest()
+        return receipt
+    lib.export_files = export
+    monkeypatch.setattr(worker, 'docker_json', lambda *args: {'ID': 'owned-daemon'})
+    if backend_kind == 'incus':
+        monkeypatch.setattr(incus_worker, 'validate_configuration', lambda value: value)
+        monkeypatch.setattr(incus_worker.shutil, 'disk_usage', lambda root: SimpleNamespace(free=20 * 1024**3))
+        raw = owner.get(app.data_dir, row['sessionId'], row['id'])
+        def cli(config, env, args, timeout=30):
+            incus_calls.append(('cli', args))
+            if args == ['capacity']:
+                return {'scope': {'daemon': 'owned-daemon', 'project': 'tests'},
+                        'storage': {'free_bytes': 20 * 1024**3}}
+            assert args == ['launch-status', raw['launchOperationId']], 'No launch or destroy is allowed'
+            return {'state': 'stopped', 'name': raw['universeId'],
+                    'owner_root': source['id'], 'instance_status': 'Stopped'}
+        def incus(config, env, args, timeout=30):
+            incus_calls.append(('incus', args))
+            if args == ['query', '/1.0']:
+                value = {'environment': {'project': 'tests', 'certificate_fingerprint': 'owned-daemon'}}
+            else:
+                assert args == ['query', '/1.0/instances/' + raw['universeId']], 'No guest effects are allowed'
+                value = {'status': 'Stopped', 'config': {'user.dtu.managed-by': 'amplifier-digital-twin',
+                    'user.dtu.owner-root': source['id'], 'user.dtu.request-id': raw['launchOperationId']}}
+            return {'exit_code': 0, 'stdout': json.dumps(value), 'stderr': '', 'truncated': False}
+        def export_selected(config, env, identity, destination, **kwargs):
+            from test_environment_retention import backup, ROOTS
+            incus_calls.append(('export', identity))
+            archives = worker.retention.filter_incus_stream(backup(ROOTS), destination, identity,
+                                                            archive_only=kwargs.get('archive_only', False))
+            append_fifo(destination / 'artifacts.tar')
+            return archives
+        monkeypatch.setattr(incus_worker, 'cli', cli)
+        monkeypatch.setattr(incus_worker, 'incus', incus)
+        monkeypatch.setattr(incus_worker, 'export_selected', export_selected)
+    def invoke(config, home, raw, action, args):
+        assert action == 'remove'
+        payload = {
+            'action': action, 'root': str(folder), 'rootOwner': raw['sessionId'],
+            'operationId': raw['launchOperationId'], 'universeId': raw['universeId'],
+            'expectedBackendIdentity': raw['backendIdentity'],
+            'requestId': args['requestId'], 'resourceId': raw['id'], 'resourceRevision': raw['revision'],
+            'admissionRevision': args['expectedRevision'], 'backendKey': raw['backendKey'],
+            'snapshot': raw['snapshot']}
+        if backend_kind == 'incus':
+            return incus_worker.execute_call({**payload, 'incus': config['incus']})
+        return worker.execute_call({**payload, 'dockerHost': config['dockerHost']})
+    monkeypatch.setattr(owner, 'invoke', invoke)
+    failed = await act(app, 'remove', row, 'receipt-remove')
+    row, original = failed['resource'], failed['request']
+    assert original['state'] == 'failed'
+    diagnostic = {'version': 1, 'reasonCode': 'unsupported_type',
+                  'memberType': 'fifo', 'relativePath': 'artifacts/fixture-pipe'}
+    assert original['result']['verification'] == diagnostic
+    assert original['result']['code'] == 'archive_verification_failed'
+    assert original['result']['phase'] == 'verifying' and original['result']['effectAdmitted'] is False
+    if backend_kind == 'docker':
+        assert original['result']['removal']['destroyEffect'] == 'not_dispatched'
+    else:
+        assert sum(kind == 'export' for kind, _ in incus_calls) == 1
+        assert not any(args[0] == 'destroy' for kind, args in incus_calls if kind == 'cli')
+    assert not any(name == 'destroy' for name, *_ in effects)
+    assert row['status'] == 'stopped'
+    owned = owner.get(app.data_dir, source['id'], row['id'])
+    assert owned['owner'] == {'sessionId': source['id'], 'principal': source['runtimeSessionId']}
+    assert owned['backendType'] == backend_kind and owned['status'] != 'retired'
+    args = removal_read_args(app, row, original)
+    await app.on_runtime_event('runtime.status', {'sessionId': source['id'], 'status': 'idle'})
+    app._state['selectedSessionId'] = peer['id']
+    app._save()
+    before = removal_read_snapshot(app, row)
+    home, workspace = app.data_dir, app.default_workspace
+    old_db, old_requests, old_journal = app.db, app.operations.requests, app.operations.requests.journal
+    await app.close()
+    with pytest.raises(recovery.sqlite3.ProgrammingError):
+        old_db.execute('SELECT 1')
+    with pytest.raises(recovery.sqlite3.ProgrammingError):
+        old_journal.db.execute('SELECT 1')
+    restored = AppService(home, Runtime(), workspace=workspace)
+    try:
+        assert restored.db is not old_db and restored.operations.requests is not old_requests
+        assert restored.operations.requests.journal is not old_journal
+        assert restored.operations.requests.journal.db is not old_journal.db
+        assert restored.operations.requests.read(source['id'], original['requestId']) == original
+        assert owner.get(home, source['id'], row['id']) == owned
+        saved, controls = state_records.load_owner(restored.db, source['id'])
+        assert {key: saved[key] for key in placement} == placement
+        assert saved['runtimeSessionId'] == source['runtimeSessionId']
+        # Force the saved-state path even if startup kept this owner resident.
+        restored._state['sessions'][:] = [item for item in restored._state['sessions'] if item['id'] != source['id']]
+        restored._state['selectedSessionId'] = peer['id']
+        restored.projections.invalidate()
+        assert removal_read_snapshot(restored, row) == before
+        overlay = [item['id'] for item in restored._state['sessions']]
+        db_changes = restored.db.total_changes
+        journal_changes = restored.operations.requests.journal.db.total_changes
+        visits = []
+        read_request = restored.operations.requests.read
+        ledger_connections = []
+        connect = recovery.sqlite3.connect
+        def readonly_ledger(database, *values, **options):
+            assert database.endswith('reservations.sqlite3?mode=ro')
+            assert not values and options == {'uri': True, 'timeout': 0}
+            connection = connect(database, **options)
+            ledger_connections.append(connection)
+            return connection
+        def reopened_read(sid, identity):
+            visits.append((sid, identity))
+            return read_request(sid, identity)
+        def forbidden(*args, **kwargs):
+            pytest.fail('Saved native diagnostic read must not hydrate, admit, persist or call a backend')
+        with monkeypatch.context() as guard:
+            calls = forbid_removal_read_effects(restored, guard)
+            guard.setattr(old_requests, 'read', forbidden)
+            guard.setattr(restored.operations.requests, 'read', reopened_read)
+            guard.setattr(recovery.sqlite3, 'connect', readonly_ledger)
+            for method in ('_session', '_admit_session', '_save'):
+                guard.setattr(restored, method, forbidden)
+            guard.setattr(restored.history, 'refresh', forbidden)
+            guard.setattr(restored.cold_display, 'hydrate', forbidden)
+            guard.setattr(session_projection, 'hydrate', forbidden)
+            guard.setattr(state_records, 'load_owner', forbidden)
+            guard.setattr(restored.test_queue, 'start', forbidden)
+            guard.setattr(worker, 'execute_call', forbidden)
+            guard.setattr(incus_worker, 'execute_call', forbidden)
+            observed = (await agent(restored, transport, REMOVAL_READ, args, 'reopened-native-read',
+                                    _runtimeSessionId=source['runtimeSessionId']))['result']
+            assert observed == {'version': 1, 'sessionId': source['id'], 'id': row['id'],
+                'revision': row['revision'], 'original': {'requestId': original['requestId'], 'state': 'failed'},
+                'status': 'held', 'code': 'original_binding_unverified', 'executor': 'unobserved',
+                'physical': 'not_observed', 'continuationAvailable': False, 'riskDecisionAvailable': False,
+                'verification': {'status': 'recorded', **diagnostic}}
+            assert visits == [(source['id'], original['requestId'])] * 2
+            assert len(ledger_connections) == 1
+            for altered, principal, status in [
+                (args, 'unrelated-child', 403),
+                ({**args, 'sessionId': peer['id']}, source['runtimeSessionId'], 403),
+                ({**args, 'expectedRevision': row['revision'] - 1}, source['runtimeSessionId'], 409),
+            ]:
+                with pytest.raises(AppError) as caught:
+                    await agent(restored, transport, REMOVAL_READ, altered, 'reopened-refusal',
+                                _runtimeSessionId=principal)
+                assert caught.value.status == status
+            assert visits == [(source['id'], original['requestId'])] * 2
+            assert len(ledger_connections) == 2  # Exact read and stale revision; neither foreign principal.
+            assert ledger_connections[0] is not ledger_connections[1]
+        assert not calls and not restored.runtime.calls
+        assert restored.db.total_changes == db_changes
+        assert restored.operations.requests.journal.db.total_changes == journal_changes
+        assert [item['id'] for item in restored._state['sessions']] == overlay
+        assert restored._state['selectedSessionId'] == peer['id']
+        assert state_records.load_owner(restored.db, source['id']) == (saved, controls)
+        assert removal_read_snapshot(restored, row) == before
+    finally:
+        await restored.close()
 
 
 def test_public_removal_read_declares_only_host_resolved_identity_and_revision():
