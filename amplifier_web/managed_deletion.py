@@ -10,12 +10,14 @@ import asyncio
 import copy
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import re
 import shutil
 import sqlite3
 import stat
+import sys
 import time
 import uuid
 from types import SimpleNamespace
@@ -26,6 +28,7 @@ from .session_files import amplifier_home, project_slug, validate_id
 ACTIVE = {'working', 'running', 'starting', 'ready', 'queued', 'pending', 'stopping', 'cancel_requested'}
 BUSY = 'Finish or stop this chat’s active work and pending interactions before deleting it.'
 UNOWNED = 'The saved chat ownership could not be verified. Its files were preserved.'
+LOG = logging.getLogger(__name__)
 
 
 def shared_identity(identity):
@@ -495,6 +498,24 @@ def _cleanup_aux(home, plan):
                     db.execute('DELETE FROM captures WHERE path=?', (path,))
 
 
+def _release_all(held, *, cause=None):
+    """Attempt every release; report cleanup errors without replacing a cause."""
+    failures = []
+    for item in reversed(held):
+        try:
+            item.release()
+        except BaseException as exc:
+            failures.append(exc)
+    if not failures:
+        return
+    failure = BaseExceptionGroup('Conversation lock release failed', failures)
+    if cause is None:
+        raise failure
+    cause.add_note(f'Conversation lock cleanup also failed: {failure!r}')
+    LOG.error('Conversation lock cleanup failed while preserving the original exception',
+              exc_info=(type(failure), failure, failure.__traceback__))
+
+
 def _hold(plan):
     from amplifier_foundation.session.shared_state import SharedSessionStore
     held = []
@@ -509,10 +530,11 @@ def _hold(plan):
         for path in plan.get('metadataLocks', []):
             held.append(_RecoveryLock(path, create=True))
         return held
-    except Exception:
-        for item in reversed(held):
-            item.release()
-        raise ValueError('Another application owns this conversation. Close it there before deleting this chat.') from None
+    except BaseException as exc:
+        _release_all(held, cause=exc)
+        if not isinstance(exc, Exception):
+            raise
+        raise ValueError('Another application owns this conversation. Close it there before deleting this chat.') from exc
 
 
 class _RecoveryLock:
@@ -530,8 +552,10 @@ class _RecoveryLock:
 
     def release(self):
         import fcntl
-        fcntl.flock(self.fd, fcntl.LOCK_UN)
-        os.close(self.fd)
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_UN)
+        finally:
+            os.close(self.fd)
 
 
 def _recovery_hold(plan):
@@ -542,9 +566,8 @@ def _recovery_hold(plan):
         for path in [*plan['coordinationLocks'], *plan.get('metadataLocks', [])]:
             held.append(_RecoveryLock(path))
         return held
-    except BaseException:
-        for item in reversed(held):
-            item.release()
+    except BaseException as exc:
+        _release_all(held, cause=exc)
         raise
 
 
@@ -554,11 +577,12 @@ async def _acquire(plan):
     task = asyncio.create_task(asyncio.to_thread(_hold, plan))
     try:
         return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        def release_result(finished):
+    except asyncio.CancelledError as cancelled:
+        # Exception variables are cleared after except; bind the cancellation
+        # into the callback so late cleanup can retain its diagnostics.
+        def release_result(finished, cause=cancelled):
             if not finished.cancelled() and finished.exception() is None:
-                for item in reversed(finished.result()):
-                    item.release()
+                _release_all(finished.result(), cause=cause)
         task.add_done_callback(release_result)
         raise
 
@@ -622,6 +646,7 @@ def recover(home, db, state):
         checkpoint(db, state)
         db.commit()
         held = []
+        recovery_error = None
         try:
             held = _recovery_hold(value)
             # A confirmed cleanup may have stopped between directory batches.
@@ -642,11 +667,11 @@ def recover(home, db, state):
                     cursor.close()
                 db.rollback()
             _purge(Path(home), value)
-        except (OSError, ValueError, sqlite3.Error):
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            recovery_error = exc
             continue  # durable tombstone still prevents resume/reimport/replay
         finally:
-            for item in reversed(held):
-                item.release()
+            _release_all(held, cause=recovery_error or sys.exception())
         db.execute("UPDATE managed_deletions SET phase='done', value=? WHERE id=?", (_done_value(value), value['id']))
         db.commit()
 
@@ -819,5 +844,4 @@ async def dispatch(app, action, args, origin, include_state, history=None):
         for row in app.state['sessions']:
             if row['id'] in fenced_ids:
                 row.pop('_deleting', None)
-        for item in reversed(held):
-            item.release()
+        _release_all(held, cause=sys.exception())

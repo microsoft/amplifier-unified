@@ -347,6 +347,146 @@ def test_partial_shared_acquisition_releases_earlier_lease(tmp_path):
         blocker.release()
 
 
+def fail_release_diagnostics(monkeypatch, store):
+    """Fail the real HeldSession diagnostic write, not its finally/unlock."""
+    from amplifier_foundation.session import shared_state
+    original = shared_state._atomic_json
+    attempts = []
+    def write(path, value):
+        if Path(path) == store.checkpoint_path.with_name('owner.json') and value.get('active') is False:
+            attempts.append(path)
+            raise OSError('Synthetic owner diagnostics failure')
+        return original(path, value)
+    monkeypatch.setattr(shared_state, '_atomic_json', write)
+    return attempts
+
+
+def two_shared_stores(workspace):
+    from amplifier_foundation.session.shared_state import SharedSessionStore
+    return [SharedSessionStore(workspace, str(uuid.UUID(int=value))) for value in (1, 2)]
+
+
+def test_release_error_is_reported_after_all_shared_handles_are_attempted(tmp_path, monkeypatch):
+    first, second = two_shared_stores(tmp_path)
+    handles = [first.acquire(app='synthetic-root'), second.acquire(app='synthetic-UUID-worker')]
+    with monkeypatch.context() as patcher:
+        attempts = fail_release_diagnostics(patcher, second)
+        with pytest.raises(ExceptionGroup, match='Conversation lock release failed') as caught:
+            managed_deletion._release_all(handles)
+        assert attempts and len(caught.value.exceptions) == 1
+        assert str(caught.value.exceptions[0]) == 'Synthetic owner diagnostics failure'
+    for store in (first, second):
+        with shared_lease(store, app='synthetic-all-release-recheck'):
+            pass
+
+
+def test_partial_rollback_keeps_acquisition_cause_and_releases_all(tmp_path, monkeypatch, caplog):
+    from amplifier_foundation.session.shared_state import SharedSessionStore
+    first, second = two_shared_stores(tmp_path)
+    blocked = SharedSessionStore(tmp_path, 'z-blocked')
+    blocker = blocked.acquire(app='synthetic-blocker')
+    try:
+        with monkeypatch.context() as patcher:
+            attempts = fail_release_diagnostics(patcher, second)
+            with pytest.raises(ValueError, match='Another application owns') as caught:
+                managed_deletion._hold({
+                    'workspace': str(tmp_path),
+                    'nativeIds': [store.session_id for store in (first, second, blocked)],
+                })
+            assert attempts and caught.value.__cause__ is not None
+            assert any('cleanup also failed' in note for note in caught.value.__cause__.__notes__)
+            assert 'Synthetic owner diagnostics failure' in caplog.text
+        for store in (first, second):
+            with shared_lease(store, app='synthetic-rollback-recheck'):
+                pass
+    finally:
+        blocker.release()
+
+
+async def test_cancel_late_result_releases_two_real_leases_despite_diagnostics_error(tmp_path, monkeypatch, caplog):
+    from amplifier_foundation.session.metadata import metadata_lock
+    first, second = two_shared_stores(tmp_path)
+    native = tmp_path/'synthetic_worker'; native.mkdir()
+    lock = native.parent/f'.{native.name}.metadata.lock'
+    with metadata_lock(native):
+        inode = lock.stat().st_ino
+    loop = asyncio.get_running_loop()
+    acquired, cleaned = asyncio.Event(), asyncio.Event()
+    finish = threading.Event()
+    original_hold, original_release = managed_deletion._hold, managed_deletion._release_all
+    causes = []
+    def delayed(plan):
+        handles = original_hold(plan)
+        loop.call_soon_threadsafe(acquired.set)
+        if not finish.wait(5):
+            original_release(handles)
+            raise TimeoutError('Synthetic late-result gate timed out')
+        return handles  # the callback receives two actual HeldSessions and a metadata flock
+    def observe_release(handles, *, cause=None):
+        causes.append(cause)
+        try:
+            return original_release(handles, cause=cause)
+        finally:
+            cleaned.set()
+    with monkeypatch.context() as patcher:
+        attempts = fail_release_diagnostics(patcher, second)
+        patcher.setattr(managed_deletion, '_hold', delayed)
+        patcher.setattr(managed_deletion, '_release_all', observe_release)
+        task = asyncio.create_task(managed_deletion._acquire({
+            'workspace': str(tmp_path), 'nativeIds': [first.session_id, second.session_id],
+            'metadataLocks': [str(lock)],
+        }))
+        try:
+            await asyncio.wait_for(acquired.wait(), 5)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError) as caught:
+                await task
+        finally:
+            finish.set()
+        await asyncio.wait_for(cleaned.wait(), 5)
+        assert attempts and causes == [caught.value]
+        assert any('cleanup also failed' in note for note in caught.value.__notes__)
+        assert 'Synthetic owner diagnostics failure' in caplog.text
+    for store in (first, second):
+        with shared_lease(store, app='synthetic-cancel-two-lease-recheck'):
+            pass
+    with metadata_lock(native):
+        assert lock.stat().st_ino == inode
+
+
+async def test_dispatch_final_cleanup_does_not_mask_primary_failure_or_leak_root(app, monkeypatch, caplog):
+    from amplifier_foundation.session.shared_state import SharedSessionStore
+    row = await create(app); files = Path(row['workspace'])
+    worker_history(row)
+    worker_id = str(uuid.uuid4())
+    native_session(files, worker_id, metadata={'parent_id': row['id']})
+    root, worker = (SharedSessionStore(files, identity) for identity in (row['id'], worker_id))
+    value = await preview(app, row['id'])
+    original_hold, original_inventory = managed_deletion._hold, managed_deletion._inventory
+    def hold(plan):
+        # Put the worker last to reproduce root starvation on reverse release.
+        return original_hold({**plan, 'sharedIds': [row['id'], worker_id]})
+    def changed(path):
+        raise ValueError('Synthetic primary inventory failure')
+    with monkeypatch.context() as patcher:
+        attempts = fail_release_diagnostics(patcher, worker)
+        patcher.setattr(managed_deletion, '_hold', hold)
+        # Plan enumeration must finish before failing the post-acquisition check.
+        async def acquire(plan):
+            handles = await asyncio.to_thread(hold, plan)
+            patcher.setattr(managed_deletion, '_inventory', changed)
+            return handles
+        patcher.setattr(managed_deletion, '_acquire', acquire)
+        with pytest.raises(AppError, match='Synthetic primary inventory failure') as caught:
+            await delete(app, value)
+        assert attempts and any('cleanup also failed' in note for note in caught.value.__notes__)
+        assert 'Synthetic owner diagnostics failure' in caplog.text
+    assert managed_deletion._inventory is original_inventory and files.exists()
+    for store in (root, worker):
+        with shared_lease(store, app='synthetic-final-cleanup-recheck'):
+            pass
+
+
 async def test_cancelled_acquisition_releases_handles_that_finish_late(tmp_path, monkeypatch):
     from amplifier_foundation.session.shared_state import SharedSessionStore
     from amplifier_foundation.session.metadata import metadata_lock
