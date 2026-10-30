@@ -238,8 +238,7 @@ async def test_foreign_executable_and_authority_mutations_still_refuse_through_a
     source, peer = app.state["sessions"]
     before = copy.deepcopy(peer)
     settings = copy.deepcopy(app.state["settings"])
-    reason = "calling conversation" if action == "permissions.save" else "explicitly"
-    with pytest.raises(AppError, match=reason) as exc:
+    with pytest.raises(AppError, match="explicitly") as exc:
         await app.app_bridge("dispatch", {"action": action, "args": {key: peer["id"], **args},
             "_runtimeSessionId": source["id"]}, source["id"])
     assert exc.value.status == 403
