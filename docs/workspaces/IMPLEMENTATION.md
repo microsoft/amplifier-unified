@@ -22,7 +22,7 @@ worktree, resource and usage records remain authoritative.
 | --- | --- | --- |
 | A Authority | Actual root/child identity, intersected file policy, reusable scoped configuration grants, per-chat write settings and inherited-default reset, native approval continuation, delayed revocation and common registered-history scope | Supported native consumers and effect families only; no OS, tenant or arbitrary executable-code confinement |
 | B Requests and continuations | Coherent peer creation, retained retry identities, later-generation replies, revision notifications and expiring one-shot watches | Notifications report outcomes; only qualified terminal evidence satisfies a dependency |
-| C Bounded messaging | Destination/sender/assignment limits, fair admission, queue expiry, causal-hop bounds and authenticated peer lineage | Safe tool-boundary informational delivery is adapter-specific; unsupported steering does not become cancel-and-resend |
+| C Bounded messaging | Destination/sender/assignment limits, fair admission, queue expiry, message rates and authenticated peer lineage | Safe tool-boundary informational delivery is adapter-specific; unsupported steering does not become cancel-and-resend |
 | D Placement and resources | Explicit per-repository copies, phase-aware handoff, cooperative reservations, owner observations and retained task-owned scratch folders, browser-profile directories and SQLite files | Explicit dependency mappings; no automatic environment inference, running browser confinement, database servers or arbitrary preview discovery |
 | E Awareness and cooperation | Bounded active-work packets, advisory file intent, supported file-tool source checks, replacement of volatile guidance and optional shared assignment tasks with atomic exclusive claims | Task claims assign responsibility, not file access; no universal external-writer detection or filesystem fence |
 | F Results and integration | Retained exact reported bytes, scoped artifact reads, loaded-origin observations, explicit integration responsibility, recorded candidates and native validation/collection per repository | Qualification covers the chosen commands and observed versions; semantic correctness, complete subprocess imports and publication are not inferred |
@@ -866,9 +866,15 @@ Inbox admission retains the existing 64-slot destination bound, including saved
 reply/watch slots, and adds 16 pending inputs per sender and 32 per assignment.
 Pending senders rotate using durable admission order. Accepted substantive input
 remains retained when a caller-selected deadline expires. The default and maximum
-queue duration is one day; callers can choose a shorter deadline. A causal chain
-is bounded to 16 peer-input hops using host-retained input provenance, independently
-of command IDs or wording. Only actual new human input resets that bound.
+queue duration is one day; callers can choose a shorter deadline. Causal depth
+remains recorded from host-retained input provenance, independently of command
+IDs or wording, but does not stop authorized work after an arbitrary number of
+handoffs. Only actual new human input resets the recorded depth. Existing pair
+message rates, inbox capacity, assignment/task limits and Stop still apply. On
+restart, current-protocol versioned waits bearing the exact retired hop-limit
+diagnostic are reconsidered through normal outcome and admission checks. Stops,
+changed objectives, already admitted or uncertain inputs and the separate
+32-revision limit are not reopened or replayed.
 Publication failure tests distinguish a rolled-back notification from a committed
 claim with a lost acknowledgement. Neither loses the underlying report or creates
 an extra model turn on retry.
