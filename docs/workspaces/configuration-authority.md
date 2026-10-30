@@ -217,7 +217,11 @@ They cannot supply inherited Full or erase an operator's existing broad Full
 choice. The unavailable relationship remains in the revision and source diagnostic.
 
 Host checks and native file preparation use one resolver. It reads only the
-requested owners and their source chain; directory rows locate aliases but never
+requested owners and their source chain, following each committed manifest's
+exact immutable view payload and immediately projecting its identity/source
+fields. It never follows cold message/execution references or trusts mutable
+`view.json` presentation. Read cost grows with source depth and those owner
+payload bytes, not unrelated history. Directory rows locate aliases but never
 supply authority. A worker's host-owner ID is transported separately from its
 native ID, so older aliases do not change its policy. The effective revision binds
 consulted choices, relationships and source Stop revisions. Source revocation or

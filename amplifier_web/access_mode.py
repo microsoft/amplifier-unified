@@ -42,18 +42,33 @@ def _records(db, workspace, session_id, *, global_only=False):
 
 
 def _owner(db, identity):
-    """Read only source/identity scalars from one canonical saved owner."""
+    """Project one committed owner, without following cold history references."""
     if not db.execute("SELECT 1 FROM sqlite_master WHERE name='state_records'").fetchone():
         return None
     row = db.execute("""SELECT id, json_extract(value,'$.workspace'),
         coalesce(json_extract(value,'$.runtimeSessionId'),json_extract(value,'$.nativeIdentity'),id),
         json_extract(value,'$.collaboration.creatorSessionId'),json_extract(value,'$.collaboration.requestId'),
         json_extract(value,'$.scheduledOrigin.sessionId'),json_extract(value,'$.scheduledOrigin.scheduleId'),
-        json_extract(value,'$.scheduledOrigin.runId'),coalesce(json_extract(value,'$.interruptionRevision'),0)
+        json_extract(value,'$.scheduledOrigin.runId'),coalesce(json_extract(value,'$.interruptionRevision'),0),
+        json_extract(value,'$."$viewPayload"')
         FROM state_records WHERE kind='session' AND id=? AND value!='null'""", (identity,)).fetchone()
     if not row or not isinstance(row[1], str):
         return None
-    return dict(zip(('id', 'workspace', 'nativeId', 'creator', 'request', 'scheduler', 'schedule', 'run', 'interruption'), row))
+    if row[9] is None:
+        return dict(zip(('id', 'workspace', 'nativeId', 'creator', 'request', 'scheduler', 'schedule', 'run', 'interruption'), row))
+    # The manifest's exact immutable resource owns the saved view. Its mutable
+    # view.json presentation can be newer than the committed transaction.
+    from .resource_files import detach, read_detached
+    reference = json.loads(row[9])
+    saved = read_detached(detach(db, reference['$resource']))
+    if not isinstance(saved, dict) or saved.get('id') != identity or not isinstance(saved.get('workspace'), str):
+        raise ValueError('The saved access-policy owner is invalid.')
+    creator, scheduler = saved.get('collaboration', {}), saved.get('scheduledOrigin', {})
+    return {'id': identity, 'workspace': saved['workspace'],
+            'nativeId': saved.get('runtimeSessionId') or saved.get('nativeIdentity') or identity,
+            'creator': creator.get('creatorSessionId'), 'request': creator.get('requestId'),
+            'scheduler': scheduler.get('sessionId'), 'schedule': scheduler.get('scheduleId'),
+            'run': scheduler.get('runId'), 'interruption': saved.get('interruptionRevision', 0)}
 
 
 def _native_owner(db, workspace, session_id, owner_session_id=None):

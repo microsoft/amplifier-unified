@@ -8,6 +8,7 @@ import pytest
 from amplifier_web.access_mode import read_mode
 from amplifier_web.host.config import read_config
 from amplifier_web.host.session import _apply_host_policy
+from amplifier_web.resource_files import detach, read_detached
 from amplifier_web.service import AppError, AppService
 from test_access_mode import save
 from test_configuration_authority import app
@@ -154,6 +155,38 @@ async def test_native_alias_locator_reads_canonical_source_not_directory_project
     assert both_modes(app, target) == ('full', 'full')
 
 
+async def test_committed_payload_wins_over_mutable_view_without_loading_cold_history(app, monkeypatch):
+    from amplifier_web import resource_files
+    from amplifier_web.session_projection import view_path
+    source, target = app.state['sessions']
+    await save(app, source)
+    source['messages'] = [{'id': 'retained-history', 'role': 'assistant', 'text': 'History body. ' * 2000}]
+    app._publish_changes(sessions={source['id']})
+    link(app, target, source)
+    def payload(session):
+        row = app.db.execute("SELECT value FROM state_records WHERE kind='session' AND id=?", (session['id'],)).fetchone()
+        manifest = json.loads(row[0])
+        assert 'collaboration' not in manifest
+        return read_detached(detach(app.db, manifest['$viewPayload']['$resource']))
+    cold_messages = payload(source)['_coldFields']['messages']['$resource']
+    uncommitted = payload(target)
+    uncommitted['collaboration']['creatorSessionId'] = 'uncommitted-source'
+    uncommitted['nativeIdentity'] = 'uncommitted-native'
+    path = view_path(app.data_dir, target)
+    path.write_text(json.dumps(uncommitted))
+    reads = []
+    original = resource_files.read_detached
+    def read(source, **kwargs):
+        reads.append(source.identity)
+        assert source.identity != cold_messages
+        return original(source, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(resource_files, 'read_detached', read)
+        assert both_modes(app, target) == ('full', 'full')
+    assert reads and cold_messages not in reads
+    assert json.loads(path.read_text())['collaboration']['creatorSessionId'] == 'uncommitted-source'
+
+
 async def test_current_worker_alias_uses_verified_host_owner_for_file_policy(app):
     source, target = app.state['sessions']
     await save(app, source)
@@ -267,7 +300,9 @@ async def test_scheduled_root_inherits_after_host_restart_without_source_residen
             if identity != sid and identity not in runtime.workers:
                 first_mount_modes.append(read_mode(app.data_dir, app._session(identity)['workspace'], identity))
                 saved = app.db.execute("SELECT value FROM state_records WHERE kind='session' AND id=?", (identity,)).fetchone()
-                first_mount_origins.append(json.loads(saved[0]).get('scheduledOrigin'))
+                manifest = json.loads(saved[0])
+                payload = read_detached(detach(app.db, manifest['$viewPayload']['$resource']))
+                first_mount_origins.append(payload.get('scheduledOrigin'))
             return await original_control(identity, operation, args)
         runtime.control = control
         now[0] += 61
