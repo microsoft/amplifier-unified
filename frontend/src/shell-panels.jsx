@@ -71,7 +71,7 @@ export function SessionHistoryControls({session,messages=session?.messages,act,o
 }
 
 export {A2UISurface} from './a2ui';
-export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSurface}){
+export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSurface,permissionHistoryCurrent=()=>false}){
  const settings=!!state.view?.settingsCanvas;
  const canvas=state.canvas||{},view=state.view||{},draft=view.canvasDraft||{},layout=usePanelLayout(state,act),panel=useRef(null),actRef=useRef(act);
  actRef.current=act;
@@ -145,7 +145,7 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSur
  useModalFocus(panel,focused,()=>controls?closeControls():patch(actRef.current,{canvasFocused:false}),'#canvas-toggle');
  useEffect(()=>{if(focused)panel.current?.querySelector('[aria-label="Exit canvas focus"]')?.focus({preventScroll:true})},[focused]);
  useEffect(()=>{
-  if(!visible||!overview||!draft.library||!['outputs','publishing','permissions'].includes(draft.delivery))return;
+  if(!visible||!overview||!draft.library||!['outputs','publishing'].includes(draft.delivery))return;
   const id=draft.delivery==='outputs'?'review':draft.delivery;
   setOverviewDraft({sections:{...overviewDraft.sections,[id]:true}});
   // Consume the existing navigation target only after its visible destination
@@ -153,6 +153,23 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSur
   const timer=requestAnimationFrame(()=>{const section=panel.current?.querySelector(`[data-overview-section="${id}"]`);section?.scrollIntoView({block:'nearest',behavior:'instant'});section?.querySelector('summary')?.focus({preventScroll:true});patch(actRef.current,{canvasDraft:{...draft,delivery:null}})});
   return()=>cancelAnimationFrame(timer);
  },[visible,overview,state.selectedSessionId,draft.library,draft.delivery]);
+ useEffect(()=>{
+  if(!visible||!overview||draft.delivery!=='permissions')return;
+  const key=draft.permissionHistoryKey;
+  setOverviewDraft({sections:{...overviewDraft.sections,permissions:true}});
+  // Clear only the still-current target after document commands settle. The
+  // dispatch owner derives its draft then; never send this render's stale copy.
+  dispatch('view.update',{sessionId:state.selectedSessionId,patch:{}},{consumePermissionHistory:key}).then(receipt=>{
+   if(!receipt.accepted)return;
+   requestAnimationFrame(()=>{
+    if(!permissionHistoryCurrent(key))return;
+    const section=panel.current?.querySelector('[data-overview-section="permissions"]');
+    if(!section||section.closest('[hidden],[inert]'))return;
+    section.scrollIntoView({block:'nearest',behavior:'instant'});
+    section.querySelector('summary')?.focus({preventScroll:true});
+   });
+  }).catch(()=>{});
+ },[visible,overview,state.selectedSessionId,draft.delivery,draft.permissionHistoryKey]);
  if(!mounted.current)return null;
  const latestEvent=canvas.events?.at(-1);
  return <CanvasPrimaryActionsHost.Provider value={actionsHost}><CanvasControlsHost.Provider value={controlsHost}><aside ref={panel} id="workspace-canvas" className="a-canvas-panel" hidden={suppressed||!canvas.open||!state.selectedSessionId} inert={suppressed||!canvas.open||!state.selectedSessionId} aria-hidden={suppressed||!canvas.open||!state.selectedSessionId||undefined} data-part="canvas" data-mode={overview?'overview':'artifact'} data-focused={focused} data-controls={controls} data-pinned={!!view.canvasControlsPinned} aria-label="Canvas" role={focused?'dialog':undefined} aria-modal={focused||undefined} aria-owns={focused?'canvas-toggle':undefined} onKeyDown={event=>{

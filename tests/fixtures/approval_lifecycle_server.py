@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 import tempfile
 import time
@@ -44,6 +45,14 @@ class Runtime:
 
 
 async def main(home):
+    package = Path(amplifier_web.__file__).parent
+    toolchain = Path(os.environ.get('AMPLIFIER_SHELL_NODE_MODULES', package.parent / 'frontend/node_modules')).resolve()
+    readiness = {'node':shutil.which('node'), 'nodeModules':str(toolchain),
+                 'playwright':(toolchain / 'playwright').is_dir(),
+                 'validationHtml':(package / 'static/shell-validation.html').is_file(),
+                 'source':str(package)}
+    (home.parent / 'validation-readiness.json').write_text(json.dumps(readiness, indent=2))
+    assert readiness['node'] and readiness['playwright'] and readiness['validationHtml'], readiness
     workspace = home / 'workspace'
     workspace.mkdir()
     os.environ['AMPLIFIER_HOME'] = str(home / 'native')
