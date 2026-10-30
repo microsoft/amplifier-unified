@@ -230,9 +230,9 @@ async def test_full_scope_cannot_take_browser_draft_or_another_conversations_fil
             await app.dispatch('feedback.attachment.remove', {'feedbackId': FID, 'id': row['id']})
         assert app.feedback.additions.project() == before
     with pytest.raises(AppError):
-        await staged(app, peer)
+        await staged(app, peer, origin='system')
     with pytest.raises(AppError):
-        await call(app, peer, 'feedback.attachments.add', addition([row]))
+        await call(app, peer, 'feedback.attachments.add', addition([row]), origin='system')
     assert not remote.writes
     args = addition([row])
     await call(app, source, 'feedback.attachments.add', args)
@@ -274,3 +274,49 @@ async def test_changed_or_incomplete_selected_manifest_refuses_before_acceptance
     with pytest.raises(AppError):
         await call(app, source, 'feedback.attachments.add', addition([first, {**second, 'sha256': '0' * 64}]))
     assert not app.db.execute('SELECT 1 FROM feedback_followups').fetchone() and not remote.writes
+
+
+@pytest.mark.parametrize('origin', ['agent', 'system'])
+async def test_outer_command_receipts_keep_conversation_owner_after_stop_and_revocation(app, remote, origin):
+    source, peer = app.state['sessions']
+    await mode(app, source)
+    await mode(app, peer)
+    peer['collaborationGeneration'] = {'id': 'peer-generation', 'inputIds': ['peer-input'],
+        'terminal': False, 'interruptionRevision': peer.get('interruptionRevision', 0)}
+    accepted = []
+
+    async def command(action, args, identity):
+        result = await call(app, source, action, args, origin=origin, command=identity)
+        accepted.append((action, copy.deepcopy(args), identity, copy.deepcopy(result['result'])))
+        return result['result']
+
+    row = await command('feedback.attachment.add', staging(), 'outer-stage')
+    spare = await command('feedback.attachment.add', staging('spare-file-stage'), 'outer-spare')
+    await command('feedback.attachment.remove', {'feedbackId': FID, 'id': spare['id']}, 'outer-remove')
+    review = {'requestId': 'outer-review-request', 'feedbackId': FID}
+    await command('feedback.attachments.review', review, 'outer-review')
+    await settled(app)
+    remote.lose, remote.after_processing = 'comment', True
+    args = addition([row], reviewRequestId=review['requestId'])
+    await command('feedback.attachments.add', args, 'outer-add')
+    await settled(app)
+    assert retained(app)['status'] == 'partial'
+    original_authority = copy.deepcopy(retained(app)['authority'])
+    await mode(app, source, 'ask')
+    await app.dispatch('conversation.stop', {'sessionId': source['id']})
+    remote.lose = None
+    # The new check is observational and therefore needs no renewed generation.
+    check = {'requestId': 'outer-reconcile-request', 'feedbackId': FID,
+             'additionRequestId': args['requestId']}
+    await command('feedback.attachments.reconcile', check, 'outer-reconcile')
+    await settled(app)
+    assert retained(app)['status'] == 'submitted'
+    writes = len(remote.writes)
+    for action, payload, identity, original_result in accepted:
+        # Exercise the outer commands ledger, not only the inner requestId.
+        with pytest.raises(AppError, match='command ID.*different contents'):
+            await call(app, peer, action, payload, origin=origin, command=identity)
+        result = await call(app, source, action, payload, origin=origin, command=identity)
+        assert result['duplicate'] and result['result'] == original_result
+    assert retained(app)['authority'] == original_authority
+    assert len(remote.writes) == writes == 5

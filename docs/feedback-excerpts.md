@@ -75,10 +75,13 @@ Every upload/issue write checks that retained authority. Revocation
 or Stop prevents later writes; once a write may have happened, its outcome stays
 unknown and is never replayed. An accepted background send can outlive its turn.
 
-Initial publication and direct text follow-ups support standing Full through
-the same retained authority. Later-file additions and optional comparison reviews
-retain their separate client workflow; general GitHub issue, PR or release
-management is outside these feedback actions. Existing Ask-mode/browser
+Initial publication, direct text follow-ups and later ordinary-file additions
+support standing Full through the same retained authority. Later files use
+conversation-owned staging and an exact selected file manifest; review is
+optional under Full. Their existing upload journal retains per-phase receipts
+and supports read-only reconciliation after Stop or revocation. Optional text
+comparison reviews retain their separate client workflow; general GitHub issue,
+PR or release management is outside these feedback actions. Existing Ask-mode/browser
 confirmation keeps its behavior. Admission consumes the canonical current
 generation/Stop check with explicit descendant support, not a second generation
 authority service. Runtime and release qualification remain distinct from this
