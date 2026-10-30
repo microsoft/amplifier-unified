@@ -845,7 +845,13 @@ generation, delivered input and digest. Unrelated background jobs no longer
 invalidate a proven manager result. Missing anchors, unrelated inputs and
 background-only dispositions never qualify. Rejected/unknown terminal evidence
 notifies without becoming success. A later meaningful report suppresses an
-unsubmitted earlier success notification; both receipts remain inspectable.
+unsubmitted earlier notification, including a question, deferral or failure;
+both reports and their notification receipts remain inspectable. A merely staged
+success does not replace an earlier notification until its terminal evidence
+arrives. Already accepted or uncertain inputs are never rewritten or replayed. Retiring
+a queued return releases its inbox slot for a newer backpressured outcome without
+waiting for an unrelated event. Reading a result remains passive; it does not
+mean that the model reviewed it or retire a same-revision notification.
 New subscriptions claim at most one continuation per meaningful revision, capped
 at 32 notifications. Old single-notification waits retain their original policy.
 

@@ -849,8 +849,11 @@ class Collaboration:
                             if row.get('outcomeRevision') == revision), None)
             if current is not None and current.get('qualified') is not snapshot.get('qualified'):
                 return False
-            if receipt.get('dependencySatisfied') and request.get('outcomeRevision', revision) > revision:
-                return False  # A later report superseded the old successful dependency.
+            if request.get('outcomeRevision', revision) > revision:
+                # A later meaningful outcome replaces the queued wake, including
+                # an old question/failure. Full reports remain in their receipts.
+                # Staged success does not advance outcomeRevision before sealing.
+                return False
             return revision <= wait.get('lastClaimedRevision', 0) and identity == receipt.get('requestId')
         return wait.get('status') == 'claimed' and wait.get('continuationId') == receipt.get('requestId')
 
@@ -889,6 +892,7 @@ class Collaboration:
         if sid in self.draining:
             return
         self.draining.add(sid)
+        freed_return = False
         try:
             self.resume_outcomes(sid)
             rows = self.fair_rows(sid)
@@ -907,6 +911,7 @@ class Collaboration:
                         self.observe_admission(receipt)
                         self.publish_receipt(receipt)
                         self.cancel_expiry(identity)
+                        freed_return = freed_return or bool(receipt.get('dependencyRequestId'))
                         continue
                     if (target.get("status") in BUSY or target.get('configurationBusy')
                             or target.get('pendingConfiguration', {}).get('phase') in {'queued', 'applying'}
@@ -962,6 +967,10 @@ class Collaboration:
                     break
         finally:
             self.draining.discard(sid)
+        if freed_return:
+            # The newest outcome may have been backpressured by the old queued
+            # return. Reuse the released slot now; no unrelated event is needed.
+            self.resume_outcomes(sid)
 
     def admission(self, sid, args):
         receipt = self.receipt(args["inputId"])
