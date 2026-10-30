@@ -1,0 +1,529 @@
+{
+  "date": "2026-10-30",
+  "scope": "Real installed 0.35.0 server and built client; owned isolated synthetic state, no live provider or production adoption. Test-only follow-up.",
+  "release": {
+    "candidate": "675bc28fc8504353f21686305ec0cd7b9806ce5f",
+    "publishedParent": "3993c9b277054f758c263b4f69d3626d9a5b1fea",
+    "mergedRelease": "f8ae720781dc2b0d5f420f2fc8d07a72bf08a022",
+    "version": "0.35.0",
+    "build": "04ea117f6399dcff",
+    "wheelSha256": "af4be5882203d0e4ce69e242baa7dc9ecdd19f94be5eeffcc8d2ec84ec40b01d"
+  },
+  "originalCi": {
+    "url": "https://github.com/microsoft/amplifier-unified/actions/runs/41118240211",
+    "status": "failed",
+    "retained": true,
+    "failurePhase": "large-chat-work-causal-pulse",
+    "revisionOnlyFrames": 8,
+    "revisionOnlyBytes": 960,
+    "materialWorkFrames": 2,
+    "viewPosts": 0
+  },
+  "conclusion": "The observed failure sampled pending work-history materialization. No candidate-caused transport regression demonstrated; unchanged candidate passes. The test must establish selected work readiness and keep unrelated scheduled discovery outside its strict causal-only workload.",
+  "sourceComparison": {
+    "revisions": {
+      "published": "3993c9b277054f758c263b4f69d3626d9a5b1fea",
+      "frozenBase": "99d975b0387ec1b24c84db7fffe898370155d3d1",
+      "candidate": "675bc28fc8504353f21686305ec0cd7b9806ce5f"
+    },
+    "files": [
+      {
+        "path": "amplifier_web/work_windows.py",
+        "sha256": {
+          "3993c9b277054f758c263b4f69d3626d9a5b1fea": "7e483b87736662ae27741a8cee7a3cd87eb771e7d6079f1c083b8a24d4bb7678",
+          "99d975b0387ec1b24c84db7fffe898370155d3d1": "7e483b87736662ae27741a8cee7a3cd87eb771e7d6079f1c083b8a24d4bb7678",
+          "675bc28fc8504353f21686305ec0cd7b9806ce5f": "7e483b87736662ae27741a8cee7a3cd87eb771e7d6079f1c083b8a24d4bb7678"
+        },
+        "unchangedSincePublished": true
+      },
+      {
+        "path": "amplifier_web/event_log_view.py",
+        "sha256": {
+          "3993c9b277054f758c263b4f69d3626d9a5b1fea": "68a866d2a61dbbc8b9a21c453efae5125a0a47bca4bf2d19a50eb7a4ec44b9c3",
+          "99d975b0387ec1b24c84db7fffe898370155d3d1": "68a866d2a61dbbc8b9a21c453efae5125a0a47bca4bf2d19a50eb7a4ec44b9c3",
+          "675bc28fc8504353f21686305ec0cd7b9806ce5f": "68a866d2a61dbbc8b9a21c453efae5125a0a47bca4bf2d19a50eb7a4ec44b9c3"
+        },
+        "unchangedSincePublished": true
+      },
+      {
+        "path": "amplifier_web/event_window_worker.py",
+        "sha256": {
+          "3993c9b277054f758c263b4f69d3626d9a5b1fea": "10cabddcde3f25b6cf46fa7641f993b18432f0432de544912a5016346e3f1666",
+          "99d975b0387ec1b24c84db7fffe898370155d3d1": "10cabddcde3f25b6cf46fa7641f993b18432f0432de544912a5016346e3f1666",
+          "675bc28fc8504353f21686305ec0cd7b9806ce5f": "10cabddcde3f25b6cf46fa7641f993b18432f0432de544912a5016346e3f1666"
+        },
+        "unchangedSincePublished": true
+      },
+      {
+        "path": "amplifier_web/browser_state.py",
+        "sha256": {
+          "3993c9b277054f758c263b4f69d3626d9a5b1fea": "a7d8488999ef7a37fc009f9338f221c53f4a25c5efc4e89ae9820461230e00b8",
+          "99d975b0387ec1b24c84db7fffe898370155d3d1": "a7d8488999ef7a37fc009f9338f221c53f4a25c5efc4e89ae9820461230e00b8",
+          "675bc28fc8504353f21686305ec0cd7b9806ce5f": "a7d8488999ef7a37fc009f9338f221c53f4a25c5efc4e89ae9820461230e00b8"
+        },
+        "unchangedSincePublished": true
+      },
+      {
+        "path": "amplifier_web/browser_demand.py",
+        "sha256": {
+          "3993c9b277054f758c263b4f69d3626d9a5b1fea": "d1cc7476be20bb9581eaac55de8b38de47888d70b6ca9e0faa746ba696484f5a",
+          "99d975b0387ec1b24c84db7fffe898370155d3d1": "d1cc7476be20bb9581eaac55de8b38de47888d70b6ca9e0faa746ba696484f5a",
+          "675bc28fc8504353f21686305ec0cd7b9806ce5f": "d1cc7476be20bb9581eaac55de8b38de47888d70b6ca9e0faa746ba696484f5a"
+        },
+        "unchangedSincePublished": true
+      },
+      {
+        "path": "amplifier_web/state_transport.py",
+        "sha256": {
+          "3993c9b277054f758c263b4f69d3626d9a5b1fea": "82e38a3811169edf7e9da1fd514ffc7a4db75d9d557be2e46da64018981a062a",
+          "99d975b0387ec1b24c84db7fffe898370155d3d1": "82e38a3811169edf7e9da1fd514ffc7a4db75d9d557be2e46da64018981a062a",
+          "675bc28fc8504353f21686305ec0cd7b9806ce5f": "82e38a3811169edf7e9da1fd514ffc7a4db75d9d557be2e46da64018981a062a"
+        },
+        "unchangedSincePublished": true
+      },
+      {
+        "path": "frontend/src/main.jsx",
+        "sha256": {
+          "3993c9b277054f758c263b4f69d3626d9a5b1fea": "a98f57ca29e1bacef56b3770fd0835fe42a9511bf8dbd9a8ca82fea5c8317023",
+          "99d975b0387ec1b24c84db7fffe898370155d3d1": "a98f57ca29e1bacef56b3770fd0835fe42a9511bf8dbd9a8ca82fea5c8317023",
+          "675bc28fc8504353f21686305ec0cd7b9806ce5f": "a98f57ca29e1bacef56b3770fd0835fe42a9511bf8dbd9a8ca82fea5c8317023"
+        },
+        "unchangedSincePublished": true
+      },
+      {
+        "path": "frontend/src/state-stream.js",
+        "sha256": {
+          "3993c9b277054f758c263b4f69d3626d9a5b1fea": "840ba2d9840ffdf7c461e2fd84dbcf2671061b3b3ac075ee12b4b0a871de3025",
+          "99d975b0387ec1b24c84db7fffe898370155d3d1": "840ba2d9840ffdf7c461e2fd84dbcf2671061b3b3ac075ee12b4b0a871de3025",
+          "675bc28fc8504353f21686305ec0cd7b9806ce5f": "840ba2d9840ffdf7c461e2fd84dbcf2671061b3b3ac075ee12b4b0a871de3025"
+        },
+        "unchangedSincePublished": true
+      },
+      {
+        "path": "frontend/src/state-transport.js",
+        "sha256": {
+          "3993c9b277054f758c263b4f69d3626d9a5b1fea": "2f2d3bcbc7567729afad99e09bf3242e861dd313170fb95173037630c24e6ccf",
+          "99d975b0387ec1b24c84db7fffe898370155d3d1": "2f2d3bcbc7567729afad99e09bf3242e861dd313170fb95173037630c24e6ccf",
+          "675bc28fc8504353f21686305ec0cd7b9806ce5f": "2f2d3bcbc7567729afad99e09bf3242e861dd313170fb95173037630c24e6ccf"
+        },
+        "unchangedSincePublished": true
+      },
+      {
+        "path": "frontend/src/view-reporter.js",
+        "sha256": {
+          "3993c9b277054f758c263b4f69d3626d9a5b1fea": "75b33515a0c6049b05e64207d151afb1cb500f1de7ba8ade21478f3ef4cceed4",
+          "99d975b0387ec1b24c84db7fffe898370155d3d1": "75b33515a0c6049b05e64207d151afb1cb500f1de7ba8ade21478f3ef4cceed4",
+          "675bc28fc8504353f21686305ec0cd7b9806ce5f": "75b33515a0c6049b05e64207d151afb1cb500f1de7ba8ade21478f3ef4cceed4"
+        },
+        "unchangedSincePublished": true
+      },
+      {
+        "path": "frontend/tests/client-traffic-browser.mjs",
+        "sha256": {
+          "3993c9b277054f758c263b4f69d3626d9a5b1fea": "cac69c75d990f6f88c221c33e20e030be1cf06ad49622d513411de6c4d3fae1a",
+          "99d975b0387ec1b24c84db7fffe898370155d3d1": "cac69c75d990f6f88c221c33e20e030be1cf06ad49622d513411de6c4d3fae1a",
+          "675bc28fc8504353f21686305ec0cd7b9806ce5f": "cac69c75d990f6f88c221c33e20e030be1cf06ad49622d513411de6c4d3fae1a"
+        },
+        "unchangedSincePublished": true
+      },
+      {
+        "path": "frontend/tests/browser-chat-pages.mjs",
+        "sha256": {
+          "3993c9b277054f758c263b4f69d3626d9a5b1fea": "493be98dddeb031a19d42ad7d1a70f2a8095a590624c0bf2c0faa1ad5c2b6107",
+          "99d975b0387ec1b24c84db7fffe898370155d3d1": "493be98dddeb031a19d42ad7d1a70f2a8095a590624c0bf2c0faa1ad5c2b6107",
+          "675bc28fc8504353f21686305ec0cd7b9806ce5f": "493be98dddeb031a19d42ad7d1a70f2a8095a590624c0bf2c0faa1ad5c2b6107"
+        },
+        "unchangedSincePublished": true
+      },
+      {
+        "path": "tests/fixtures/client_traffic_server.py",
+        "sha256": {
+          "3993c9b277054f758c263b4f69d3626d9a5b1fea": "593d7f272052201947a8662830520f1e1bb652dcd86963a1a8b2fcdafe057c34",
+          "99d975b0387ec1b24c84db7fffe898370155d3d1": "593d7f272052201947a8662830520f1e1bb652dcd86963a1a8b2fcdafe057c34",
+          "675bc28fc8504353f21686305ec0cd7b9806ce5f": "593d7f272052201947a8662830520f1e1bb652dcd86963a1a8b2fcdafe057c34"
+        },
+        "unchangedSincePublished": true
+      },
+      {
+        "path": "tests/fixtures/empty_host_ui_server.py",
+        "sha256": {
+          "3993c9b277054f758c263b4f69d3626d9a5b1fea": "0c7e389b3adee47aa540fc1c622d0c41ff8bd2d4428d0882562a2036276bb6e6",
+          "99d975b0387ec1b24c84db7fffe898370155d3d1": "0c7e389b3adee47aa540fc1c622d0c41ff8bd2d4428d0882562a2036276bb6e6",
+          "675bc28fc8504353f21686305ec0cd7b9806ce5f": "0c7e389b3adee47aa540fc1c622d0c41ff8bd2d4428d0882562a2036276bb6e6"
+        },
+        "unchangedSincePublished": true
+      },
+      {
+        "path": "tests/fixtures/configured_browser.py",
+        "sha256": {
+          "3993c9b277054f758c263b4f69d3626d9a5b1fea": "e1eec612da5665cd3ab70facc73a14ed029283bd251b1b6031d1963e45e88976",
+          "99d975b0387ec1b24c84db7fffe898370155d3d1": "e1eec612da5665cd3ab70facc73a14ed029283bd251b1b6031d1963e45e88976",
+          "675bc28fc8504353f21686305ec0cd7b9806ce5f": "e1eec612da5665cd3ab70facc73a14ed029283bd251b1b6031d1963e45e88976"
+        },
+        "unchangedSincePublished": true
+      },
+      {
+        "path": "frontend/src/task-continuity.jsx",
+        "sha256": {
+          "3993c9b277054f758c263b4f69d3626d9a5b1fea": "4eeb84696c145a30568e07171f0e32a6a2ca8a23a03b23772b344de96bb19d17",
+          "99d975b0387ec1b24c84db7fffe898370155d3d1": "a9662e30e6801e7e87ff6c8b75755eb00dfd693e4a3090a82046b8bd4112e4df",
+          "675bc28fc8504353f21686305ec0cd7b9806ce5f": "a9662e30e6801e7e87ff6c8b75755eb00dfd693e4a3090a82046b8bd4112e4df"
+        },
+        "unchangedSincePublished": false
+      },
+      {
+        "path": "amplifier_web/service.py",
+        "sha256": {
+          "3993c9b277054f758c263b4f69d3626d9a5b1fea": "4f8361bf7c630d47984d3c47d5cbe6c7eaa91c6935dfa5d1e9557292e15ccb5e",
+          "99d975b0387ec1b24c84db7fffe898370155d3d1": "95e5a17992a8abf27047b4a5eef0ee0ec46ee244d5c103af54c9342cad0b7407",
+          "675bc28fc8504353f21686305ec0cd7b9806ce5f": "95e5a17992a8abf27047b4a5eef0ee0ec46ee244d5c103af54c9342cad0b7407"
+        },
+        "unchangedSincePublished": false
+      },
+      {
+        "path": "amplifier_web/server.py",
+        "sha256": {
+          "3993c9b277054f758c263b4f69d3626d9a5b1fea": "2e23248afe76853546f401158a3ca776e6b595c5241b69b46763bb22a68a380d",
+          "99d975b0387ec1b24c84db7fffe898370155d3d1": "5e47fdb51d26ddd2b491849bc265e28924096079e9e32846cc4de8eaa31a35d0",
+          "675bc28fc8504353f21686305ec0cd7b9806ce5f": "5e47fdb51d26ddd2b491849bc265e28924096079e9e32846cc4de8eaa31a35d0"
+        },
+        "unchangedSincePublished": false
+      },
+      {
+        "path": "amplifier_web/task_continuity.py",
+        "sha256": {
+          "3993c9b277054f758c263b4f69d3626d9a5b1fea": "396b1c284ccf7568fc142f01cfa64beb4b9060ff3ec98c24fd0e884773b681f5",
+          "99d975b0387ec1b24c84db7fffe898370155d3d1": "5e593eff41fbb41a15bbe55764e65078e2b5719c23f2b50120fe7f7d5c3c2daa",
+          "675bc28fc8504353f21686305ec0cd7b9806ce5f": "5e593eff41fbb41a15bbe55764e65078e2b5719c23f2b50120fe7f7d5c3c2daa"
+        },
+        "unchangedSincePublished": false
+      }
+    ]
+  },
+  "changes": {
+    "frontend/tests/client-traffic-browser.mjs": {
+      "sha256": "c603b2df477f7c47a194ab29b762f11eab66635d6ffde262d048a3adf32e4e7e",
+      "scope": "Await ready/current receipt for the selected session, together with the original shell readiness. All frame/bytes/render/view-report/history assertions unchanged."
+    },
+    "tests/fixtures/client_traffic_server.py": {
+      "sha256": "acb40742f4a81d34f98d413268c70605940e3d1984945658145f40fd00fcd0fc",
+      "scope": "Cancel only the fixture periodic catalog discovery task, perform and verify one initial read. Selected transcript/work readers, initial catalog state, canonical history, transport and cleanup stay active."
+    }
+  },
+  "diagnosticDelay": {
+    "seconds": 2,
+    "trigger": "First selected WorkWindows.read after fixture grow-history operation",
+    "implementation": "Task-owned fixture copy wraps windows.read; one-shot flag is set by grow-history, wrapper clears flag and awaits asyncio.sleep(2) before the original read. No application package or installed artifact changes."
+  },
+  "guardNegativeControl": {
+    "control": "remove-revision-guard",
+    "sourceFunction": "onlyStateRevisionChanged",
+    "servedAsset": "assets/app-brvtYUsL.js",
+    "originalSha256": "dfa0d7857d1af987415e460c4581dd6dcc105de741509a284003da142c0532ef",
+    "modifiedSha256": "800f54ddca2f900df9b14802f3dbbfbda24c217ea2d9524187b34acfdcf99582",
+    "replacements": 1,
+    "installedFilesModified": false
+  },
+  "cases": [
+    {
+      "case": "unchanged-candidate",
+      "status": "passed",
+      "failure": null,
+      "reportSha256": "01f44559a0608bd92303f5046a7fa3ed8070a3141992c61bd808a2aea81e6721",
+      "phases": [
+        {
+          "phase": "large-chat-work-causal-pulse",
+          "frameCount": 8,
+          "revisionOnlyFrames": 8,
+          "bytes": 960,
+          "appCommits": 0,
+          "viewPosts": 0,
+          "materialPaths": []
+        },
+        {
+          "phase": "large-session-details-causal-pulse",
+          "frameCount": 8,
+          "revisionOnlyFrames": 8,
+          "bytes": 960,
+          "appCommits": 0,
+          "viewPosts": 0,
+          "materialPaths": []
+        },
+        {
+          "phase": "large-runtime-causal-pulse",
+          "frameCount": 8,
+          "revisionOnlyFrames": 8,
+          "bytes": 960,
+          "appCommits": 0,
+          "viewPosts": 0,
+          "materialPaths": []
+        },
+        {
+          "phase": "chat-causal-pulse",
+          "frameCount": 8,
+          "revisionOnlyFrames": 8,
+          "bytes": 960,
+          "appCommits": 0,
+          "viewPosts": 0,
+          "materialPaths": []
+        }
+      ],
+      "fixtureExit": {
+        "code": 0,
+        "signal": null,
+        "forced": false,
+        "confirmed": true
+      },
+      "semantics": {
+        "historyPreserved": true,
+        "currentFieldsRetained": true,
+        "completionEnabled": true,
+        "continuationRetained": true,
+        "pagedHistoricalDetail": true,
+        "providerCalls": 0,
+        "runtimeStarts": 0
+      }
+    },
+    {
+      "case": "delayed-work-original",
+      "status": "failed",
+      "failure": {
+        "phase": "large-chat-work-causal-pulse",
+        "message": "Only causal revisions belong to this measurement"
+      },
+      "reportSha256": "8a5ae7f353b21a5567a4517e0b4d2f9b7a454b1e8587ef92047b20cdd5e77753",
+      "phases": [
+        {
+          "phase": "large-chat-work-causal-pulse",
+          "frameCount": 10,
+          "revisionOnlyFrames": 8,
+          "bytes": 2339,
+          "appCommits": 2,
+          "viewPosts": 0,
+          "materialPaths": [
+            "sessions.0.execution.turns",
+            "sessions.0.executionWindow.coverage.rangeEnd",
+            "sessions.0.executionWindow.coverage.scannedBytes",
+            "sessions.0.executionWindow.coverage.scannedEvents",
+            "sessions.0.executionWindow.revision",
+            "sessions.0.workProjection.current",
+            "sessions.0.workProjection.receipt",
+            "sessions.0.workProjection.status"
+          ]
+        }
+      ],
+      "fixtureExit": {
+        "code": 0,
+        "signal": null,
+        "forced": false,
+        "confirmed": true
+      },
+      "semantics": null
+    },
+    {
+      "case": "delayed-work-ready",
+      "status": "failed",
+      "failure": {
+        "phase": "large-runtime-causal-pulse",
+        "message": "Only causal revisions belong to this measurement"
+      },
+      "reportSha256": "71b8d46bb5c2b39dd66e694ff2382bab47f26f3101a2889ed23401bbd6344835",
+      "phases": [
+        {
+          "phase": "large-chat-work-causal-pulse",
+          "frameCount": 8,
+          "revisionOnlyFrames": 8,
+          "bytes": 960,
+          "appCommits": 0,
+          "viewPosts": 0,
+          "materialPaths": []
+        },
+        {
+          "phase": "large-session-details-causal-pulse",
+          "frameCount": 8,
+          "revisionOnlyFrames": 8,
+          "bytes": 960,
+          "appCommits": 0,
+          "viewPosts": 0,
+          "materialPaths": []
+        },
+        {
+          "phase": "large-runtime-causal-pulse",
+          "frameCount": 10,
+          "revisionOnlyFrames": 8,
+          "bytes": 1255,
+          "appCommits": 1,
+          "viewPosts": 0,
+          "materialPaths": [
+            "revision",
+            "sharedHistory.reconciliation.completedAt"
+          ]
+        }
+      ],
+      "fixtureExit": {
+        "code": 0,
+        "signal": null,
+        "forced": false,
+        "confirmed": true
+      },
+      "semantics": null
+    },
+    {
+      "case": "delayed-work-ready-isolated",
+      "status": "passed",
+      "failure": null,
+      "reportSha256": "e918ae2878910bfd97fb129c38422f553e311cec83c532225c49dada2c33d714",
+      "phases": [
+        {
+          "phase": "large-chat-work-causal-pulse",
+          "frameCount": 8,
+          "revisionOnlyFrames": 8,
+          "bytes": 960,
+          "appCommits": 0,
+          "viewPosts": 0,
+          "materialPaths": []
+        },
+        {
+          "phase": "large-session-details-causal-pulse",
+          "frameCount": 8,
+          "revisionOnlyFrames": 8,
+          "bytes": 960,
+          "appCommits": 0,
+          "viewPosts": 0,
+          "materialPaths": []
+        },
+        {
+          "phase": "large-runtime-causal-pulse",
+          "frameCount": 8,
+          "revisionOnlyFrames": 8,
+          "bytes": 960,
+          "appCommits": 0,
+          "viewPosts": 0,
+          "materialPaths": []
+        },
+        {
+          "phase": "chat-causal-pulse",
+          "frameCount": 8,
+          "revisionOnlyFrames": 8,
+          "bytes": 960,
+          "appCommits": 0,
+          "viewPosts": 0,
+          "materialPaths": []
+        }
+      ],
+      "fixtureExit": {
+        "code": 0,
+        "signal": null,
+        "forced": false,
+        "confirmed": true
+      },
+      "semantics": {
+        "historyPreserved": true,
+        "currentFieldsRetained": true,
+        "completionEnabled": true,
+        "continuationRetained": true,
+        "pagedHistoricalDetail": true,
+        "providerCalls": 0,
+        "runtimeStarts": 0
+      }
+    },
+    {
+      "case": "final-ready-isolated",
+      "status": "passed",
+      "failure": null,
+      "reportSha256": "c180064df8ad851982bd440b05b5078c350559fe5d643230ed0b51279db90d15",
+      "phases": [
+        {
+          "phase": "large-chat-work-causal-pulse",
+          "frameCount": 8,
+          "revisionOnlyFrames": 8,
+          "bytes": 960,
+          "appCommits": 0,
+          "viewPosts": 0,
+          "materialPaths": []
+        },
+        {
+          "phase": "large-session-details-causal-pulse",
+          "frameCount": 8,
+          "revisionOnlyFrames": 8,
+          "bytes": 960,
+          "appCommits": 0,
+          "viewPosts": 0,
+          "materialPaths": []
+        },
+        {
+          "phase": "large-runtime-causal-pulse",
+          "frameCount": 8,
+          "revisionOnlyFrames": 8,
+          "bytes": 960,
+          "appCommits": 0,
+          "viewPosts": 0,
+          "materialPaths": []
+        },
+        {
+          "phase": "chat-causal-pulse",
+          "frameCount": 8,
+          "revisionOnlyFrames": 8,
+          "bytes": 960,
+          "appCommits": 0,
+          "viewPosts": 0,
+          "materialPaths": []
+        }
+      ],
+      "fixtureExit": {
+        "code": 0,
+        "signal": null,
+        "forced": false,
+        "confirmed": true
+      },
+      "semantics": {
+        "historyPreserved": true,
+        "currentFieldsRetained": true,
+        "completionEnabled": true,
+        "continuationRetained": true,
+        "pagedHistoricalDetail": true,
+        "providerCalls": 0,
+        "runtimeStarts": 0
+      }
+    },
+    {
+      "case": "remove-revision-guard",
+      "status": "failed",
+      "failure": {
+        "phase": "large-chat-work-causal-pulse",
+        "message": "Revision-only publications must not render the application root again\n\n48 !== 40\n"
+      },
+      "reportSha256": "85fc0b500d5e84adfce7a5860d7782f78133f6143322622e2adb437a5b7ee7da",
+      "phases": [
+        {
+          "phase": "large-chat-work-causal-pulse",
+          "frameCount": 8,
+          "revisionOnlyFrames": 8,
+          "bytes": 960,
+          "appCommits": 8,
+          "viewPosts": 0,
+          "materialPaths": []
+        }
+      ],
+      "fixtureExit": {
+        "code": 0,
+        "signal": null,
+        "forced": false,
+        "confirmed": true
+      },
+      "semantics": null
+    }
+  ],
+  "finalInitialReadAssertions": {
+    "passed": true,
+    "fixtureSha256": "acb40742f4a81d34f98d413268c70605940e3d1984945658145f40fd00fcd0fc",
+    "fixtureExit": 0,
+    "verifiedInitialCatalogRead": true
+  },
+  "validationLimits": [
+    "No new universal release gate; original failed CI remains failed.",
+    "One unchanged installed-candidate run and bounded diagnostic controls; no live-provider/native-startup or machine-wide latency claim.",
+    "The final full behavior run preceded adding two initial-catalog assertions. Those final assertions were separately executed through successful fixture startup and clean shutdown; no later behavior changed.",
+    "No material frames filtered from any measurement; removing revision render guard still fails the original render assertion."
+  ]
+}

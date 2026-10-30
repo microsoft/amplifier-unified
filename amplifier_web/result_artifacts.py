@@ -8,7 +8,6 @@ from pathlib import Path
 import re
 
 from .outputs import file_bytes, MAX_FILE
-from .peer_scope import participant_matches
 
 MAX_DECLARATION = 2 * MAX_FILE
 EXACT = re.compile(r'([^@\n]+)@sha256:([a-f0-9]{64})\Z')
@@ -118,17 +117,14 @@ async def store(collaboration, source, request, response, prepared, command_id):
                                       'before finishing the turn; terminal sealing does not repair retention.')
 
 
-def resolve(collaboration, sid, request_id, reference, response_revision=None):
+def resolve(collaboration, sid, request_id, reference, response_revision=None, *, scope='workspace'):
     """Request authority does not grant general peer output-library access."""
     app = collaboration.service
     reader = app._session(sid, hydrate=False)
     request = collaboration.receipt(request_id)
-    if (request.get('commandAction') != 'coordination.send'
-            or sid not in {request.get('senderSessionId'), request.get('target', {}).get('sessionId')}
-            or not participant_matches(request, reader)
-            or not participant_matches(request, app._session(request['senderSessionId'], hydrate=False))
-            or not participant_matches(request, app._session(request['target']['sessionId'], hydrate=False))):
+    if request.get('commandAction') != 'coordination.send':
         collaboration.error('This artifact is outside the conversation request and workspace scope.')
+    collaboration.require_request_reader(request, reader, scope=scope)
     response = request.get('response') or {}
     if response_revision is not None and response.get('responseRevision') != response_revision:
         row = app.db.execute("""SELECT receipt FROM commands
@@ -159,11 +155,11 @@ def resolve(collaboration, sid, request_id, reference, response_revision=None):
                 'detail': 'The retained version is unavailable or failed its content hash. No mutable source was substituted.'}, None, response
 
 
-async def load(collaboration, sid, request_id, reference, response_revision=None):
+async def load(collaboration, sid, request_id, reference, response_revision=None, *, scope='workspace'):
     """Detach immutable reads; recheck request authority after worker I/O."""
     app = collaboration.service
     async with app.lock:
-        proof = resolve(collaboration, sid, request_id, reference, response_revision)
+        proof = resolve(collaboration, sid, request_id, reference, response_revision, scope=scope)
     item, record, response = proof
     if record is None:
         return item, None, response
@@ -176,14 +172,14 @@ async def load(collaboration, sid, request_id, reference, response_revision=None
                 'detail': 'The retained version is unavailable or failed its content hash. No mutable source was substituted.'}
         data = None
     async with app.lock:
-        current = resolve(collaboration, sid, request_id, reference, response_revision)
+        current = resolve(collaboration, sid, request_id, reference, response_revision, scope=scope)
         if current != proof:
             collaboration.error('The result changed while reading its retained version; inspect and retry.', 409)
     return item, data, response
 
 
 async def read(collaboration, sid, args):
-    item, data, response = await load(collaboration, sid, args['requestId'], args['reference'], args.get('responseRevision'))
+    item, data, response = await load(collaboration, sid, args['requestId'], args['reference'], args.get('responseRevision'), scope=args.get('scope', 'workspace'))
     result = {**item, 'responseStatus': response.get('status'), 'qualified': response.get('qualified', False),
               'independentArtifactVerification': False}
     if data is not None:

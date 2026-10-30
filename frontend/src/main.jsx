@@ -275,10 +275,11 @@ function App(){
   if(action==='conversation.send'&&!meta.checkpointed)return checkpointSurfaces(args.sessionId).then(()=>dispatch(action,args,{...meta,checkpointed:true}));
   if(action==='view.update'&&Object.keys(args.patch||{}).some(key=>key==='draft'||key.startsWith('canvas')))args={sessionId:latest.current?.selectedSessionId,...args};
   const selectedId=action==='session.select'?args.id:action==='shell.command'&&args.action==='session.select'?args.args?.id:null;
+  const openingDraft=action==='session.draft'||action==='shell.command'&&args.action==='session.draft';
   // References, like external links, keep source controls/editors mounted until
   // acceptance. The same navigation queue and Settings/Canvas guards still own
   // the transition; rejection must not destroy the control that shows it.
-  const navigationToken=selectedId&&!meta.chatLink&&!chatReference&&!canvasDirtyBarrier.current?conversationNavigation.current.begin(pendingView.current.apply(latest.current),selectedId,meta.navigationSession):null;
+  const navigationToken=openingDraft?conversationNavigation.current.beginDraft():selectedId&&!meta.chatLink&&!chatReference&&!canvasDirtyBarrier.current?conversationNavigation.current.begin(pendingView.current.apply(latest.current),selectedId,meta.navigationSession):null;
   if(navigationToken&&serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}
   if(action==='canvas.visibility')args={sessionId:latest.current?.selectedSessionId??null,canvasId:latest.current?.canvas?.id??null,...args};
   const pending=action==='canvas.visibility'?pendingView.current.addCanvas(latest.current,args.open):action==='view.update'?(meta.pendingViewToken??pendingView.current.add(args.patch||{},args.sessionId)):null;
@@ -578,7 +579,7 @@ function App(){
   draftSaves.current.set(payload,save);save.catch(()=>draftSaves.current.delete(payload));return save;
  }
  function editDraft(value,documentValue){
-  if(referenceDraftLock.current)return;
+  if(referenceDraftLock.current||latest.current?.draftNavigationPending)return;
   if(documentValue===undefined&&value&&quoteApi.current?.document()){
    if(value.startsWith(lastDraft.current)){try{quoteApi.current.append(value.slice(lastDraft.current.length));}catch(error){reportError(error)}return;}
    setError('Quoted content was kept. Edit its commentary in the composer.');return;
@@ -806,7 +807,7 @@ function App(){
      const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(source.text||''));
      const digest=[...new Uint8Array(bytes)].map(n=>n.toString(16).padStart(2,'0')).join('');
      return digest===quote.sourceDigest?'Original revealed. Saved quotation is unchanged.':'Source changed since quoting. The earlier snapshot is retained.';
-    }} onFiles={addFiles} disabled={executionUnavailable} readOnly={referencingDraft} pasteDisabled={historyPending}/>
+    }} onFiles={addFiles} disabled={executionUnavailable} readOnly={referencingDraft||!!state?.draftNavigationPending} pasteDisabled={historyPending}/>
     {visibleQuoteNotice(quoteNotice,session?.id)&&<small role="status">{visibleQuoteNotice(quoteNotice,session?.id)}</small>}
     {quoteReturn&&quoteReturn.sid===session?.id&&<button type="button" className="a-link" onClick={()=>{if(messagesPane.current)messagesPane.current.scrollTop=quoteReturn.top;const button=quoteReturn.button;setQuoteReturn(null);if(button?.isConnected&&button.getClientRects().length)button.focus({preventScroll:true});else composerRef.current?.focus({preventScroll:true});}}>Return to reading position</button>}
     </div>

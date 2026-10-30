@@ -118,3 +118,31 @@ test('a background chat also hides inline execution and transcript details until
  nav.begin(a,'b');const shown=nav.apply(a).sessions.find(row=>row.id==='b');
  assert.deepEqual(shown.messages,[]);assert.equal(shown.execution,undefined);assert.equal(shown.runtimeEvents,undefined);assert.equal(shown.streaming,undefined);
 });
+
+test('a pending new chat fences composition without inventing a destination or changing retained drafts',()=>{
+ const nav=createConversationNavigation(),before=state('a');nav.remember(before);
+ before.canvasWorkspace.views=[{dirty:true}];
+ const token=nav.beginDraft(),shown=nav.apply(before);
+ assert.equal(shown.navigationPending,true);assert.equal(shown.draftNavigationPending,true);
+ assert.equal(shown.selectedSessionId,'a');assert.equal(shown.view,before.view);
+ assert.equal(shown.sessions,before.sessions);assert.equal(shown.canvasWorkspace,before.canvasWorkspace);
+ const confirmed={...before,selectedSessionId:null,view:{draft:'retained unsent draft',newSessionDraft:{bundle:'work'}}};
+ assert.equal(nav.apply(confirmed).draftNavigationPending,true,'receipt settlement owns unlocking, not an intermediate frame');
+ nav.settle(token);assert.equal(nav.apply(confirmed),confirmed);
+});
+
+test('failed draft navigation unlocks the original chat and cannot unlock a newer selection',()=>{
+ const nav=createConversationNavigation(),before=state('a');nav.remember(before);
+ const failed=nav.beginDraft();nav.settle(failed);assert.equal(nav.apply(before),before);
+ const draft=nav.beginDraft(),selected=nav.begin(nav.apply(before),'b');
+ nav.settle(draft);const shown=nav.apply(before);
+ assert.equal(shown.selectedSessionId,'b');assert.equal(shown.navigationPending,true);
+ assert.equal(shown.draftNavigationPending,undefined);
+ nav.settle(selected);assert.equal(nav.apply(before),before);
+});
+
+test('a host restart clears the pending draft fence',()=>{
+ const nav=createConversationNavigation(),before=state('a');nav.remember(before);nav.beginDraft();
+ const restarted={...before,client:{hostInstanceId:'new-host'}};nav.remember(restarted);
+ assert.equal(nav.apply(restarted),restarted);
+});
