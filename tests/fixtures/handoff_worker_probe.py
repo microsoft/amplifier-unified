@@ -19,8 +19,10 @@ sys.path.insert(0, str(SOURCE))
 
 async def main():
     with_child = '--child' in sys.argv[2:]
+    canonical = '--canonical' in sys.argv[2:]
     cap_one = '--goal-cap-one' in sys.argv[2:]
     with_goal = '--goal' in sys.argv[2:] or cap_one
+    goal_cap = 1 if cap_one else 3 if with_child else 2
     root = Path(sys.argv[1]).resolve()
     root.mkdir(parents=True, exist_ok=False)
     workspace = root / 'workspace'
@@ -33,7 +35,7 @@ async def main():
     subprocess.run(['git', '-C', str(workspace), 'commit', '-m', 'fixture'], check=True, capture_output=True)
     os.environ.update(AMPLIFIER_HOME=str(root / 'shared'), AMPLIFIER_WEB_HOME=str(root / 'app'),
         AMPLIFIER_UNIFIED_IMPORT_HOME=str(root / 'legacy'), AMPLIFIER_SESSION_STATE_HOME=str(root / 'ownership'),
-        AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH=str(root / 'captures'), PYTHONPATH=os.pathsep.join(filter(None, [str(SOURCE), os.environ.get('PYTHONPATH')])) )
+        AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH=str(root / 'captures'), PYTHONPATH=os.pathsep.join(filter(None, [str(SOURCE), os.environ.get('PYTHONPATH')])))
     (root / 'shared').mkdir()
     (root / 'shared' / 'settings.yaml').write_text('bundle:\n  app: []\n')
     provider = root / 'provider' / 'amplifier_module_provider_fixture'
@@ -45,7 +47,7 @@ from amplifier_core import ProviderInfo, ToolResult
 from amplifier_core.message_models import ChatResponse, TextBlock, ToolCall
 class FixtureProvider:
     name = 'fixture'
-    def __init__(self, coordinator): self.coordinator = coordinator
+    def __init__(self, coordinator=None): self.coordinator = coordinator
     def get_info(self): return ProviderInfo(id='fixture', display_name='Fixture', defaults={'model':'fixture'})
     async def list_models(self): return []
     def parse_tool_calls(self, response): return response.tool_calls or []
@@ -83,7 +85,7 @@ class FixtureDelegate:
     name = 'delegate'
     description = 'A finite native child whose result arrives after the originating turn.'
     input_schema = {'type':'object','properties':{}}
-    def __init__(self, coordinator): self.coordinator = coordinator
+    def __init__(self, coordinator=None): self.coordinator = coordinator
     async def execute(self, arguments):
         registry = self.coordinator.get_capability('live.children')
         result = await registry.spawn('self', 'Finish this admitted child.', registry.sessions[self.coordinator.session_id])
@@ -124,6 +126,9 @@ providers:
         await app.dispatch('session.create', {'bundle': str(bundle)})
         session = app._session()
         sid = session['id']
+        if canonical:
+            import uuid
+            session['runtimeSessionId'] = str(uuid.uuid4())
         inspected = (await app.dispatch('worktree.inspect', {'sessionId': sid}))['result']
         checkout = (await app.dispatch('worktree.create', {'sessionId': sid,
             'sourceRevision': inspected['repository']['sourceRevision']}, command_id='native-checkout'))['result']
@@ -131,7 +136,7 @@ providers:
                                       'calls': str(root / 'calls.jsonl'), 'withChild': with_child, 'childStarted': str(root / 'child-started')}))
         if with_goal:
             await app.dispatch('task.create', {'sessionId': sid, 'expectedRevision': 0,
-                'objective': 'Complete the native checkout handoff fixture.', 'maxTurns': 1 if cap_one else 2})
+                'objective': 'Complete the native checkout handoff fixture.', 'maxTurns': goal_cap}, command_id='native-task')
         await app.dispatch('view.update', {'patch': {'draft': 'preserve-unsent-draft'}})
         await app.dispatch('conversation.send', {'sessionId': sid, 'text': 'original-request: Move and continue this work.',
             'preserveDraft': True}, command_id='native-original', include_state=False)
@@ -158,7 +163,7 @@ providers:
         async with asyncio.timeout(10):
             while sid in runtime.workers and not runtime.workers[sid].get('parked'):
                 await asyncio.sleep(.05)
-        messages = SessionHistoryStore(sessions_dir(workspace) / sid).load_messages()
+        messages = SessionHistoryStore(sessions_dir(workspace) / (session.get('runtimeSessionId') or sid)).load_messages()
         originals = [m for m in messages if (m.get('metadata') or {}).get('amplifier_input', {}).get('id') == 'native-original']
         assert len(originals) == 1, messages
         assert any(m.get('tool_call_id') == 'move-tool' for m in messages), messages
@@ -172,8 +177,8 @@ providers:
             assert calls[-1]['cwd'] == checkout['path']
         if with_goal and not cap_one:
             resumed = next(row for row in calls if row['cwd'] == checkout['path'])['goal']
-            assert resumed['cap'] == 2 and resumed['turns_used'] == 1, resumed
-            assert max(row['goal']['turns_used'] for row in calls if row['goal']) == 2, calls
+            assert resumed['cap'] == goal_cap and resumed['turns_used'] == (2 if with_child else 1), resumed
+            assert max(row['goal']['turns_used'] for row in calls if row['goal']) == goal_cap, calls
         if cap_one:
             assert record['continuation']['status'] == 'suppressed', record
             assert max(row['goal']['turns_used'] for row in calls if row['goal']) == 1, calls
@@ -181,7 +186,7 @@ providers:
         print(json.dumps({'phase': record['phase'], 'workerProcesses': process_count, 'originalInputs': 1,
             'toolResultPersisted': True, 'continuationAccepted': not cap_one, 'draftPreserved': True,
             'historyHomePreserved': True, 'goalBudgetPreserved': with_goal,
-            'childResultRetained': with_child, 'provider': 'scripted-offline'}))
+            'childResultRetained': with_child, 'canonicalAlias': canonical, 'provider': 'scripted-offline'}))
     finally:
         await app.close()
 

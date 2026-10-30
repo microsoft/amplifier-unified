@@ -41,7 +41,8 @@ async def admit(service, sid, args):
     def guard(current):
         active = current.get('collaborationGeneration') or {}
         drain = args.get('_handoffDrain')
-        draining = finishing_turn(service, current, row, drain, args.get('_nativeChild'))
+        draining = current.get('configurationBusy') and finishing_turn(
+            service, current, row, drain, args.get('_nativeChild'))
         now = (active.get('id'), tuple(active.get('inputIds', [])),
                current.get('interruptionRevision', 0), current.get('configurationPendingRevision', 0))
         if (PRINCIPAL.get() != (current.get('runtimeSessionId') or sid)
@@ -50,7 +51,7 @@ async def admit(service, sid, args):
                 or now[2:] != expected[2:]
                 or current.get('status') in {'stopped', 'stopping', 'interrupted', 'error'}):
             return 'The input or generation changed while waiting; no provider request was sent.'
-        if (current.get('configurationBusy') and not (draining or finishing_turn(service, current, row))
+        if (current.get('configurationBusy') and not draining
                 or current.get('fileAccessPending') or Management.unresolved_configuration(current)):
             return 'Conversation access or configuration changed while waiting; no provider request was sent.'
         if (current.get('failure') or {}).get('category') in {'content_filter', 'computer_capture_stop'}:
