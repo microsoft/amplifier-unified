@@ -339,7 +339,10 @@ access. The agent can reconcile native evidence and explicitly resume proven
 no-effect work without another permission request. Recovery checks the original
 mode revision, Stop boundary, target and exact payload again; re-enabling Full
 access does not renew an older operation. Unknown or saved effects cannot resume.
-The original request, hash and history remain intact.
+The original request, hash and existing history remain intact. Explicit recovery
+transitions append their actual caller origin, conversation owner and observed
+native principal/generation/input coverage to the existing private history; they
+do not relabel the original actor or replace the retained effect authority.
 
 File, patch, image and search mounts (including child definitions and restored
 plans) use all accessible local filesystem roots under Full access. Original

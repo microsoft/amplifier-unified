@@ -168,12 +168,24 @@ async def test_full_actor_recovers_only_original_proven_no_effect(process_bounda
         view = (await invoke('configuration.operation.read', {**args, 'includeRecovery': True}, 'full-recovery-current'))['result']
         assert view['recovery']['canResume'] == (outcome == 'none')
         assert operation(b)['request'] == saved['request'] and operation(b)['requestHash'] == saved['requestHash']
+        expected_source = {'action': 'configuration.operation.reconcile',
+            'origin': 'agent' if actor == 'child' else 'system', 'sessionId': b.owner['id'],
+            'runtimeSessionId': principal,
+            'generationId': b.owner['collaborationGeneration']['id'] if actor == 'child' else None,
+            'interruptionRevision': b.owner.get('interruptionRevision', 0),
+            'inputIds': b.owner['collaborationGeneration']['inputIds'] if actor == 'child' else [],
+            'inputCoverage': 'complete' if actor == 'child' else 'unavailable'}
+        assert operation(b)['history'][-1]['recoverySource'] == expected_source
+        assert 'recoverySource' not in operation(b)['state']
+        assert all('recoverySource' not in entry for entry in view['history'])
         if outcome == 'none':
             await b.runtime._request(b.owner['id'], 'fixture.busy', count=0)
             b.owner['status'] = 'working'
             result = await invoke('configuration.operation.resume', {
                 **args, 'expectedRevision': reconciled['revision']}, 'full-recovery-resume')
             assert result['result']['state']['phase'] == 'queued'
+            assert operation(b)['history'][-1]['recoverySource'] == {
+                **expected_source, 'action': 'configuration.operation.resume'}
         else:
             # The original partial-write bytes stay unknown and cannot replay.
             before = override_path(b.owner['runtimeSessionId']).read_bytes()
