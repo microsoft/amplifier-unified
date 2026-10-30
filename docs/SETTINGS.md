@@ -1,59 +1,74 @@
 # Settings experience
 
-Settings has 24 destinations in 11 sections. Wide windows use a persistent sidebar; windows narrower than 960 pixels use a full-screen index and one navigation level at a time. Appearance, Voice, Notifications and Updates are first-class sections. The navigation is a new presentation of the existing forms and public actions. No configuration migration is required.
+Settings groups configuration into AI connections, Smart Tools, Appearance,
+Workspaces, Voice, Notifications, Privacy & files, Testing & resources, Updates,
+and Advanced. Wide layouts use a sidebar; below 960 pixels of available Settings
+width, an index and one navigation level replace it. Presentation changes do not
+migrate configuration or retire public destination IDs.
 
-## Completeness contract
+## Navigation and implementation owners
 
-The [inventory](settings-inventory.csv) tracks all 321 requirements from the settings audit plus six conversation diagnosis/recovery requirements and the Work summary detail preference added to main during implementation (328 requirements across 25 feature areas). Each row has an explicit destination, ownership boundary and validation evidence for its area. Area validation does not imply that every listed backend outcome was separately induced in a browser. The source review verifies that the original controls and handlers remain; automated tests check their contracts and affected workflows.
+Use these owners for the current destination list and implementation rather than
+copying an exhaustive route/component table into this guide:
 
-| Area | Destination | Native implementation |
-| --- | --- | --- |
-| Appearance (separate top-bar panel) | appearance | main.jsx |
-| Setup > Conversation defaults > Voice | voice | settings-personal.jsx |
-| Maintenance > Notifications | notifications | maintenance.jsx |
-| Setup > Model providers | providers | setup.jsx |
-| Setup > Model routing | routing | routing-settings.jsx |
-| Capabilities > App bundles | app-bundles | bundles.jsx |
-| Capabilities > Add capabilities | add-bundles | bundles.jsx |
-| Setup > Conversation defaults > Bundle | defaults | bundle-controls.jsx |
-| Setup / Capabilities > Loaded session modules | loaded-modules | bundles.jsx |
-| Capabilities > Save and share | share-bundle | bundles.jsx |
-| Capabilities > Smart Tools | smart-tools | smart-tools.jsx |
-| Maintenance > Updates | updates | updates.jsx |
-| Maintenance > Diagnostics & Context Intelligence | diagnostics | diagnostics.jsx |
-| Maintenance > Conversation history | history | maintenance.jsx |
-| Setup > Current conversation | conversation | conversation-controls.jsx; conversation-export.jsx |
-| Maintenance > Backup and repair | repair | maintenance.jsx |
-| Maintenance > Advanced recovery | reset | maintenance.jsx |
-| Maintenance > Ready conversations | ready-conversations | worker-retention.jsx |
-| Capabilities > Advanced module & source registries | registries | registry.jsx |
-| Maintenance > File access | permissions | maintenance.jsx |
-| Maintenance > Terminal and automation | automation | maintenance.jsx |
-| Setup > Install Amplifier | install-app | settings-personal.jsx |
-| Shared settings controls | shared | settings-ui.jsx; list-filter.jsx; attention.jsx |
-| Adjacent: conversation bundle popup | conversation | bundle-controls.jsx |
-| Adjacent: Session controls | runtime | runtime-settings.jsx |
+| Responsibility | Owner |
+| --- | --- |
+| Section titles, destination IDs, parent routes and public aliases | [settings-navigation.js](../frontend/src/settings-navigation.js) and [navigation checks](../frontend/tests/settings-navigation.test.mjs) |
+| Host routing of legacy destinations and Settings state for agents | [settings_navigation.py](../amplifier_web/settings_navigation.py) |
+| Destination-to-editor mapping, generic contributed sections and retained editor mounts | [settings-experience.jsx](../frontend/src/settings-experience.jsx) |
+| Compact hierarchy, browser history, scroll restoration and footer actions | [settings-mobile.js](../frontend/src/settings-mobile.js) and [settings-layout.jsx](../frontend/src/settings-layout.jsx) |
+| Dirty-editor registration and review/discard decisions | [settings-drafts.jsx](../frontend/src/settings-drafts.jsx) |
+
+`settingsSection`, `settingsExpanded` and `panel: appearance` remain supported
+navigation inputs. Older Setup/Capabilities/Maintenance destinations resolve
+through the route owner. Chat-specific aliases such as `conversation`, `runtime`,
+`loaded-modules`, `share-bundle` and `recall` open their current chat panels;
+`outputs` and `publishing` open the corresponding Canvas library view. Contributed Settings
+sections appear generically under Advanced.
+
+## Historical completeness evidence
+
+The September 2026 [field inventory](settings-inventory.csv) retains 328
+requirements across 25 feature areas: the original 321, six diagnosis/recovery
+requirements and the Work summary detail preference. Its destinations and
+validation entries describe that implementation, not today's route map or a
+current release verdict. The later [Everyday Settings test-build record](validation/everyday-settings.md)
+also keeps its own source identity, route counts and reported outcomes. Area
+validation does not establish that every backend outcome was induced in a browser.
+Use these records to preserve coverage intent, with current owners and new
+exact-source evidence when behavior changes.
 
 ## Boundaries and state
 
 - Unified-specific screens depend on integrations the app explicitly consumes. Loaded bundle modules are inspected and configured generically; their names never become hard-coded navigation entries. This follows [Amplifier repository rules](https://github.com/microsoft/amplifier/blob/main/docs/REPOSITORY_RULES.md).
 - Diagnostics configures the app’s Context Intelligence client. Optional bundle hooks remain generic module configuration. File access edits the existing scoped write overrides through Unified’s shared policy API. The editor does not claim to display every effective restriction inherited from settings or bundles, and navigation does not add module-specific assumptions.
-- `settingsSection` and `settingsExpanded` stay the public navigation contract. Old saved pages and agent actions resolve into the new structure. `panel: appearance` remains supported.
-- Visited editors remain mounted until the dialog closes. Ordinary drafts use the existing shared view state; private provider keys and notification credentials stay only in component memory until explicitly saved. Closing a dialog never saves a draft.
+- Visited editors remain mounted while Settings stays open. Private provider keys and notification credentials remain in component memory until explicitly saved. Registered dirty editors offer review, discard or keeping Settings open before dismissal; closing never silently saves. Nonsecret editors use their existing view or local state, and the appearance editor has the separate persistence described below.
+- Composer drafts are a different owner: the current host still stores acknowledged client drafts, while the browser journal retains unacknowledged edits. Ordinary model readback excludes those drafts. [CS2](../contracts/client-state.v1.md) and the [live-session contract](clients/live-sessions.md) distinguish current storage from the target client-local design.
 - The shared activity and outside-dismissal contracts remain in effect. Pending receipts are distinct from completed background work, and navigation remains usable during independent operations.
 - Existing skin tokens control color and typography. Structural layout supports widths down to 320 pixels and keyboard access. Compact Settings has one content scroll area between its Back/Close header and contextual actions.
 
-## Release validation
+## Validation
 
-- Full Python suite; frontend unit suite; reproducible production build.
-- `test:settings-browser`: real isolated backend, provider reordering/model/routing updates, module apply/toggle, unread notices, source filtering, registered bundles, path selection, file drops and mobile layout.
-- `test:settings-completeness-browser`: all 24 destinations at 320/390/736/1280 pixels in light/dark (192 layouts), notification validation/private credential persistence, unsaved secret drafts across navigation, voice and appearance persistence, catalog → inspect → install → connection workflow. Catalog/package execution uses deterministic fixture methods; operation lifecycle and connection storage are real. No third-party package is downloaded or executed by that fixture.
-- Existing bundle, Smart Tools MCP Apps, export, history, readiness, delayed-navigation, multi-client, bootstrap, activity and library performance browser suites remain release evidence for their native behavior.
-- The normal release workflow additionally checks empty storage, pending send, source cache reporting, ownership, live history, conversation drafts and canvas preservation. Settings suites are added to that workflow so subsequent releases cannot omit this coverage.
+Follow the [release qualification policy](validation/release-qualification.md):
+run affected unit and browser checks against exact source in an owned DTU with
+synthetic state. Broad suites run separately in the background; this guide adds
+no exhaustive merge or publication gate. Maintained commands live in
+[frontend/package.json](../frontend/package.json), including:
 
-## Validation boundary
+| Changed behavior | Relevant browser journey |
+| --- | --- |
+| Provider/module settings, sources and shared actions | `test:settings-browser` |
+| Guided AI connections and everyday destinations | `test:settings-everyday-browser` |
+| Credential isolation, notification/voice persistence and catalog-to-connection flow | `test:settings-completeness-browser` |
+| Ordered collections, routing edits, pagination and partial-batch retry | `test:settings-collections-browser` |
+| Compact navigation, Back/Forward, scroll and footer/keyboard layout | `test:settings-mobile-browser` |
+| Appearance library, mutation lifecycle and preview boundaries | `test:appearance-library-browser`, `test:appearance-lifecycle-browser`, `test:appearance-preview-boundaries-browser` |
 
-Browser acceptance runs against isolated app instances with synthetic configuration and temporary storage. Access to the user’s already-running personally configured app was blocked by browser policy verification during the design audit, so this release does not claim live personal-configuration acceptance. The prior sanitized design fixture and inventory informed completeness; no simulator or personal configuration is shipped.
+Choose checks from the actual changed owners, including backend contracts where
+needed. Record fixture substitutions, source revision and actual results. Synthetic
+catalog/provider checks do not establish live account, third-party package,
+physical mobile keyboard or screen-reader acceptance. Historical layout counts
+are not current coverage claims.
 
 ## Collections and ordering
 
@@ -73,12 +88,16 @@ All matching entries are shown up to 50; larger results use pages of 40. Filteri
 
 `providers.reorder` and `bundles.reorder` accept `ids` and `expectedIds`; the existing single-item move actions remain compatible. Ordering and catalog draft selections use the existing nonsecret editor view state.
 
-The additional `test:settings-collections-browser` gate covers 13 routing roles, unknown fields, provider refresh during editing, drag insertion/preview/cancel/drop/save, private drafts across selection, independent checkboxes, composition exclusions, 51 catalog entries, filtering, cross-page selection, partial installation and retry, and narrow layouts. Its temporary fixture uses an OS-assigned port and performs no external package or account calls.
+The `test:settings-collections-browser` fixture covers unknown routing fields,
+provider refresh during editing, order manipulation, private drafts across
+selection, independent checkboxes, composition exclusions, catalog pagination,
+partial installation and retry, and narrow layouts. It uses temporary storage
+and an OS-assigned port without external package or account calls.
 
 
 ## Narrow screens and mobile
 
-Below 960 pixels, opening Settings starts at its section index. A section replaces the index; details, routing choices and preference ordering replace their parent list. The header and browser Back follow the same hierarchy. Two local tabs remain visible; longer tab groups become a labelled section picker. Existing agent links still open their requested destination directly, with the complete parent path available through Back.
+In compact layouts, opening Settings starts at its section index. A section replaces the index; details, routing choices and preference ordering replace their parent list. The header and browser Back follow the same hierarchy. Two local tabs remain visible; longer tab groups become a labelled section picker. Existing agent links still open their requested destination directly, with the complete parent path available through Back.
 
 Visited editors stay mounted. Back restores list scroll and keeps filters, catalog selections, ordinary drafts and private provider/notification fields. Unfinished order drafts remain available on returning to the order screen; Cancel discards them and Save applies them through the existing action. Browser history stores only an opaque Settings token and depth, never form contents, credentials or configuration. Reload reuses those navigation entries without adding another history stack; private unsaved credentials remain memory-only and do not survive reload or closing Settings.
 
@@ -86,7 +105,14 @@ Primary provider, routing, module, catalog, connection, notification, permission
 
 The dedicated order screen retains the lifted drag preview, moving rows and between-item insertion line. Dragging starts only from the handle, so ordinary list touches scroll. A large position selector supplies a non-drag alternative. Catalog selection persists across details, filtering and pagination; the footer reports the total and the count outside the current page/filter. The existing all-through-50 / pages-of-40 behavior and per-package retry lifecycle are unchanged.
 
-`test:settings-mobile-browser` exercises the built app against temporary synthetic storage on an OS-assigned port. It covers all 24 destinations at 320/390/736/960/1280 pixels, browser Back/Forward/reload, private draft isolation, nested routing, touch dragging, unfinished order navigation, saved order, list scroll restoration, cross-page catalog selection, form-associated footer submission, a simulated keyboard viewport reduction, and short landscape layout. The existing completeness gate also covers 192 light/dark layouts. These checks do not substitute for physical iOS/Android keyboard or screen-reader acceptance.
+`test:settings-mobile-browser` exercises the built app against temporary synthetic
+storage on an OS-assigned port. It covers destination access at several widths,
+browser Back/Forward/reload, private draft isolation, nested routing, touch
+dragging, unfinished order navigation, saved order, scroll restoration, catalog
+selection, footer submission, a simulated keyboard viewport reduction and short
+landscape layout. Consult the current fixture for its destination/viewport matrix;
+these checks do not substitute for physical iOS/Android keyboard or screen-reader
+acceptance.
 
 ## Appearance library
 
