@@ -7,6 +7,8 @@ import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 
+const nonReduction=process.env.TEST_NATIVE_NO_REDUCTION==='1';
+const artifacts=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp';
 const root=fileURLToPath(new URL('../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u','-c',`
 import asyncio, json, sys, tempfile
@@ -28,6 +30,9 @@ async def main():
   from amplifier_web.session_health import generation_failure
   session['failure']=generation_failure({'error_category':'context_measurement', 'error_type':'LLMError',
    'count_failure':{'category':'service','retryable':True,'httpStatus':503,'attempts':3,'requestId':'req_count_fixture'}})
+  if ${nonReduction ? 'True' : 'False'}:
+   session['failure']=generation_failure({'error_category':'context_compaction',
+    'error_type':'CompactionError','error_code':'native_no_reduction','error_stage':'context_preparation'})
   session['error']=session['failure']['summary']
   session['status']='error'
   service._publish()
@@ -56,15 +61,31 @@ try{
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
 
- const banner=page.locator('.a-alert').filter({hasText:'Could not check conversation size.'});
+ const banner=page.locator('.a-alert').filter({hasText:nonReduction?'Native compaction could not confirm a smaller continuation request.':'The provider’s token-counting service was temporarily unavailable.'});
  await expect(banner).toBeVisible();
  await expect(banner).not.toContainText('Context compaction failed');
- await banner.getByRole('button',{name:'View error details'}).click();
- await expect(page.getByText('The counting service is temporarily unavailable.',{exact:false})).toBeVisible();
- await expect(page.getByRole('definition').filter({hasText:'req_count_fixture'})).toBeVisible();
- await expect(page.getByText('Counting attempts',{exact:true})).toBeVisible();
- await page.screenshot({path:'/tmp/count-recovery-details.png'});
+ const details= banner.getByRole('button',{name:'View error details'});
+ await details.focus(); await page.keyboard.press('Enter');
+ if(nonReduction){
+  await expect(page.getByText('A recovery copy with the same history can hit the same limit',{exact:false})).toBeVisible();
+  await expect(page.getByText('Copy the chat diagnostics',{exact:false})).toBeVisible();
+ }else{
+  await expect(page.getByText('The counting service is temporarily unavailable.',{exact:false})).toBeVisible();
+  await expect(page.getByRole('definition').filter({hasText:'req_count_fixture'})).toBeVisible();
+  await expect(page.getByText('Counting attempts',{exact:true})).toBeVisible();
+ }
+ await page.screenshot({path:`${artifacts}/${nonReduction?'nonreduction':'count'}-recovery-details.png`});
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ if(nonReduction){
+  const narrow=await browser.newPage({viewport:{width:402,height:700},hasTouch:true,
+    extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+  await narrow.goto(vite.resolvedUrls.local[0]); await narrow.waitForSelector('#amp-one');
+  await narrow.locator('.a-alert').filter({hasText:'Native compaction'}).getByRole('button',{name:'View error details'}).tap();
+  await expect(narrow.getByText('Copy the chat diagnostics',{exact:false})).toBeVisible();
+  await narrow.screenshot({path:`${artifacts}/nonreduction-recovery-narrow.png`});
+  await narrow.getByRole('button',{name:'Close panel',exact:true}).tap();
+  await narrow.close();
+ }
  const sends=[];
  page.on('request',request=>{if(request.url().includes('/api/actions')){try{const body=request.postDataJSON();if(body.action==='conversation.send')sends.push(body)}catch{}}});
  await banner.getByRole('button',{name:'Continue conversation',exact:true}).click();
@@ -72,7 +93,7 @@ try{
  assert.equal(sends[0].args.preserveDraft,true);
  assert.match(sends[0].args.text,/Check what has already completed before repeating any actions/);
  assert.deepEqual(errors,[]);
- console.log('Counting failure browser passed: accurate banner, guidance, request ID/status/attempt details, single explicit continuation.');
+ console.log(nonReduction?'Non-reduction browser passed: specific diagnosis, same-history warning, desktop keyboard and narrow touch details, single explicit continuation.':'Counting failure browser passed: accurate banner, guidance, request ID/status/attempt details, single explicit continuation.');
 }finally{
  await page?.unrouteAll({behavior:'ignoreErrors'});await browser?.close();await vite?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}
 }
