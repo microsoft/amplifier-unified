@@ -384,6 +384,44 @@ async def test_question_unknown_evidence_and_wrong_bindings_do_not_confirm(tmp_p
         await app.close()
 
 
+@pytest.mark.parametrize('probe_fails', [False, True])
+async def test_question_passive_check_uses_acceptance_arriving_during_probe(tmp_path, probe_fails):
+    runtime = Runtime()
+    runtime.failure = TimeoutError('Lost acknowledgement')
+    entered, finish = asyncio.Event(), asyncio.Event()
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    task = None
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        q = await create_question(app, sid)
+        saved = (await app.dispatch('question.answer', {
+            'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': 'Summary'}))['result']
+        input_id = saved['delivery']['inputId']
+        app._session()['messages'] = []
+        async def delivery(session, identity):
+            entered.set()
+            await finish.wait()
+            if probe_fails:
+                raise TimeoutError('Probe unavailable')
+            return 'unknown'
+        runtime.delivery = delivery
+        task = asyncio.create_task(app.dispatch('conversation.delivery', {'sessionId': sid, 'inputId': input_id}))
+        await asyncio.wait_for(entered.wait(), 2)
+        await app.on_runtime_event('runtime.delivery', {
+            'sessionId': sid, 'inputId': input_id, 'delivery': 'accepted'})
+        finish.set()
+        assert (await task)['result']['delivery'] == 'accepted'
+        current = app.questions.store.get(sid, q['id'])
+        assert current['delivery']['status'] == 'accepted'
+        assert current['answer'] == saved['answer'] and len(runtime.sent) == 1
+    finally:
+        finish.set()
+        if task and not task.done():
+            await task
+        await app.close()
+
+
 async def test_question_acceptance_lookup_does_not_scan_unrelated_questions(tmp_path, monkeypatch):
     runtime = Runtime()
     runtime.failure = TimeoutError('Lost reply')

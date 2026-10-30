@@ -4102,7 +4102,9 @@ class AppService:
         async with self.lock:
             current = self._session(sid)
             current_message = find_message(current, input_id)
-            if current_message and current_message.get('delivery', {}).get('status') == 'accepted':
+            current_question = self.questions.for_input(sid, input_id)
+            if ((current_message and current_message.get('delivery', {}).get('status') == 'accepted') or
+                    (current_question and current_question['delivery']['status'] == 'accepted')):
                 status = 'accepted'
             if status == 'accepted':
                 self._delivery(current, input_id, status)
