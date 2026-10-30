@@ -203,6 +203,7 @@ class Worktrees:
         host_matches = not host or (host.get('scope') == 'local' and host.get('id') == local_host_identity()['id'])
         return {'hostMatches': host_matches, 'executionHost': copy.deepcopy(host), 'directory': session.get('workingDirectory') or session['workspace'],
                 'revision': session.get('executionRevision', 0),
+                'interruptionRevision': session.get('interruptionRevision', 0),
                 'fenced': any(row['phase'] in {'pending', 'unknown'} for row in session.get('worktreeHandoffs', [])) or
                     bool(getattr(self.app, 'portability', None) and self.app.portability.fenced(sid))}
 

@@ -18,6 +18,15 @@ bounded retained generation history cannot replace the current owner. Fresh work
 after Stop needs a new generation ID with the correctly captured current epoch;
 it does not require a human input role or a new permission grant.
 
+The host execution snapshot supplies this revision to the worker's private
+command envelope at admission. The worker retains it beside the input's existing
+context binding and copies it into the native generation before publication.
+Retries of an already accepted input keep its original binding. Internal native
+child/job-result inputs inherit the worker's captured startup revision; they do
+not consult the current host. Stop closes that worker, and admission waits for
+its confirmed exit before a replacement can receive the new startup revision.
+Parking and remounting preserve the original startup capture.
+
 `Collaboration.active_binding` retains strict root-principal validation by default.
 An effect owner may explicitly opt into a descendant's trusted native bridge
 binding. That bridge must preserve the actual descendant principal and supply its
