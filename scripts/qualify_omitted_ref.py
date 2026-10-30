@@ -81,6 +81,24 @@ def save(path, data):
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + '\n')
 
 
+def diagnostic_warning(status, message):
+    try:
+        print(message, file=sys.stderr)
+    except OSError:
+        status['diagnosticWarningError'] = 'stderr-write-failed'
+
+
+def save_status(path, status):
+    """Do not replace an in-flight command failure with diagnostic IO errors."""
+    try:
+        save(path, status)
+        return True
+    except OSError:
+        status['receiptWriteError'] = 'status-write-failed'
+        diagnostic_warning(status, 'Omitted-ref diagnostic receipt write failed; no success is certified.')
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--work', required=True, type=Path)
@@ -95,13 +113,15 @@ def main():
     output.mkdir(exist_ok=True, parents=True)
     raw_logs = work / 'private-logs'; raw_logs.mkdir()
     status = {'status': 'preparing', 'commands': [], 'modelCalls': 'not-started'}
-    save(output / 'status.json', status)
+    if not save_status(output / 'status.json', status):
+        return 1  # No command starts without its initial receipt.
 
     def run(label, command, *, cwd=ROOT, env=None, timeout=900):
         log = raw_logs / (label + '.log')
         record = {'label': label, 'returncode': None}
         status['commands'].append(record)
-        save(output / 'status.json', status)
+        if not save_status(output / 'status.json', status):
+            raise RuntimeError('Diagnostic receipt unavailable')
         try:
             with log.open('w') as stream:
                 result = subprocess.run(command, cwd=cwd, env=env, stdout=stream,
@@ -111,7 +131,11 @@ def main():
                 raise RuntimeError(label + ' failed')
         finally:
             record.update(command_log_facts(log, record['returncode']))
-            save(output / 'status.json', status)
+            receipt_saved = save_status(output / 'status.json', status)
+        if not receipt_saved:
+            # Reached only after a successful command. An existing failure or
+            # timeout propagates unchanged through the guarded finally above.
+            raise RuntimeError('Diagnostic receipt unavailable')
 
     try:
         git = lambda *a: subprocess.check_output(['git', *a], cwd=ROOT, text=True).strip()
@@ -205,11 +229,10 @@ Path(sys.argv[1]).write_text(json.dumps({'python':sys.executable,'prefix':sys.pr
                       failureCategory=(status['commands'][-1].get('failureCategory', 'unknown')
                                        if status['commands'] else 'unknown'))
         # Do not print traceback/source excerpts from the private dependency.
-        print('Omitted-ref qualification failed; see the bounded status receipt.', file=sys.stderr)
-        return 1
+        diagnostic_warning(status, 'Omitted-ref qualification failed; see the bounded status receipt.')
     finally:
-        save(output / 'status.json', status)
-    return 0
+        receipt_saved = save_status(output / 'status.json', status)
+    return 0 if status['status'] == 'passed' and receipt_saved else 1
 
 
 if __name__ == '__main__':

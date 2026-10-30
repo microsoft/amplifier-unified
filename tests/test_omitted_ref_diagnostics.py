@@ -107,14 +107,63 @@ class SafeResolverFacts(unittest.TestCase):
         self.assertNotIn('private', json.dumps(result))
         self.assertNotIn('hidden', json.dumps(result))
 
+    def test_status_write_failure_cannot_replace_an_in_flight_exception(self):
+        private = '/private/receipt SECRET_ENV=hidden'
+        for primary in (RuntimeError('original command failure'),
+                        adapter.subprocess.TimeoutExpired(['fixture'], 900)):
+            with self.subTest(primary=type(primary).__name__):
+                status = {'status': 'failed'}
+                console = io.StringIO()
+                with patch.object(adapter, 'save', side_effect=PermissionError(private)), \
+                     patch.object(adapter.sys, 'stderr', console):
+                    try:
+                        try:
+                            raise primary
+                        finally:
+                            self.assertFalse(adapter.save_status(Path('unused'), status))
+                    except type(primary) as caught:
+                        self.assertIs(caught, primary)
+                self.assertEqual(status['receiptWriteError'], 'status-write-failed')
+                self.assertNotIn(private, json.dumps(status) + console.getvalue())
+                self.assertNotIn('Traceback', console.getvalue())
+
+    def test_broken_warning_stream_cannot_replace_primary_failure(self):
+        class BrokenWarningStream:
+            def write(self, value):
+                raise BrokenPipeError('/private/stderr SECRET_ENV=hidden')
+        for primary in (RuntimeError('original command failure'),
+                        adapter.subprocess.TimeoutExpired(['fixture'], 900)):
+            with self.subTest(primary=type(primary).__name__):
+                status = {'status': 'failed'}
+                with patch.object(adapter, 'save', side_effect=PermissionError('/private/receipt')), \
+                     patch.object(adapter.sys, 'stderr', BrokenWarningStream()):
+                    try:
+                        try:
+                            raise primary
+                        finally:
+                            self.assertFalse(adapter.save_status(Path('unused'), status))
+                            adapter.diagnostic_warning(status, 'Fixed failure warning.')
+                    except type(primary) as caught:
+                        self.assertIs(caught, primary)
+                self.assertEqual(status['receiptWriteError'], 'status-write-failed')
+                self.assertEqual(status['diagnosticWarningError'], 'stderr-write-failed')
+                self.assertNotIn('private', json.dumps(status))
+                self.assertNotIn('hidden', json.dumps(status))
+
     def test_adapter_persists_safe_failure_and_preserves_primary_outcome(self):
         """All command boundaries mocked; no uv/Git/network/product execution."""
         loop_pin = next(p for p in adapter.tomllib.loads((adapter.ROOT / 'uv.lock').read_text())['package']
                         if p['name'] == adapter.LOOP)['source']['git'].rsplit('#', 1)[1]
         private = 'https://secret:token@private.example/repo /private/source SECRET_ENV=hidden'
         original_facts = adapter.command_log_facts
-        for mode in ('failure', 'capture-error', 'timeout'):
-            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+        original_save = adapter.save
+        cases = [(mode, None) for mode in ('failure', 'capture-error', 'timeout')]
+        cases += [(mode, write_failure) for mode in ('failure', 'timeout')
+                  for write_failure in ('command-finally', 'outer-finally', 'persistent')]
+        cases += [('command-success', write_failure)
+                  for write_failure in ('command-finally', 'persistent')]
+        for mode, write_failure in cases:
+            with self.subTest(mode=mode, write_failure=write_failure), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 output = root / 'evidence'
                 argv = ['qualify_omitted_ref.py', '--work', str(root / 'work'),
@@ -133,11 +182,14 @@ class SafeResolverFacts(unittest.TestCase):
                         return 'https://github.com/microsoft/' + adapter.LOOP
                     raise AssertionError('Unexpected fixture command')
 
+                command_started = False
                 def failed(command, **kwargs):
+                    nonlocal command_started
+                    command_started = True
                     kwargs['stdout'].write('fatal: Authentication failed ' + private + '\n')
                     if mode == 'timeout':
                         raise adapter.subprocess.TimeoutExpired(command, 900, stderr=private)
-                    return adapter.subprocess.CompletedProcess(command, 7)
+                    return adapter.subprocess.CompletedProcess(command, 0 if mode == 'command-success' else 7)
 
                 def facts(log, code):
                     if mode != 'capture-error':
@@ -147,6 +199,17 @@ class SafeResolverFacts(unittest.TestCase):
                             raise PermissionError(private)
                     return original_facts(Unreadable(), code)
 
+                save_attempts = []
+                def save(path, data):
+                    if path.name == 'status.json' and command_started:
+                        save_attempts.append(json.loads(json.dumps(data)))
+                        count = len(save_attempts)
+                        if (write_failure == 'persistent'
+                                or write_failure == 'command-finally' and count == 1
+                                or write_failure == 'outer-finally' and count == 2):
+                            raise PermissionError(private)
+                    original_save(path, data)
+
                 console = io.StringIO()
                 with patch.object(adapter.sys, 'argv', argv), \
                      patch.object(adapter.sys, 'version_info', (3, 13)), \
@@ -154,23 +217,43 @@ class SafeResolverFacts(unittest.TestCase):
                      patch.object(adapter.sys, 'stderr', console), \
                      patch.object(adapter.subprocess, 'check_output', side_effect=checked), \
                      patch.object(adapter.subprocess, 'run', side_effect=failed) as runner, \
-                     patch.object(adapter, 'command_log_facts', side_effect=facts):
+                     patch.object(adapter, 'command_log_facts', side_effect=facts), \
+                     patch.object(adapter, 'save', side_effect=save):
                     self.assertEqual(adapter.main(), 1)
-                receipt = json.loads((output / 'status.json').read_text())
+                retained = json.loads((output / 'status.json').read_text())
+                receipt = save_attempts[-1]
                 self.assertEqual(runner.call_count, 1)  # Stop at first mocked command.
+                self.assertEqual(len(save_attempts), 2)  # Natural finalizers, not a retry loop.
+                self.assertEqual(receipt['status'], 'failed')
                 self.assertEqual(receipt['errorType'], 'TimeoutExpired' if mode == 'timeout' else 'RuntimeError')
                 category = 'transport-auth' if mode == 'failure' else 'unknown'
                 self.assertEqual(receipt['failureCategory'], category)
                 self.assertEqual(receipt['classifierVersion'], 1)
                 command, = receipt['commands']
-                self.assertEqual(command['failureCategory'], category)
-                self.assertEqual(command['returncode'], None if mode == 'timeout' else 7)
+                if mode == 'command-success':
+                    self.assertNotIn('failureCategory', command)
+                else:
+                    self.assertEqual(command['failureCategory'], category)
+                self.assertEqual(command['returncode'], None if mode == 'timeout'
+                                 else 0 if mode == 'command-success' else 7)
                 self.assertNotIn('command', command)
                 self.assertNotIn('cwd', command)
                 if mode == 'capture-error':
                     self.assertEqual(command['captureError'], 'log-read-failed')
+                if write_failure:
+                    self.assertIn('diagnostic receipt write failed; no success is certified.', console.getvalue())
+                    self.assertNotEqual(retained['status'], 'passed')
+                    if write_failure != 'outer-finally':
+                        self.assertEqual(receipt['receiptWriteError'], 'status-write-failed')
+                    if write_failure == 'command-finally':
+                        self.assertEqual(retained, receipt)  # Later natural save retained the failure flag.
+                    else:
+                        self.assertEqual(retained['status'], 'preparing')  # Stale, never terminal success.
+                else:
+                    self.assertEqual(retained, receipt)
+                    self.assertNotIn('receiptWriteError', receipt)
                 for value in ('secret', 'token', 'private.example', '/private', 'SECRET_ENV', 'hidden'):
-                    self.assertNotIn(value, json.dumps(receipt) + console.getvalue())
+                    self.assertNotIn(value, json.dumps(save_attempts) + json.dumps(retained) + console.getvalue())
 
 
 if __name__ == '__main__':
