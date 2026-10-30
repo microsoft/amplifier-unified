@@ -100,12 +100,14 @@ async def test_failed_child_resume_keeps_transcript_and_metadata_bytes(admission
             assert coordinator is h.coordinator
             await coordinator.get_capability("live.checkpoint")()
             raise error
-        h.parent_capabilities["web.app_access.install"] = AsyncMock(side_effect=fail_access)
+        install_access = AsyncMock(side_effect=fail_access)
+        h.parent_capabilities["web.app_access.install"] = Mock(return_value=install_access)
     with pytest.raises(asyncio.CancelledError if failure.startswith("cancel") else ValueError):
         await h.children.resume(h.identity, "Do not execute", h.parent)
     assert_original(h)
     if failure in {"app_access", "cancel_app_access"}:
-        h.parent_capabilities["web.app_access.install"].assert_awaited_once_with(h.coordinator)
+        h.parent_capabilities["web.app_access.install"].assert_called_once_with()
+        install_access.assert_awaited_once_with(h.coordinator)
     expected = "cancelled" if failure.startswith("cancel") else "error"
     assert h.children.snapshot()[0]["status"] == expected
     events = []

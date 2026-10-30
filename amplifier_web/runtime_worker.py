@@ -212,7 +212,9 @@ class Worker:
         canonical_inputs = (getattr(getattr(self, 'runtime', None), 'generation', None) or {}).get('input_ids')
         assigned = None if coordinator is self.session.coordinator else list(
             assignment[0] if assignment is not None else canonical_inputs or [])
-        assigned_generation = (getattr(getattr(self, 'runtime', None), 'generation', None) or {}).get('id')
+        assigned_generation = (assignment[2] if assignment is not None else
+            (getattr(getattr(self, 'runtime', None), 'generation', None) or {}).get('id'))
+        assigned_stop = assignment[3] if assignment is not None else getattr(self, 'stop_revision', 0)
         assigned_context = None if assigned is None else copy.deepcopy(
             assignment[1] if assignment is not None else {i: self.context_bindings[i] for i in assigned if i in self.context_bindings})
         assigned_bindings = None if assigned is None else [{'inputId': i, 'clientId': assigned_context.get(i, {}).get('clientId')} for i in assigned]
@@ -227,7 +229,8 @@ class Worker:
             if (not runtime or not generation.get('id') or not gate or not gate.current_valid
                     or runtime.closed or runtime.stop_requested
                     or coordinator.cancellation.is_cancelled or not isinstance(ids, list)
-                    or assigned is not None and generation.get('id') != assigned_generation):
+                    or assigned is not None and (generation.get('id') != assigned_generation
+                                                or self.stop_revision != assigned_stop)):
                 return None
             return {'rootSessionId': self.session.coordinator.session_id,
                     'runtimeSessionId': coordinator.session_id, 'generationId': generation['id'],
@@ -250,6 +253,8 @@ class Worker:
                 runtime = getattr(self, "runtime", None)
                 generation = getattr(runtime, "generation", None) or {}
                 args["_generationId"] = generation.get("id")
+            elif origin_scope() is not None:
+                args['_generationId'] = assigned_generation
             all_inputs = ((getattr(getattr(self, 'runtime', None), 'generation', None) or {}).get('input_ids', [])
                           if assigned is None else assigned)
             # Transport the full bounded set, not the visual-context tail.
@@ -367,11 +372,23 @@ class Worker:
                     return {'allowed': False, 'effectAuthorized': False}
                 return result
             register('web.work_effect_check', effect_check)
-            async def install_child_access(child_coordinator):
-                from amplifier_web.app_guidance import install_app_access
-                await install_app_access(child_coordinator, self.app_access_bridge(child_coordinator,
-                    assignment=None if assigned is None else (assigned, assigned_context)))
-            register("web.app_access.install", install_child_access)
+            def capture_child_access():
+                # Called at child invocation, before provider preparation can
+                # await a later root generation or Stop. Descendants keep the
+                # assignment they already received from their own parent.
+                if assigned is None:
+                    generation = getattr(self.runtime, 'generation', None) or {}
+                    inputs = list(generation.get('input_ids', []))
+                    context = {i: copy.deepcopy(self.context_bindings[i]) for i in inputs if i in self.context_bindings}
+                    assignment = (inputs, context, generation.get('id'), self.stop_revision)
+                else:
+                    assignment = (assigned, assigned_context, assigned_generation, assigned_stop)
+                async def install_child_access(child_coordinator):
+                    from amplifier_web.app_guidance import install_app_access
+                    await install_app_access(child_coordinator, self.app_access_bridge(child_coordinator,
+                                                                                      assignment=assignment))
+                return install_child_access
+            register("web.app_access.install", capture_child_access)
         if assigned is None and callable(register):
             async def peer_continuation_ready():
                 runtime, gate = self.runtime, self.activation_gate
@@ -403,6 +420,16 @@ class Worker:
             event['rootSessionId'] = event_root_id
         root_generation = event_session_id == root_session_id and event_root_id == root_session_id
         if root_generation and event.get('type') == 'generation.started':
+            # Explicit inputs carry the host epoch captured at transport
+            # admission. Native child/job follow-ups inherit this process's
+            # original startup epoch: Stop closes the worker, never renews it.
+            binding = self.context_bindings.get(event.get('initial_input_id'), {})
+            interruption = binding.get('interruptionRevision', (self.start_config or {}).get('interruptionRevision', 0))
+            event['interruptionRevision'] = interruption
+            generation = self.runtime.generation
+            if generation and generation.get('id') == event.get('generation_id'):
+                generation.setdefault('interruptionRevision', interruption)
+                event['interruptionRevision'] = generation['interruptionRevision']
             self.root_generation_outcome = None
             self.failed_generation = None
             self.response_blocks.reset()
@@ -1314,6 +1341,15 @@ class Worker:
         future.add_done_callback(retired)
         return await asyncio.shield(task)
 
+    def bind_input_context(self, identity, data, binding=None):
+        """Keep original host admission metadata beside the input's context."""
+        if identity in self.runtime.accepted:
+            return
+        self.context_bindings[identity] = {
+            **(binding or {'clientId': None, 'targets': []}),
+            'interruptionRevision': data.get('interruptionRevision', 0)}
+        self.context_bindings = dict(list(self.context_bindings.items())[-64:])
+
     async def _command_serial(self, data):
         identity = data.get("id")
         try:
@@ -1410,8 +1446,7 @@ class Worker:
                 from amplifier_module_loop_live.runtime import Input
                 from amplifier_web.message_interactions import prepare_input
                 text = await prepare_input(self.session.coordinator, data['text'], data.get('reply_context'), max_chars=self.runtime.max_input_chars)
-                self.context_bindings[data['input_id']] = data.get('context_binding', {'clientId': None, 'targets': []})
-                self.context_bindings = dict(list(self.context_bindings.items())[-64:])
+                self.bind_input_context(data['input_id'], data, data.get('context_binding'))
                 input_id = await self.runtime.submit(Input(
                     "user", text, id=data["input_id"],
                     attachments=tuple(data.get("attachments", [])),
@@ -1419,6 +1454,10 @@ class Worker:
                 result = {"accepted": True, "inputId": input_id}
             elif op == "control":
                 arguments = data.get("arguments", {})
+                if data['operation'] in {'conversation.steer', 'schedule.submit', 'observation.submit',
+                                         'coordination.submit', 'coordination.steer', 'history.edit'}:
+                    input_id = arguments['operationId'] if data['operation'] == 'history.edit' else arguments['inputId']
+                    self.bind_input_context(input_id, data, arguments.get('context_binding'))
                 if data['operation'] in {'configuration.apply', 'configuration.patchPlacement.bind'}:
                     from amplifier_web.configuration_recovery import native_apply
                     # This envelope is supplied only by the host's retained
@@ -1432,8 +1471,6 @@ class Worker:
                             lambda: self.stop_revision, operation=data['operation'])
                 elif data['operation'] == 'conversation.steer':
                     from amplifier_web.conversation_steering import submit
-                    self.context_bindings[arguments['inputId']] = arguments.get('context_binding', {'clientId': None, 'targets': []})
-                    self.context_bindings = dict(list(self.context_bindings.items())[-64:])
                     result = await submit(self.controls, self.runtime, arguments, self.activation,
                                           stop_epoch=lambda: self.stop_revision)
                 elif data["operation"] == "schedule.submit":
