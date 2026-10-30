@@ -116,7 +116,7 @@ class Followups:
 
     def accept(self, action, args, origin, caller=None):
         if action.startswith("feedback.attachments."):
-            return self.owner.additions.accept(action, args, origin)
+            return self.owner.additions.accept(action, args, origin, caller)
         from .service import AppError
         scoped = action == feedback_edits.ACTION or action == "feedback.update" and "reviewRequestId" in args
         owner = feedback_edits.client(self) if scoped else None

@@ -3545,6 +3545,8 @@ class AppService:
                             "feedback.attachments.review", "feedback.attachments.add", "feedback.attachments.reconcile"}:
                 if self.feedback.followups.accept(action, args, origin, caller_session_id):
                     pending.append((self.feedback.followups.run, (args['requestId'],)))
+                if action.startswith('feedback.attachments.') and origin in {'agent', 'system'}:
+                    diagnostic_result = self.feedback.additions.result(args['requestId'], caller_session_id)
             elif action.startswith("smartTools."):
                 if not self.smart_tools: raise AppError("Smart Tools service is unavailable.")
                 if action == 'smartTools.context':

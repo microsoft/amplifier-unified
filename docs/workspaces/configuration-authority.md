@@ -238,8 +238,9 @@ staging without a browser or renewed human confirmation. Existing receipts retai
 actual caller/source authority, verified recipient facts and immutable content;
 every external write rechecks the captured Full revision and Stop boundary.
 Read-only reconciliation never renews effect authority or repeats uncertain work.
-Later-file additions and optional comparison reviews retain separate client
-workflows. The precise behavior and limits live in
+Later-file additions use the same conversation-owned Full path and exact file
+manifest with optional review; Ask retains browser review and confirmation.
+Optional text comparison reviews retain their separate client workflow. The precise behavior and limits live in
 [the feedback contract](../feedback-excerpts.md#initial-publication-under-full-access).
 
 ### Implemented standing preference
