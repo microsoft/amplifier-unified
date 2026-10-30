@@ -49,7 +49,7 @@ def definitions(schema, string):
             schema({"requestId": request_id, "deviceDiagnostics": feedback_diagnostics.DEVICE_SCHEMA}, []),
         ),
         "feedback.submit": (
-            "Create feedback in microsoft/amplifier-unified with exact title/body and explicit attachmentIds. Under saved Full, a current root agent or trusted system with an explicit calling conversation can select its own staged initial files/excerpts without a browser or human confirmation. Staging returns immutable IDs/hashes; the host verifies bytes and records the actual repository identity/visibility before writing. Optional uploadDestination and confirmedFiles/confirmedExcerpts remain exact preconditions, not human-review claims. Outside this Full path, use reviewed title/body; public ordinary files require uploadDestination plus confirmedFiles after explicit review, and excerpts require feedback.excerpt.review/stage followed by confirmExcerpts:true and the complete confirmedExcerpts set after user review. Files remain in repository history. Allowlisted diagnostics are included by default; includeDiagnostics:false opts out. Never include raw logs, paths or credentials. Reuse requestId and identical payload after a lost response; read /feedback/requests for durable results. Unknown outcomes are not reposted. Native descendants and Work-bound publication require separate qualification.",
+            "Create feedback in microsoft/amplifier-unified with exact title/body and explicit attachmentIds. Under saved Full, a current root agent or trusted system with an explicit calling conversation can select its own staged initial files/excerpts without a browser or human confirmation. Staging returns immutable IDs/hashes; the host verifies bytes and records the actual repository identity/visibility before file uploads; plain-text sends need no upload metadata lookup. Optional uploadDestination and confirmedFiles/confirmedExcerpts remain exact preconditions, not human-review claims. Outside this Full path, use reviewed title/body; public ordinary files require uploadDestination plus confirmedFiles after explicit review, and excerpts require feedback.excerpt.review/stage followed by confirmExcerpts:true and the complete confirmedExcerpts set after user review. Files remain in repository history. Allowlisted diagnostics are included by default; includeDiagnostics:false opts out. Never include raw logs, paths or credentials. Reuse requestId and identical payload after a lost response; read /feedback/requests for durable results. Unknown outcomes are not reposted. Native descendants and Work-bound publication require separate qualification.",
             schema({"requestId": request_id,
                     "title": {**string(200), "minLength": 1}, "body": {**string(16000), "minLength": 1},
                     "category": {"enum": list(CATEGORIES)}, "confirmExcerpts": {"type": "boolean"}, "includeDiagnostics": {"type": "boolean"},
@@ -360,7 +360,7 @@ class Feedback:
 
         try:
             destination = None
-            if authority:
+            if authority and (files or args.get('uploadDestination') is not None):
                 feedback_context.check(self.service, authority)
                 destination = await github_api('repos/' + REPOSITORY, None)
                 if (destination.get('full_name') != REPOSITORY or type(destination.get('id')) is not int

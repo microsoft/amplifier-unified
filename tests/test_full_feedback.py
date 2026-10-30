@@ -10,7 +10,15 @@ import pytest
 from amplifier_web import attachments, feedback
 from amplifier_web.service import AppError
 from test_coordination_generation import app, agent
-from test_feedback_attachments import settle, submission
+from test_feedback_attachments import submission
+
+
+async def settle(app):
+    """Await the domain result, independent of canceled UI progress tasks."""
+    async with asyncio.timeout(5):
+        while app.db.execute("SELECT 1 FROM feedback_requests WHERE "
+                "json_extract(receipt,'$.status') IN ('queued','sending') LIMIT 1").fetchone():
+            await asyncio.sleep(.01)
 
 
 async def mode(app, source, value='full'):
@@ -56,6 +64,45 @@ def github(monkeypatch):
     monkeypatch.setattr(feedback, 'github_api', api)
     monkeypatch.setattr(feedback.shutil, 'which', lambda _: '/fixture/gh')
     return calls, target, hooks
+
+
+@pytest.mark.parametrize('origin', ['agent', 'system'])
+async def test_full_text_only_skips_upload_metadata_lookup(app, github, origin):
+    source = app.state['sessions'][0]
+    await mode(app, source)
+
+    async def forbidden():
+        raise AssertionError('Text-only feedback must not read upload metadata')
+
+    github[2]['repos/' + feedback.REPOSITORY] = forbidden
+    payload = submission(includeDiagnostics=False)
+    await call(app, source, 'feedback.submit', payload, origin=origin)
+    await settle(app)
+    _, frozen, receipt = saved(app)
+    assert receipt['status'] == 'submitted'
+    assert receipt['authority']['origin'] == origin
+    assert receipt['authority']['sessionId'] == source['id']
+    assert receipt['authority'] == frozen['_authority']
+    assert frozen['_attachments'] == []
+    assert 'destination' not in receipt
+    assert github[0] == [('repos/' + feedback.REPOSITORY + '/issues', {
+        'title': payload['title'], 'body': payload['body'] + '\n\n---\nCategory: Bug report'
+        + '\n\n<!-- amplifier-feedback:' + payload['requestId'] + ' -->'})]
+
+
+@pytest.mark.parametrize('repository_id', [101, 999])
+async def test_full_text_only_honors_explicit_destination(app, github, repository_id):
+    source = app.state['sessions'][0]
+    await mode(app, source)
+    destination = {'repository': feedback.REPOSITORY, 'repositoryId': repository_id, 'visibility': 'public'}
+    await call(app, source, 'feedback.submit', submission(includeDiagnostics=False, uploadDestination=destination))
+    await settle(app)
+    _, frozen, receipt = saved(app)
+    assert frozen['_attachments'] == []
+    assert frozen['uploadDestination'] == destination
+    assert [path for path, payload in github[0] if payload is None] == ['repos/' + feedback.REPOSITORY]
+    assert receipt['status'] == ('submitted' if repository_id == 101 else 'failed')
+    assert len([1 for _, payload in github[0] if payload is not None]) == int(repository_id == 101)
 
 
 @pytest.mark.parametrize('origin', ['agent', 'system'])

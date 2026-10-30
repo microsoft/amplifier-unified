@@ -61,8 +61,10 @@ prepared excerpt's repository identity/visibility. Optional `confirmedExcerpts`
 and `confirmedFiles` are exact content preconditions when supplied, not claims
 that a human reviewed them. A mismatched set or hash still refuses the send.
 
-The sender verifies and records the actual fixed feedback repository before its
-first write. Full accepts its publication/retention risk without a separate
+For files or an explicit `uploadDestination`, the sender verifies and records the
+actual fixed feedback repository before its first write. Plain-text feedback
+without that precondition goes directly to issue creation, retaining the same
+authority check before the write. Full accepts publication/retention risk without a separate
 `feedback.destination` call; an explicitly supplied `uploadDestination` remains
 an exact precondition. Accepted payloads and request fingerprints stay unchanged.
 New Full receipts retain the actual origin, source conversation, access revision,
