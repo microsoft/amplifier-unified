@@ -82,10 +82,18 @@ async def test_full_observer_reads_cold_registered_results_without_history_or_ad
     await save(app, reader)
     app._publish_changes(sessions={source['id'], peer['id'], reader['id']})
     app.state['sessions'] = [reader]
+    admit = app._admit_session
+
+    def resident_only(metadata):
+        assert metadata['id'] == reader['id'], 'No dormant peer admission'
+        current = admit(metadata)
+        assert current is reader
+        return current
+
     with monkeypatch.context() as patch:
         patch.setattr(app.history, 'ensure_loaded', AsyncMock(side_effect=AssertionError('No transcript loading')))
         patch.setattr(app.cold_display, 'hydrate', Mock(side_effect=AssertionError('No cold-field hydration')))
-        patch.setattr(app, '_admit_session', Mock(side_effect=AssertionError('No dormant owner admission')))
+        patch.setattr(app, '_admit_session', resident_only)
         before = app.db.execute('SELECT id,receipt FROM commands ORDER BY id').fetchall()
         assert (await result(app, reader))['qualified']
         assert (await read(app, reader, args))['text'] == 'Original exact bytes'
