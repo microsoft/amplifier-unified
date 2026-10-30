@@ -75,6 +75,15 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
   }catch(e){if(e.confirmed)clearPending();if(live.current)setError(e.message||'No confirmed response. Check the same request before trying another change.')}
   finally{inFlight.current=false;if(mounted.current)setBusy(false)}
  };
+ const cancelCheck=async(requestId)=>{
+  if(inFlight.current||!active||readOnly)return;
+  inFlight.current=true;setBusy(true);setError('');
+  const visible=()=>live.current&&current.current.key===key;
+  // Cancellation is idempotent by check ID; an older request keeps its own recovery receipt.
+  try{unwrap(await act('workspace.tests.cancel',{workspaceId,sessionId,requestId}));if(visible())await refresh()}
+  catch(e){if(visible()){await refresh();if(visible())setError(e.message||'Cancellation was not confirmed. Check the current status before trying again.')}}
+  finally{inFlight.current=false;if(mounted.current)setBusy(false)}
+ };
  const rows=page?.items||[],capability=page?.capability,setup=page?.setup,setupOwned=!setup?.operation?.sessionId||(setup.operation.sessionId===sessionId&&setup.operation.workspaceId===workspaceId),profiles=capability?.profiles||[],profile=profiles.find(row=>row.id===draft.profileId)||profiles[0],controlsBlocked=busy||!!draft.pending||!active||readOnly,blocked=controlsBlocked||capability?.status!=='ready';
  const last=request||rows.map(row=>row.lastOperation).filter(Boolean).sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0))[0];
  const output=last?.result?.result;
@@ -152,7 +161,7 @@ export function TaskEnvironments({workspaceId,sessionId,act,active,readOnly}){
      {checkOutput.truncatedAtSource&&<p>The command output reached its capture limit.</p>}
      {checkOutput.nextOffset!=null&&<button type="button" className="a-link" onClick={()=>readCheck(check.id,checkOutput.nextOffset)}>Next output page</button>}
     </div>}
-    {!readOnly&&['queued','starting','preparing','checking'].includes(check.status)&&!check.cancelRequested&&<button type="button" className="a-soft" disabled={busy||!active} onClick={()=>mutate('workspace.tests.cancel',{requestId:check.id})}>Cancel check</button>}
+    {!readOnly&&['queued','starting','preparing','checking'].includes(check.status)&&!check.cancelRequested&&<button type="button" className="a-soft" disabled={busy||!active} onClick={()=>cancelCheck(check.id)}>Cancel check</button>}
     <details><summary>Check details</summary><pre className="a-state-view">{JSON.stringify(check,null,2)}</pre></details>
    </li>)}</ul>
   </section>}
