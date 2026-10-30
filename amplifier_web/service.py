@@ -17,6 +17,7 @@ from weakref import WeakValueDictionary
 
 from jsonschema import validate, ValidationError
 import tinycss2
+from .errors import AppError
 from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background, interrupt_unfinished, restore_voice_usage
 from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, work_paused
 from .managed_chats import LOCATION
@@ -262,14 +263,6 @@ from .configuration_authority import definitions as configuration_authority_defi
 ACTION_DEFINITIONS.update(configuration_authority_definitions(schema, string))
 from .access_mode import definitions as access_mode_definitions
 ACTION_DEFINITIONS.update(access_mode_definitions(schema, string))
-
-
-class AppError(Exception):
-    def __init__(self, message, status=400, *, code=None, receipt=None):
-        super().__init__(message)
-        self.status = status
-        self.code = code
-        self.receipt = receipt
 
 
 def validate_theme(css):
