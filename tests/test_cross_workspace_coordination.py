@@ -14,7 +14,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -739,22 +739,32 @@ async def test_result_and_retained_file_refuse_changed_participant_location(cros
 
 
 @pytest.mark.parametrize("moved", ["sender", "recipient"])
-async def test_result_rechecks_locations_after_history_hydration(cross_app, moved, monkeypatch):
+async def test_result_rechecks_locations_after_receipt_read(cross_app, moved, monkeypatch):
     app = cross_app
     source, target = app.state["sessions"]
     await request(app, mode="notify")
+    read_receipt = app.collaboration.receipt
+    before = copy.deepcopy(read_receipt("cross-request"))
 
-    async def relocate(_):
+    def relocate(identity):
+        receipt = read_receipt(identity)
+        # Result reads authorize current endpoints after reading the retained
+        # receipt; they no longer load the target's conversation history.
         session = source if moved == "sender" else target
         session["workspace"] += "/moved-during-read"
         target["activity"] = {"detail": "Private activity in the new location"}
+        return receipt
 
-    hydration = AsyncMock(side_effect=relocate)
+    receipt_read = Mock(side_effect=relocate)
+    hydration = AsyncMock(side_effect=AssertionError("Result reads must not load target history"))
+    monkeypatch.setattr(app.collaboration, "receipt", receipt_read)
     monkeypatch.setattr(app.history, "ensure_loaded", hydration)
     with pytest.raises(AppError) as denied:
         await result(app, source, scope="all")
     assert denied.value.status == 403
-    hydration.assert_awaited_once()
+    receipt_read.assert_called_once_with("cross-request")
+    hydration.assert_not_called()
+    assert read_receipt("cross-request") == before
     assert not app.runtime.inputs
 
 
