@@ -756,8 +756,10 @@ async def test_retained_no_effect_receipt_does_not_borrow_authority_for_new_requ
     duplicate = await submit(b, args)
     assert duplicate['duplicate'] and duplicate['result'] == accepted['result']
     fresh = await read_placement(b, 'after-authority-ended')
-    with pytest.raises(AppError, match='Configuration authority'):
+    reason = 'crossed Stop' if change == 'stop' else 'Configuration authority'
+    with pytest.raises(AppError, match=reason) as rejected:
         await submit(b, bind_args(b, fresh), 'different-new-request')
+    assert rejected.value.status == 403
     await settle_submitted_commands(b)
     assert await operation(b) == retained
     assert stages(b) == [] and not b.runtime.workers
