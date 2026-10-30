@@ -23,6 +23,7 @@ from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, work_pa
 from .managed_chats import LOCATION
 from .attachments import MAX_ENCODED_BYTES
 from .performance_diagnostics import PerformanceDiagnostics, measured, TimedLock
+from .action_schema import schema, string
 
 
 def settle_stream(session):
@@ -37,15 +38,6 @@ def settle_stream(session):
             **({'streamId': identity} if identity else {}),
             **({'inputId': input_id} if input_id else {}),
         })
-
-
-def string(limit=16000):
-    return {"type": "string", "maxLength": limit}
-
-
-def schema(properties=None, required=None):
-    properties = properties or {}
-    return {"type": "object", "properties": properties, "required": list(properties) if required is None else required, "additionalProperties": False}
 
 
 def command_fingerprint(action, args, origin, client_id):

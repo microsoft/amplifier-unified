@@ -41,7 +41,7 @@ def tool_schema():
 
 
 def definitions():
-    from .service import schema, string
+    from .action_schema import schema, string
 
     common = {
         "sessionId": string(200),
