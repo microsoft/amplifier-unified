@@ -118,6 +118,12 @@ replace the original backend configuration or silently enlarge every export.
 Docker rejects full-environment retention before effects.
 Existing complete exports remain unchanged.
 
+Archive-only retention follows the shared [inert metadata policy](test-environments.md#finish-incomplete-cleanup):
+zero-length FIFO entries are retained without opening, creating or extracting
+them. Nonzero FIFOs and other unsupported special entries remain rejected.
+Ordinary `files` and artifact-only validation still reject FIFOs; opaque `full`
+retention is unchanged.
+
 Incus may still create a temporary complete backup during export. Smaller retained
 archives reduce storage after cleanup; they do not remove that temporary space
 requirement. Export has a bounded size, deadline and free-space preflight. Unsafe
