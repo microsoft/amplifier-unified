@@ -77,6 +77,18 @@ try{
   assert.equal(styles.images,3);assert.equal(styles.animation,'digital-rain-drift');
   for(const key of ['form','configuration','user'])assert.equal(styles[key],'rgba(0, 0, 0, 0)',key);
   assert.notEqual(styles.input,'rgba(0, 0, 0, 0)');
+  const assistant=await page.locator('.a-message.a-assistant:has(> .a-message-actions)').first().evaluate(el=>{
+   const body=el.querySelector(':scope > .a-message-body'),actions=el.querySelector(':scope > .a-message-actions');
+   const outer=getComputedStyle(el),inner=getComputedStyle(body),footer=getComputedStyle(actions);
+   return {outer:outer.backgroundColor,border:outer.borderTopWidth,padding:outer.paddingTop,
+    body:inner.backgroundColor,bodyBorder:inner.borderTopWidth,footer:footer.backgroundColor,
+    bodyBottom:body.getBoundingClientRect().bottom,actionsTop:actions.getBoundingClientRect().top};
+  });
+  assert.equal(assistant.outer,'rgba(0, 0, 0, 0)');
+  assert.equal(assistant.border,'0px');assert.equal(assistant.padding,'0px');
+  assert.notEqual(assistant.body,'rgba(0, 0, 0, 0)');assert.equal(assistant.bodyBorder,'1px');
+  assert.equal(assistant.footer,'rgba(0, 0, 0, 0)');
+  assert.ok(assistant.actionsTop>=assistant.bodyBottom,'Assistant actions sit beneath the boxed body');
   assert.match(styles.mask,/linear-gradient/);assert.match(styles.font,/mono|Menlo|Consolas/i);
   const after=await geometry();assert.equal(after.railPosition,'absolute');
   assert.ok(Math.abs(after.railTop-baseline.railTop)<16,'Navigator retains native top anchoring');
@@ -104,6 +116,13 @@ try{
   await page.setViewportSize({width,height:900});
   await expect(input).toBeVisible();await expect(page.locator('[data-part="composer-primary-action"]')).toBeInViewport();
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  const bubble=await page.locator('.a-message.a-assistant:has(> .a-message-actions)').first().evaluate(el=>{
+   const body=el.querySelector(':scope > .a-message-body'),actions=el.querySelector(':scope > .a-message-actions');
+   return {padding:getComputedStyle(body).paddingTop,bodyBottom:body.getBoundingClientRect().bottom,
+    actionsTop:actions.getBoundingClientRect().top};
+  });
+  assert.equal(bubble.padding,'12px','Narrow assistant padding belongs to the body');
+  assert.ok(bubble.actionsTop>=bubble.bodyBottom,'Narrow assistant actions remain below the body');
  }
  await action('theme.apply',{name:preset.name,css:preset.css});
  assert.equal(await page.locator('[data-part="conversation"]').evaluate(el=>getComputedStyle(el,'::before').animationName),'none');
