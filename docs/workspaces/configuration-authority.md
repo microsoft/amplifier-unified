@@ -231,14 +231,16 @@ already supports it. The existing behavior and command-line entry points below
 are narrower: task lineage, system-origin action parity and action-specific human
 gates require incremental qualification before being described as complete.
 
-Initial feedback publication now has a bounded Full path for a current root agent
-or trusted host system with an explicit calling conversation: exact initial files
-and prepared excerpts use conversation-owned staging without a browser or renewed
-human confirmation. The existing receipts retain actual caller/source authority,
-verified recipient facts and immutable content; every external write rechecks the
-captured Full revision and Stop boundary. This does not yet qualify native-child
-or Work-bound publication, or later-file additions. The precise behavior and
-limits live in [the feedback contract](../feedback-excerpts.md#initial-publication-under-full-access).
+Initial feedback publication and direct text follow-ups have a Full path for
+current agents, assigned native children and trusted host systems with an explicit
+calling conversation. Initial files and prepared excerpts use conversation-owned
+staging without a browser or renewed human confirmation. Existing receipts retain
+actual caller/source authority, verified recipient facts and immutable content;
+every external write rechecks the captured Full revision and Stop boundary.
+Read-only reconciliation never renews effect authority or repeats uncertain work.
+Later-file additions and optional comparison reviews retain separate client
+workflows. The precise behavior and limits live in
+[the feedback contract](../feedback-excerpts.md#initial-publication-under-full-access).
 
 ### Implemented standing preference
 

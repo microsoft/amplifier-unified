@@ -3543,7 +3543,7 @@ class AppService:
                     view['panel']=None
             elif action in {"feedback.edits.review", "feedback.get", "feedback.comment", "feedback.reconcile", "feedback.update", "feedback.close", "feedback.reopen",
                             "feedback.attachments.review", "feedback.attachments.add", "feedback.attachments.reconcile"}:
-                if self.feedback.followups.accept(action, args, origin):
+                if self.feedback.followups.accept(action, args, origin, caller_session_id):
                     pending.append((self.feedback.followups.run, (args['requestId'],)))
             elif action.startswith("smartTools."):
                 if not self.smart_tools: raise AppError("Smart Tools service is unavailable.")

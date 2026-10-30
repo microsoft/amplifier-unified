@@ -8,6 +8,24 @@ That support does not change the later-file client ownership and separate review
 described here. Direct text comments/corrections already work without a browser;
 the optional comparison UI is not a new prerequisite for those callers.
 
+Under saved Full, root agents, assigned native children and trusted systems with
+an explicit calling conversation can publish text comments, correction versions
+and issue-state changes without a fresh human request or connected browser.
+Accepted writes retain their actual source conversation, runtime principal,
+origin and captured Full/Stop authority separately from the remote GitHub account.
+Each remote mutation rechecks that authority after preflight awaits. Revocation,
+Stop or an off/on policy change prevents a delayed write; an accepted background
+operation may outlive its originating turn. Exact retries only read the original
+result and do not recapture authority or repeat a possible effect.
+
+Read-only report loading and unknown-original reconciliation do not renew the
+original effect's authority. They remain available after Stop or revocation and
+retain the current check's caller separately. Local feedback identity, remote
+owner/marker checks, revisions and append-only corrections keep their existing
+meaning. This does not add submitting-chat ownership to host feedback or change
+Ask-mode direct follow-ups. Optional browser comparison and later-file review
+remain separate workflows.
+
 - `feedback.get` reads the original report and bounded comment pages. Use a new request ID to refresh; exact retries return the same snapshot.
 - `feedback.reconcile` reads GitHub for an unknown original submission. Only a unique fresh owner/marker match binds the original receipt. No match or incomplete/ambiguous search leaves delivery unknown and never resends it.
 - `feedback.comment` appends the explicitly requested text. `feedback.update` adds a correction version as a comment, preserving the original report and maintainer changes. It does not replace the issue title or body. GitHub does not provide atomic conditional issue edits.

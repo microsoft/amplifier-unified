@@ -20,10 +20,12 @@ def capture(service, origin, caller):
         'interruptionRevision': source.get('interruptionRevision', 0),
     }
     if origin == 'agent':
-        binding, active = service.collaboration.active_binding(source)
+        binding, active = service.collaboration.active_binding(source, allow_descendant=True)
+        # The trusted bridge retains the child's assignment, not the root's
+        # later inputs. Missing/overflowed transport is not a proven empty set.
+        inputs = [row['inputId'] for row in binding.get('_inputBindings', []) if row.get('inputId')]
         authority.update(runtimeSessionId=PRINCIPAL.get(), generationId=active['id'],
-                         inputIds=[row['inputId'] for row in binding.get('_inputBindings', [])
-                                   if row.get('inputId') in active.get('inputIds', [])])
+                         inputIds=inputs, inputCoverage='complete' if inputs else 'unavailable')
     return authority
 
 

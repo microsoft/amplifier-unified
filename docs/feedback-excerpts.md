@@ -45,9 +45,9 @@ controls beyond editing the excerpt are outside this initial slice.
 
 ## Initial publication under Full access
 
-A current root agent or a trusted host system with an explicit calling
-conversation can prepare, stage and submit exact initial feedback under that
-conversation's saved Full access. It does not need a browser, a selected chat,
+A current agent, assigned native child or trusted host system with an explicit
+calling conversation can prepare, stage and submit exact initial feedback under
+that conversation's saved Full access. It does not need a browser, a selected chat,
 a new human message or disclosure/warning acknowledgements. The existing
 minimal export and excerpt preparation checks still apply. Selection of an
 immutable same-conversation review retains agent/system attribution; the
@@ -68,13 +68,18 @@ authority check before the write. Full accepts publication/retention risk withou
 `feedback.destination` call; an explicitly supplied `uploadDestination` remains
 an exact precondition. Accepted payloads and request fingerprints stay unchanged.
 New Full receipts retain the actual origin, source conversation, access revision,
-native/execution identity and Stop boundary, plus the admitted root generation
-for an agent. Every upload/issue write checks that retained authority. Revocation
+native/execution identity and Stop boundary, plus the assigned generation and
+actual runtime principal for an agent. Each child invocation keeps its assigned inputs captured before preparation,
+including nested and resumed execution; later root inputs are not substituted. Missing or overflowed input transport records unavailable coverage.
+Every upload/issue write checks that retained authority. Revocation
 or Stop prevents later writes; once a write may have happened, its outcome stays
 unknown and is never replayed. An accepted background send can outlive its turn.
 
-This slice supports initial publication only. It does not qualify native child
-publication, Work-bound effects, later-file additions, or general GitHub issue,
-PR or release management. Existing Ask-mode/browser confirmation and ordinary
-direct follow-ups keep their behavior. Root admission consumes the canonical
-current-generation/Stop check; it is not a second generation authority service.
+Initial publication and direct text follow-ups support standing Full through
+the same retained authority. Later-file additions and optional comparison reviews
+retain their separate client workflow; general GitHub issue, PR or release
+management is outside these feedback actions. Existing Ask-mode/browser
+confirmation keeps its behavior. Admission consumes the canonical current
+generation/Stop check with explicit descendant support, not a second generation
+authority service. Runtime and release qualification remain distinct from this
+source contract.
