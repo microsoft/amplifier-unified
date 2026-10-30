@@ -22,7 +22,7 @@ export function AccessMode({session,act,globalOnly=false}){
  return <section className="a-settings-section" aria-label="Access and approvals">
   {globalOnly&&<p>Default for all existing and new chats across every workspace on this Amplifier host. Explicit chat and workspace choices still take precedence.</p>}
   <p>Full access lets Amplifier use files, tools and configuration without asking for each permission. Enable it for work you trust.</p>
-  {report&&<p role="status">Current mode: <strong>{report.mode==='full'?'Full access':'Ask when needed'}</strong> · {({session:'This chat',workspace:'Workspace default',app:'App default',default:'Default'})[report.source]}</p>}
+  {report&&<p role="status">Current mode: <strong>{report.mode==='full'?'Full access':'Ask when needed'}</strong> · {({session:'This chat',workspace:'Workspace default',app:'App default',default:'Default',inherited:'Source task settings',unavailable:'Source settings unavailable'})[report.source]}</p>}
   <fieldset className="a-permissions-fields" disabled={busy||!report}>
    {!globalOnly&&<label>Apply to <select aria-label="Access scope" value={scope} onChange={e=>{setScope(e.target.value);setMode(report.overrides[e.target.value].mode)}}>
     <option value="session">This chat</option><option value="workspace">This workspace</option><option value="app">App default</option>

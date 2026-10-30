@@ -719,6 +719,7 @@ class Worker:
                     shared_handle_getter=lambda: self.shared_handle,
                     write_guard=self.activation_gate.check_current, resolved_root=resolved_root,
                     execution_workspace=config.get("workingDirectory"), install_overrides=install_overrides,
+                    owner_session_id=config.get("ownerSessionId"),
                     startup_timing=startup_timing)
             if qualified_overrides is not None:
                 active_install_overrides(self.home, str(qualified_overrides))

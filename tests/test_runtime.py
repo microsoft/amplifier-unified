@@ -23,7 +23,7 @@ for line in sys.stdin:
         if data['session']['id']=='slow':
             print(json.dumps({'type':'runtime.progress','phase':'bundle-preparation','detail':'Loading configured modules.'}),flush=True)
         else:
-            print(json.dumps({'type':'runtime.ready','report':{'resumed':True,'session_id':root}}),flush=True)
+            print(json.dumps({'type':'runtime.ready','report':{'resumed':True,'session_id':root,'owner_session_id':data['session'].get('ownerSessionId')}}),flush=True)
             if root=='native-root':
                 print(json.dumps({'type':'generation.started','session_id':'child','root_session_id':root}),flush=True)
     elif op=='send':
@@ -634,6 +634,7 @@ class ProcessContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list(self.manager.workers), ['fixture-session'])
         ready = next(p for k,p in self.events if k == 'runtime.status' and p['status'] == 'ready')
         self.assertEqual(ready['report']['session_id'], 'native-root')
+        self.assertEqual(ready['report']['owner_session_id'], 'fixture-session')
         self.assertEqual(ready['sessionId'], 'fixture-session')
         self.assertEqual(self.bridges, [('get_state', {}, 'fixture-session')])
         root, child = [p for k,p in self.events if k == 'execution.event']
