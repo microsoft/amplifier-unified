@@ -831,7 +831,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                           ask=None, report_dir=None, resume=False, selection=None,
                           application_host="Amplifier Unified", shared_handle=None,
                           shared_handle_getter=None, shared_snapshot=None,
-                          write_guard=None, resolved_root=None, execution_workspace=None,
+                          write_guard=None, resolved_root=None, execution_workspace=None, owner_session_id=None,
                           refresh_dependencies=False, install_overrides=None, qualification_readonly=False, global_only=False, runtime_plan=None, startup_timing=None, **kwargs):
     from ..worker_diagnostics import StartupTimings
     startup_timing = startup_timing or StartupTimings()
@@ -847,7 +847,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
 
     runtime = runtime or Runtime()
     with startup_timing.phase('manager.config'):
-        config = load_config(workspace, session_id=runtime.session_id, global_only=global_only)
+        config = load_config(workspace, session_id=runtime.session_id, global_only=global_only,
+            **({'owner_session_id': owner_session_id} if owner_session_id is not None else {}))
         from .config import prepare_registry
         prepare_registry(config)
     # Registry/cache ownership is passed explicitly below. AMPLIFIER_HOME must

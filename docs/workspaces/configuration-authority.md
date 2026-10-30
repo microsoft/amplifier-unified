@@ -240,7 +240,38 @@ remain Ask when needed. Full access persists across turns, Stop and host restart
 Only authenticated user controls can call `access.set`; agents can inspect their
 own mode with `access.get` but cannot enable it. Repository settings cannot opt in.
 Records live in the existing host command database with revision-checked,
-idempotent saves. New native workers read only the three exact policy records.
+idempotent saves. New native workers read exact policy and task-source records.
+
+Commissioned and new-task scheduled roots inherit through their retained creator
+or scheduled-origin relationship. The scheduler's validated source/run relationship
+is saved with the new root, before its first native preparation. The receiving
+chat's explicit choice wins.
+Otherwise a source chat's specific choice follows the task ahead of workspace
+and app defaults. At a cross-workspace relationship, an explicit destination
+workspace choice wins before source inheritance. Removing a chat override restores
+this inheritance; it does not copy Full access into the receiving chat.
+Missing, cyclic or ambiguous source relationships, including unavailable or
+invalid committed source payloads, fall back to the receiving
+chat's independently applicable workspace/app preference, or Ask by default.
+They cannot supply inherited Full or erase an operator's existing broad Full
+choice. The unavailable relationship remains in the revision and source diagnostic.
+
+Host checks and native file preparation use one resolver. It reads only the
+requested owners and their source chain, following each committed manifest's
+exact immutable view payload and immediately projecting its identity/source
+fields. It never follows cold message/execution references or trusts mutable
+`view.json` presentation. Read cost grows with source depth and those owner
+payload bytes, not unrelated history. Directory rows locate aliases but never
+supply authority. A worker's host-owner ID is transported separately from its
+native ID, so older aliases do not change its policy. The effective revision binds
+consulted choices, relationships and source Stop revisions. Source revocation or
+Stop fences an already captured derived effect; an explicit receiving-chat choice
+is independent of source permission changes. The saved preference persists after
+Stop, while execution admission still owns cancellation and resume.
+
+This source resolver covers independent task roots. Native-child principal and
+per-child approval attribution, and action-specific human-only gates, remain
+separate implementation work. Existing child file-policy composition is unchanged.
 
 Full access preauthorizes configuration effects at all scopes and ordinary
 allow/deny tool permissions. Pending valid permission requests are answered once;

@@ -31,7 +31,6 @@ async def create_destination(schedules, current, run):
         }, origin='scheduler', command_id=run['id'] + ':create', include_state=False)
         async with app.lock:
             destination = app._session(identity)
-            destination['scheduledOrigin'] = {'sessionId': sid, 'scheduleId': current['id'], 'runId': run['id']}
             run = schedules.store.transition(sid, run['id'], ['creating'], 'creating', schedules.clock(),
                 destinationConfigurationHash=template(app, destination)[1]['configurationHash'],
                 destinationInterruptionRevision=0, destinationExecutionRevision=0, creationConfirmed=True)
