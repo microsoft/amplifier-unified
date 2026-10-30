@@ -112,7 +112,7 @@ class Outputs:
         return await asyncio.to_thread(materialize)
 
     def image(self,sid,identity,expected_hash):
-        self.app._session(sid)
+        self.app._session(sid, hydrate=False)
         record=self.record(sid,identity)
         if record.get('sha256')!=expected_hash or record.get('kind') not in {'file','dataset'}:
             raise ValueError('Choose the exact saved file snapshot and content hash.')
@@ -192,7 +192,11 @@ class Outputs:
             if action == 'outputs.mediaReport':
                 return await self.media.observe(args, origin)
             async with self.app.lock:
-                session=copy.deepcopy(self.app._session(args['sessionId']))
+                source = self.app._session(args['sessionId'], hydrate=bool(args.get('messageId')))
+                # Output records own their bodies. Retain only the execution
+                # fence and location across the file/Git read below.
+                session = {key: source[key] for key in
+                           ('id', 'workspace', 'workingDirectory', 'executionRevision') if key in source}
                 if action=='outputs.list':
                     return {'accepted':True,'result':self.store.list(session['id'],include_unlinked=args.get('includeUnlinked',False),offset=args.get('offset',0),limit=args.get('limit',20))}
                 if action=='outputs.image':
@@ -232,7 +236,7 @@ class Outputs:
                 if previous:return {'accepted':True,'result':previous}
                 for reference in args.get('evidenceIds',[]):self.record(session['id'],reference)
                 if args.get('parentId'):self.record(session['id'],args['parentId'])
-                if args.get('messageId') and not any(row.get('id')==args['messageId'] for row in session.get('messages',[])):
+                if args.get('messageId') and not any(row.get('id')==args['messageId'] for row in source.get('messages',[])):
                     raise ValueError('Choose an original message visible in this conversation; no turn was inferred.')
             data=None
             value={'kind':args.get('kind','writing' if action=='outputs.write' else 'file' if action=='outputs.attachImage' else 'git_review'),
@@ -295,7 +299,7 @@ class Outputs:
                 review=await git_snapshot(workspace,args['mode'],args.get('base'),path)
                 data=review.pop('text').encode();value.update(review=review,filename='review.diff',versionEvidence='snapshot')
             async with self.app.lock:
-                current = self.app._session(session['id'])
+                current = self.app._session(session['id'], hydrate=bool(args.get('messageId')))
                 # File/Git reads above can outlive a task transfer. Recheck
                 # authority under the same lock that commits its source fence.
                 if portability and portability.write_context(session['id']) != transfer_context:
