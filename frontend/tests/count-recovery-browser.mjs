@@ -11,9 +11,12 @@ const nonReduction=process.env.TEST_NATIVE_NO_REDUCTION==='1';
 const artifacts=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp';
 const root=fileURLToPath(new URL('../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u','-c',`
-import asyncio, json, sys, tempfile
+import asyncio, json, os, sys, tempfile
 from pathlib import Path
 from aiohttp import web
+if os.environ.get('AMPLIFIER_TEST_PACKAGE_ROOT'):
+ import amplifier_web
+ assert Path(amplifier_web.__file__).resolve().parent == Path(os.environ['AMPLIFIER_TEST_PACKAGE_ROOT']).resolve()
 sys.path.insert(0, ${JSON.stringify(fileURLToPath(new URL('../../tests/fixtures',import.meta.url)))})
 import chat_ui_server as fixture
 class CountingRuntime(fixture.ChatRuntime):
@@ -40,19 +43,19 @@ async def main():
   site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
   port=site._server.sockets[0].getsockname()[1]
   app['allowed_origins']=app['allowed_origins']|{f'http://127.0.0.1:{port}'}
-  print(json.dumps({'port':port}),flush=True)
+  print(json.dumps({'port':port,'sessionId':session['id']}),flush=True)
   try:await asyncio.Event().wait()
   finally:await runner.cleanup()
 asyncio.run(main())
 `],{stdio:['ignore','pipe','pipe']});
 let fixtureLog='';fixture.stderr.on('data',chunk=>{fixtureLog+=chunk});
 const fixtureReady=new Promise((resolve,reject)=>{
- let text='';fixture.stdout.on('data',chunk=>{text+=chunk;const line=text.split('\n').find(row=>row.startsWith('{"port":'));if(line)resolve(JSON.parse(line).port)});
+ let text='';fixture.stdout.on('data',chunk=>{text+=chunk;const line=text.split('\n').find(row=>row.startsWith('{"port":'));if(line)resolve(JSON.parse(line))});
  fixture.once('exit',code=>reject(new Error(`Counting fixture exited ${code}: ${fixtureLog}`)));
 });
 let vite,browser,page;
 try{
- const port=await Promise.race([fixtureReady,new Promise((_,reject)=>setTimeout(()=>reject(new Error('Counting fixture did not start')),15000).unref())]);
+ const {port,sessionId}=await Promise.race([fixtureReady,new Promise((_,reject)=>setTimeout(()=>reject(new Error('Counting fixture did not start')),15000).unref())]);
  const target=`http://127.0.0.1:${port}`;
  vite=await createServer({configFile:false,root,server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});
  await vite.listen();
@@ -60,6 +63,15 @@ try{
  page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});const errors=[];
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
+ const openFixtureChat=async (targetPage,{touch=false}={})=>{
+  const card=targetPage.locator(`article[data-session-id="${sessionId}"]`);
+  await expect(card).toContainText('Settings test');
+  const open=card.getByRole('button',{name:/^Settings test/});
+  if(touch)await open.tap();else await open.click();
+  await expect(targetPage.getByRole('navigation',{name:'Breadcrumb'}).locator('[aria-current=page]')).toContainText('Settings test');
+  await expect.poll(()=>targetPage.evaluate(()=>window.amplifier.getState().selectedSessionId)).toBe(sessionId);
+ };
+ await openFixtureChat(page);
 
  const banner=page.locator('.a-alert').filter({hasText:nonReduction?'Native compaction could not confirm a smaller continuation request.':'The provider’s token-counting service was temporarily unavailable.'});
  await expect(banner).toBeVisible();
@@ -71,8 +83,12 @@ try{
   await expect(page.getByText('Copy the chat diagnostics',{exact:false})).toBeVisible();
  }else{
   await expect(page.getByText('The counting service is temporarily unavailable.',{exact:false})).toBeVisible();
+  await page.getByText('Technical details',{exact:true}).click();
   await expect(page.getByRole('definition').filter({hasText:'req_count_fixture'})).toBeVisible();
   await expect(page.getByText('Counting attempts',{exact:true})).toBeVisible();
+  const diagnostic=page.getByRole('definition');
+  await expect(diagnostic.filter({hasText:/^503$/})).toBeVisible();
+  await expect(diagnostic.filter({hasText:/^3$/})).toBeVisible();
  }
  await page.screenshot({path:`${artifacts}/${nonReduction?'nonreduction':'count'}-recovery-details.png`});
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
@@ -80,6 +96,7 @@ try{
   const narrow=await browser.newPage({viewport:{width:402,height:700},hasTouch:true,
     extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
   await narrow.goto(vite.resolvedUrls.local[0]); await narrow.waitForSelector('#amp-one');
+  await openFixtureChat(narrow,{touch:true});
   await narrow.locator('.a-alert').filter({hasText:'Native compaction'}).getByRole('button',{name:'View error details'}).tap();
   await expect(narrow.getByText('Copy the chat diagnostics',{exact:false})).toBeVisible();
   await narrow.screenshot({path:`${artifacts}/nonreduction-recovery-narrow.png`});
