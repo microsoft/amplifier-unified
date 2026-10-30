@@ -51,6 +51,11 @@ catalog exposes different query work than a growing notice set without native
 history. Inspect the executed query plan and work counts; selecting a few fields
 or joining a small result does not prevent an earlier full materialization.
 
+Also vary retained body bytes with the row count fixed. A constant SQL instruction
+count can still hide repeated parsing of large bound JSON parameters. Scalar
+queries should not bind unused bodies; measure parameter/statement bytes as well
+as rows and preserve the authorized full-detail read.
+
 Prefer stable work assertions at the affected boundary: rows read or visited,
 records copied/encoded, queries, publications, frames/bytes, retained cache bytes
 or runtime starts. Pick the counts that expose the regression; avoid tests that
@@ -123,6 +128,14 @@ growing unrelated native rows from 300 to 27,000. Selected notices, visible read
 receipts and explicit Activity must preserve their exact results without growing
 SQL work with that unrelated history. This covers canonical native metadata for
 local notice owners without scanning native-only rows that have no notices.
+
+`tests/test_directory_scalar_payloads.py` holds the catalog and current notice set
+fixed while growing retained body bytes. Scalar notice/revision queries must keep
+their SQL inputs bounded by the requested metadata; full-detail reads retain the
+exact bodies. Summary-only edits still invalidate observations, and frozen readers
+retain their own state. The overlay encoding checks exercise mixed scalar/full
+query order and reuse each variant only until the installed overlay changes.
+These checks bound SQL inputs, not all live-summary preparation or global counts.
 
 The additive Extended browser registration runs after publication. The separate
 `Client performance smoke` workflow selects affected PR paths and supports manual

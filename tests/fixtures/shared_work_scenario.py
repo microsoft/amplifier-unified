@@ -101,8 +101,76 @@ async def install(app, runtime, *, manifest_path=None):
             'pendingWarmups': len(service.warmup.pending)})
     app.router.add_get('/fixture/shared-work', inspect)
 
-    # Observe the production wait without changing its timeout, cancellation or
-    # result. stdout records survive the HTTP connection and server shutdown.
+    # Observe real dispatch/HTTP/fence boundaries, not a replacement wait. The
+    # mutable context links the HTTP task to its shielded dispatch without
+    # reading the request body again or adding a scheduling point.
+    http_context = contextvars.ContextVar('shared_work_http_observation', default=None)
+    active_waits = {}
+    observation_errors = []
+    error_count = 0
+    fence = None
+
+    def observation_error(message):
+        nonlocal error_count
+        error_count += 1
+        if len(observation_errors) < 16:
+            observation_errors.append(message[:200])
+
+    def emit_wait(record, phase, **fields):
+        print(json.dumps({'workWait': {**record, 'phase': phase,
+            'at': time.monotonic(), 'serviceClosed': service.closed, **fields}}), flush=True)
+
+    @web.middleware
+    async def observe_http(request, handler):
+        if request.path != '/api/actions' or request.method != 'POST':
+            return await handler(request)
+        context = {}
+        token = http_context.set(context)
+        try:
+            response = await handler(request)
+            record = context.get('wait')
+            if record:
+                try:
+                    body = response.body
+                    if not isinstance(body, bytes) or len(body) > 8 * 1024 * 1024:
+                        raise ValueError('Wait response exceeds observation bound')
+                    value = json.loads(body)
+                    emit_wait(record, 'http-response', status=response.status,
+                              accepted=value.get('accepted'), code=value.get('code'),
+                              changed=value.get('changed'), timedOut=value.get('timedOut'))
+                except (ValueError, TypeError, AttributeError):
+                    observation_error('Could not observe bounded Work wait HTTP response')
+            return response
+        except BaseException as error:
+            if context.get('wait'):
+                emit_wait(context['wait'], 'http-failed', error=type(error).__name__)
+            raise
+        finally:
+            http_context.reset(token)
+
+    # Outside the real boundaries middleware: observe its actual 503 response.
+    # A constructed response is not proof of delivery to a disconnected browser.
+    app.middlewares.insert(0, observe_http)
+    begin_shutdown = service.begin_shutdown
+
+    def observe_shutdown():
+        nonlocal fence
+        first = fence is None
+        pending = [dict(record) for record in active_waits.values()] if first else []
+        result = begin_shutdown()
+        if first:
+            fence = {'at': time.monotonic(), 'serviceClosed': service.closed,
+                     'active': pending}
+            print(json.dumps({'sharedWorkFence': fence}), flush=True)
+        return result
+
+    service.begin_shutdown = observe_shutdown
+    app['shared_work_wait_snapshot'] = lambda: {
+        'activeIds': sorted(active_waits), 'observationErrors': list(observation_errors),
+        'observationErrorCount': error_count}
+
+    # stdout survives transport disconnect. A terminal dispatch row is separate
+    # from the middleware's constructed response and the client's wire receipt.
     dispatch = service.workspace_work.dispatch
     sequence = 0
     async def observed_dispatch(action, args, origin, command_id, caller):
@@ -113,9 +181,24 @@ async def install(app, runtime, *, manifest_path=None):
                 return await dispatch(action, args, origin, command_id, caller)
             sequence += 1
             identity = sequence
+            if identity > 128:
+                observation_error('Work wait observation capacity exceeded')
+                return await dispatch(action, args, origin, command_id, caller)
+            context = http_context.get()
+            if context is None or context.get('wait') is not None:
+                observation_error('Work wait has no unique HTTP observation context')
+            # Generic read callers may omit an optional command ID. The two
+            # control probes supply exact IDs; all reads still have wait/task IDs.
+            if command_id is not None and (not isinstance(command_id, str) or not 0 < len(command_id) <= 200):
+                observation_error('Work wait command identity is invalid or unbounded')
+            record = {'id': identity, 'commandId': command_id if isinstance(command_id, str)
+                      and len(command_id) <= 200 else None,
+                      'taskId': id(asyncio.current_task()), 'waitMs': args.get('waitMs', 30000)}
+            if context is not None:
+                context['wait'] = record
+            active_waits[identity] = record
             def emit(phase, **fields):
-                print(json.dumps({'workWait': {'id': identity, 'phase': phase,
-                    'at': time.monotonic(), 'waitMs': args.get('waitMs', 30000), **fields}}), flush=True)
+                emit_wait(record, phase, **fields)
             emit('entered')
             try:
                 response = await dispatch(action, args, origin, command_id, caller)
@@ -125,8 +208,12 @@ async def install(app, runtime, *, manifest_path=None):
             except Exception as error:
                 emit('failed', error=type(error).__name__)
                 raise
-            emit('returned', changed=response.get('changed'), timedOut=response.get('timedOut'))
-            return response
+            else:
+                emit('returned', accepted=response.get('accepted'),
+                     changed=response.get('changed'), timedOut=response.get('timedOut'))
+                return response
+            finally:
+                active_waits.pop(identity, None)
         finally:
             active_read.reset(token)
     service.workspace_work.dispatch = observed_dispatch
