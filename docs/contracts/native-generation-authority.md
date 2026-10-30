@@ -35,6 +35,12 @@ check validates current generation and Stop revision, while the effect owner
 checks its required delivered-input membership and ordinary authority. Root reply
 and provenance consumers keep the strict default.
 
+Child invocation captures its app-access installer synchronously, before provider
+resolution or session mounting can await. The retained installer carries the
+original generation, inputs and Stop revision into the eventual child bridge.
+Nested children keep their parent's assigned tuple. A first mount that finishes
+after newer root work or Stop cannot borrow that newer execution's authority.
+
 The host consumer and its synthetic transport tests do not qualify the native
 producer. The captured-epoch producer and assigned-child generation stamping must
 ship with consumers that require them; this host seam alone is not a complete

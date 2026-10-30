@@ -210,9 +210,10 @@ async def test_nested_child_keeps_original_assignment_when_installed_during_late
     app, root, worker, envelopes = worker_bridge
     child = coordinator('native-child')
     worker.app_access_bridge(child)
-    original_install = child.get_capability('web.app_access.install')
+    capture_install = child.get_capability('web.app_access.install')
     worker.runtime.generation = {'id': 'later', 'input_ids': ['later-input']}
     worker.context_bindings['later-input'] = {'clientId': 'old-browser', 'targets': []}
+    original_install = capture_install()
     installed = []
     async def install(coordinator, bridge):
         coordinator.register_capability('web.app_access.bridge', bridge)

@@ -390,6 +390,10 @@ class Children:
     async def _execute(self, identity, instruction, parent, agent, overlay, *, tool_inheritance=None,
                        hook_inheritance=None, orchestrator_config=None, parent_messages=None,
                        provider_preferences=None, self_delegation_depth=0, session_metadata=None, resumed=False):
+        # Capture the invoking assignment before any provider/session setup can
+        # await newer parent work. The bound installer never recaptures it.
+        capture_access = parent.coordinator.get_capability("web.app_access.install")
+        install_access = capture_access() if capture_access else None
         from amplifier_foundation import Bundle, ProviderPreference, apply_provider_preferences_with_resolution
         from amplifier_core import HookResult
         if identity in self.rows and self.rows[identity].get("status") in {"starting", "running", "idle", "stopping"} and self.rows[identity].get("task") and not self.rows[identity]["task"].done():
@@ -631,7 +635,6 @@ class Children:
             # Install before execution, including finite/custom orchestrators
             # that never call loop-live's prepare_execution hook. The installer
             # also propagates itself for nested and resumed children.
-            install_access = parent.coordinator.get_capability("web.app_access.install")
             if install_access:
                 await install_access(coordinator)
             unregister = coordinator.hooks.register("orchestrator:complete", completed, name="unified-child-completion", priority=999)

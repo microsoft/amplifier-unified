@@ -372,11 +372,23 @@ class Worker:
                     return {'allowed': False, 'effectAuthorized': False}
                 return result
             register('web.work_effect_check', effect_check)
-            async def install_child_access(child_coordinator):
-                from amplifier_web.app_guidance import install_app_access
-                await install_app_access(child_coordinator, self.app_access_bridge(child_coordinator,
-                assignment=None if assigned is None else (assigned, assigned_context, assigned_generation, assigned_stop)))
-            register("web.app_access.install", install_child_access)
+            def capture_child_access():
+                # Called at child invocation, before provider preparation can
+                # await a later root generation or Stop. Descendants keep the
+                # assignment they already received from their own parent.
+                if assigned is None:
+                    generation = getattr(self.runtime, 'generation', None) or {}
+                    inputs = list(generation.get('input_ids', []))
+                    context = {i: copy.deepcopy(self.context_bindings[i]) for i in inputs if i in self.context_bindings}
+                    assignment = (inputs, context, generation.get('id'), self.stop_revision)
+                else:
+                    assignment = (assigned, assigned_context, assigned_generation, assigned_stop)
+                async def install_child_access(child_coordinator):
+                    from amplifier_web.app_guidance import install_app_access
+                    await install_app_access(child_coordinator, self.app_access_bridge(child_coordinator,
+                                                                                      assignment=assignment))
+                return install_child_access
+            register("web.app_access.install", capture_child_access)
         if assigned is None and callable(register):
             async def peer_continuation_ready():
                 runtime, gate = self.runtime, self.activation_gate
