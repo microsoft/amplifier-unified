@@ -57,8 +57,12 @@ existing roots in the authenticated user's Unified installation.
   remote-host federation and provides no new credentials or filesystem access.
 - Explicit references remain citations unless the existing exact-file result
   mechanism retains their bytes. General peer output libraries, private drafts
-  and files are not shared by sending. Request participants can inspect only
-  their exact retained result relationship; later location changes fail closed.
+  and files are not shared by sending. Request participants can inspect their
+  exact retained result relationship. A registered Full-access observer may also
+  read that exact request and its declared retained artifacts, using `scope:"all"`
+  for other workspaces. It remains an observer: original participants, producer,
+  response provenance and notification ownership are unchanged. Saved endpoint
+  location checks still apply; a result read never loads transcript history.
 - Stable request IDs, cancellation and unknown receipts retain their original
   meaning. Shipping this change never resends rejected or uncertain old input.
 

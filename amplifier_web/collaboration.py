@@ -108,8 +108,8 @@ def definitions(schema, string):
         "coordination.cancel": ("Withdraw your exact queued request, or request cancellation of already admitted work. Does not stop the recipient chat, undo effects, or prove cancellation. Active recipients see the request at their next coordination boundary and report outcome=cancelled when settled. Inspect coordination.result; never replay an unknown admission.", schema({
             **sid, "requestId": string(200), "reason": string(1000)}, ["sessionId", "requestId"])),
         "coordination.acknowledge": ("After reviewing an exact result, retire only its unsubmitted completion notification. Use the review reference from coordination.result or workspace.tests.read/result and a stable command ID. Does not cancel work, qualify success, change limits or suppress later changed outcomes. Reading alone never acknowledges.", schema({**sid, "requestId": string(200), "outcomeRevision": {"type": "integer", "minimum": 1}, "reviewKey": string(200)}, ["sessionId", "requestId", "outcomeRevision", "reviewKey"])),
-        "coordination.result": ("Inspect admission and exact qualified final result links for one request. Only its exact participants may read across its recorded locations; scope=all grants no extra request authority. Acknowledgements and unrelated turns do not count.", schema({"requestId": string(200), "scope": {"enum": ["workspace", "all"]}}, ["requestId"])),
-        "coordination.artifact": ("Read the exact retained file declared in your request relationship, even after its source disappears. Bounded text and download identity; no peer output-library access or work admission. Retained bytes are not proof of correctness.", schema({**sid,
+        "coordination.result": ("Inspect admission and exact qualified final result links for one request without loading history. Original participants retain access; a Full-access observer may inspect a registered request using workspace/all read scope. Observation does not change participants, producer or notification ownership. Acknowledgements and unrelated turns do not count.", schema({"requestId": string(200), "scope": {"enum": ["workspace", "all"]}}, ["requestId"])),
+        "coordination.artifact": ("Read an exact retained file as an original request participant or Full-access observer, even after its source disappears. Observers use workspace/all read scope. Bounded text and download identity; no peer output-library access or work admission. Retained bytes are not proof of correctness.", schema({**sid,
             "requestId": string(200), "reference": string(2000), "scope": {"enum": ["workspace", "all"]}, "responseRevision": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0},
             "limit": {"type": "integer", "minimum": 1, "maximum": 4000}}, ["sessionId", "requestId", "reference"])),
         "coordination.reply": ("Record a typed reply to your exact delivered request. Optional messageIds name your current-generation assistant output, never the incoming request messageId; omit them when unknown. Retain files using path@sha256:<64 lowercase hex digits> in references. Before ending the turn, check artifactVerification and each artifacts[].status: bytes are saved before this reply is acknowledged; later terminal sealing only qualifies the report. Later current generations may reply with expectedResponseRevision from coordination.result. Questions/deferrals stay open; reports are unqualified until separately proven terminal. Exact command IDs deduplicate retries. At most 32 revisions per request.", schema({
@@ -524,22 +524,35 @@ class Collaboration:
                            'Omit messageIds if no current assistant output ID is known; requestId already correlates the request. '
                            'Keep any evidence in references. No reply revision was recorded; correct the arguments and retry.', 400)
 
-    def require_result_reader(self, receipt, origin, caller):
+    def require_result_reader(self, receipt, origin, caller, *, scope='workspace'):
         if origin in {'ui', 'user'}:
             return
-        reader = self.source({}, origin, caller)
+        self.require_request_reader(receipt, self.source({}, origin, caller, hydrate=False), scope=scope)
+
+    def require_request_reader(self, receipt, reader, *, scope='workspace'):
+        """Authorize observation separately from the original request owners."""
         sid = receipt.get('target', {}).get('sessionId') or receipt['sessionId']
         sender = receipt.get('senderSessionId') or receipt.get('result', {}).get('creatorSessionId')
-        workspace = receipt.get('workspace') or self.service._session(sender, hydrate=False)['workspace']
-        if reader['id'] not in {sender, sid}:
+        participant = reader['id'] in {sender, sid}
+        if not participant and not self.service.access_mode.full(reader):
             self.error("This result is outside the caller's request and workspace scope.")
+        fields = ('id', 'workspace', 'location')
         if receipt.get('commandAction') == 'coordination.send':
-            if (not participant_matches(receipt, reader)
-                    or not participant_matches(receipt, self.service._session(sender, hydrate=False))
-                    or not participant_matches(receipt, self.service._session(sid, hydrate=False))):
+            original, target = self.service._session_read_sources([sender, sid], fields)
+            if not all(participant_matches(receipt, row) for row in (original, target)):
                 self.error("This result is outside the caller's recorded request workspace scope.")
-        elif reader['workspace'] != workspace:
-            self.error("This result is outside the caller's request and workspace scope.")
+        else:
+            original, = self.service._session_read_sources([sender], fields)
+            workspace = receipt.get('workspace') or original['workspace']
+            # A creation receipt can precede its reserved root. Its recorded
+            # workspace still scopes inspection without admitting that root.
+            target = {'id': sid, 'workspace': workspace}
+            if (participant and reader['workspace'] != workspace) or original['workspace'] != workspace:
+                self.error("This result is outside the caller's request and workspace scope.")
+        if not participant:
+            from .owned_history import includes
+            if not includes(reader, target, scope):
+                self.error('Result is outside the requested history scope. Use explicit scope=all for registered own-history.')
 
     def resolve_message(self, session, identity, *, strict_source=False):
         def correlated(row):
@@ -1444,7 +1457,7 @@ class Collaboration:
             return await self.watches.dispatch(action, args, origin, command_id, caller)
         if action in {"coordination.grant", "coordination.decide", "coordination.revoke"}:
             self.error("Coordination approval APIs are retired. Historical records are read-only.", 410)
-        source = self.source(args, origin, caller) if action not in {"coordination.result", "coordination.read"} else None
+        source = self.source(args, origin, caller, hydrate=action != 'coordination.artifact') if action not in {"coordination.result", "coordination.read"} else None
         if action == 'coordination.acknowledge':
             from .outcome_acknowledgement import acknowledge
             return await acknowledge(self, source, args, origin, command_id)
@@ -1518,15 +1531,8 @@ class Collaboration:
             if receipt.get("commandAction") not in {"coordination.send", "coordination.create"}:
                 self.error("This receipt is not a peer request.", 409)
             sid = receipt.get("target", {}).get("sessionId") or receipt["sessionId"]
-            self.require_result_reader(receipt, origin, caller)
+            self.require_result_reader(receipt, origin, caller, scope=args.get('scope', 'workspace'))
             target = next((row for row in self.service.state["sessions"] if row["id"] == sid), None)
-            if target:
-                await self.service.history.ensure_loaded(sid)
-                receipt = self.receipt(args["requestId"])
-                # Hydration yields to workspace moves and session replacement.
-                # Resolve the actual reader and target again before exposing data.
-                self.require_result_reader(receipt, origin, caller)
-                target = next((row for row in self.service.state['sessions'] if row['id'] == sid), None)
             initial = None
             if receipt.get('commandAction') == 'coordination.create' and receipt.get('initialInputId'):
                 row = self.service.db.execute('SELECT receipt FROM commands WHERE id=?', (receipt['initialInputId'],)).fetchone()
@@ -1534,6 +1540,7 @@ class Collaboration:
                 if (candidate.get('commandAction') == 'coordination.send'
                         and candidate.get('senderSessionId') == receipt['senderSessionId']
                         and candidate.get('target', {}).get('sessionId') == sid):
+                    self.require_result_reader(candidate, origin, caller, scope=args.get('scope', 'workspace'))
                     initial = candidate
             results = []
             report = initial or receipt

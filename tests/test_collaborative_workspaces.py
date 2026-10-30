@@ -1298,19 +1298,18 @@ async def test_result_read_is_exact_participant_root_and_workspace_scoped(app, r
 
 
 @pytest.mark.parametrize('moved', ['reader', 'target'])
-async def test_result_rechecks_workspace_after_hydration(app, moved, monkeypatch):
+async def test_result_checks_current_workspace_without_loading_history(app, moved, monkeypatch):
     source, target = app.state['sessions']
     await send(app, mode='notify')
 
-    async def hydrate(_):
-        await asyncio.sleep(0)
-        (source if moved == 'reader' else target)['workspace'] += '/other-workspace'
-        target['activity'] = {'detail': 'Activity in the newly moved workspace'}
-
+    (source if moved == 'reader' else target)['workspace'] += '/other-workspace'
+    target['activity'] = {'detail': 'Activity in the newly moved workspace'}
+    hydrate = AsyncMock(side_effect=AssertionError('Exact result reads must not load history'))
     monkeypatch.setattr(app.history, 'ensure_loaded', hydrate)
     with pytest.raises(AppError, match='scope'):
         await app.dispatch('coordination.result', {'requestId': 'request-1'},
             origin='agent', caller_session_id=source['id'])
+    hydrate.assert_not_awaited()
     assert not app.runtime.inputs
 
 
