@@ -254,7 +254,7 @@ class AccessMode:
             raise AppError('Choose a chat or the app-wide access settings.', 400)
         session = None if global_only else (
             self.service._session(args['sessionId']) if origin in {'ui', 'user'}
-            else self.service.configuration_authority.source(args, origin, caller))
+            else self.service.configuration_authority.source(args, origin, caller, allow_descendant=action == 'access.get'))
         def snapshot():
             return policy(self.service.db, '/', '', global_only=True) if global_only else self.snapshot(session)
         if action == 'access.get':

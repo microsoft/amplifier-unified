@@ -269,14 +269,31 @@ Stop fences an already captured derived effect; an explicit receiving-chat choic
 is independent of source permission changes. The saved preference persists after
 Stop, while execution admission still owns cancellation and resume.
 
-This source resolver covers independent task roots. Native-child principal and
-per-child approval attribution, and action-specific human-only gates, remain
-separate implementation work. Existing child file-policy composition is unchanged.
+This source resolver covers independent task roots. Qualified native children can
+use their owning chat's Full mode for the existing shared configuration effects
+and inspect that chat's `access.get` and `capability.read`. Configuration routing
+uses the existing effect requirement; it does not maintain another action list.
+The source check explicitly opts into the native child's current assigned
+generation and captured Stop boundary. Finite, nested, resumed and persistent
+mounts keep their actual principal and original assigned inputs. They do not
+impersonate the root or borrow an unrelated later input. New Full configuration
+receipts retain actor, owner, origin, generation and assigned input IDs separately.
+Accepted delayed work keeps its captured Full revision and the existing final
+effect checks; the finite child finishing does not itself revoke accepted work.
+
+Ask-mode discrete grants remain root-owned, and children cannot grant/request/revoke
+those root grants or change access mode. Other collaboration consumers keep their
+strict root default. Existing child file-policy composition is unchanged.
+This shared configuration consumer does not yet remove the separate native-child
+gates in managed test-host setup, patch placement or configuration operation
+recovery. Those are remaining implementation gaps toward Full parity, not intended
+recurring approval requirements. Work and provider admission use their respective
+canonical owners; this consumer adds no exception or duplicate permission policy.
 
 Full access preauthorizes configuration effects at all scopes and ordinary
 allow/deny tool permissions. Pending valid permission requests are answered once;
 questions, expired requests, lost workers and old tool effects are never replayed.
-Existing root ownership, execution identity, Stop, resource ownership, capacity,
+Existing conversation ownership, execution identity, Stop, resource ownership, capacity,
 retention and recovery checks remain in force. A trusted root remains responsible
 for evaluating peer messages. Configuration commits recheck the captured mode
 revision; turning the mode off fences delayed changes and grants derived from it.
