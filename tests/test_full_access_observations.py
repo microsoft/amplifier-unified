@@ -20,14 +20,22 @@ async def mode(app, sid, value='full'):
         'mode': value, 'expectedRevision': current['revision']})
 
 
+async def generation(app, sid, identity='system-work', input_id='trusted-system-input'):
+    source = app._session(sid)
+    app.collaboration.observe(source, 'runtime.generation', {'sessionId': sid,
+        'rootSessionId': sid, 'event': 'generation.started', 'generation_id': identity,
+        'interruptionRevision': source.get('interruptionRevision', 0)})
+    app.collaboration.observe(source, 'runtime.status', {'sessionId': sid,
+        'event': 'input.delivered', 'inputId': input_id})
+
+
 async def full_fixture(tmp_path, monkeypatch):
     values = await fixture(tmp_path, monkeypatch)
     app, runtime, _, sid, *_ = values
     # No mounted provider needs retirement when the operator saves the preference.
     runtime.workers = {}
     runtime.stop = AsyncMock()
-    app._session(sid)['collaborationGeneration'] = {
-        'id': 'system-work', 'inputIds': ['trusted-system-input'], 'terminal': False}
+    await generation(app, sid)
     async def admit(owner, args, guard):
         reason = guard()
         if reason:
@@ -71,6 +79,9 @@ async def test_full_watch_qualifies_runs_and_resumes_without_human_or_client(tmp
             {'sessionId': sid, 'descriptor': supplied}, origin))['result']['observer']
         expected = {'origin': origin, 'sessionId': sid,
             'accessRevision': app.access_mode.snapshot(source)['revision'], 'at': now[0]}
+        if origin == 'agent':
+            expected.update(runtimeSessionId=sid, generationId='system-work',
+                inputIds=['trusted-system-input'])
         assert qualified['authorization'] == expected
         assert qualified['qualification'] == supplied['qualification']
         assert 'approvedBy' not in qualified and 'verified' not in qualified['qualification']
@@ -165,10 +176,67 @@ async def test_full_resume_cannot_renew_a_stopped_or_revoked_watch(tmp_path, mon
         retained = app.observations.store.get('watch', watch['id'])
         assert retained['status'] == 'needs_review'
         assert app.access_mode.full(app._session(sid))
-        with pytest.raises(AppError, match='Full access or Stop boundary'):
+        with pytest.raises(AppError, match='Full access or Stop boundary|current.*generation|Stop'):
             await resume(app, sid, config, retained)
         assert app.observations.store.get('watch', watch['id']) == retained
         runtime.observation_input.assert_not_awaited()
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('fresh_origin', ['agent', 'system'])
+async def test_stopped_transport_cannot_arm_or_qualify_fresh_work(tmp_path, monkeypatch, fresh_origin):
+    app, _, _, sid, config, _, _, descriptor = await full_fixture(tmp_path, monkeypatch)
+    try:
+        source = app._session(sid)
+        transport = {'_runtimeSessionId': sid,
+            '_generationId': source['collaborationGeneration']['id'],
+            '_inputBindings': [{'inputId': value} for value in source['collaborationGeneration']['inputIds']]}
+        async def old_call(action, args, identity):
+            return await app.app_bridge('dispatch', {
+                'action': action, 'args': args, 'id': identity, **transport}, sid)
+        watch, payload = await arm(app, sid, config)
+        await app.dispatch('conversation.stop', {'sessionId': sid})
+        # The worker has not reported a terminal generation. Even a later status
+        # update must not let its old transport capture the new Stop revision.
+        assert not source['collaborationGeneration']['terminal']
+        original_generation = copy.deepcopy(source['collaborationGeneration'])
+        await app.on_runtime_event('runtime.generation', {'sessionId': sid,
+            'rootSessionId': sid, 'event': 'generation.started',
+            'generation_id': transport['_generationId']})
+        assert source['collaborationGeneration'] == original_generation
+        await app.on_runtime_event('runtime.status', {'sessionId': sid, 'status': 'working'})
+        await app.observations.tick()
+        retained = app.observations.store.get('watch', watch['id'])
+        assert retained['status'] == 'needs_review'
+        before = copy.deepcopy(app.observations.store.rows('observer'))
+        for action, args in [
+            ('observation.preview', config),
+            ('observation.create', {**payload, 'requestId': 'fresh-after-stop'}),
+            ('observation.qualify', {'sessionId': sid, 'descriptor': descriptor}),
+        ]:
+            with pytest.raises(AppError, match='current.*generation|Stop'):
+                await old_call(action, args, 'stale:' + action)
+        assert app.observations.store.rows('observer') == before
+        assert app.observations.store.rows('watch') == [retained]
+        duplicate = (await old_call('observation.create', payload, 'original-receipt'))['result']
+        assert duplicate['duplicate'] and duplicate['watch'] == retained
+
+        if fresh_origin == 'agent':
+            await generation(app, sid, 'new-system-work', 'new-trusted-system-input')
+        qualified = (await dispatch(app, sid, 'observation.qualify',
+            {'sessionId': sid, 'descriptor': descriptor}, fresh_origin))['result']['observer']
+        fresh, _ = await arm(app, sid, config, fresh_origin, request='new-work')
+        assert fresh['authorization']['origin'] == fresh_origin
+        assert fresh['interruptionRevision'] == source['interruptionRevision']
+        assert qualified['authorization']['origin'] == fresh_origin
+        if fresh_origin == 'agent':
+            assert fresh['authorization']['generationId'] == 'new-system-work'
+            assert fresh['authorization']['inputIds'] == ['new-trusted-system-input']
+        else:
+            assert 'generationId' not in fresh['authorization']
+        assert not any(row.get('role') == 'user' for row in source['messages'])
+        assert not source['approvals']
     finally:
         await app.close()
 
@@ -184,6 +252,18 @@ async def test_full_preview_binds_the_saved_access_revision(tmp_path, monkeypatc
         assert not app.observations.store.rows('watch')
         watch, _ = await arm(app, sid, config, request='current-preview')
         assert watch['authorization']['accessRevision'] == app.access_mode.snapshot(app._session(sid))['revision']
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('transport', [{'_inputBindings': []},
+    {'_inputBindings': [{'inputId': 'never-admitted'}]}, {'_generationId': 'obsolete'}])
+async def test_full_cannot_borrow_current_owner_authority_without_current_work(tmp_path, monkeypatch, transport):
+    app, _, _, sid, config, *_ = await full_fixture(tmp_path, monkeypatch)
+    try:
+        with pytest.raises(AppError, match='current.*generation|current admitted input'):
+            await agent(app, app._session(sid), 'observation.preview', config, 'unbound', **transport)
+        assert not app.observations.store.rows('watch')
     finally:
         await app.close()
 

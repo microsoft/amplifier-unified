@@ -24,6 +24,17 @@ create new work. Existing watches are not migrated or automatically rearmed.
 No browser, question answer or new permission record is needed to authorize an
 unattended watch with `presentationRequest` omitted.
 
+Agent entry also uses the shared [current native generation authority](native-generation-authority.md).
+Qualification, preview and fresh create/resume require the actual caller's current
+generation and delivered input binding at its original Stop revision. The existing
+authorization record keeps `runtimeSessionId`, `generationId` and `inputIds`
+separate from the owning `sessionId`. A stopped worker cannot choose a new request
+ID to regain authority, even before its terminal event arrives or after a duplicate
+start/status event. Reading the original idempotent receipt still does not replay
+anything. Fresh trusted host system work is independent of the stopped worker's
+binding; current agent work can proceed with a new correctly admitted generation.
+Neither path requires human input or reattributes an agent as the root or user.
+
 Required unanswered task questions remain factual dependencies in this slice;
 Full observation authority does not answer them or turn an agent choice into a
 human answer. The existing human-only answer route is a separate autonomous
