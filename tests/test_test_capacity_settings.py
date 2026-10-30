@@ -9,6 +9,7 @@ import pytest
 
 from amplifier_web import task_environments as environments
 from amplifier_web import test_capacity_settings as policy
+from amplifier_web import private_policy_file
 from amplifier_web.service import AppError
 from test_configuration_authority import app, grant
 from test_coordination_generation import agent, until
@@ -202,6 +203,7 @@ def test_settings_store_without_unix_filesystem_capabilities(tmp_path, monkeypat
     portable = SimpleNamespace(**{name: getattr(native, name) for name in dir(native)
         if name not in {'O_NOFOLLOW', 'O_DIRECTORY', 'O_NONBLOCK', 'getuid', 'name'}}, name='nt')
     monkeypatch.setattr(policy, 'os', portable)
+    monkeypatch.setattr(private_policy_file, 'os', portable)
     app = SimpleNamespace(data_dir=tmp_path)
     assert policy.load(app) == {'version': 1, 'defaults': {}, 'runners': {}}
     value = {'version': 1, 'defaults': {'maxRunning': 0}, 'runners': {}}
