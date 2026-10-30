@@ -231,14 +231,15 @@ async def test_malformed_execution_targets_never_fall_back_to_selection(app, act
 @pytest.mark.parametrize("action,key,args", [
     ("session.warm", "id", {}),
     ("configuration.apply", "id", {"config": {}}),
-    ("permissions.save", "sessionId", {"allowed": [], "denied": []}),
+    ("permissions.save", "sessionId", {"scope": "global", "allowed": [], "denied": []}),
     ("runtime.control", "sessionId", {"operation": "provider.select", "args": {}}),
 ])
 async def test_foreign_executable_and_authority_mutations_still_refuse_through_app_bridge(app, action, key, args):
     source, peer = app.state["sessions"]
     before = copy.deepcopy(peer)
     settings = copy.deepcopy(app.state["settings"])
-    with pytest.raises(AppError, match="explicitly") as exc:
+    reason = "calling conversation" if action == "permissions.save" else "explicitly"
+    with pytest.raises(AppError, match=reason) as exc:
         await app.app_bridge("dispatch", {"action": action, "args": {key: peer["id"], **args},
             "_runtimeSessionId": source["id"]}, source["id"])
     assert exc.value.status == 403
