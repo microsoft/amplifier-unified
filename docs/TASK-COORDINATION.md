@@ -1,5 +1,15 @@
 # Task and worker coordination
 
+## Correcting a commissioned member's required turn limit
+
+When an already-authorized limit correction cannot reach an exhausted member,
+use the separate [commissioned-member limit action](TASK-CONTINUITY.md#commissioned-member-limit-correction).
+It changes only the exact existing task's `maxTurns` through the native task
+transaction. It does not admit a message, resume work, clear Stop, change
+permissions or reset consumed turns. Ordinary `task.*` caller ownership and
+exhausted peer-input checks remain unchanged. Read its exact receipt after an
+uncertain reply; only a separate authorized fresh input may continue the task.
+
 ## Atomic returns for existing-root requests
 
 For new queued work that needs a returned result, `coordination.send` accepts

@@ -33,6 +33,57 @@ authorized follow-up and retains the completed task in history. Neither action
 supplies permission, resolves a pending user choice or overrides Stop. This is
 operating guidance for existing controls, not a new grant or automatic migration.
 
+## Commissioned-member limit correction
+
+`assignment.taskLimit.correct` is a separate, explicit limit-only operation for
+the authenticated direct commissioning root and its current idle member in an
+active same-workspace assignment. It is not a cross-root `task.update` exception.
+The host verifies the original creation receipt, current root generation and
+admitted input. An assignment peer or an adopted member does not acquire this
+authority. The commissioning owner must already be authorized to change this
+particular limit within the original delegation: neither an agent-origin record
+nor this API establishes that a user, owner or host limit is disposable.
+
+The exact arguments are `sessionId` (the caller), `targetSessionId`, `taskId`,
+`expectedAssignmentRevision`, `expectedTaskRevision`,
+`expectedInterruptionRevision`, `maxTurns` (positive integer or null), and a
+nonempty `reason`. Dispatch requires a stable `id`. Current assignment/member
+summaries supply the target/task revisions; the ordinary coordination listing
+supplies its Stop revision. Inspect exact retained constraints before acting;
+a summary is not authority to remove them.
+
+The host retains the request before preparing the native owner. Preparation and
+final native admission recheck membership, identities, task, current owner input
+and Stop. The worker takes its normal writer custody and task lock, rechecks
+authorization after awaits, and uses the existing task mutation transaction.
+The final host authorization is the effect-admission point, recorded before the
+native save. A later owner Stop or membership change cannot retract an already
+admitted effect; it may still settle. A recipient Stop observed by the native
+worker before its save refuses. Admission alone is not a confirmed mutation:
+only the canonical task receipt establishes that the correction was applied.
+Only the limit and its attributed correction/change history change. Task identity,
+status, objective, constraints, used turns, failures, evidence and other budgets
+are retained. No input, task resume, Stop clearing or old-effect replay occurs.
+Running, stopped, failed, unsettled or completed work cannot use this route.
+A paused/blocked task in an otherwise idle conversation remains paused/blocked.
+
+`assignment.taskLimit.read` takes the caller's `sessionId` and exact `commandId`.
+It reads the retained admission and canonical task receipt without warming a
+runtime. Exact duplicate dispatch only reads that original operation; it does
+not repeat preparation or the mutation. Changed contents under the same ID
+refuse. Lost acknowledgements can be reconciled with the canonical receipt;
+missing/corrupt evidence remains unknown and never permits a replacement request.
+The private native operation is not accessible through `runtime.control`.
+Work-dependent corrections retain the existing fail-closed final-owner guard;
+this increment does not add support for mutations requiring a Work-content
+witness. The passive receipt read remains available for recovery.
+
+An applied correction is not recovery of the product task. A **separate fresh,
+authorized input** must pass the unchanged peer/native admission, capacity,
+permission and Stop checks. A suppressed or uncertain old input stays unchanged.
+Source, synthetic native-boundary qualification and deployed availability must
+be reported separately.
+
 ## Continuation and recovery
 
 The existing goal controller performs continuation. The task revision applies at

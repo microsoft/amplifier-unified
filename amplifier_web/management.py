@@ -662,7 +662,7 @@ class Management:
                     if not session.get('configurationBusy'):
                         self.background(self.service.collaboration.drain(identity))
 
-    async def ensure_runtime(self,session,*,selection_override=None,bundle_replacement=None,restart_guard=None,preserve_configuration=False):
+    async def ensure_runtime(self,session,*,selection_override=None,bundle_replacement=None,restart_guard=None,preserve_configuration=False,settled=None):
         if self.unresolved_configuration(self.service._session(session['id'])):
             raise ValueError('The original configuration application is unresolved. Runtime preparation cannot reconcile or repeat it.')
         if session.get('nativeProject'):
@@ -695,7 +695,8 @@ class Management:
         check_current()
         await self.service.runtime.start(session,self.service.on_runtime_event,
             **({'guard': restart_guard} if restart_guard is not None else {}),
-            **({'preserve_configuration': True} if preserve_configuration else {}))
+            **({'preserve_configuration': True} if preserve_configuration else {}),
+            **({'settled': settled} if settled is not None else {}))
 
     async def recover_provider_catalog(self, session, operation, args):
         if operation not in {'configuration.providers', 'configuration.providerModels'}:

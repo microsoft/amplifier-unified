@@ -30,6 +30,7 @@ SAFE_ACTIONS = frozenset({
     'coordination.awareness', 'coordination.intent.read', 'coordination.diagnostics',
     'coordination.reply', 'coordination.cancel', 'coordination.acknowledge', 'coordination.wait',
     'task.get', 'task.history', 'task.detail', 'task.receipt',
+    'assignment.taskLimit.read',
     'operations.list', 'operations.read', 'operations.wait',
     'workspace.tests.read', 'workspace.tests.result', 'workspace.tests.cancel',
     'workspace.environments.read', 'workspace.environments.reconcile',

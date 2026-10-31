@@ -201,7 +201,18 @@ class RuntimeControls:
         if saved.get("mode"):
             await self.mode("mode.set", {"name":saved["mode"]})
 
-    def persist(self, *, task_only=False):
+    def persist(self, *, task_only=False, preserve_controls=False):
+        if preserve_controls:
+            if not task_only:
+                raise ValueError('Field-only task persistence requires task_only')
+            # Native custody excludes another writer. Fail closed if the
+            # original controls disappeared; never reconstruct other settings.
+            saved = json.loads(self.state_path().read_text())
+            saved.update(goal=self.coordinator.session_state.get('goal'),
+                         task=self.coordinator.session_state.get('task'),
+                         taskReceipts=self.tasks.receipts, taskHistory=self.tasks.history)
+            write_private(self.state_path(), json.dumps(saved, default=str))
+            return
         if self.preserve_configuration:
             return  # A scoped placement mount restores controls without rewriting them.
         snapshot = self.configurator.snapshot() if self.configurator else {}

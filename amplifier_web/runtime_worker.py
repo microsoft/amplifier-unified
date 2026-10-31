@@ -1207,11 +1207,12 @@ class Worker:
                         "accepted": False, "supported": False, "effect": "none",
                         "reason": "No active native owner is available for anchored steering."}})
                     return
-                placement_control = op == 'control' and data.get('operation') == 'configuration.patchPlacement.bind'
+                placement_control = op == 'control' and data.get('operation') in {
+                    'configuration.patchPlacement.bind', 'assignment.taskLimit.apply'}
                 if placement_control:
                     # A parked worker may remount while acquiring its writer.
-                    # Preserve controls during that preparation too, not only
-                    # after acquisition or the explicit replacement startup.
+                    # Field-only placement/limit controls preserve settings
+                    # during preparation as well as the eventual transaction.
                     if self.parked:
                         if not isinstance(self.start_config, dict):
                             raise ValueError('The parked placement owner has no verified startup binding.')
@@ -1470,6 +1471,12 @@ class Worker:
                         result = await native_apply(self.controls, arguments.get('config'), attempt,
                             lambda value: self.bridge('configuration.effect.admit', value),
                             lambda: self.stop_revision, operation=data['operation'])
+                elif data['operation'] == 'assignment.taskLimit.apply':
+                    from amplifier_web.commissioned_task_limit import native_apply
+                    result = await native_apply(self.controls, arguments,
+                        lambda value: self.bridge('assignment.taskLimit.admit',
+                            {**value, '_runtimeSessionId': self.session.session_id}),
+                        lambda: self.stop_revision)
                 elif data['operation'] == 'conversation.steer':
                     from amplifier_web.conversation_steering import submit
                     result = await submit(self.controls, self.runtime, arguments, self.activation,

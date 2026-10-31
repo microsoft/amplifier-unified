@@ -331,6 +331,8 @@ from .questions import definitions as question_definitions
 ACTION_DEFINITIONS.update(question_definitions(schema, string))
 from .task_continuity import definitions as task_definitions
 ACTION_DEFINITIONS.update(task_definitions(schema, string))
+from .commissioned_task_limit import definitions as commissioned_limit_definitions
+ACTION_DEFINITIONS.update(commissioned_limit_definitions(schema, string))
 from .coordination import definitions as coordination_definitions
 ACTION_DEFINITIONS.update(coordination_definitions())
 from .integration_evidence import definitions as integration_definitions
@@ -1936,6 +1938,8 @@ class AppService:
             raise AppError('Use the shared schedule actions; direct scheduled input admission is internal.', 403)
         if action == 'runtime.control' and args.get('operation', '').startswith(('configuration.operation.', 'configuration.effect.')):
             raise AppError('Use the operation-bound configuration recovery actions.', 403)
+        if action == 'runtime.control' and args.get('operation', '').startswith('assignment.taskLimit.'):
+            raise AppError('Use the commissioning-owner limit action; native limit admission is internal.', 403)
         if action == 'runtime.control' and args.get('operation', '').startswith('memory.'):
             raise AppError('Use the shared memory controls; model consolidation is internal.', 403)
         if action == 'runtime.control' and args.get('operation', '').startswith(('task.', 'capacity.')):
@@ -2223,6 +2227,9 @@ class AppService:
             except ValueError as exc:
                 raise AppError(str(exc), 409) from None
             return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
+        if action in {'assignment.taskLimit.correct', 'assignment.taskLimit.read'}:
+            from .commissioned_task_limit import dispatch as limit_dispatch
+            return await limit_dispatch(self, action, args, origin, command_id, caller_session_id)
         if action.startswith('assignment.'):
             return await self.assignments.dispatch(action, args, origin, command_id, caller_session_id)
         if action.startswith("modelCapacity."):
@@ -5070,6 +5077,10 @@ class AppService:
             from .configuration_recovery import authorize
             async with self.lock:
                 return authorize(self.management, session_id, args)
+        if operation == 'assignment.taskLimit.admit':
+            from .commissioned_task_limit import authorize
+            async with self.lock:
+                return authorize(self, session_id, args)
         if operation == "coordination.continuation_ready":
             return self.collaboration.continuation_ready(session_id, args)
         if operation == "coordination.admit":

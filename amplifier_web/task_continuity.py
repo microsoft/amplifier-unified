@@ -460,7 +460,7 @@ class TaskController:
                 "Paused, blocked or completed tasks must not continue automatically. A model response ending does not complete this objective.\n" + json.dumps(visible, ensure_ascii=False))
         return HookResult(action="inject_context", context_injection=text, context_injection_role="system", ephemeral=True)
 
-    async def perform(self, operation, args):
+    async def perform(self, operation, args, *, preserve_controls=False):
         if operation in READ_ACTIONS:
             if operation == "task.get":
                 return self.canonical_snapshot()
@@ -568,7 +568,7 @@ class TaskController:
         try:
             if not getattr(self.controls.runtime, "generation", None):
                 self.apply(persist=False)
-            self.controls.persist(task_only=True)
+            self.controls.persist(task_only=True, **({'preserve_controls': True} if preserve_controls else {}))
         except Exception:
             self.coordinator.session_state["task"] = previous
             self.coordinator.session_state["goal"] = old_goal
@@ -685,6 +685,11 @@ async def dispatch(service, operation, args, origin, command_id, include_state):
         result = await service.runtime.control(sid, operation, forwarded)
     except ValueError as exc:
         raise AppError(str(exc), 409) from None
+    return await publish_result(service, sid, result)
+
+
+async def publish_result(service, sid, result):
+    """Publish an already committed canonical task transaction, never reapply it."""
     receipt = copy.deepcopy(result["receipt"])
     async with service.lock:
         # Keep existing full-record authority projections, never summary nulls.

@@ -344,11 +344,30 @@ class RuntimeManager:
         except (ValueError, IndexError) as exc:
             raise RuntimeError("The runtime command does not identify a uv project.") from exc
 
-    async def start(self, session: dict, emit: Emitter, *, preserve_emit=False, guard=None, preserve_configuration=False):
+    async def start(self, session: dict, emit: Emitter, *, preserve_emit=False, guard=None, preserve_configuration=False, settled=None):
         sid = session["id"]
         async with self._admission(sid):
-            await self._start_locked(session, emit, preserve_emit=preserve_emit, guard=guard,
-                **({'preserve_configuration': True} if preserve_configuration else {}))
+            # Effect owners may distinguish their own preparation lifecycle
+            # from unrelated starting work. This is an identity, not permission.
+            if not hasattr(self, '_starting_guards'):
+                self._starting_guards = {}
+            self._starting_guards[sid] = guard
+            try:
+                await self._start_locked(session, emit, preserve_emit=preserve_emit, guard=guard,
+                    **({'preserve_configuration': True} if preserve_configuration else {}))
+                if settled is not None:
+                    if guard is None:
+                        raise ValueError('Settled startup requires its host operation guard.')
+                    # ready acknowledges mounting, not publication of the idle
+                    # lifecycle boundary. Keep custody admission and this exact
+                    # preparation identity while its owner observes settlement.
+                    async with asyncio.timeout(10):
+                        while not settled():
+                            guard()
+                            await asyncio.sleep(.01)
+                        guard()
+            finally:
+                self._starting_guards.pop(sid, None)
 
     @asynccontextmanager
     async def _admission(self, sid):
@@ -1399,6 +1418,19 @@ class RuntimeManager:
         return await self._reply(*pending, op="control", args=args)
 
     async def control(self, session_id, operation, arguments=None, *, guard=None):
+        if operation == 'assignment.taskLimit.apply':
+            # Preparation was explicit and preservation-aware. Retirement must
+            # not silently restart through the ordinary unpreserved route.
+            async with self._admission(session_id):
+                if guard is None:
+                    raise ValueError('Limit correction requires its host guard.')
+                guard()
+                row = self.workers.get(session_id)
+                if not row or row['process'].returncode is not None or row.get('closing'):
+                    raise ValueError('The prepared task owner retired before limit admission; no effect was sent.')
+                pending = await self._admit(session_id, 'control', {
+                    'operation': operation, 'arguments': arguments or {}})
+            return await self._reply(*pending)
         return await self._request(session_id, "control", operation=operation, arguments=arguments or {},
             **({'guard': guard} if guard is not None else {}))
 
