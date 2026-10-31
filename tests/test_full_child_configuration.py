@@ -96,6 +96,12 @@ async def mounted(app, tmp_path, monkeypatch):
     failures = []
 
     def install_execute(execute):
+        # Finish the synthetic root's preparation after initial settings setup.
+        # Capture once, before child assignment/provider awaits; later changes
+        # must invalidate this mount rather than renew its execution scope.
+        if worker.start_config is None:
+            worker.start_config = {key: source.get(key, 0) for key in
+                ('interruptionRevision', 'executionRevision', 'configurationPendingRevision')}
         async def checked(*args, **kwargs):
             try:
                 return await execute(*args, **kwargs)
@@ -271,7 +277,7 @@ async def test_mounted_child_inherits_source_full_and_retains_queued_configurati
     await h.registry.spawn('worker', 'queue configuration', h.parent, sub_session_id='child')
 
 
-@pytest.mark.parametrize('advance', ['input', 'generation', 'stop'])
+@pytest.mark.parametrize('advance', ['input', 'generation', 'stop', 'configuration'])
 async def test_full_child_first_mount_preserves_assignment_across_provider_await(mounted, monkeypatch, advance):
     h = mounted
     await save(h.app)
@@ -312,9 +318,11 @@ async def test_full_child_first_mount_preserves_assignment_across_provider_await
             h.worker.runtime.generation = {'id': 'later-generation', 'input_ids': ['later-input']}
             h.source['collaborationGeneration'] = {'id': 'later-generation', 'inputIds': ['later-input'],
                                                    'interruptionRevision': 0, 'terminal': False}
-        else:
+        elif advance == 'stop':
             await h.app.dispatch('conversation.stop', {'sessionId': h.source['id']})
             h.worker.stop_revision += 1
+        else:
+            h.source['configurationPendingRevision'] = h.source.get('configurationPendingRevision', 0) + 1
         release.set()
         cancelled = False
         try:
@@ -327,8 +335,8 @@ async def test_full_child_first_mount_preserves_assignment_across_provider_await
             cancelled = True
         # A new root turn does not replace the child's admitted assignment.
         # Stop can cancel in the producer before an action result is returned.
-        assert outcomes == ([] if cancelled else [advance != 'stop'])
-        if advance == 'stop':
+        assert outcomes == ([] if cancelled else [advance in {'input', 'generation'}])
+        if advance in {'stop', 'configuration'}:
             assert not h.authorities and saved_permissions(h) == {}
         h.approval_prompt.assert_not_awaited()
     finally:
