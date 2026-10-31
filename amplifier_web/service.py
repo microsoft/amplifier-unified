@@ -345,7 +345,7 @@ from .workspace_work import definitions as workspace_work_definitions
 ACTION_DEFINITIONS.update(workspace_work_definitions(schema, string))
 for _peer_action in ("conversation.send", "coordination.followup"):
     ACTION_DEFINITIONS[_peer_action][1]["properties"].update({
-        "grantId": string(200), "mode": {"enum": ["notify", "queue", "steer"]},
+        "grantId": string(200), "mode": {"enum": ["auto", "notify", "queue", "steer"]},
         "senderSessionId": string(200),
         "replyToRequestId": string(200),
         "expiresInSeconds": {"type": "integer", "minimum": 1, "maximum": 86400},

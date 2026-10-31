@@ -1185,7 +1185,8 @@ class RuntimeManager:
                 return {"accepted": False, "reason": reason}
             if configuration_guard:
                 configuration_guard()
-            args = {"operation": "coordination.submit", "arguments": arguments}
+            operation = "coordination.deliver" if arguments.get("automaticDelivery") is True else "coordination.submit"
+            args = {"operation": operation, "arguments": arguments}
             pending = await self._admit(session["id"], "control", args)
         return await self._reply(*pending, op="control", args=args)
 
