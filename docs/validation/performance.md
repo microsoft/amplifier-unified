@@ -134,6 +134,17 @@ agent reads or model context. Measure those boundaries separately.
 
 ## Agent preparation and tool reads
 
+`tests/test_agent_state_read_cost.py` grows retained question metadata while
+holding the requested state fixed. Agent reads share the directory's existing
+synchronous read frame across navigation, attention and workspace projection;
+each section must not copy the same retained metadata again. An overview may
+also prepare its independent frozen directory reader. This reuse ends before
+yielding or returning: the next read observes current inputs, and mutation owners
+still invalidate derived views. Explicit complete compatibility reads keep their
+hydration path outside the frame. The directory frame checks cover exceptions,
+inherited task/thread contexts, admission and durable/native changes. This bounds
+duplicate preparation, not the cost of one preparation or all historical reads.
+
 `tests/test_runtime_progress_backpressure.py` grows retained worker reports from
 one to 475 with a large saved task body. Bridge diagnostics must produce zero
 conversation saves/publications while remaining inspectable in pending and
