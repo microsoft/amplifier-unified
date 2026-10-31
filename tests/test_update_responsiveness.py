@@ -260,3 +260,8 @@ async def test_drain_retention_protects_only_exact_unobserved_owner(manager):
     runtime.workers[sid]['runtimeOwnerId']='current'
     service.state['updates']['drain']['workers'][sid]['ready']=True
     assert not runtime.retention.protected(sid)
+    service.state['updates']['drain']['workers'][sid]['ready']=False
+    for phase in ('replacing','releasing','released'):
+        service.state['updates']['drain']['phase']=phase
+        assert not runtime.retention.protected(sid)
+        assert runtime.retention.protected('voice')
