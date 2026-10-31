@@ -104,13 +104,13 @@ async def test_full_inbox_preserves_accepted_inputs_and_duplicate_receipts(app, 
     assert accepted['accepted']
 
 
-async def test_notify_bursts_are_bounded_without_waking_receiver(app, monkeypatch):
-    monkeypatch.setattr('amplifier_web.collaboration.MAX_PAIR_MESSAGES_PER_MINUTE', 1)
+async def test_configured_notify_rate_is_bounded_without_waking_receiver(app, monkeypatch):
+    monkeypatch.setitem(execution_settings.CONCURRENCY_DEFAULTS, 'maxPeerMessagesPerMinute', 1)
     source, target = app.state['sessions']
     args = {'sessionId': target['id'], 'text': 'Observation', 'mode': 'notify'}
     await agent_action(app, source, 'coordination.send', args, 'notice')
     before = len(target['messages'])
-    with pytest.raises(AppError, match='Too many messages'):
+    with pytest.raises(AppError, match='configured limit of 1'):
         await agent_action(app, source, 'coordination.send', args, 'flood')
     assert len(target['messages']) == before and not app.runtime.inputs
     assert (await agent_action(app, source, 'coordination.send', args, 'notice'))['duplicate']

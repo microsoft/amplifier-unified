@@ -618,6 +618,24 @@ unsubmitted earlier success notification, preserving both receipts and preventin
 stale dependency success. Requests made under older single-notification
 subscriptions keep that behavior until explicitly replaced by a new request.
 
+### Optional message rates and complete one-shot observations — 2026-10-30
+
+Global Work concurrency settings also expose `maxPeerMessagesPerMinute` (per
+sender/recipient pair, including notify) and `maxPendingWatchesPerTarget`. Both
+have default 0, meaning no count limit. Explicit positive values gate only new
+requests atomically, before message/watch effects. Exact retries return their
+receipts. Changing these limits neither retries rejected requests nor restarts
+work. Automatic retained returns use their existing guarded inbox, not the
+new-message rate check.
+
+A root lifecycle event captures its status, workspace, time, and retained command
+row high-water once. Every pending watch registered by then is considered using
+64-row keyset pages; later registrations cannot consume that older event. Expiry
+uses that captured time throughout. Each matching watch records one observation
+and at most one guarded notification. Restart also reads watch receipts in bounded
+pages. This preserves Stop, ownership, cancellation and unknown-input handling;
+observation still neither starts the target nor proves successful task completion.
+
 ### Continuing-objective result delivery — 2026-10-19
 
 New waits and reply boundaries capture a task continuation epoch separately

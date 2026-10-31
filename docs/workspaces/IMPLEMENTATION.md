@@ -795,7 +795,7 @@ review probes reproduced the reported defects without touching live services.
 | Worker and native children | Each mounted child receives its own app adapter and transport principal, including finite/custom loops, persistent children, resumes and nested delegation. Nested children retain the assigning input context. Root-only controls reject a child principal. | Real Core/Foundation mounting with a deterministic orchestrator; no provider call |
 | Host file policy | Filesystem/patch child allow lists intersect across parent, spawn, overlay and retained plans; denies accumulate. Explicit read-only declarations stay read-only. Repository paths follow the execution folder; unrelated external paths remain. Image boundaries remain covered. | Composition and host-policy regressions; no claim of shell or OS sandbox enforcement |
 | Shared dispatch | Agent permission writes require an explicit existing scope. Root agents can still perform scoped configuration actions; settings are not made categorically human-only. | Direct-dispatch and app-bridge rejection tests; this is not a general capability-grant system |
-| Collaboration | Sealed negative reports and host-observed failed generations notify the exact waiter once without satisfying dependencies. Queue admission reserves space for saved replies. A destination has 64 pending/reserved slots; each ordered sender/recipient pair admits 32 messages per minute. Retries retain their identities. | Deterministic admission, failure, duplicate, reservation and Stop tests |
+| Collaboration | Sealed negative reports and host-observed failed generations notify the exact waiter once without satisfying dependencies. Queue admission reserves space for saved replies. At this historical baseline, a destination had 64 pending/reserved slots and an ordered sender/recipient pair admitted 32 messages per minute; the optional policies recorded below supersede those defaults. Retries retain their identities. | Deterministic admission, failure, duplicate, reservation and Stop tests |
 | Creation and worktrees | A commissioned peer uses the creator's actual execution folder and keeps canonical history grouping. A failed read-only handoff preflight or initial foreign-writer refusal is rejected without fencing the source; uncertainty after release still fences it. Previously unknown receipts retain their fence until explicit reconciliation. | Temporary Git repositories, real shared-writer ownership and restart/failure injection; no shared host changes |
 | Canvas and related work | Referenced bytes are hashed before presentation in the recorded producer execution folder. A changed or unavailable source is explicit. A verified preview retains its bytes independently of the source. User-created peers are visible alongside commissioned peers. | Actual service/Chromium journey with scripted runtime; no real-provider evidence |
 
@@ -1497,3 +1497,17 @@ failed on the unchanged base, and the built settings browser passed finite/zero,
 lost-acknowledgment, concurrent-writer, narrow-layout and cold-reopen checks. See
 [scope and limitations](../validation/peer-inbox-policy-qualification.md). This
 source evidence does not establish release or live-worker adoption.
+
+## Optional message rate and complete watch delivery — 2026-10-30
+
+The earlier fixed pair-message rate and 64-watch target limit are superseded by
+optional global Work concurrency settings, both defaulting to 0 (no count limit).
+Positive values still reject new requests atomically and preserve exact retries.
+Changing a limit does not retry rejected work. Existing saved returns retain their
+inbox admission path.
+
+Lifecycle observation visits the complete pre-event watch set using 64-row keyset
+pages, with one captured status/time and a row high-water. Later registrations do
+not consume an earlier event. Restart reads are also bounded. Stop, cancellation,
+unknown delivery and once-only notifications retain their existing guards.
+See [qualification and limits](../validation/peer-watch-policy-qualification.md).

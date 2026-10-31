@@ -22,7 +22,6 @@ BINDING = ContextVar("collaboration_binding", default=None)
 CREATION = ContextVar("collaboration_creation", default=None)
 BUSY = {"working", "starting", "running", "busy", "stopping", "ready"}
 PROTOCOL = 2
-MAX_PAIR_MESSAGES_PER_MINUTE = 32
 RETIRED_HOP_LIMIT = 'The causal peer-input chain reached 16 hops; its report remains inspectable.'
 RETIRED_NOTIFICATION_LIMIT = 'Automatic outcome notification limit reached; inspect the retained result.'
 DEFAULT_QUEUE_SECONDS = 86400
@@ -394,14 +393,18 @@ class Collaboration:
         return depth + 1
 
     def require_message_rate(self, source, target):
+        from .test_execution_settings import concurrency
+        limit = concurrency(self.service)['maxPeerMessagesPerMinute']
+        if not limit:
+            return
         count = self.service.db.execute("""SELECT count(*) FROM commands
             WHERE json_extract(receipt,'$.commandAction')='coordination.send'
             AND json_extract(receipt,'$.senderSessionId')=?
             AND json_extract(receipt,'$.target.sessionId')=?
             AND json_extract(receipt,'$.acceptedAt')>?""",
             (source, target, time.time() - 60)).fetchone()[0]
-        if count >= MAX_PAIR_MESSAGES_PER_MINUTE:
-            self.error('Too many messages between these conversations in one minute. Pause and combine updates; no input was added.', 429)
+        if count >= limit:
+            self.error(f'The configured limit of {limit} messages between these conversations in one minute was reached; no input was added.', 429)
 
     def refresh_reference(self, receipt):
         """Only affected roots retain a tiny reference projection, not bodies."""
