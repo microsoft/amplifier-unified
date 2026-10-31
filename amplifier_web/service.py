@@ -40,9 +40,18 @@ def settle_stream(session):
         })
 
 
-def command_fingerprint(action, args, origin, client_id):
+def command_fingerprint(action, args, origin, client_id, *, caller_session_id=None):
     # One ledger identity for admission and passive receipt retrieval.
-    return hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None and action not in {'conversation.send', 'worker.message'} and not action.startswith('question.') and not (action=='session.create' and args.get('fromDraft')) else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
+    values = [action, args, origin]
+    if client_id is not None and action not in {'conversation.send', 'worker.message'} and not action.startswith('question.') and not (action=='session.create' and args.get('fromDraft')):
+        values.append(client_id)
+    # Later-file receipts belong to their conversation even when no browser is
+    # attached. This is a stable replay identity, not a fresh permission check.
+    if (origin in {'agent', 'system'} and caller_session_id and
+            (action.startswith('feedback.attachments.') or
+             action in {'feedback.attachment.add', 'feedback.attachment.remove'} and args.get('feedbackId'))):
+        values.append({'sourceSessionId': caller_session_id})
+    return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
 
 ACTION_DEFINITIONS = {
@@ -2252,7 +2261,7 @@ class AppService:
             except ValueError as exc:
                 raise AppError(str(exc)) from None
         if action.startswith(('recall.', 'memory.')):
-            return await self.recall.dispatch(action,args,origin,command_id)
+            return await self.recall.dispatch(action,args,origin,command_id,caller_session_id)
         if action in MESSAGE_INTERACTIONS and origin == 'agent' and (not caller_session_id or args['sessionId'] != caller_session_id):
             raise AppError('Message actions must target the calling conversation.', 403)
         reveal_message = None
@@ -2345,7 +2354,7 @@ class AppService:
                     current=self._session(sid)
                     if current.get('configurationPending') and current.get('configurationRefresh',{}).get('phase')=='error':
                         raise AppError(current['configurationRefresh']['error'],409)
-        fingerprint = command_fingerprint(action, args, origin, client_id)
+        fingerprint = command_fingerprint(action, args, origin, client_id, caller_session_id=caller_session_id)
         prepared_workspace = None
         prepared_identity = None
         prepared_draft_id = None
@@ -3557,8 +3566,10 @@ class AppService:
                     view['panel']=None
             elif action in {"feedback.edits.review", "feedback.get", "feedback.comment", "feedback.reconcile", "feedback.update", "feedback.close", "feedback.reopen",
                             "feedback.attachments.review", "feedback.attachments.add", "feedback.attachments.reconcile"}:
-                if self.feedback.followups.accept(action, args, origin):
+                if self.feedback.followups.accept(action, args, origin, caller_session_id):
                     pending.append((self.feedback.followups.run, (args['requestId'],)))
+                if action.startswith('feedback.attachments.') and origin in {'agent', 'system'}:
+                    diagnostic_result = self.feedback.additions.result(args['requestId'], caller_session_id)
             elif action.startswith("smartTools."):
                 if not self.smart_tools: raise AppError("Smart Tools service is unavailable.")
                 if action == 'smartTools.context':

@@ -354,6 +354,20 @@ class Worker:
                     'inputCoverage': 'complete' if len(ids) <= 16 else 'overflow',
                     'stopRevision': self.stop_revision}
         coordinator.register_capability('web.work_origin_scope', origin_scope)
+        def current_full_access():
+            # Read the same current policy as the host, never a startup copy.
+            # Descendants retain their own live assignment while the root owns
+            # the policy identity. No content-coverage proof is required.
+            if origin_scope() is None or self.home is None or self.workspace is None:
+                return False
+            from amplifier_web.access_mode import read_mode
+            import sqlite3
+            try:
+                return read_mode(self.home, self.workspace, self.session.coordinator.session_id,
+                    owner_session_id=(self.start_config or {}).get('ownerSessionId')) == 'full'
+            except (OSError, ValueError, sqlite3.Error):
+                return False
+        coordinator.register_capability('web.work_full_access', current_full_access)
         coordinator.register_capability('web.performance.emit', self.emit_timing)
         coordinator.register_capability('web.performance.scope', lambda: {
             'runtimeSessionId': coordinator.session_id,

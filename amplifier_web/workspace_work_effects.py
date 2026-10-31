@@ -1,8 +1,9 @@
-"""Private Work precondition checks, never ordinary tool permission grants.
+"""Work assurance policy, never ordinary tool permission grants.
 
 The authenticated worker supplies its single-use originating-call witness. This
 module does not mint, consume or reconstruct that witness from model arguments.
-Effect owners must call the check at final admission; a result is not a lease.
+Full accepts incomplete Work assurance; native scope and effect owners still
+govern execution. A check result is not a lease across an await.
 """
 from __future__ import annotations
 
@@ -15,6 +16,15 @@ from .collaboration import BINDING
 from .child_execution import current as child_execution, generation as execution_generation
 
 APP_EFFECT = ContextVar('workspace_work_app_effect', default=None)
+
+
+def _full_access(service, source):
+    """Reuse standing policy and the actual native owner/descendant boundary."""
+    if not service.access_mode.full(source):
+        return False
+    service.collaboration.active_binding(source, allow_descendant=True)
+    return True
+
 
 # Explicit recovery surface, including attributed reports and own-request
 # cancellation. Reporting is not a read, but must remain possible when stuck.
@@ -79,10 +89,10 @@ def app_request(operation, arguments, sid):
 
 
 def guard(service, action, arguments, origin, caller, *, final=False):
-    """Fail closed for applicable effects without a qualified final owner.
+    """Apply current Work policy before the ordinary effect owner.
 
-    Only synchronous mutation owners audited below can proceed. Delayed work
-    needs its own retained Work binding and is not implicitly admitted here.
+    Full accepts Work assurance risk; Ask requires the qualified owners below.
+    Delayed effects retain their own authority, cancellation and receipt checks.
     Reads, reporting and unrelated roots retain their existing domain checks.
     """
     request = APP_EFFECT.get()
@@ -101,7 +111,7 @@ def guard(service, action, arguments, origin, caller, *, final=False):
     result = check(service.work_invocation, caller, query)
     if not result['allowed']:
         raise AppError('Work precondition: ' + result['reason'], 409, code='work_coverage_unavailable')
-    if not result['applicable']:
+    if not result['applicable'] or _full_access(service, service._session(caller, hydrate=False)):
         return
     supported = (action in {
         'workspace.work.create', 'workspace.work.revise', 'workspace.work.link',
@@ -177,6 +187,12 @@ def check(invocation, sid, args):
             # Reading grants no Work authority; the actual read tool/domain
             # still enforces the delegated caller's ordinary permissions.
             return {**result, 'allowed': True, 'reason': 'Exact read or safe reporting; ordinary authority still applies.'}
+        if _full_access(invocation.service, target):
+            # Missing or stale Work observations remain missing or stale. This
+            # decision neither resolves all required sources nor certifies that
+            # they reached the model. Domains still own facts and exact effects.
+            return {**result, 'allowed': True,
+                    'reason': 'Current Full access accepts incomplete Work coverage; ordinary effect-owner checks still apply.'}
         target = invocation.bound_root(sid)
         if args['toolName'] == 'tool_exec' and (BINDING.get() or {}).get('_workDispatchGuarded') is True:
             # Only the installed ProgrammaticTool under the worker's active

@@ -231,14 +231,17 @@ already supports it. The existing behavior and command-line entry points below
 are narrower: task lineage, system-origin action parity and action-specific human
 gates require incremental qualification before being described as complete.
 
-Initial feedback publication now has a bounded Full path for a current root agent
-or trusted host system with an explicit calling conversation: exact initial files
-and prepared excerpts use conversation-owned staging without a browser or renewed
-human confirmation. The existing receipts retain actual caller/source authority,
-verified recipient facts and immutable content; every external write rechecks the
-captured Full revision and Stop boundary. This does not yet qualify native-child
-or Work-bound publication, or later-file additions. The precise behavior and
-limits live in [the feedback contract](../feedback-excerpts.md#initial-publication-under-full-access).
+Initial feedback publication and direct text follow-ups have a Full path for
+current agents, assigned native children and trusted host systems with an explicit
+calling conversation. Initial files and prepared excerpts use conversation-owned
+staging without a browser or renewed human confirmation. Existing receipts retain
+actual caller/source authority, verified recipient facts and immutable content;
+every external write rechecks the captured Full revision and Stop boundary.
+Read-only reconciliation never renews effect authority or repeats uncertain work.
+Later-file additions use the same conversation-owned Full path and exact file
+manifest with optional review; Ask retains browser review and confirmation.
+Optional text comparison reviews retain their separate client workflow. The precise behavior and limits live in
+[the feedback contract](../feedback-excerpts.md#initial-publication-under-full-access).
 
 ### Implemented standing preference
 
@@ -278,14 +281,42 @@ Stop fences an already captured derived effect; an explicit receiving-chat choic
 is independent of source permission changes. The saved preference persists after
 Stop, while execution admission still owns cancellation and resume.
 
-This source resolver covers independent task roots. Native-child principal and
-per-child approval attribution, and action-specific human-only gates, remain
-separate implementation work. Existing child file-policy composition is unchanged.
+This source resolver covers independent task roots. Qualified native children can
+use their owning chat's Full mode for the existing shared configuration effects
+and inspect that chat's `access.get` and `capability.read`. Configuration routing
+uses the existing effect requirement; it does not maintain another action list.
+The source check explicitly opts into the native child's current assigned
+generation and captured Stop boundary. Finite, nested, resumed and persistent
+mounts keep their actual principal and original assigned inputs. They do not
+impersonate the root or borrow an unrelated later input. New Full configuration
+receipts retain actor, owner, origin, generation and the bounded assigned-input
+observation separately. An empty native input envelope records unavailable input
+coverage, not a verified empty assignment; its cause and count are not inferred
+from the root's later inputs. This observation adds no permission gate under Full.
+Accepted delayed work keeps its captured Full revision and the existing final
+effect checks; the finite child finishing does not itself revoke accepted work.
+
+Ask-mode discrete grants remain root-owned, and children cannot grant/request/revoke
+those root grants or change access mode. Other collaboration consumers keep their
+strict root default. Existing child file-policy composition is unchanged.
+This shared configuration consumer does not yet remove the separate native-child
+gates in managed test-host setup, patch placement or configuration operation
+recovery. Those are remaining implementation gaps toward Full parity, not intended
+recurring approval requirements. Work and provider admission use their respective
+canonical owners; this consumer adds no exception or duplicate permission policy.
 
 Full access preauthorizes configuration effects at all scopes and ordinary
 allow/deny tool permissions. Pending valid permission requests are answered once;
 questions, expired requests, lost workers and old tool effects are never replayed.
-Existing root ownership, execution identity, Stop, resource ownership, capacity,
+For Work-associated execution it also accepts partial or inferred Work context:
+missing fitted-content proof does not add a permission gate or restrict the set
+of supported actions. The shared Work policy reuses current native generation and
+Stop checks for roots and trusted descendants, preserving their actual identities.
+Coverage remains explicitly unknown or partial when not established; it is not
+verification or success. Action owners still enforce their own factual inputs,
+revisions, receipts and recovery. This does not establish descendant support or
+complete deferred-effect cancellation in every individual action owner.
+Existing conversation ownership, execution identity, Stop, resource ownership, capacity,
 retention and recovery checks remain in force. A trusted root remains responsible
 for evaluating peer messages. Configuration commits recheck the captured mode
 revision; turning the mode off fences delayed changes and grants derived from it.
