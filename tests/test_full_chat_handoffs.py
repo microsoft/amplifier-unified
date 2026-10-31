@@ -391,3 +391,59 @@ async def test_full_creation_respects_existing_destination_ask(handoff):
     assert result['delivery'] == 'accepted'
     assert app.access_mode.snapshot(app._session(result['targetSessionId']))['mode'] == 'ask'
     assert len(runtime.sent) == 1
+
+
+@pytest.mark.parametrize('change', ['complete', 'revoke', 'off-on', 'stop', 'target-ask', 'target-full'])
+async def test_full_handoff_schedule_keeps_original_lineage_at_final_admission(handoff, monkeypatch, change):
+    from test_full_schedules import preview, invoke
+    from test_schedules import Runtime, attach
+
+    app, handoff_runtime, source_id, _, args = await headless(handoff)
+    handed = await finish(app, await start(app, source_id, args))
+    assert handed['delivery'] == 'accepted'
+    source, target = app._session(source_id), app._session(handed['targetSessionId'])
+    assert app.access_mode.snapshot(target)['source'] == 'inherited'
+    if change == 'target-full':
+        await save(app, target)
+    # Reuse the schedule owner's task/runtime fixture after the initial handoff.
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(app.data_dir))
+    runtime, now = Runtime(), [1800000000.0]
+    attach(app, runtime, now)
+    await app.dispatch('task.create', {'sessionId': target['id'], 'expectedRevision': 0,
+        'objective': 'Continue the independently handed-off report'}, command_id='target-task')
+    request = await preview(app, target, now[0])
+    record = (await invoke(app, target, 'schedule.create', request, 'target-schedule', 'system'))['schedule']
+    authority = record['authorization']['authority']
+    assert authority['sessionId'] == target['id']
+    assert authority['accessRevision'] == app.access_mode.snapshot(target)['revision']
+    assert 'generationId' not in authority and 'messageId' not in record['authorization']
+    source['collaborationGeneration']['terminal'] = True
+    target.pop('collaborationGeneration', None)
+    original = runtime.scheduled_input
+
+    async def held(sid, values, guard):
+        if change in {'revoke', 'off-on', 'target-full'}:
+            await save(app, source, mode='ask')
+            if change == 'off-on':
+                await save(app, source)
+        elif change == 'stop':
+            await app.dispatch('conversation.stop', {'sessionId': source_id})
+        elif change == 'target-ask':
+            await save(app, target, mode='ask')
+        return await original(sid, values, guard)
+
+    runtime.scheduled_input = held
+    now[0] += 61
+    await app.schedules.tick()
+    run = app.schedules.store.runs(target['id'])[0]
+    assert run['authorizationCommandId'] == record['authorization']['commandId'] == 'target-schedule'
+    assert len(handoff_runtime.sent) == 1
+    if change in {'complete', 'target-full'}:
+        assert run['phase'] == 'accepted', run
+        assert len(runtime.inputs) == 1
+        assert app.access_mode.full(target)
+    else:
+        assert run['phase'] == 'skipped', run
+        assert not runtime.inputs
+        assert app.schedules.store.get(target['id'], record['id'])['status'] == 'needs_review'
+    assert app.schedules.store.get(target['id'], record['id'])['authorization']['authority'] == authority
