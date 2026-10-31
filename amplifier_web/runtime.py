@@ -550,6 +550,7 @@ class RuntimeManager:
         # browser's execution logs, catalogs and attachment history is redundant.
         config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','interruptionRevision','bundle','selection','forkContext','replaceSavedSelection','bundleReplacement') if key in session}
         config['id'] = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
+        config['configurationPendingRevision'] = session.get('configurationPendingRevision', 0)
         config['ownerSessionId'] = sid  # Identity only; workers read current standing policy themselves.
         if preserve_configuration:
             config['_preserveConfiguration'] = True
@@ -652,7 +653,8 @@ class RuntimeManager:
                     else:
                         if not self.app_bridge:
                             raise RuntimeError("App controls are not connected")
-                        result = await self.app_bridge(data["operation"], data.get("args", {}), sid)
+                        result = await self.app_bridge(data["operation"], {**data.get("args", {}),
+                            "_runtimeOwnerId": row["runtimeOwnerId"]}, sid)
                 finally:
                     if timing:
                         timing.mark('handler.end')
@@ -660,6 +662,8 @@ class RuntimeManager:
             except Exception as exc:
                 outcome = 'failed'
                 reply = {"op": "bridge.result", "id": data["id"], "error": str(exc)}
+                if isinstance(getattr(exc, '_handoff_disposition', None), dict):
+                    reply['_handoffDisposition'] = exc._handoff_disposition
             if row["process"].returncode is None:
                 if timing:
                     timing.mark('reply.start')
@@ -1181,7 +1185,8 @@ class RuntimeManager:
                 return {"accepted": False, "reason": reason}
             if configuration_guard:
                 configuration_guard()
-            args = {"operation": "coordination.submit", "arguments": arguments}
+            operation = "coordination.deliver" if arguments.get("automaticDelivery") is True else "coordination.submit"
+            args = {"operation": operation, "arguments": arguments}
             pending = await self._admit(session["id"], "control", args)
         return await self._reply(*pending, op="control", args=args)
 
@@ -1284,14 +1289,14 @@ class RuntimeManager:
                 current.args = (f'Takeover did not complete ({result.status}). {result.message} {current}',)
                 raise current from None
 
-    async def handoff_boundary(self, session_id, request_id, *, cancel=False):
+    async def handoff_boundary(self, session_id, request_id, *, cancel=False, receipt=None):
         """Inspect only this existing worker; never warm or acquire a writer."""
         row = self.workers.get(session_id)
         if row is None:
             return {'ready': True, 'waitingFor': [], 'continuationAllowed': False}
         if row['process'].returncode is not None:
             raise RuntimeError('The old worker exited before confirming its saved boundary.')
-        return await self._request(session_id, 'handoff.boundary', request_id=request_id, cancel=cancel)
+        return await self._request(session_id, 'handoff.boundary', request_id=request_id, cancel=cancel, receipt=receipt)
 
     @contextmanager
     def stopped_boundary(self, session):

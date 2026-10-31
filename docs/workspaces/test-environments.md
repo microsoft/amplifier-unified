@@ -171,12 +171,17 @@ when guest removal and any dependency preparation cleanup are confirmed. A
 missing or changed backend, foreign owner, running guest, insufficient storage or
 incomplete export retains ownership and reports the phase that needs attention.
 
-Recovery preserves symbolic link text as inert archive metadata, including the
-absolute links produced by pytest. It never follows guest links or extracts guest
-files on the host. These archives are marked `archiveOnly`; restoring them requires
-an isolated environment and an explicit safe extraction policy. Member paths,
-entry types, hard-link targets, member count, tar termination, hashes and sizes
-remain verified. Nothing is silently omitted from the selected filesystems.
+Archive-only retention preserves symbolic-link text and zero-length FIFO entries
+as inert archive metadata, including those produced by test fixtures. It never
+follows guest links, opens a FIFO, creates a special file, or extracts guest files
+on the host. A FIFO entry with a nonzero declared size is rejected. Character and
+block devices, sockets, unknown entry types and sparse entries remain unsupported.
+Ordinary files-mode and artifact-only validation continue to reject FIFO entries.
+These archives are marked `archiveOnly`; restoring them requires an isolated
+environment and an explicit safe extraction policy. Member paths, duplicate and
+ancestor conflicts, regular-file-only hard-link targets, member count, tar
+termination, hashes and size limits remain verified. Nothing is silently omitted
+from the selected filesystems.
 Docker recovery bounds each selected archive to 4 GiB and reserves space for both
 plus 1 GiB; Incus retains its 8 GiB input limit and a 4 GiB selected-content bound.
 Files outside `/workspace` and `/artifacts` require the existing full Incus export.

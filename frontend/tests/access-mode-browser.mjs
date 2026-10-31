@@ -104,7 +104,7 @@ try{
  await expect(oldCard.getByRole('region',{name:'Current configuration scope'})).toBeVisible();
  await oldCard.getByRole('button',{name:'Dismiss old request',exact:true}).click();
  await expect(oldCard).toHaveCount(0);
- await page.locator('[data-part="approvals"] summary').click();
+ await page.getByRole('button',{name:/^Permissions history \(/}).click();
  const historical=page.locator(`[data-permission-history-id="${expiredGrant.id}"]`);
  await expect(historical).toContainText('Dismissed old request');
  await expect(historical).toContainText('Retain this note only.');

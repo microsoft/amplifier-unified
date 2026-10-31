@@ -345,7 +345,7 @@ from .workspace_work import definitions as workspace_work_definitions
 ACTION_DEFINITIONS.update(workspace_work_definitions(schema, string))
 for _peer_action in ("conversation.send", "coordination.followup"):
     ACTION_DEFINITIONS[_peer_action][1]["properties"].update({
-        "grantId": string(200), "mode": {"enum": ["notify", "queue", "steer"]},
+        "grantId": string(200), "mode": {"enum": ["auto", "notify", "queue", "steer"]},
         "senderSessionId": string(200),
         "replyToRequestId": string(200),
         "expiresInSeconds": {"type": "integer", "minimum": 1, "maximum": 86400},
@@ -882,6 +882,14 @@ class AppService:
 
     def state_context(self, *, complete=False):
         """Read-only active context; complete legacy snapshots are explicit."""
+        if not complete:
+            # Navigation, attention and workspace projections consume the same
+            # admitted metadata. Prepare it once within this synchronous read,
+            # as the bundled browser does, rather than per derived section.
+            return self.directory.read_frame(self._state_context)
+        return self._state_context(complete=True)
+
+    def _state_context(self, *, complete=False):
         from .attention import snapshot
         from .workspace_navigation import snapshot as workspace_snapshot
         from .browser_state import navigation
@@ -3532,7 +3540,7 @@ class AppService:
                     patch['canvasDraft'] = {**patch.get('canvasDraft', self.state['view'].get('canvasDraft', {})), 'library': False}
                 elif patch.get('settingsCanvas') is False and self.state.get('canvas', {}).get('kind') == 'settings':
                     patch['canvasDraft'] = {**patch.get('canvasDraft', self.state['view'].get('canvasDraft', {})), 'library': True}
-                if patch.get('canvasDraft', {}).get('delivery') in {'outputs','publishing'}:
+                if patch.get('canvasDraft', {}).get('delivery') in {'outputs','publishing','permissions'}:
                     self.state.setdefault('canvas', {})['open'] = True
                 self.state["view"].update(patch)
             elif action == 'feedback.excerpt.stage':
@@ -4070,7 +4078,12 @@ class AppService:
         from .message_delivery import find_message
         async with self.lock:
             session = copy.deepcopy(self._session(sid))
+            question = self.questions.for_input(sid, input_id)
         message = find_message(session, input_id)
+        if message is None and question is not None:
+            # The answer record survives a cold/pruned message projection.
+            # Its exact input binding permits a passive evidence probe, not send.
+            message = {'delivery': question['delivery']}
         if message is None:
             return {'delivery': 'not_saved', 'message': 'This app has no saved copy. You can try sending the original message again with the same delivery identity.'}
         if message.get('steering'):
@@ -4089,7 +4102,9 @@ class AppService:
         async with self.lock:
             current = self._session(sid)
             current_message = find_message(current, input_id)
-            if current_message and current_message.get('delivery', {}).get('status') == 'accepted':
+            current_question = self.questions.for_input(sid, input_id)
+            if ((current_message and current_message.get('delivery', {}).get('status') == 'accepted') or
+                    (current_question and current_question['delivery']['status'] == 'accepted')):
                 status = 'accepted'
             if status == 'accepted':
                 self._delivery(current, input_id, status)
@@ -4118,6 +4133,10 @@ class AppService:
         return {'delivery': 'accepted', 'resent': not bool(isinstance(result, dict) and result.get('duplicate'))}
 
     def _delivery(self, session, input_id, status):
+        # Question command IDs differ from their immutable answer input IDs.
+        # Reconcile their canonical record even after its message left the view.
+        if status == 'accepted' and (questions := getattr(self, 'questions', None)):
+            questions.accept_delivery(session['id'], input_id)
         message = next((row for row in session['messages'] if row.get('inputId') == input_id and row.get('role') == 'user'), None)
         row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
         receipt = json.loads(row[0]) if row else {}
@@ -5005,6 +5024,17 @@ class AppService:
         binding_token = BINDING.set(args)
         try:
             return await self._bound_app_bridge(operation, args, session_id)
+        except Exception as exc:
+            if args.get('_handoffSnapshot') is not None:
+                from .handoff_drain import failed_disposition
+                try:
+                    async with self.lock:
+                        disposition = failed_disposition(self, session_id, operation, args)
+                    if disposition is not None:
+                        exc._handoff_disposition = disposition
+                except Exception:
+                    pass  # An unreadable receipt remains unknown, never absent.
+            raise
         finally:
             PRINCIPAL.reset(token)
             BINDING.reset(binding_token)
@@ -5016,7 +5046,9 @@ class AppService:
         transport = args
         args = {key: value for key, value in args.items()
                 if key not in {'_generationId', '_runtimeSessionId', '_inputBindings', '_inputClients',
-                               '_workOrigin', '_workDispatchGuarded', '_responseMode'}}
+                               '_workOrigin', '_workDispatchGuarded', '_responseMode', '_childOrigin', '_runtimeOwnerId',
+                               '_handoffSnapshot'}
+                and (operation == 'capacity.admit' or key not in {'_handoffDrain', '_nativeChild'})}
         from .workspace_work_effects import APP_EFFECT, app_request
         token = APP_EFFECT.set(app_request(operation, args, session_id))
         try:
@@ -5287,7 +5319,8 @@ class AppService:
             compact_smart_tool = args['action'].startswith('smartTools.')
             compact_domain_receipt = args['action'] in SETTINGS_ACTIONS or args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.', 'outputs.')) or args['action'] == 'runtime.provenance' or args['action'] in RESOURCE_RESERVATION_ACTIONS
             task_action = action_args.get('operation') if args['action'] == 'runtime.control' else args['action']
-            compact_task_receipt = isinstance(task_action, str) and task_action in task_definitions(schema, string)
+            compact_task_receipt = (isinstance(task_action, str) and task_action in task_definitions(schema, string)
+                                    or args['action'].startswith('assignment.task.'))
             compact_domain_receipt = compact_domain_receipt or compact_task_receipt
             if args['action'].startswith('profiling.'):
                 # Profiling must not flush progress or build an unrelated

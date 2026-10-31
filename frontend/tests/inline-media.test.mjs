@@ -370,11 +370,15 @@ test('actual GIF open is single-flight and late settlement does not update a dis
 
 test('actual App Settings-leaving guard cancels GIF admission visibly without a host request',async()=>{
  const source=readFileSync(new URL('../src/main.jsx',import.meta.url),'utf8');
+ const approvals=readFileSync(new URL('../src/approval-card.jsx',import.meta.url),'utf8');
+ const classifyStart=approvals.indexOf('export function isCapabilityCardAction('),classifyEnd=approvals.indexOf('// Client-local ordering only.');
+ assert.ok(classifyStart>=0&&classifyEnd>classifyStart);
+ const isCapabilityCardAction=runInNewContext(`${approvals.slice(classifyStart,classifyEnd).replace('export ','')}\nisCapabilityCardAction`);
  const start=source.indexOf(' const dispatch=useCallback('),end=source.indexOf(' },[acceptState,handleEffects,awaitState]);',start);
  assert.ok(start>=0&&end>start);let confirmations=0,requests=0;
  const dispatch=runInNewContext(`${source.slice(start,end)} },[acceptState,handleEffects,awaitState]);\ndispatch`,{
   useCallback:fn=>fn,acceptState(){},handleEffects(){},awaitState(){},
-  isNavigationAction,archiveRevision:{current:0},
+  isNavigationAction,isCapabilityCardAction,archiveRevision:{current:0},canvasInputRevision:{current:0},
   settingsNavigation:{current:{hasUnsaved:()=>true,confirmClose:async()=>{confirmations++;return false}}},
   request:()=>{requests++;assert.fail('Cancelled Settings navigation issued a host command')}
  });

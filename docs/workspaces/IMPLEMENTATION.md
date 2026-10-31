@@ -795,7 +795,7 @@ review probes reproduced the reported defects without touching live services.
 | Worker and native children | Each mounted child receives its own app adapter and transport principal, including finite/custom loops, persistent children, resumes and nested delegation. Nested children retain the assigning input context. Root-only controls reject a child principal. | Real Core/Foundation mounting with a deterministic orchestrator; no provider call |
 | Host file policy | Filesystem/patch child allow lists intersect across parent, spawn, overlay and retained plans; denies accumulate. Explicit read-only declarations stay read-only. Repository paths follow the execution folder; unrelated external paths remain. Image boundaries remain covered. | Composition and host-policy regressions; no claim of shell or OS sandbox enforcement |
 | Shared dispatch | Agent permission writes require an explicit existing scope. Root agents can still perform scoped configuration actions; settings are not made categorically human-only. | Direct-dispatch and app-bridge rejection tests; this is not a general capability-grant system |
-| Collaboration | Sealed negative reports and host-observed failed generations notify the exact waiter once without satisfying dependencies. Queue admission reserves space for saved replies. A destination has 64 pending/reserved slots; each ordered sender/recipient pair admits 32 messages per minute. Retries retain their identities. | Deterministic admission, failure, duplicate, reservation and Stop tests |
+| Collaboration | Sealed negative reports and host-observed failed generations notify the exact waiter once without satisfying dependencies. Queue admission reserves space for saved replies. At this historical baseline, a destination had 64 pending/reserved slots and an ordered sender/recipient pair admitted 32 messages per minute; the optional policies recorded below supersede those defaults. Retries retain their identities. | Deterministic admission, failure, duplicate, reservation and Stop tests |
 | Creation and worktrees | A commissioned peer uses the creator's actual execution folder and keeps canonical history grouping. A failed read-only handoff preflight or initial foreign-writer refusal is rejected without fencing the source; uncertainty after release still fences it. Previously unknown receipts retain their fence until explicit reconciliation. | Temporary Git repositories, real shared-writer ownership and restart/failure injection; no shared host changes |
 | Canvas and related work | Referenced bytes are hashed before presentation in the recorded producer execution folder. A changed or unavailable source is explicit. A verified preview retains its bytes independently of the source. User-created peers are visible alongside commissioned peers. | Actual service/Chromium journey with scripted runtime; no real-provider evidence |
 
@@ -1325,6 +1325,24 @@ command lock. It yields saved goals at their completed-turn boundary and require
 the existing checkpoint/park path before cooperative writer release. It does not
 cancel a tool to make a move possible or acquire a foreign conversation writer.
 
+The originating worker records the already admitted native jobs and exact child
+runs before publishing its move request. New delegation is briefly fenced even
+when that attempted move is later rejected; known rejection releases the fence.
+Preparation admitted before the fence, including nested preparation without a UI
+row yet, keeps its existing run identity and may settle. Ordinary tools continue.
+The host preserves queued and in-transit child model requests only when their
+private run identity matches that receipt. Root observations may include only
+completion inputs tied to those captured native jobs. Unknown input provenance,
+Stop, changed source/configuration/task authority and model budgets remain gates.
+
+A bridge error carries the exact receipt disposition only after the host handler
+finishes: positively absent releases the provisional marker; a committed receipt
+retains its actual state; unreadable or lost acknowledgement stays uncertain.
+Existing native boundary inspection can bind that same receipt after reply loss.
+No second action is issued and no input or operation is replayed. Native result
+identity depends on loop-live preserving the existing `Input.call_id` field;
+older producers without it cannot qualify late completion observations.
+
 `worktrees.py` persists positive release evidence separately from placement and
 recovers that confirmed boundary after host replacement. Earlier preflight/wait
 interruptions reject safely; unconfirmed release stays unknown. Active work gets
@@ -1480,3 +1498,34 @@ manager continuation and placement controls then use that responsibility. Earlie
 history and usage stay attributed as before; adding itself never starts a turn.
 The workspace/canvas assignment controls expose the same operation. Independent
 chats in a shared folder remain independent unless explicitly added.
+
+
+## Optional peer inbox counts — 2026-10-30
+
+The earlier 64-slot destination, 16-per-sender and 32-per-assignment bounds above
+record historical behavior. They are superseded by optional global Work
+concurrency settings, all defaulting to 0 (no count ceiling). Positive configured
+limits still reserve return capacity atomically. Sender selection considers the
+complete pending set using indexed admission order, then loads one bounded FIFO
+batch. Relaxing a limit resumes saved backpressured returns through existing
+guards without replaying unknown operations or clearing Stop.
+
+Qualification: 223 focused Python checks passed, both selected new regressions
+failed on the unchanged base, and the built settings browser passed finite/zero,
+lost-acknowledgment, concurrent-writer, narrow-layout and cold-reopen checks. See
+[scope and limitations](../validation/peer-inbox-policy-qualification.md). This
+source evidence does not establish release or live-worker adoption.
+
+## Optional message rate and complete watch delivery — 2026-10-30
+
+The earlier fixed pair-message rate and 64-watch target limit are superseded by
+optional global Work concurrency settings, both defaulting to 0 (no count limit).
+Positive values still reject new requests atomically and preserve exact retries.
+Changing a limit does not retry rejected work. Existing saved returns retain their
+inbox admission path.
+
+Lifecycle observation visits the complete pre-event watch set using 64-row keyset
+pages, with one captured status/time and a row high-water. Later registrations do
+not consume an earlier event. Restart reads are also bounded. Stop, cancellation,
+unknown delivery and once-only notifications retain their existing guards.
+See [qualification and limits](../validation/peer-watch-policy-qualification.md).

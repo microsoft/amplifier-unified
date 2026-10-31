@@ -174,7 +174,7 @@ class Coordination:
                                 location=details['location'], workspaceLabel=details['workspaceLabel'])
                 if caller and session["id"] != caller:
                     permitted = session.get('sessionKind', 'root') == 'root' and not target.get("workerId")
-                    modes = ["notify", "queue"]
+                    modes = ["auto", "notify", "queue"]
                     if self.service.collaboration.can_steer(session):
                         modes.append("steer")
                     item.update(canMessage=permitted, canFollowup=permitted, canInterrupt=False,

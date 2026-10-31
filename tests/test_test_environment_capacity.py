@@ -87,3 +87,16 @@ def test_admission_rejects_symlinked_ancestor_and_public_lock(monkeypatch, tmp_p
     with pytest.raises(ValueError, match='private regular'):
         with worker.docker_admission(payload):
             pytest.fail('public lock admitted')
+
+
+@pytest.mark.parametrize('explicit_zero', [False, True])
+def test_uncapped_counts_above_old_defaults_keep_storage_pressure(monkeypatch, tmp_path, explicit_zero):
+    payload = observation(monkeypatch, tmp_path, ['running']*16 + ['exited']*257)
+    payload.pop('maxRunning')
+    if explicit_zero:
+        payload.update(maxRunning=0, maxInstances=0)
+    result = worker.docker_capacity(payload)
+    assert result['available'] and result['counts']['active'] == 16
+    assert result['counts']['total'] == 273
+    monkeypatch.setattr(worker.os, 'statvfs', lambda *a: SimpleNamespace(f_bavail=1, f_frsize=1024**3))
+    assert worker.docker_capacity(payload)['blockers'] == [{'code': 'storage_pressure'}]
