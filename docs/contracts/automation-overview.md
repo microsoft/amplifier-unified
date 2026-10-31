@@ -55,6 +55,25 @@ restart their failed task or infer that its work is safe to repeat.
 New-task execution uses reviewed saved configuration to create a fresh target and
 does not require inference or warming in the owner. The source remains stopped or
 failed; reauthorizing future scheduled targets does not resume its old generation.
+Standing Full access also permits this exact owner-local preview and future-run
+repair without a browser or human message. A fresh trusted system request names
+the canonical calling owner and carries no native binding; it may deliberately
+cross the saved owner's Stop under current Full without acknowledging as a human.
+The receipt labels `fresh_system`, actual system origin, crossed Stop and captured
+Full/source revisions. The owner stays stopped; only new future targets may run.
+A currently admitted Full native root or child may repair its own non-stopped
+chain, retaining its real native actor. A stale or stopped native binding cannot
+become fresh merely by declaring system origin or supplying `acknowledgeStop`.
+
+Capture, exact preview comparison and schedule commit share the existing owner
+lock. A Stop or configuration change after preview invalidates confirmation;
+subsequent effects check the captured witnesses. Full off/on does not revive the
+saved capture. Exact completed retries only return the original receipt after
+revocation or Stop. This changes neither prompt/timing nor the destination kind,
+replays no old input and starts no source worker. Unknown runs still require
+separate evidence reconciliation; a fresh Full system may record that finding for
+a stopped owner without restarting it or renewing the original run authority; same-task repair remains its existing task flow.
+
 Existing peer handoff rules in [schedule-repair-handoff.md](schedule-repair-handoff.md)
 are unchanged. Account/credential selection is not rewritten by recovery.
 

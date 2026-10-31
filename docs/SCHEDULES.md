@@ -11,14 +11,35 @@ Neither mode independently completes the original objective.
 
 Preview shows future local/UTC occurrences and the exact saved instructions. Its
 hash binds timing, prompt, policies, task revision, execution-folder revision and stop revision. UI activation
-is an explicit user action. Agent activation must cite the actual user message or
-voice transcript requesting scheduling; agent-authored user-role bubbles and
+is an explicit user action. Under Ask, agent activation must cite the actual user
+message or voice transcript requesting scheduling; agent-authored user-role bubbles and
 question-answer receipts are rejected. The authorization snapshot and source
 hash survive history paging/restart. New task corrections, an edited source, or
-user stop intent or a changed execution folder require visible review with fresh user provenance. No pending
+user stop intent or a changed execution folder require visible review with current authorization. No pending
 question counts as schedule authorization or tool permission. Required linked
 questions gate dependent scheduled work; optional questions do not globally pause
 independent work.
+
+Standing Full access authorizes owner-local create, update, normal resume and
+reconciliation without a human message or connected browser. A fresh agent call
+validates the actual mounted root or child; an explicit trusted system caller
+retains system attribution without inventing a native generation or human input.
+The schedule stores that actor separately from its canonical conversation owner,
+with the exact access, native owner, workspace, execution and Stop revisions.
+Normal turn/child completion and host restart do not revoke accepted future work.
+Changing Full off and on does not renew an older capture. Stop, source moves,
+assignment suspension, configuration changes and exact task revisions still fence
+future effects. An old stopped actor cannot capture new schedule authority.
+
+Exact command retries return their original receipt without preparing a runtime
+or requiring renewed authority. Changed intent or another owner cannot borrow the
+receipt. New reconciliation requires current Full or the existing attributable
+post-run human finding; it preserves the original run and its authorization receipt reference and does not
+resume, replay or independently verify the reported evidence. Existing human
+peer-repair handoffs remain separate. For an exited new-task owner, Full also
+permits exact future repair through `schedule.repairPreview/repairResume`; only a
+fresh explicitly identified trusted system request may cross owner Stop without
+a human, never an old stopped native chain. See [automation recovery](contracts/automation-overview.md).
 
 The reusable [policy/store](../amplifier_scheduling/README.md) is authoritative for
 due identity and leases. The app runs one lightweight owner loop, checks existing
@@ -47,8 +68,9 @@ input admission. Recurring occurrences have distinct destinations. Creation or
 submission uncertainty retains the reserved UUID and requires inspection and
 explicit reconciliation; it never automatically retries creation or input.
 Shared creation command receipts deduplicate the exact command, and another
-command cannot overwrite that identity. Source/destination stop or configuration
-changes winning input admission produce a skipped run, without undoing creation.
+command cannot overwrite that identity. Source/destination Stop, revoked Full or configuration changes winning conversation
+creation, task-control admission or scheduled input admission produce a skipped
+run, retaining any already confirmed creation. Uncertain effects remain unknown.
 
 Run receipts remain owned by the source schedule. The exact destination can read
 that schedule's history and report its own run (`schedule.list.incomingRuns`
@@ -64,14 +86,14 @@ revision is captured in the receipt and checked again under runtime admission;
 a stop that wins this boundary produces an explicit skipped run. Ambiguous
 handoff, runtime exit, or scheduler restart leaves unknown, never automatic replay.
 Pause/cancel prevent future runs; currently admitted work may finish. Reconcile
-records a user's evidence that a run completed or was abandoned without replay;
+records an attributable finding that a run completed or was abandoned without replay;
 future scheduling still requires separate review/resume. The app must be running
 for due checks; on restart the chosen missed-run policy applies.
 
 A monitor can report actual compared values (up to 64 KB), an explanation, and
 changed/unchanged. Stored-value comparison takes precedence over the reported
 claim. Its source is labelled `compared_reported_values`; without values the
-source remains `agent_report`/`user_report`, which is not proof. Unchanged reports
+source remains `agent_report`/`system_report`/`user_report`, which is not proof. Unchanged reports
 stay quiet under the changes policy. Initial compared values, confirmed changes,
 or failures notify according to the saved intent; normal app notification/privacy
 settings still govern delivery. Notification decisions persist before delivery

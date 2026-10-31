@@ -11,10 +11,11 @@ from test_task_continuity import controls
 class Runtime:
     def __init__(self): self.workers, self.inputs, self.before_admission, self.failure = {}, [], None, None
     async def start(self, *args): pass
-    async def control(self, sid, operation, args):
+    async def control(self, sid, operation, args, *, guard=None):
         if sid not in self.workers:
             self.workers[sid] = controls(sid)
             await self.workers[sid].restore()
+        if guard is not None: guard()
         return await self.workers[sid].perform(operation, args)
     async def scheduled_input(self, sid, args, guard):
         if self.before_admission: self.before_admission()
@@ -25,6 +26,9 @@ class Runtime:
         self.inputs.append((sid, args))
         if self.failure: raise self.failure
         return {'accepted': True, 'inputId': args['inputId']}
+    async def stop(self, sid, *, reason='stopped'):
+        worker = self.workers.pop(sid, None)
+        if worker is not None: await worker.close()
     async def close(self):
         for worker in self.workers.values(): await worker.close()
 
