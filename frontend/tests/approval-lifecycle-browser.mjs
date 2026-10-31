@@ -515,9 +515,13 @@ try{
   const inspectTarget=()=>stopPage.request.get(url+'/fixture?sessionId='+encodeURIComponent(target.sessionId),{timeout:8000}).then(r=>r.json());
   let acceptedLookup=false,stopCommand,stopClientId,stopReceipt,supersedingStop=null;
   const hideStop=async route=>{
-   const command=unwrap(route.request().postDataJSON());
-   if(command.action!=='conversation.stop')return route.continue();
    try{
+    // Reconnect also reads the bodyless action catalog. Only POST commands
+    // carry JSON, and callback failures must reach the journey's cleanup path.
+    if(!isAction(route.request())){await route.continue();return}
+    const command=unwrap(route.request().postDataJSON());
+    assert.ok(command&&typeof command.action==='string','Action POST must identify its command');
+    if(command.action!=='conversation.stop'){await route.continue();return}
     assert.equal(stopCommand,undefined,'Never replay the uncertain Stop');stopCommand=command;
     stopClientId=route.request().headers()['x-amplifier-client'];
     const response=await route.fetch({timeout:8000});
@@ -529,10 +533,11 @@ try{
    }catch(error){routeErrors.push(error.message);await route.abort('failed').catch(()=>{})}
   };
   const lookup=async route=>{
-   const request=route.request(),body=request.postDataJSON(),row={body};
+   const request=route.request(),row={};
    lookups.push(row);
    try{
     assert.equal(request.method(),'POST');
+    const body=request.postDataJSON();row.body=body;
     assert.deepEqual(body,{sessionId:target.sessionId,commandId:stopCommand.id,clientId:stopClientId});
     assert.equal(request.headers()['x-amplifier-client'],stopClientId);
     assert.equal(typeof body.clientId,'string');assert.ok(body.clientId);
