@@ -33,12 +33,14 @@ try{
  const initial=await state(),workspace=initial.workspaces.find(row=>row.id===initial.selectedWorkspaceId).path;
  const filePath=workspace+'/copy path proof.md';await writeFile(filePath,'# File path proof');
  await action('canvas.show',{kind:'markdown',path:filePath});
- await page.getByText('File path',{exact:true}).click();
- await page.getByRole('button',{name:'Copy absolute path'}).click();
+ const fileDetails=page.locator('#workspace-canvas .a-canvas-inspector details.a-canvas-file-path');
+ await fileDetails.getByText('File details',{exact:true}).click();
+ await expect(fileDetails.locator('code')).toHaveText([filePath,workspace,'copy path proof.md']);
+ await fileDetails.getByRole('button',{name:'Copy full path',exact:true}).click();
  await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(filePath);
- await page.getByRole('button',{name:'Copy relative path'}).click();
+ await fileDetails.getByRole('button',{name:'Copy relative path',exact:true}).click();
  await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe('copy path proof.md');
- await page.getByText('File path',{exact:true}).click();
+ await fileDetails.getByText('File details',{exact:true}).click();
  await action('canvas.show',{kind:'html',title:'Live HTML view',content:'<h1>Persistent viewer</h1><input aria-label="Viewer note" value="Retained input">'});
  const html=await view('primary');
  await expect(page.getByRole('button',{name:'Open a second view'})).toHaveCount(0);
