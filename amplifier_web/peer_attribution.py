@@ -118,7 +118,7 @@ class PeerAttribution:
                     and request.get('commandAction') in {'coordination.send', 'coordination.watch', 'coordination.create'}
                     and request.get('protocol') == receipt.get('protocol') == PROTOCOL
                     and request.get('requestId') == receipt.get('dependencyRequestId')
-                    and receipt.get('origin') == 'system' and receipt.get('mode') == 'queue'
+                    and receipt.get('origin') == 'system' and receipt.get('mode') in {'queue', 'auto'}
                     and receipt.get('requestId') == receipt.get('inputId') == identity
                     and receipt.get('dependencySatisfied') is snapshot['qualified']
                     and request.get('senderSessionId') == receipt.get('target', {}).get('sessionId')

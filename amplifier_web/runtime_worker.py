@@ -1602,7 +1602,7 @@ class Worker:
             elif op == "control":
                 arguments = data.get("arguments", {})
                 if data['operation'] in {'conversation.steer', 'schedule.submit', 'observation.submit',
-                                         'coordination.submit', 'coordination.steer', 'history.edit'}:
+                                         'coordination.submit', 'coordination.steer', 'coordination.deliver', 'history.edit'}:
                     input_id = arguments['operationId'] if data['operation'] == 'history.edit' else arguments['inputId']
                     self.bind_input_context(input_id, data, arguments.get('context_binding'))
                 if data['operation'] in {'configuration.apply', 'configuration.patchPlacement.bind'}:
@@ -1630,6 +1630,11 @@ class Worker:
                 elif data["operation"] == "coordination.submit":
                     from amplifier_web.collaboration_input import admit
                     result = await admit(self.controls, self.runtime, arguments, self.activation,
+                        authorize=lambda value: self.bridge("coordination.admit", value),
+                        stop_epoch=lambda: self.stop_revision)
+                elif data["operation"] == "coordination.deliver":
+                    from amplifier_web.collaboration_input import deliver
+                    result = await deliver(self.controls, self.runtime, arguments, self.activation,
                         authorize=lambda value: self.bridge("coordination.admit", value),
                         stop_epoch=lambda: self.stop_revision)
                 elif data["operation"] == "coordination.steer":

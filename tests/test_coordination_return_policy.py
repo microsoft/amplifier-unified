@@ -91,13 +91,13 @@ async def test_send_policy_is_explicit_and_saved_before_drain(app, policy):
     assert app.assignments.current(source) is None
 
 
-async def test_optin_accepts_omitted_mode_as_queue(app):
+async def test_optin_accepts_omitted_mode_as_auto(app):
     source, target = app.state['sessions']
     target['status'] = 'working'
     receipt = await agent_action(app, source, 'coordination.send', {
         'sessionId': target['id'], 'text': 'Return the exact result',
         'returnNotification': True}, 'default-mode')
-    assert receipt['mode'] == 'queue' and receipt['subscription']['status'] == 'waiting'
+    assert receipt['mode'] == 'auto' and receipt['subscription']['status'] == 'waiting'
 
 
 @pytest.mark.parametrize('policy', [None, False])
@@ -116,9 +116,9 @@ async def test_one_way_result_does_not_gain_an_automatic_subscription(app, polic
 
 
 @pytest.mark.parametrize('mode', ['notify', 'steer'])
-async def test_return_notification_rejects_nonqueue_before_effects(app, mode):
+async def test_return_notification_rejects_nonexecuting_or_anchored_modes_before_effects(app, mode):
     before = projections(app)
-    with pytest.raises(AppError, match='requires queue mode') as denied:
+    with pytest.raises(AppError, match='requires auto or queue mode') as denied:
         await send(app, mode=mode, returnNotification=True)
     assert denied.value.status == 400
     assert not committed(app, 'request-1') and not app.runtime.inputs
@@ -512,18 +512,24 @@ async def test_terminal_failure_takes_precedence_over_the_typed_response(app):
 async def test_host_admission_unknown_is_projected_without_inventing_a_reply(app):
     app.runtime.fail = True
     await send(app, returnNotification=True)
-    await settled(app, 'request-1', 'unknown')
+    request = await settled(app, 'request-1', 'unknown')
+    # The host observation itself now reaches a busy requester automatically.
+    # This fixture loses every acknowledgement, so both inputs remain unknown.
+    returned = request['subscription']['continuationId']
+    await settled(app, returned, 'unknown')
     state = (await result(app))['returnState']
     assert state['response']['status'] == 'absent'
     assert state['outcome']['source'] == 'terminalOutcome'
     assert state['outcome']['status'] == 'observed'
     assert state['outcome']['outcome'] == 'unknown'
     assert state['qualification']['status'] == 'unqualified'
-    assert state['notification']['status'] == 'queued'
+    assert state['notification']['status'] == 'unknown'
+    assert [row[1] for row in app.runtime.inputs].count(returned) == 1
     retry = await send(app, returnNotification=True)
     assert retry['duplicate'] and retry['delivery'] == 'unknown'
     await app.collaboration.drain(app.state['sessions'][1]['id'])
-    assert [row[1] for row in app.runtime.inputs] == ['request-1']
+    await app.collaboration.drain(app.state['sessions'][0]['id'])
+    assert [row[1] for row in app.runtime.inputs] == ['request-1', returned]
 
 
 @pytest.mark.parametrize('delivery', ['accepted', 'unknown', 'not_sent'])

@@ -117,7 +117,7 @@ async def test_list_pages_dormant_peers_without_admission_or_body_reads(app, mon
         assert saved['signal']['interruptionRevision'] == 7
         assert saved['taskId'] == 'saved-task' and saved['attention']
         assert saved['canFollowup'] and not saved['canInterrupt']
-        assert saved['peerActions'] == [{'modes': ['notify', 'queue']}]
+        assert saved['peerActions'] == [{'modes': ['auto', 'notify', 'queue']}]
         monkeypatch.setattr(projection, 'hydrate', original_hydrate)
         explicit = restored.coordination.list({'sessionId': peer_id, 'includeWorkers': True}, caller['id'])
         assert [row['kind'] for row in explicit['items']] == ['conversation', 'worker']

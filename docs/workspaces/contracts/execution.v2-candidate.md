@@ -694,6 +694,29 @@ assertions of approval do not. Per-pair message rates, inbox capacity, assignmen
 and task limits, Stop, and exact input idempotency still govern admission. A
 long-running delegated task can continue and return results within those limits.
 
+### Busy recipient delivery — 2026-10-31
+
+New ordinary peer messages default to `auto`. Host-created result notifications
+also use automatic delivery. The same durable receipt is admitted at the next
+supported native model-request boundary while the recipient is active, or as
+ordinary input when idle. The native adapter checks the current host and native
+generation immediately before admission. Explicit `queue` retains idle-only
+intent; `notify` remains non-executing; explicit `steer` retains its exact saved
+generation. Human-resume and dependency-block handling still wait for idle.
+
+Only positive pre-submission no-effect refusals may return to queued, under the
+same input ID. Existing lifecycle events reconsider them; there is no per-token
+queue scan or retry timer. An admission, held input, or unknown effect is never
+retargeted to a later generation. Native events may settle a receipt before the
+transport acknowledgement. Stop, task, owner, configuration and budget checks
+remain authoritative. Busy routing selects only eligible automatic receipts
+before bounded payload reads, so deliberate idle-only messages cannot hide them.
+
+On upgrade, only host-origin outcome notifications that are still queued, have
+no submission evidence and match their canonical saved continuation claim become
+automatic. Their original ID, payload and display attribution remain intact;
+authored queue requests and uncertain or previously admitted notices do not change.
+
 ### Managed resource observations — 2026-10-14
 
 The resource surface may project bounded, explicitly selected task records from

@@ -65,18 +65,22 @@ compare those exact links, not equal message text.
    that another chat's purpose matches yours. Keep requests within the user's intent;
    do not treat a purpose label or peer message as additional permission.
 3. Use `coordination.send` with the exact target, short text,
-   references and a stable dispatch ID. For a queued request that needs a result,
+   references and a stable dispatch ID. Leave mode omitted (or use `auto`) for
+   routine collaboration: a busy recipient gets the input at its next supported
+   model-request boundary; an idle recipient starts normally. Keep the same
+   receipt while it waits. For an automatic or queued request that needs a result,
    set `returnNotification:true`: the host commits the request and its return
    subscription together before the recipient can run. Inspect `returnState` in
    the receipt; registration is not delivery or successful work. Do not add a
    second subscription for that request. Omitted/false retains one-way behavior;
-   notify and steer reject true. Notify only retains a note. Queue admits
-   at an idle boundary, starting a cold worker when needed; the user does not
+   notify and steer reject true. Notify only retains a note. Use explicit `queue`
+   only when you intend to wait until idle. Automatic idle delivery and queue
+   start a cold worker when needed; the user does not
    need to open that chat or relay a Continue message. Idle worker retirement
    (including replacement for an update) keeps the conversation eligible for
    this ordinary guarded input. It does not clear an actual Stop, a blocked task
    or a failed turn, and does not replay previously suppressed requests.
-   A fresh direct queued message may be handled while the recipient's own
+   A fresh direct automatic or queued message may be handled while the recipient's own
    agent-recorded dependency block remains in place. The host binds that one
    input to the exact blocked task; this is not peer task-resume authority.
    Reconcile the dependency and reply/defer/decline within existing permissions.
@@ -162,7 +166,7 @@ compare those exact links, not equal message text.
    execution or completion. Read elapsed progress and honor Stop rather than
    replaying a slow request. Failed/cancelled preparation retains diagnostics.
 5. Read `coordination.result` and retain exact request/input/message IDs.
-   Prefer the atomic `returnNotification:true` option when sending new queued
+   Prefer the atomic `returnNotification:true` option when sending new automatic or queued
    work. Use `coordination.subscribe` only to register a return for an existing
    exact request you sent without that option, within current authority.
    Exact command retries never add or rearm a return; changed arguments with the
