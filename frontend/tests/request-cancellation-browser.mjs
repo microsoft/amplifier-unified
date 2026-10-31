@@ -70,6 +70,7 @@ try{
  // service transitions are covered in test_request_cancellation.py; here the
  // response fixture ensures the UI does not replace unconfirmed with waiting.
  for(const reportStatus of ['rejected','unknown']){
+  let reportDelivered=false;
   const unconfirmed=async route=>{
    if(route.request().postDataJSON()?.action!=='coordination.context')return route.fallback();
    const response=await route.fetch(),body=await response.json();
@@ -77,9 +78,13 @@ try{
    row.response={kind:'result',outcome:'cancelled',status:reportStatus,qualified:false};
    row.cancellation={...row.cancellation,status:'reported_unconfirmed',detail:'A cancellation report was saved, but completion could not be confirmed. Inspect the retained result before deciding what to do next.'};
    await route.fulfill({response,json:body});
+   reportDelivered=true;
   };
   await page.route('**/api/actions',unconfirmed);
   await page.getByRole('button',{name:'Refresh workspace work',exact:true}).click();
+  // Both reports use the same text. Wait for this response, not a matching
+  // render left behind by the preceding report.
+  await expect.poll(()=>reportDelivered).toBe(true);
   await expect(active.locator('[data-part="request-cancellation"]')).toContainText('completion could not be confirmed');
   await expect(active.locator('[data-part="request-cancellation"]')).not.toContainText('waiting');
   await page.unroute('**/api/actions',unconfirmed);
@@ -91,4 +96,7 @@ try{
  const evidence={queuedWithdrawn:true,otherRequestRetained:true,activeCancellationUnconfirmed:true,lostAcknowledgementSameIdentity:true,noWholeChatStop:true,noReplay:true,draftAndSelectionPreserved:true,mobileNoOverflow:true,rejectedAndUnknownRendering:true,reportRenderingUsesResponseFixtures:true,scriptedRuntime:true,liveModelEvidence:false,outputDir};
  await writeFile(join(outputDir,'result.json'),JSON.stringify(evidence,null,2));console.log(JSON.stringify(evidence));
 }catch(error){await page?.screenshot({path:join(outputDir,'failure.png')});throw error}
-finally{await browser?.close();fixture.kill()}
+finally{
+ try{await page?.unrouteAll({behavior:'wait'})}
+ finally{try{await browser?.close()}finally{fixture.kill()}}
+}
