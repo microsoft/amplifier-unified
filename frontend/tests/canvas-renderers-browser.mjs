@@ -25,6 +25,16 @@ try{
  const inspect=()=>action('canvas.views.inspect').then(result=>result.result);
  const view=async id=>(await inspect()).views.find(view=>view.viewId===id);
  const target=view=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]]));
+ const canvas=page.locator('#workspace-canvas'),inspector=canvas.locator('.a-canvas-inspector'),reader=canvas.locator('.a-canvas-reader');
+ const openDetails=()=>canvas.getByRole('button',{name:'Canvas details',exact:true}).click();
+ // At these pane widths Details covers the reader; use the UI to expose it.
+ const closeDetails=async()=>{
+  await inspector.getByRole('button',{name:'Close canvas details',exact:true}).click();
+  await expect(inspector).toBeHidden();
+  await expect(reader).toHaveJSProperty('inert',false);
+  await expect(reader).not.toHaveAttribute('aria-hidden','true');
+  await expect(reader.getByRole('region',{name:'Artifact view',exact:true})).toBeVisible();
+ };
  await action('session.create',{});
  await action('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true,canvasWidth:640}});
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep this draft through viewer changes');
@@ -43,6 +53,7 @@ try{
  await fileDetails.getByText('File details',{exact:true}).click();
  await action('canvas.show',{kind:'html',title:'Live HTML view',content:'<h1>Persistent viewer</h1><input aria-label="Viewer note" value="Retained input">'});
  const html=await view('primary');
+ await closeDetails();
  await expect(page.getByRole('button',{name:'Open a second view'})).toHaveCount(0);
  await page.evaluate(()=>{window.proof={root:document.getElementById('amp-one'),time:performance.timeOrigin,host:window.amplifier.getState().client.hostInstanceId,session:window.amplifier.getState().selectedSessionId}});
  await action('canvas.show',{kind:'markdown',title:'Reading notes',content:'# Reading notes\n\nA live document for the reader.\n\n## Next section\n\nKeep the source unchanged.'});
@@ -61,7 +72,9 @@ try{
  const staged=(await action('shell.packages.stage',{manifest,source})).result;
  await assert.rejects(()=>action('canvas.views.renderer',{...target(markdown),renderer:staged.digest}),/validation/);
  assert.equal((await action('shell.packages.validate',{digest:staged.digest})).result.status,'passed');
+ await openDetails();
  await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(staged.digest);
+ await closeDetails();
  await page.getByRole('article',{name:'Reading view'}).waitFor();
  await expect.poll(async()=>(await view('primary')).activation?.status).toBe('ready');
  await page.getByRole('combobox',{name:'Reader text size'}).selectOption('22');
@@ -69,9 +82,14 @@ try{
  await action('view.update',{patch:{canvasWidth:620}});
  assert.deepEqual(await page.evaluate(()=>({root:window.proof.root===document.getElementById('amp-one'),time:window.proof.time===performance.timeOrigin,host:window.proof.host===window.amplifier.getState().client.hostInstanceId,session:window.proof.session===window.amplifier.getState().selectedSessionId})),{root:true,time:true,host:true,session:true});
  assert.equal((await state()).canvas.content,sourceBefore);
+ await openDetails();
  await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption('builtin.canvas.markdown');
+ await closeDetails();
+ await expect(reader.getByRole('heading',{name:'Reading notes',exact:true})).toBeVisible();
  await expect(page.getByRole('article',{name:'Reading view'})).toHaveCount(0);
+ await openDetails();
  await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(staged.digest);
+ await closeDetails();
  await page.getByRole('article',{name:'Reading view'}).waitFor();
  await expect(page.getByRole('combobox',{name:'Reader text size'})).toHaveValue('22');
  const readsBefore=resourceReads;
@@ -88,19 +106,23 @@ try{
  const beforeClose=await view('primary');
  await action('canvas.close');await action('canvas.reopen');
  await assert.rejects(()=>action('canvas.views.command',{...target(beforeClose),action:'canvas.view',args:{patch:{readerScale:99}}}),/changed/);
+ await openDetails();
  const beforeReload=(await state()).client.id;
- await page.reload();await page.getByRole('article',{name:'Reading view'}).first().waitFor();
+ await page.reload();await closeDetails();await page.getByRole('article',{name:'Reading view'}).first().waitFor();
  assert.notEqual((await state()).client.id,beforeReload);
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep this draft through viewer changes');
  // A module can pass fixtures but still fail on live data: contain and recover.
  const brokenSource='export default ({React})=>function Broken({host}){const s=React.useSyncExternalStore(host.subscribe,host.getSnapshot,host.getSnapshot);if(s.resource?.content?.includes("live document"))throw Error("Live reader failure");return React.createElement("p",null,"Fixture reader")}';
  const broken=(await action('shell.packages.stage',{manifest:{...manifest,id:'example.live-failure'},source:brokenSource})).result;
  assert.equal((await action('shell.packages.validate',{digest:broken.digest})).result.status,'passed');
+ await openDetails();
  await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(broken.digest);
+ await closeDetails();
  await page.getByText(/This renderer needs attention: Live reader failure/).waitFor();
  await expect.poll(async()=>(await view('primary')).activation?.status).toBe('error');
  assert.equal((await view('primary')).resourceId,markdown.resourceId);
  await page.getByRole('button',{name:'Use standard viewer'}).click();
+ await openDetails();
  await expect(page.getByRole('combobox',{name:'Open with',exact:true})).toHaveValue('builtin.canvas.markdown');
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep this draft through viewer changes');
  await page.setViewportSize({width:390,height:844});
@@ -113,7 +135,9 @@ try{
  await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(staged.digest);
  await page.goto(url+'/?shell=recovery');
  await page.locator('[aria-label="Message Amplifier"]').waitFor({state:'attached'});
+ await closeDetails();
  await expect(page.getByText('Recovery mode uses standard viewers.')).toBeVisible();
+ await expect(reader.getByRole('heading',{name:'Reading notes',exact:true})).toBeVisible();
  assert.equal(await page.getByRole('article',{name:'Reading view'}).count(),0);
  await expect.poll(async()=>(await view('primary')).activation?.status).toBe('error');
  assert.equal((await view('primary')).renderer,staged.digest);
