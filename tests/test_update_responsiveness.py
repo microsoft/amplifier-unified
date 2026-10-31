@@ -243,6 +243,71 @@ async def test_native_settlement_reobserves_drain_without_timer_or_publication_l
         assert state['drain']['workers'][session['id']]['ready'] is False
 
 
+@pytest.mark.parametrize('ready', [False, True])
+async def test_settlement_consumed_during_command_lock_rewakes_real_app(manager, monkeypatch, ready):
+    from types import SimpleNamespace
+    from amplifier_web import update_drain
+    service = manager.service
+    await service.dispatch('session.create', {})
+    session = service._session(); session['status'] = 'working'
+    target = {'attemptId': 'a' * 32, 'revision': 'b' * 40, 'generation': 'c' * 32}
+    state = service.state['updates']
+    state.update(phase='app-staged', pendingApp=target, pendingAppCheckAt=time.time())
+    service.runtime.workers = {session['id']: {'runtimeOwnerId': 'owned-worker', 'process': SimpleNamespace(returncode=None)}}
+    observed, installed, entered, release, sleeping = (asyncio.Event() for _ in range(5))
+    observations, settlement = [], [False]
+    async def boundary(sid, identity, **kwargs):
+        observations.append(identity)
+        if len(observations) > 1: observed.set()
+        return {'ready': settlement[0], 'waitingFor': [] if settlement[0] else ['children']}
+    service.runtime.handoff_boundary = boundary
+    # Keep the real app(), command(), tick() and loop() owners. Only the
+    # external package effect and the concurrent command's work are controlled.
+    async def activate(owner):
+        assert owner is manager and not manager.lock.locked()
+        if await update_drain.prepare(owner, target):
+            state.update(phase='installed', pendingApp=None)
+            installed.set()
+    async def command_work():
+        async with manager.lock:
+            entered.set()
+            await release.wait()
+    original_wait = manager.wait_for_work
+    async def wait(delay):
+        if delay == 3: return
+        sleeping.set()
+        await original_wait(delay)
+    monkeypatch.setattr(app_updates, 'activate', activate)
+    monkeypatch.setattr(manager, 'check', command_work)
+    monkeypatch.setattr(manager, 'wait_for_work', wait)
+    manager._storage_last_pass = time.time()
+    manager.task = asyncio.create_task(manager.loop())
+    await asyncio.wait_for(sleeping.wait(), 1)
+    assert len(observations) == 1
+    command = asyncio.create_task(manager.command('check'))
+    await asyncio.wait_for(entered.wait(), 1)
+    try:
+        sleeping.clear(); settlement[0] = ready; session['status'] = 'ready'
+        await service.on_runtime_event('runtime.warmth', {'sessionId': session['id'], 'status': 'warm'})
+        # The background owner consumes this wake while real app() refuses
+        # contention. The command's finally must retain the next observation.
+        await asyncio.wait_for(sleeping.wait(), 1)
+        assert manager.lock.locked() and not manager.wakeup.is_set()
+        assert len(observations) == 1
+    finally:
+        release.set()
+        await asyncio.wait_for(command, 1)
+    await asyncio.wait_for(observed.wait(), 1)
+    if ready:
+        await asyncio.wait_for(installed.wait(), 1)
+        assert state['drain']['workers'][session['id']]['ready'] is True
+    else:
+        assert not installed.is_set()
+        await manager.publish(detail='Still saving current work')
+        await asyncio.sleep(.03)
+        assert len(observations) == 2 and not manager.wakeup.is_set()
+
+
 async def test_drain_retention_protects_only_exact_unobserved_owner(manager):
     from types import SimpleNamespace
     from amplifier_web import update_drain
