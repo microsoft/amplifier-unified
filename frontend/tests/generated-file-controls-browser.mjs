@@ -210,8 +210,58 @@ async function measure(target,details,label){
 async function cornerTap(control,corner){
  await control.scrollIntoViewIfNeeded();
  await control.evaluate(node=>node.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'}));
- const bounds=await control.boundingBox();assert.ok(bounds);
- await control.tap({position:corner==='top-left'?{x:3,y:3}:{x:bounds.width-3,y:bounds.height-3}});
+ assert.ok(['top-left','top-right','bottom-left','bottom-right'].includes(corner));
+ const measured=await control.evaluate((node,corner)=>{
+  const describe=element=>element&&({tag:element.tagName,id:element.id,className:element.className,
+   label:element.getAttribute('aria-label')||element.textContent.trim().slice(0,120)});
+  const sample=()=>{
+   const r=node.getBoundingClientRect(),style=getComputedStyle(node);
+   const borders={left:parseFloat(style.borderLeftWidth),top:parseFloat(style.borderTopWidth),
+    right:parseFloat(style.borderRightWidth),bottom:parseFloat(style.borderBottomWidth)};
+   const oldPosition={x:corner.endsWith('left')?3:r.width-3,y:corner.startsWith('top')?3:r.height-3};
+   const intended={x:r.left+oldPosition.x,y:r.top+oldPosition.y};
+   // Playwright's explicit positions start at the padding box, not the border
+   // box used by getBoundingClientRect and the four-corner reachability oracle.
+   const position={x:oldPosition.x-borders.left,y:oldPosition.y-borders.top};
+   const hit=point=>({point,reachable:node.contains(document.elementFromPoint(point.x,point.y)),
+    elements:document.elementsFromPoint(point.x,point.y).map(describe)});
+   const fromPosition=offset=>({x:r.left+borders.left+offset.x,y:r.top+borders.top+offset.y});
+   const ancestors=[];for(let parent=node.parentElement;parent;parent=parent.parentElement){
+    if(parent.scrollTop||parent.scrollLeft)ancestors.push({node:describe(parent),x:parent.scrollLeft,y:parent.scrollTop});
+   }
+   return {corner,node:describe(node),rect:r.toJSON(),borders,
+    radii:[style.borderTopLeftRadius,style.borderTopRightRadius,style.borderBottomLeftRadius,style.borderBottomRightRadius],
+    scroll:{x:scrollX,y:scrollY,ancestors},viewport:{width:innerWidth,height:innerHeight},
+    intended,position,oldPosition,corrected:hit(fromPosition(position)),old:hit(fromPosition(oldPosition))};
+  };
+  window.__fileControlsLastTap=null;
+  node.addEventListener('pointerdown',event=>{
+   window.__fileControlsLastTap={...sample(),event:{x:event.clientX,y:event.clientY,
+    pointerType:event.pointerType,target:describe(event.target),sameNode:node.contains(event.target)}};
+  },{capture:true,once:true});
+  return sample();
+ },corner);
+ geometry.push({label:'corner-tap-before',...measured});
+ const exactCorner=sample=>{
+  assert.deepEqual(sample.point,measured.intended,'Tap must preserve the measured 3px border-box corner');
+  assert.ok(sample.reachable,'Exact corner must hit the native control');
+ };
+ exactCorner(measured.corrected);
+ if(measured.borders.left||measured.borders.top){
+  assert.throws(()=>exactCorner(measured.old),/Tap must preserve the measured 3px border-box corner/);
+  checks.push({check:'old padding-origin conversion rejected by same exact-corner oracle',corner,
+   oldPoint:measured.old.point,intended:measured.intended,oldReachable:measured.old.reachable});
+ }
+ await control.tap({position:measured.position});
+ const delivered=await control.evaluate(()=>window.__fileControlsLastTap);
+ geometry.push({label:'corner-tap-delivered',...delivered});
+ assert.ok(delivered?.event?.sameNode,'Touch must reach the native control');
+ assert.deepEqual(delivered.rect,measured.rect,'Control geometry changed between measurement and gesture');
+ assert.deepEqual(delivered.scroll,measured.scroll,'Control scrolled between measurement and gesture');
+ assert.equal(delivered.event.pointerType,'touch');
+ // Chromium may quantize fractional CSS coordinates; retain actual delivery.
+ assert.ok(Math.abs(delivered.event.x-measured.intended.x)<1&&
+  Math.abs(delivered.event.y-measured.intended.y)<1,'Delivered touch missed the measured corner');
 }
 
 async function connect(owner,options){
