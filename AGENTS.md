@@ -82,3 +82,11 @@ public `session.archive` action. Qualify late-response navigation races, the
 noncurrent-chat path, Undo, and the raw action's selection-preserving behavior.
 Release the interactive mutation lock on its confirmed receipt, independently of
 navigation. Qualify stalled navigation with usable Undo and superseding intent.
+
+## Native Windows work
+
+Native Windows backend support is not yet qualified. Follow the
+[setup design](docs/design/native-windows-installation.md) and keep WSL evidence
+separate. Never use Windows `os.kill(pid, 0)` for passive liveness; it can terminate
+the process. `tests/test_generation_leases.py` includes an unmocked sentinel.
+The focused platform workflow checks that mechanism, not full Windows installation.
