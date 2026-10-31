@@ -265,3 +265,38 @@ async def test_drain_retention_protects_only_exact_unobserved_owner(manager):
         service.state['updates']['drain']['phase']=phase
         assert not runtime.retention.protected(sid)
         assert runtime.retention.protected('voice')
+
+
+async def test_explicit_stop_wakes_owner_and_still_requires_positive_writer_absence(manager, monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from amplifier_web import update_drain
+    service=manager.service
+    await service.dispatch('session.create', {})
+    session=service._session();session['status']='working'
+    sid=session['id'];target={'attemptId':'a'*32,'revision':'b'*40,'generation':'c'*32}
+    state=service.state['updates'];state.update(phase='app-staged',pendingApp=target)
+    service.runtime.workers={sid:{'runtimeOwnerId':'original','process':SimpleNamespace(returncode=None)}}
+    async def boundary(*args,**kwargs):return {'ready':False,'waitingFor':['generation']}
+    service.runtime.handoff_boundary=boundary
+    proofs=[]
+    @contextmanager
+    def stopped(session):
+        assert session['interruptionRevision']==1 and sid not in service.runtime.workers
+        proofs.append(sid)
+        yield {'workerAbsent':True}
+    service.runtime.stopped_boundary=stopped
+    installed=asyncio.Event()
+    async def activate():
+        async with manager.lock:
+            if await update_drain.prepare(manager,target):
+                state.update(phase='installed',pendingApp=None);installed.set()
+    monkeypatch.setattr(manager,'app',activate)
+    manager._storage_last_pass=time.time()
+    await sleeping_owner(manager,monkeypatch)
+    assert not installed.is_set() and not proofs
+    service.runtime.workers.clear();session['interruptionRevision']=1
+    await service.on_runtime_event('runtime.status',{'sessionId':sid,'status':'stopped'})
+    await asyncio.wait_for(installed.wait(),1)
+    assert proofs==[sid] and state['drain']['workers'][sid]['stopped']=={'workerAbsent':True}
+    assert 'yieldedGoal' not in state['drain']['workers'][sid]
