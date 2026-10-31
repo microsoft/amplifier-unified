@@ -273,16 +273,18 @@ def validate_theme(css):
             if node.type == "url":
                 check_url(node.value)
             if node.type == "function" and node.lower_name == "url":
-                value = tinycss2.serialize(node.arguments).strip().strip('\"\'')
-                check_url(value)
+                arguments = [argument for argument in node.arguments if argument.type not in ('comment', 'whitespace')]
+                if len(arguments) != 1 or arguments[0].type != 'string':
+                    raise AppError('Use one literal asset reference in url(), not substitutions.')
+                check_url(arguments[0].value)
             if node.type == 'function' and node.lower_name in {'image-set', '-webkit-image-set', 'image', 'src'}:
                 # These CSS image forms also accept bare strings as URLs.
-                # Dynamic string substitution cannot be verified as embedded.
+                # Fail closed for nested/unknown substitutions, not just var().
+                from .appearance_packages import literal_image_functions
+                literal_image_functions(node)
                 for argument in node.arguments:
                     if argument.type == 'string':
                         check_url(argument.value)
-                    if argument.type == 'function' and argument.lower_name in {'var', 'attr', 'env'}:
-                        raise AppError('Use explicit embedded assets in image functions, not dynamic URLs.')
             for attr in ("prelude", "content", "arguments"):
                 child = getattr(node, attr, None)
                 if child:
@@ -3249,11 +3251,15 @@ class AppService:
                     raise AppError('Choose Markdown to copy a conversation or create a readable snapshot.')
                 if action == 'theme.export':
                     from .theme_library import export
-                    diagnostic_result = export(self, args.get('id'))
-                content = self.state if action == "state.export" else self._session(args["id"]) if action == "session.export" else diagnostic_result['css']
-                mime = "text/css" if action == "theme.export" else "application/json"
-                filename = (diagnostic_result['filename'] if args.get('id') else 'amplifier-skin.css') if action == 'theme.export' else 'amplifier-export.json'
-                effects.append({"type": "download", "filename": filename, "mime": mime, "mimeType": mime, "content": content if isinstance(content, str) else json.dumps(content, indent=2)})
+                    diagnostic_result = export(self, args.get('id'), args.get('format', 'css'))
+                    zipped = diagnostic_result.get('format') == 'zip'
+                    content = {'base64': diagnostic_result['base64']} if zipped else diagnostic_result['css']
+                    mime = 'application/zip' if zipped else 'text/css'
+                    filename = diagnostic_result['filename'] if zipped or args.get('id') else 'amplifier-skin.css'
+                else:
+                    content = json.dumps(self.state if action == 'state.export' else self._session(args['id']), indent=2)
+                    mime, filename = 'application/json', 'amplifier-export.json'
+                effects.append({"type": "download", "filename": filename, "mime": mime, "mimeType": mime, "content": content})
             elif action == "attachment.add":
                 from .attachments import save,MAX_FILES
                 target = args.get('sessionId', self.state.get('selectedSessionId'))
@@ -3681,7 +3687,9 @@ class AppService:
                 self._refresh_shared_preferences()
             elif action in {'theme.save', 'theme.import', 'theme.update', 'theme.delete'}:
                 from . import theme_library
-                if action in {'theme.save', 'theme.import'}:
+                if action == 'theme.import':
+                    diagnostic_result = theme_library.import_appearance(self, args)
+                elif action == 'theme.save':
                     diagnostic_result = theme_library.save(self, args)
                 else:
                     diagnostic_result = theme_library.mutate(self, args, deleting=action == 'theme.delete')
