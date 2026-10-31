@@ -122,7 +122,15 @@ providers:
         app.state['updates'].update(phase='installed',applicationResult={**target})
         await update_drain.finish(app.update_manager,'installed')
         async with asyncio.timeout(45):
-            while sid not in runtime.workers or not runtime.workers[sid]['parked']:
+            while True:
+                returns=app.db.execute("SELECT receipt FROM commands WHERE json_extract(receipt,'$.dependencyRequestId') LIKE 'update-wait:%'").fetchall()
+                calls=[json.loads(line) for line in (root/'calls.jsonl').read_text().splitlines()]
+                # A newly prepared worker can initially be parked before its
+                # input is accepted. Wait for actual second-process execution
+                # and the exact accepted input before inspecting final parking.
+                if (len({row['pid'] for row in calls})==2 and len(returns)==1
+                        and json.loads(returns[0][0]).get('delivery')=='accepted'
+                        and runtime.workers.get(sid,{}).get('parked')):break
                 if app._session(sid).get('error'):raise AssertionError(app._session(sid)['error'])
                 await asyncio.sleep(.05)
         await update_drain.finish(app.update_manager,'installed')
