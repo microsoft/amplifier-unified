@@ -14,6 +14,7 @@ from test_collaborative_workspaces import (
 
 async def ready(app, request='result-request'):
     source, target = app.state['sessions'][:2]
+    app.runtime.unavailable_boundaries.add(source['id'])
     source['status'] = 'working'
     target['status'] = 'idle'
     await declared_result(app, request=request)
