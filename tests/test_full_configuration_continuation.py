@@ -308,20 +308,32 @@ async def test_full_child_recovery_route_retains_execution_boundaries(process_bo
 
 @pytest.mark.parametrize('process_boundary', ['full'], indirect=True)
 @pytest.mark.parametrize('change', ['stop', 'configuration', 'revoke'])
-async def test_full_child_recovery_rechecks_after_pre_tool_await(process_boundary, tmp_path, monkeypatch, change):
+async def test_full_child_recovery_rechecks_after_dispatch_await(process_boundary, tmp_path, monkeypatch, change):
+    from amplifier_web import workspace_work_effects
     b = process_boundary
     saved = await refused_operation(b)
     entered, release = asyncio.Event(), asyncio.Event()
-    original_bridge = b.app.app_bridge
-    async def held_bridge(method, args, sid):
-        result = await original_bridge(method, args, sid)
-        if (method == 'work.effect.check' and args['toolInput'].get('args', {}).get('action')
-                == 'configuration.operation.reconcile'):
-            assert result['allowed'] and not result['effectAuthorized']
-            entered.set()
-            await release.wait()  # Actual tool body has not reached dispatch yet.
+    checks = []
+    original_check = workspace_work_effects.check
+    def observed_check(invocation, sid, args):
+        result = original_check(invocation, sid, args)
+        if args['toolInput'].get('args', {}).get('action') == 'configuration.operation.reconcile':
+            checks.append(result)
         return result
-    monkeypatch.setattr(b.app, 'app_bridge', held_bridge)
+    monkeypatch.setattr(workspace_work_effects, 'check', observed_check)
+    original_route = b.app.collaboration.route
+    async def held_route(action, args, origin, identity, caller):
+        result = await original_route(action, args, origin, identity, caller)
+        if action == 'configuration.operation.reconcile':
+            # AppControl uses service-owned Work guards, not the separate
+            # work.effect.check bridge used by other mounted tools. Hold its
+            # real routing await after the first guard and before final admission.
+            assert len(checks) == 1 and checks[0]['allowed'] and not checks[0]['effectAuthorized']
+            assert result is None and PRINCIPAL.get() == 'native-continuation-child'
+            entered.set()
+            await release.wait()
+        return result
+    monkeypatch.setattr(b.app.collaboration, 'route', held_route)
     async def exercise(invoke, principal):
         with pytest.raises((AssertionError, AppError, RuntimeError)):
             await invoke('configuration.operation.reconcile', {'sessionId': b.owner['id'],
@@ -337,6 +349,7 @@ async def test_full_child_recovery_rechecks_after_pre_tool_await(process_boundar
     finally:
         release.set()
         await asyncio.wait_for(task, 12)
+    assert len(checks) == 2 and not checks[-1]['allowed']
     assert operation(b) == saved
     assert not override_path(b.owner['runtimeSessionId']).exists()
 
