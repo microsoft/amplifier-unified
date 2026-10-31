@@ -1638,6 +1638,8 @@ class Collaboration:
 
     async def route(self, action, args, origin, command_id, caller):
         """One gate for equivalent old/new host entry points."""
+        if self.service.handoffs.execution(action, args, origin, command_id, caller) is not None:
+            return None
         if action == "conversation.send" and (args.get("grantId") or (
                 origin not in {"ui", "user", "scheduler"} and args.get("sessionId") != caller)):
             values = {key: value for key, value in args.items() if key != "preserveDraft"}

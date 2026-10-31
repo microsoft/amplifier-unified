@@ -1139,10 +1139,13 @@ class RuntimeManager:
             await self.start(session, emit)
             await self._request(session["id"], "park")
 
-    async def send(self, session, text, input_id, emit):
+    async def send(self, session, text, input_id, emit, *, admission_check=None):
+        if admission_check:
+            admission_check()
         update_gate = getattr(self, 'update_input_gate', lambda *args: None)
         update_gate(session['id'], input_id)
-        configuration_guard = await self._start_for_input(session, emit)
+        configuration_guard = await self._start_for_input(session, emit,
+            **({'admission_check': admission_check} if admission_check else {}))
         def guard():
             update_gate(session['id'], input_id)
             message = next((m for m in session.get('messages', []) if m.get('inputId') == input_id), {})
@@ -1237,18 +1240,25 @@ class RuntimeManager:
         return await self._request_unlocked(session_id, "coordination.approval", prompt=prompt,
             **({"approval_id": approval_id} if approval_id else {}))
 
-    async def _start_for_input(self, session, emit):
+    async def _start_for_input(self, session, emit, *, admission_check=None):
         try:
             guard = None
             original = session
             if self._input_configuration and session.get('nextMessageRevision'):
                 session, guard = await self._input_configuration(session)
+            configuration_guard = guard
+            if admission_check:
+                def guard():
+                    admission_check()
+                    if configuration_guard:
+                        configuration_guard()
+                guard()
             requested=session.get('pendingModelSelection')
             guarded = {'guard': guard} if guard else {}
             await self.start({**session,**({'selection':requested,'replaceSavedSelection':True} if requested else {})}, emit, **guarded)
             if requested:
                 await self.control(session['id'],'provider.select',requested, **guarded)
-            if guard:
+            if configuration_guard:
                 guard()
                 await emit('runtime.nextMessageApplied', {'sessionId': session['id'],
                     'revision': original['nextMessageRevision'], 'bundle': session.get('bundle'), 'selection': requested})
@@ -1276,8 +1286,9 @@ class RuntimeManager:
         from .message_delivery import saved_delivery
         return await asyncio.to_thread(saved_delivery, session, input_id)
 
-    async def retry(self, session, text, input_id, emit):
-        guard = await self._start_for_input(session, emit)
+    async def retry(self, session, text, input_id, emit, *, admission_check=None):
+        guard = await self._start_for_input(session, emit,
+            **({'admission_check': admission_check} if admission_check else {}))
         return await self._request(session['id'], 'retry', guard=guard, text=text, input_id=input_id,
             reply_context=next((m.get('replyTo') for m in session.get('messages',[]) if m.get('inputId')==input_id),None),
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
