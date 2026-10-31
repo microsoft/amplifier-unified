@@ -1,5 +1,6 @@
 """Atomic cooperative claims, independent of external effects and inventory."""
 import copy
+import json
 from types import SimpleNamespace
 import sqlite3
 import uuid
@@ -236,3 +237,28 @@ def test_configured_reservation_limit_is_atomic_across_processes(tmp_path):
         futures=[pool.submit(reserve,tmp_path,str(i),WORKSPACE,owner('root'),resourceKey=str(i)) for i in range(8)]
         outcomes=[future.result()['outcome'] for future in futures]
     assert outcomes.count('reserved')==2 and outcomes.count('limit')==6
+
+
+@pytest.mark.parametrize('explicit_zero', [False, True])
+def test_uncapped_claim_counts_keep_conflicts_and_unknown_receipts(tmp_path, explicit_zero):
+    actor = owner('manager')
+    original = reserve(tmp_path, 'original', actor=actor, resourceKey='unknown')
+    unknown = change(tmp_path, original['reservation'], 'uncertain', identity='unknown')['reservation']
+    # Populate a valid indexed retained inventory beyond the former global1024
+    # and per-chat64 ceilings; no services are created by a cooperative claim.
+    with sqlite3.connect(tmp_path / 'workspace-resources/reservations.sqlite3') as db:
+        for index in range(1024):
+            row = {**original['reservation'], 'id': f'claim-{index}', 'resourceKey': f'key-{index}'}
+            db.execute('INSERT INTO claims VALUES(?,?,?,?,?,?)',
+                (row['id'], WORKSPACE, row['resourceKey'], actor['sessionId'], row['status'], json.dumps(row)))
+        before = db.execute('SELECT id,body FROM claims ORDER BY id').fetchall()
+    if explicit_zero:
+        settings.write(SimpleNamespace(data_dir=tmp_path), {'version':1,'queue':{},'profiles':{},
+            'concurrency':{'maxResourceReservations':0,'maxResourceReservationsPerChat':0}})
+    assert reserve(tmp_path, 'fresh', actor=actor, resourceKey='new')['outcome'] == 'reserved'
+    assert reserve(tmp_path, 'blocked-unknown', actor=owner('peer'), resourceKey='unknown')['outcome'] == 'conflict'
+    assert reserve(tmp_path, 'original', actor=actor, resourceKey='unknown') == original
+    with sqlite3.connect(tmp_path / 'workspace-resources/reservations.sqlite3') as db:
+        assert db.execute('SELECT id,body FROM claims WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id',
+            (json.dumps([identity for identity, _ in before]),)).fetchall() == before
+    assert change(tmp_path, unknown, identity='reconcile')['outcome'] == 'released'
