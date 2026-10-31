@@ -356,13 +356,23 @@ Pending counts still derive from current pending records;
 an old request is not an outstanding approval. An already-allowed grant is never
 revoked merely because a lagging card still looks pending after restart.
 
-**Review current scope** calls only `capability.read` with the exact request ID.
+**Review current scope** reads `capability.read` with the exact request ID.
 It shows applicable saved authority and Full access separately from request
 expiry. It neither opens runtime settings nor sends an input. The optional `id`
 read returns a request projection with `requestHash`, revision and the available
 decisions. Bundled decision controls check that hash before submitting and the
 server rechecks it under its commit lock. A failed decision refreshes display
 without repeating the mutation or changing the proposed scope silently.
+
+Bundled cards fence decisions as soon as this page requests Stop, before its
+command can wait behind Canvas work. A lost Stop acknowledgement stays unknown.
+The page may passively read that exact command from the host's existing command
+ledger, bound to its session and originating client. Confirmed acceptance releases
+only that command's local fence; it does not prove runtime termination, replay
+Stop, or send a decision. Missing or mismatched evidence keeps the fence.
+A preflight begun while fenced stays invalid after reconciliation: the person must
+review and decide again, with their note retained. This ordering fence is local
+to the mounted page, not a durable unresolved-Stop journal across reload.
 
 Dismissal reuses `capability.revoke` with `dismissRequest:true`, the observed
 `expectedRevision` and `expectedRequestHash`. It refuses active/current requests.
