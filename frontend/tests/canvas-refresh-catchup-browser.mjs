@@ -233,13 +233,20 @@ try{
    }
    await capture('load-feedback-'+mode);
    if(unreadable){
-    if(details)await page.getByRole('button',{name:'Close canvas details',exact:true}).tap();
     // A failed explicit read cannot turn an unreadable mutation into refusal.
-    await refresh().click();
-    await expect(panel.locator('.a-canvas-freshness')).toContainText('Could not refresh');
-    await expect(panel.locator('.a-canvas-freshness')).not.toContainText('preview retained');
-    assert.equal(loads,1);
+    if(!details){
+     await refresh().click();
+     await expect(panel.locator('.a-canvas-freshness')).toContainText('Could not refresh');
+     await expect(panel.locator('.a-canvas-freshness')).not.toContainText('preview retained');
+     assert.equal(loads,1);
+    }
     await page.unroute('**/api/state',failRead);
+    // Close is a separate state action. Do not inject a second unrelated
+    // failure into its confirmation while testing recovery of the Load.
+    if(details){
+     await page.getByRole('button',{name:'Close canvas details',exact:true}).tap();
+     await action('canvas.views.inspect');
+    }
     await refresh().click();
     await expect.poll(async()=>(await view()).runningVersion).toBe(2);
     const second=await sample();
