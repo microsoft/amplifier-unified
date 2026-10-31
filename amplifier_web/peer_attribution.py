@@ -98,10 +98,10 @@ class PeerAttribution:
             return False
         wait = request.get('subscription') or {}
         if wait.get('notificationVersion') == 2:
-            from .collaboration import PROTOCOL, MAX_RESPONSE_REVISIONS
+            from .collaboration import PROTOCOL
             revision = receipt.get('dependencyOutcomeRevision')
             snapshot = receipt.get('outcomeSnapshot') or {}
-            if (type(revision) is not int or not 1 <= revision <= MAX_RESPONSE_REVISIONS
+            if (type(revision) is not int or revision < 1
                     or type(wait.get('lastClaimedRevision')) is not int
                     or wait['lastClaimedRevision'] < revision
                     or not isinstance(wait.get('continuationId'), str) or not wait['continuationId']
