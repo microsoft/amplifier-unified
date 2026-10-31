@@ -197,6 +197,31 @@ def test_same_cause_in_different_tiers_recovers_independently(tmp_path):
     assert next(iter(diagnostics.state['activeFailures'].values()))['tier'] == 'other'
 
 
+def test_unqualified_failures_in_different_scopes_do_not_merge(tmp_path):
+    state, diagnostics = fixture(tmp_path)
+    for scope in ['component-a', 'component-b']:
+        diagnostics.begin('ecosystem', components=[scope])
+        diagnostics.record('ecosystem-validation', 'failed', errorType='ValueError')
+    assert len(active(state)) == 2
+    diagnostics.begin('ecosystem', components=['component-a'])
+    diagnostics.record('ecosystem-activation', 'succeeded')
+    assert len(active(state)) == 1
+    assert next(iter(diagnostics.state['activeFailures'].values()))['components'] == ['component-b']
+
+
+def test_original_public_cause_survives_a_metadata_only_collector(tmp_path):
+    import json
+    state, diagnostics = fixture(tmp_path)
+    diagnostics.manager.service.diagnostics = SimpleNamespace(record=lambda *args: None)
+    diagnostics.begin('ecosystem', components=['component-a'])
+    event = diagnostics.record('ecosystem-validation', 'failed', errorType='ValueError',
+                               failureLocation='amplifier_web.updates:validate:42')
+    for _ in range(55):
+        diagnostics.record('ecosystem-check', 'succeeded')
+    assert event not in diagnostics.state['events']
+    assert json.loads(diagnostics.path.read_text().splitlines()[0]) == event
+
+
 @pytest.mark.parametrize('components', [[], [f'component-{i}' for i in range(6)]])
 def test_unknown_or_truncated_scope_cannot_claim_recovery(tmp_path, components):
     state, diagnostics = fixture(tmp_path)

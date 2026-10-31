@@ -484,6 +484,7 @@ async def test_post_commit_promotion_retry_preserves_pointer_identity(app, repo,
     target = committed.get('current')
     assert committed == {'current': target, 'previous': before.get('current'), 'at': committed['at']}
     assert app.state['updates']['phase'] == 'error'
+    assert manager.diagnostics.state['activeFailures']
     if rollback:
         assert 'pendingRollback' in app.state['updates']
     else:
@@ -496,6 +497,7 @@ async def test_post_commit_promotion_retry_preserves_pointer_identity(app, repo,
 
     assert active_release(app.data_dir) == committed
     assert app.state['updates']['phase'] == 'installed'
+    assert not manager.diagnostics.state['activeFailures']
     assert app.state['updates'].get('pendingRelease') is None
     assert 'pendingRollback' not in app.state['updates']
 

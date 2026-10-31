@@ -115,7 +115,8 @@ def snapshot(state, *, session_items=None):
     overflow = updates.get('diagnostics', {}).get('failureOverflow')
     if overflow:
         add('updates:failure-overflow', 'Additional update failures need review', 'maintenance', 'updates',
-            'More distinct failures occurred than the active summary can retain. Original receipts remain in update diagnostics; recovery of these additional failures is unverified.',
+            'More distinct failures occurred than the active summary can retain. Review the bounded update diagnostic history; recovery of these additional failures is unverified.' +
+            (' Some original receipts could not be stored.' if updates.get('diagnostics', {}).get('storageUnavailable') else ''),
             overflow.get('firstAt'), actionRequired=True, occurrences=overflow['occurrences'])
     for key, failure in sorted(failures.items(), key=lambda pair: pair[1]['first'].get('at', 0), reverse=True):
         kind = failure['kind']

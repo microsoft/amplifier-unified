@@ -1231,6 +1231,7 @@ class UpdateManager:
                     write_private(self.directory/'releases'/target/'validated.json',json.dumps(marker))
             hot = bool(target and marker.get('generationSchema') == 1 and marker.get('workerProtocol') == 1
                        and callable(getattr(self.service.runtime, 'promote_generation', None)))
+            self.diagnostics.capture_activation_retry(target, rollback=rollback)
             async with self.service.lock:
                 if self.service.closed:
                     return

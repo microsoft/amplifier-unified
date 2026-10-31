@@ -197,6 +197,9 @@ class UpdateDiagnostics:
             cause['probe'] = {key: value for key, value in cause['probe'].items()
                               if key not in {'elapsedMs', 'profileIndex'}}
         cause['tier'] = self.state.get('batch', {}).get('tier')
+        if not (event.get('component') or event.get('package') or event.get('probe', {}).get('package')):
+            batch = self.state.get('batch', {})
+            cause['scope'] = [batch.get('components', []), batch.get('componentCount', 0)]
         fingerprint = hashlib.sha256(json.dumps(cause, sort_keys=True).encode()).hexdigest()
         active = self.state.setdefault('activeFailures', {})
         key = kind + ':' + fingerprint
@@ -235,6 +238,16 @@ class UpdateDiagnostics:
             # occurrence invalidates that evidence, including an identical cause.
             if group and group['kind'] == kind and group['latest'].get('id') == observed:
                 del active[key]
+
+    def capture_activation_retry(self, target, *, rollback=False):
+        """Snapshot failures for this validated promotion, before any new effects."""
+        recovery = self.state.setdefault('batch', {}).setdefault('recoveringFailures', {})
+        for key, group in self.state.get('activeFailures', {}).items():
+            event = group['latest']
+            if (group['kind'] == 'ecosystem' and event.get('phase') == 'ecosystem-activation'
+                    and event.get('revision') == target
+                    and (event.get('kind') == 'rollback') == rollback):
+                recovery[key] = event.get('id')
 
     def begin(self,kind,revision=None,attempt_id=None,*,tier=None,components=()):
         self._pending_failure = None
@@ -322,22 +335,21 @@ class UpdateDiagnostics:
         elif status == 'succeeded':
             self._settle_failure(phase)
         collector=getattr(self.manager.service,'diagnostics',None)
-        delivered=False
         if collector:
             try:
                 collector.record('updates',{'event':'update:'+phase,'data':event})
-                delivered=True
             except Exception:pass
-        if not delivered:
-            try:
-                if self.path.exists() and self.path.stat().st_size>1_000_000:
-                    old=self.path.with_suffix('.previous.jsonl');os.replace(self.path,old)
-                fd=os.open(self.path,os.O_WRONLY|os.O_CREAT|os.O_APPEND,0o600)
-                with os.fdopen(fd,'a') as stream:
-                    os.fchmod(stream.fileno(),0o600)
-                    stream.write(json.dumps(event,separators=(',',':'))+'\n')
-            except OSError:
-                self.state['storageUnavailable']=True
+        # The general collector may be disabled or retain metadata only. Keep
+        # the already-sanitized original in the existing bounded update journal.
+        try:
+            if self.path.exists() and self.path.stat().st_size>1_000_000:
+                old=self.path.with_suffix('.previous.jsonl');os.replace(self.path,old)
+            fd=os.open(self.path,os.O_WRONLY|os.O_CREAT|os.O_APPEND,0o600)
+            with os.fdopen(fd,'a') as stream:
+                os.fchmod(stream.fileno(),0o600)
+                stream.write(json.dumps(event,separators=(',',':'))+'\n')
+        except OSError:
+            self.state['storageUnavailable']=True
         try:self.manager.service._save_changes(globals={'updates'})
         except (OSError,sqlite3.Error):self.state['storageUnavailable']=True
         return event
