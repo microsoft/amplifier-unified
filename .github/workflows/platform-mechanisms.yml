@@ -5,8 +5,15 @@ on:
     paths:
       - .github/workflows/platform-mechanisms.yml
       - amplifier_web/generation_leases.py
+      - amplifier_web/reset.py
+      - amplifier_web/runtime_worker.py
+      - amplifier_web/runtime_protocol.py
+      - amplifier_web/worker_input.py
+      - amplifier_web/message_delivery.py
       - tests/test_generation_leases.py
       - tests/test_installation_guidance.py
+      - tests/test_repair_lock_platform.py
+      - tests/test_worker_platform_io.py
       - README.md
       - scripts/install.sh
       - docs/design/native-windows-installation.md
@@ -27,11 +34,12 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
-      - name: Check passive process inspection and installation guidance
+      - name: Check passive inspection, repair locks, worker pipes and guidance
         run: >
           python -I -S -B -c
           "import sys, unittest; sys.path.insert(0, '.');
           suite = unittest.TestSuite(unittest.defaultTestLoader.discover('tests', pattern=pattern)
-          for pattern in ('test_generation_leases.py', 'test_installation_guidance.py'));
+          for pattern in ('test_generation_leases.py', 'test_installation_guidance.py',
+          'test_repair_lock_platform.py', 'test_worker_platform_io.py'));
           result = unittest.TextTestRunner(verbosity=2).run(suite);
           sys.exit(not result.wasSuccessful())"

@@ -28,7 +28,8 @@ runtime blockers below. Installing Visual Studio is not the proposed solution.
 
 ## Recommended experience
 
-These are proposed defaults, not ratified changes to authentication or lifetime:
+The owner approved the two authentication/lifetime policies below on October 31,
+2026. Implementation details and platform qualification remain pending.
 
 1. Run one PowerShell bootstrap as the signed-in user. It explains what it will
    install and where; no administrator terminal or machine execution-policy change.
@@ -98,7 +99,7 @@ removal remains a separate explicit action.
 
 ### Authentication that works with Windows Hello accounts
 
-Recommendation: the authenticated owner's Windows session can authorize a local
+Accepted policy: the authenticated owner's Windows session can authorize a local
 browser through the launcher. Identify the owner by process-token **SID**, not
 display name, environment variables or a guessed email address.
 Do not require a Hello PIN in a password form: it is not an account password.
@@ -127,7 +128,7 @@ than offering the unusable Windows password form.
 
 ### Background lifetime
 
-Recommendation: an interactive-token Scheduled Task under the owner SID,
+Implementation choice for the accepted lifetime: an interactive-token Scheduled Task under the owner SID,
 least privilege, with a user-logon trigger and no stored password.
 Do not use LocalSystem or S4U to avoid account-password prompts.
 Use absolute executable/data/workspace/shared-state paths and explicit quoting.
@@ -218,7 +219,7 @@ Each stage returns exact-source evidence. None is a substitute for the next.
 2. **Host runtime:** portable repair lock, storage, optional-controller isolation,
    pipe transport, process trees and default tool behavior. Prove host start,
    first worker, file tool, Stop and recovery against combined candidates.
-3. **Owner entry and lifecycle:** resolve the policy choices below; implement
+3. **Owner entry and lifecycle:** apply the accepted policy choices below; implement
    local browser authorization and user-logon task, including health, update,
    rollback and reset. An unchanged data root must remain the same identity.
 4. **Bootstrap:** implement PowerShell setup with verified prerequisites and
@@ -240,15 +241,18 @@ environment as well as native Windows. Retain source revisions, dependency graph
 artifact hashes, OS/architecture, account class, commands, results and limitations.
 Keep private usernames, SIDs, paths, tokens and screenshots out of public evidence.
 
-## Policy choices awaiting the product owner
+## Accepted policy choices
 
-| Choice | Recommendation | Consequence |
+| Choice | Accepted policy | Consequence |
 | --- | --- | --- |
 | Is the signed-in owner OS session sufficient to authorize a browser? | Yes, through a narrow single-use launcher grant. | Supports passwordless accounts without asking for the OS password. A fresh Hello challenge would add a different security requirement. |
 | Must work continue after Windows sign-out? | Not for the ordinary user-logon deployment. | Browser and terminal closure are supported; sign-out is a documented lifecycle boundary. Always-on execution needs a separately designed service mode. |
 
-These are recommendations, not approvals inferred from the implementation request.
-Independent storage, process and dependency work does not need to wait for them.
+The owner answered **"Use both recommended defaults"** to the two-policy question
+on October 31, 2026. This selects only owner-session browser authorization and
+user-logon lifetime, not every implementation detail in this document.
+No fresh Windows password or Hello challenge is required. A user-logon host starts
+again on the next sign-in; unknown tool effects are never replayed.
 Remote browser access and architecture coverage remain explicit qualification work,
 not an implicit promise or a silent scope reduction.
 
@@ -273,8 +277,46 @@ python -I -S -B -c "import sys, unittest; sys.path.insert(0, '.'); suite = unitt
 ```
 
 Local link targets, workflow YAML parsing and `git diff --check` also passed.
-Independent source review found no actionable defect in this increment.
-The existing pytest installer suite could not start because pytest was absent
-from the executing interpreter. An isolated check did not start because repository
-snapshot admission failed; it is not an isolated-test pass. Native Windows,
-macOS and WSL runtime execution remain unverified here.
+Independent source review found no actionable defect in the passive probe.
+The initial pytest installer check could not start because pytest was absent.
+An isolated check did not start because repository snapshot admission failed;
+it is not an isolated-test pass.
+
+### Host mechanism implementation increment
+
+The candidate adds Windows `LockFileEx` shared/exclusive repair locking and
+bounded worker stdin reading, with explicit binary UTF-8 protocol output. POSIX
+keeps its existing `flock` and asynchronous pipe reader. The repair lock file is
+stable and never unlinked. A Windows reader uses one daemon thread and a
+one-slot request handoff; cancellation stops delivery but does not interrupt a
+synchronous OS read. The retained descriptor/thread ends on input/EOF or
+worker-process exit. It is not a reusable connection pool.
+
+Independent review found a hidden test dependency: child worker probes loaded
+installed Foundation even when the parent used standard-library isolation.
+History-only Foundation imports now occur inside the history-reading function,
+and the real worker probe subprocesses also use `-I -S`. The focused workflow
+includes the complete pipe and repair-lock tests on all three platforms.
+
+Observed on Linux ARM64, Python 3.13.11:
+
+- **37 tests passed** with `-I -S -B`, covering passive inspection, guidance,
+  real subprocess lock contention/crash release, and real worker transport.
+- **173 tests passed, 1 skipped, 54 subtests passed** in the focused runtime,
+  shutdown, reset, installer, guidance and mechanism regression selection.
+- **4 targeted delivery checks passed**, preserving passive history inspection,
+  ownership checks and duplicate-input refusal after the import isolation.
+
+A broader delivery-suite invocation exceeded its 120-second command budget;
+no result is claimed for that invocation. The smaller named checks above ran
+separately. Source review and these Linux results do not establish Win32 API
+execution, Windows account/privacy behavior or clean-machine installation.
+
+Foundation and memory candidates remain separate upstream work. The bounded
+Foundation ownership increment is not checkpoint persistence or Windows
+cooperative handoff; review and native qualification must precede integration.
+Optional publishing/transfer startup isolation must preserve retained ownership
+and transfer fences, not replace unavailable controllers with empty state.
+Owner browser authorization, user-logon lifecycle, process-tree containment,
+general filesystem compatibility and PowerShell bootstrap remain unfinished.
+Native Windows, macOS and WSL runtime execution remain unverified here.
