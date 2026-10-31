@@ -117,6 +117,11 @@ Qualify CSRF, login-CSRF, expiry, replay and cross-origin rejection before use.
 
 Loopback alone is never authentication. Preserve Host/Origin checks, API
 authorization, TLS policy and browser-cookie protections.
+The current launcher implementation requires an app-owned, private-read leaf
+certificate pin and HTTPS **before reading or transmitting the control bearer**.
+Validating a health JSON response after sending the bearer is too late: another
+local account could occupy the port while the host is stopped. This is a
+listener-authentication requirement, not a new Windows Hello challenge.
 This delegates existing OS-session authority; it does not prove a fresh Hello
 challenge. A new native Hello challenge is a different product/security promise.
 Keep PAM authentication unchanged for existing POSIX deployments.
@@ -170,6 +175,66 @@ on POSIX, using an existing owner/helper where possible. Do not rewrite intentio
 Linux **guest** paths in remote test-runner protocols.
 Job containment must not kill the detached update helper that must outlive the old
 host. Validate nested-job restrictions and escape prevention separately.
+
+#### Private config and credential boundary
+
+The first filesystem increment covers `config/server.yaml`, `session-secret`
+and `control-token`; it is not a claim that all application storage is adapted.
+Pass the original expanded absolute Windows address to the native boundary.
+Resolving it first can remove the junction/reparse component being inspected.
+Keep app data, shared settings/native history and Foundation coordination roots
+distinct and preserve their explicit overrides.
+
+Pin and inspect each traversal ancestor before creating or opening its child.
+Denying delete sharing protects against rename, but sharing alone does not
+prevent reparse conversion through attribute access. Validate actual handle
+identity, type, filesystem and ACLs. Treat the owner and narrowly identified
+Windows system authorities as trusted; reject ordinary foreign mutation rights
+on traversal ancestors and ordinary foreign read access to private state.
+Do not silently rewrite an existing custom root's ACLs.
+
+New private directories and temporary files receive their security descriptors
+at creation, before content is written. Credential initialization publishes
+without replacing an existing credential and reads the winner; concurrent
+processes must converge on one value. Existing empty, malformed or unsafe
+credentials fail rather than regenerate. Config replacement uses a flushed
+same-directory temporary and never deletes the destination to bypass sharing
+errors. Atomic visibility does not establish namespace power-loss durability.
+
+Shared settings migration, provider OAuth files, TLS material and SQLite/WAL
+storage remain separate privacy checks. Do not mark browser authorization
+ready merely because its ticket protocol passes with synthetic credentials.
+
+#### Owned process launch boundary
+
+Python 3.13's documented `STARTUPINFO.lpAttributeList` exposes `handle_list`,
+not `job_list`. An ignored dictionary key is not creation-time containment.
+Do not launch the payload and assign it to a job afterward.
+
+A bounded candidate mechanism may launch a trusted, isolated standard-library
+guard with `-I -S` and no payload/application imports. It must exit on control
+EOF or a finite startup timeout. The host retains a non-inheritable Job Object
+with kill-on-close, verifies the exact guard process identity and membership,
+then releases a single execution gate. The payload may start only afterward;
+it receives exact argv, environment, cwd and binary streams without shell
+reinterpretation. The guard must never inherit the job's lifetime handle.
+Assignment or nested-job failure refuses execution, not an uncontained retry.
+
+The current isolated guard implementation supports **CPython 3.13 only**.
+Its trusted bootstrap executable must explicitly name the host-controlled
+`sys._base_executable`: the standard Windows venv executable is a redirector,
+so its initial process ID is not the interpreter child's process ID. Do not
+weaken exact process-identity checks to accept it. A contained payload may still
+use its own qualified venv after the guard is assigned and released. The narrow
+asyncio I/O-finalization bridge is version-specific; newer Python versions
+require separate qualification rather than an assumed `>=3.13` guarantee.
+
+Observe process exit separately from pipe EOF: descendants can keep stdout
+open. After graceful shutdown, or after a finite command exits successfully,
+settle remaining owned descendants and verify zero active job processes before
+claiming cleanup. Preserve failed/unknown cleanup ownership and external-effect
+receipts. Job termination does not undo a provider request, file write or cloud
+resource. Qualify this mechanism on Windows before integrating runtime callers.
 
 Optional Linux controllers must not crash ordinary startup. Gate unavailable
 actions explicitly; preserve retained resource records without launching, deleting
@@ -320,3 +385,66 @@ and transfer fences, not replace unavailable controllers with empty state.
 Owner browser authorization, user-logon lifecycle, process-tree containment,
 general filesystem compatibility and PowerShell bootstrap remain unfinished.
 Native Windows, macOS and WSL runtime execution remain unverified here.
+
+### Subsequent bounded qualification
+
+These results qualify the named increments only. They do not establish an
+installed native Windows host, a clean-machine installer, or a merged upstream
+dependency graph.
+
+| Increment | Observed evidence | Remaining boundary |
+| --- | --- | --- |
+| Foundation ownership and advisory reads | Draft [PR 455](https://github.com/microsoft/amplifier-foundation/pull/455), exact head `06a825db4732f7c540b51f1d095d499c67d92b0a`; [CI 41218283216](https://github.com/microsoft/amplifier-foundation/actions/runs/41218283216) passed Windows and Linux Python 3.11/3.12/3.13. Each Windows job ran all 20 native cases, with zero native skips; 2548 total passed and 75 other skips. | Windows Server 2025 build 26100, not minimum Windows 10 or clean Windows 11. Checkpoint/fence mutation and Windows handoff remain unsupported. PR remains draft and unmerged. |
+| Memory store locking/encoding | Draft [PR 24](https://github.com/microsoft/amplifier-bundle-memory/pull/24), exact head `6820d5cc2cb7701ec9f965c493886a1e89ef22d5`; [CI 41215809263](https://github.com/microsoft/amplifier-bundle-memory/actions/runs/41215809263) passed all four Windows/Linux Python 3.11/3.13 jobs: 34 tests per job, no skips. | Selected store mechanisms, not the whole installed runtime; PR remains draft and unmerged. |
+| Unified private config files and owned processes | Reviewed local candidates retain lexical paths, handle-bound rename, no-replace credential initialization, exact interpreter identity and bounded pipe finalization. Parent checks: 24 file tests passed/13 native skips; 29 deployment tests passed/1 native skip; 34 process tests passed/11 native skips. | Linux control-flow and real-pipe checks are not native Win32 acceptance. No production process callers integrated yet. |
+| Owner browser entry | The reproduced unverified-HTTP bearer disclosure is repaired in the local candidate. Independent real-socket HTTP/wrong-leaf/proxy/redirect checks pass; private credential adapters use bounded pinned-directory reads. | Browser activation still unconditionally refuses pending native credential/TLS and combined rendered-flow qualification. No passwordless-account acceptance is claimed. |
+
+The initial Foundation [CI 41215809534](https://github.com/microsoft/amplifier-foundation/actions/runs/41215809534)
+remains failure evidence: `MoveFileExW` replacement failed with access denied
+while an advisory reader held the old file open. The repair uses
+`FileRenameInfoEx` replace/POSIX semantics. The new native regression passes
+release and successor publication while the old reader still returns the
+complete original JSON. This evidence is not substituted for Unified's separate
+private-file tests.
+
+TLS storage/loading, Scheduled Task lifecycle, PowerShell bootstrap, process
+caller integration, combined-source checks and the native acceptance rubric
+remain separate work. Publication of Unified still follows upstream merge/CI.
+The installed app's 0.44.0 adoption does not install these local Windows changes.
+
+### Reviewed local candidates, not native acceptance
+
+The retained local increments now include:
+
+1. **Private files and TLS:** fixed app-owned certificate/key paths, bounded
+   reads, held file handles through OpenSSL loading, and a stable bounded TLS
+   lock. Parent checks: 49 passed, 7 native skips; independent changed-risk
+   review: 24 passed. Per-file publication is not pair-atomic. Partial material
+   fails explicitly without automatic CA regeneration.
+2. **Interactive Scheduled Task:** owner-SID identity, least privilege,
+   live-definition ownership checks and private explicit-replacement backups.
+   Executable and working-directory fields reject `%` because Scheduler expands
+   those fields; encoded data/state paths retain literal percent characters.
+   Parent checks: 98 passed, 2 native skips before the narrow repair; 21 focused
+   repair cases pass. The CLI's 26 checks pass after forwarding the selected data
+   root. Task state is not health; authenticated host/process correlation, logs
+   and automatic managed restart remain unavailable.
+3. **PowerShell bootstrap:** pinned, owner/DACL-validated traversal, exclusive
+   extraction-root creation, immutable checked-file handles and correct
+   PowerShell source quoting. Parent and independent review each observed
+   15 portable guards passed, 2 native skips. Neither PowerShell parsing,
+   embedded C# compilation nor Win32 fixture execution has occurred here.
+   Both release-support and activation gates remain closed.
+
+The focused platform workflow selects the standalone file, process and installer
+fixtures without importing installed application dependencies. That workflow
+change is local and unexecuted on Windows; selection is not test evidence.
+
+**Next execution dependency:** upstream Foundation and memory merge/CI, followed
+by Unified's approved draft-PR/native-CI route. No merge authority was granted.
+Until the standalone mechanism passes its own native checks, do not integrate
+runtime process callers. After that boundary, preserve owner cleanup-failure
+custody and generation leases, distinguish guard/payload/worker identities, and
+qualify the runtime-sized stream limit. Detached restart and synchronous
+standalone reset require their own lifetime boundaries; they are not drop-in
+consumers of the asynchronous finite-process owner.
