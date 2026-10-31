@@ -517,6 +517,15 @@ class Collaboration:
         binding = BINDING.get() or {}
         native = source.get("runtimeSessionId") or source.get("nativeIdentity") or source["id"]
         active = source.get("collaborationGeneration") or {}
+        if allow_descendant and '_childOrigin' in binding:
+            from .child_execution import current
+            child = current(self.service, source)
+            if child is None:
+                self.error('The admitted native child execution is no longer current.')
+            # The child owner validates its original assignment independently
+            # of a normal parent turn finish or a newer parent generation.
+            active = {'id': child['generationId'], 'inputIds': list(child['inputIds']),
+                      'interruptionRevision': child['interruptionRevision'], 'terminal': False}
         principal = PRINCIPAL.get()
         descendant = (allow_descendant and isinstance(principal, str) and bool(principal)
             and binding.get('_runtimeSessionId') == principal)

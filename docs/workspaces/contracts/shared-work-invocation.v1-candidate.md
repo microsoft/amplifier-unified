@@ -237,6 +237,10 @@ Full authority. The shared Work policy checks the current saved mode and the
 existing authenticated native generation and Stop boundary, including trusted
 descendants without changing their actual principal. It then leaves every
 supported action to its ordinary owner, without a Work-specific action allowlist.
+For a current native child, that generation and input set come from the existing
+live child-execution owner; normal parent completion or a newer parent generation
+does not renew or revoke the child's original assignment. Invalid supplied child
+provenance cannot fall back to the parent's binding. Root-only consumers remain strict.
 No fresh human input, additional grant or copied permission flag is required.
 
 Coverage observations remain honest: allowing Full work neither marks required
