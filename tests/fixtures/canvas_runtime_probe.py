@@ -79,6 +79,6 @@ async def run():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         await session.cleanup()
-    print(json.dumps({'canvas_guidance_in_provider_request': True, 'app_control_mounted': True, 'instructions_ephemeral': True, 'public_events_contain_no_image_data': True, 'provider_network_calls': 0}))
+    print(json.dumps({'canvas_guidance_in_provider_request': True, 'app_control_mounted': True, 'instructions_ephemeral': True, 'public_events_contain_no_image_data': True, 'provider_network_calls': 0, 'provider_request_bytes': len(serialized.encode('utf-8')), 'recurring_guidance_bytes': len(CANVAS_GUIDANCE.encode('utf-8'))}))
 
 asyncio.run(run())

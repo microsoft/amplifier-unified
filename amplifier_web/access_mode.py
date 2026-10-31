@@ -50,18 +50,23 @@ def _owner(db, identity):
         json_extract(value,'$.collaboration.creatorSessionId'),json_extract(value,'$.collaboration.requestId'),
         json_extract(value,'$.scheduledOrigin.sessionId'),json_extract(value,'$.scheduledOrigin.scheduleId'),
         json_extract(value,'$.scheduledOrigin.runId'),coalesce(json_extract(value,'$.interruptionRevision'),0),
-        json_extract(value,'$."$viewPayload"')
+        json_extract(value,'$.handoffOrigin'),json_extract(value,'$."$viewPayload"')
         FROM state_records WHERE kind='session' AND id=? AND value!='null'""", (identity,)).fetchone()
     if not row or not isinstance(row[1], str):
         return None
     owner = dict(zip(('id', 'workspace', 'nativeId', 'creator', 'request', 'scheduler', 'schedule', 'run', 'interruption'), row))
-    if row[9] is None:
+    if row[9] is not None:
+        try:
+            owner['handoff'] = json.loads(row[9]) if isinstance(row[9], str) else row[9]
+        except ValueError:
+            owner['handoff'] = {'invalid': row[9]}
+    if row[10] is None:
         return owner
     # The manifest's exact immutable resource owns the saved view. Its mutable
     # view.json presentation can be newer than the committed transaction.
     from .resource_files import detach, read_detached
     try:
-        reference = json.loads(row[9])
+        reference = json.loads(row[10])
         if not isinstance(reference, dict) or not isinstance(reference.get('$resource'), str):
             raise ValueError('The saved access-policy reference is invalid.')
         saved = read_detached(detach(db, reference['$resource']))
@@ -73,12 +78,13 @@ def _owner(db, identity):
     except (OSError, ValueError):
         # Expected unavailable resource evidence is not permission revocation.
         # Retain its exact identity for diagnostics/revision, never use view.json.
-        return {**owner, 'unavailable': row[9]}
+        return {**owner, 'unavailable': row[10]}
     return {'id': identity, 'workspace': saved['workspace'],
             'nativeId': saved.get('runtimeSessionId') or saved.get('nativeIdentity') or identity,
             'creator': creator.get('creatorSessionId'), 'request': creator.get('requestId'),
             'scheduler': scheduler.get('sessionId'), 'schedule': scheduler.get('scheduleId'),
-            'run': scheduler.get('runId'), 'interruption': saved.get('interruptionRevision', 0)}
+            'run': scheduler.get('runId'), 'interruption': saved.get('interruptionRevision', 0),
+            'handoff': saved.get('handoffOrigin')}
 
 
 def _native_owner(db, workspace, session_id, owner_session_id=None):
@@ -136,15 +142,30 @@ def policy(db, workspace, session_id, *, global_only=False, owner_session_id=Non
         if owner['id'] in seen:
             return unavailable('cycle')
         seen.add(owner['id'])
-        if owner['creator'] and owner['scheduler']:
+        handoff = owner.get('handoff')
+        if sum(bool(value) for value in (owner['creator'], owner['scheduler'], handoff)) > 1:
             return unavailable('ambiguous source')
-        source_id = owner['creator'] or owner['scheduler']
+        if handoff:
+            # Only canonical creation writes this pointer. Require its exact
+            # durable operation as well; a peer message cannot invent lineage.
+            if (not isinstance(handoff, dict) or any(not isinstance(handoff.get(key), str) or not handoff[key]
+                    for key in ('sessionId', 'requestId', 'createCommandId')) or not db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name='new_chat_handoffs'").fetchone()):
+                return unavailable('missing handoff')
+            relation = db.execute("""SELECT 1 FROM new_chat_handoffs WHERE id=? AND source=?
+                AND json_extract(value,'$.mode')='full'
+                AND json_extract(value,'$.targetSessionId')=?
+                AND json_extract(value,'$.createCommandId')=?""",
+                (handoff.get('requestId'), handoff.get('sessionId'), owner['id'], handoff.get('createCommandId'))).fetchone()
+            if not relation:
+                return unavailable('invalid handoff')
+        source_id = owner['creator'] or owner['scheduler'] or (handoff or {}).get('sessionId')
         if not source_id:
             return result()
         source = _owner(db, source_id)
         edge = [owner['id'], owner['workspace'], owner['nativeId'],
-                'commissioned' if owner['creator'] else 'scheduled',
-                source_id, owner['request'] if owner['creator'] else [owner['schedule'], owner['run']]]
+                'commissioned' if owner['creator'] else 'handoff' if handoff else 'scheduled',
+                source_id, owner['request'] if owner['creator'] else handoff if handoff else [owner['schedule'], owner['run']]]
         if source is None:
             lineage.append({'relationship': edge, 'source': None})
             return unavailable('missing source')

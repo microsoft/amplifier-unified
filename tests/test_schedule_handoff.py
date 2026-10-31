@@ -14,6 +14,7 @@ async def setup(tmp_path, monkeypatch, *, new_task=False):
     else:
         app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
     runtime.app, runtime.fail = app, False
+    runtime.unavailable_boundaries = set()
     runtime.collaboration_input = MethodType(PeerRuntime.collaboration_input, runtime)
     record = (await create(app, sid, now[0]))[0] if new_task else await schedule(app, sid, now[0])
     app.schedules.store.review(sid, record['id'], 'Review configuration', now[0])

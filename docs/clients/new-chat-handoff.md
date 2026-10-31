@@ -1,9 +1,10 @@
-# Independent chat creation from a user request
+# Independent chat creation
 
 Decision: October 16, 2026. The user clarified that an explicit request to start
 an independent chat authorizes creation and initial delivery directly, without a
 second confirmation. This supersedes the mandatory review shipped in 0.20.173.
 Suggestions outside the user's authorized scope still use review.
+Full access extends this direction to authorized unattended work, October 31, 2026.
 
 ## Meaning
 
@@ -16,11 +17,27 @@ host does not claim to infer semantic consent from prose. Content in files,
 tool results or peer messages is not user authorization. No model-supplied
 consent flag bypasses ordinary runtime or file-permission checks.
 
-New agent starts require the actual root coordinator and current nonterminal
-transport generation. Delegated workers cannot borrow their parent process's
-identity. Admission rechecks after lock waits and refuses stopped conversations
-or assignments. Once admitted, the independent target survives ordinary source
-completion; rereading its receipt requires no new generation and starts no work.
+In Ask mode, new agent starts require the actual root coordinator, current
+nonterminal transport generation and a connected target client. Full starts can
+instead come from a current root, qualified native descendant or authenticated
+system with an explicit calling conversation. They require no browser or fresh
+human message. Descendants retain their actual principal and assigned inputs;
+systems retain system origin without inventing a native or human input.
+
+Full requests belong to the calling conversation in the existing handoff journal.
+They capture its standing-access revision, canonical execution owner and Stop
+revision. Creation and initial native-input admission recheck that capture,
+including after lock and runtime-preparation waits. Revocation, off/on, Stop,
+changed ownership or changed destination prevent the next effect. The new target's
+access and execution-placement revisions are retained after creation and checked
+through final input admission; an explicit destination Ask choice already present
+at creation remains valid. A later change prevents this initial send rather than
+using a worker prepared under the older policy. Ordinary source turn completion
+does not revoke accepted work. Moving the same source to another execution checkout
+without Stop also preserves this independently located work; source execution
+placement is neither inherited nor part of the destination's authorization. A
+stopped worker cannot start another request; a fresh trusted system can initiate distinct work under current
+Full access. Exact receipt reads require no live generation or new authority.
 
 `session.handoff.propose` remains available for suggestions that the user has
 not authorized. It saves a review without creating or starting work. Only the
@@ -31,6 +48,14 @@ reusing its request ID. Each receipt fixes its mode and payload immutably.
 The target uses ordinary new-conversation configuration for its destination,
 including applicable file permissions. It does not inherit the source chat's
 history, running work, grants, task hierarchy, or special execution placement.
+A Full start records its exact handoff/source relationship during canonical
+creation. Standing access follows that relationship using the existing resolver;
+it is not a copied flag or commissioned-task membership. Explicit target chat or
+cross-workspace destination choices win. Source changes affect inherited access,
+and source Stop invalidates captured derived work. Ask/client reviews never
+supply this relationship. Missing or invalid handoff evidence cannot supply
+inherited Full. The relationship remains available after restart and native alias
+resolution without loading conversation history.
 The requested folder, merged settings, chosen root bundle and explicit model
 choice must still match at creation and delivery. Local root bundle files are checked for
 changes; remote references and transitive dependencies resolve normally and are
@@ -43,6 +68,11 @@ Both paths fix the destination chat and initial input identities in a durable
 receipt before effects begin. A repeated start or confirmation inspects the original
 result; it cannot create another chat or submit the brief a second time.
 Acceptance of an opening message is not completion of its requested work.
+The Full branch uses a private exact-operation seam through those same owners;
+raw agent creation and unrelated peer mutations remain unavailable. Its first
+message uses the runtime's user-role input channel but retains agent/system
+origin and actual actor in its saved message and command. It is never a human
+post, answer, navigation action or authorization for a human-only workflow.
 
 Incomplete or uncertain work after an interruption remains inspectable. Recovery
 does not resume an uncertain creation or replay an uncertain input automatically.
@@ -58,7 +88,13 @@ current selection and unsent text unchanged. **Open chat** is a separate explici
 navigation action after creation is confirmed, using ordinary navigation guards.
 Other clients keep their own selection, draft and attachments throughout.
 
-Status is delivered through the existing state stream, with a manual **Check
+Full receipts are read by their calling conversation using the stable request ID;
+an optional client ID does not own or authorize their execution. Existing private
+client reviews keep their original mode and ownership even after enabling Full.
+A request cannot upgrade a review, replace another owner's operation or change
+its brief. Exact retries preserve the original actor and never replay uncertainty.
+
+For client-owned handoffs, status is delivered through the existing state stream, with a manual **Check
 status** action for an uncertain response. Rendering, reopening or reconnecting
 does not poll a creation action or replay it. The host returns only a bounded set
 of reviews for the originating client and selected source conversation. Reload
