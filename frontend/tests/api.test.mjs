@@ -12,6 +12,25 @@ test('server validation errors remain visible and do not report success',async()
 test('unexpected HTML response gives useful connection error',async()=>{
  const original=globalThis.fetch;try{globalThis.fetch=async()=>new Response('<html>proxy failure</html>',{status:502});await assert.rejects(request('/api/state'),/unexpected response \(502\)/);}finally{globalThis.fetch=original}
 });
+test('unreadable acknowledgements keep mutations unconfirmed and never replay',async()=>{
+ const original=globalThis.fetch;let calls=0;
+ try{
+  for(const [status,body] of [[502,'<html>proxy failure</html>'],[200,'{"accepted":'],[200,''],[200,'null'],[200,'{}']]){
+   globalThis.fetch=async()=>{calls++;return new Response(body,{status})};
+   await assert.rejects(request('/api/actions',{method:'POST',body:{action:'canvas.views.loadVersion'}}),error=>{
+    assert.equal(error.unconfirmed,true,`Unreadable ${status} acknowledgement is not a refusal`);
+    assert.equal(error.code,'invalid_response');assert.equal(error.status,status);return true;
+   });
+  }
+  assert.equal(calls,5);
+  globalThis.fetch=async()=>new Response('<html>proxy failure</html>',{status:502});
+  await assert.rejects(request('/api/state'),error=>error.code==='invalid_response'&&error.unconfirmed===false);
+  for(const status of [409,200]){
+   globalThis.fetch=async()=>new Response(JSON.stringify({accepted:false,status:409,error:'Unfinished edits',code:'dirty_view'}),{status});
+   await assert.rejects(request('/api/actions',{method:'POST',body:{action:'canvas.views.loadVersion'}}),error=>error.status===409&&!error.unconfirmed&&error.code==='dirty_view');
+  }
+ }finally{globalThis.fetch=original}
+});
 test('live timers anchor to the host response clock instead of a skewed device clock',async()=>{
  const {hostNow}=await import('../src/api.js'),original=globalThis.fetch;
  try{

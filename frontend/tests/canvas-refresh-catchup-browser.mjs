@@ -168,8 +168,9 @@ try{
   row.observed={original,loaded,third,pinned,versions:(await view()).versions.map(v=>v.version)};
   await capture(kind+'-pinned-retained');return row.observed;
  });
- for(const mode of ['accepted-toolbar','accepted-details','unknown','refused'])await check('Load feedback: '+mode,async row=>{
-  held=false;await page.setViewportSize({width:mode.startsWith('accepted')?390:1500,height:950});
+ for(const mode of ['accepted-toolbar','accepted-details','unknown','proxy-html','malformed-details','refused'])await check('Load feedback: '+mode,async row=>{
+  const details=mode.endsWith('details'),unreadable=mode==='proxy-html'||mode==='malformed-details';
+  held=false;await page.setViewportSize({width:mode.startsWith('accepted')||details?390:1500,height:950});
   const id=(await action('canvas.show',{kind:'html',title:'Load feedback '+mode,content:html(1)})).result.id;
   await frame().getByRole('heading',{name:'Executable version 1'}).waitFor();
   await frame().getByLabel('Local unfinished input').fill('Keep unless explicit Load is accepted');
@@ -181,12 +182,13 @@ try{
    if(unwrap(route.request().postDataJSON()).action!=='canvas.views.loadVersion')return route.continue();
    loads++;const response=await route.fetch();receipt=await response.json();
    if(mode==='unknown')return route.abort('failed');
+   if(unreadable)return route.fulfill({status:mode==='proxy-html'?502:200,contentType:mode==='proxy-html'?'text/html':'application/json',body:mode==='proxy-html'?'<html>Proxy acknowledgement unavailable</html>':'{"accepted":'});
    await route.fulfill({response});
   };
   const failRead=async route=>{reads++;await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic readback unavailable'})})};
   await page.route('**/api/actions',intercept);
   try{
-   if(mode==='accepted-details'){
+   if(details){
     await panel.getByRole('button',{name:'Choose artifact version',exact:true}).click();
     await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('2');
    }
@@ -195,10 +197,10 @@ try{
    await action('canvas.views.inspect');
    await page.route('**/api/state',failRead);
    held=true;
-   const load=mode==='accepted-details'
+   const load=details
     ?page.getByRole('group',{name:'Confirm saved preview version'}).getByRole('button',{name:'Load v2 — resets preview and runs its code',exact:true})
     :panel.getByRole('button',{name:'Load v2 — resets preview and runs its code',exact:true});
-   await load.click();
+   if(unreadable){await load.focus();await page.keyboard.press('Enter')}else await load.click();
    await expect.poll(()=>!!receipt).toBe(true);
    row.observed={before,receipt};
    if(mode==='refused'){
@@ -212,31 +214,46 @@ try{
     if(mode.startsWith('accepted')){
      assert.equal(receipt.state,undefined,'Exercise actual delta receipt followed by a failed read, not a fabricated receipt');
      await expect.poll(()=>reads).toBeGreaterThan(0);
-     const feedback=mode==='accepted-details'?page.locator('#canvas-options').getByRole('alert'):panel.getByRole('alert');
+     const feedback=details?page.locator('#canvas-options').getByRole('alert'):panel.getByRole('alert');
      await expect(feedback).toContainText('Load v2 was accepted');
-     if(mode==='accepted-details'){
+     if(details){
       await expect(feedback).toContainText('Close Canvas details to use Refresh');
       await expect(page.getByRole('combobox',{name:'Artifact version',exact:true})).toBeDisabled();
       assert.equal(await feedback.evaluate(el=>!!el.closest('[inert],[aria-hidden="true"]')),false,'Details feedback is accessible in the active narrow sheet');
      }
-    }else await expect(panel.getByRole('alert')).toContainText('completion is unconfirmed');
+    }else await expect(details?page.locator('#canvas-options').getByRole('alert'):panel.getByRole('alert')).toContainText('completion is unconfirmed');
     await expect(panel.getByRole('alert')).not.toContainText('current preview is retained');
     await expect(panel.locator('.a-canvas-freshness')).not.toContainText('preview retained');
     const observedBeforeRefresh=await sample();
     assert.equal(observedBeforeRefresh.executed,before.executed);assert.equal(observedBeforeRefresh.input,before.input);
-    if(mode!=='accepted-details'){
+    if(!details){
      await expect(load).toHaveAttribute('aria-disabled','true');await load.click({force:true});
     }else await expect(page.getByRole('group',{name:'Confirm saved preview version'})).toHaveCount(0);
     assert.equal(loads,1,'No automatic or repeated Load while readback is unresolved');
    }
    await capture('load-feedback-'+mode);
+   if(unreadable){
+    if(details)await page.getByRole('button',{name:'Close canvas details',exact:true}).tap();
+    // A failed explicit read cannot turn an unreadable mutation into refusal.
+    await refresh().click();
+    await expect(panel.locator('.a-canvas-freshness')).toContainText('Could not refresh');
+    await expect(panel.locator('.a-canvas-freshness')).not.toContainText('preview retained');
+    assert.equal(loads,1);
+    await page.unroute('**/api/state',failRead);
+    await refresh().click();
+    await expect.poll(async()=>(await view()).runningVersion).toBe(2);
+    const second=await sample();
+    assert.equal(second.view.generation,receipt.result.generation);
+    assert.equal(second.view.resourceRevision,receipt.result.resourceRevision);assert.equal(loads,1);
+    await page.route('**/api/state',failRead);
+   }
   }catch(error){
    row.failureSurface=await page.evaluate(()=>({inspector:document.querySelector('#canvas-options')?.outerHTML,freshness:document.querySelector('.a-canvas-freshness')?.outerHTML,view:window.amplifier.getState().canvasWorkspace,expanded:window.amplifier.getState().view.canvasControlsExpanded}));
    await capture('before-cleanup-'+mode);throw error;
   }finally{
    await page.unroute('**/api/actions',intercept);await page.unroute('**/api/state',failRead);held=false;
    await reconnect();await action('canvas.views.inspect');
-   if(mode==='accepted-details')await page.getByRole('button',{name:'Close canvas details',exact:true}).click();
+   if(details&&!unreadable)await page.getByRole('button',{name:'Close canvas details',exact:true}).click();
   }
   if(mode==='refused')await action('canvas.views.dirty',{...target(await view()),dirty:false});
   else{
@@ -246,7 +263,19 @@ try{
    assert.equal(after.view.generation,receipt.result.generation);assert.equal(after.input,'');
    row.observed.after=after;
   }
-  assert.equal(loads,1);row.observed.loads=loads;row.observed.failedReads=reads;return row.observed;
+  assert.equal(loads,1);
+  if(unreadable){
+   const second=await sample();await frame().getByLabel('Local unfinished input').fill('Keep v2 until explicit next Load');
+   assert.equal((await publish('canvas.versions.revise',{id,sessionId,expectedRevision:2,content:html(3)})).accepted,true);
+   await expect.poll(async()=>(await view()).latestVersion).toBe(3);
+   assert.equal((await sample()).executed,second.executed);
+   assert.equal((await sample()).input,'Keep v2 until explicit next Load');
+   const next=panel.getByRole('button',{name:'Load v3 — resets preview and runs its code',exact:true});
+   await next.tap();await frame().getByRole('heading',{name:'Executable version 3'}).waitFor();
+   assert.deepEqual((await view()).versions.map(v=>v.version),[1,2,3]);
+   row.observed.adjacent=await sample();
+  }
+  row.observed.loads=loads;row.observed.failedReads=reads;return row.observed;
  });
  await check('Declared dirty view blocks publication; same-definition Refresh retains it',async row=>{
   const id=(await action('canvas.show',{kind:'html',title:'Declared dirty executable',content:html(1)})).result.id;
