@@ -1,5 +1,6 @@
 // Real bundled UI -> creation -> synthetic provider dispatch through the native selector.
 import {showComposerOption} from './composer-options-helpers.mjs';
+import {ownFixture} from './fixture-lifecycle.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {appendFile,mkdir,readFile,writeFile} from 'node:fs/promises';
@@ -9,6 +10,10 @@ import {chromium,expect} from '@playwright/test';
 const artifacts=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp';
 const fixturePath=process.env.PROVIDER_SELECTION_FIXTURE||fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fixturePath,'--chat-controls','--provider-resolution'],{stdio:['ignore','pipe','inherit']});
+const stopFixture=ownFixture(fixture,{label:'Provider selection fixture',timeoutMs:3000});
+const fixtureEvents={exit:null,close:null};
+fixture.once('exit',(code,signal)=>{fixtureEvents.exit={pid:fixture.pid,code,signal}});
+fixture.once('close',(code,signal)=>{fixtureEvents.close={pid:fixture.pid,code,signal}});
 const evidence=artifacts+'/provider1201';
 const save=async(name,value)=>writeFile(`${evidence}/${name}`,JSON.stringify(value,null,2));
 async function bounded(promise,ms,label){
@@ -404,11 +409,12 @@ try{
  throw error;
 }finally{
  const cleanupErrors=[];
- try{await bounded(browser?.close(),3000,'Browser close')}catch(error){cleanupErrors.push(error)}
- fixture.kill();
- try{
-  await bounded(new Promise(resolve=>{if(fixture.exitCode!==null||fixture.signalCode)resolve();else fixture.once('exit',resolve)}),3000,'Fixture exit');
- }catch(error){cleanupErrors.push(error);fixture.kill('SIGKILL')}
+ let fixtureStopped=false,browserClosed=false;
+ try{await bounded(browser?.close(),3000,'Browser close');browserClosed=!browser?.isConnected()}catch(error){cleanupErrors.push(error)}
+ try{await stopFixture();fixtureStopped=true}catch(error){cleanupErrors.push(error)}
+ try{await save('cleanup.json',{browserClosed,fixtureStopped,...fixtureEvents,
+  errors:cleanupErrors.map(error=>({name:error.name,message:error.message}))})}
+ catch(error){cleanupErrors.push(error)}
  if(cleanupErrors.length){
   if(primaryError)console.error('Secondary teardown failures (primary failure preserved):',cleanupErrors);
   else throw new AggregateError(cleanupErrors,'Fixture teardown failed');
