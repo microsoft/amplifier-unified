@@ -1,4 +1,6 @@
 """Native settlement, guarded continuation and positive-boundary recovery."""
+from amplifier_web import test_execution_settings as execution_settings
+
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -274,7 +276,7 @@ async def test_backpressured_handoff_notification_retains_an_inbox_slot(tmp_path
     from amplifier_web.service import AppError
     app, _, _, sid = await fixture(tmp_path, monkeypatch)
     try:
-        monkeypatch.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 1)
+        monkeypatch.setitem(execution_settings.CONCURRENCY_DEFAULTS, 'maxPendingPeerInputs', 1)
         request = {'commandAction':'worktree.handoff', 'requestId':'move-wait', 'senderSessionId':sid,
             'subscription':app.collaboration.saved_wait(app._session(sid), 'move-wait', status='backpressured')}
         app.collaboration.insert('move-wait', 'fixture', request)

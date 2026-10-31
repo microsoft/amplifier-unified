@@ -22,10 +22,7 @@ BINDING = ContextVar("collaboration_binding", default=None)
 CREATION = ContextVar("collaboration_creation", default=None)
 BUSY = {"working", "starting", "running", "busy", "stopping", "ready"}
 PROTOCOL = 2
-MAX_PENDING_INPUTS = 64
 MAX_PAIR_MESSAGES_PER_MINUTE = 32
-MAX_SENDER_INPUTS = 16
-MAX_ASSIGNMENT_INPUTS = 32
 RETIRED_HOP_LIMIT = 'The causal peer-input chain reached 16 hops; its report remains inspectable.'
 RETIRED_NOTIFICATION_LIMIT = 'Automatic outcome notification limit reached; inspect the retained result.'
 DEFAULT_QUEUE_SECONDS = 86400
@@ -176,11 +173,24 @@ class Collaboration:
         service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_admission_order ON commands(
             json_extract(receipt,'$.target.sessionId'), json_extract(receipt,'$.admissionOrder'))
             WHERE json_extract(receipt,'$.commandAction')='coordination.send'""")
+        service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_queued_sender ON commands(
+            json_extract(receipt,'$.target.sessionId'), json_extract(receipt,'$.senderSessionId'))
+            WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+            AND json_extract(receipt,'$.delivery')='queued'""")
+        service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_sender_admission ON commands(
+            json_extract(receipt,'$.target.sessionId'), json_extract(receipt,'$.senderSessionId'),
+            json_extract(receipt,'$.admissionOrder'))
+            WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+            AND json_extract(receipt,'$.admissionOrder') IS NOT NULL""")
         service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_pending_outcomes ON commands(
             json_extract(receipt,'$.subscription.status'), json_extract(receipt,'$.senderSessionId'))
             WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.watch')
             AND (coalesce(json_extract(receipt,'$.outcomeRevision'),0)>coalesce(json_extract(receipt,'$.subscription.lastClaimedRevision'),0)
                 OR json_extract(receipt,'$.subscription.status')='waiting')""")
+        service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_backpressured_sender ON commands(
+            json_extract(receipt,'$.senderSessionId'))
+            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','worktree.handoff')
+            AND json_extract(receipt,'$.subscription.status')='backpressured'""")
         service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_replies ON commands(
             json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.result.requestId'))""")
         service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_pair_window ON commands(
@@ -324,33 +334,38 @@ class Collaboration:
         self.refresh_reference(receipt)
 
     def require_inbox_slot(self, sid, sender=None, assignment=None, *, slots=1):
+        from .test_execution_settings import concurrency, PEER_INBOX_COUNTS
+        limits = concurrency(self.service)
+        if not any(limits[key] for key in PEER_INBOX_COUNTS):
+            return  # Uncapped admission needs no receipt counts or native task read.
         # A saved wait reserves one slot for its eventual outcome. Interim
-        # notifications retain a slot for the next revision as well as their
-        # queued input, and both count against this bound.
-        pending = self.service.db.execute("""SELECT count(*) FROM commands
-            WHERE json_extract(receipt,'$.commandAction')='coordination.send'
-            AND json_extract(receipt,'$.target.sessionId')=?
-            AND json_extract(receipt,'$.delivery') IN ('queued','submitting','pending_steer')""", (sid,)).fetchone()[0]
-        session = self.service._session(sid)
-        task = session.get('task') or self.service.coordination.task(sid)
-        waiting = self.service.db.execute("""SELECT count(*) FROM commands
-            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','workspace.tests.submit','worktree.handoff')
-            AND json_extract(receipt,'$.senderSessionId')=?
-            AND (json_extract(receipt,'$.subscription.status') IN ('waiting','reserved','backpressured')
-                OR json_extract(receipt,'$.subscription.open')=1)
-            AND json_extract(receipt,'$.subscription.interruptionRevision')=?
-            AND json_extract(receipt,'$.subscription.taskId') IS ?
-            AND ((json_type(receipt,'$.subscription.taskContinuationEpoch') IS NOT NULL
-                  AND json_extract(receipt,'$.subscription.taskContinuationEpoch') IS ?)
-                 OR (json_type(receipt,'$.subscription.taskContinuationEpoch') IS NULL
-                     AND json_extract(receipt,'$.subscription.taskRevision') IS ?))""",
-            (sid, session.get('interruptionRevision', 0), task.get('id'),
-             continuation_epoch(task), task.get('revision'))).fetchone()[0]
-        if pending + waiting + slots > MAX_PENDING_INPUTS:
-            self.error('This conversation inbox is full, including reserved replies. Wait for pending work to settle; no input was added.', 429)
-        for key, value, limit, label in [('senderSessionId', sender, MAX_SENDER_INPUTS, 'sender'),
-                                        ('assignmentId', assignment, MAX_ASSIGNMENT_INPUTS, 'assignment')]:
-            if not value:
+        # notifications keep both their queued input and the next return slot.
+        if limits['maxPendingPeerInputs']:
+            pending = self.service.db.execute("""SELECT count(*) FROM commands
+                WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+                AND json_extract(receipt,'$.target.sessionId')=?
+                AND json_extract(receipt,'$.delivery') IN ('queued','submitting','pending_steer')""", (sid,)).fetchone()[0]
+            session = self.service._session(sid)
+            task = session.get('task') or self.service.coordination.task(sid)
+            waiting = self.service.db.execute("""SELECT count(*) FROM commands
+                WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','workspace.tests.submit','worktree.handoff')
+                AND json_extract(receipt,'$.senderSessionId')=?
+                AND (json_extract(receipt,'$.subscription.status') IN ('waiting','reserved','backpressured')
+                    OR json_extract(receipt,'$.subscription.open')=1)
+                AND json_extract(receipt,'$.subscription.interruptionRevision')=?
+                AND json_extract(receipt,'$.subscription.taskId') IS ?
+                AND ((json_type(receipt,'$.subscription.taskContinuationEpoch') IS NOT NULL
+                      AND json_extract(receipt,'$.subscription.taskContinuationEpoch') IS ?)
+                     OR (json_type(receipt,'$.subscription.taskContinuationEpoch') IS NULL
+                         AND json_extract(receipt,'$.subscription.taskRevision') IS ?))""",
+                (sid, session.get('interruptionRevision', 0), task.get('id'),
+                 continuation_epoch(task), task.get('revision'))).fetchone()[0]
+            if pending + waiting + slots > limits['maxPendingPeerInputs']:
+                self.error('This conversation inbox is full, including reserved replies. Wait for pending work to settle; no input was added.', 429)
+        for key, value, limit, label in [
+                ('senderSessionId', sender, limits['maxPendingPeerInputsPerSender'], 'sender'),
+                ('assignmentId', assignment, limits['maxPendingPeerInputsPerAssignment'], 'assignment')]:
+            if not value or not limit:
                 continue
             count = self.service.db.execute(f"""SELECT count(*) FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='coordination.send'
@@ -882,32 +897,49 @@ class Collaboration:
         return wait.get('status') == 'claimed' and wait.get('continuationId') == receipt.get('requestId')
 
     def fair_rows(self, sid):
-        rows = self.service.db.execute("""SELECT id,receipt FROM commands
+        # Pick the least recently served sender across the complete pending set,
+        # using indexed scalar metadata. A long FIFO from one sender must not
+        # hide another sender beyond the first receipt page. NULL senders (host
+        # notifications) form their own group and receive the same fair turn.
+        sender = self.service.db.execute("""WITH pending AS (
+            SELECT json_extract(receipt,'$.senderSessionId') AS sender, min(rowid) AS first_row
+            FROM commands INDEXED BY coordination_queued_sender
             WHERE json_extract(receipt,'$.commandAction')='coordination.send'
             AND json_extract(receipt,'$.target.sessionId')=?
-            AND json_extract(receipt,'$.delivery')='queued' ORDER BY rowid LIMIT 64""", (sid,)).fetchall()
-        groups = {}
-        for row in rows:
-            groups.setdefault(json.loads(row[1]).get('senderSessionId'), []).append(row)
-        last = self.service.db.execute("""SELECT json_extract(receipt,'$.senderSessionId') FROM commands
+            AND json_extract(receipt,'$.delivery')='queued'
+            GROUP BY json_extract(receipt,'$.senderSessionId'))
+            SELECT sender FROM pending ORDER BY coalesce((
+                SELECT max(json_extract(receipt,'$.admissionOrder'))
+                FROM commands INDEXED BY coordination_sender_admission
+                WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+                AND json_extract(receipt,'$.target.sessionId')=?
+                AND json_extract(receipt,'$.senderSessionId') IS pending.sender
+                AND json_extract(receipt,'$.admissionOrder') IS NOT NULL),0), first_row LIMIT 1""",
+            (sid, sid)).fetchone()
+        if sender is None:
+            return []
+        return self.service.db.execute("""SELECT id,receipt FROM commands
             WHERE json_extract(receipt,'$.commandAction')='coordination.send'
             AND json_extract(receipt,'$.target.sessionId')=?
-            AND json_extract(receipt,'$.admissionOrder') IS NOT NULL
-            ORDER BY json_extract(receipt,'$.admissionOrder') DESC LIMIT 1""", (sid,)).fetchone()
-        senders = list(groups)
-        if last and last[0] in senders:
-            offset = senders.index(last[0])+1
-            senders = senders[offset:]+senders[:offset]
-        result = []
-        while any(groups.values()):
-            for sender in senders:
-                if groups[sender]:
-                    result.append(groups[sender].pop(0))
-        return result
+            AND json_extract(receipt,'$.senderSessionId') IS ?
+            AND json_extract(receipt,'$.delivery')='queued' ORDER BY rowid LIMIT 64""",
+            (sid, sender[0])).fetchall()
+
+    def refresh_inboxes(self):
+        """Reconsider saved work after a relaxed inbox policy, never replay it."""
+        recipients = self.service.db.execute("""SELECT json_extract(receipt,'$.target.sessionId')
+            FROM commands WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+            AND json_extract(receipt,'$.delivery')='queued'
+            UNION SELECT json_extract(receipt,'$.senderSessionId') FROM commands
+            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','worktree.handoff')
+            AND json_extract(receipt,'$.subscription.status')='backpressured'""").fetchall()
+        for (sid,) in recipients:
+            if sid:
+                self.service._task(self.drain(sid))
 
     def resume_outcomes(self, sid):
         for (encoded,) in self.service.db.execute("""SELECT receipt FROM commands
-            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.watch','worktree.handoff')
+            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','worktree.handoff')
             AND json_extract(receipt,'$.senderSessionId')=?
             AND json_extract(receipt,'$.subscription.status')='backpressured' LIMIT 64""", (sid,)).fetchall():
             self.enqueue_continuation(json.loads(encoded))
@@ -989,6 +1021,12 @@ class Collaboration:
                 # input merely because its acknowledgement arrived first.
                 if phase in {"accepted", "unknown"}:
                     break
+            else:
+                if rows:
+                    # This bounded batch contained only suppressed/expired or
+                    # confirmed unsubmitted inputs. Continue without requiring
+                    # an unrelated runtime event; accepted/unknown never retry.
+                    self.service._task(self.drain(sid))
         finally:
             self.draining.discard(sid)
         if freed_return:

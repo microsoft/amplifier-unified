@@ -1498,3 +1498,20 @@ manager continuation and placement controls then use that responsibility. Earlie
 history and usage stay attributed as before; adding itself never starts a turn.
 The workspace/canvas assignment controls expose the same operation. Independent
 chats in a shared folder remain independent unless explicitly added.
+
+
+## Optional peer inbox counts — 2026-10-30
+
+The earlier 64-slot destination, 16-per-sender and 32-per-assignment bounds above
+record historical behavior. They are superseded by optional global Work
+concurrency settings, all defaulting to 0 (no count ceiling). Positive configured
+limits still reserve return capacity atomically. Sender selection considers the
+complete pending set using indexed admission order, then loads one bounded FIFO
+batch. Relaxing a limit resumes saved backpressured returns through existing
+guards without replaying unknown operations or clearing Stop.
+
+Qualification: 223 focused Python checks passed, both selected new regressions
+failed on the unchanged base, and the built settings browser passed finite/zero,
+lost-acknowledgment, concurrent-writer, narrow-layout and cold-reopen checks. See
+[scope and limitations](../validation/peer-inbox-policy-qualification.md). This
+source evidence does not establish release or live-worker adoption.
