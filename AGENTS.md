@@ -25,7 +25,8 @@ Amplifier Agent is separate from Unified's Core/Foundation runtime.
 
 ## Make performance changes reviewable
 
-For changes to repeated reads, publication, persistence or runtime preparation,
+For changes to repeated reads, publication, persistence, runtime preparation or
+provider requests/cache reporting,
 follow [performance validation](docs/validation/performance.md). Identify the
 canonical owner, triggering operation and inputs that grow before choosing an
 optimization. Review work done before filtering or sending a response, including

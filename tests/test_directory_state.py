@@ -29,11 +29,16 @@ async def test_agent_state_pages_27000_rows_and_resolves_global_pointer_without_
     title=page['items'][3]['value']['title']
     assert read_state(context,{'path':pointer+'/title'},directory=app.directory)['value']==title
     assert len(decoded)==6
+    last = read_state(context, {'path': '/sessions/26999/id'}, directory=app.directory)['value']
+    assert read_state(context, {'path': '/sessions/-1/id'}, directory=app.directory)['value'] == last
+    for invalid in (-27001, 27000):
+        with pytest.raises(ValueError, match='does not exist'):
+            read_state(context, {'path': f'/sessions/{invalid}/id'}, directory=app.directory)
     assert not app._state['sessions']
     assert not app.runtime.started and not app.runtime.sent
     with pytest.raises(ValueError,match='changed'):
         read_state(context,{'path':'/sessions','revision':-1},directory=app.directory)
-    assert len(decoded)==6
+    assert len(decoded)==8
 
 
 async def test_directory_revision_rejects_native_commit_before_app_publication(app_factory,tmp_path):
@@ -83,7 +88,7 @@ async def test_dormant_pointer_and_overview_keep_identity_indices_and_exact_user
     monkeypatch.setattr(session_projection,'hydrate',lambda home,state,db:(hydrated.extend(row['id'] for row in state['sessions']),hydrate(home,state,db))[1])
     context=restored.state_context()
     assert hydrated==[]
-    position,metadata=_ranked(restored.directory,'id=?',(ids[-1],),limit=1)[0]
+    position,metadata=next(item for item in _ranked(restored.directory) if item[1]['id']==ids[-1])
     pointer='/sessions/'+str(position)
     body=read_state(context,{'path':pointer+'/structuredData'},directory=restored.directory)
     assert {row['key']:row['value'] for row in body['items']}=={'path':'/sessions/0/user-value','$statePath':'/sessions/0/literal'}

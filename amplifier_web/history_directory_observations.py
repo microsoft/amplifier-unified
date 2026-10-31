@@ -219,17 +219,22 @@ def revision(directory,state):
                 overlays[key].append((row['id'],current[index]))
     directory._observation_parts = retained
     pins = sorted(visible_ids(directory, state, state.get('pinnedSessionIds', ())))
-    # First match existing notice fingerprints, without expanding the history
-    # directory. Only those owners need the canonical visibility/role lookup.
-    read = [] if not state.get('attentionRead') else [tuple(row) for row in directory.db.execute(sql+
-        " SELECT n.owner,n.key,n.fingerprint FROM directory_notices n JOIN json_each(?) r ON r.key=n.key AND r.value=n.fingerprint "
-        "ORDER BY n.owner,n.key,n.fingerprint",
-        [*params,json.dumps(state.get('attentionRead',{}))])]
-    if read:
-        owners = visible_ids(directory, state, (row[0] for row in read), notices=True)
-        read = [row for row in read if row[0] in owners]
-    root_read_owners = visible_ids(directory, state, (row[0] for row in read), roots=True) if read else set()
-    workspace_read = [row for row in read if row[0] in root_read_owners]
+    read, workspace_read = [], []
+    if state.get('attentionRead'):
+        # Notices belong to local owners. Resolve their canonical visibility and
+        # role in the same scalar join, using the already materialized receipts.
+        # Repeating exact-ID queries for every batch reparses the live overlay
+        # and receipts, twice, even though both answers come from the same rows.
+        notice_sql, notice_params = directory.effective(state, fields={'id', 'session_kind'}, local_only=True)
+        for owner, key, fingerprint, kind in directory.db.execute(notice_sql + '''
+                SELECT n.owner,n.key,n.fingerprint,d.session_kind FROM directory_notices n
+                JOIN read_receipts r ON r.key=n.key AND r.value=n.fingerprint
+                JOIN directory_rows d ON d.id=n.owner WHERE d.session_kind!='internal'
+                ORDER BY n.owner,n.key,n.fingerprint''', notice_params):
+            item = (owner, key, fingerprint)
+            read.append(item)
+            if kind == 'root':
+                workspace_read.append(item)
     from .managed_deletion import tombstones
     suppression = digest([sorted(set(state.get('hiddenNativeSessions',[]))),
                           sorted(set(state.get('hiddenNativeWorkspaces',[]))),

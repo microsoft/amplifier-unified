@@ -24,15 +24,15 @@ def _metadata(directory, keys):
     return {(row[0], row[COLUMNS.index('ordinal')]): directory.decode(row) for row in rows}
 
 
-def _ranked(directory, where='1', params=(), *, limit=50, offset=0):
-    sql, bound = directory.effective(fields=('id', 'ordinal', 'session_kind'))
-    # Rank membership scalars before filtering. Resolving every historical
-    # parent/body/activity while ranking made a small pointer read catalog-sized.
-    sql += ', ranked AS (SELECT id,ordinal,session_kind,ROW_NUMBER() OVER(ORDER BY ordinal,id)-1 AS position FROM directory_rows)'
-    rows = directory.db.execute(sql + ' SELECT id,ordinal,position FROM ranked WHERE '
-        + where + ' ORDER BY position LIMIT ? OFFSET ?', (*bound, *params, limit, offset)).fetchall()
+def _ranked(directory, *, limit=50, offset=0):
+    sql, bound = directory.effective(fields=('id', 'ordinal'))
+    # Every caller requests a contiguous ordinal range. Select that range
+    # directly; assigning a window rank to the entire catalog is redundant.
+    rows = directory.db.execute(sql + ' SELECT id,ordinal FROM directory_rows '
+        'ORDER BY ordinal,id LIMIT ? OFFSET ?', (*bound, limit, offset)).fetchall()
     metadata = _metadata(directory, [(row[0], row[1]) for row in rows])
-    return [(position, metadata[(identity, ordinal)]) for identity, ordinal, position in rows]
+    return [(offset + index, metadata[(identity, ordinal)])
+            for index, (identity, ordinal) in enumerate(rows)]
 
 
 def _overview_rows(directory, selected):
@@ -147,7 +147,9 @@ def _sessions(directory, state, args, resolve, reference_key, session_id):
     # Retain the legacy list's negative-index semantics for direct reads.
     if position < 0:
         position += _count(directory)
-    rows = _ranked(directory, 'position=?', (position,), limit=1)
+    if position < 0:
+        raise ValueError('That state path does not exist.')
+    rows = _ranked(directory, offset=position, limit=1)
     if not rows:
         raise ValueError('That state path does not exist.')
     # A one-key mapping resolves this exact pointer without allocating a sparse
