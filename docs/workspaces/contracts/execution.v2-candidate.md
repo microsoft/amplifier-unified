@@ -257,8 +257,8 @@ claim with evidence and does not claim physical teardown.
 Stable command IDs retain their exact results across restart, including release
 and later reacquisition. Retries cannot resurrect an old reservation. Updates
 require the observed revision. Admission uses global Advanced execution limits,
-defaulting to 64 held reservations per root (including its children) and 1024 per app data home. Lowering those limits
-only gates new acquisitions; existing held or uncertain claims remain
+defaulting to 0 (no count ceiling) both per root (including its children) and
+per app data home. Explicit positive limits gate new acquisitions; existing held or uncertain claims remain
 readable and releasable at the limit. Reads are paginated, passive and do not
 load or resume conversations. Shared actions serve both clients and agents.
 
@@ -717,31 +717,35 @@ worktree owner's verified move records. Other path changes are unavailable, not
 permission to recreate or relocate storage. Existing app-owned allocations keep
 their original locations. Retries preserve the original placement even after a
 chat moves. No files or pending permissions are migrated automatically.
-The caller does not supply a destination. At most 32 nonretired
-allocations belong to one root and 512 to one app home; these are allocation-count
-limits, not disk quotas. A stopped allocation owner is reconciled to unknown only
+The caller does not supply a destination. Nonretired allocation counts default
+to 0 (no count ceiling), both per root and per app home. Optional positive limits
+in global Advanced execution settings remain allocation-count limits, not disk
+quotas. A stopped allocation owner is reconciled to unknown only
 after its physical owner lock is free. Retirement releases a count slot but never
 reclaims bytes. No automatic garbage collection or deletion action is supplied.
 Read pages contain at most 32 records and do not hydrate conversation history.
 The ready-worker policy check observes supported reference filesystem and patch
 tools only; it does not certify custom tools, shell, browser or database access.
 
-### Optional per-chat execution counts — 2026-10-21
+### Optional work and test execution counts — 2026-10-30
 
-Global execution settings accept explicit zero for outstanding task chats per
-source, owned test environments per chat and pending checks per chat; each
-then has no count ceiling. These optional counts and queue wait default to zero.
+Global execution settings accept zero for all work counts: outstanding task chats
+per source, environments per chat, pending checks per chat and installation,
+retained resources and cooperative reservations per chat and installation. Each
+defaults to zero (no count ceiling), as do local and registered target backend
+running/retained instance counts. Queue wait also defaults to zero.
 Saved positive operator values are preserved. Wait zero means until Stop or
 cancellation; accepted checks retain their original deadline and resource budget.
 
 These choices do not change same-request idempotency, causal depth, assignment
-membership, authorization, Stop, retained-owner bounds or physical resource
+membership, authorization, Stop, retained ownership or physical resource
 admission. Ordered checks retain their earlier-check/cleanup barrier; overlap
 requires both checks to be explicitly independent. Unknown results remain unknown
 and retain exact owners. Disabling a count cannot retire, replay or overwrite them.
 Manual and queued environment allocations share the same atomic admission owner.
-The global pending queue and retained resource/reservation record limits remain
-positive; bounded display pages are not concurrency ceilings.
+CPU, memory and disk budgets remain enforced by their existing machine/backend
+owners where supported. Bounded display pages and record sizes are not
+concurrency ceilings. A default change never rewrites explicit saved limits.
 
 ### Notification display provenance — 2026-10-14
 

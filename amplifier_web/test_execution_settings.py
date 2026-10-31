@@ -8,17 +8,16 @@ import stat
 from . import test_environment_profiles as profiles
 from .private_policy_file import write as write_policy_file
 
-OPTIONAL_CONCURRENCY_COUNTS = {'maxTaskChatsPerSource', 'maxEnvironmentsPerChat'}
 CONCURRENCY_DEFAULTS = {'maxTaskChatsPerSource': 0, 'maxEnvironmentsPerChat': 0,
-                        'maxOwnedResources': 512, 'maxOwnedResourcesPerChat': 32,
-                        'maxResourceReservations': 1024, 'maxResourceReservationsPerChat': 64}
+                        'maxOwnedResources': 0, 'maxOwnedResourcesPerChat': 0,
+                        'maxResourceReservations': 0, 'maxResourceReservationsPerChat': 0}
 
-QUEUE_DEFAULTS = {'maxPending': 64, 'maxPendingPerChat': 0, 'defaultWaitSeconds': 0}
+QUEUE_DEFAULTS = {'maxPending': 0, 'maxPendingPerChat': 0, 'defaultWaitSeconds': 0}
 PROFILE_FIELDS = (*profiles.RESOURCE_FIELDS, *profiles.TIMING_FIELDS)
 
 
 def definitions(schema, string):
-    queue = schema({key: {'type': 'integer', 'minimum': 1 if key == 'maxPending' else 0,
+    queue = schema({key: {'type': 'integer', 'minimum': 0,
                           'maximum': profiles.MAX_SECONDS} for key in QUEUE_DEFAULTS}, [])
     fields = schema({key: {'type': 'integer', 'minimum': 1,
                           'maximum': 1048576 if key in profiles.RESOURCE_FIELDS else profiles.MAX_SECONDS}
@@ -27,7 +26,7 @@ def definitions(schema, string):
         'testing.execution.read': ('Read global work concurrency, queue and profile defaults without starting work.', schema({}, [])),
         'testing.execution.save': ('Save global work concurrency, queue and test profile limits. Concurrency gates new admissions without stopping active work; accepted checks retain their resource and time budgets.', schema({
             'expectedRevision': string(64), 'queue': queue,
-            'concurrency': schema({key: {'type': 'integer', 'minimum': 0 if key in OPTIONAL_CONCURRENCY_COUNTS else 1, 'maximum': profiles.MAX_SECONDS} for key in CONCURRENCY_DEFAULTS}, []),
+            'concurrency': schema({key: {'type': 'integer', 'minimum': 0, 'maximum': profiles.MAX_SECONDS} for key in CONCURRENCY_DEFAULTS}, []),
             'profiles': schema({item['id']: fields for item in profiles.catalog()}, [])}, ['expectedRevision', 'queue', 'profiles'])),
     }
 
@@ -39,15 +38,15 @@ def validate(value):
     concurrency = value.get('concurrency', {})
     if not isinstance(concurrency, dict) or set(concurrency) - CONCURRENCY_DEFAULTS.keys():
         raise ValueError('Choose supported work concurrency limits.')
-    if any(type(item) is not int or not (0 if key in OPTIONAL_CONCURRENCY_COUNTS else 1) <= item <= profiles.MAX_SECONDS
+    if any(type(item) is not int or not 0 <= item <= profiles.MAX_SECONDS
            for key, item in concurrency.items()):
-        raise ValueError('Work concurrency limits must be whole numbers; retained owner and reservation limits must be positive.')
+        raise ValueError('Work concurrency limits must be nonnegative whole numbers; 0 means no count limit.')
     queue = value['queue']
     if not isinstance(queue, dict) or set(queue) - QUEUE_DEFAULTS.keys():
         raise ValueError('Choose supported queue limits.')
     for key, item in queue.items():
-        if type(item) is not int or not (1 if key == 'maxPending' else 0) <= item <= profiles.MAX_SECONDS:
-            raise ValueError('Queue limits must be whole numbers; maximum pending must be positive.')
+        if type(item) is not int or not 0 <= item <= profiles.MAX_SECONDS:
+            raise ValueError('Queue limits must be nonnegative whole numbers; 0 means no count or waiting limit.')
     saved = value['profiles']
     if not isinstance(saved, dict) or set(saved) - {item['id'] for item in profiles.catalog()}:
         raise ValueError('Choose supported test profiles.')

@@ -96,7 +96,7 @@ def reservation_command(home, workspace_id, action, args, actor, command_id=None
             elif any(row['owner'] == actor for row in same):
                 result = {'outcome': 'conflict', 'resourceKey': key,
                           'detail': 'This principal already holds this shared resource. Inspect its existing reservation.'}
-            elif total >= limits['maxResourceReservations'] or owned >= limits['maxResourceReservationsPerChat']:
+            elif (limits['maxResourceReservations'] and total >= limits['maxResourceReservations']) or (limits['maxResourceReservationsPerChat'] and owned >= limits['maxResourceReservationsPerChat']):
                 result = {'outcome': 'limit', 'detail': 'Resource reservation capacity is full. Inspect and release unused reservations or adjust Advanced execution limits in Settings.'}
             else:
                 row = {'id': str(uuid.uuid4()), 'workspaceId': workspace_id, 'resourceKey': key,
