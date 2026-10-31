@@ -5279,7 +5279,8 @@ class AppService:
             compact_smart_tool = args['action'].startswith('smartTools.')
             compact_domain_receipt = args['action'] in SETTINGS_ACTIONS or args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.', 'outputs.')) or args['action'] == 'runtime.provenance' or args['action'] in RESOURCE_RESERVATION_ACTIONS
             task_action = action_args.get('operation') if args['action'] == 'runtime.control' else args['action']
-            compact_task_receipt = isinstance(task_action, str) and task_action in task_definitions(schema, string)
+            compact_task_receipt = (isinstance(task_action, str) and task_action in task_definitions(schema, string)
+                                    or args['action'].startswith('assignment.task.'))
             compact_domain_receipt = compact_domain_receipt or compact_task_receipt
             if args['action'].startswith('profiling.'):
                 # Profiling must not flush progress or build an unrelated
