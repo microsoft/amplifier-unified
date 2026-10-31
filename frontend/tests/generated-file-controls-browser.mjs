@@ -201,8 +201,12 @@ async function freshDetails(target,details,row,trigger){
   'An earlier matching metadata request is still pending');
   target.on('request',onRequest); // Armed BEFORE the native opening gesture.
   const openingIndex=await bounded(probe.evaluate(value=>value.markOpening()),1000,'Opening marker timed out');
-  // The retained label alone must fail the SAME readiness predicate.
-  assert.equal(freshRenderReady({events:[],snapshot:before.snapshot},0,row.version),false);
+  // Synthetic predicate controls only, never evidence of application rendering.
+  // Both use the SAME open, visible result; only post-opening loading differs.
+  const staleVisibleSnapshot={open:true,visible:true,loading:false,errors:[],
+   paragraphs:[{text:`Saved version ${row.version}`,visible:true}]};
+  assert.equal(freshRenderReady({events:[],snapshot:staleVisibleSnapshot},0,row.version),false);
+  assert.equal(freshRenderReady({events:[{open:true,loading:true}],snapshot:staleVisibleSnapshot},0,row.version),true);
   trace.openingAt=Date.now();await trigger();
   const observed=await requestGate.wait();await observed.wait();
   metadataOracle(observed.record,row);
