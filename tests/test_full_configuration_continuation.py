@@ -306,6 +306,41 @@ async def test_full_child_recovery_route_retains_execution_boundaries(process_bo
     await child(b.app, b.owner, tmp_path, monkeypatch, exercise)
 
 
+@pytest.mark.parametrize('process_boundary', ['full'], indirect=True)
+@pytest.mark.parametrize('change', ['stop', 'configuration', 'revoke'])
+async def test_full_child_recovery_rechecks_after_pre_tool_await(process_boundary, tmp_path, monkeypatch, change):
+    b = process_boundary
+    saved = await refused_operation(b)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_bridge = b.app.app_bridge
+    async def held_bridge(method, args, sid):
+        result = await original_bridge(method, args, sid)
+        if (method == 'work.effect.check' and args['toolInput'].get('args', {}).get('action')
+                == 'configuration.operation.reconcile'):
+            assert result['allowed'] and not result['effectAuthorized']
+            entered.set()
+            await release.wait()  # Actual tool body has not reached dispatch yet.
+        return result
+    monkeypatch.setattr(b.app, 'app_bridge', held_bridge)
+    async def exercise(invoke, principal):
+        with pytest.raises((AssertionError, AppError, RuntimeError)):
+            await invoke('configuration.operation.reconcile', {'sessionId': b.owner['id'],
+                'operationId': saved['id'], 'expectedRevision': saved['revision']}, 'changed-after-check')
+    task = asyncio.create_task(child(b.app, b.owner, tmp_path, monkeypatch, exercise))
+    try:
+        await asyncio.wait_for(entered.wait(), 12)
+        if change == 'revoke':
+            await save(b.app, b.owner, mode='ask')
+        else:
+            key = 'interruptionRevision' if change == 'stop' else 'configurationPendingRevision'
+            b.owner[key] = b.owner.get(key, 0) + 1
+    finally:
+        release.set()
+        await asyncio.wait_for(task, 12)
+    assert operation(b) == saved
+    assert not override_path(b.owner['runtimeSessionId']).exists()
+
+
 @pytest.mark.parametrize('change', ['revoke', 'off-on', 'stop'])
 async def test_system_full_configuration_rechecks_authority_after_wait(app, change):
     owner = app.state['sessions'][0]
