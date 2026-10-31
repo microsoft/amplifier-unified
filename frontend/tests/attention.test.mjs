@@ -50,11 +50,12 @@ test('off-page errors and approvals open their owning conversation through share
  assert.deepEqual(calls,[{name:'session.select',args:{id:'failed'}},{name:'view.update',args:{patch:{panel:null}}},{name:'session.select',args:{id:'blocked'}},{name:'view.update',args:{patch:{panel:null}}}]);
  await renderAct(async()=>root.unmount());
 });
-test('feedback status is available outside the form for all outcomes',()=>{
+test('successful feedback stays in history, while pending and failed delivery remain visible',()=>{
  for(const status of ['sending','submitted','failed','unknown']){
   const receipt={requestId:'req-123',status,message:`Outcome ${status}`};
   const state={view:{panel:null},feedback:{requests:[receipt]},attention:{items:[{...receipt,id:'feedback:req-123',fingerprint:status}]}};
   const html=render(FeedbackNotice,{state,act:()=>{}});
+  if(status==='submitted'){assert.equal(html,'');continue}
   assert.match(html,status==='sending'?/sending in the background/:new RegExp(`Outcome ${status}`));
   assert.match(html,/View (status|feedback)/);
   if(status==='submitted')assert.match(html,/a-check-result success/);
@@ -100,6 +101,20 @@ test('app badges can be quiet while completions stay unread in chat lists',()=>{
  const state={attention:{unread:12,badgeUnread:0,sections:{chats:12}}};
  assert.equal(render(AttentionBadge,{state}),'');
  assert.match(render(AttentionBadge,{state,section:'chats'}),/12 unread items/);
+});
+test('read update failures precede quiet news and cannot produce a healthy empty state',()=>{
+ const state={attention:{items:[
+  {id:'release-notice:one',title:'Optional news',informational:true,read:false},
+  {id:'updates:failure:ecosystem',title:'Component update needs attention',detail:'Current components remain active.',
+   actionRequired:true,read:true,occurrences:3}
+ ]}};
+ const html=render(ActivityPanel,{state,act:()=>{}});
+ assert.match(html,/Needs action/);
+ assert.match(html,/Reviewed · still unresolved/);
+ assert.match(html,/3 occurrences/);
+ assert.doesNotMatch(html,/All caught up/);
+ assert.ok(html.indexOf('Needs action')<html.indexOf('News and receipts'));
+ assert.doesNotMatch(html,/Mark reviewed: Optional news/);
 });
 test('bulk review is bounded and snapshots exact fingerprints without opening chats',async()=>{
  const items=Array.from({length:1101},(_,i)=>({id:'completion:'+i,fingerprint:'v1'})),calls=[];

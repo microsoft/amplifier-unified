@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import errno
 import os
 import re
@@ -164,8 +165,70 @@ class UpdateDiagnostics:
         self.state=manager.service.state['updates'].setdefault('diagnostics',{'events':[]})
         self.state.setdefault('events',[])
         self.path=manager.directory/'diagnostics.jsonl'
+        # An old lastFailure may be history after exact restart reconciliation.
+        if 'activeFailures' not in self.state:
+            self.state['activeFailures'] = {}
+            updates = manager.service.state['updates']
+            failure = self.state.get('lastFailure')
+            reconciliation = updates.get('reconciliation') or {}
+            recovered = bool(failure and failure.get('attemptId') and
+                reconciliation.get('attemptId') == failure['attemptId'] and
+                reconciliation.get('verifiedAt', 0) >= failure.get('at', 0))
+            if failure and not recovered:
+                self._track_failure(failure)
+                for group in self.state['activeFailures'].values():
+                    group['displayError'] = updates.get('error')
+        self._pending_failure = None
+
+    def _track_failure(self, event):
+        phase = event.get('phase', '')
+        kind = event.get('kind') or ('application' if phase.startswith(('app-', 'restart-')) else
+                                    'ecosystem' if phase.startswith('ecosystem-') else 'update')
+        if kind == 'rollback':
+            kind = 'ecosystem'
+        if kind not in {'application', 'ecosystem'}:
+            return  # Other domains retain their existing owner recovery semantics.
+        # Attempt/command IDs, elapsed time and byte counts are occurrences, not
+        # causes. Retain every original receipt in the existing diagnostic sink.
+        cause = {key: event[key] for key in (
+            'phase', 'reason', 'component', 'package', 'errorType', 'osError',
+            'expectedRevision', 'observedRevision', 'resolutionMismatches',
+            'expectedVersion', 'observedVersion', 'probe') if key in event}
+        if 'probe' in cause:
+            cause['probe'] = {key: value for key, value in cause['probe'].items()
+                              if key not in {'elapsedMs', 'profileIndex'}}
+        fingerprint = hashlib.sha256(json.dumps(cause, sort_keys=True).encode()).hexdigest()
+        active = self.state.setdefault('activeFailures', {})
+        key = kind + ':' + fingerprint
+        previous = active.get(key)
+        if previous:
+            previous.update(occurrences=previous['occurrences'] + 1, latest=event)
+        else:
+            identity = event.get('id') or hashlib.sha256(json.dumps(event, sort_keys=True).encode()).hexdigest()
+            active[key] = {'id': identity, 'cause': fingerprint, 'kind': kind,
+                           'tier': self.state.get('batch', {}).get('tier'),
+                           'first': event, 'latest': event, 'occurrences': 1}
+        self._pending_failure = key
+
+    def _settle_failure(self, phase):
+        # Preparation, accepted restart, checks, skips and partial installs are
+        # not verified recovery. These completion events already have owner guards.
+        kind = {'ecosystem-activation': 'ecosystem', 'ecosystem-rollback': 'ecosystem',
+                'restart-ack': 'application', 'restart-reconcile': 'application',
+                'restart-superseded': 'application'}.get(phase)
+        if not kind:
+            return
+        if self.state.get('kind') not in {kind, 'rollback' if kind == 'ecosystem' else kind}:
+            return
+        tier = self.state.get('batch', {}).get('tier')
+        active = self.state.setdefault('activeFailures', {})
+        for key, group in list(active.items()):
+            if group['kind'] == kind and (kind == 'application' or phase == 'ecosystem-rollback' or
+                    group.get('tier') in {None, 'ecosystem', tier}):
+                del active[key]
 
     def begin(self,kind,revision=None,attempt_id=None,*,tier=None,components=()):
+        self._pending_failure = None
         identity=attempt_id if isinstance(attempt_id,str) and re.fullmatch(r'[a-f0-9]{32}',attempt_id) else uuid.uuid4().hex
         self.state.update(attemptId=identity,kind=kind)
         if revision and re.fullmatch(r'[a-f0-9]{32,40}',revision):self.state['revision']=revision
@@ -225,6 +288,10 @@ class UpdateDiagnostics:
             if status=='interrupted' and self.state.get('lastFailure',{}).get('attemptId')==event['attemptId'] and self.state.get('lastFailure',{}).get('status')=='failed':
                 prior_failure=self.state['lastFailure']
             self.state['lastFailure']=prior_failure if prior_failure is not None else event
+            if prior_failure is None:
+                self._track_failure(event)
+        elif status == 'succeeded':
+            self._settle_failure(phase)
         collector=getattr(self.manager.service,'diagnostics',None)
         delivered=False
         if collector:

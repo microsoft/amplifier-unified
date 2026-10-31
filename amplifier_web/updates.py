@@ -503,6 +503,12 @@ class UpdateManager:
 
     async def publish(self, **values):
         async with self.service.lock:
+            if values.get('error'):
+                group = self.diagnostics.state.get('activeFailures', {}).get(
+                    getattr(self.diagnostics, '_pending_failure', None))
+                if group:
+                    group['displayError'] = values['error']
+                self.diagnostics._pending_failure = None
             self.service.state['updates'].update(values)
             state = self.service.state['updates']
             state['blockers'] = self.blockers() if self.requires_idle(state) else []
@@ -620,6 +626,7 @@ class UpdateManager:
     async def command(self, action, args=None, command_id=None):
         if self.awaiting_restart() and action not in {'featureInstall', 'forceRestart'}:return
         previous_error=self.service.state['updates'].get('error')
+        previous_event=self.diagnostics.state.get('latest',{}).get('id')
         try:
             if action == 'forceRestart':
                 from .app_updates import activate
@@ -654,7 +661,8 @@ class UpdateManager:
             from .update_diagnostics import exception_facts, failure_guidance
             last=self.diagnostics.state.get('latest',{})
             phase=last.get('phase',action)
-            if last.get('status')!='failed':self.diagnostics.record(phase,'failed',**exception_facts(error))
+            if last.get('status')!='failed' or last.get('id')==previous_event:
+                self.diagnostics.record(phase,'failed',**exception_facts(error))
             await self.publish(phase='activating' if self.service.state['updates'].get('pendingRestart') else 'error',error=failure_guidance(self.diagnostics.state.get('lastFailure', {})) or 'Update failed during '+phase.replace('-',' ')+'. Review the diagnostic receipt; no conversation work was replayed.')
         finally:
             # Manual actions used to leave ready work behind a 60-second
@@ -1294,6 +1302,7 @@ class UpdateManager:
                         self.service._publish_changes(globals={'updates','settings'})
                 self.diagnostics.clear_failure()
                 self.diagnostics.record('ecosystem-rollback' if rollback else 'ecosystem-activation','succeeded')
+                await self.publish()  # Publish settled attention, not just the preceding installed status.
                 self.inventory=[]
                 if self.cleanup_task is None or self.cleanup_task.done():
                     self.cleanup_task = asyncio.create_task(self.retire_storage())
@@ -1427,13 +1436,14 @@ class UpdateManager:
         await self.wait_for_work(3)
         while not self.closed:
             self.wakeup.clear()
+            previous_event=self.diagnostics.state.get('latest',{}).get('id')
             try:
                 await self.tick()
             except asyncio.CancelledError: raise
             except Exception as error:
                 from .update_diagnostics import exception_facts, failure_guidance
                 last=self.diagnostics.state.get('latest',{})
-                if last.get('status') not in {'failed','interrupted'}:
+                if last.get('status') not in {'failed','interrupted'} or last.get('id')==previous_event:
                     self.diagnostics.record('background-update','failed',**exception_facts(error))
                 phase=self.diagnostics.state['latest']['phase']
                 await self.publish(phase='activating' if self.service.state['updates'].get('pendingRestart') else 'error',error=failure_guidance(self.diagnostics.state.get('lastFailure', {})) or 'Background update failed during '+phase.replace('-',' ')+'. Review its diagnostic receipt; no work was replayed.')
