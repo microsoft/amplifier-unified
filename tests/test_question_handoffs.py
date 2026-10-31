@@ -8,14 +8,14 @@ from amplifier_web.service import AppError, AppService
 from test_collaborative_workspaces import app, agent_action, generation, settled, Runtime
 
 
-async def delivered_answer(app, *, mode='queue'):
+async def delivered_answer(app, *, mode='queue', artifacts=None):
     source, target = app.state['sessions']
     # A managed design chat and a release workspace are distinct locations.
     source.update(workspace=source['workspace'] + '/managed', location={'kind': 'managed'})
     target.update(workspace=target['workspace'] + '/release', location={'kind': 'workspace'})
     question = (await app.dispatch('question.create', {
         'sessionId': target['id'], 'prompt': 'Proceed with the corrected check?',
-        'required': True, 'dependency': 'Complete validation',
+        'required': True, 'dependency': 'Complete validation', 'artifacts': artifacts or [],
     }))['result']
     human = app._message(source, 'user', 'Yes, complete the corrected validation.',
                          inputId='human-answer', inputOrigin='ui')
@@ -56,6 +56,107 @@ async def test_original_human_answer_crosses_delivered_handoff_once(app, mode):
     assert again['duplicate']
     answer_input = 'question:' + question['id'] + ':answer'
     assert len([row for row in app.runtime.inputs if row[1] == answer_input]) == 1
+
+
+@pytest.mark.parametrize('confirmation', ['runtime.delivery', 'runtime.status', 'check'])
+async def test_handoff_answer_timeout_reconciles_exact_input_without_replay(app, monkeypatch, confirmation):
+    target = app.state['sessions'][1]
+    artifact = (await app.app_bridge('dispatch', {'action': 'canvas.show', 'args': {
+        'kind': 'markdown', 'title': 'Handoff review', 'content': '# Reviewed v1',
+        'presentation': 'saved',
+    }}, target['id']))['result']
+    source, target, question, human, args = await delivered_answer(
+        app, artifacts=[{'id': artifact['id'], 'version': 1}])
+    revised = await app.app_bridge('dispatch', {'action': 'canvas.versions.revise', 'args': {
+        'id': artifact['id'], 'expectedRevision': 1, 'content': '# Later v2',
+    }}, target['id'])
+    assert revised['accepted']
+    assert next(row for row in app.state['canvasArtifacts'] if row['id'] == artifact['id'])['revision'] == 2
+    answer_input = 'question:' + question['id'] + ':answer'
+    original_source = copy.deepcopy(source['messages'])
+    original_handoff = copy.deepcopy(app.collaboration.receipt('answer-handoff'))
+    before_inputs = list(app.runtime.inputs)
+    assert [(sid, identity) for sid, identity, _ in before_inputs] == [(target['id'], 'answer-handoff')]
+    target['approvals'] = [{'id': 'separate-permission', 'status': 'pending'}]
+    before_selection, before_draft = app.state['selectedSessionId'], app.state['view']['draft']
+
+    async def lost_ack(session, text, input_id, emit):
+        assert (session['id'], input_id) == (target['id'], answer_input)
+        app.runtime.inputs.append((session['id'], input_id, text))
+        raise TimeoutError('Lost acknowledgement for the verified human answer')
+
+    send = AsyncMock(side_effect=lost_ack)
+    probe = AsyncMock(return_value='unknown')
+    replay = AsyncMock(side_effect=AssertionError('Do not replay the delivered handoff'))
+    retry = AsyncMock(side_effect=AssertionError('Do not retry the saved answer'))
+    monkeypatch.setattr(app.runtime, 'send', send)
+    monkeypatch.setattr(app.runtime, 'delivery', probe, raising=False)
+    monkeypatch.setattr(app.runtime, 'collaboration_input', replay)
+    monkeypatch.setattr(app.runtime, 'retry', retry, raising=False)
+    original = copy.deepcopy((await agent_action(
+        app, target, 'question.answer', args, 'record-timeout-answer'))['result'])
+    assert original['status'] == 'answered' and original['revision'] == 2
+    assert original['delivery']['status'] == 'unknown'
+    assert original['delivery']['inputId'] == answer_input
+    answer = original['answer']
+    assert answer['questionRevision'] == question['revision'] == 1
+    assert answer['text'] == human['text']
+    assert answer['provenance']['sourceSessionId'] == source['id']
+    assert answer['provenance']['sourceRequestId'] == 'answer-handoff'
+    assert answer['provenance']['messageId'] == human['id']
+    assert answer['provenance']['inputOrigin'] == 'ui'
+    assert answer['provenance']['text'] == human['text']
+    assert answer['artifacts'] == original['artifacts'] == question['artifacts']
+    assert [(ref['id'], ref['version']) for ref in answer['artifacts']] == [(artifact['id'], 1)]
+    sent_inputs = list(app.runtime.inputs)
+    assert sent_inputs[:-1] == before_inputs
+    assert sent_inputs[-1][:2] == (target['id'], answer_input)
+    messages = [m for m in target['messages'] if m.get('inputId') == answer_input]
+    assert len(messages) == 1 and messages[0]['delivery']['status'] == 'unknown'
+    message_id = messages[0]['id']
+
+    # Acceptance for another input cannot confirm this saved answer.
+    await app.on_runtime_event('runtime.delivery', {
+        'sessionId': target['id'], 'inputId': answer_input + ':other', 'delivery': 'accepted'})
+    assert app.questions.store.get(target['id'], question['id']) == original
+    if confirmation == 'check':
+        check_args = {'sessionId': target['id'], 'inputId': answer_input}
+        missing = await app.dispatch('conversation.delivery', check_args)
+        assert missing['result']['delivery'] == 'unknown'
+        assert app.questions.store.get(target['id'], question['id']) == original
+        probe.return_value = 'accepted'
+        checked = await app.dispatch('conversation.delivery', check_args)
+        assert checked['result']['delivery'] == 'accepted'
+        assert probe.await_count == 2
+        for call in probe.await_args_list:
+            assert (call.args[0]['id'], call.args[1]) == (target['id'], answer_input)
+    else:
+        await app.on_runtime_event(confirmation, {
+            'sessionId': target['id'], 'inputId': answer_input, 'delivery': 'accepted',
+            'event': 'input.delivered', 'status': 'working'})
+        probe.assert_not_awaited()
+    saved = (await app.dispatch('question.read', {
+        'sessionId': target['id'], 'id': question['id']}))['result']
+    assert saved['delivery']['status'] == 'accepted'
+    assert saved['delivery']['inputId'] == answer_input
+    assert 'message' not in saved['delivery']
+    assert {key: value for key, value in saved.items() if key != 'delivery'} == {
+        key: value for key, value in original.items() if key != 'delivery'}
+    duplicate = await agent_action(app, target, 'question.answer', args, 'record-timeout-answer')
+    assert duplicate['duplicate'] and duplicate['result'] == saved
+    messages = [m for m in target['messages'] if m.get('inputId') == answer_input]
+    assert len(messages) == 1 and messages[0]['id'] == message_id
+    assert messages[0]['delivery']['status'] == 'accepted'
+    assert messages[0]['answerProvenance'] == answer['provenance']
+    send.assert_awaited_once()
+    retry.assert_not_awaited()
+    replay.assert_not_awaited()
+    assert app.runtime.inputs == sent_inputs
+    assert source['messages'] == original_source
+    assert app.collaboration.receipt('answer-handoff') == original_handoff
+    assert target['approvals'] == [{'id': 'separate-permission', 'status': 'pending'}]
+    assert app.state['selectedSessionId'] == before_selection
+    assert app.state['view']['draft'] == before_draft
 
 
 @pytest.mark.parametrize('change', [

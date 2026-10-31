@@ -89,6 +89,20 @@ govern work. These are controls and correctness requirements, not substitute
 approval ceremonies. The [standing authorization contract](../workspaces/configuration-authority.md#unattended-full-access-direction)
 defines this direction separately from demonstrated implementation.
 
+### 11. Available resources govern throughput
+Ordinary work has no default turn, member, queued-work or retained-resource count
+ceiling. Planning estimates are not reasons to stop an unfinished task. Actual
+machine and provider capacity governs admission; temporary pressure queues work
+and automatically reconsiders it when capacity returns. Machine accounting follows
+the machine doing the work, not an unrelated workspace or viewing device.
+
+Operators may deliberately choose limits and change them through visible settings
+and supported controls. Existing saved limits are not silently reclassified or
+deleted on upgrade. Standing authorization supports revising them without another
+approval ceremony. Stop, ownership, resource conflicts and honest unknown-effect
+receipts still apply. Bounded reads and storage retention are implementation
+controls, not limits on how much useful work an assignment can complete.
+
 ## What this deliberately resists
 
 - A global application snapshot as the default read, update or persistence unit.
@@ -114,6 +128,7 @@ defines this direction separately from demonstrated implementation.
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-30 | Use resource-based throughput instead of arbitrary default work-count ceilings. | User-requested removal of artificial limits and optional adjustable controls. |
 | 2026-10-30 | Make operator-selected Full access cover unattended and system-delegated work. | User-requested standing authorization and removal of recurring human gates. |
 | 2026-10-29 | Make scaling and semantic preservation explicit in performance evidence. | [Implementation and review guidance](../validation/performance.md); user-requested regression safeguards. |
 | 2026-10-02 | Initial destination for protocol adoption and decomposition. | [Design packet and source assessment](README.md). |

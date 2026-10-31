@@ -69,8 +69,9 @@ remain uncertain, and inspection, stop and removal do not depend on the base ima
 remaining available. Selecting a replacement image requires explicit operator
 configuration and a new request; the adapter never substitutes one automatically.
 
-The legacy defaults separate 15 active/starting instances, 256 total retained
-instances, and a 10 GiB storage-pool free-space floor. An explicit existing
+Unified passes defaults of 0 (no count ceiling) for active/starting and total
+retained instances, while preserving the 10 GiB storage-pool free-space floor.
+Configured positive limits remain enforced. An explicit existing
 `AMPLIFIER_DTU_MAX_INSTANCES=15` still means **15 total**; it does not become an
 active-only policy during migration. Change that policy deliberately if retained
 instances should not consume an execution limit. Stopped work still consumes disk.
@@ -117,6 +118,12 @@ removal confirmation offers this choice under “Save more files”. It does not
 replace the original backend configuration or silently enlarge every export.
 Docker rejects full-environment retention before effects.
 Existing complete exports remain unchanged.
+
+Archive-only retention follows the shared [inert metadata policy](test-environments.md#finish-incomplete-cleanup):
+zero-length FIFO entries are retained without opening, creating or extracting
+them. Nonzero FIFOs and other unsupported special entries remain rejected.
+Ordinary `files` and artifact-only validation still reject FIFOs; opaque `full`
+retention is unchanged.
 
 Incus may still create a temporary complete backup during export. Smaller retained
 archives reduce storage after cleanup; they do not remove that temporary space
