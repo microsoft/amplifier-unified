@@ -183,13 +183,11 @@ class Worker:
                 timing.mark('write.end')
             result = await asyncio.wait_for(future, timeout)
             if handoff_marker:
-                from amplifier_web.handoff_drain import finish
                 try:
                     if isinstance(result, dict) and result.get('accepted') is True:
-                        await finish(self, result.get('result'))
+                        await self._finish_handoff_ack(result.get('result'))
                     elif isinstance(result, dict) and result.get('accepted') is False:
-                        from amplifier_web.handoff_boundary import inspect
-                        await inspect(self, handoff_marker, cancel=True)
+                        await self._finish_handoff_ack({'id': handoff_marker, 'phase': 'absent'})
                 except Exception as exc:
                     # Keep a known pending receipt; local setup failure does not
                     # turn it into a failed action or authorize a retry.
@@ -215,9 +213,8 @@ class Worker:
             raise
         except Exception as exc:
             if handoff_marker and isinstance(getattr(exc, '_handoff_disposition', None), dict):
-                from amplifier_web.handoff_drain import finish
                 try:
-                    await finish(self, exc._handoff_disposition)
+                    await self._finish_handoff_ack(exc._handoff_disposition)
                 except Exception as disposition_error:
                     diagnostic('handoff-drain-unavailable', errorType=type(disposition_error).__name__)
             outcome = 'failed'
@@ -236,6 +233,24 @@ class Worker:
             if timing:
                 timing.mark('end')
                 self.emit_timing(timing.snapshot(outcome))
+
+    async def _finish_handoff_ack(self, receipt):
+        """A consumed acknowledgement survives cancellation of its caller."""
+        from amplifier_web.handoff_drain import finish
+        task = asyncio.create_task(finish(self, receipt))
+        self.tasks.add(task)
+        def settled(done):
+            self.tasks.discard(done)
+            if not done.cancelled() and (error := done.exception()) is not None:
+                # A cancelled waiter cannot report this failure itself. Retain
+                # the uncertain marker and a bounded diagnostic, never replay.
+                try:
+                    publish({'type': 'runtime.bridge', 'phase': 'handoff-drain-unavailable',
+                             'errorType': type(error).__name__})
+                except Exception:
+                    pass
+        task.add_done_callback(settled)
+        return await asyncio.shield(task)
 
     def emit_timing(self, value):
         try:

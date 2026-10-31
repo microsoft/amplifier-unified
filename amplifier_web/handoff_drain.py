@@ -47,11 +47,11 @@ async def late_reply(worker, data):
         return
     result = data.get('result')
     if isinstance(data.get('_handoffDisposition'), dict):
-        await finish(worker, data['_handoffDisposition'])
+        await worker._finish_handoff_ack(data['_handoffDisposition'])
     elif isinstance(result, dict) and result.get('accepted') is True:
-        await finish(worker, result.get('result'))
+        await worker._finish_handoff_ack(result.get('result'))
     elif isinstance(result, dict) and result.get('accepted') is False:
-        await finish(worker, {'id': marker['id'], 'phase': 'absent'})
+        await worker._finish_handoff_ack({'id': marker['id'], 'phase': 'absent'})
 
 
 async def begin(worker, command_id):

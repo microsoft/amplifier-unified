@@ -210,3 +210,75 @@ async def test_partial_hook_installation_releases_its_own_gate(worker, monkeypat
         await begin(value, 'move')
     assert value._handoff_boundary is None and children.admission_gate is None
     assert removed == ['orchestrator:goal_progress']
+
+
+@pytest.mark.parametrize('response', ['rejected', 'absent'])
+async def test_consumed_no_effect_ack_finishes_after_bridge_cancellation(worker, monkeypatch, response):
+    value, children = worker
+    sent, reconciling = asyncio.Event(), asyncio.Event()
+    messages = []
+    def publish(message):
+        if message.get('op') == 'bridge':
+            messages.append(message)
+            sent.set()
+    original = inspect
+    async def blocked_inspect(worker, request_id, cancel=False):
+        if cancel:
+            reconciling.set()
+        return await original(worker, request_id, cancel=cancel)
+    monkeypatch.setattr('amplifier_web.runtime_worker.publish', publish)
+    monkeypatch.setattr('amplifier_web.handoff_boundary.inspect', blocked_inspect)
+    bridge = asyncio.create_task(value.bridge('dispatch', {'action': 'worktree.handoff', 'id': 'move',
+        '_runtimeSessionId': 'root', 'args': {}}))
+    await sent.wait()
+    await value.command_lock.acquire()
+    try:
+        message = {'op': 'bridge.result', 'id': messages[0]['id']}
+        if response == 'rejected':
+            message['result'] = {'accepted': False}
+        else:
+            message.update(error='definite validation failure',
+                _handoffDisposition={'id': identity(), 'phase': 'absent'})
+        await value._command_serial(message)
+        await asyncio.wait_for(reconciling.wait(), 1)
+        bridge.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await bridge
+        assert children.admission_gate and value._handoff_boundary
+    finally:
+        value.command_lock.release()
+    # An exact reply was already consumed; no new host notification is coming.
+    # Any worker-owned reconciliation must finish without replaying the move.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert value._handoff_boundary is None and children.admission_gate is None
+    assert len(messages) == 1 and not value.bridges
+
+
+async def test_cancelled_ack_reports_reconciliation_failure_and_retains_marker(worker, monkeypatch):
+    value, children = worker
+    entered, release = asyncio.Event(), asyncio.Event()
+    published = []
+    async def fail_after_wait(*args):
+        entered.set()
+        await release.wait()
+        raise ValueError('private cleanup details')
+    def publish(message):
+        published.append(message)
+        if message.get('op') == 'bridge':
+            value.bridges[message['id']].set_result({'accepted': False})
+    monkeypatch.setattr('amplifier_web.handoff_drain.finish', fail_after_wait)
+    monkeypatch.setattr('amplifier_web.runtime_worker.publish', publish)
+    bridge = asyncio.create_task(value.bridge('dispatch', {'action': 'worktree.handoff', 'id': 'move',
+        '_runtimeSessionId': 'root', 'args': {}}))
+    await entered.wait()
+    bridge.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await bridge
+    assert len(value.tasks) == 1
+    release.set()
+    await asyncio.gather(*value.tasks, return_exceptions=True)
+    assert not value.tasks and children.admission_gate and value._handoff_boundary
+    diagnostic = next(message for message in published if message.get('phase') == 'handoff-drain-unavailable')
+    assert diagnostic['errorType'] == 'ValueError' and 'private' not in str(diagnostic)
+    assert sum(message.get('op') == 'bridge' for message in published) == 1
