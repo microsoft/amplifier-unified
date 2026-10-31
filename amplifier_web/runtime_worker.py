@@ -185,9 +185,9 @@ class Worker:
             if handoff_marker:
                 try:
                     if isinstance(result, dict) and result.get('accepted') is True:
-                        await self._finish_handoff_ack(result.get('result'))
+                        await self._finish_handoff_ack(result.get('result'), future)
                     elif isinstance(result, dict) and result.get('accepted') is False:
-                        await self._finish_handoff_ack({'id': handoff_marker, 'phase': 'absent'})
+                        await self._finish_handoff_ack({'id': handoff_marker, 'phase': 'absent'}, future)
                 except Exception as exc:
                     # Keep a known pending receipt; local setup failure does not
                     # turn it into a failed action or authorize a retry.
@@ -214,7 +214,7 @@ class Worker:
         except Exception as exc:
             if handoff_marker and isinstance(getattr(exc, '_handoff_disposition', None), dict):
                 try:
-                    await self._finish_handoff_ack(exc._handoff_disposition)
+                    await self._finish_handoff_ack(exc._handoff_disposition, future)
                 except Exception as disposition_error:
                     diagnostic('handoff-drain-unavailable', errorType=type(disposition_error).__name__)
             outcome = 'failed'
@@ -234,8 +234,8 @@ class Worker:
                 timing.mark('end')
                 self.emit_timing(timing.snapshot(outcome))
 
-    async def _finish_handoff_ack(self, receipt):
-        """A consumed acknowledgement survives cancellation of its caller."""
+    def _own_handoff_ack(self, receipt):
+        """Retain the exact acknowledgement before its caller can be resumed."""
         from amplifier_web.handoff_drain import finish
         task = asyncio.create_task(finish(self, receipt))
         self.tasks.add(task)
@@ -250,6 +250,10 @@ class Worker:
                 except Exception:
                     pass
         task.add_done_callback(settled)
+        return task
+
+    async def _finish_handoff_ack(self, receipt, future):
+        task = getattr(future, '_handoff_ack', None) or self._own_handoff_ack(receipt)
         return await asyncio.shield(task)
 
     def emit_timing(self, value):
@@ -1417,8 +1421,15 @@ class Worker:
         try:
             op = data.get("op")
             if op == "bridge.result":
+                from amplifier_web.handoff_drain import acknowledged_receipt
+                receipt = acknowledged_receipt(self, data)
+                # Ownership precedes set_result/set_exception: the caller can
+                # be cancelled before it resumes to process this exact reply.
+                acknowledgement = self._own_handoff_ack(receipt) if receipt is not None else None
                 future = self.bridges.get(identity)
                 if future and not future.done():
+                    if acknowledgement is not None:
+                        future._handoff_ack = acknowledgement
                     timing = getattr(self, 'bridge_timings', {}).get(identity)
                     if timing:
                         timing.mark('received')
@@ -1429,18 +1440,11 @@ class Worker:
                         future.set_exception(error)
                     else:
                         future.set_result(data.get("result"))
-                else:
-                    from amplifier_web.handoff_drain import late_reply
+                elif acknowledgement is not None:
                     try:
-                        await late_reply(self, data)
-                    except Exception as exc:
-                        # A failed cleanup keeps the marker; it cannot change a
-                        # completed action or make an unknown move retryable.
-                        try:
-                            publish({'type': 'runtime.bridge', 'bridgeId': identity,
-                                     'phase': 'handoff-drain-unavailable', 'errorType': type(exc).__name__})
-                        except Exception:
-                            pass
+                        await asyncio.shield(acknowledgement)
+                    except Exception:
+                        pass  # The retained owner reports failure and keeps uncertainty.
                 return
             if op == "resume":
                 if not self.session or not self.execution or self.execution.done():

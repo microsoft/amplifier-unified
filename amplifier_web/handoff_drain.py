@@ -39,19 +39,19 @@ def own_target(worker, args):
     return args.get('args', {}).get('sessionId') in {None, worker.session.session_id, owner}
 
 
-async def late_reply(worker, data):
-    """A lost waiter does not discard the exact command's later disposition."""
+def acknowledged_receipt(worker, data):
+    """Recognize only this marker's exact transport acknowledgement."""
     marker = getattr(worker, '_handoff_boundary', None) or {}
     drain = marker.get('drain') or {}
     if data.get('id') != drain.get('bridgeId') or not drain.get('bridgeId'):
         return
     result = data.get('result')
     if isinstance(data.get('_handoffDisposition'), dict):
-        await worker._finish_handoff_ack(data['_handoffDisposition'])
+        return data['_handoffDisposition']
     elif isinstance(result, dict) and result.get('accepted') is True:
-        await worker._finish_handoff_ack(result.get('result'))
+        return result.get('result')
     elif isinstance(result, dict) and result.get('accepted') is False:
-        await worker._finish_handoff_ack({'id': marker['id'], 'phase': 'absent'})
+        return {'id': marker['id'], 'phase': 'absent'}
 
 
 async def begin(worker, command_id):

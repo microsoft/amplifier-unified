@@ -213,7 +213,8 @@ async def test_partial_hook_installation_releases_its_own_gate(worker, monkeypat
 
 
 @pytest.mark.parametrize('response', ['rejected', 'absent'])
-async def test_consumed_no_effect_ack_finishes_after_bridge_cancellation(worker, monkeypatch, response):
+@pytest.mark.parametrize('cancel_at', ['reconciling', 'consumed'])
+async def test_consumed_no_effect_ack_finishes_after_bridge_cancellation(worker, monkeypatch, response, cancel_at):
     value, children = worker
     sent, reconciling = asyncio.Event(), asyncio.Event()
     messages = []
@@ -240,7 +241,9 @@ async def test_consumed_no_effect_ack_finishes_after_bridge_cancellation(worker,
             message.update(error='definite validation failure',
                 _handoffDisposition={'id': identity(), 'phase': 'absent'})
         await value._command_serial(message)
-        await asyncio.wait_for(reconciling.wait(), 1)
+        if cancel_at == 'reconciling':
+            await asyncio.wait_for(reconciling.wait(), 1)
+        # The consumed variant cancels before the bridge waiter resumes.
         bridge.cancel()
         with pytest.raises(asyncio.CancelledError):
             await bridge
