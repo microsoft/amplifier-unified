@@ -270,6 +270,16 @@ try{
  // The alternate probe is deliberately held. A prior bundle must not masquerade as resolved.
  await expect(model.locator(':scope > span')).toHaveText('Loading model…');
  await expect(model).toHaveAttribute('aria-busy','true');
+ // Discovery is busy, not disabled: retain undimmed text and keyboard access.
+ await expect(model).toBeEnabled();
+ await expect(model).toHaveCSS('opacity','1');
+ await expect(model).toHaveCSS('cursor','progress');
+ await model.focus();await model.press('Enter');
+ await expect(dialog).toBeVisible();
+ await expect(dialog.getByRole('button',{name:'Choose model',exact:true})).toBeFocused();
+ await closeOptions();
+ await expect(model).toBeFocused();
+ await expect(model).toHaveAttribute('aria-busy','true');
  await page.screenshot({path:artifacts+'/provider1201/desktop-loading.png'});
  assert.equal((await requests()).length,count);
  await page.request.post(url+'/fixture/provider-resolution/release');
