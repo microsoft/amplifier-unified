@@ -26,6 +26,8 @@ const python=process.env.AMPLIFIER_TEST_PYTHON||process.env.FIXTURE_PYTHON||join
 const fixture=spawn(python,['-u',fixturePath],{cwd:dirname(fixturePath),stdio:['ignore','pipe','pipe']});
 const stop=ownFixture(fixture,{label:'Generated file controls fixture'});
 const records=[],checks=[],geometry=[],downloads=[],requests=[],commands=[],errors=[],screenshotErrors=[];
+const metadataExchanges=[],detailsReadiness=[],preCleanupSnapshots=[],metadataPending=new Set();
+const metadataByRequest=new WeakMap();
 const pageLabels=new WeakMap(),routeCleanups=new Set(),browserOwners=[];
 let logs='',lineBuffer='',page,ready,seed,failure,cleanup,timer,running;
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
@@ -96,36 +98,172 @@ async function placement(target,restore=false){
  return response.json();
 }
 
+// Runs in the page before application code. This is observation only: no app
+// state or controls are substituted. Each snapshot is one synchronous DOM read.
+function installDetailsProbe(){
+ const ids=new WeakMap();let nextId=0;
+ const id=node=>{if(!ids.has(node))ids.set(node,++nextId);return ids.get(node)};
+ const visible=node=>node.checkVisibility({checkVisibilityCSS:true})&&node.getClientRects().length>0;
+ const snapshot=node=>({
+  at:Date.now(),nodeId:id(node),tag:node.tagName,open:node.open,visible:visible(node),
+  viewport:{width:innerWidth,height:innerHeight},scroll:{x:scrollX,y:scrollY},
+  loading:[...node.querySelectorAll('[role="status"]')].some(item=>item.textContent==='Loading file details…'),
+  errors:[...node.querySelectorAll('[role="alert"]')].map(item=>item.textContent),
+  paragraphs:[...node.querySelectorAll('p')].map(item=>({id:id(item),text:item.textContent,visible:visible(item)})),
+  controls:[...node.querySelectorAll('button,[role="button"]')].map(item=>({
+   tag:item.tagName,label:item.getAttribute('aria-label')||item.textContent.trim(),visible:visible(item)})),
+  codes:[...node.querySelectorAll('code')].map(item=>({text:item.textContent,visible:visible(item)})),
+  text:node.textContent,iframes:node.querySelectorAll('iframe').length
+ });
+ window.__fileDetailsSnapshot=snapshot;
+ window.__fileDetailsProbe=node=>{
+  const events=[];let overflow=false;
+  const record=kind=>{
+   if(events.length===100){overflow=true;return}
+   events.push({kind,...snapshot(node)});
+  };
+  const observer=new MutationObserver(()=>record('mutation')),toggle=()=>record('toggle');
+  record('armed');
+  observer.observe(node,{childList:true,subtree:true,characterData:true,attributes:true});
+  node.addEventListener('toggle',toggle);
+  return {read:()=>({events:[...events],overflow,snapshot:snapshot(node)}),
+   markOpening:()=>{record('opening');return events.length},
+   stop:()=>{observer.disconnect();node.removeEventListener('toggle',toggle)}};
+ };
+}
+const detailsSnapshot=details=>details.evaluate(node=>window.__fileDetailsSnapshot(node));
+
+function observeMetadata(request,payload,client,requestId){
+ const args=payload.args||{},gate=observedGate('Exact metadata response completion');
+ const record={client,requestedAt:Date.now(),requestId,
+  target:{id:args.id,version:args.version,sessionId:args.sessionId}};
+ metadataExchanges.push(record);
+ const observed={record,wait:()=>gate.wait()};metadataByRequest.set(request,observed);
+ const pending=(async()=>{
+  try{
+   const response=await request.response();assert.ok(response,'Metadata request has no response');
+   record.responseAt=Date.now();record.httpStatus=response.status();
+   const body=await response.json(),value=body.result;
+   const finished=await response.finished();assert.equal(finished,null,'Metadata response did not complete');
+   record.completedAt=Date.now();
+   record.response={accepted:body.accepted,id:value?.id,version:value?.version,
+    filePaths:value?.filePaths,download:value?.download,error:body.error};
+   gate.resolve(record);
+  }catch(error){record.failedAt=Date.now();record.error=errorEvidence(error);gate.reject(error)}
+ })();
+ metadataPending.add(pending);pending.finally(()=>metadataPending.delete(pending));
+ return observed;
+}
+function metadataOracle(record,row){
+ assert.equal(record.httpStatus,200,'Fresh metadata HTTP response refused');
+ assert.ok(record.completedAt,'Fresh metadata response must finish');
+ assert.equal(record.response.accepted,true,'Fresh metadata action refused');
+ assert.equal(record.response.id,row.id,'Fresh metadata artifact changed');
+ assert.equal(record.response.version,row.version,'Fresh metadata version changed');
+ assert.deepEqual(record.response.filePaths,row.filePaths,'Fresh metadata paths differ from fixture provenance');
+}
+function freshRenderReady(state,openingIndex,version){
+ const current=state.snapshot;
+ const loadedThisOpening=state.events.slice(openingIndex).some(event=>event.open&&event.loading);
+ return loadedThisOpening&&current.open&&!current.loading&&(current.errors.length>0||
+  current.paragraphs.some(item=>item.text===`Saved version ${version}`&&item.visible));
+}
+// Poll only lifecycle readiness, NEVER the expected button/path counts. Once a
+// fresh result is rendered, the exact oracle below runs once and fails on a
+// settled missing control. An unchanged old version label is not fresh evidence.
+async function freshDetails(target,details,row,trigger){
+ const trace={client:pageLabels.get(target),expected:{id:row.id,version:row.version,sessionId:seed.sessionId},
+  armedAt:Date.now(),matches:[]};detailsReadiness.push(trace);
+ const probe=await bounded(details.evaluateHandle(node=>window.__fileDetailsProbe(node)),2000,'Details probe setup timed out');
+ const readProbe=()=>bounded(probe.evaluate(value=>value.read()),1000,'Details snapshot timed out');
+ const failures=[];
+ let matched;
+ const requestGate=observedGate('Fresh opening metadata request');
+ const onRequest=request=>{
+  const observed=metadataByRequest.get(request);
+  if(!observed||JSON.stringify(observed.record.target)!==JSON.stringify(trace.expected))return;
+  trace.matches.push(observed.record);if(!matched){matched=observed;requestGate.resolve(observed)}
+ };
+ try{
+  let before=await readProbe();trace.before=before;
+  // The rail can retain an open disclosure when its panel closes. Exercise a
+  // real close/reopen rather than accepting that prior result as a fresh load.
+  if(before.snapshot.open){
+   await trigger();
+   await expect.poll(async()=>{
+    before=await readProbe();
+    return !before.snapshot.open&&before.events.some(event=>event.kind==='toggle'&&!event.open);
+   },{timeout:4000}).toBe(true);
+  }
+  trace.closed=before.snapshot;
+  assert.equal(metadataExchanges.filter(record=>record.client===trace.client&&
+   JSON.stringify(record.target)===JSON.stringify(trace.expected)&&!record.completedAt&&!record.failedAt).length,0,
+  'An earlier matching metadata request is still pending');
+  target.on('request',onRequest); // Armed BEFORE the native opening gesture.
+  const openingIndex=await bounded(probe.evaluate(value=>value.markOpening()),1000,'Opening marker timed out');
+  // The retained label alone must fail the SAME readiness predicate.
+  assert.equal(freshRenderReady({events:[],snapshot:before.snapshot},0,row.version),false);
+  trace.openingAt=Date.now();await trigger();
+  const observed=await requestGate.wait();await observed.wait();
+  metadataOracle(observed.record,row);
+  let state;
+  await expect.poll(async()=>{
+   state=await readProbe();trace.latest=state;
+   // Require this opening's observed loading -> result transition, even when
+   // React reuses its paragraph. If no transition was observed, fail readiness;
+   // do not infer a new render from receipt completion or a retained label.
+   return freshRenderReady(state,openingIndex,row.version);
+  },{timeout:4000}).toBe(true);
+  assert.equal(trace.matches.length,1,'More than one matching metadata request during this opening');
+  assert.equal(state.overflow,false,'Details transition evidence exceeded its bound');
+  controlsSnapshotOracle(state.snapshot,row);
+  trace.settledAt=Date.now();trace.passed=true;
+ }catch(error){trace.error=errorEvidence(error);failures.push(error)}
+ finally{
+  target.off('request',onRequest);
+  try{trace.final=await bounded(probe.evaluate(value=>{const result=value.read();value.stop();return result}),
+   1500,'Final details capture timed out')}
+  catch(error){trace.captureError=errorEvidence(error);failures.push(error)}
+  try{await bounded(probe.dispose(),1000,'Details probe disposal timed out')}
+  catch(error){trace.disposeError=errorEvidence(error);failures.push(error)}
+ }
+ if(failures.length===1)throw failures[0];
+ if(failures.length)throw new AggregateError(failures,'Details readiness and diagnostic capture failed');
+}
 async function openDetails(target,row,mode='click'){
  const details=detailsFor(target,row),summary=details.locator('summary');
  await expect(summary).toHaveText('File details');
- if(!await details.evaluate(node=>node.open)){
-  if(mode==='keyboard'){
-   await card(target,row).getByRole('button',{name:'Preview in chat',exact:true}).focus();
-   await target.keyboard.press('Tab');await expect(summary).toBeFocused();
-   await target.keyboard.press('Enter');
-  }else if(mode==='touch')await summary.tap();
-  else await summary.click();
+ if(mode==='keyboard'){
+  await card(target,row).getByRole('button',{name:'Preview in chat',exact:true}).focus();
+  await target.keyboard.press('Tab');await expect(summary).toBeFocused();
  }
- await expect(details.getByText(`Saved version ${row.version}`,{exact:true})).toBeVisible();
+ await freshDetails(target,details,row,()=>mode==='keyboard'?target.keyboard.press('Enter'):
+  mode==='touch'?summary.tap():summary.click());
  return details;
 }
 
-// The same existence/path oracle is used unchanged for positive and deliberately
-// missing-control cases. It never synthesizes replacement controls.
-async function controlsOracle(details,row){
- assert.equal(await details.evaluate(node=>node.tagName),'DETAILS');
+// Positive and deliberate missing-button cases consume the SAME atomic snapshot
+// predicate. No sequential locator counts, retries or synthesized replacements.
+function controlsSnapshotOracle(snapshot,row){
+ assert.equal(snapshot.tag,'DETAILS');assert.equal(snapshot.open,true);
+ assert.equal(snapshot.visible,true);assert.equal(snapshot.loading,false);assert.deepEqual(snapshot.errors,[]);
  const expected=row.filePaths;
  for(const [name,present] of [
   ['Copy full path',!!expected.absolute],['Copy relative path',!!expected.relative],['Download saved file',true]]){
-  assert.equal(await button(details,name).count(),present?1:0,`Required control mismatch: ${name}`);
-  if(present)assert.equal(await button(details,name).evaluate(node=>node.tagName),'BUTTON',`${name} must be a native button`);
+  const controls=snapshot.controls.filter(item=>item.label===name);
+  assert.equal(controls.length,present?1:0,`Required control mismatch: ${name}`);
+  if(present){assert.equal(controls[0].tag,'BUTTON',`${name} must be a native button`);assert.equal(controls[0].visible,true)}
  }
- const codes=await details.locator('code').allTextContents();
+ const codes=snapshot.codes.filter(item=>item.visible).map(item=>item.text);
  for(const value of Object.values(expected))assert.ok(codes.includes(value),`Missing displayed path/base: ${value}`);
- if(!expected.absolute)await expect(details).toContainText('Saved in this chat; no backing filesystem path.');
- else if(!expected.relative)await expect(details).toContainText('No relative path:');
- assert.equal(await details.locator('iframe').count(),0,'File details must not mount a preview');
+ if(!expected.absolute)assert.ok(snapshot.text.includes('Saved in this chat; no backing filesystem path.'));
+ else if(!expected.relative)assert.ok(snapshot.text.includes('No relative path:'));
+ assert.equal(snapshot.iframes,0,'File details must not mount a preview');
+}
+async function controlsOracle(details,row){
+ const snapshot=await detailsSnapshot(details);
+ detailsReadiness.push({kind:'atomic-oracle',at:Date.now(),expected:{id:row.id,version:row.version},snapshot});
+ controlsSnapshotOracle(snapshot,row);
 }
 
 async function copy(target,details,name,expected,trigger){
@@ -271,9 +409,12 @@ async function connect(owner,options){
   const pathname=new URL(request.url()).pathname;
   if(pathname.startsWith('/api/canvas/'))requests.push({client:label,path:pathname,query:new URL(request.url()).search});
   if(request.method()==='POST'&&pathname==='/api/actions'){
-   const payload=request.postDataJSON();commands.push(payload?.action==='shell.command'?(payload.args.command||payload.args):payload);
+   const payload=request.postDataJSON(),command=payload?.action==='shell.command'?(payload.args.command||payload.args):payload;
+   commands.push(command);
+   if(command?.action==='canvas.versions.inspect')observeMetadata(request,command,label,payload.id);
   }
  });
+ await target.addInitScript(installDetailsProbe);
  await target.addInitScript(()=>{
   window.__fileControlsFrames=[];
   new MutationObserver(records=>{
@@ -408,9 +549,8 @@ async function usePreviewControls(retained,label,mode){
  if(mode==='keyboard'){
   await expect(inspector.getByRole('button',{name:'Close canvas details',exact:true})).toBeFocused();
   await tabTo(target,summary);
-  if(!await details.evaluate(node=>node.open))await target.keyboard.press('Enter');
- }else if(!await details.evaluate(node=>node.open))await summary.tap();
- await expect(details.getByText(`Saved version ${row.version}`,{exact:true})).toBeVisible();
+ }
+ await freshDetails(target,details,row,()=>mode==='keyboard'?target.keyboard.press('Enter'):summary.tap());
  await controlsOracle(details,row);
  for(const [name,value] of [[names[0],row.filePaths.absolute],[names[1],row.filePaths.relative]]){
   if(mode==='keyboard'){
@@ -640,7 +780,8 @@ async function run(){
   await copy(mobile,touchDetails,names[1],html.filePaths.relative,control=>cornerTap(control,'bottom-right'));
   await saveAndVerify(mobile,touchDetails,html,`touch-${width}-deleted-v1`,control=>cornerTap(control,'bottom-right'));
   await preserved(mobile,mobileDraft);
-  await touchDetails.locator('summary').tap();
+  // Leave it open. On the next width freshDetails owns BOTH the close fence and
+  // the fresh opening, instead of racing an external close's native toggle.
  }
  assert.deepEqual(commands.slice(touchStart).filter(row=>['canvas.select','canvas.views.inline','conversation.send','session.send'].includes(row?.action)),[]);
  checks.push({check:'390px/320px emulated touch, actual corner taps, 44px targets, four-corner hit testing and saved PNGs'});
@@ -687,6 +828,11 @@ try{
  failure=error;
  for(const target of browserOwners.flatMap(owner=>owner.browser?.contexts()||[]).flatMap(context=>context.pages()).filter(target=>!target.isClosed())){
   const label=pageLabels.get(target)||'unknown';
+  try{preCleanupSnapshots.push({client:label,...await bounded(target.evaluate(()=>({
+   at:Date.now(),viewport:{width:innerWidth,height:innerHeight},
+   details:[...document.querySelectorAll('details.a-canvas-file-path')].map(window.__fileDetailsSnapshot)
+  })),1500,`${label} pre-cleanup details capture timed out`)})}
+  catch(error){preCleanupSnapshots.push({client:label,error:errorEvidence(error)})}
   try{await target.screenshot({path:join(evidence,`failure-${label}.png`),timeout:3000})}
   catch(error){screenshotErrors.push({client:label,error:errorEvidence(error)})}
  }
@@ -702,11 +848,17 @@ try{
  // driver calls; await the run before freezing evidence, including its finally.
  if(running)try{await bounded(running,10000,'Driver did not settle after fixture cleanup')}
  catch(error){if(error!==failure)failure=failure?new AggregateError([failure,error],'File controls proof did not settle cleanly'):error}
+ try{
+  await bounded(Promise.all([...metadataPending]),5000,'Metadata observations did not settle after cleanup');
+  assert.deepEqual(metadataExchanges.filter(record=>record.error),[],'Metadata response capture failed');
+ }
+ catch(error){failure=failure?new AggregateError([failure,error],'Metadata observation cleanup failed'):error}
  const writes=await Promise.allSettled([
   writeFile(join(evidence,'fixture.log'),logs),
   writeFile(join(evidence,'observations.json'),JSON.stringify({passed:!failure,error:failure?.stack,failure:errorEvidence(failure),screenshotErrors,
   installed:ready&&{packageRoot:ready.packageRoot,verified:ready.installedVerified,staticSha256:ready.staticSha256},
-  seed,checks,geometry,downloads,requests,commands,errors,cleanup,fixtureCleanup:records.find(row=>row.cleanup)?.cleanup,
+  seed,checks,geometry,downloads,requests,commands,metadataExchanges,detailsReadiness,preCleanupSnapshots,
+  errors,cleanup,fixtureCleanup:records.find(row=>row.cleanup)?.cleanup,
   browserCleanup:browserOwners.map(owner=>({label:owner.label,closed:owner.closed,connected:owner.browser?.isConnected()??false})),
   limits:['Synthetic runtime and fixture bearer authentication; no provider, login, remote server or physical touch-device claim.',
    'Clipboard/403/wrong-byte faults are deliberate test injections; positive clipboard reads and downloaded files are real browser results.',
