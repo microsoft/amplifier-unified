@@ -30,8 +30,13 @@ async def child(app, owner, tmp_path, monkeypatch, exercise):
     from amplifier_web.host.approvals import Approvals
     from amplifier_web.host.children import install_children
     from amplifier_web.host.storage import SessionStore
+    from amplifier_web.runtime import RuntimeManager
     from amplifier_web.runtime_worker import Worker
 
+    if owner['id'] not in app.runtime.workers:
+        await app.runtime.start(owner, app.on_runtime_event)
+    host_owner = app.runtime.workers[owner['id']]
+    assert host_owner['runtimeOwnerId'] and host_owner['process'].returncode is None
     spec = importlib.util.spec_from_file_location('configuration_continuation_child_fixture',
         Path(__file__).parent / 'fixtures/standalone_children_probe.py')
     fixture = importlib.util.module_from_spec(spec)
@@ -52,13 +57,32 @@ async def child(app, owner, tmp_path, monkeypatch, exercise):
     assert not active.get('terminal')
     worker = Worker()
     worker.session = parent
+    worker.start_config = {key: owner.get(key, 0) for key in
+        ('interruptionRevision', 'executionRevision', 'configurationPendingRevision')}
+    worker.stop_revision = owner.get('interruptionRevision', 0)
     worker.runtime = SimpleNamespace(generation={'id': active['id'], 'input_ids': list(active['inputIds'])},
                                      closed=False, stop_requested=False)
     worker.activation_gate = SimpleNamespace(current_valid=True)
     worker.context_inputs = list(active['inputIds'])
     worker.context_bindings = {identity: {'clientId': None, 'targets': []} for identity in active['inputIds']}
+    # Keep the real subprocess writer intact. This adapter sends the in-process
+    # native child's envelope through the same host owner authentication.
+    bridge_host = RuntimeManager()
+    bridge_host.workers = app.runtime.workers
+    bridge_host.app_bridge = app.app_bridge
     async def transport(method, arguments):
-        return await app.app_bridge(method, arguments, owner['id'])
+        replies = []
+        async def write(row, reply):
+            assert row is host_owner
+            replies.append(reply)
+        bridge_host._write = write
+        await bridge_host._bridge(owner['id'], host_owner,
+            {'id': 'continuation-child-bridge', 'operation': method, 'args': arguments})
+        assert len(replies) == 1
+        reply = replies[0]
+        if 'error' in reply:
+            raise RuntimeError(reply['error'])
+        return reply['result']
     worker.bridge = transport
     await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
     registry = await install_children(parent, prepared, Runtime(native), SessionStore(tmp_path / 'continuation-children'), approvals)
@@ -98,10 +122,17 @@ async def test_full_patch_placement_needs_exact_choice_without_human_message(pla
     await save(b.app, b.owner)
     b.owner['messages'] = []
     b.owner['status'] = 'working'
+    cold = (await system(b.app, b.owner, READ,
+        {'sessionId': b.owner['id'], 'moduleId': MODULE}, 'cold-placement-read'))['result']
+    assert cold['mounted']['status'] == 'unobserved' and not b.runtime.workers
     retained, submitted = [], []
     async def exercise(invoke, principal):
         snapshot = (await invoke(READ, {'sessionId': b.owner['id'], 'moduleId': MODULE}, 'full-placement-read'))['result']
-        assert snapshot['mounted']['status'] == 'unobserved' and not b.runtime.workers
+        if actor == 'child':
+            assert snapshot['mounted'] == {'status': 'observed', 'workingDirectory': str(b.home)}
+            assert b.runtime.workers[b.owner['id']]['process'].returncode is None
+        else:
+            assert snapshot['mounted']['status'] == 'unobserved' and not b.runtime.workers
         args = bind_args(b, snapshot)
         args.pop('sourceMessageId')
         args['whenIdle'] = True
