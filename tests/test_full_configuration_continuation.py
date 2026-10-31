@@ -313,7 +313,7 @@ async def test_full_child_recovery_rechecks_after_dispatch_await(process_boundar
     b = process_boundary
     saved = await refused_operation(b)
     entered, release = asyncio.Event(), asyncio.Event()
-    checks = []
+    checks, owner_refusals = [], []
     original_check = workspace_work_effects.check
     def observed_check(invocation, sid, args):
         result = original_check(invocation, sid, args)
@@ -321,6 +321,18 @@ async def test_full_child_recovery_rechecks_after_dispatch_await(process_boundar
             checks.append(result)
         return result
     monkeypatch.setattr(workspace_work_effects, 'check', observed_check)
+    original_source = b.app.configuration_authority.source
+    def observed_source(args, origin, caller, **options):
+        try:
+            return original_source(args, origin, caller, **options)
+        except AppError:
+            if (origin == 'agent' and caller == b.owner['id']
+                    and args.get('operationId') == saved['id']):
+                assert entered.is_set() and release.is_set()
+                assert options['active'] and options['allow_descendant']
+                owner_refusals.append(PRINCIPAL.get())
+            raise
+    monkeypatch.setattr(b.app.configuration_authority, 'source', observed_source)
     original_route = b.app.collaboration.route
     async def held_route(action, args, origin, identity, caller):
         result = await original_route(action, args, origin, identity, caller)
@@ -350,7 +362,7 @@ async def test_full_child_recovery_rechecks_after_dispatch_await(process_boundar
     finally:
         release.set()
         await asyncio.wait_for(task, 12)
-    assert len(checks) == 2 and not checks[-1]['allowed']
+    assert len(checks) == 1 and owner_refusals == ['native-continuation-child']
     assert operation(b) == saved
     assert not override_path(b.owner['runtimeSessionId']).exists()
 
