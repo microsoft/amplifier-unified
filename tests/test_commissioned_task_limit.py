@@ -61,6 +61,50 @@ async def test_runtime_manager_limit_control_uses_real_reply_and_never_revives(m
     await manager.close()
 
 
+@pytest.mark.parametrize('lost_ack', [False, True])
+async def test_public_correction_through_real_manager_admission_and_reply(harness, monkeypatch, lost_ack):
+    """Only the process pipe endpoints are synthetic; all admission is real."""
+    from amplifier_web.runtime import RuntimeManager
+    h = harness
+    manager = RuntimeManager()
+    row = {'process': SimpleNamespace(returncode=None), 'pending': {},
+           'inflight': set(), 'parked': True}
+    manager.workers[h.target['id']] = row
+    writes = []
+    async def pipe_write(owner, command):
+        assert manager._locks[h.target['id']].locked()
+        writes.append(copy.deepcopy(command))
+        result = await h.transport.command(command['operation'], command['arguments'])
+        future = owner['pending'][command['id']]
+        if lost_ack:
+            future.set_exception(ConnectionError('Pipe acknowledgement lost after native commit'))
+        else:
+            future.set_result(result)
+        owner['inflight'].discard(command['id'])
+    monkeypatch.setattr(manager, '_write', pipe_write)
+    monkeypatch.setattr(h.app.runtime, 'control', manager.control)
+    args = arguments(h)
+    try:
+        if lost_ack:
+            with pytest.raises(ConnectionError, match='acknowledgement lost'):
+                await correct(h, args)
+            assert h.app.collaboration.receipt('correct-limit')['state'] == 'unknown'
+        else:
+            assert (await correct(h, args))['result']['state'] == 'applied'
+        proof = await read(h)
+        assert proof['state'] == 'applied'
+        assert proof['receipt'] == saved(h)['taskReceipts']['correct-limit']['receipt']
+        assert saved(h)['goal']['turns_used'] == 8
+        assert (await correct(h, args))['duplicate']
+        assert (await read(h))['receipt'] == proof['receipt']
+        assert len(writes) == 1 and not row['pending'] and not row['inflight']
+        assert h.transport.counts() == (1, 1, 2)
+        assert_no_input(h)
+    finally:
+        manager.workers.clear()  # Process is a fixture; harness owns real native custody.
+        await manager.close()
+
+
 class NativeCommandError(RuntimeError):
     def __init__(self, reply):
         self.reply = reply
