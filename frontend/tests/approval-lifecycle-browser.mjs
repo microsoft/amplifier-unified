@@ -513,6 +513,22 @@ try{
    if(command.action==='conversation.stop')stopRequests.push(command);
   });
   const inspectTarget=()=>stopPage.request.get(url+'/fixture?sessionId='+encodeURIComponent(target.sessionId),{timeout:8000}).then(r=>r.json());
+  const nextPermissionRead=()=>bounded('Stop recovery permission read', (async()=>{
+   const request=await stopPage.waitForRequest(request=>{
+    if(!isAction(request))return false;
+    const command=unwrap(request.postDataJSON());
+    return command.action==='capability.read'&&command.args?.sessionId===target.sessionId&&command.args?.id===target.pendingId;
+   },{timeout:8000});
+   // Correlate the body to this exact new request, not an earlier response.
+   const response=await request.response();assert.ok(response,'Permission read must receive a response');
+   const receipt={command:unwrap(request.postDataJSON()),status:response.status(),body:await response.json()};
+   diagnostic('stop-recovery-permission-read',{scenario,...receipt});
+   assert.equal(receipt.status,200);assert.equal(receipt.body.accepted,true);
+   assert.equal(receipt.body.result.request.id,target.pendingId);
+   assert.equal(receipt.body.result.request.canDismiss,true);
+   assert.ok(receipt.body.result.request.requestHash);
+   return receipt;
+  })(),8000).then(receipt=>({receipt}),error=>({error}));
   let acceptedLookup=false,stopCommand,stopClientId,stopReceipt,supersedingStop=null;
   const hideStop=async route=>{
    try{
@@ -592,7 +608,24 @@ try{
    await expect.poll(()=>lookups.length).toBeGreaterThan(priorLookups);
    await expect(review).toBeEnabled();await expect(note).toHaveValue(noteText);
    assert.equal(await stopPage.evaluate(()=>window.amplifier.getState().client.id),clientBefore);
+   // A newer Stop changes requestHash even when the card still looks expired.
+   // Reconnect lookup arrival is not completion of the card's passive review.
+   // Clear the earlier alert through the real UI handler before the one decision
+   // attempt: a stale-hash rejection must never stand in for Stop-fence proof.
+   const scopeRead=nextPermissionRead();
+   await review.click();
+   const scoped=await scopeRead;if(scoped.error)throw scoped.error;
+   await expect(card.getByRole('region',{name:'Current configuration scope'})).toBeVisible();
+   await expect(card.getByRole('alert')).toHaveCount(0);
+   await expect(review).toBeEnabled();await expect(note).toHaveValue(noteText);
+   assert.equal(acceptedLookup,false);assert.deepEqual(mutations,[]);
+   const guardedRead=nextPermissionRead();
    await dismiss.click();await expect(card.getByRole('alert')).toContainText('Stop was requested');
+   const guarded=await guardedRead;if(guarded.error)throw guarded.error;
+   assert.equal(guarded.receipt.body.result.request.requestHash,scoped.receipt.body.result.request.requestHash,
+    'The fenced decision preflight must match the freshly reviewed scope');
+   diagnostic('stop-recovery-reviewed-fence',{scenario,review:scoped.receipt,preflight:guarded.receipt,
+    decisionRequests:[...mutations],acceptedLookup});
    await expect(review).toBeEnabled();assert.deepEqual(mutations,[]);
    acceptedLookup=true;
    if(scenario==='malformed-ack'){
