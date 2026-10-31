@@ -1,118 +1,122 @@
 #!/bin/bash
-# Run only in the prepared managed browser-test guest, never on the development host.
+# Existing focused #1201 entry point. Run ONLY in the prepared browser-test guest.
+# Source and installed journeys share the newly built bytes, never stale Git assets.
 set -eu
 cd /workspace
-mkdir -p /artifacts/provider1201
-python - <<'PY' > /artifacts/provider1201/readiness.json
-import sys, json, importlib.metadata as m
+OUT=/artifacts/provider1201
+mkdir -p "$OUT"
+# Preserve the first failing phase and all earlier logs; there are no implicit retries.
+run() {
+  name=$1; shift
+  printf 'starting %s\n' "$name"
+  if "$@" > "$OUT/$name.log" 2>&1; then code=0; else code=$?; fi
+  printf '%s=%s\n' "$name" "$code" | tee -a "$OUT/results.txt"
+  if [ "$code" -ne 0 ]; then tail -80 "$OUT/$name.log"; fi
+  return "$code"
+}
+trap 'code=$?; printf "qualifier_exit=%s\n" "$code" >> "$OUT/results.txt"' EXIT
+run readiness python - <<'PY'
+import os, sys, json, hashlib, importlib.metadata as m
 from pathlib import Path
-import amplifier_core, amplifier_foundation, amplifier_module_loop_live.orchestrator
+import amplifier_core, amplifier_core._engine, amplifier_foundation
+import amplifier_module_loop_live.orchestrator, amplifier_module_loop_streaming
 assert sys.version_info >= (3, 13)
-build=json.loads(Path('/opt/unified-prepared/execution-contract.json').read_text())['pythonBuild']
-assert build.get('available') and Path(build['python']).is_file(), 'Installed qualification requires prepared build runtime'
-print(json.dumps({'python': sys.version, 'core': m.version('amplifier-core'), 'foundation': m.version('amplifier-foundation'), 'loop': m.version('amplifier-module-loop-live')}))
+contract=json.loads(Path('/opt/unified-prepared/execution-contract.json').read_text())
+build=contract['pythonBuild']
+assert build.get('available') and Path(build['python']).is_file(), 'Prepared wheel builder unavailable'
+assert build['python']=='/opt/unified-prepared/build-venv/bin/python'
+input_path=Path(os.environ['PROVIDER_SELECTION_INPUT_MANIFEST'])
+inputs=json.loads(input_path.read_text())
+assert inputs['commit'] and inputs['files']
+for name,sha in inputs['files'].items():
+    path=Path(name)
+    assert not path.is_absolute() and '..' not in path.parts and not path.is_symlink()
+    assert hashlib.sha256(path.read_bytes()).hexdigest()==sha, name
+Path('/artifacts/provider1201/candidate-inputs.json').write_bytes(input_path.read_bytes())
+modules={name:{'path':str(Path(module.__file__).resolve()),'sha256':hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest()}
+ for name,module in sys.modules.copy().items() if name in ('amplifier_core._engine','amplifier_foundation','amplifier_module_loop_live.orchestrator','amplifier_module_loop_streaming')}
+packages={d.metadata['Name']: {'version':d.version,'source':json.loads(d.read_text('direct_url.json') or 'null')}
+ for d in m.distributions() if d.metadata['Name']}
+# Check actual prepared pins, not a matching loop __init__.py alone.
+assert json.loads(m.distribution('amplifier-module-loop-live').read_text('direct_url.json'))['vcs_info']['commit_id']=='ccc4aa8a0bb0efdbc9e4023c2feab47d19c4bcaf'
+assert json.loads(m.distribution('amplifier-module-loop-streaming').read_text('direct_url.json'))['vcs_info']['commit_id']=='270a998503c689b4b6185df817d3f6249c32e956'
+Path('/artifacts/provider1201/readiness.json').write_text(json.dumps({'python':sys.version,'modules':modules,'packages':packages,'contract':contract},indent=2)+'\n')
 PY
-node --input-type=module - <<'JS'
+run chromium node --input-type=module - <<'JS'
 import {chromium} from './frontend/node_modules/@playwright/test/index.mjs';
 const browser=await chromium.launch({headless:true});
-const page=await browser.newPage();await page.setContent('<button>Ready</button>');await page.getByRole('button',{name:'Ready'}).click();console.log('Chromium',browser.version());await browser.close();
+try {const page=await browser.newPage();await page.setContent('<button>Ready</button>');await page.getByRole('button',{name:'Ready'}).click();console.log('Chromium',browser.version(),'Node',process.version);} finally {await browser.close();}
 JS
-cp /opt/unified-prepared/execution-contract.json /artifacts/provider1201/execution-contract.json
-sha256sum uv.lock frontend/package-lock.json frontend/src/chat-controls.jsx tests/test_draft_defaults.py frontend/tests/chat-controls.test.mjs frontend/tests/provider-selection-browser.mjs tests/fixtures/provider_selection_scenario.py tests/fixtures/empty_host_ui_server.py scripts/qualify_provider_selection.sh > /artifacts/provider1201/source-sha256.txt
-python - <<'PY'
-import hashlib,json
-from pathlib import Path
-root=Path('amplifier_web/static')
-assert not any(path.is_symlink() for path in root.rglob('*'))
-files={str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(root.rglob('*')) if path.is_file()}
-Path('/artifacts/provider1201/committed-static.json').write_text(json.dumps(files,indent=2)+'\n')
-PY
-export PROVIDER_SELECTION_STATIC_MANIFEST=/artifacts/provider1201/committed-static.json
-# Keep independent results even when a check fails. Never silently retry it.
-set +e
-python -m pytest -q --tb=short tests/test_draft_defaults.py tests/test_provider_selection_lifecycle.py tests/test_selected_provider.py tests/test_new_chat.py tests/test_provider_recovery.py tests/test_provider_isolation.py tests/test_bundle_selection.py::test_scoped_defaults_persist_and_do_not_retarget_existing_chats > /artifacts/provider1201/python.log 2>&1
-python_result=$?
-(cd frontend && node --test tests/chat-controls.test.mjs) > /artifacts/provider1201/frontend.log 2>&1
-frontend_result=$?
-set -e
-# Old-behavior negative control: restore the precise obsolete fallback, run only
-# the discriminating test, then restore the candidate before building it.
-cp frontend/src/chat-controls.jsx /artifacts/provider1201/chat-controls-candidate.jsx
+cp /opt/unified-prepared/execution-contract.json "$OUT/execution-contract.json"
+# This remains a small affected set, not the Python/frontend full suites. Changed
+# runtime/control and loop inputs mean their previous results are not blanket proof.
+run python python -m pytest -q --tb=short tests/test_draft_defaults.py tests/test_provider_selection_lifecycle.py tests/test_selected_provider.py tests/test_new_chat.py tests/test_provider_recovery.py tests/test_provider_isolation.py tests/test_browser_check_runner.py::test_existing_scenario_commands_environments_and_distinct_modes_are_preserved tests/test_bundle_selection.py::test_scoped_defaults_persist_and_do_not_retarget_existing_chats
+run frontend bash -c 'cd frontend && node --test tests/chat-controls.test.mjs'
+# Discriminating old-behavior control; restore exact source even on runner failure.
+cp frontend/src/chat-controls.jsx "$OUT/chat-controls-candidate.jsx"
 python - <<'PY'
 from pathlib import Path
-path=Path('frontend/src/chat-controls.jsx')
-text=path.read_text()
-old=' const resolvedDefaults=defaults;'
-assert text.count(old)==1
+path=Path('frontend/src/chat-controls.jsx');text=path.read_text()
+old=' const resolvedDefaults=defaults;';assert text.count(old)==1
 path.write_text(text.replace(old, ''' const defaultsContext=JSON.stringify([setup.location?.kind||'workspace',setup.workspace,configurationRevision]);
  const previousDefaults=useRef(null);
  if(isDraft&&defaults.phase==='ready')previousDefaults.current={context:defaultsContext,value:defaults};
  const resolvedDefaults=defaults.phase==='ready'||defaults.phase==='error'?defaults:previousDefaults.current?.context===defaultsContext?previousDefaults.current.value:defaults;'''))
 PY
-set +e
-(cd frontend && node --test --test-name-pattern='inherited choices are displayed' tests/chat-controls.test.mjs) > /artifacts/provider1201/negative.log 2>&1
-negative_result=$?
-set -e
-cp /artifacts/provider1201/chat-controls-candidate.jsx frontend/src/chat-controls.jsx
-sha256sum -c /artifacts/provider1201/source-sha256.txt
-python - <<'PY'
+negative=0
+run old_behavior bash -c "cd frontend && node --test --test-name-pattern='inherited choices are displayed' tests/chat-controls.test.mjs" || negative=$?
+cp "$OUT/chat-controls-candidate.jsx" frontend/src/chat-controls.jsx
+[ "$negative" -ne 0 ]
+run negative_oracle python - <<'PY'
 from pathlib import Path
-log=Path('/artifacts/provider1201/negative.log').read_text()
+log=Path('/artifacts/provider1201/old_behavior.log').read_text()
 assert 'ERR_ASSERTION' in log and 'Loading model' in log and 'not ok' in log, log
 assert 'ERR_LOAD_URL' not in log and 'ERR_MODULE_NOT_FOUND' not in log, log
 PY
-set +e
-npm run build --prefix frontend > /artifacts/provider1201/build.log 2>&1
-build_result=$?
-if [ "$build_result" -eq 0 ]; then
-  python - <<'PY' > /artifacts/provider1201/static-parity.json
-import hashlib,json
-from pathlib import Path
-expected=json.loads(Path('/artifacts/provider1201/committed-static.json').read_text())
-actual={str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in Path('amplifier_web/static').rglob('*') if path.is_file()}
-assert actual==expected, {'missing': sorted(expected.keys()-actual.keys()), 'extra': sorted(actual.keys()-expected.keys()), 'changed': [name for name in expected if name in actual and expected[name]!=actual[name]]}
-print(json.dumps({'committedEqualsRebuild':True,'fileCount':len(actual),'manifestSha256':hashlib.sha256(Path('/artifacts/provider1201/committed-static.json').read_bytes()).hexdigest()}))
-PY
-  parity_result=$?
-  node frontend/tests/provider-selection-browser.mjs > /artifacts/provider1201/browser.log 2>&1
-  browser_result=$?
-  node frontend/tests/draft-provider-refresh-browser.mjs > /artifacts/provider1201/adjacent-browser.log 2>&1
-  adjacent_result=$?
-else
-  browser_result=125
-  adjacent_result=125
-  parity_result=125
-fi
-set -e
-# Installed package boundary: fresh venv, exact wheel, prepared dependency paths
-# without processing their editable-app .pth; leave source and unset PYTHONPATH.
-/opt/unified-prepared/build-venv/bin/python -m build --wheel --no-isolation --outdir /artifacts/dist /workspace > /artifacts/provider1201/wheel.log 2>&1
+run build npm run build --prefix frontend
 python - <<'PY'
-import hashlib,json,pathlib,shutil,subprocess,sys,sysconfig,venv,zipfile
-out=pathlib.Path('/artifacts/provider1201')
-wheel=next(pathlib.Path('/artifacts/dist').glob('*.whl'))
-venv.EnvBuilder(with_pip=True).create('/artifacts/installed')
-python='/artifacts/installed/bin/python'
+import hashlib,json,tarfile
+from pathlib import Path
+root=Path('amplifier_web/static');assert not any(p.is_symlink() for p in root.rglob('*'))
+files={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.rglob('*')) if p.is_file()}
+Path('/artifacts/provider1201/rebuilt-static.json').write_text(json.dumps(files,indent=2)+'\n')
+with tarfile.open('/artifacts/provider1201/rebuilt-static.tar','w') as archive:
+    for name in files: archive.add(name,arcname=name,recursive=False)
+# Bind every frozen non-static tracked input; the managed guest has no .git.
+inputs=json.loads(Path('/artifacts/provider1201/candidate-inputs.json').read_text())
+for name,sha in inputs['files'].items():
+    if not name.startswith('amplifier_web/static/'):
+        assert hashlib.sha256(Path(name).read_bytes()).hexdigest()==sha, name
+assert not list(Path('.').glob('.env*')) and not list(Path('frontend').glob('.env*'))
+PY
+export PROVIDER_SELECTION_STATIC_MANIFEST="$OUT/rebuilt-static.json"
+run wheel /opt/unified-prepared/build-venv/bin/python -m build --wheel --no-isolation --outdir /artifacts/dist /workspace
+run install python - <<'PY'
+import hashlib,json,pathlib,shutil,subprocess,sysconfig,venv,zipfile
+out=pathlib.Path('/artifacts/provider1201');wheels=list(pathlib.Path('/artifacts/dist').glob('*.whl'));assert len(wheels)==1
+wheel=wheels[0];venv.EnvBuilder(with_pip=True).create('/artifacts/installed');python='/artifacts/installed/bin/python'
 subprocess.run([python,'-m','pip','install','--no-index','--no-deps',str(wheel)],check=True)
 site=pathlib.Path(subprocess.check_output([python,'-c','import sysconfig; print(sysconfig.get_path("purelib"))'],text=True).strip())
-# Referencing a site directory in .pth adds imports, not its nested .pth hooks.
+# A plain path does not execute the prepared environment's editable-app .pth.
 (site/'prepared-dependencies.pth').write_text(sysconfig.get_path('purelib')+'\n')
 with zipfile.ZipFile(wheel) as archive:
-    files={name:hashlib.sha256(archive.read(name)).hexdigest() for name in archive.namelist() if not name.endswith('/') and not name.endswith('.dist-info/RECORD')}
-identity={'wheelSha256':hashlib.sha256(wheel.read_bytes()).hexdigest(),'files':files,'static':{name:sha for name,sha in files.items() if name.startswith('amplifier_web/static/')}}
-committed=json.loads((out/'committed-static.json').read_text())
-assert identity['static']==committed, 'Wheel static payload differs from committed candidate'
-identity['committedStaticParity']=True
-(out/'installed-identity.json').write_text(json.dumps(identity,indent=2))
+    assert not any('.data/' in n for n in archive.namelist()), 'Unexpected relocated wheel payload; retain it and review installation mapping'
+    files={n:hashlib.sha256(archive.read(n)).hexdigest() for n in archive.namelist() if not n.endswith('/') and not n.endswith('.dist-info/RECORD')}
+identity={'wheelSha256':hashlib.sha256(wheel.read_bytes()).hexdigest(),'files':files,'static':{n:s for n,s in files.items() if n.startswith('amplifier_web/static/')}}
+assert identity['static']==json.loads((out/'rebuilt-static.json').read_text())
+for name,sha in files.items(): assert hashlib.sha256((site/name).read_bytes()).hexdigest()==sha, name
+(out/'installed-identity.json').write_text(json.dumps(identity,indent=2)+'\n')
 fixtures=pathlib.Path('/artifacts/installed-fixtures');fixtures.mkdir()
-for name in ['empty_host_ui_server.py','configured_browser.py','provider_selection_scenario.py']:
+for name in ('empty_host_ui_server.py','configured_browser.py','provider_selection_scenario.py','provider_native_ui_server.py'):
     shutil.copyfile(pathlib.Path('/workspace/tests/fixtures')/name,fixtures/name)
 PY
-mkdir -p /artifacts/installed-proof
-set +e
-(cd /artifacts && env -u PYTHONPATH AMPLIFIER_TEST_INSTALLED=1 AMPLIFIER_TEST_INSTALLED_IDENTITY=/artifacts/provider1201/installed-identity.json AMPLIFIER_TEST_PYTHON=/artifacts/installed/bin/python AMPLIFIER_TEST_ARTIFACTS=/artifacts/installed-proof PROVIDER_SELECTION_FIXTURE=/artifacts/installed-fixtures/empty_host_ui_server.py node /workspace/frontend/tests/provider-selection-browser.mjs) > /artifacts/provider1201/installed-browser.log 2>&1
-installed_result=$?
-set -e
-printf 'python=%s frontend=%s negative_expected_nonzero=%s build=%s static_parity=%s browser=%s adjacent=%s installed=%s\n' "$python_result" "$frontend_result" "$negative_result" "$build_result" "$parity_result" "$browser_result" "$adjacent_result" "$installed_result" | tee /artifacts/provider1201/results.txt
-cat /artifacts/provider1201/python.log /artifacts/provider1201/frontend.log /artifacts/provider1201/browser.log /artifacts/provider1201/installed-browser.log
-[ "$python_result" -eq 0 ] && [ "$frontend_result" -eq 0 ] && [ "$negative_result" -ne 0 ] && [ "$build_result" -eq 0 ] && [ "$parity_result" -eq 0 ] && [ "$browser_result" -eq 0 ] && [ "$adjacent_result" -eq 0 ] && [ "$installed_result" -eq 0 ]
+mkdir -p /artifacts/source-native /artifacts/installed-native /artifacts/source-synthetic /artifacts/installed-synthetic
+run native_source env AMPLIFIER_TEST_ARTIFACTS=/artifacts/source-native node frontend/tests/provider-native-browser.mjs
+run native_installed bash -c 'cd /artifacts && env -u PYTHONPATH AMPLIFIER_TEST_INSTALLED=1 AMPLIFIER_TEST_INSTALLED_IDENTITY=/artifacts/provider1201/installed-identity.json AMPLIFIER_TEST_DEPENDENCY_PREFIX=/opt/unified-prepared/venv AMPLIFIER_TEST_PYTHON=/artifacts/installed/bin/python AMPLIFIER_TEST_ARTIFACTS=/artifacts/installed-native PROVIDER_NATIVE_FIXTURE=/artifacts/installed-fixtures/provider_native_ui_server.py node /workspace/frontend/tests/provider-native-browser.mjs'
+run synthetic_source env AMPLIFIER_TEST_ARTIFACTS=/artifacts/source-synthetic node frontend/tests/provider-selection-browser.mjs
+run synthetic_installed bash -c 'cd /artifacts && env -u PYTHONPATH AMPLIFIER_TEST_INSTALLED=1 AMPLIFIER_TEST_INSTALLED_IDENTITY=/artifacts/provider1201/installed-identity.json AMPLIFIER_TEST_PYTHON=/artifacts/installed/bin/python AMPLIFIER_TEST_ARTIFACTS=/artifacts/installed-synthetic PROVIDER_SELECTION_FIXTURE=/artifacts/installed-fixtures/empty_host_ui_server.py node /workspace/frontend/tests/provider-selection-browser.mjs'
+run adjacent node frontend/tests/draft-provider-refresh-browser.mjs
+# Host imports this exact successful build after verifying unchanged inputs. It
+# must compare final Git static bytes to rebuilt-static.json before publication.
+printf 'source_and_installed_complete=0\n' >> "$OUT/results.txt"
+cat "$OUT/results.txt"

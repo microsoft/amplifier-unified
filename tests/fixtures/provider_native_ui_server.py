@@ -3,7 +3,7 @@
 Run with the prepared interpreter: python <this-file> <new-artifact-root>.
 The first stdout line is the listening HTTP URL. Login uses the production
 control-token flow with fixture-browser-control-token. No sessions or mounted
-controls are seeded. The browser owns creation, selection and all four sends.
+controls are seeded. The browser owns creation, selection and all five sends.
 
 GET /fixture/native-proof is strictly observational: it never calls a runtime
 control, starts a worker or reads a transcript/events.jsonl. configuration.providers
@@ -12,10 +12,18 @@ service's browsing catalog is reported separately. Missing observations stay abs
 
 Disable automatic naming through session.naming before each chat's first send
 (or rename it through session.rename, which disables Auto). Naming calls, if any,
-are retained too, not filtered out to manufacture four calls.
-Only the provider, prepared-interpreter command selection and owned proof sinks
-are fixture code. The audit guard refuses external networking and unlisted child
+are retained too, not filtered out to manufacture five calls.
+Only the provider, prepared-interpreter command selection, finite probe gate and
+owned proof sinks are fixture code. Releasing the gate executes the original
+production probe. The audit guard refuses external networking and unlisted child
 commands; it is not a replacement preparation, mount, selector or worker.
+
+Installed mode: AMPLIFIER_TEST_INSTALLED=1, AMPLIFIER_TEST_INSTALLED_IDENTITY
+points to {files: {wheel-relative-path: sha256}} (all wheel entries except RECORD).
+AMPLIFIER_TEST_PYTHON must be the launching fresh venv interpreter. Dependencies
+must resolve inside that venv or AMPLIFIER_TEST_DEPENDENCY_PREFIX, an explicitly
+prepared prefix. Launch this externally copied file with PYTHONPATH unset and
+cwd outside the checkout. No missing installed import falls back to source.
 """
 from __future__ import annotations
 
@@ -24,7 +32,9 @@ import atexit
 import copy
 import hashlib
 import importlib
+import importlib.machinery
 import importlib.metadata
+import importlib.util
 import ipaddress
 import json
 import os
@@ -33,12 +43,13 @@ import signal
 import sys
 import time
 
-SOURCE = Path(__file__).resolve().parents[2]
 MODULES = {
     'amplifier_core': 'amplifier-core',
     'amplifier_core._engine': 'amplifier-core',
     'amplifier_foundation': 'amplifier-foundation',
     'amplifier_module_loop_live': 'amplifier-module-loop-live',
+    'amplifier_module_loop_live.orchestrator': 'amplifier-module-loop-live',
+    'amplifier_module_loop_streaming': 'amplifier-module-loop-streaming',
     'amplifier_module_context_simple': 'amplifier-module-context-simple',
     'amplifier_module_hook_context_intelligence': 'amplifier-module-hook-context-intelligence',
 }
@@ -93,6 +104,9 @@ class NativeFixtureProvider:
                 raise RuntimeError('Incomplete provider proof append')
         finally:
             os.close(fd)
+        from pathlib import Path
+        from provider_native_ui_server import capture_loaded_sources
+        capture_loaded_sources(Path(self.config['proof_sink']).parent, 'provider-entry', call=row)
         return ChatResponse(content=[TextBlock(text='native-fixture-response')])
 
 async def mount(coordinator, config=None):
@@ -116,6 +130,115 @@ def file_identity(path):
     return {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
+def package_origin(root):
+    """Select application origin once, independently of the test's location."""
+    installed = os.environ.get('AMPLIFIER_TEST_INSTALLED') == '1'
+    if installed:
+        if os.environ.get('PYTHONPATH'):
+            raise RuntimeError('Installed fixture must start with PYTHONPATH unset')
+        manifest_path = Path(os.environ['AMPLIFIER_TEST_INSTALLED_IDENTITY']).resolve(strict=True)
+        manifest = read_json(manifest_path)
+        files = manifest.get('files')
+        if not isinstance(files, dict) or not files:
+            raise ValueError('Installed identity requires a nonempty wheel files map')
+        distribution = importlib.metadata.distribution('amplifier-unified')
+        prefix = Path(sys.prefix).resolve(strict=True)
+        if prefix == Path(sys.base_prefix).resolve():
+            raise RuntimeError('Installed qualification requires a fresh virtual environment')
+        verified = {}
+        for relative, expected in files.items():
+            path = Path(relative)
+            if path.is_absolute() or '..' in path.parts or path.name == 'RECORD':
+                raise ValueError(f'Invalid wheel manifest entry: {relative}')
+            actual = file_identity(distribution.locate_file(relative))
+            if not Path(actual['path']).is_relative_to(prefix) or actual['sha256'] != expected:
+                raise RuntimeError(f'Installed wheel identity mismatch: {relative}')
+            verified[relative] = actual
+        spec = importlib.util.find_spec('amplifier_web')
+        if spec is None or not spec.origin:
+            raise RuntimeError('Installed amplifier_web is missing; no source fallback')
+        application = Path(spec.origin).resolve(strict=True).parent
+        if not application.is_relative_to(prefix):
+            raise RuntimeError('Application did not resolve inside the installed prefix')
+        # A partial manifest cannot attest an application tree. Ignore only
+        # interpreter-created bytecode, never extra authored/static files.
+        for path in application.rglob('*'):
+            if path.is_file() and '__pycache__' not in path.parts:
+                key = str(Path('amplifier_web') / path.relative_to(application))
+                if key not in verified or verified[key]['path'] != str(path.resolve()):
+                    raise RuntimeError(f'Unmanifested installed application file: {key}')
+        if verified.get('amplifier_web/__init__.py', {}).get('path') != str(application / '__init__.py'):
+            raise RuntimeError('Wheel identity does not match the imported application')
+        dependency = Path(os.environ.get('AMPLIFIER_TEST_DEPENDENCY_PREFIX', sys.prefix)).resolve(strict=True)
+        policy = {'mode': 'installed', 'applicationRoot': str(application),
+                  'applicationInstallRoot': str(Path(distribution.locate_file('')).resolve()),
+                  'applicationPackages': sorted({Path(name).parts[0] for name in files
+                      if len(Path(name).parts) > 1 and Path(name).parts[0].startswith('amplifier_')
+                      and not Path(name).parts[0].endswith('.dist-info')}),
+                  'applicationPrefix': str(prefix), 'dependencyPrefixes': list(dict.fromkeys(
+                      (str(prefix), str(dependency)))), 'wheelFiles': verified}
+        save(root / 'installed-identity.json', {'manifest': file_identity(manifest_path),
+             'version': distribution.version, 'files': verified})
+    else:
+        source = Path(__file__).resolve().parents[2]
+        application = source / 'amplifier_web'
+        if not (application / 'runtime_worker.py').is_file():
+            raise RuntimeError('Source fixture must reside in tests/fixtures of the checkout')
+        sys.path.insert(0, str(source))
+        policy = {'mode': 'source', 'applicationRoot': str(application), 'sourceRoot': str(source)}
+    policy['fixture'] = file_identity(__file__)
+    policy['providerRoot'] = str(root / 'provider')
+    save(root / 'origin-policy.json', policy)
+    return application, policy
+
+
+def check_origin(name, location, policy):
+    path = Path(location).resolve(strict=True)
+    if policy['mode'] != 'installed':
+        return
+    if name == 'amplifier_module_provider_native_fixture' or name.startswith('amplifier_module_provider_native_fixture.'):
+        if not path.is_relative_to(policy['providerRoot']):
+            raise RuntimeError(f'Unexpected synthetic provider origin: {path}')
+        return
+    # App modules must match the wheel, dependencies the prepared prefixes.
+    application = Path(policy['applicationRoot'])
+    if name.split('.')[0] in policy['applicationPackages'] or path.is_relative_to(application):
+        install_root = Path(policy['applicationInstallRoot'])
+        if not path.is_relative_to(install_root):
+            raise RuntimeError(f'Checkout application import refused: {name}: {path}')
+        key = str(path.relative_to(install_root))
+        expected = policy['wheelFiles'].get(key)
+        if expected != file_identity(path):
+            raise RuntimeError(f'Unmanifested application import: {name}: {path}')
+    elif not any(path.is_relative_to(prefix) for prefix in policy['dependencyPrefixes']):
+        raise RuntimeError(f'Dependency outside prepared prefixes: {name}: {path}')
+
+
+def capture_loaded_sources(root, boundary, *, call=None):
+    """Hash the actually loaded native binary and Python implementation files."""
+    policy = read_json(root / 'origin-policy.json')
+    modules, violations = {}, []
+    for name, module in sorted(tuple(sys.modules.items())):
+        location = getattr(module, '__file__', None)
+        if not location:
+            continue
+        # Directly executed worker/probe scripts also import bare sibling names.
+        if not name.startswith('amplifier_') and not Path(location).resolve().is_relative_to(policy['applicationRoot']):
+            continue
+        try:
+            modules[name] = file_identity(location)
+            check_origin(name, location, policy)
+        except (OSError, RuntimeError) as exc:
+            violations.append({'module': name, 'path': str(location), 'error': str(exc)})
+    row = {'pid': os.getpid(), 'python': sys.executable, 'boundary': boundary,
+           'atNs': time.time_ns(), 'modules': modules, 'violations': violations,
+           **({'call': call} if call is not None else {})}
+    append(root / f'loaded-boundaries-{os.getpid()}.jsonl', row)
+    if violations:
+        raise RuntimeError('Loaded source origin validation failed; see retained boundary evidence')
+    return row
+
+
 def process_identity(pid):
     # Linux-only qualification: start ticks distinguish PID reuse, not just liveness.
     stat = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
@@ -126,6 +249,31 @@ def install_guard(root, commands=()):
     """Inherited via sitecustomize; fail before any installer or remote transport."""
     allowed = {tuple(command) for command in commands}
     script_identity = file_identity(sys.argv[0])
+    policy = read_json(root / 'origin-policy.json')
+    if policy['mode'] == 'installed':
+        if script_identity != policy['fixture']:
+            check_origin('amplifier_web.__main__', script_identity['path'], policy)
+        app_module_names = {Path(name).stem for name in policy['wheelFiles']
+                            if Path(name).parent == Path('amplifier_web') and name.endswith('.py')}
+        class InstalledOriginFinder:
+            def find_spec(self, fullname, path=None, target=None):
+                if not fullname.startswith('amplifier_') and fullname not in app_module_names:
+                    return None
+                spec = importlib.machinery.PathFinder.find_spec(fullname, path, target)
+                if spec is not None and spec.origin and spec.origin not in {'built-in', 'frozen'}:
+                    if not fullname.startswith('amplifier_') and not Path(spec.origin).resolve().is_relative_to(policy['applicationRoot']):
+                        return None  # Do not mistake a similarly named stdlib module for an app sibling.
+                    try:
+                        check_origin(fullname if fullname.startswith('amplifier_') else
+                                     'amplifier_web.' + fullname, spec.origin, policy)
+                    except (OSError, RuntimeError) as exc:
+                        append(root / f'origin-refused-{os.getpid()}.jsonl',
+                               {'module': fullname, 'origin': spec.origin, 'error': str(exc)})
+                        raise
+                return spec
+        # Select the same Python path result, but refuse it before loading when
+        # outside the attested application / explicitly prepared dependency roots.
+        sys.meta_path.insert(0, InstalledOriginFinder())
     def audit(event, args):
         refused = False
         if event == 'subprocess.Popen':
@@ -150,13 +298,12 @@ def install_guard(root, commands=()):
     save(root / f'guard-ready-{os.getpid()}.json', {
         'pid': os.getpid(), 'script': sys.argv[0], 'allowedCommands': [list(c) for c in commands]})
     def loaded_sources():
-        rows = {}
-        for name in (*MODULES, 'amplifier_web.host.session', 'amplifier_web.runtime_worker',
-                     'amplifier_web.runtime_controls', 'amplifier_module_provider_native_fixture'):
-            location = getattr(sys.modules.get(name), '__file__', None)
-            rows[name] = file_identity(location) if location else {'status': 'not_loaded'}
-        save(root / f'loaded-{os.getpid()}.json', {'pid': os.getpid(), 'python': sys.executable,
-            'script': script_identity, 'modules': rows})
+        try:
+            row = capture_loaded_sources(root, 'exit')
+            save(root / f'loaded-{os.getpid()}.json', {**row, 'script': script_identity})
+        except BaseException as exc:
+            save(root / f'loaded-{os.getpid()}.json',
+                 {'pid': os.getpid(), 'error': f'{type(exc).__name__}: {exc}', 'script': script_identity})
     atexit.register(loaded_sources)
 
 
@@ -196,8 +343,13 @@ async def main(root):
         raise RuntimeError('Launch the fixture with AMPLIFIER_TEST_PYTHON itself; no interpreter fallback')
     if os.name != 'posix' or not Path('/proc/self/stat').is_file():
         raise RuntimeError('This fixture requires Linux process identity evidence')
-    command = [sys.executable, '-u', str(SOURCE / 'amplifier_web/runtime_worker.py')]
-    commands = [command, *[command[:-1] + [str(SOURCE / 'amplifier_web' / name)]
+    try:
+        application, origin_policy = package_origin(root)
+    except BaseException as exc:
+        save(root / 'failure.json', {'stage': 'package-origin', 'type': type(exc).__name__, 'message': str(exc)})
+        raise
+    command = [sys.executable, '-u', str(application / 'runtime_worker.py')]
+    commands = [command, *[command[:-1] + [str(application / name)]
                          for name in ('draft_defaults_probe.py', 'provider_probe.py')]]
     # Inherited credentials/source-store selectors cannot turn this into a user run.
     for name in list(os.environ):
@@ -211,14 +363,19 @@ async def main(root):
         HOME=str(root / 'user-home'), XDG_CONFIG_HOME=str(root / 'user-home/.config'),
         XDG_CACHE_HOME=str(root / 'user-home/.cache'), PYTHONNOUSERSITE='1', PYTHONDONTWRITEBYTECODE='1')
     sys.dont_write_bytecode = True
-    sys.path[:0] = [str(SOURCE), str(root / 'provider')]
-    os.environ['PYTHONPATH'] = os.pathsep.join((str(root / 'bootstrap'), str(Path(__file__).parent),
-                                              str(SOURCE), str(root / 'provider')))
+    sys.path.insert(0, str(root / 'provider'))
+    inherited_paths = [str(root / 'bootstrap'), str(root / 'provider')]
+    if origin_policy['mode'] == 'source':
+        inherited_paths.append(origin_policy['sourceRoot'])
+    os.environ['PYTHONPATH'] = os.pathsep.join(inherited_paths)
     (root / 'bootstrap/sitecustomize.py').write_text(
-        'import os, traceback\ntry:\n'
+        'import os, sys, traceback, importlib.util\ntry:\n'
         '    from pathlib import Path\n'
-        '    from provider_native_ui_server import install_guard\n'
-        f'    install_guard(Path({str(root)!r}))\n'
+        f'    spec = importlib.util.spec_from_file_location("provider_native_ui_server", {str(Path(__file__).resolve())!r})\n'
+        '    fixture = importlib.util.module_from_spec(spec)\n'
+        '    sys.modules[spec.name] = fixture\n'
+        '    spec.loader.exec_module(fixture)\n'
+        f'    fixture.install_guard(Path({str(root)!r}))\n'
         'except BaseException:\n'
         '    traceback.print_exc()\n'
         '    os._exit(78)\n')  # site normally swallows import errors; fail closed.
@@ -228,7 +385,7 @@ async def main(root):
     runtime = runner = app = None
     primary_failure = None
     original_spawn = asyncio.create_subprocess_exec
-    original_command = original_setup_perform = None
+    original_command = original_setup_perform = original_defaults = None
     stopped = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -239,9 +396,11 @@ async def main(root):
         paths = {}
         for name, distribution in MODULES.items():
             module = importlib.import_module(name)
+            direct_url = importlib.metadata.distribution(distribution).read_text('direct_url.json')
             modules[name] = {**file_identity(module.__file__),
-                             'version': importlib.metadata.version(distribution)}
-            if name.startswith('amplifier_module_'):
+                             'version': importlib.metadata.version(distribution),
+                             'directUrl': json.loads(direct_url) if direct_url else None}
+            if name.startswith('amplifier_module_') and '.' not in name:
                 paths[name.removeprefix('amplifier_module_').replace('_', '-')] = str(Path(module.__file__).parent)
         from aiohttp import web
         from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
@@ -250,17 +409,32 @@ async def main(root):
         from amplifier_web.setup import SetupManager
         from amplifier_web.auth import control_token_path
         from amplifier_web.session_files import validate_id
+        from amplifier_web import draft_defaults
         package = root / 'provider/amplifier_module_provider_native_fixture'
         package.mkdir()
         (package / '__init__.py').write_text(PROVIDER)
         importlib.import_module('amplifier_module_provider_native_fixture')
         paths['provider-native-fixture'] = str(package.parent)
         bundle = root / 'root.yaml'
-        save(bundle, {'bundle': {'name': 'provider-native-ui', 'version': '1.0.0'},
+        alternate = root / 'alternate.yaml'
+        root_definition = {'bundle': {'name': 'provider-native-ui', 'version': '1.0.0'},
             'session': {'orchestrator': {'module': 'loop-live', 'source': paths['loop-live'],
                                         'config': {'use_streaming': False}},
                         'context': {'module': 'context-simple', 'source': paths['context-simple'],
-                                    'config': {'max_tokens': 1000000}}}})
+                                    'config': {'max_tokens': 1000000}}}}
+        save(bundle, root_definition)
+        alternate_definition = copy.deepcopy(root_definition)
+        alternate_definition['bundle']['name'] = 'provider-native-alternate'
+        # A distinct root-local connection leaves shared A/B priorities intact.
+        # Shared settings override matching IDs, so do not pretend a root B=0
+        # would override the shared B=20 declaration.
+        alternate_definition['providers'] = [{
+            'module': 'provider-native-fixture', 'id': 'native-alt',
+            'source': paths['provider-native-fixture'],
+            'config': {'display_name': 'Native alternate', 'priority': 0,
+                       'default_model': 'native-model', 'reasoning_effort': 'high',
+                       'proof_sink': str(root / 'calls.jsonl')}}]
+        save(alternate, alternate_definition)
         settings = root / 'shared/settings.yaml'
         save(settings, {'bundle': {'active': str(bundle), 'app': []},
             'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)}, 'sources': {'modules': paths},
@@ -275,6 +449,43 @@ async def main(root):
         # Same local prepared-interpreter seam as bundle_switch_probe; real probes.
         original_command = RuntimeManager._command
         RuntimeManager._command = lambda self, *args, **kwargs: list(self.command or command)
+        gate = asyncio.Event()
+        delayed = {'phase': 'unarmed', 'bundle': str(alternate), 'timeoutSeconds': 45, 'probes': []}
+        def gate_record(event, **values):
+            append(root / 'delayed-probe.jsonl', {'event': event, 'atNs': time.time_ns(), **values})
+        original_defaults = draft_defaults.resolve_defaults
+        async def gated_defaults(home, workspace, bundle=None, app_bundle=None, **kwargs):
+            if bundle != str(alternate):
+                return await original_defaults(home, workspace, bundle, app_bundle, **kwargs)
+            row = {'index': len(delayed['probes']), 'home': str(home), 'workspace': str(workspace),
+                   'bundle': bundle, 'arguments': copy.deepcopy(kwargs), 'enteredAtNs': time.time_ns(),
+                   'phase': 'held'}
+            delayed['probes'].append(row)
+            gate_record('entered', **row)
+            try:
+                if delayed['phase'] == 'unarmed' or len(delayed['probes']) > 8:
+                    raise RuntimeError('Unexpected alternate probe outside the bounded delayed case')
+                if not gate.is_set():
+                    delayed['phase'] = 'held'
+                    await asyncio.wait_for(gate.wait(), delayed['timeoutSeconds'])
+                row.update(phase='production-probe', releasedAtNs=time.time_ns())
+                gate_record('production-probe', **row)
+                before_processes = len(processes)
+                # Never synthesize or modify the resolved providers/effective tuple.
+                result = await original_defaults(home, workspace, bundle, app_bundle, **kwargs)
+                row.update(phase='ready', finishedAtNs=time.time_ns(), result=copy.deepcopy(result),
+                           probeProcesses=[{**entry['identity'], 'command': entry['command'],
+                                            'spawnedAtNs': entry['spawnedAtNs']}
+                               for entry in processes[before_processes:] if entry['kind'] == 'draft_defaults_probe'])
+                gate_record('ready', **row)
+                delayed['phase'] = 'ready'
+                return result
+            except BaseException as exc:
+                row.update(phase='error', error=f'{type(exc).__name__}: {exc}')
+                delayed['phase'] = 'error'
+                gate_record('error', **row)
+                raise
+        draft_defaults.resolve_defaults = gated_defaults
         original_setup_perform = SetupManager.perform
         async def observed_setup(manager, action, arguments):
             # Observe the real returned optional diagnostic before another setup
@@ -292,7 +503,7 @@ async def main(root):
                 raise RuntimeError(f'Unexpected fixture subprocess: {argv!r}')
             process = await original_spawn(*argv, **kwargs)
             entry = {'process': process, 'identity': {'pid': process.pid},
-                     'command': list(argv), 'kind': Path(argv[-1]).stem}
+                     'command': list(argv), 'kind': Path(argv[-1]).stem, 'spawnedAtNs': time.time_ns()}
             processes.append(entry)
             try:
                 entry['identity'] = process_identity(process.pid)
@@ -300,7 +511,7 @@ async def main(root):
                 # Retain custody even if a failed probe exits before /proc is read.
                 entry['identity']['identityError'] = f'{type(exc).__name__}: {exc}'
             append(root / 'processes.jsonl', {'event': 'spawned', **entry['identity'],
-                                             'command': entry['command'], 'kind': entry['kind']})
+                'command': entry['command'], 'kind': entry['kind'], 'spawnedAtNs': entry['spawnedAtNs']})
             async def exited():
                 code = await process.wait()
                 append(root / 'processes.jsonl', {'event': 'reaped', **entry['identity'], 'returncode': code})
@@ -338,19 +549,23 @@ async def main(root):
                 append(root / 'provider-controls.jsonl', record)
             return result
         service.on_runtime_event, runtime.control = observed_event, observed_control
-        static = SOURCE / 'amplifier_web/static'
+        static = application / 'static'
         if not (static / 'index.html').is_file():
             raise RuntimeError('Prepared frontend assets are missing; fixture never builds them')
         readiness = {'python': sys.executable, 'prefix': sys.prefix, 'modules': modules,
+            'mode': origin_policy['mode'], 'applicationRoot': str(application),
+            'originPolicy': file_identity(root / 'origin-policy.json'),
             'modulePaths': paths, 'settings': file_identity(settings), 'rootBundle': file_identity(bundle),
+            'alternateBundle': file_identity(alternate),
             'fixture': file_identity(__file__), 'provider': file_identity(package / '__init__.py'),
-            'sources': {name: file_identity(SOURCE / 'amplifier_web' / name) for name in (
+            'sources': {name: file_identity(application / name) for name in (
                 'server.py', 'service.py', 'runtime.py', 'runtime_worker.py', 'runtime_controls.py',
-                'host/session.py', 'host/config.py', 'draft_defaults.py', 'draft_defaults_probe.py')},
+                'host/session.py', 'host/config.py', 'draft_defaults.py', 'draft_defaults_probe.py', 'provider_probe.py')},
             'static': {str(p.relative_to(static)): file_identity(p)['sha256']
                        for p in sorted(static.rglob('*')) if p.is_file()},
             'importsReady': True, 'startupGate': 'imports-and-assets-only',
             'externalAcquisitionAllowed': False}
+        capture_loaded_sources(root, 'server-readiness')
         save(root / 'readiness.json', readiness)
         def proof():
             sessions = list(service.state.get('sessions', []))
@@ -363,6 +578,7 @@ async def main(root):
                 validate_id(native)
                 controls = read_json(root / 'app/sessions' / native / 'control-state.json')
                 result.append({'id': sid, 'nativeId': native, 'selection': session.get('selection'),
+                    'bundle': session.get('bundle'),
                     'status': session.get('status'), 'report': session.get('runtimeReport'),
                     'error': session.get('error'), 'failure': session.get('failure'),
                     'nextMessageRevision': session.get('nextMessageRevision'),
@@ -382,15 +598,32 @@ async def main(root):
                 'draftDefaults': copy.deepcopy(service.state.get('draftDefaults', {}))}
             return {'calls': calls_at(root / 'calls.jsonl'), 'sessions': result,
                 'workers': [{**entry['identity'], 'kind': entry['kind'],
+                    'command': entry['command'], 'spawnedAtNs': entry['spawnedAtNs'],
                     'returncode': entry['process'].returncode} for entry in processes],
                 'workerReady': ready_events, 'providerControls': control_reads,
                 'lifecycle': lifecycle, 'readiness': readiness, 'discovery': discovery,
-                'routingDiscovery': routing_reads,
+                'routingDiscovery': routing_reads, 'delayedProbe': copy.deepcopy(delayed),
+                'originRefusals': [row for path in sorted(root.glob('origin-refused-*.jsonl')) for row in calls_at(path)],
                 'guardRefusals': [row for path in sorted(root.glob('guard-*.jsonl')) for row in calls_at(path)],
                 'sharedSettings': {'initial': settings_identity, 'current': file_identity(settings)}}
         async def inspect(request):
             return web.json_response(proof(), headers={'Cache-Control': 'no-store'})
+        async def arm(request):
+            if delayed['phase'] != 'unarmed' or len(calls_at(root / 'calls.jsonl')) != 4:
+                raise web.HTTPConflict(text='Arm only once, after the original four sends')
+            delayed.update(phase='armed', armedAtNs=time.time_ns())
+            gate_record('armed', bundle=str(alternate))
+            return web.json_response(copy.deepcopy(delayed))
+        async def release(request):
+            if delayed['phase'] != 'held' or not delayed['probes'] or len(calls_at(root / 'calls.jsonl')) != 4:
+                raise web.HTTPConflict(text='Release requires an observed held probe and no fifth call')
+            delayed.update(phase='released', releasedAtNs=time.time_ns())
+            gate_record('released', bundle=str(alternate))
+            gate.set()
+            return web.json_response(copy.deepcopy(delayed))
         app.router.add_get('/fixture/native-proof', inspect)
+        app.router.add_post('/fixture/native-delay/arm', arm)
+        app.router.add_post('/fixture/native-delay/release', release)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, '127.0.0.1', 0)
@@ -421,6 +654,12 @@ async def main(root):
                 await asyncio.wait_for(runtime.close(), 8)
         except BaseException as exc:
             cleanup_errors.append(f'runtime close: {type(exc).__name__}: {exc}')
+        try:
+            capture_loaded_sources(root, 'server-cleanup')
+            if any(root.glob('origin-refused-*.jsonl')):
+                raise RuntimeError('Installed-origin refusal occurred; see retained origin-refused records')
+        except BaseException as exc:
+            cleanup_errors.append(f'loaded origins: {type(exc).__name__}: {exc}')
         # Only retained subprocess handles; fallback never kills a reused PID.
         fallback = []
         async def reap_owned(entry):
@@ -451,10 +690,14 @@ async def main(root):
             identities = [{**entry['identity'], 'kind': entry['kind'],
                            'returncode': entry['process'].returncode,
                            'guardReady': (root / f'guard-ready-{entry["identity"]["pid"]}.json').is_file(),
+                           'loadedSources': read_json(root / f'loaded-{entry["identity"]["pid"]}.json'),
                            'procAbsent': not Path(f'/proc/{entry["identity"]["pid"]}').exists()}
                           for entry in processes]
             complete = not cleanup_errors and all(row['returncode'] is not None and row['procAbsent']
                                                   and row['guardReady'] and 'identityError' not in row
+                                                  and row['loadedSources'] is not None
+                                                  and not row['loadedSources'].get('error')
+                                                  and not row['loadedSources'].get('violations')
                                                   for row in identities)
             save(root / 'cleanup.json', {'complete': complete, 'errors': cleanup_errors,
                                         'fallbackPids': fallback, 'processes': identities})
@@ -468,6 +711,8 @@ async def main(root):
                 RuntimeManager._command = original_command
             if original_setup_perform is not None:
                 SetupManager.perform = original_setup_perform
+            if original_defaults is not None:
+                draft_defaults.resolve_defaults = original_defaults
             for signum in (signal.SIGINT, signal.SIGTERM):
                 loop.remove_signal_handler(signum)
             try:

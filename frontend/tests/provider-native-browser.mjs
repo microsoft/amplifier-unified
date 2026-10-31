@@ -1,7 +1,8 @@
 // Ordinary native preparation + real rendered controls; only providers are synthetic.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {mkdir,readFile,writeFile,appendFile} from 'node:fs/promises';
+import {mkdir,readFile,writeFile,appendFile,realpath,readdir} from 'node:fs/promises';
+import {isAbsolute,relative,resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
@@ -9,16 +10,34 @@ import {showComposerOption} from './composer-options-helpers.mjs';
 
 const root=process.env.AMPLIFIER_TEST_ARTIFACTS;
 assert.ok(root,'An owned artifact directory is required');
+assert.ok(isAbsolute(root),'Artifact root must be absolute, independently of Node cwd');
 const evidence=root+'/provider1201-native';
-await mkdir(evidence,{recursive:true});
+await mkdir(root,{recursive:true});
+await mkdir(evidence); // Never overwrite an earlier attempt's partial records.
 const save=(name,value)=>writeFile(`${evidence}/${name}`,JSON.stringify(value,null,2)+'\n');
 async function bounded(promise,ms,label){
  let timer;
  try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(label+' timed out')),ms)})])}
  finally{clearTimeout(timer)}
 }
-const fixturePath=fileURLToPath(new URL('../../tests/fixtures/provider_native_ui_server.py',import.meta.url));
-const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON,[fixturePath,evidence+'/fixture'],{stdio:['ignore','pipe','pipe']});
+const installed=process.env.AMPLIFIER_TEST_INSTALLED==='1';
+const checkout=await realpath(fileURLToPath(new URL('../..',import.meta.url)));
+const under=(base,path)=>{const part=relative(base,path);return part===''||!part.startsWith('..')&&!isAbsolute(part)};
+assert.ok(process.env.AMPLIFIER_TEST_PYTHON,'Prepared interpreter must be supplied; no fallback');
+if(installed){
+ assert.ok(process.env.PROVIDER_NATIVE_FIXTURE,'Installed mode requires an externally copied fixture');
+ assert.ok(process.env.AMPLIFIER_TEST_INSTALLED_IDENTITY,'Installed mode requires the exact wheel files manifest');
+ assert.ok(!under(checkout,await realpath(evidence)),'Installed fixture cwd/artifacts must be outside the checkout');
+}
+const fixturePath=await realpath(process.env.PROVIDER_NATIVE_FIXTURE||fileURLToPath(new URL('../../tests/fixtures/provider_native_ui_server.py',import.meta.url)));
+if(installed)assert.ok(!under(checkout,fixturePath),'Installed fixture must be outside the checkout');
+const fixtureEnv={...process.env,PYTHONNOUSERSITE:'1',PYTHONDONTWRITEBYTECODE:'1'};
+delete fixtureEnv.PYTHONPATH;
+await save('launch.json',{mode:installed?'installed':'source',fixturePath,python:process.env.AMPLIFIER_TEST_PYTHON,
+ cwd:evidence,pythonPathUnset:true,fixtureSha256:createHash('sha256').update(await readFile(fixturePath)).digest('hex'),
+ installedIdentity:process.env.AMPLIFIER_TEST_INSTALLED_IDENTITY||null});
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON,[fixturePath,evidence+'/fixture'],
+ {stdio:['ignore','pipe','pipe'],cwd:evidence,env:fixtureEnv});
 const exit=new Promise(resolve=>fixture.once('exit',(code,signal)=>resolve({code,signal})));
 const drained=new Promise(resolve=>fixture.once('close',resolve));
 let fixtureOutput='',fixtureErrors='',browser,page,primary,proof,flush,journey,discoveryRead;
@@ -52,7 +71,20 @@ try{
  page.on('requestfailed',request=>{
   const row=requests.get(request);if(row){Object.assign(row,{phase:'transport-failed',error:request.failure()});record({...row})}
  });
- const staticManifest=JSON.parse(await readFile(process.env.PROVIDER_SELECTION_STATIC_MANIFEST,'utf8'));
+ async function sourceStatic(folder,prefix='amplifier_web/static'){
+  const manifest={};
+  for(const row of await readdir(folder,{withFileTypes:true})){
+   assert.ok(!row.isSymbolicLink(),'Static links are not accepted');
+   if(row.isDirectory())Object.assign(manifest,await sourceStatic(`${folder}/${row.name}`,`${prefix}/${row.name}`));
+   else if(row.isFile())manifest[`${prefix}/${row.name}`]=createHash('sha256').update(await readFile(`${folder}/${row.name}`)).digest('hex');
+  }
+  return manifest;
+ }
+ if(installed)assert.ok(process.env.PROVIDER_SELECTION_STATIC_MANIFEST,'Installed checks require an independently bound static manifest');
+ const staticManifest=process.env.PROVIDER_SELECTION_STATIC_MANIFEST?
+  JSON.parse(await readFile(process.env.PROVIDER_SELECTION_STATIC_MANIFEST,'utf8')):
+  await sourceStatic(checkout+'/amplifier_web/static');
+ await save('expected-static.json',staticManifest);
  const assetPromises=[];let assetWrites=Promise.resolve();
  page.on('response',response=>{
   const address=new URL(response.url());if(address.origin!==new URL(url).origin)return;
@@ -83,7 +115,9 @@ try{
  const dialog=page.getByRole('dialog',{name:'Chat options',exact:true});
  const A={instance:'native-a',model:'native-model',effort:'low'};
  const B={instance:'native-b',model:'native-model',effort:'high'};
- const label=instance=>`${instance==='native-a'?'Native A':'Native B'} (${instance})`;
+ const ALT={instance:'native-alt',model:'native-model',effort:'high'};
+ const connectionLabels={'native-a':'Native A','native-b':'Native B','native-alt':'Native alternate'};
+ const label=instance=>{assert.ok(connectionLabels[instance],'Unknown connection label');return `${connectionLabels[instance]} (${instance})`};
  const managedKey=JSON.stringify(['','','managed']);
  const managedWorkspace=evidence+'/fixture/app';
  const discoverySnapshots=[];
@@ -208,7 +242,7 @@ try{
   await save('visible.json',boundaries);return row;
  }
  const tuple=value=>({instance:value.instance||value.id,model:value.model,effort:value.effort});
- let sendIndex=0,firstNative=null;
+ let sendIndex=0,firstNative=null,acceptedConfiguration=null;
  async function send(expected,existingId=null){
   const index=sendIndex++,text='Native provider boundary '+index;
   if(!existingId){
@@ -240,6 +274,16 @@ try{
   },{timeout:30000}).toBe(true);
   await save(`send-${index}-after.json`,after);
   const call=after.calls[index];assert.deepEqual(tuple(call),expected);
+  assert.deepEqual(call.providerDefaults,{model:expected.model,reasoning_effort:expected.effort},
+   'Low/high are provider defaults, not evidence of an explicit xhigh pin');
+  const finished=after.lifecycle.find(row=>row.kind==='runtime.generation'&&row.event==='generation.finished'&&
+   row.sessionId===receipt.sessionId&&(row.input_ids||[]).includes(receipt.inputId));
+  const started=after.lifecycle.find(row=>row.kind==='runtime.generation'&&row.event==='generation.started'&&
+   row.sessionId===receipt.sessionId&&row.generation_id===finished?.generation_id&&row.initial_input_id===receipt.inputId);
+  assert.ok(started&&finished&&finished.generation_id,'Join admitted input to one actual native generation');
+  // Server reduction time is not worker emission time: transport can deliver a
+  // started event after the provider entered. Join IDs, not that timing accident.
+  assert.ok(started.atNs<=finished.atNs&&call.atNs<=finished.atNs);
   const session=after.sessions.find(row=>row.id===receipt.sessionId);assert.ok(session);
   assert.equal(session.controlsPresent,true);
   assert.equal(call.sessionId,session.nativeId);assert.ok(call.inputIds.includes(receipt.inputId),'Actual provider input identity must match admitted send');
@@ -267,6 +311,13 @@ try{
    assert.equal(session.savedSelection.model,expected.model);
    const applied=after.lifecycle.find(row=>row.kind==='runtime.nextMessageApplied'&&row.sessionId===session.id&&row.selection?.instance===expected.instance&&row.atNs<call.atNs);
    assert.ok(applied);
+   assert.ok(acceptedConfiguration);
+   assert.equal(session.nextMessageRevision,acceptedConfiguration.revision);
+   assert.equal(applied.revision,acceptedConfiguration.revision);
+   assert.equal(session.appliedConfigurationRevision,acceptedConfiguration.revision);
+   await save('warm-b-configuration-join.json',{accepted:acceptedConfiguration,applied,
+    nextMessageRevision:session.nextMessageRevision,appliedConfigurationRevision:session.appliedConfigurationRevision,
+    inputId:receipt.inputId,generationId:finished.generation_id,call,controls:session.savedSelection});
   }
   const controlsBefore=after.providerControls.length;
   const controlReceipt=await action('runtime.control',{sessionId:session.id,operation:'configuration.providers',args:{}});
@@ -280,6 +331,7 @@ try{
   assert.deepEqual(tuple(providerControl.result.effective),expected);
   assert.equal(providerControl.result.pinned,index===1);
   await save(`send-${index}-provider-control.json`,{receipt:controlReceipt,observation:providerControl});
+  await save(`send-${index}-generation-join.json`,{command,receipt,started,finished,call,worker,ready,session,providerControl});
   if(index===0)firstNative=structuredClone({call,worker,session,ready,providerControl});
   if(index===1)await save('warm-b-evidence.json',{originalA:firstNative,call,worker,session,ready,providerControl});
   await flush();return session.id;
@@ -337,6 +389,7 @@ try{
  await save('existing-chat-choice.json',{command:configureCommand,status:configured.status(),receipt:configureReceipt});
  assert.equal(configured.status(),200);assert.equal(configureReceipt.accepted,true);
  assert.equal(configureReceipt.result.revision,configureCommand.args.expectedRevision+1);
+ acceptedConfiguration={revision:configureReceipt.result.revision,command:configureCommand,receipt:configureReceipt};
  await close();await visible(B);
  // Same-model/effort negative uses the SAME visible observer; no extra send.
  const countBefore=(await proof()).calls.length;
@@ -350,11 +403,66 @@ try{
   await settleManagedDraft();
   const id=await send(A);assert.ok(!sessionIds.includes(id));sessionIds.push(id);
  }
+ const four=await proof();assert.equal(four.calls.length,4);await save('four-send-complete.json',four);
+ // A distinct ordinary root adds native-alt at priority 0. Shared A=1/B=20
+ // stay unchanged; no draft pin. Hold only this test's resolution boundary.
+ assert.equal((await action('session.draft')).accepted,true);
+ await settleManagedDraft();await visible(A);
+ const alternate=four.readiness.alternateBundle.path;
+ const armedResponse=await page.request.post(url+'/fixture/native-delay/arm',{timeout:10000});
+ const armed=await armedResponse.json();await save('delayed-arm.json',{status:armedResponse.status(),armed});
+ assert.equal(armedResponse.status(),200);assert.equal(armed.phase,'armed');assert.equal(armed.bundle,alternate);
+ const draft=(await state()).view.newSessionDraft;
+ const changed=await action('view.update',{patch:{newSessionDraft:{...draft,bundle:alternate,selection:{}}}});
+ await save('delayed-draft-receipt.json',changed);assert.equal(changed.accepted,true);
+ let held;
+ await expect.poll(async()=>{
+  held=await proof();await appendFile(evidence+'/delayed-observations.jsonl',JSON.stringify({phase:'waiting-held',proof:held})+'\n');
+  return held.delayedProbe.phase;
+ },{timeout:10000}).toBe('held');
+ assert.ok(held.delayedProbe.probes.length>0);
+ assert.ok(held.delayedProbe.probes.every(row=>row.phase==='held'&&!row.result));
+ assert.equal(held.calls.length,4);
+ await expect(model.locator(':scope > span')).toHaveText('Loading model…');
+ await expect(model).toHaveAttribute('aria-busy','true');
+ const waitingState=await state();
+ assert.equal(waitingState.selectedSessionId,null);
+ assert.equal(waitingState.view.newSessionDraft.bundle,alternate);
+ assert.deepEqual(waitingState.view.newSessionDraft.selection,{});
+ await page.screenshot({path:evidence+'/delayed-loading.png'});
+ await save('delayed-loading.json',{chip:await model.locator(':scope > span').innerText(),
+  busy:await model.getAttribute('aria-busy'),draft:waitingState.view.newSessionDraft,proof:held});
+ const releasedResponse=await page.request.post(url+'/fixture/native-delay/release',{timeout:10000});
+ const released=await releasedResponse.json();await save('delayed-release.json',{status:releasedResponse.status(),released});
+ assert.equal(releasedResponse.status(),200);assert.equal(released.phase,'released');
+ let resolved;
+ await expect.poll(async()=>{
+  resolved=await proof();await appendFile(evidence+'/delayed-observations.jsonl',JSON.stringify({phase:'waiting-ready',proof:resolved})+'\n');
+  return resolved.delayedProbe.phase;
+ },{timeout:60000}).toBe('ready');
+ const readyProbe=resolved.delayedProbe.probes.find(row=>row.phase==='ready');
+ assert.ok(readyProbe);assert.ok(readyProbe.releasedAtNs>=released.releasedAtNs);
+ assert.ok(readyProbe.probeProcesses.length>0,'Releasing the gate must execute a real production probe subprocess');
+ for(const process of readyProbe.probeProcesses){
+  assert.ok(process.spawnedAtNs>=released.releasedAtNs&&process.spawnedAtNs<=readyProbe.finishedAtNs);
+  assert.equal(process.command.at(-1),resolved.readiness.sources['draft_defaults_probe.py'].path);
+ }
+ assert.equal(readyProbe.result.bundle,alternate);assert.equal(readyProbe.result.globalOnly,true);
+ assert.deepEqual(tuple(readyProbe.result.effective),ALT);
+ assert.equal(resolved.calls.length,4,'Readiness must not perform inference');
+ await visible(ALT);await save('delayed-ready.json',resolved);
+ const alternateSession=await send(ALT);
+ assert.ok(!sessionIds.includes(alternateSession));sessionIds.push(alternateSession);
  await flush();assert.deepEqual(pageErrors,[]);assert.deepEqual(evidenceErrors,[]);assert.deepEqual(assets.filter(row=>row.error),[]);
- const final=await proof();assert.equal(final.calls.length,4);
+ const final=await proof();assert.equal(final.calls.length,5);
+ assert.equal(final.sessions.find(row=>row.id===alternateSession).bundle,alternate);
+ assert.ok(final.calls[4].atNs>readyProbe.finishedAtNs);
  assert.deepEqual(final.sharedSettings.current,final.sharedSettings.initial);
+ assert.deepEqual(final.originRefusals,[]);
  await save('native-final.json',final);
- journey={outcome:'passed',sends:4,sessions:sessionIds,sequence:[A,B,A,A],pageErrors,evidenceErrors,scope:'Real ordinary preparation and synthetic providers, not literal unspecified CLI incident',staticResponses:assets.length};
+ journey={outcome:'passed',mode:installed?'installed':'source',sends:5,sessions:sessionIds,sequence:[A,B,A,A,ALT],
+  delayedBundle:{bundle:alternate,sessionId:alternateSession,loadingObserved:true,productionProbe:readyProbe},
+  pageErrors,evidenceErrors,scope:'Real ordinary preparation and synthetic providers; low/high provider defaults, not native explicit xhigh or a literal unspecified CLI incident',staticResponses:assets.length};
  await save('journey.json',journey);
 }catch(error){
  primary=error;const failure={primary:{name:error.name,message:error.message,stack:error.stack},pageErrors,evidenceErrors};
@@ -380,6 +488,43 @@ try{
    const cleanup=JSON.parse(await readFile(evidence+'/fixture/cleanup.json','utf8'));
    assert.equal(cleanup.complete,true);assert.deepEqual(cleanup.fallbackPids,[]);
    await save('cleanup-readback.json',cleanup);
+   const origin=JSON.parse(await readFile(evidence+'/fixture/origin-policy.json','utf8'));
+   const finalProof=JSON.parse(await readFile(evidence+'/fixture/final-proof.json','utf8'));
+   assert.equal(origin.mode,installed?'installed':'source');
+   const within=(base,path)=>under(resolve(base),resolve(path));
+   for(const row of cleanup.processes){
+    const loaded=row.loadedSources;assert.ok(loaded&&!loaded.error);assert.deepEqual(loaded.violations,[]);
+    assert.equal(loaded.python,process.env.AMPLIFIER_TEST_PYTHON);
+    if(installed)assert.ok(within(origin.applicationRoot,loaded.script.path),'Worker/probe script must come from installed app');
+    if(row.kind!=='runtime_worker')continue;
+    const modules=loaded.modules;
+    assert.match(modules['amplifier_core._engine']?.path||'',/\.so$/,'Hash the actual native Core engine binary');
+    assert.ok(modules['amplifier_module_loop_live.orchestrator']?.sha256,'Hash loop-live implementation, not just __init__');
+    assert.ok(Object.entries(modules).some(([name,value])=>name.startsWith('amplifier_foundation.')&&
+     value.path.endsWith('.py')&&!value.path.endsWith('/__init__.py')),'Hash actual Foundation implementation files');
+    assert.ok(modules['amplifier_module_loop_streaming']?.sha256,'Retain actually loaded streaming implementation and helpers');
+    const boundaryText=await readFile(`${evidence}/fixture/loaded-boundaries-${row.pid}.jsonl`,'utf8');
+    assert.ok(boundaryText.endsWith('\n'),'Never ignore a partial loaded-source record');
+    const entries=boundaryText.trimEnd().split('\n').map(line=>JSON.parse(line)).filter(value=>value.boundary==='provider-entry');
+    const calls=finalProof.calls.filter(value=>value.pid===row.pid);
+    assert.deepEqual(entries.map(value=>value.call),calls,'Join source hashes to every actual provider entry');
+    for(const entry of entries){
+     assert.deepEqual(entry.violations,[]);
+     for(const name of ['amplifier_core._engine','amplifier_module_loop_live.orchestrator','amplifier_module_loop_streaming']){
+      assert.ok(entry.modules[name]?.sha256,'Missing dispatch-time implementation: '+name);
+      assert.equal(entry.modules[name].sha256,finalProof.readiness.modules[name].sha256,name+' differs from prepared server dependency');
+     }
+     assert.ok(Object.entries(entry.modules).some(([name,value])=>name.startsWith('amplifier_foundation.')&&
+      value.path.endsWith('.py')&&!value.path.endsWith('/__init__.py')));
+    }
+    if(installed)for(const [name,value] of Object.entries(modules)){
+     const roots=name==='amplifier_module_provider_native_fixture'?[origin.providerRoot]:
+      name==='amplifier_web'||name.startsWith('amplifier_web.')?[origin.applicationRoot]:origin.dependencyPrefixes;
+     assert.ok(roots.some(prefix=>within(prefix,value.path)),'Unapproved loaded origin: '+name);
+    }
+   }
+   await save('loaded-origin-readback.json',{mode:origin.mode,processes:cleanup.processes.map(row=>({
+    pid:row.pid,kind:row.kind,loadedSources:row.loadedSources}))});
   }
   catch(error){primary??=error;cleanupErrors.push({stage:'fixture-retention',error:error.message})}
   if(outcome.code!==0){primary??=Error('Fixture cleanup did not exit cleanly: '+JSON.stringify(outcome));}
@@ -387,4 +532,4 @@ try{
 }
 if(primary){console.error(JSON.stringify({primary:primary.message,cleanupErrors}));throw primary}
 await save('result.json',{...journey,cleanupErrors,fixtureClosed:true});
-console.log('Native provider boundary passed: A -> existing-chat B -> two inherited A chats; real prepare_manager, worker and synthetic provider entry.');
+console.log('Native provider boundary passed: shared A -> same-worker B -> shared A -> shared A -> delayed root-local native-alt; real preparation, production probe and provider entry.');

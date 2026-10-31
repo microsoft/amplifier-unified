@@ -239,6 +239,8 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         "assignment-adoption": {},
         "delegate-work-stream": {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/delegate-work-stream'},
         "request-cancellation": {},
+        'provider-selection': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/provider-selection'},
+        'provider-native': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/provider-native'},
         'diagram-navigation': {'DIAGRAM_EVIDENCE': '{root}/output/browser-checks/diagram-navigation/report.json'},
         'chat-shortcuts': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/chat-shortcuts'},
         'automation-hub': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/automation-hub'},
