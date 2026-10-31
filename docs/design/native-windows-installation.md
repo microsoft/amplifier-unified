@@ -407,9 +407,10 @@ release and successor publication while the old reader still returns the
 complete original JSON. This evidence is not substituted for Unified's separate
 private-file tests.
 
-TLS storage/loading, Scheduled Task lifecycle, PowerShell bootstrap, process
-caller integration, combined-source checks and the native acceptance rubric
-remain separate work. Publication of Unified still follows upstream merge/CI.
+Native TLS storage/loading, Scheduled Task lifecycle, PowerShell bootstrap,
+process caller integration and the native acceptance rubric remain separate
+work. Publication of Unified still follows upstream merge/CI; isolated
+combined-source testing does not require those merges.
 The installed app's 0.44.0 adoption does not install these local Windows changes.
 
 ### Reviewed local candidates, not native acceptance
@@ -440,7 +441,7 @@ The focused platform workflow selects the standalone file, process and installer
 fixtures without importing installed application dependencies. That workflow
 change is local and unexecuted on Windows; selection is not test evidence.
 
-**Next execution dependency:** upstream Foundation and memory merge/CI, followed
+**Next native-CI/publication dependency:** upstream Foundation and memory merge/CI, followed
 by Unified's approved draft-PR/native-CI route. No merge authority was granted.
 Until the standalone mechanism passes its own native checks, do not integrate
 runtime process callers. After that boundary, preserve owner cleanup-failure
@@ -448,3 +449,60 @@ custody and generation leases, distinguish guard/payload/worker identities, and
 qualify the runtime-sized stream limit. Detached restart and synchronous
 standalone reset require their own lifetime boundaries; they are not drop-in
 consumers of the asynchronous finite-process owner.
+
+### Installed Linux consumer checks, October 31, 2026
+
+One isolated Ubuntu 24.04 aarch64 DTU, ordinary CPython 3.13.9, exercised
+non-editable installed candidate packages. Explicit Foundation, delegate and
+memory overrides selected the candidate sources rather than the consumers'
+upstream pins. This is combined-candidate evidence, not a published installation.
+
+| Source | Tested identity |
+| --- | --- |
+| Unified | HEAD `9f94e5355e0e78be8796ce16160af1af30374a8f` plus dirty/untracked source, frozen as snapshot `4067404ec0897fd9c57f071009b58f75bf453a40` |
+| Foundation | `06a825db4732f7c540b51f1d095d499c67d92b0a` |
+| Memory | `6820d5cc2cb7701ec9f965c493886a1e89ef22d5` |
+| Agent SDK and engine | `95877ef54cd8849f8f2066ef3e97ce4c8a1669af`; complete SDK/engine package trees match the SDK-declared `v0.25.0` revision `1da05aa81fa2239d9044b375f21f75ed0e46c89f` |
+| App CLI | `631c4bdbcf3dcd2da20456ad6ccef386e778c101` |
+
+Agent retained Core **2.0.1** in its own environment. CLI/Unified retained Core
+**2.0.2** in another environment on the same DTU. A single Agent/Unified package
+environment is unsatisfiable: the engine pins Core 2.0.1 and Unified requires
+Core >=2.0.2. Do not relax either requirement to manufacture co-installability.
+
+The final focused selection passed **341 test executions, zero failures and
+zero skips**: 141 in the Agent environment and 200 in CLI/Unified. This includes
+Foundation/memory checks in each environment, not 341 distinct tests. Earlier
+setup and fixture failures remain retained; no production source was patched.
+Nineteen same-process import audits found no candidate source shadowing, and
+installed Python bytes matched their selected source packages.
+
+The deterministic roundtrips saved/read UTF-8 memory through the real library,
+resumed SDK history, preserved synthetic configuration bytes, and persisted CLI
+user/tool/assistant content. Separate-process checks established live-owner
+refusal, release, old-capability fencing and successor checkpoint readback
+across the two environments. Parent verification repeated the two consumer
+roundtrips and ownership sequence with fresh synthetic data, and checked all
+208 exported evidence-file hashes before teardown. The owned DTU was removed;
+the seven pre-existing environments were left untouched.
+
+**Mocked boundaries remain explicit:** scripted provider, CLI first-run and
+bundle-assembly seams, and fixture tool bridges to the real memory library.
+The shipped memory tool/injector adapters were not mounted. Actual Foundation
+loading of the memory bundle and its declarations passed separately. No
+live-provider, rendered-browser, native Windows or full-default-bundle acceptance
+is established by these checks.
+
+A separate Windows x64/ordinary CPython 3.13 resolution passed for each default
+package graph: Unified, Agent and App CLI. Native-only binary rechecks preserved
+the selected identities; 24 unique native wheels across 91 selected registry
+releases were available and hash-verified. Parent readback verified the wheels,
+210 retained evidence files and 97 AMD64 PE members. PyYAML 6.0.3 has a matching
+CPython 3.13 Windows wheel but none compatible with ordinary CPython 3.15.
+Pure-Python/VCS packaging was not globally prohibited. Wheel availability does
+not establish Windows execution, OS-wrapper behavior or optional/dynamic graphs.
+
+Astra and Fable separately reviewed the earlier evidence brief, not source or
+DTU execution. Their requested consumer/provenance and native-wheel checks now
+have the bounded evidence above. Their native runtime, security/lifecycle and
+clean-install gaps remain open. Both activation gates stay closed.
