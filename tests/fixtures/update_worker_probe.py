@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 
 SOURCE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SOURCE))
@@ -104,12 +105,28 @@ providers:
         async with asyncio.timeout(45):
             while not (root/'child-started').exists():await asyncio.sleep(.03)
         target={'attemptId':'a'*32,'revision':'b'*40,'generation':'c'*32}
-        assert not await update_drain.prepare(app.update_manager,target)
+        app.state['settings']['updates'].update(autoCheck=False)
+        app.state['updates'].update(phase='app-staged',pendingApp=target)
+        observed,ready=asyncio.Event(),asyncio.Event()
+        observations=[]
+        async def qualified_application():
+            # Only package replacement is outside this probe. The real updater
+            # loop, notifications and native readiness owner run unchanged.
+            async with app.update_manager.lock:
+                result=await update_drain.prepare(app.update_manager,target)
+                observations.append(result);observed.set()
+                if result:ready.set()
+        app.update_manager.app=qualified_application
+        app.update_manager._storage_last_pass=time.time()
+        app.update_manager.wakeup.set()
+        app.update_manager.task=asyncio.create_task(app.update_manager.loop())
+        await asyncio.wait_for(observed.wait(),10)
         first=json.loads(json.dumps(app.state['updates']['drain']))
         assert first['workers'][sid]['ready'] is False
         (root/'release-child').write_text('finish')
-        async with asyncio.timeout(45):
-            while not await update_drain.prepare(app.update_manager,target):await asyncio.sleep(.05)
+        # Below the unchanged 60-second fallback: native park must wake the
+        # production owner. The fixture never polls prepare() for readiness.
+        await asyncio.wait_for(ready.wait(),45)
         saved=json.loads(json.dumps(app.state['updates']['drain']))
         assert saved['workers'][sid]['ready']
         assert saved['workers'][sid]['yieldedGoal']['turns_used']==2,saved
@@ -150,7 +167,8 @@ providers:
         (root/'drain-receipt.json').write_text(json.dumps(saved,indent=2))
         print(json.dumps({'workerProcesses':2,'originalInputCount':1,'continuations':1,
             'childResultRetained':True,'parkedBeforeRestart':True,'resumedUsedTurns':2,'cap':3,
-            'healthyReceipt':'fixture-controlled','provider':'scripted-offline'}))
+            'healthyReceipt':'fixture-controlled','provider':'scripted-offline',
+            'readinessDriver':'real-update-loop/native-settlement-event','boundaryObservations':len(observations)}))
     finally:await app.close()
 
 if __name__=='__main__':asyncio.run(main())

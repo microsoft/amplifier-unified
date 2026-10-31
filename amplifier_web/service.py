@@ -4928,6 +4928,9 @@ class AppService:
                                kind == 'runtime.generation' and payload.get('event') == 'generation.started')
                 self._publish_changes(sessions={session['id']} | changed | collaboration_changed,
                                       detail_only=detail_only and not changed and not collaboration_changed)
+            if (self.update_manager and kind == 'runtime.warmth'
+                    and payload.get('status') in {'warm', 'cold'}):
+                self.update_manager.notify_idle(settled_session_id=session['id'])
 
 
     def _unmounted_legacy_refresh(self, session):

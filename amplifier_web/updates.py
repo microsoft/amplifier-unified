@@ -510,13 +510,20 @@ class UpdateManager:
             state['forceRestartTarget'] = target(self)
             self.service._publish_changes(globals={'updates','settings'})
 
-    def notify_idle(self):
+    def notify_idle(self, *, settled_session_id=None):
         state = self.service.state['updates']
-        if (not self.closed and not self.lock.locked() and state.get('phase') in {'staged', 'app-staged'}
-                and self.requires_idle(state)
-                and not self.busy()):
-            # Work finishing is an event too. Do not add another timer wait
-            # after the user has already waited for the idle safety gate.
+        if self.closed or state.get('phase') not in {'staged', 'app-staged'} or not self.requires_idle(state):
+            return
+        drain = state.get('drain') or {}
+        boundary = drain.get('workers', {}).get(settled_session_id)
+        if drain.get('phase') == 'draining' and boundary and not boundary.get('ready'):
+            # A committed native park/retirement event can invalidate the saved
+            # unready observation. Retain it even during an activation attempt;
+            # the next owner tick must still obtain positive boundary proof.
+            self.wakeup.set()
+        elif not self.lock.locked() and not self.busy():
+            # Ordinary publications retain the idle-only signal. In particular,
+            # the updater's own observations never poll an unready boundary.
             self.wakeup.set()
 
     @staticmethod
