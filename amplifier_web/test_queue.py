@@ -19,6 +19,7 @@ from . import test_environment_profiles as profiles
 from . import test_capacity_settings as capacity_settings
 from . import registered_test_runners as registered_runners
 from . import test_execution_settings as execution_settings
+from . import owned_history
 from .collaboration import PROTOCOL
 from amplifier_operations.coordination import fingerprint
 
@@ -50,11 +51,11 @@ def definitions(schema, string):
             'waitSeconds': {'type': 'integer', 'minimum': 0, 'maximum': profiles.MAX_SECONDS},
             'independent': {'type': 'boolean', 'description': 'Allow this check to overlap other independent checks in this chat within the global environment limit. Use only when no earlier check result is required. Default false preserves ordered execution.'},
             'notify': {'type': 'boolean'}}, [*scope, 'requestId', 'profileId', 'command'])),
-        'workspace.tests.read': ('Read this chat’s queued checks and retained outcomes. A recoveredOutcome separately reports exact later cleanup and the verified check result; the original status remains retained. Does not execute or replay a check.', schema({**scope,
+        'workspace.tests.read': ('Read queued checks and retained outcomes. Full-access roots and their current delegated reviewers can inspect another registered chat in the same workspace, or explicitly use scope=all for another workspace. Use the producer’s sessionId and workspaceId. A recoveredOutcome separately reports exact later cleanup and the verified check result; the original status remains retained. Does not execute or replay a check.', schema({**scope, 'scope': owned_history.SCOPE,
             'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 20}}, list(scope))),
         'workspace.tests.cancel': ('Cancel this chat’s waiting check or request prompt termination of its admitted durable guest job. Cancellation is confirmed only after observed termination and owned cleanup. Evidence is retained.', schema({**scope,
             'requestId': string(200)}, [*scope, 'requestId'])),
-        'workspace.tests.result': ('Read a bounded page of the exact recorded check output and its retained environment. A recoveredOutcome can confirm later cleanup without changing an unknown check into a pass. Never executes or repeats a check.', schema({**scope,
+        'workspace.tests.result': ('Read a bounded page of the exact recorded check output and its retained environment. Full-access roots and their current delegated reviewers can inspect peer evidence using the producer’s sessionId and workspaceId; another workspace requires explicit scope=all. A recoveredOutcome can confirm later cleanup without changing an unknown check into a pass. Never executes or repeats a check.', schema({**scope, 'scope': owned_history.SCOPE,
             'requestId': string(200), 'offset': {'type': 'integer', 'minimum': 0}}, [*scope, 'requestId'])),
     }
 
@@ -312,9 +313,13 @@ class TestQueue:
 
     async def dispatch(self, action, args, origin, caller, authority):
         owner = self.app.collaboration
-        source = owner.source(args, origin, caller, hydrate=False)
+        reading = action in {'workspace.tests.read', 'workspace.tests.result'}
+        source = (owner.result_source(args, origin, caller) if reading
+                  else owner.source(args, origin, caller, hydrate=False))
         if source['id'] != args['sessionId']:
-            owner.error('A queued check belongs to its calling root conversation.')
+            if not reading or not self.app.access_mode.full(source):
+                owner.error('A queued check belongs to its calling root conversation.')
+            source = owned_history.require(self.app, source['id'], args['sessionId'], owned_history.selected(args))
         workspace = next((w for w in self.app.state['workspaces'] if w['id'] == args['workspaceId']), None)
         if not workspace or workspace['path'] != source['workspace']:
             owner.error('Choose this conversation’s current workspace.')

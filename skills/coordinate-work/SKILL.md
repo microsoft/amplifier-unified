@@ -30,7 +30,10 @@ compare those exact links, not equal message text.
    Ordinary in-scope collaboration needs no separate approval, grant, participant
    form or freshly delivered human message. The host requires your actual
    authenticated root/current generation, including peer-awakened generations.
-   Children cannot borrow it. File/tool/destructive/budget and Stop protections
+   Children cannot borrow it. Current Full-access delegated reviewers can directly
+   inspect saved evidence with `coordination.result/artifact` and
+   `workspace.tests.read/result`; no parent relay or producer export is needed.
+   File/tool/destructive/budget and Stop protections
    remain unchanged. Legacy grants/proposals are read-only; denied, pending,
    revoked or unknown work never gains fresh authority during an upgrade.
 2. When returning to earlier workspace work, use `coordination.review` with your

@@ -128,8 +128,8 @@ def definitions(schema, string):
         "coordination.cancel": ("Withdraw your exact queued request, or request cancellation of already admitted work. Does not stop the recipient chat, undo effects, or prove cancellation. Active recipients see the request at their next coordination boundary and report outcome=cancelled when settled. Inspect coordination.result; never replay an unknown admission.", schema({
             **sid, "requestId": string(200), "reason": string(1000)}, ["sessionId", "requestId"])),
         "coordination.acknowledge": ("After reviewing an exact result, retire only its unsubmitted completion notification. Use the review reference from coordination.result or workspace.tests.read/result and a stable command ID. Does not cancel work, qualify success, change limits or suppress later changed outcomes. Reading alone never acknowledges.", schema({**sid, "requestId": string(200), "outcomeRevision": {"type": "integer", "minimum": 1}, "reviewKey": string(200)}, ["sessionId", "requestId", "outcomeRevision", "reviewKey"])),
-        "coordination.result": ("Inspect admission and exact qualified final result links for one request without loading history. Original participants retain access; a Full-access observer may inspect a registered request using workspace/all read scope. Observation does not change participants, producer or notification ownership. Acknowledgements and unrelated turns do not count.", schema({"requestId": string(200), "scope": {"enum": ["workspace", "all"]}}, ["requestId"])),
-        "coordination.artifact": ("Read an exact retained file as an original request participant or Full-access observer, even after its source disappears. Observers use workspace/all read scope. Bounded text and download identity; no peer output-library access or work admission. Retained bytes are not proof of correctness.", schema({**sid,
+        "coordination.result": ("Inspect admission and exact qualified final result links for one request without loading history. Original participants retain access; a Full-access observer or its current delegated reviewer may inspect a registered request using workspace/all read scope. Observation does not change participants, producer or notification ownership. Acknowledgements and unrelated turns do not count.", schema({"requestId": string(200), "scope": {"enum": ["workspace", "all"]}}, ["requestId"])),
+        "coordination.artifact": ("Read an exact retained file as an original request participant or Full-access observer, even after its source disappears. Current delegated Full-access reviewers may use this passive read. Observers use workspace/all read scope. Bounded text and download identity; no peer output-library access or work admission. Retained bytes are not proof of correctness.", schema({**sid,
             "requestId": string(200), "reference": string(2000), "scope": {"enum": ["workspace", "all"]}, "responseRevision": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0},
             "limit": {"type": "integer", "minimum": 1, "maximum": 4000}}, ["sessionId", "requestId", "reference"])),
         "coordination.reply": ("Record a typed reply to your exact delivered request. Optional messageIds name your current-generation assistant output, never the incoming request messageId; omit them when unknown. Retain files using path@sha256:<64 lowercase hex digits> in references. Before ending the turn, check artifactVerification and each artifacts[].status: bytes are saved before this reply is acknowledged; later terminal sealing only qualifies the report. Later current generations may reply with expectedResponseRevision from coordination.result. Questions/deferrals stay open; reports are unqualified until separately proven terminal. Exact command IDs deduplicate retries. Meaningful revisions retain the original request identity without a lifetime count limit.", schema({
@@ -632,7 +632,19 @@ class Collaboration:
     def require_result_reader(self, receipt, origin, caller, *, scope='workspace'):
         if origin in {'ui', 'user'}:
             return
-        self.require_request_reader(receipt, self.source({}, origin, caller, hydrate=False), scope=scope)
+        self.require_request_reader(receipt, self.result_source({}, origin, caller), scope=scope)
+
+    def result_source(self, args, origin, caller):
+        """Passive evidence reads may use a currently admitted Full child."""
+        source = self.source(args, origin, caller, hydrate=False, allow_descendant=True)
+        actor = PRINCIPAL.get()
+        native = source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']
+        if actor and actor != native:
+            from .child_execution import current
+            # Generic configuration recovery is not an admitted evidence review.
+            if not self.service.access_mode.full(source) or current(self.service, source) is None:
+                self.error('This delegated evidence reader is no longer current.')
+        return source
 
     def require_request_reader(self, receipt, reader, *, scope='workspace'):
         """Authorize observation separately from the original request owners."""
@@ -1691,7 +1703,8 @@ class Collaboration:
             return await self.watches.dispatch(action, args, origin, command_id, caller)
         if action in {"coordination.grant", "coordination.decide", "coordination.revoke"}:
             self.error("Coordination approval APIs are retired. Historical records are read-only.", 410)
-        source = self.source(args, origin, caller, hydrate=action != 'coordination.artifact') if action not in {"coordination.result", "coordination.read"} else None
+        source = (self.result_source(args, origin, caller) if action == 'coordination.artifact'
+                  else self.source(args, origin, caller) if action not in {"coordination.result", "coordination.read"} else None)
         if action == 'coordination.acknowledge':
             from .outcome_acknowledgement import acknowledge
             return await acknowledge(self, source, args, origin, command_id)
@@ -1702,7 +1715,9 @@ class Collaboration:
             if source['id'] != args['sessionId']:
                 self.error('Read a retained result from the calling conversation.')
             from .result_artifacts import read
-            return {'accepted': True, 'result': await read(self, source['id'], args)}
+            result = await read(self, source['id'], args)
+            self.result_source(args, origin, caller)  # Stop or access changes during file I/O win.
+            return {'accepted': True, 'result': result}
         if action in {'coordination.awareness', 'coordination.intent.read', 'coordination.intent'}:
             from .workspace_awareness import packet, intent_for, declare
             if action == 'coordination.intent':

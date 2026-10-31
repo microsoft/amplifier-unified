@@ -89,6 +89,8 @@ on:
       - 'amplifier_web/incus_environment_worker.py'
       - 'amplifier_web/test_environment_*.py'
       - 'amplifier_web/test_queue.py'
+      - 'tests/test_test_result_readers.py'
+      - 'tests/test_native_result_readers.py'
       - 'amplifier_web/test_reservation_maintenance.py'
       - 'tests/test_background_reservation_recovery.py'
       - 'frontend/src/workspace-managed-resources.jsx'
@@ -177,6 +179,7 @@ jobs:
           tests/test_coordination_revisions.py tests/test_request_cancellation.py tests/test_outcome_acknowledgement.py
           tests/test_coordination_return_policy.py
           tests/test_test_outcome_acknowledgement.py
+          tests/test_test_result_readers.py
           tests/test_coordination_bridge_returns.py
           tests/test_assignment_brief.py
           tests/test_background_reservation_recovery.py
@@ -197,6 +200,14 @@ jobs:
           tests/test_multi_repository_worktrees.py
           tests/test_file_access_policy.py tests/test_canvas_files.py tests/test_management.py
           tests/test_service.py tests/test_runtime.py tests/test_agent_chat_controls.py -q
+      - name: Verify delegated evidence reads through the native boundary
+        run: |
+          uv run --no-sync pytest -q tests/test_native_result_readers.py --junitxml=output/native-result-readers.xml
+          uv run --no-sync python - <<'PY'
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/native-result-readers.xml').getroot().findall('.//testcase')
+          assert rows and all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          PY
       - name: Verify blocked peer input through the native boundary
         run: |
           uv run --no-sync pytest -q tests/test_blocked_peer_native.py --junitxml=output/blocked-peer-native.xml
