@@ -12,7 +12,7 @@ import {mkdir,mkdtemp,readFile,readdir,writeFile} from 'node:fs/promises';
 import {dirname,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {expect} from '@playwright/test';
-import {launchOwner,ownerPage,closeOwner,desktopOptions,touchOptions} from './file-controls-browser-topology.mjs';
+import {launchOwner,ownerPage,closeOwner,desktopOptions,touchOptions,launchOptions} from './file-controls-browser-topology.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 
@@ -21,8 +21,9 @@ const cornerDiagnosticMode=process.env.FILE_CONTROLS_CORNER_DIAGNOSTIC==='1';
 const touchEventDiagnosticMode=process.env.FILE_CONTROLS_TOUCH_EVENT_DIAGNOSTIC==='1';
 const nativeStateDiagnosticMode=process.env.FILE_CONTROLS_NATIVE_STATE_DIAGNOSTIC==='1';
 const portalHostExperimentMode=process.env.FILE_CONTROLS_PORTAL_HOST_EXPERIMENT==='1';
+const stateReductionMode=process.env.FILE_CONTROLS_STATE_REDUCTION==='1';
 const coarseToolbarQualificationMode=process.env.FILE_CONTROLS_COARSE_TOOLBAR_QUALIFICATION==='1';
-assert.ok([cornerDiagnosticMode,touchEventDiagnosticMode,nativeStateDiagnosticMode,portalHostExperimentMode,coarseToolbarQualificationMode].filter(Boolean).length<=1,
+assert.ok([cornerDiagnosticMode,touchEventDiagnosticMode,nativeStateDiagnosticMode,portalHostExperimentMode,stateReductionMode,coarseToolbarQualificationMode].filter(Boolean).length<=1,
  'Conflicting file-controls diagnostic/qualification modes');
 // Fixed binding to the retained failed first-390 gesture, NOT a new measurement
 // chosen to fit this candidate. No predecessor report is modified or rerun.
@@ -43,6 +44,14 @@ const coarseToolbarBaseline={
 // geometry. A missing binding stops before fixture startup.
 const portalHostBaseline=portalHostExperimentMode?JSON.parse(await readFile(
  '/artifacts/files1318-portal-host-experiment/portal-host-baseline.json','utf8')):null;
+const stateReductionBaseline=stateReductionMode?JSON.parse(await readFile(
+ '/artifacts/files1318-state-reduction/state-reduction-baseline.json','utf8')):null;
+const stateReduction={version:'state-reduction-v1',baseline:stateReductionBaseline,gates:[],card:null,primary:null,
+ outcome:'inconclusive',productAcceptance:false,
+ limits:['Two real product surfaces in one touch context; card geometry is intentionally not a causal match.',
+  'Omitted Copy/320/desktop exercises, clipboard faults and metadata races; data setup uses the existing one-shot fixture actions.',
+  'No DOM clone, trace, target listener, focus repair, alternate coordinates or product CSS change.',
+  'Non-reproduction leaves omitted history/state/timing unresolved; neither result establishes cause or product acceptance.']};
 const output=process.env.FILE_CONTROLS_EVIDENCE||process.env.AMPLIFIER_TEST_ARTIFACTS;
 assert.ok(output,'Set an owned AMPLIFIER_TEST_ARTIFACTS or FILE_CONTROLS_EVIDENCE directory');
 await mkdir(output,{recursive:true});
@@ -401,6 +410,7 @@ async function preserved(target,draft){
  assert.deepEqual(value.iframeSightings,[],'Details/download mounted an HTML iframe, even transiently');
  assert.equal(await target.locator('iframe').count(),0);
  assert.equal(await target.getByRole('textbox',{name:'Message Amplifier',exact:true}).innerText(),draft);
+ return value;
 }
 
 // One deterministic circular-contour definition, also installed verbatim in the
@@ -1054,6 +1064,79 @@ function portalHostOracle(snapshot,baseline){
  assert.equal(download.left-copy.rect.right,4);assert.equal(snapshot.details.geometry.rect.left-download.right,4);
  assert.ok(snapshot.innerWrappers.every(row=>row.connected&&row.computed.display==='contents'));
 }
+// Bounded, passive structure/focus reads for BOTH reduction gestures. This does
+// not infer native clickability from handlers or reconstruct a DOM snapshot.
+function reductionSnapshot(node){
+ const id=window.__fileControlsNodeId,limits={descendants:24,ancestors:20},truncations=[];
+ const describe=value=>{
+  if(!value)return null;
+  const style=getComputedStyle(value);
+  const className=value.getAttribute('class')||'',label=value.getAttribute('aria-label')||'';
+  if(className.length>160||label.length>160)truncations.push('descriptor');
+  return {nodeId:id(value),tag:value.tagName,className:className.slice(0,160),label:label.slice(0,160),
+   connected:value.isConnected,rect:value.getBoundingClientRect().toJSON(),rectCount:value.getClientRects().length,
+   computed:Object.fromEntries(['display','visibility','pointerEvents','touchAction','userSelect','padding','margin',
+    'borderWidth','borderRadius','position','overflowX','overflowY'].map(key=>[key,style[key]])),
+   scroll:{x:value.scrollLeft,y:value.scrollTop},inert:value.inert,ariaHidden:value.getAttribute('aria-hidden')};
+ };
+ const descendants=[],walker=document.createTreeWalker(node,NodeFilter.SHOW_ELEMENT);
+ let child;
+ while((child=walker.nextNode())&&descendants.length<limits.descendants){
+  const text=[...child.childNodes].filter(part=>part.nodeType===Node.TEXT_NODE).map(part=>part.textContent).join('');
+  if(text.length>160)truncations.push('descendant-text');
+  descendants.push({...describe(child),parentNodeId:id(child.parentElement),text:text.slice(0,160)});
+ }
+ if(child)truncations.push('descendants');
+ const ancestors=[];let ancestor=node.parentElement;
+ while(ancestor&&ancestors.length<limits.ancestors){ancestors.push(describe(ancestor));ancestor=ancestor.parentElement}
+ if(ancestor)truncations.push('ancestors');
+ const sample=value=>{
+  const c=window.__fileControlsContourSample(value),style=getComputedStyle(value);
+  return {nodeId:c.nodeId,geometry:{...Object.fromEntries(['rect','radii','borders','viewport','transforms','cornerShapes']
+   .map(key=>[key,c[key]])),scroll:{x:c.scroll.x,y:c.scroll.y,ancestors:c.scroll.ancestors.map(({x,y})=>({x,y}))},
+   computed:Object.fromEntries(['height','minHeight','minWidth','padding','borderWidth','boxSizing','whiteSpace','overflowWrap']
+    .map(key=>[key,style[key]]))},corners:c.corners};
+ };
+ const toolbar=node.closest('.a-canvas-artifact-toolbar');
+ return {at:Date.now(),limits,truncations,button:describe(node),descendants,ancestors,focus:describe(document.activeElement),
+  context:{coarse:matchMedia('(pointer:coarse)').matches,dpr:devicePixelRatio,maxTouchPoints:navigator.maxTouchPoints},
+  primary:toolbar?{download:sample(node),details:sample(toolbar.querySelector(':scope > .a-canvas-details')),
+   toolbar:describe(toolbar),body:describe(toolbar.nextElementSibling),
+   notice:describe(toolbar.nextElementSibling.querySelector('.a-renderer-notice'))}:null};
+}
+function reductionSnapshotOracle(snapshot,primary=false){
+ assert.deepEqual(snapshot.truncations,[],'Reduction structure capture truncated');
+ assert.equal(snapshot.context.coarse,true);assert.equal(snapshot.context.dpr,1);
+ assert.ok(snapshot.context.maxTouchPoints>0);
+ assert.equal(snapshot.button.connected,true);
+ if(primary){
+  const actual=snapshot.primary,expected=stateReductionBaseline;
+  assert.ok(actual,'Primary reduction snapshot missing');
+  for(const key of ['download','details']){
+   assert.deepEqual(actual[key].geometry,expected[key],`Reduction ${key} differs from original failed geometry`);
+   nativeHitOracle({tag:'BUTTON',rect:actual[key].geometry.rect,corners:actual[key].corners},`reduction ${key}`);
+  }
+  for(const key of ['toolbar','body','notice'])assert.deepEqual(actual[key].rect,expected[key+'Rect']);
+  assert.equal(actual.body.computed.margin,'0px');
+  const host=snapshot.ancestors.find(row=>row.className==='a-canvas-primary-actions');
+  assert.equal(host?.computed.display,'contents','Reduction must use rolled-back product topology');
+ }
+}
+function reductionCaptureTruncated(value){
+ return !!value&&typeof value==='object'&&Object.entries(value).some(([key,child])=>
+  (key.endsWith('Truncated')&&child===true)||reductionCaptureTruncated(child));
+}
+function reductionEventsComplete(gesture){
+ const capture=gesture?.capture,events=capture?.events||[];
+ const sequence=events.filter(event=>event.isTrusted&&['pointerdown','pointerup','mousedown','mouseup','click'].includes(event.type));
+ return !!(gesture?.captureValid&&gesture.checkpointObserved&&gesture.originalListenerRemoved&&gesture.handleDisposed&&
+  gesture.captureErrors?.length===0&&gesture.cleanupErrors?.length===0&&capture.errors.length===0&&
+  Object.values(capture.truncations).every(n=>n===0)&&!reductionCaptureTruncated(events)&&
+  JSON.stringify(sequence.map(event=>event.type))===JSON.stringify(['pointerdown','pointerup','mousedown','mouseup','click'])&&
+  sequence.every(event=>event.isTrusted&&event.reductionSnapshot&&event.reductionSnapshot.truncations.length===0)&&
+  gesture.settlement?.settled&&gesture.settlement.otherFailures.length===0&&
+  gesture.settlement.operations.every(row=>row.state==='fulfilled'));
+}
 // Installed only at the first 390px primary Download, after the existing contour
 // measurement/oracles and immediately before its unchanged locator.tap. All
 // listeners are passive document capture observers. No event or DOM is changed.
@@ -1062,7 +1145,8 @@ function armTouchEventCapture(node,intended){
   'pointerout','pointerleave','gotpointercapture','lostpointercapture',
   'touchstart','touchmove','touchend','touchcancel','mouseover','mouseenter','mousemove',
   'mousedown','mouseup','click','mouseout','mouseleave','auxclick','contextmenu'];
- const limits={windowMs:2000,records:64,stack:16,path:24,ancestors:16,notices:4,touches:4,errors:8};
+ const limits={windowMs:2000,records:window.__fileControlsReductionSnapshot?128:64,
+  stack:16,path:24,ancestors:16,notices:4,touches:4,errors:8};
  const events=[],errors=[],truncations={records:0,stack:0,path:0,ancestors:0,notices:0,touches:0,errors:0};
  const id=window.__fileControlsNodeId,armedAt=performance.now(),deadline=armedAt+limits.windowMs;
  let timer,finished,resolveDone,lastPointerId=null;
@@ -1129,6 +1213,8 @@ function armTouchEventCapture(node,intended){
    if(window.__fileControlsToolbarSnapshot)entry.toolbarLayout=window.__fileControlsToolbarSnapshot(node);
    if(window.__fileControlsPortalHostSnapshot&&['pointerdown','pointerup','mousedown','mouseup','click'].includes(event.type))
     entry.portalHost=window.__fileControlsPortalHostSnapshot(node);
+   if(window.__fileControlsReductionSnapshot&&event.isTrusted&&['pointerdown','pointerup','mousedown','mouseup','click'].includes(event.type))
+    entry.reductionSnapshot=window.__fileControlsReductionSnapshot(node);
   }catch(error){
    entry.captureError={name:error.name,message:String(error.message).slice(0,1024),
     messageTruncated:String(error.message).length>1024};
@@ -1408,7 +1494,7 @@ async function collectTouchEvents(probe,diagnostic,tap){
  diagnostic.outcome=diagnostic.checkpointObserved?'checkpoint_observed_cause_unknown':'unknown';
  return failures;
 }
-async function cornerTap(control,corner,diagnostic=null,beforeTap=null){
+async function cornerTap(control,corner,diagnostic=null,beforeTap=null,precondition=null){
  const target=control.page(),record={corner,client:pageLabels.get(target),operations:[],settled:false,
   listenerCleanup:{state:'not-armed'},handleDisposed:false};
  tapSettlements.push(record);if(diagnostic)diagnostic.settlement=record;
@@ -1496,6 +1582,17 @@ async function cornerTap(control,corner,diagnostic=null,beforeTap=null){
     portalHostOracle(snapshot,portalHostBaseline);
     diagnostic.portalHost.baselinePassed=true;
    }
+   if(diagnostic.reductionRequested){
+    diagnostic.beforeStructure=await tapOperation(tap,'reduction-before',()=>original.evaluate(node=>window.__fileControlsReductionSnapshot(node)));
+    reductionSnapshotOracle(diagnostic.beforeStructure,diagnostic.reductionPhase==='primary');
+    assert.equal(diagnostic.beforeStructure.button.nodeId,measured.nodeId);
+    if(diagnostic.reductionPhase==='primary'){
+     for(const key of ['rect','radii','borders','viewport','intended','position'])
+      assert.deepEqual(measured[key],stateReductionBaseline.tap[key],`Original reduction tap ${key} changed`);
+    }
+    if(precondition)await tapOperation(tap,'reduction-state-and-focus',()=>precondition(diagnostic),4000);
+    diagnostic.preconditionsPassed=true;
+   }
    probe=await tapOperation(tap,'arm-passive-capture',()=>original.evaluateHandle(armTouchEventCapture,measured.intended));
   }
   try{
@@ -1518,6 +1615,26 @@ async function cornerTap(control,corner,diagnostic=null,beforeTap=null){
      traceCallbackIntervalUs:{min:event.at*1000+native.state.clock.offsetUs.min,
       max:event.at*1000+native.state.clock.offsetUs.max}}));
   }
+  if(diagnostic?.reductionRequested)try{
+   // SavedFileDownload intentionally calls link.click() after fetching bytes.
+   // Retain that untrusted event raw, but never count it as native touch delivery.
+   const sequence=diagnostic.capture.events.filter(event=>event.isTrusted&&['pointerdown','pointerup','mousedown','mouseup','click'].includes(event.type));
+   assert.equal(reductionCaptureTruncated(diagnostic.capture.events),false,'Reduction descriptors truncated');
+   assert.deepEqual(sequence.map(event=>event.type),['pointerdown','pointerup','mousedown','mouseup','click']);
+   assert.equal(diagnostic.capture.events.some(event=>['pointercancel','touchcancel'].includes(event.type)),false);
+   for(const event of sequence){
+    assert.equal(event.isTrusted,true);assert.equal(event.intendedButton.nodeId,measured.nodeId);
+    assert.equal(event.intendedButton.connected,true);
+    assert.deepEqual(event.intendedButton.rect,measured.rect);assert.deepEqual(event.intended,measured.intended);
+    reductionSnapshotOracle(event.reductionSnapshot,diagnostic.reductionPhase==='primary');
+    assert.equal(event.reductionSnapshot.button.nodeId,measured.nodeId);
+   }
+   assert.equal(sequence[0].pointerType,'touch');
+   assert.equal(sequence[2].sourceCapabilities?.firesTouchEvents,true);
+   if(diagnostic.reductionPhase==='primary')
+    assert.equal(sequence[0].reductionSnapshot.focus?.nodeId,diagnostic.focus.outer.nodeId,'Iframe lost focus before pointerdown');
+   diagnostic.captureValid=true;
+  }catch(error){diagnosticFailures.push(error)}
   // Evaluate trusted raw event targets BEFORE any later geometry/cleanup error.
   // Retain both events even on failure; do not let an absent download mask them.
   record.rawTargets=(diagnostic?.capture?.events||[]).filter(event=>['pointerdown','click'].includes(event.type))
@@ -1563,10 +1680,10 @@ async function cornerTap(control,corner,diagnostic=null,beforeTap=null){
    diagnostic.originalOraclePassed=true;
    assert.equal(diagnostic.checkpointObserved,true,'Native touch event pair is UNKNOWN: missing event, truncation or capture loss; no retry');
    if(diagnostic.qualification)qualifyToolbarEvents(diagnostic);
-   if(diagnostic.nativeStateRequested||diagnostic.portalHostRequested){
+   if(diagnostic.nativeStateRequested||diagnostic.portalHostRequested||diagnostic.reductionRequested){
     const events=diagnostic.capture.events;
     for(const type of ['pointerdown','pointerup','mousedown','mouseup','click']){
-     const matches=events.filter(event=>event.type===type);
+     const matches=events.filter(event=>event.type===type&&(!diagnostic.reductionRequested||event.isTrusted));
      assert.equal(matches.length,1,`Native-state diagnostic requires exactly one ${type}`);
      assert.equal(matches[0].isTrusted,true);assert.equal(matches[0].sameNode,true,`${type} must reach the native control`);
      if(diagnostic.portalHostRequested){
@@ -1574,6 +1691,10 @@ async function cornerTap(control,corner,diagnostic=null,beforeTap=null){
       portalHostOracle(snapshot,portalHostBaseline);
       for(const key of ['download','details','host'])
        assert.equal(snapshot[key].nodeId,diagnostic.portalHost.before[key].nodeId,`Portal ${key} replaced during gesture`);
+     }
+     if(diagnostic.reductionRequested){
+      reductionSnapshotOracle(matches[0].reductionSnapshot,diagnostic.reductionPhase==='primary');
+      assert.equal(matches[0].reductionSnapshot.button.nodeId,measured.nodeId);
      }
     }
     diagnostic.strictEventsPassed=true;
@@ -1633,6 +1754,8 @@ async function connect(owner,options){
   await target.addInitScript({content:`window.__fileControlsToolbarSnapshot=(${coarseToolbarSnapshot.toString()});`});
  if(portalHostExperimentMode)
   await target.addInitScript({content:`window.__fileControlsPortalHostSnapshot=(${portalHostSnapshot.toString()});`});
+ if(stateReductionMode)
+  await target.addInitScript({content:`window.__fileControlsReductionSnapshot=(${reductionSnapshot.toString()});`});
  await target.addInitScript({content:`window.__fileControlsCircularContour=(${circularContour.toString()});`+
   `window.__fileControlsSupportedCircularCornerShape=(${supportedCircularCornerShape.toString()});`+
   `(${installContourSampler.toString()})(${JSON.stringify(cornerShapeLogPrefix)});`});
@@ -1865,7 +1988,126 @@ async function usePreviewControls(retained,label,mode){
   marker:retained.marker,unfinished:retained.unfinished,documents:documentRequests(target),state:await previewState(target,row)});
 }
 
+async function reductionDataGate(target,phase){
+ const fixtureState=await fixtureRead(target);
+ const client=await target.evaluate(()=>{
+  const s=window.amplifier.getState(),session=s.sessions.find(row=>row.id===s.selectedSessionId);
+  return {selected:s.selectedSessionId,workingDirectory:session?.workingDirectory,workspace:session?.workspace,
+   draft:s.view.draft,canvas:{id:s.canvas.id,version:s.canvas.selectedVersion,readOnly:s.canvas.readOnlyVersion}};
+ });
+ const gate={phase,fixture:fixtureState,client,passed:false};stateReduction.gates.push(gate);
+ assert.equal(fixtureState.seed.sessionId,seed.sessionId);
+ assert.equal(fixtureState.seed.artifacts.html.id,seed.artifacts.html.id);
+ assert.equal(fixtureState.newer.id,seed.artifacts.html.id);assert.equal(fixtureState.newer.revision,2);
+ assert.equal(fixtureState.sourceDeleted,true);assert.equal(fixtureState.sourceExists,false);assert.deepEqual(fixtureState.sent,[]);
+ assert.equal(client.selected,seed.sessionId);assert.equal(client.workingDirectory,seed.workingDirectory);
+ assert.equal(client.workspace,seed.workspace);assert.notEqual(seed.workingDirectory,seed.workspace);
+ assert.equal(client.draft,stateReductionBaseline.draft);
+ const expectedId=phase.startsWith('card')?seed.unrelated.id:seed.artifacts.html.id;
+ assert.deepEqual(client.canvas,{id:expectedId,version:1,readOnly:true});
+ gate.passed=true;return gate;
+}
+async function runStateReduction(){
+ // Same real fixture/components, one touch owner, no alternate DOM/React root.
+ ready=await startup;assert.notEqual(process.env.AMPLIFIER_TEST_INSTALLED,'1');
+ contourLogicChecks();cornerShapeLogicChecks();
+ const owner=await launchOwner('touch',browserOwners);page=await connect(owner,touchOptions);
+ stateReduction.browser={version:owner.browser.version(),options:touchOptions,launch:launchOptions,client:await identity(page)};
+ assert.equal(stateReduction.browser.version,stateReductionBaseline.browser);
+ await computedCornerPreflight(page,owner);
+ await action(page,'session.create',{title:'Generated file controls'});
+ stateReduction.browser.client=await identity(page);
+ await showFixtureConversation(page,{navPinned:false});
+ seed=await fixturePost(page,'seed');
+ const html=seed.artifacts.html,draft=stateReductionBaseline.draft;
+ assert.equal(html.version,1);assert.equal(html.byteLength,426);assert.equal(html.sha256,stateReductionBaseline.html.sha256);
+ assert.equal(seed.unrelated.version,1);
+ stateReduction.newer=await fixturePost(page,'newer');
+ stateReduction.deleted=await fixturePost(page,'delete-source');
+ await action(page,'canvas.select',{id:seed.unrelated.id,sessionId:seed.sessionId,version:1,presentation:'canvas'});
+ await action(page,'canvas.visibility',{open:false,sessionId:seed.sessionId,canvasId:seed.unrelated.id});
+ await page.getByRole('textbox',{name:'Message Amplifier',exact:true}).fill(draft);
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.draft)).toBe(draft);
+ await preserved(page,draft);
+ const details=await openDetails(page,html,'touch');await controlsOracle(details,html);
+ const gesture=phase=>({reductionRequested:true,reductionPhase:phase,tapAttempts:0,preconditionsPassed:false,
+  checkpointObserved:false,originalOraclePassed:false,strictEventsPassed:false});
+ const cardGesture=stateReduction.card=gesture('card');
+ const cardCommandStart=commands.length;
+ cardGesture.download=await saveControlAndVerify(page,button(details,names[2]),html,'reduction-card-v1',
+  (control,arm)=>cornerTap(control,'bottom-right',cardGesture,arm,async()=>{
+   await preserved(page,draft);await reductionDataGate(page,'card-before');
+  }),true);
+ cardGesture.preservation=await preserved(page,draft);await reductionDataGate(page,'card-after');
+ assert.deepEqual(commands.slice(cardCommandStart).filter(row=>
+  ['canvas.select','canvas.views.inline','conversation.send','session.send'].includes(row?.action)),[]);
+ assert.deepEqual(documentRequests(page),[]);
+ assert.equal(reductionEventsComplete(cardGesture),true,'Card passive evidence incomplete');
+ cardGesture.passed=true;
+
+ const retained=await startPreview(page,html,draft,'touch');
+ const primary=retained.panel.locator('.a-canvas-primary-actions').getByRole('button',{name:'Download canvas source',exact:true});
+ const primaryGesture=stateReduction.primary=gesture('primary');
+ primaryGesture.retained={marker:retained.marker,unfinished:retained.unfinished,state:retained.state,documents:retained.documents};
+ let primaryError;
+ try{
+  await expect(retained.panel.getByRole('region',{name:'Canvas details',exact:true})).toBeHidden();
+  // Preserve the existing primary-before measurement order (Download, Details).
+  await measureControls(page,[primary,retained.panel.getByRole('button',{name:'Canvas details',exact:true})],
+   'reduction-primary-before');
+  primaryGesture.download=await saveControlAndVerify(page,primary,html,'reduction-primary-v1',
+   (control,arm)=>cornerTap(control,'bottom-right',primaryGesture,arm,async diagnostic=>{
+    diagnostic.preGesturePreservation=await previewPreserved(retained);
+    assert.deepEqual(retained.state.views.map(({viewId,generation,selectedVersion})=>({viewId,generation,selectedVersion})),
+     stateReductionBaseline.views,'Reduction renderer lease generation/selection differs');
+    await reductionDataGate(page,'primary-before');
+    const outer=await retained.element.evaluate(node=>({at:Date.now(),nodeId:window.__fileControlsNodeId(node),
+     connected:node.isConnected,focused:document.activeElement===node}));
+    const inner=await retained.input.evaluate(node=>({at:Date.now(),connected:node.isConnected,focused:document.activeElement===node,
+     documentFocused:document.hasFocus(),tag:node.tagName,id:node.id,value:node.value}));
+    diagnostic.focus={outer,inner};
+    assert.equal(outer.connected,true);assert.equal(outer.focused,true);
+    assert.equal(inner.connected,true);assert.equal(inner.focused,true);assert.equal(inner.documentFocused,true);
+    assert.equal(inner.id,'preview-note');assert.equal(inner.value,retained.unfinished);
+    assert.equal(diagnostic.beforeStructure.focus.nodeId,outer.nodeId,'Pre-tap focus snapshot differs');
+   }),true);
+ }catch(error){primaryError=error}
+ finally{
+  // A wrong target stays primary even if independent state readback/cleanup fails.
+  const failures=[];
+  const settlement=primaryGesture.settlement||{operations:[],otherFailures:[],settled:false};
+  const postTap={record:settlement,owner,abort:null};
+  try{
+   primaryGesture.postGesturePreservation=await tapOperation(postTap,'reduction-post-preservation',()=>previewPreserved(retained),3000);
+   await tapOperation(postTap,'reduction-post-state',()=>reductionDataGate(page,'primary-after'),4000);
+  }catch(error){failures.push(error)}
+  try{await tapOperation(postTap,'reduction-preview-dispose',()=>retained.element.dispose())}
+  catch(error){failures.push(error)}
+  settlement.settled=settlement.operations.every(row=>row.state!=='pending')&&settlement.browserAbort?.state!=='pending';
+  primaryGesture.postErrors=failures.map(errorEvidence);
+  if(primaryError||failures.length)throw new AggregateError([primaryError,...failures].filter(Boolean),
+   primaryError?.message||'Reduction preservation/cleanup failed');
+ }
+ primaryGesture.passed=true;
+ assert.deepEqual(errors,[]);assert.deepEqual(contourOracle.cornerShapeCaptureErrors,[]);
+}
+function reductionOutcome(){
+ const card=stateReduction.card,primary=stateReduction.primary;
+ if(!card?.passed||!primary?.preconditionsPassed||!reductionEventsComplete(card)||!reductionEventsComplete(primary)||
+  !primary.postGesturePreservation||primary.postErrors?.length||stateReduction.gates.length!==4||
+  !stateReduction.gates.every(gate=>gate.passed)||!tapDrain.settled||tapDrain.pendingAfter!==0||
+  errors.length||screenshotErrors.length||metadataExchanges.some(row=>row.error)||
+  browserOwners.some(owner=>!owner.closed||owner.browser?.isConnected())||
+  records.find(row=>row.cleanup)?.cleanup.homeRemoved!==true||cleanup?.code!==0||cleanup?.signal!==null)
+  return 'inconclusive';
+ const sequence=primary.capture.events.filter(event=>event.isTrusted&&['pointerdown','pointerup','mousedown','mouseup','click'].includes(event.type));
+ if(sequence.some(event=>!event.sameNode)&&primary.settlement.primaryFailure&&
+  /must reach the native control/.test(primary.settlement.primaryFailure.message))
+  return 'smaller-reproduction-not-cause';
+ return !failure&&primary.passed&&primary.strictEventsPassed&&primary.download?'non-reproduction-not-product-acceptance':'inconclusive';
+}
 async function run(){
+ if(stateReductionMode)return runStateReduction();
  ready=await startup;
  if(process.env.AMPLIFIER_TEST_INSTALLED==='1'||process.env.AMPLIFIER_TEST_PACKAGE_ROOT)assert.equal(ready.installedVerified,true);
  if(!cornerDiagnosticMode){contourLogicChecks();cornerShapeLogicChecks()}
@@ -2185,9 +2427,11 @@ try{
   assert.deepEqual(metadataExchanges.filter(record=>record.error),[],'Metadata response capture failed');
  }
  catch(error){failure=failure?new AggregateError([failure,error],'Metadata observation cleanup failed'):error}
+ if(stateReductionMode)stateReduction.outcome=reductionOutcome();
  const writes=await Promise.allSettled([
   writeFile(join(evidence,'fixture.log'),logs),
   writeFile(join(evidence,'observations.json'),JSON.stringify({passed:!failure,error:failure?.stack,failure:errorEvidence(failure),screenshotErrors,
+  ...(stateReductionMode?{mode:'state-reduction',productAcceptance:false,stateReduction}:{}),
   ...(cornerDiagnosticMode?{mode:'corner-diagnostic',diagnosticComplete:cornerDiagnosticComplete,
    stoppedAfter:cornerDiagnosticComplete?'first-desktop-measure':null,cornerDiagnostics}:{}),
   ...(touchEventDiagnosticMode||nativeStateDiagnosticMode||portalHostExperimentMode?{
@@ -2213,7 +2457,7 @@ try{
   requests,commands,metadataExchanges,detailsReadiness,preCleanupSnapshots,
   errors,cleanup,fixtureCleanup:records.find(row=>row.cleanup)?.cleanup,
   browserCleanup:browserOwners.map(owner=>({label:owner.label,closed:owner.closed,connected:owner.browser?.isConnected()??false})),
-  limits:['Synthetic runtime and fixture bearer authentication; no provider, login, remote server or physical touch-device claim.',
+  limits:stateReductionMode?stateReduction.limits:['Synthetic runtime and fixture bearer authentication; no provider, login, remote server or physical touch-device claim.',
    'Clipboard/403/wrong-byte faults are deliberate test injections; positive clipboard reads and downloaded files are real browser results.',
    'The two later HTML previews execute deliberately as setup; copy/download must retain each original frame and execution token.',
    'Exact-byte identity covers ordinary saved UTF-8 HTML/Markdown, not Babylon engine-prepending exports.',
@@ -2226,6 +2470,7 @@ try{
  assert.ok(entries.every(entry=>entry.isFile()),'Export only ordinary evidence files, never fixture sockets/profile/state');
 }
 if(failure)throw failure;
-console.log(touchEventDiagnosticMode||nativeStateDiagnosticMode||portalHostExperimentMode?`Generated file controls touch event checkpoint observed (cause unknown; not qualification); evidence: ${evidence}`:
+console.log(stateReductionMode?`State/history reduction: ${stateReduction.outcome}; not product acceptance; evidence: ${evidence}`:
+ touchEventDiagnosticMode||nativeStateDiagnosticMode||portalHostExperimentMode?`Generated file controls touch event checkpoint observed (cause unknown; not qualification); evidence: ${evidence}`:
  cornerDiagnosticMode?`Generated file controls corner diagnostic complete (not full qualification); evidence: ${evidence}`:
  `Generated file controls passed; evidence: ${evidence}`);

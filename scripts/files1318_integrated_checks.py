@@ -104,6 +104,17 @@ The original first-390 tap is admitted only after exact check-17 Download/Detail
 geometry and a real portal-host box agree. No CDP trace, extra gesture, full
 journey, wheel or installed phase follows. A successful checkpoint supports
 topology dependence, not candidate pruning or product acceptance.
+
+--state-reduction uses /workspace/output/files1318-state-reduction-manifest.json
+and /artifacts/files1318-state-reduction. Bind stateReductionReuse=REUSE_BINDING,
+the same 23 reuseEvidence files, and stateReductionBefore=PORTAL_HOST_BEFORE
+(immutable check 17 with original CSS). Only DRIVER/PRODUCER may differ from
+the retained 8ca closure: exact pre-gap 311 assets and 70/19 proofs, never the
+boxed build. One real 390 card Download then existing startPreview/primary
+Download in the SAME touch context. No Copy/320/fault/race/desktop exercises,
+trace, product edit, build, wheel or install. Wrong target remains exit 1.
+card/state/geometry/focus/capture/cleanup gaps are inconclusive. A smaller
+reproduction is not cause; non-reproduction does not qualify the full product.
 """
 from __future__ import annotations
 
@@ -151,6 +162,7 @@ TOUCH_EVENT_MANIFEST = ROOT / 'output/files1318-touch-event-manifest.json'
 COARSE_TOOLBAR_MANIFEST = ROOT / 'output/files1318-coarse-toolbar-manifest.json'
 NATIVE_STATE_MANIFEST = ROOT / 'output/files1318-native-state-manifest.json'
 PORTAL_HOST_MANIFEST = ROOT / 'output/files1318-portal-host-manifest.json'
+STATE_REDUCTION_MANIFEST = ROOT / 'output/files1318-state-reduction-manifest.json'
 HARNESS = OUT / 'harness'
 VENV = OUT / 'installed'
 DRIVER = 'scripts/files1318_integrated_checks.py'
@@ -161,6 +173,8 @@ TOUCH_EVENT_OUT = Path('/artifacts/files1318-touch-event-diagnostic')
 COARSE_TOOLBAR_OUT = Path('/artifacts/files1318-coarse-toolbar-qualified')
 NATIVE_STATE_OUT = Path('/artifacts/files1318-native-state-diagnostic')
 PORTAL_HOST_OUT = Path('/artifacts/files1318-portal-host-experiment')
+STATE_REDUCTION_OUT = Path('/artifacts/files1318-state-reduction')
+STATE_REDUCTION_PRODUCER_SHA = '641ba7a518711bc22ec07bc62bc7c413c8022b2236f2868465f4800ecbcfdedb'
 PORTAL_HOST_PRODUCER_SHA = '31dc5d7895fea5223b4b7b32de767e384ebc923cb1c28da644c764af832827ae'
 PORTAL_HOST_CSS_SHA = 'a3ca24cd47c7df134cc32d6f096dc071684dc438203ce4109f1fe0d21632d13b'
 PORTAL_HOST_BEFORE_ROOT = ROOT / 'output/files1318-native-state-v1-result'
@@ -321,7 +335,7 @@ def select_output(folder):
     """Keep the main process and every private child on the same fixed paths."""
     global OUT, HARNESS, VENV
     require(folder in (QUALIFIED_OUT, CORNER_OUT, CONTOUR_OUT, TOUCH_EVENT_OUT, COARSE_TOOLBAR_OUT,
-                      NATIVE_STATE_OUT, PORTAL_HOST_OUT),
+                      NATIVE_STATE_OUT, PORTAL_HOST_OUT, STATE_REDUCTION_OUT),
             'Unknown evidence destination')
     OUT = folder
     HARNESS, VENV = OUT / 'harness', OUT / 'installed'
@@ -364,7 +378,8 @@ def frozen_inputs(frozen, *, built=False):
         require(not Path(name).is_absolute() and '..' not in Path(name).parts
                 and str(Path(name)) == name
                 and path not in (MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST,
-                                 COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST, PORTAL_HOST_MANIFEST), 'Unsafe frozen path')
+                                 COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST, PORTAL_HOST_MANIFEST,
+                                 STATE_REDUCTION_MANIFEST), 'Unsafe frozen path')
         require(path.parent.resolve().is_relative_to(ROOT), 'Frozen path escapes snapshot')
         require(expected['mode'] in ('100644', '100755', '120000')
                 and re.fullmatch('[a-f0-9]{64}', expected['sha256']), 'Invalid frozen identity')
@@ -383,7 +398,7 @@ def diagnostic_static(frozen, *, binding='diagnosticReuse'):
     unit_only = binding in ('coarseToolbarReuse', 'portalHostReuse')
     require(not unit_only or OUT in (COARSE_TOOLBAR_OUT, PORTAL_HOST_OUT), 'Unexpected unit-only reuse mode')
     require(binding in ('diagnosticReuse', 'contourReuse', 'touchEventReuse', 'coarseToolbarReuse', 'nativeStateReuse',
-                        'portalHostReuse')
+                        'portalHostReuse', 'stateReductionReuse')
             and frozen.get(binding) == REUSE_BINDING, 'Missing exact static reuse binding')
     archive, metadata_path = REUSE_INPUT / 'static.tar', REUSE_INPUT / 'reuse.json'
     for path, digest in ((archive, REUSE_BINDING['archiveSha256']),
@@ -579,6 +594,51 @@ def retained_environment(prior):
         'oldRuntimeSha256': sha(prior / 'runtime-readiness.json'),
         'currentRuntimeSha256': sha(OUT / 'runtime-readiness.json'),
         'distributionCount': len(current['distributions']),
+    })
+
+
+def state_reduction_inputs(frozen):
+    require(OUT == STATE_REDUCTION_OUT and frozen.get('stateReductionReuse') == REUSE_BINDING
+            and frozen.get('stateReductionBefore') == PORTAL_HOST_BEFORE
+            and frozen['files'][PRODUCER]['sha256'] == STATE_REDUCTION_PRODUCER_SHA
+            and frozen['files'][COARSE_TOOLBAR_CSS]['sha256'] == NATIVE_STATE_CSS_SHA,
+            'Reduction requires pinned producer and original pre-gap/pre-box product')
+    for name, digest in PORTAL_HOST_BEFORE['files'].items():
+        source, destination = PORTAL_HOST_BEFORE_ROOT / name, OUT / 'before-evidence' / name
+        require(source.resolve() == source and source.is_file() and sha(source) == digest, 'Reduction before evidence changed')
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        require(sha(destination) == digest, 'Reduction before evidence copy differs')
+    previous = read(OUT / 'before-evidence/parent-manifest.json')
+    require(previous['revision'] == PORTAL_HOST_BEFORE['sourceRevision']
+            and previous['tree'] == PORTAL_HOST_BEFORE['sourceTree']
+            and previous['files'].keys() == frozen['files'].keys()
+            and {name for name in frozen['files'] if previous['files'][name] != frozen['files'][name]} == {DRIVER, PRODUCER},
+            'Reduction may change only the existing producer/driver')
+    name, = [name for name in PORTAL_HOST_BEFORE['files'] if name.endswith('/observations.json')]
+    proof = read(OUT / 'before-evidence' / name)
+    gesture = proof['touchEventDiagnostic']
+    require(proof['passed'] is False and proof['mode'] == 'native-state-diagnostic'
+            and gesture['tapAttempts'] == 1 and gesture['delivered']['event']['sameNode'] is False,
+            'Reduction must bind the original failed primary gesture')
+    def geometry(label):
+        row, = [row for row in proof['geometry']
+                if row.get('label') == 'touch-390-preview-primary-before' and row['name'] == label]
+        return {**{key: row[key] for key in ('rect', 'radii', 'borders', 'viewport', 'transforms', 'cornerShapes', 'computed')},
+                'scroll': {'x': row['scroll']['x'], 'y': row['scroll']['y'],
+                           'ancestors': [{key: a[key] for key in ('x', 'y')} for a in row['scroll']['ancestors']]}}
+    pointer, = [e for e in gesture['capture']['events'] if e['type'] == 'pointerdown']
+    require(pointer['activeElement']['tag'] == 'IFRAME', 'Original primary focus was not iframe')
+    body, = [n for n in pointer['ancestors'] if n['className'] == 'a-canvas-body']
+    roots = {row['kind']: row for row in gesture['nativeState']['roots']}
+    save('state-reduction-baseline.json', {
+        'source': PORTAL_HOST_BEFORE, 'browser': gesture['browser'], 'draft': gesture['retained']['state']['draft'],
+        'views': [{key: view[key] for key in ('viewId', 'generation', 'selectedVersion')}
+                  for view in gesture['retained']['state']['views']],
+        'download': geometry('Download canvas source'), 'details': geometry('Canvas details'),
+        'toolbarRect': roots['toolbar']['rect'], 'noticeRect': roots['notice']['rect'], 'bodyRect': body['rect'],
+        'tap': {key: gesture['before'][key] for key in ('rect', 'radii', 'borders', 'viewport', 'intended', 'position')},
+        'html': {'bytes': proof['seed']['artifacts']['html']['byteLength'], 'sha256': proof['seed']['artifacts']['html']['sha256']},
     })
 
 
@@ -1354,7 +1414,7 @@ def contour_sample(sample, *, reachable=(True, True, True, True)):
                 'Legacy rectangular probe diagnostic missing/changed')
 
 
-def computed_shape_proof(proof):
+def computed_shape_proof(proof, *, client='desktop'):
     oracle = proof['contourOracle']
     inputs = ['', 'round', 'superellipse(1)', 'bevel', 'scoop', 'superellipse(0)',
               'superellipse(2)', 'unknown', 'Round', ' round', 'round ',
@@ -1370,7 +1430,7 @@ def computed_shape_proof(proof):
     preflight = oracle['browserPreflight']
     result, observations = preflight['result'], oracle['cornerShapeObservations']
     require(preflight['passed'] is True and not preflight.get('error')
-            and preflight['client'] == 'desktop' and preflight['timeoutMs'] == 2000
+            and preflight['client'] == client and preflight['timeoutMs'] == 2000
             and preflight['browser'] == {'name': 'chromium',
                 'version': read(OUT / 'browser-readiness.json')['browser']}
             and preflight['observationRange'] == {'start': 0, 'end': 3}
@@ -1409,7 +1469,7 @@ def computed_shape_proof(proof):
                              or (index in (1, 2) and shape['corner'] == 'top-left'
                                  and shape['raw'] == negative['raw']))
                         for shape in row['cornerShapes']), 'Invalid raw computed-shape evidence')
-    require(all(row['client'] == 'desktop' and row['nodeId'] == result['positive']['nodeId']
+    require(all(row['client'] == client and row['nodeId'] == result['positive']['nodeId']
                 for row in observations[:3])
             and observations[0]['cornerShapes'] == result['positive']['cornerShapes']
             and observations[1]['cornerShapes'] == observations[2]['cornerShapes']
@@ -1827,6 +1887,206 @@ def touch_event_diagnostic_proof(exit_code, *, native_state=False, portal_host=F
              else 'generated-source/touch-event-diagnostic-report.json', result)
 
 
+def state_reduction_proof(exit_code):
+    result = {'exitCode': exit_code, 'outcome': 'inconclusive', 'checkpointObserved': False, 'productAcceptance': False}
+    try:
+        path, = (OUT / 'generated-source/evidence').glob('generated-file-controls-*/observations.json')
+        result.update(path=str(path), sha256=sha(path))
+        proof, baseline = read(path), read(OUT / 'state-reduction-baseline.json')
+        reduction, seed = proof['stateReduction'], proof['seed']
+        result['originalFailure'] = proof.get('failure')
+        require(exit_code in (0, 1) and proof['mode'] == 'state-reduction'
+                and proof['productAcceptance'] is False and proof['passed'] is (exit_code == 0)
+                and reduction['version'] == 'state-reduction-v1' and reduction['baseline'] == baseline,
+                'Wrong reduction mode/source/exit binding')
+        browser = reduction['browser']
+        require(browser['version'] == baseline['browser'] == read(OUT / 'browser-readiness.json')['browser']
+                and browser['options'] == {'viewport': {'width': 390, 'height': 844},
+                    'isMobile': True, 'hasTouch': True, 'deviceScaleFactor': 1}
+                and browser['launch'] == {'headless': True, 'timeout': 8000, 'args': []}
+                and browser['client']['sessionId'] == seed['sessionId'], 'Reduction browser/context differs')
+        computed_shape_proof(proof, client='touch')
+        require([g['phase'] for g in reduction['gates']] == ['card-before', 'card-after', 'primary-before', 'primary-after']
+                and reduction['newer']['id'] == seed['artifacts']['html']['id'] and reduction['newer']['revision'] == 2
+                and reduction['deleted'] == {'sourceDeleted': True, 'sourceExists': False}, 'Missing one-shot data setup/gates')
+        for gate in reduction['gates']:
+            f, c = gate['fixture'], gate['client']
+            expected_id = seed['unrelated']['id'] if gate['phase'].startswith('card') else seed['artifacts']['html']['id']
+            require(gate['passed'] is True and f['seed'] == seed and f['newer']['id'] == seed['artifacts']['html']['id']
+                    and f['newer']['revision'] == 2 and f['sourceDeleted'] is True and f['sourceExists'] is False
+                    and f['sent'] == [] and c == {'selected': seed['sessionId'], 'workingDirectory': seed['workingDirectory'],
+                        'workspace': seed['workspace'], 'draft': baseline['draft'],
+                        'canvas': {'id': expected_id, 'version': 1, 'readOnly': True}}
+                    and seed['workspace'] != seed['workingDirectory'], 'Reduction data/precondition mismatch')
+
+        def structure(snapshot, primary):
+            require(snapshot['limits'] == {'descendants': 24, 'ancestors': 20} and snapshot['truncations'] == []
+                    and len(snapshot['descendants']) <= 24 and len(snapshot['ancestors']) <= 20
+                    and snapshot['button']['connected'] is True
+                    and snapshot['context']['coarse'] is True and snapshot['context']['dpr'] == 1
+                    and snapshot['context']['maxTouchPoints'] > 0 and snapshot['focus'], 'Incomplete reduction structure/focus')
+            if primary:
+                p = snapshot['primary']
+                for key in ('download', 'details'):
+                    require(p[key]['geometry'] == baseline[key] and len(p[key]['corners']) == 4
+                            and all(c['reachable'] for c in p[key]['corners']), 'Reduction primary/neighbor geometry differs')
+                require(all(p[key]['rect'] == baseline[key + 'Rect'] for key in ('toolbar', 'body', 'notice'))
+                        and p['body']['computed']['margin'] == '0px'
+                        and any(a['className'] == 'a-canvas-primary-actions' and a['computed']['display'] == 'contents'
+                                for a in snapshot['ancestors']), 'Reduction must use original product body/portal')
+            else:
+                require(snapshot['primary'] is None, 'Card must not be a primary-toolbar surrogate')
+
+        sequences = []
+        def truncated(value):
+            if isinstance(value, dict):
+                return any((key.endswith('Truncated') and child is True) or truncated(child) for key, child in value.items())
+            return isinstance(value, list) and any(truncated(child) for child in value)
+        for phase in ('card', 'primary'):
+            g = reduction[phase]
+            require(g['reductionRequested'] is True and g['reductionPhase'] == phase and g['tapAttempts'] == 1
+                    and g['preconditionsPassed'] is True and g['captureValid'] is True
+                    and g['originalListenerRemoved'] is True and g['handleDisposed'] is True
+                    and g['captureErrors'] == g['cleanupErrors'] == [], 'Reduction gesture/gate/cleanup incomplete')
+            contour_sample(g['before'])
+            structure(g['beforeStructure'], phase == 'primary')
+            require(g['beforeStructure']['button']['nodeId'] == g['before']['nodeId'], 'Reduction target identity differs')
+            capture = g['capture']
+            require(capture['limits'] == {'windowMs': 2000, 'records': 128, 'stack': 16, 'path': 24,
+                    'ancestors': 16, 'notices': 4, 'touches': 4, 'errors': 8}
+                    and len(capture['events']) <= 128 and capture['errors'] == []
+                    and not truncated(capture['events'])
+                    and all(n == 0 for n in capture['truncations'].values())
+                    and capture['finished']['listenersRemoved'] is True and capture['finished']['timerCleared'] is True
+                    and g['checkpointObserved'] is True
+                    and not any(e['type'] in ('pointercancel', 'touchcancel') for e in capture['events']),
+                    'Reduction capture incomplete/truncated/cancelled')
+            sequence = [e for e in capture['events'] if e['isTrusted']
+                        and e['type'] in ('pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click')]
+            require([e['type'] for e in sequence] == ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click']
+                    and sequence[0]['pointerType'] == 'touch' and sequence[2]['sourceCapabilities']['firesTouchEvents'] is True,
+                    'Native reduction sequence differs; synthetic link.click is not touch delivery')
+            for index, e in enumerate(capture['events']):
+                require(e['index'] == index and capture['armedAt'] <= e['at'] < capture['deadline']
+                        and not e.get('captureError'), 'Bad reduction event/time')
+            for e in sequence:
+                structure(e['reductionSnapshot'], phase == 'primary')
+                require(e['intendedButton']['nodeId'] == g['before']['nodeId']
+                        and e['intendedButton']['connected'] is True and e['intendedButton']['rect'] == g['before']['rect']
+                        and e['intended'] == g['before']['intended']
+                        and e['atIntended']['point'] == g['before']['intended']
+                        and type(e['sameNode']) is bool and e['actual'] is not None
+                        and all(type(e['actual'][key]) in (int, float) and math.isfinite(e['actual'][key]) for key in ('x', 'y'))
+                        and e['reductionSnapshot']['button']['nodeId'] == g['before']['nodeId'],
+                        'Original reduction node/geometry changed')
+            require(sequence[0]['actual'] == {k: g['delivered']['event'][k] for k in ('x', 'y')}
+                    and sequence[0]['sameNode'] == g['delivered']['event']['sameNode'], 'Pointer observers disagree')
+            sequences.append(sequence)
+        card, primary = reduction['card'], reduction['primary']
+        require(Counter(c['check'] for c in proof['checks']) == Counter({
+                    'contour formula and unsupported geometry logic checks': 1,
+                    'computed corner-shape exact-value predicate checks': 1,
+                    'actual browser computed round accepted and noncircular corner rejected by same sampler': 1,
+                    'old padding-origin conversion rejected by same exact-contour oracle': 1,
+                    'deliberate saved-v1 preview setup, not a download': 1})
+                and len([g for g in proof['geometry'] if g['label'] == 'corner-tap-before']) == 2
+                and proof['fileFrameCaptures'] == []
+                and not any(c.get('action') in ('canvas.views.inline', 'canvas.copy', 'conversation.send', 'session.send')
+                            for c in proof['commands']), 'Reduction exceeded its two-Download scope')
+        require(card['passed'] is True and card['strictEventsPassed'] is True and all(e['sameNode'] for e in sequences[0]),
+                'Card positive control did not pass')
+        preserved = card['preservation']
+        require(preserved['selected'] == seed['sessionId'] and preserved['draft'] == baseline['draft']
+                and preserved['canvas'] == {'id': seed['unrelated']['id'], 'version': 1, 'readOnly': True}
+                and preserved['iframeSightings'] == []
+                and not any(v.get('resourceId') == seed['artifacts']['html']['id'] for v in preserved['views']),
+                'Card did not preserve unrelated historical state')
+        require(all(primary['before'][k] == v for k, v in baseline['tap'].items()), 'Original derived primary tap changed')
+        focus, retained = primary['focus'], primary['retained']
+        require(focus['outer']['connected'] is True and focus['outer']['focused'] is True
+                and focus['inner']['connected'] is True and focus['inner']['focused'] is True
+                and focus['inner']['documentFocused'] is True and focus['inner']['tag'] == 'INPUT'
+                and focus['inner']['id'] == 'preview-note' and focus['inner']['value'] == retained['unfinished']
+                and primary['beforeStructure']['focus']['nodeId'] == focus['outer']['nodeId']
+                and sequences[1][0]['reductionSnapshot']['focus']['nodeId'] == focus['outer']['nodeId'],
+                'Actual original iframe/input focus not established')
+        require(retained['marker']['count'] == 1 and retained['marker']['executed'] == '1'
+                and re.fullmatch(r'\d+-\d+-\d+-\d+', retained['marker']['token'])
+                and retained['state']['selected'] == seed['sessionId'] and retained['state']['draft'] == baseline['draft']
+                and retained['state']['canvas'] == {'id': seed['artifacts']['html']['id'], 'version': 1, 'readOnly': True}
+                and len(retained['state']['views']) == 1
+                and retained['state']['views'][0]['viewId'] == 'primary'
+                and retained['state']['views'][0]['resourceId'] == seed['artifacts']['html']['id']
+                and [{key: view[key] for key in ('viewId', 'generation', 'selectedVersion')}
+                     for view in retained['state']['views']] == baseline['views'], 'Primary setup state differs')
+        for key in ('preGesturePreservation', 'postGesturePreservation'):
+            p = primary[key]
+            require(p['iframeConnected'] is True and p['sameIframe'] is True and p['iframeCount'] == 1
+                    and p['prohibitedCommands'] == [] and all(p[k] == retained[k] for k in ('marker', 'unfinished', 'state', 'documents')),
+                    'Reduction preview/input/token/lease/draft preservation failed')
+        require(primary['postErrors'] == [] and len([r for r in proof['requests'] if r['path'].endswith('/document')]) == 1,
+                'Reduction issued an extra preview document or post read failed')
+        require(len(proof['tapSettlements']) == len(proof['downloadSettlements']) == 2
+                and proof['tapDrain'].get('settled') is True and proof['tapDrain']['pendingAfter'] == 0
+                and all(t['settled'] and t['otherFailures'] == [] and t['handleDisposed']
+                        and t['listenerCleanup']['state'] == 'removed'
+                        and all(op['state'] == 'fulfilled' for op in t['operations']) for t in proof['tapSettlements'])
+                and all(d['settled'] and d['observation']['listenerRemoved'] and d['observation']['timerCleared']
+                        for d in proof['downloadSettlements']), 'Reduction branches not settled')
+        require(proof['tapSettlements'] == [card['settlement'], primary['settlement']]
+                and all(g['settlement']['retained']['nodeId'] == g['before']['nodeId']
+                        and g['settlement']['retained']['connected'] is True for g in (card, primary))
+                and [d['label'] for d in proof['downloadSettlements']] == ['reduction-card-v1', 'reduction-primary-v1']
+                and proof['downloadSettlements'][0]['trigger']['state'] == 'fulfilled'
+                and proof['downloadSettlements'][0]['observation']['state'] == 'received',
+                'Reduction retained-node/download branch correlation differs')
+        for download in proof['downloads']:
+            html = seed['artifacts']['html']
+            saved = path.parent / (download['label'] + '-' + download['filename'])
+            require(download['label'] in ('reduction-card-v1', 'reduction-primary-v1') and download['filename'] == html['filename']
+                    and download['bytes'] == baseline['html']['bytes'] == 426
+                    and download['sha256'] == baseline['html']['sha256'] == sha(saved)
+                    and saved.read_bytes() == html['body'].encode(), 'Reduction download byte identity differs')
+        require(card['download'] in proof['downloads'] and proof['errors'] == proof['screenshotErrors'] == []
+                and all(not r.get('error') and r.get('completedAt') for r in proof['metadataExchanges']),
+                'Card download/page/metadata proof missing')
+        require(Counter(d['label'] for d in proof['downloads']) == Counter(
+                    ['reduction-card-v1'] + (['reduction-primary-v1'] if primary.get('download') else [])),
+                'Unexpected or duplicate reduction downloads')
+        cleanup = proof['cleanup']
+        require(cleanup['code'] == 0 and cleanup['signal'] is None
+                and proof['fixtureCleanup'] == {'pid': cleanup['pid'], 'homeRemoved': True}
+                and proof['browserCleanup'] == [{'label': 'touch', 'closed': True, 'connected': False}],
+                'Reduction owner cleanup failed')
+        expected = read(OUT / 'candidate.json')
+        require(proof['installed'] == {'packageRoot': str(ROOT / 'amplifier_web'), 'verified': False,
+                    'staticSha256': {p.removeprefix('amplifier_web/static/'): h for p, h in expected['static'].items()}}
+                and all(read(OUT / f'source-fixture-origins-{when}.json')['pid'] == cleanup['pid'] for when in ('before', 'after'))
+                and read(OUT / 'source-fixture-payload-before.json') == read(OUT / 'source-fixture-payload-after.json'),
+                'Reduction fixture/payload identity changed')
+        wrong = any(not e['sameNode'] for e in sequences[1])
+        if wrong:
+            require(exit_code == 1 and primary['settlement'].get('primaryFailure')
+                    and 'must reach the native control' in primary['settlement']['primaryFailure']['message']
+                    and proof.get('failure') and proof['downloadSettlements'][1]['trigger']['state'] == 'rejected',
+                    'Wrong target must remain actual primary failed check')
+            outcome = 'smaller-reproduction-not-cause'
+        else:
+            require(exit_code == 0 and primary['passed'] is True and primary['strictEventsPassed'] is True
+                    and primary['download'] in proof['downloads'] and not proof.get('failure')
+                    and proof['downloadSettlements'][1]['trigger']['state'] == 'fulfilled'
+                    and proof['downloadSettlements'][1]['observation']['state'] == 'received',
+                    'Non-reproduction requires both actual downloads and state checks')
+            outcome = 'non-reproduction-not-product-acceptance'
+        require(reduction['outcome'] == outcome, 'Unsupported reduction outcome claim')
+        result.update(outcome=outcome, checkpointObserved=True, cause='unknown')
+    except Exception as error:
+        result['validationError'] = {'type': type(error).__name__, 'message': str(error)}
+    finally:
+        save('generated-source/state-reduction-report.json', result)
+    return result
+
+
 def portal_host_proof(proof, folder, exit_code):
     gesture = proof['touchEventDiagnostic']
     experiment, baseline = gesture['portalHost'], read(OUT / 'portal-host-baseline.json')
@@ -2186,21 +2446,24 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest', required=True, type=Path,
                         choices=[MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST,
-                                 COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST, PORTAL_HOST_MANIFEST])
+                                 COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST, PORTAL_HOST_MANIFEST,
+                                 STATE_REDUCTION_MANIFEST])
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--corner-diagnostic', action='store_true')
     modes.add_argument('--contour-qualification', action='store_true')
     modes.add_argument('--touch-event-diagnostic', action='store_true')
     modes.add_argument('--native-state-diagnostic', action='store_true')
     modes.add_argument('--portal-host-experiment', action='store_true')
+    modes.add_argument('--state-reduction', action='store_true')
     modes.add_argument('--coarse-toolbar-qualification', action='store_true')
     args = parser.parse_args()
-    touch_checkpoint = args.touch_event_diagnostic or args.native_state_diagnostic or args.portal_host_experiment
+    touch_checkpoint = args.touch_event_diagnostic or args.native_state_diagnostic or args.portal_host_experiment or args.state_reduction
     checkpoint_mode = args.corner_diagnostic or touch_checkpoint
-    reuse_mode = args.contour_qualification or args.touch_event_diagnostic or args.native_state_diagnostic
+    reuse_mode = args.contour_qualification or args.touch_event_diagnostic or args.native_state_diagnostic or args.state_reduction
     fresh_product = args.coarse_toolbar_qualification or args.portal_host_experiment
     reused_phases = COARSE_TOOLBAR_REUSED_PHASES if fresh_product else REUSED_PHASES
     manifest_path = (CORNER_MANIFEST if args.corner_diagnostic
+                     else STATE_REDUCTION_MANIFEST if args.state_reduction
                      else PORTAL_HOST_MANIFEST if args.portal_host_experiment
                      else NATIVE_STATE_MANIFEST if args.native_state_diagnostic
                      else TOUCH_EVENT_MANIFEST if args.touch_event_diagnostic
@@ -2209,6 +2472,7 @@ def main():
     if args.manifest != manifest_path:
         parser.error('The manifest must match the selected qualification mode')
     select_output(CORNER_OUT if args.corner_diagnostic
+                  else STATE_REDUCTION_OUT if args.state_reduction
                   else PORTAL_HOST_OUT if args.portal_host_experiment
                   else NATIVE_STATE_OUT if args.native_state_diagnostic
                   else TOUCH_EVENT_OUT if args.touch_event_diagnostic
@@ -2241,7 +2505,7 @@ def main():
         for name, row in report['phases'].items():
             if name not in selected:
                 row['reason'] = 'outside_touch_event_diagnostic_scope'
-        report.update(mode='portal-host-experiment' if args.portal_host_experiment
+        report.update(mode='state-reduction' if args.state_reduction else 'portal-host-experiment' if args.portal_host_experiment
                       else 'native-state-diagnostic' if args.native_state_diagnostic else 'touch-event-diagnostic',
                       outcome='not_started', cause='unknown',
                       productAcceptance=False, checkpointObserved=False)
@@ -2253,6 +2517,12 @@ def main():
             report['limits'].append(
                 'Bounded current DOM responsiveness/quads and gesture-window HitTest trace only. '
                 'Candidate membership, pruning and scoring are not exposed. Native source/bytes checks are not a full pass.')
+        if args.state_reduction:
+            report.update(priorChecksConsumed=18)
+            report['limits'].append(
+                'One 390 card Download and primary preview Download in one product touch context. '
+                'Card/state/geometry/focus/capture/cleanup gap is inconclusive; '
+                'smaller reproduction is not cause, non-reproduction is not product acceptance.')
     if reuse_mode:
         if args.contour_qualification:
             report['mode'] = 'contour-qualification'
@@ -2351,6 +2621,8 @@ def main():
                         'Native-state producer/reuse/rolled-back CSS differs from reviewed inputs')
             if args.portal_host_experiment:
                 portal_host_inputs(frozen)
+            if args.state_reduction:
+                state_reduction_inputs(frozen)
             if args.coarse_toolbar_qualification:
                 require(isinstance(COARSE_TOOLBAR_PRODUCER_SHA, str)
                         and re.fullmatch('[a-f0-9]{64}', COARSE_TOOLBAR_PRODUCER_SHA)
@@ -2422,6 +2694,8 @@ def main():
         }
         if args.corner_diagnostic:
             env['FILES1318_CORNER_DIAGNOSTIC'] = '1'  # Fixed child evidence destination only.
+        elif args.state_reduction:
+            env['FILES1318_STATE_REDUCTION'] = '1'
         elif args.portal_host_experiment:
             env['FILES1318_PORTAL_HOST_EXPERIMENT'] = '1'
         elif args.native_state_diagnostic:
@@ -2464,11 +2738,37 @@ def main():
                     report['checkpointObserved'] = row['diagnostic']['checkpointObserved']
                     save('report.json', report)
                 if touch_checkpoint and name == 'generated-source':
-                    row['diagnostic'] = touch_event_diagnostic_proof(
-                        raw['exitCode'], native_state=args.native_state_diagnostic, portal_host=args.portal_host_experiment)
+                    row['diagnostic'] = (state_reduction_proof(raw['exitCode']) if args.state_reduction
+                                         else touch_event_diagnostic_proof(
+                                             raw['exitCode'], native_state=args.native_state_diagnostic, portal_host=args.portal_host_experiment))
                     report['checkpointObserved'] = row['diagnostic']['checkpointObserved']
                     report['observationOutcome'] = row['diagnostic']['outcome']
+                    if args.state_reduction:
+                        # Producer observation is not a runner settlement receipt.
+                        # Validate both legitimate terminal outcomes BEFORE the
+                        # normal exit-zero gate rejects a clean reproduction.
+                        expected_exit = {
+                            'smaller-reproduction-not-cause': 1,
+                            'non-reproduction-not-product-acceptance': 0,
+                        }.get(report['observationOutcome'])
+                        row['reductionRunnerReceipt'] = {
+                            'complete': result.get('complete'), 'passed': result.get('passed'),
+                            'status': raw.get('status'), 'exitCode': raw.get('exitCode'), 'runnerCode': code,
+                            'cleanup': raw.get('cleanup'), 'reason': raw.get('reason'),
+                            'validated': (
+                                expected_exit is not None and raw.get('cleanup') == CLEAN
+                                and 'reason' in raw and raw['reason'] is None and result.get('complete') is True
+                                and result.get('passed') is (expected_exit == 0)
+                                and raw.get('status') == ('passed' if expected_exit == 0 else 'failed')
+                                and type(raw.get('exitCode')) is int and raw['exitCode'] == expected_exit
+                                and type(code) is int and code == expected_exit),
+                        }
                     save('report.json', report)
+                    if args.state_reduction:
+                        require(row['diagnostic']['outcome'] != 'inconclusive',
+                                'Reduction inconclusive; inspect retained gates/capture/cleanup, no retry')
+                        require(row['reductionRunnerReceipt']['validated'],
+                                'Reduction runner receipt incomplete, inconsistent or cleanup failed')
                 require(raw['cleanup'] == CLEAN and raw['reason'] is None, f'{name}: process/cleanup failure')
                 require(result['complete'] is True and result['passed'] is (not negative)
                         and raw['status'] == ('failed' if negative else 'passed')
@@ -2499,7 +2799,8 @@ def main():
                     frozen, binding='portalHostReuse' if args.portal_host_experiment else 'coarseToolbarReuse'))
             else:
                 step('static-reuse', lambda: diagnostic_static(
-                    frozen, binding='nativeStateReuse' if args.native_state_diagnostic
+                    frozen, binding='stateReductionReuse' if args.state_reduction
+                    else 'nativeStateReuse' if args.native_state_diagnostic
                     else 'touchEventReuse' if args.touch_event_diagnostic else 'contourReuse'))
             # No status changes until every original proof, dependency identity,
             # tracked input and archived static byte has passed the reuse guard.
@@ -2574,6 +2875,9 @@ def main():
             if args.portal_host_experiment:
                 require(mode == 'source', 'Portal experiment cannot exercise installed mode')
                 extra['FILE_CONTROLS_PORTAL_HOST_EXPERIMENT'] = '1'
+            if args.state_reduction:
+                require(mode == 'source', 'State reduction cannot exercise installed mode')
+                extra['FILE_CONTROLS_STATE_REDUCTION'] = '1'
             if args.coarse_toolbar_qualification:
                 extra['FILE_CONTROLS_COARSE_TOOLBAR_QUALIFICATION'] = '1'
             run('topology-' + mode, [NODE, 'tests/file-controls-topology-preflight.mjs'], root=root,
@@ -2732,6 +3036,11 @@ def main():
                         require(all(report['phases'][name]['status'] == 'REUSED'
                                     and report['phases'][name]['executed'] is False for name in reused_phases),
                                 'Reused phases were rerun or lost their evidence')
+                    if args.state_reduction:
+                        require(all(sha(folder / name) == digest
+                                    for folder in (PORTAL_HOST_BEFORE_ROOT, OUT / 'before-evidence')
+                                    for name, digest in PORTAL_HOST_BEFORE['files'].items()),
+                                'Reduction immutable before evidence changed')
                     save('source-payload-final.json', expected['files'])
                     save('static-final.json', tree(ROOT / 'amplifier_web/static'))
                     integrity.update(status='passed', reason=None)
@@ -2756,6 +3065,12 @@ def main():
                 report['outcome'] = 'checkpoint_observed_cause_unknown' if report['complete'] else 'failed'
                 if touch_checkpoint and not report['checkpointObserved']:
                     report['outcome'] = 'unknown'
+                if args.state_reduction:
+                    report['outcome'] = (report.get('observationOutcome', 'inconclusive')
+                                         if report['finalization']['status'] == 'passed'
+                                         and report['phases']['final-integrity']['status'] == 'passed'
+                                         and report['phases']['generated-source'].get(
+                                             'reductionRunnerReceipt', {}).get('validated') is True else 'inconclusive')
             report['durationSeconds'] = round(time.monotonic() - started, 3)
             save('report.json', report)
             signal.setitimer(signal.ITIMER_REAL, 0)
@@ -2770,13 +3085,14 @@ if __name__ == '__main__':
     touch_event = os.environ.get('FILES1318_TOUCH_EVENT_DIAGNOSTIC') == '1'
     native_state = os.environ.get('FILES1318_NATIVE_STATE_DIAGNOSTIC') == '1'
     portal_host = os.environ.get('FILES1318_PORTAL_HOST_EXPERIMENT') == '1'
+    state_reduction = os.environ.get('FILES1318_STATE_REDUCTION') == '1'
     coarse_toolbar = os.environ.get('FILES1318_COARSE_TOOLBAR_QUALIFICATION') == '1'
-    require(sum((corner, contour, touch_event, native_state, portal_host, coarse_toolbar)) <= 1, 'Conflicting child qualification modes')
-    select_output(CORNER_OUT if corner else PORTAL_HOST_OUT if portal_host
+    require(sum((corner, contour, touch_event, native_state, portal_host, state_reduction, coarse_toolbar)) <= 1, 'Conflicting child qualification modes')
+    select_output(CORNER_OUT if corner else STATE_REDUCTION_OUT if state_reduction else PORTAL_HOST_OUT if portal_host
                   else NATIVE_STATE_OUT if native_state else TOUCH_EVENT_OUT if touch_event
                   else COARSE_TOOLBAR_OUT if coarse_toolbar
                   else CONTOUR_OUT if contour else QUALIFIED_OUT)
-    if touch_event or native_state or portal_host:
+    if touch_event or native_state or portal_host or state_reduction:
         require(os.environ.get('FILES1318_FIXTURE') != 'installed'
                 and sys.argv[1:] not in (['--python-tests'], ['--installed-ready']),
                 'Touch event diagnostic cannot run units or installed children')
