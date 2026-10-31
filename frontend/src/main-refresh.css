@@ -32,6 +32,9 @@
 /* Approvals are siblings of messages, so they need the same reading column.
    Keep the existing bounded scroller; long paths must not widen its contents. */
 #amp-one.a-approachable-shell .a-approvals{box-sizing:border-box;max-width:var(--a-reading-width);width:calc(100% - 48px);margin-inline:auto;overflow-wrap:anywhere}
+#amp-one.a-approachable-shell .a-permission-history-entry{box-sizing:border-box;max-width:var(--a-reading-width);width:calc(100% - 48px);margin-inline:auto;flex-shrink:0;font-size:13px;overflow-wrap:anywhere}
+#amp-one.a-approachable-shell .a-permission-history-entry button{min-height:44px}
+#amp-one.a-approachable-shell .a-permission-history article{border-top:1px solid var(--a-line);padding-block:12px;overflow-wrap:anywhere}
 #amp-one.a-approachable-shell .a-chat-plan-composer{max-width:var(--a-reading-width);width:calc(100% - 48px);border:0;margin-bottom:6px;font-size:13px}
 #amp-one.a-approachable-shell .a-layout[data-pane-layout]>.a-canvas-panel{height:auto;border:var(--a-panel-border-width,0px) solid var(--a-panel-line,var(--a-line));border-bottom:0;border-left-width:1px;border-right:0;border-radius:var(--a-panel-radius,0px) 0 0 0;box-shadow:var(--a-panel-shadow,none)}
 #amp-one.a-approachable-shell[data-layout=work] .a-layout>.a-canvas-panel{border-left:0;border-right:1px solid var(--a-panel-line,var(--a-line));border-radius:0 var(--a-panel-radius,0px) 0 0}
@@ -48,7 +51,7 @@
 #amp-one.a-approachable-shell .a-nav-resize:hover:before,#amp-one.a-approachable-shell .a-nav-resize:focus-visible:before,#amp-one.a-approachable-shell .a-canvas-resize:hover:before,#amp-one.a-approachable-shell .a-canvas-resize:focus-visible:before{background:var(--a-accent)}
 @container conversation (max-width:520px){
  #amp-one.a-approachable-shell .a-messages{padding:22px 18px;gap:clamp(18px,calc(var(--a-message-gap,24px) - 4px),22px)}
- #amp-one.a-approachable-shell .a-composer,#amp-one.a-approachable-shell .a-approvals,#amp-one.a-approachable-shell .a-chat-plan-composer{width:calc(100% - 28px)}
+ #amp-one.a-approachable-shell .a-composer,#amp-one.a-approachable-shell .a-approvals,#amp-one.a-approachable-shell .a-permission-history-entry,#amp-one.a-approachable-shell .a-chat-plan-composer{width:calc(100% - 28px)}
  #amp-one.a-approachable-shell .a-user>.a-message-body{max-width:94%}
 }
 @media(max-width:760px){

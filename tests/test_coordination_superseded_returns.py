@@ -1,4 +1,6 @@
 """Only the latest queued outcome wakes a requester; all evidence remains saved."""
+from amplifier_web import test_execution_settings as execution_settings
+
 import copy
 
 import pytest
@@ -64,7 +66,7 @@ async def test_staged_success_does_not_hide_an_outstanding_question(app):
 async def test_retiring_old_return_releases_backpressure_without_another_external_event(app, monkeypatch):
     source, target, old_id = await first_return(app)
     # One pending return plus its interim subscription reserves both slots.
-    monkeypatch.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 2)
+    monkeypatch.setitem(execution_settings.CONCURRENCY_DEFAULTS, 'maxPendingPeerInputs', 2)
     new_id = await later_return(app, target)
     assert app.collaboration.receipt('result-request')['subscription']['status'] == 'backpressured'
     assert not app.db.execute('SELECT 1 FROM commands WHERE id=?', (new_id,)).fetchone()

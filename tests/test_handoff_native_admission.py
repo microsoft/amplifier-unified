@@ -61,6 +61,8 @@ async def test_actual_native_turn_completes_handoff_without_self_wait(app, tmp_p
     native_worker.parked = False
 
     async def boundary(_sid, identity, **kwargs):
+        from amplifier_web.handoff_drain import finish
+        await finish(native_worker, kwargs.pop('receipt', None))
         return await inspect(native_worker, identity, **kwargs)
     app.runtime.handoff_boundary = boundary
 
