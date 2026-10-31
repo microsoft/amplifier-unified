@@ -15,14 +15,14 @@ test('unexpected HTML response gives useful connection error',async()=>{
 test('unreadable acknowledgements keep mutations unconfirmed and never replay',async()=>{
  const original=globalThis.fetch;let calls=0;
  try{
-  for(const [status,body] of [[502,'<html>proxy failure</html>'],[200,'{"accepted":'],[200,''],[200,'null'],[200,'{}']]){
+  for(const [status,body] of [[502,'<html>proxy failure</html>'],[200,'{"accepted":'],[200,''],[200,'null'],[200,'{}'],[200,'[]'],[200,'{"accepted":"true"}'],[502,'']]){
    globalThis.fetch=async()=>{calls++;return new Response(body,{status})};
    await assert.rejects(request('/api/actions',{method:'POST',body:{action:'canvas.views.loadVersion'}}),error=>{
     assert.equal(error.unconfirmed,true,`Unreadable ${status} acknowledgement is not a refusal`);
     assert.equal(error.code,'invalid_response');assert.equal(error.status,status);return true;
    });
   }
-  assert.equal(calls,5);
+  assert.equal(calls,8);
   globalThis.fetch=async()=>new Response('<html>proxy failure</html>',{status:502});
   await assert.rejects(request('/api/state'),error=>error.code==='invalid_response'&&error.unconfirmed===false);
   for(const status of [409,200]){
@@ -106,7 +106,7 @@ test('support timings retain correlation and exclude query strings and bodies',a
  const {recentRequestTimings}=await import('../src/api.js');
  const original=globalThis.fetch;
  try{
-  globalThis.fetch=async()=>new Response('{}',{headers:{'Server-Timing':'app;dur=12.3','X-Amplifier-Request-Id':'request-1'}});
+  globalThis.fetch=async()=>new Response('{"accepted":true}',{headers:{'Server-Timing':'app;dur=12.3','X-Amplifier-Request-Id':'request-1'}});
   await request('/api/actions?private=secret',{method:'POST',body:{action:'session.create',args:{text:'private prompt'}}});
   const row=recentRequestTimings().at(-1);
   assert.equal(row.serverMs,12.3);assert.equal(row.requestId,'request-1');assert.equal(row.action,'session.create');
