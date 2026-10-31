@@ -381,7 +381,8 @@ def assert_fault_controls(report):
 
 
 @pytest.mark.parametrize('selection', [None, {'instance': 'fixture', 'model': 'fixture-pinned', 'effort': 'high'}], ids=['default', 'pinned'])
-async def test_prepared_first_and_second_occurrences_execute_once(tmp_path, monkeypatch, selection):
+@pytest.mark.parametrize('authorization', ['ui', 'full-system'])
+async def test_prepared_first_and_second_occurrences_execute_once(tmp_path, monkeypatch, selection, authorization):
     import amplifier_module_context_simple as context
     import amplifier_module_loop_live as loop
     import amplifier_module_hook_context_intelligence as capture
@@ -507,6 +508,9 @@ async def test_prepared_first_and_second_occurrences_execute_once(tmp_path, monk
         await app.dispatch('session.create', {'bundle': str(bundle), 'workspace': str(workspace),
                                              **({'selection': selection} if selection else {})})
         source_id = app._session()['id']
+        if authorization == 'full-system':
+            from test_full_feedback import mode
+            await mode(app, app._session(source_id))
         await app.management.ensure_runtime(app._session(source_id))
         await runtime.control(source_id, 'task.get', {})
         source_summary = template(app, app._session(source_id))[1]
@@ -514,7 +518,13 @@ async def test_prepared_first_and_second_occurrences_execute_once(tmp_path, monk
                   'newTaskMaxTurns': 1, 'prompt': 'Report SCHEDULE_ADMISSION_CONTROL, then finish.', 'notificationPolicy': 'always'}
         preview = (await app.dispatch('schedule.preview', fields))['result']
         schedule = (await app.dispatch('schedule.create', {**fields, 'expectedRevision': 0,
-            'previewHash': preview['previewHash']}, command_id='synthetic-schedule'))['result']['schedule']
+            'previewHash': preview['previewHash']}, command_id='synthetic-schedule',
+            **({'origin': 'system', 'caller_session_id': source_id} if authorization == 'full-system' else {})))['result']['schedule']
+        report['authorization'] = authorization
+        if authorization == 'full-system':
+            assert schedule['authorization']['origin'] == 'system'
+            assert schedule['authorization']['authority']['sessionId'] == source_id
+            assert 'messageId' not in schedule['authorization']
         report['sourceConfiguration'] = source_summary
         destinations = []
         for occurrence in range(2):
@@ -572,5 +582,6 @@ async def test_prepared_first_and_second_occurrences_execute_once(tmp_path, monk
             report['calls'] = read_calls()
             artifacts = os.environ.get('AMPLIFIER_TEST_ARTIFACTS')
             if artifacts:
-                path = Path(artifacts) / ('schedule-prepared-' + ('pinned' if selection else 'default') + '.json')
+                path = Path(artifacts) / ('schedule-prepared-' + ('pinned' if selection else 'default')
+                    + ('-full-system' if authorization == 'full-system' else '') + '.json')
                 path.write_text(json.dumps(report, indent=2))

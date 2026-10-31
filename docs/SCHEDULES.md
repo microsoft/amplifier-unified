@@ -36,7 +36,10 @@ or requiring renewed authority. Changed intent or another owner cannot borrow th
 receipt. New reconciliation requires current Full or the existing attributable
 post-run human finding; it preserves the original run and its authorization receipt reference and does not
 resume, replay or independently verify the reported evidence. Existing human
-peer-repair handoffs and future-schedule recovery remain separate contracts.
+peer-repair handoffs remain separate. For an exited new-task owner, Full also
+permits exact future repair through `schedule.repairPreview/repairResume`; only a
+fresh explicitly identified trusted system request may cross owner Stop without
+a human, never an old stopped native chain. See [automation recovery](contracts/automation-overview.md).
 
 The reusable [policy/store](../amplifier_scheduling/README.md) is authoritative for
 due identity and leases. The app runs one lightweight owner loop, checks existing

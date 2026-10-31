@@ -269,6 +269,21 @@ async def test_mounted_full_child_retains_actor_without_human(mounted, kind):
         assert authority['sessionId'] == h.source['id'] and authority['nativeSessionId'] == 'native-root'
         assert authority['generationId'] == 'generation-1' and authority['inputIds'] == ['assigned-input']
         assert not h.source['messages'] and not h.source['approvals'] and not h.app.clients.records
+        record = created['schedule']
+        recovery = {'id': record['id'], 'expectedRevision': record['revision']}
+        repair_preview = await invoke('schedule.repairPreview', recovery)
+        repaired = await invoke('schedule.repairResume', {**recovery, 'previewHash': repair_preview['previewHash']})
+        assert repaired['schedule']['authorization']['authority']['runtimeSessionId'] == actor
+        assert repaired['schedule']['authorization']['recoveryInitiation'] == 'current_native'
+        if kind == 'finite':
+            current = repaired['schedule']
+            recovery['expectedRevision'] = current['revision']
+            next_preview = await invoke('schedule.repairPreview', recovery)
+            h.source.update(status='stopped', interruptionRevision=1)
+            denied = await child_dispatch(control, 'schedule.repairResume', {**recovery,
+                'previewHash': next_preview['previewHash'], 'acknowledgeStop': True}, 'stopped-child')
+            assert not denied.success
+            assert h.app.schedules.store.get(h.source['id'], record['id']) == current
         if kind == 'nested' and actor == 'child':
             await h.registry.spawn('worker', 'schedule another task', h.registry.sessions['child'], sub_session_id='grandchild')
         return 'scheduled'

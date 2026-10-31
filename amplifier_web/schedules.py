@@ -18,8 +18,8 @@ def definitions(schema, string):
     authorization = {'previewHash': string(100), 'sourceMessageId': string(200)}
     return {
         'schedule.overview': ('Read a bounded page of chat-owned schedules without histories or worker starts.', schema({'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100}, 'status': {'enum': ['current', 'all']}}, [])),
-        'schedule.repairPreview': ('Human-only preview of future new-task recovery using saved configuration, without waking the owner.', schema({**identity, **revision})),
-        'schedule.repairResume': ('Human-only confirm of reviewed future new-task recovery. Never replays uncertain prior work or resumes the old owner generation.', schema({**identity, **revision, 'previewHash': string(100), 'acknowledgeStop': {'type': 'boolean'}}, [*identity, *revision, 'previewHash'])),
+        'schedule.repairPreview': ('Preview owner-local future new-task recovery from saved configuration without waking the owner. Full accepts current native work or a fresh explicitly identified trusted system caller; Ask uses the human Automation controls.', schema({**identity, **revision})),
+        'schedule.repairResume': ('Resume reviewed future new-task occurrences under current Full or human confirmation. Only a fresh trusted system request or human confirmation can cross owner Stop; old stopped native work cannot rearm itself. Never replays uncertain work or resumes the old generation.', schema({**identity, **revision, 'previewHash': string(100), 'acknowledgeStop': {'type': 'boolean'}}, [*identity, *revision, 'previewHash'])),
         'schedule.list': ('List saved schedules in any registered conversation in this user’s library, without starting work. Cross-conversation mutations remain unavailable.', schema(sid)),
         'schedule.read': ('Read a schedule and its bounded durable run history from any registered conversation in this user’s library. Unknown is never replayed.', schema(identity)),
         'schedule.preview': ('Preview concrete timezone occurrences and exact configuration for authorized scheduled work. destination defaults to same_task; new_task explicitly creates a fresh user-owned task for every run using the reviewed source configuration. Does not save or submit work.', schema({**sid, **fields, **destination}, [*sid, *fields])),
@@ -125,13 +125,15 @@ class Schedules:
             binding['newTaskConfiguration'] = {key: value for key, value in template(self.app, owner)[1].items() if key != 'legacyConfigurationHash'}
         return {'previewHash': fingerprint(binding), 'binding': binding, 'occurrences': preview(config['spec'], self.clock(), 5), 'daylightSaving': 'Nonexistent local times are skipped; repeated local times run once at the first occurrence.', 'missedRunPolicy': config['missedRunPolicy'], 'notificationPolicy': config['notificationPolicy']}
 
-    def full_authority(self, sid, origin):
+    def full_authority(self, sid, origin, *, fresh_recovery=False):
         if origin not in {'agent', 'system'}:
             return None
         session = self.app._session(sid, hydrate=False)
         authority = self.app.access_mode.capture_full(session, origin)
         if authority is not None:
-            if session.get('status') in {'stopped', 'stopping'}:
+            from .collaboration import BINDING, PRINCIPAL
+            fresh_system = origin == 'system' and not (BINDING.get() or PRINCIPAL.get())
+            if session.get('status') in {'stopped', 'stopping'} and not (fresh_recovery and fresh_system):
                 raise ValueError('Stopped work cannot authorize its own future schedule. Review future recovery separately.')
             authority.update(workspace=session.get('workspace'),
                 nativeSessionId=session.get('runtimeSessionId') or session.get('nativeIdentity') or sid,
@@ -179,7 +181,7 @@ class Schedules:
             return overview(self, args)
         if action in {'schedule.repairPreview', 'schedule.repairResume'}:
             from .automation_overview import repair
-            return await repair(self, action, args, origin, command_id or str(uuid.uuid4()))
+            return await repair(self, action, args, origin, command_id or str(uuid.uuid4()), caller)
         sid = args['sessionId']
         self.app._session(sid)
         if action in {'schedule.list', 'schedule.read'}:
@@ -255,7 +257,7 @@ class Schedules:
             retained = self.store.receipt(command_id, signature)
             if retained is not None:
                 return retained
-            authority = self.full_authority(sid, origin) if action == 'schedule.reconcile' else None
+            authority = self.full_authority(sid, origin, fresh_recovery=True) if action == 'schedule.reconcile' else None
             def edit(run):
                 if action == 'schedule.report':
                     if run['phase'] not in {'submitting', 'accepted', 'running'}: raise ValueError('Only an admitted current run can report monitor evidence')
