@@ -656,7 +656,7 @@ def test_browser_runner_matcher_excludes_test_names_without_hiding_extra_invocat
 def test_canvas_qualification_is_fixed_manual_and_installed_not_a_release_gate():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     job = workflow['jobs']['canvas-qualification']
-    assert job['if'] == "${{ !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && inputs.canvas_qualification }}"
+    assert job['if'] == "${{ !inputs.permissions_history && !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && inputs.canvas_qualification }}"
     assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '20'
     assert workflow['permissions'] == {'contents': 'read'}
     assert 'secrets.' not in str(job)
@@ -687,7 +687,7 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption',
                            'canvas_qualification', 'destination_history', 'settings_close_diagnostic',
                            'multi_quote', 'attachment_experience', 'compact_composer', 'peer_messages',
-                           'readiness_trio'}
+                           'readiness_trio', 'permissions_history'}
     assert inputs['canvas_qualification']['type'] == 'boolean'
     assert inputs['canvas_qualification']['default'] == 'false'
     assert inputs['multi_quote']['type'] == 'boolean'
@@ -712,12 +712,12 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert workflow['on']['workflow_call'] == {
         'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
     job = workflow['jobs']['browser']
-    assert job['if'] == '${{ !inputs.readiness_trio && !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
+    assert job['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
     assert job['timeout-minutes'] == '45'
     mcp = workflow['jobs']['mcp-boundary']
-    assert mcp['if'] == "${{ !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
+    assert mcp['if'] == "${{ !inputs.permissions_history && !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
     history = workflow['jobs']['destination-history']
-    assert history['if'] == '${{ !inputs.readiness_trio && !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}'
+    assert history['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}'
     assert history['steps'][0] == {
         'name': 'Require the fixed navigation selection for diagnostic mode',
         'if': '${{ inputs.settings_close_diagnostic && !inputs.destination_history }}',
@@ -826,19 +826,19 @@ def test_readiness_trio_is_exclusive_manual_fixed_and_not_a_default_gate():
         'peer-messages': "github.event_name == 'workflow_dispatch' && inputs.peer_messages",
     }
     jobs = workflow['jobs']
-    assert set(jobs) == {*previous_conditions, 'readiness-trio'}
+    assert set(jobs) == {*previous_conditions, 'readiness-trio', 'permissions-history'}
     for name, condition in previous_conditions.items():
-        assert jobs[name]['if'] == '${{ !inputs.readiness_trio && ' + condition + ' }}'
+        assert jobs[name]['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && ' + condition + ' }}'
         assert 'needs' not in jobs[name], 'Manual qualification cannot gate existing jobs'
     job = jobs['readiness-trio']
-    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.readiness_trio == true }}"
+    assert job['if'] == "${{ !inputs.permissions_history && github.event_name == 'workflow_dispatch' && inputs.readiness_trio == true }}"
     assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '15'
     assert 'needs' not in job and 'continue-on-error' not in job
     steps = job['steps']
     mixed = ('attachment_experience', 'peer_messages', 'destination_history', 'settings_close_diagnostic',
              'mcp_boundary', 'app004_qualification', 'attachment_consumption', 'canvas_qualification',
              'multi_quote', 'compact_composer')
-    assert set(inputs) == {'readiness_trio', *mixed}
+    assert set(inputs) == {'readiness_trio', 'permissions_history', *mixed}
     assert steps[0] == {
         'name': 'Reject mixed readiness trio selections before setup',
         'if': '${{ ' + ' || '.join('inputs.' + name for name in mixed) + ' }}',
@@ -879,12 +879,297 @@ def test_readiness_trio_is_exclusive_manual_fixed_and_not_a_default_gate():
             assert 'readiness-trio' not in path.read_text()
 
 
+def test_permissions_history_is_exclusive_manual_fixed_and_preserves_default_jobs():
+    workflows = ROOT / '.github/workflows'
+    workflow = yaml.load((workflows / 'browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    inputs = workflow['on']['workflow_dispatch']['inputs']
+    assert inputs['permissions_history'] == {
+        'description': 'Only fixed permissions history source and installed-wheel qualification',
+        'type': 'boolean', 'default': 'false',
+    }
+    assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
+    assert workflow['on']['workflow_call'] == {
+        'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
+    assert workflow['permissions'] == {'contents': 'read'}
+    jobs = workflow['jobs']
+    job = jobs['permissions-history']
+    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.permissions_history == true }}"
+    assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '15'
+    assert 'needs' not in job and 'continue-on-error' not in job
+    for name, other in jobs.items():
+        if name != 'permissions-history':
+            assert other['if'].startswith('${{ !inputs.permissions_history && ')
+            assert 'needs' not in other
+    steps = job['steps']
+    assert set(re.findall(r'inputs\.([a-z_0-9]+)', steps[0]['if'])) == set(inputs) - {'permissions_history'}
+    assert steps[0]['run'].endswith('exit 1\n')
+    assert steps[1]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
+    assert steps[2]['run'].startswith('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"\n')
+    assert 'scripts/permission_history_checks.py' in steps[2]['run']
+    actions = {step['uses'] for step in steps if 'uses' in step}
+    assert actions == {
+        'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+        'actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065',
+        'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020',
+        'astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e',
+        'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+    }
+    private = next(s for s in steps if s.get('with', {}).get('repository'))
+    assert private['with'] == {
+        'repository': 'microsoft/amplifier-module-loop-live',
+        'ref': '${{ steps.runtime.outputs.revision }}', 'path': '.ci/loop-live',
+        'ssh-key': '${{ secrets.LOOP_LIVE_CI_READ_KEY }}', 'persist-credentials': 'false'}
+    resolve = next(s['run'] for s in steps if s.get('id') == 'runtime')
+    assert "tomllib.load(open('uv.lock', 'rb'))" in resolve and "rsplit('#', 1)" in resolve
+    assert steps[-2]['timeout-minutes'] == '11'
+    assert steps[-2]['run'] == (
+        'set -o pipefail\npython -u scripts/permission_history_checks.py '
+        '2>&1 | tee output/permissions-history-run.log\n')
+    assert sum('python -u scripts/permission_history_checks.py' in s.get('run', '') for s in steps) == 1
+    assert all('continue-on-error' not in s for s in steps)
+    assert steps[-1]['if'] == 'always()'
+    assert steps[-1]['with']['include-hidden-files'] == 'true'
+    assert steps[-1]['with']['if-no-files-found'] == 'error'
+    assert steps[-1]['with']['path'].splitlines() == [
+        'output/permissions-history-inputs/', 'output/permissions-history-run.log',
+        'output/permissions-history/', 'test-results/']
+    for path in workflows.glob('*.yml'):
+        if path.name != 'browser-checks.yml':
+            assert 'permissions_history' not in path.read_text()
+            assert 'permissions-history' not in path.read_text()
+
+
+@pytest.fixture
+def permissions_checks(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / 'scripts'))
+    spec = importlib.util.spec_from_file_location('permissions_checks', ROOT / 'scripts/permission_history_checks.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_permissions_history_plan_has_only_fixed_checks_and_strict_evidence():
+    import ast
+    source = (ROOT / 'scripts/permission_history_checks.py').read_text()
+    tree = ast.parse(source)
+    plans, = [n.value for n in ast.walk(tree) if isinstance(n, ast.Assign)
+              and any(isinstance(t, ast.Name) and t.id == 'plans' for t in n.targets)]
+    assert [ast.literal_eval(row.elts[0]) for row in plans.elts] == [
+        'locked-host', 'locked-freeze', 'host-dependencies', 'npm-ci', 'chromium', 'python', 'node',
+        'build', 'source-approval', 'wheel', 'fresh-runtime', 'install-dependencies', 'install-wheel',
+        'installed-dependencies', 'installed-freeze', 'installed-imports', 'installed-approval', 'questions']
+    assert source.count("['npm', 'run', 'build']") == 1
+    assert source.count("['uv', 'build', '--wheel'") == 1
+    assert source.count("['node', 'tests/approval-lifecycle-browser.mjs']") == 2
+    assert source.count("['node', 'tests/questions-browser.mjs']") == 1
+    assert "'--locked', '--group', 'dev', '--group', 'artifacts', '--no-install-project'" in source
+    assert "'--no-build-isolation'" in source and "'--no-deps'" in source
+    assert 'CONTEXT_REQUIREMENT' not in source and 'context-dependency' not in source
+    assert 'signal.alarm(600)' in source and "'normalBudgetSeconds': 300" in source
+    assert 'from browser_check_runner import run_scenarios' in source
+    assert "'scenarios': [{'id': phase, 'command': command, 'env': env}]" in source
+    assert "row['cleanup'] == {'remaining': [], 'terminated': 0}" in source
+    assert "report['phases'] = {name: {'status': 'not_run'}" in source
+    assert 'verify_wheel(wheel, candidate, package.parent)' in source
+    assert 'source_identity(ROOT)' in source and 'create(ROOT,' in source and 'verify(ROOT,' in source
+    assert "harness / 'frontend/node_modules', symlinks=False" in source
+    assert 'symlink_to' not in source and 'manifest(harness) == copied' in source
+    assert source.count("'AMPLIFIER_SHELL_NODE_MODULES':") == 2
+    assert source.count("'AMPLIFIER_TEST_PACKAGE_ROOT':") == 2
+    assert "source['version']" in source and "dist['direct']['url'] == wheel.as_uri()" in source
+    assert source.index('retained = qualification_environment(os.environ)') < source.index('os.environ.clear()')
+    assert source.index('os.environ.clear()') < source.index('code = run_scenarios(')
+    assert "'GIT_CONFIG_GLOBAL': '/dev/null'" in source and "'GIT_CONFIG_NOSYSTEM': '1'" in source
+    assert "'UV_CACHE_DIR': str(work / 'uv-cache')" in source
+    assert "'NPM_CONFIG_USERCONFIG': str(work / 'npm-user.conf')" in source
+
+
+def test_permissions_history_selection_comes_from_actual_source(permissions_checks):
+    module = permissions_checks
+    assert module.PYTHON_TESTS == ('tests/test_approval_recovery.py', 'tests/test_approval_feedback.py',
+                                   'tests/test_host_approvals.py', 'tests/test_conversation_stop_status.py')
+    assert module.NODE_TESTS == ('tests/approval-card.test.mjs', 'tests/settings-action-queue.test.mjs',
+                                'tests/pending-view.test.mjs', 'tests/conversation-navigation.test.mjs',
+                                'tests/fixture-lifecycle.test.mjs')
+    python = module.python_selection(ROOT)
+    assert python['tests/test_host_approvals.py::test_real_worker_canonical_decision_returns_exact_offered_label_with_note'] == 6
+    assert python['tests/test_approval_feedback.py::test_overlapping_approval_retries_share_delivery_and_settle_waiter'] == 5
+    assert sum(value for name, value in python.items() if name.startswith('tests/test_conversation_stop_status.py::')) == 42
+    assert python['tests/test_conversation_stop_status.py::test_identifiers_are_nonempty_bounded_strings'] == 18
+    assert sum(python.values()) == 73
+    node = module.node_selection(ROOT)
+    assert set(node) == set(module.NODE_TESTS)
+    assert {name: len(names) for name, names in node.items()} == {
+        'tests/approval-card.test.mjs': 27, 'tests/settings-action-queue.test.mjs': 7,
+        'tests/pending-view.test.mjs': 9, 'tests/conversation-navigation.test.mjs': 16,
+        'tests/fixture-lifecycle.test.mjs': 5}
+    approval = node['tests/approval-card.test.mjs']
+    assert {name.removeprefix('passive Stop lookup stays fenced on ') for name in approval
+            if name.startswith('passive Stop lookup stays fenced on ')} == {
+        'missing', 'empty', 'unknown', 'wrong status', 'boolean acceptance',
+        'wrong sessionId', 'wrong commandId', 'wrong clientId',
+        'missing sessionId', 'missing commandId', 'missing clientId',
+        'non-object', 'transport failure', 'malformed JSON'}
+    assert all('Stop during preflight invalidates it after ' + value + '; no automatic replay' in approval
+               for value in ('accepted', 'not-applied'))
+    assert all('note accompanies ' + value + ', targets the rendered chat and survives failure' in approval
+               for value in ('approve', 'deny'))
+    assert all('opening ' + value + ' from a workspace paints the chat before the server responds'
+               in node['tests/conversation-navigation.test.mjs'] for value in ('a', 'b'))
+    assert all('delayed ' + value + ' cannot overtake later browsing, while later drawer intent still wins'
+               in node['tests/conversation-navigation.test.mjs'] for value in ('navExpanded', 'navPinned'))
+    assert 'unexpected fixture exit is never reported as successful cleanup' in node['tests/fixture-lifecycle.test.mjs']
+
+
+def test_permissions_python_selection_counts_rows_without_evaluating_fixture_constants(
+    permissions_checks, tmp_path, monkeypatch,
+):
+    path = tmp_path / 'selected.py'
+    path.write_text(
+        "class WaitingRuntime:\n    pass\n"
+        "@pytest.mark.parametrize('body', [{'clientId': CLIENT}, {}])\n"
+        "@pytest.mark.parametrize('field,limit', [('sessionId', 200), ('clientId', 100)])\n"
+        "def test_identity(body, field, limit):\n    pass\n")
+    monkeypatch.setattr(permissions_checks, 'PYTHON_TESTS', ('selected.py',))
+    assert permissions_checks.python_selection(tmp_path) == {'selected.py::test_identity': 4}
+    path.write_text(path.read_text().replace("[{'clientId': CLIENT}, {}]", '[*EXTRA]'))
+    with pytest.raises(AssertionError):
+        permissions_checks.python_selection(tmp_path)
+
+
+def test_permissions_node_names_expand_literals_and_refuse_unknown_loops(permissions_checks):
+    module = permissions_checks
+    text = ("test('literal',()=>{});\nfor(const value of ['one','two'])test(`case ${value}`,()=>{});\n"
+            "for(const value of ['a','b'])test('prefix '+value+' suffix',()=>{});\n")
+    assert module.node_names(text) == ['literal', 'case one', 'case two', 'prefix a suffix', 'prefix b suffix']
+    with pytest.raises(AssertionError, match='Unrecognized'):
+        module.node_names("test('literal',()=>{});\nfor(const [name,fn] of cases)test(`case ${name}`,fn);\n")
+    with pytest.raises(AssertionError):
+        module.node_names(text.replace('${value}', '${other}'))
+    with pytest.raises(AssertionError, match='Unrecognized'):
+        module.node_names((ROOT / 'frontend/tests/approval-card.test.mjs').read_text().replace(
+            "['missing',()=>null]", "['renamed',()=>null]"))
+
+
+def test_permissions_environment_keeps_only_named_ci_and_tool_certificate_inputs(permissions_checks):
+    permitted = {'PATH': '/tools/bin', 'LD_LIBRARY_PATH': '/tools/lib', 'LANG': 'C.UTF-8',
+                 'SSL_CERT_FILE': '/certs/root.pem', 'NODE_EXTRA_CA_CERTS': '/certs/node.pem',
+                 'GITHUB_ACTIONS': 'true', 'GITHUB_SHA': 'a' * 40, 'RUNNER_TEMP': '/ci/temp'}
+    refused = {key: 'must-not-inherit' for key in (
+        'HOME', 'PYTHONPATH', 'PYTHONHOME', 'PYTHONSTARTUP', 'PYTHONOPTIMIZE', 'PYTEST_ADDOPTS',
+        'NODE_PATH', 'NODE_OPTIONS', 'UV_PROJECT_ENVIRONMENT', 'UV_INDEX_URL', 'PIP_INDEX_URL',
+        'NPM_TOKEN', 'NPM_CONFIG_USERCONFIG', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS',
+        'GIT_SSH_COMMAND', 'SSH_AUTH_SOCK', 'AWS_ACCESS_KEY_ID', 'AZURE_CLIENT_SECRET',
+        'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GITHUB_TOKEN', 'GH_TOKEN',
+        'ACTIONS_RUNTIME_TOKEN', 'LOOP_LIVE_CI_READ_KEY', 'AMPLIFIER_TEST_PACKAGE_ROOT')}
+    assert permissions_checks.qualification_environment({**permitted, **refused}) == permitted
+
+
+@pytest.mark.parametrize('mutation', [None, 'duplicate', 'missing', 'wrong', 'skip', 'fail', 'cancel', 'todo'])
+def test_permissions_tap_rejects_partial_or_substituted_execution(permissions_checks, mutation):
+    text = ('TAP version 13\nok 1 - first\nok 2 - second\n1..2\n'
+            '# tests 2\n# pass 2\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n')
+    if mutation == 'duplicate':
+        text = text.replace('ok 2 - second', 'ok 2 - first')
+    elif mutation == 'missing':
+        text = text.replace('ok 2 - second\n', '')
+    elif mutation == 'wrong':
+        text = text.replace('second', 'unselected')
+    elif mutation:
+        key = {'skip': 'skipped', 'cancel': 'cancelled'}.get(mutation, mutation)
+        text = text.replace(f'# {key} 0', f'# {key} 1')
+    if mutation:
+        with pytest.raises(AssertionError):
+            permissions_checks.verify_tap(text, {'fixed.test.mjs': ['first', 'second']})
+    else:
+        assert permissions_checks.verify_tap(text, {'fixed.test.mjs': ['first', 'second']})['names'] == ['first', 'second']
+
+
+@pytest.mark.parametrize('mutation', [None, 'sigterm', 'failed', 'incomplete', 'checks', 'wrong-root',
+                                     'renderer', 'fixture-origin', 'report-origin', 'substitute-check',
+                                     'recovery-flag', 'preflight-replay', 'wrong-command', 'old-stop'])
+def test_permissions_browser_requires_full_report_and_normal_fixture_exit(permissions_checks, tmp_path, mutation):
+    import hashlib
+    package, modules = tmp_path / 'package', tmp_path / 'node_modules'
+    package.mkdir()
+    (package / 'configuration_authority.py').write_text('exact authority')
+    (package / 'static').mkdir()
+    (package / 'static/index.html').write_text('exact static')
+    folder = tmp_path / 'evidence'
+    output = folder / 'approval-lifecycle-owned'
+    output.mkdir(parents=True)
+    cleanup = {'exitCode': 0, 'signal': None, 'observed': True, 'graceful': True, 'error': None}
+    # Independent names retain all original checks (four Close receipts) and
+    # the five added unknown/recovery assertions, not merely a minimum count.
+    names = [
+        'Close accepted', 'Close accepted', 'Close accepted', 'Close accepted',
+        'Pending approve completes during held history', 'Pending deny completes during held history',
+        'Held history/newer document wins', 'Dirty edit retained and replacement refused',
+        'Newer Close hides immediately before either receipt', 'Held history/newer Close accepted',
+        'Stop fences later-allow', 'Stop fences pending-preflight', 'Unknown lost-ack stays fenced',
+        'Passive lost-ack recovery permits only fresh dismissal', 'Unknown malformed-ack stays fenced',
+        'Recovering preflight cannot send its decision', 'Passive malformed-ack recovery permits only fresh dismissal']
+    checks = [{'name': name, 'decisionRequests': []} for name in names]
+    binding = {'sessionId': 'chat-a', 'commandId': 'original', 'clientId': 'client-a'}
+    for row in checks:
+        if row['name'].startswith('Passive '):
+            row.update(samePage=True, stopReceipt={'accepted': True}, dismissalReceipt={'accepted': True},
+                       stopCommand={'id': 'original', 'args': {'sessionId': 'chat-a'}}, clientId='client-a',
+                       supersedingStop={'id': 'newer', 'receipt': {'accepted': True}},
+                       decisionRequests=[{'action': 'capability.revoke'}],
+                       lookups=[{'body': binding, 'response': {**binding, 'status': 'accepted'}, 'httpStatus': 200}])
+    proof = {'passed': True, 'incomplete': False, 'error': None, 'checks': checks,
+             'stopAcknowledgementRecovery': True, 'overwrittenStopRecovery': True,
+             'source': str(package / '__init__.py'), 'cleanup': cleanup,
+             'authoritySha256': hashlib.sha256(b'exact authority').hexdigest()}
+    readiness = {'source': str(package), 'nodeModules': str(modules),
+                 'node': '/node', 'playwright': True, 'validationHtml': True,
+                 'packageIdentity': {'installedPackageVerified': True,
+                     'expectedPackageRoot': str(package), 'packageRoot': str(package),
+                     'server': str(package / 'server.py'), 'staticRoot': str(package / 'static'),
+                     'staticSha256': {'index.html': hashlib.sha256(b'exact static').hexdigest()}}}
+    proof['packageIdentity'] = json.loads(json.dumps(readiness['packageIdentity']))
+    if mutation == 'sigterm':
+        cleanup.update(exitCode=None, signal='SIGTERM')
+    elif mutation == 'failed':
+        proof['passed'] = False
+    elif mutation == 'incomplete':
+        proof['incomplete'] = True
+    elif mutation == 'checks':
+        proof['checks'].pop()
+    elif mutation == 'wrong-root':
+        proof['source'] = str(tmp_path / 'other/__init__.py')
+    elif mutation == 'renderer':
+        readiness['nodeModules'] = str(tmp_path / 'source/node_modules')
+    elif mutation == 'fixture-origin':
+        readiness['packageIdentity']['expectedPackageRoot'] = str(tmp_path / 'source')
+    elif mutation == 'report-origin':
+        proof['packageIdentity']['server'] = str(tmp_path / 'source/server.py')
+    elif mutation == 'substitute-check':
+        checks[-1]['name'] = 'Unrelated passing check'
+    elif mutation == 'recovery-flag':
+        proof['stopAcknowledgementRecovery'] = False
+    elif mutation == 'preflight-replay':
+        next(row for row in checks if row['name'].startswith('Recovering '))['decisionRequests'] = [{}]
+    elif mutation == 'wrong-command':
+        checks[-1]['lookups'][0]['response']['commandId'] = 'different'
+    elif mutation == 'old-stop':
+        next(row for row in checks if row['name'].startswith('Passive lost-ack'))['supersedingStop']['id'] = 'original'
+    for name, value in [('report', proof), ('cleanup', cleanup), ('validation-readiness', readiness)]:
+        (output / (name + '.json')).write_text(json.dumps(value))
+    if mutation:
+        with pytest.raises(AssertionError):
+            permissions_checks.verify_approval(folder, package, modules)
+    else:
+        assert permissions_checks.verify_approval(folder, package, modules)['checks'] == 17
+
+
 def test_compact_composer_is_fixed_manual_only_with_independent_failure_evidence():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert workflow['permissions'] == {'contents': 'read'}
     assert 'compact_composer' not in workflow['on']['workflow_call']['inputs']
     job = workflow['jobs']['compact-composer']
-    assert job['if'] == "${{ !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && inputs.compact_composer }}"
+    assert job['if'] == "${{ !inputs.permissions_history && !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && inputs.compact_composer }}"
     assert job['timeout-minutes'] == '30'
     steps = job['steps']
     assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}

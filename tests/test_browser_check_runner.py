@@ -690,7 +690,7 @@ def test_attachment_focus_workflow_retains_failures_and_default_coverage():
     assert workflow['on']['workflow_dispatch']['inputs']['attachment_consumption']['default'] == 'false'
     assert 'attachment_consumption' not in workflow['on']['workflow_call']['inputs']
     job = workflow['jobs']['browser']
-    assert job['if'] == '${{ !inputs.readiness_trio && !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
+    assert job['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
     runs = [step for step in job['steps'] if 'scripts/browser_check_runner.py' in step.get('run', '')]
     assert len(runs) == 2
     flag = "${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}"
@@ -744,9 +744,9 @@ def test_destination_history_manual_route_is_fixed_and_preserves_default_coverag
     option = workflow['on']['workflow_dispatch']['inputs']['destination_history']
     assert option['type'] == 'boolean' and option['default'] == 'false'
     assert workflow['permissions'] == {'contents': 'read'}
-    assert workflow['jobs']['browser']['if'] == '${{ !inputs.readiness_trio && !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
+    assert workflow['jobs']['browser']['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
     focused = workflow['jobs']['destination-history']
-    assert focused['if'] == '${{ !inputs.readiness_trio && !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}'
+    assert focused['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}'
     assert workflow['on']['workflow_dispatch']['inputs']['settings_close_diagnostic']['default'] == 'false'
     assert focused['runs-on'] == 'ubuntu-latest' and focused['timeout-minutes'] == '30'
     steps = focused['steps']
@@ -780,7 +780,7 @@ def test_attachment_experience_route_is_fixed_and_installs_the_exact_wheel():
     assert option == {'description': 'Fixed attachment modal/drop and consumption checks, source and installed wheel',
                       'type': 'boolean', 'default': 'false'}
     job = workflow['jobs']['attachment-experience']
-    assert job['if'] == '${{ !inputs.readiness_trio && inputs.attachment_experience }}'
+    assert job['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && inputs.attachment_experience }}'
     assert job['timeout-minutes'] == '30'
     runs = '\n'.join(step.get('run', '') for step in job['steps'])
     assert "wanted = ('attachment-experience', 'attachment-consumption')" in runs
