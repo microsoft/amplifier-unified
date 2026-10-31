@@ -327,12 +327,8 @@ separately; exact retries preserve original attribution and never repeat an
 uncertain effect. Passive removal inspection keeps its bounded cold-owner read
 path. See [test environments](test-environments.md) for this domain's exact scope;
 this does not expand generic task-resource or queued-check admission.
-Recovery of an operation originally authorized by UI or internal code also remains
-unavailable to agents/systems in this batch. That original-operation gate is a
-remaining Full parity gap, not an intended recurring approval requirement; future
-recovery must preserve the original request and use the existing current recovery
-authority and attempt evidence. Work and provider admission use their respective
-canonical owners; this consumer adds no exception or duplicate permission policy.
+Work and provider admission use their respective canonical owners; this consumer
+adds no exception or duplicate permission policy.
 
 Full access preauthorizes configuration effects at all scopes and ordinary
 allow/deny tool permissions. Pending valid permission requests are answered once;
@@ -355,10 +351,18 @@ access. The agent can reconcile native evidence and explicitly resume proven
 no-effect work without another permission request. Recovery checks the original
 mode revision, Stop boundary, target and exact payload again; re-enabling Full
 access does not renew an older operation. Unknown or saved effects cannot resume.
+For UI, user or internal originals, a current Full agent, qualified child or
+trusted system can reconcile and resume through the same recovery owner. Ask
+cannot substitute a new grant for that operator-origin authority. Resume retains
+the current Full authority in the operation's existing resumptions, checked at
+queued application and native write admission. Revoked original agent authority,
+revoked resumptions, Stop and changed targets cannot be renewed by another resume.
 The original request, hash and existing history remain intact. Explicit recovery
 transitions append their actual caller origin, conversation owner and observed
 native principal/generation/input coverage to the existing private history; they
-do not relabel the original actor or replace the retained effect authority.
+also record the Full revision used for operator-origin recovery. Public operation
+views omit this attribution. Recovery does not relabel the original actor or
+replace the retained effect authority.
 
 File, patch, image and search mounts (including child definitions and restored
 plans) use all accessible local filesystem roots under Full access. Original

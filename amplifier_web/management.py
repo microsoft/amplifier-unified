@@ -582,10 +582,10 @@ class Management:
             if not request.get('authority'):
                 raise ValueError('The original configuration authority is missing.')
             self.service.configuration_authority.check(request['authority'])
-            for retained in record.get('resumptions', []):
-                self.service.configuration_authority.check(retained)
         elif request['authorization'] not in {'ui', 'user', 'internal'} or request.get('authority') is not None:
             raise ValueError('The original configuration authority cannot be verified.')
+        for retained in record.get('resumptions', []):
+            self.service.configuration_authority.check(retained)
         if (fingerprint(request['config']) != request['payloadHash']
                 or fingerprint(json.loads(self.queued_path(session['id']).read_text())) != request['payloadHash']):
             raise ValueError('The original configuration payload changed. It was not applied.')
