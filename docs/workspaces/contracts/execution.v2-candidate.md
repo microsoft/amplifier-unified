@@ -324,6 +324,22 @@ retroactively labeled retained. Request-scoped artifact reads expose only the
 declared artifact to the request participants in the recorded workspace; they do
 not grant general access to the producing conversation's output library.
 
+`outputs.image` and `outputs.images` use that same request-reader authority for
+an exact retained PNG from another conversation. The output's saved reply
+command selects the original response revision; later replies cannot substitute
+new bytes. The caller still supplies the exact output ID and SHA-256. Image reads
+and validation happen outside the app lock, then every selected relationship is
+rechecked before any pixels are returned. Ordinary output-library reads remain
+conversation-owned; this path does not copy files or grant new permissions.
+
+Image observations describe only the prepared model request, not an acknowledgement
+from the provider or a revision to earlier visual evidence. The existing inspection
+receipt/tool-call identity remains the correlation key; request preparation and
+pre-transport omissions name timeout, changed input/selection, missing receipt,
+unavailable vision or unreadable saved bytes separately. A failed later read does
+not establish that the saved image hash changed or that an earlier request lacked
+pixels. No new observation store or retry loop is introduced.
+
 The discovered reply schema and shipped coordination skill describe the exact
 syntax, an executable example and the acknowledgement's retention status. A
 local reference with an explicit but malformed `@sha256` or `#sha256` marker,
