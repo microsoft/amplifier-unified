@@ -233,9 +233,25 @@ Settings → Storage → **Automatic cleanup** applies to every workspace on thi
 app installation. It is enabled by default, with a seven-day period beginning
 when an owned code copy is first verified unused, and a 10 GiB size target.
 Zero days removes the extra waiting period; a zero size target disables size
-pressure. Turning automatic cleanup off leaves explicit, reviewed cleanup
+pressure. Turning automatic cleanup off leaves explicit cleanup
 available. Settings changes use a revision check, and a lost reply is recovered
 with the original request ID rather than submitting another cleanup.
+
+Agents, native children and trusted systems with an explicit calling conversation
+can save this policy and run it under standing Full access, without a browser,
+new human confirmation or mandatory preview. Ask retains the existing user
+controls. Accepted explicit work keeps its source authority across ordinary turn
+completion, but rechecks the captured Full revision, Stop, assignment status,
+workspace and native execution ownership after waits and at each owner's removal
+admission. Revoking and restoring Full does not renew an already captured run.
+
+The saved global policy is durable configuration: automatic maintenance continues
+after its setter finishes or loses Full. Stop and revocation fence that setter's
+in-flight explicit cleanup, not the committed maintenance policy. New autonomous
+request receipts belong to their canonical source conversation and retain the
+actual agent/system actor privately. Exact retries after Stop or revocation only
+observe the original receipt; they do not refresh authority or repeat an attempt.
+Global reads and public results omit private authority and input identities.
 
 The policy asks the existing ecosystem-generation and purpose-installed test
 runner and qualified dependency-layer owners to remove only copies they can still prove unused. Current and

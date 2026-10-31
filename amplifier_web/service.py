@@ -2176,7 +2176,7 @@ class AppService:
             return {'accepted':True,'result':result,'effects':[]}
         if action in storage_cleanup_definitions(schema, string):
             from .storage_cleanup import dispatch as cleanup_dispatch
-            return await cleanup_dispatch(self, action, args, origin, command_id)
+            return await cleanup_dispatch(self, action, args, origin, command_id, caller_session_id)
         if action in {'storage.historyDeletePreview', 'storage.historyDelete'}:
             from .managed_deletion import dispatch as delete_history
             selection = {key: args[key] for key in ('project', 'nativeId') if args.get(key)}

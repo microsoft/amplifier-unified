@@ -10,6 +10,7 @@ import time
 import uuid
 
 from amplifier_operations.coordination import fingerprint
+from .errors import AppError
 
 DEFAULTS = {'revision': 0, 'enabled': True, 'keepDays': 7, 'maxUnusedBytes': 10 * 1024**3}
 POLICY = 'storage-cleanup-policy'
@@ -21,13 +22,13 @@ def definitions(schema, string):
     return {
         'storage.cleanup.read': ('Read global automatic cleanup settings and the last receipt without scanning or starting work.', schema({}, [])),
         'storage.cleanup.evidence': ('Read one bounded page of recorded saved test sizes. Does not measure current files, connect to machines, start work or delete evidence.', schema({'before': {'type': 'integer', 'minimum': 1, 'maximum': 2**53-1}}, [])),
-        'storage.cleanup.save': ('User-only: save global unused component/test-runner code retention. Saved test sources, results, chats and working folders are always kept.', schema({
+        'storage.cleanup.save': ('Save global unused component/test-runner code retention under standing Full or user control. Saved test sources, results, chats and working folders are always kept.', schema({
             'expectedRevision': {'type': 'integer', 'minimum': 0}, 'enabled': {'type': 'boolean'},
             'keepDays': {'type': 'integer', 'minimum': 0, 'maximum': 3650},
             'maxUnusedBytes': {'type': 'integer', 'minimum': 0, 'maximum': 2**53-1},
         }, ['expectedRevision', 'enabled', 'keepDays', 'maxUnusedBytes'])),
         'storage.cleanup.preview': ('Measure a bounded set of unused code copies and protected storage. Never starts workers or deletes files. Incomplete measurements are reported.', schema({}, [])),
-        'storage.cleanup.run': ('User-only: apply the saved cleanup policy to currently proven unused code. Each owner rechecks references before removal and keeps an outcome receipt.', schema({
+        'storage.cleanup.run': ('Apply the saved cleanup policy under standing Full or user control. Each owner rechecks unused code before removal. Reuse the request ID to observe an uncertain outcome without replay.', schema({
             'expectedRevision': {'type': 'integer', 'minimum': 0}}, ['expectedRevision'])),
     }
 
@@ -47,8 +48,12 @@ def policy(app):
     return {**DEFAULTS, **(record(app, POLICY, {}) or {})}
 
 
+def public(value):
+    return {key: item for key, item in value.items() if key != '_authority'} if value is not None else None
+
+
 def read(app):
-    return {'policy': policy(app), 'lastCleanup': record(app, LATEST),
+    return {'policy': policy(app), 'lastCleanup': public(record(app, LATEST)),
             'scope': 'All workspaces on this Amplifier installation. Only unused component code, test runner code, and qualified reusable test dependencies are eligible.',
             'preserved': 'Chats, working folders, saved test sources and results, other dependency stores, current and rollback versions, and uncertain work are kept.'}
 
@@ -65,6 +70,49 @@ def lock(app):
     if not hasattr(app, '_storage_cleanup_lock'):
         app._storage_cleanup_lock = asyncio.Lock()
     return app._storage_cleanup_lock
+
+
+def capture(app, source, origin):
+    authority = app.access_mode.capture_full(source, origin)
+    if authority is None:
+        raise AppError('Only the user or a calling conversation with Full access can change cleanup settings or request cleanup.', 403)
+    return {**authority, 'workspace': source['workspace'],
+            'nativeSessionId': source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id'],
+            'executionRevision': source.get('executionRevision', 0),
+            'interruptionRevision': source.get('interruptionRevision', 0)}
+
+
+def check(app, authority):
+    if authority is None:
+        return  # User controls and durable automatic policy keep their existing lifetime.
+    try:
+        source = app._session(authority['sessionId'], hydrate=False)
+        valid = (source['id'] == authority['sessionId']
+                 and app.access_mode.full(source, authority['accessRevision'])
+                 and not app.assignments.blocked(source)
+                 and source['workspace'] == authority['workspace']
+                 and (source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']) == authority['nativeSessionId']
+                 and all(source.get(key, 0) == authority[key] for key in ('executionRevision', 'interruptionRevision')))
+    except AppError:
+        valid = False
+    if not valid:
+        raise ValueError('Cleanup authority changed or its work was stopped. No further removals were started.')
+
+
+def retained_run(app, identity, expected_revision, source_id=None):
+    previous = record(app, 'storage-cleanup-run:' + identity)
+    if previous is not None and (previous.get('expectedRevision') != expected_revision
+            or (previous.get('_authority') or {}).get('sessionId') != source_id):
+        raise ValueError('This cleanup request ID was used with different contents or a different calling conversation.')
+    return previous
+
+
+def saved_command(app, identity, digest):
+    saved = app.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (identity,)).fetchone()
+    if saved:
+        if saved[0] != digest:
+            raise AppError('This command ID was used with different contents or a different calling conversation.', 409)
+        return {**public(json.loads(saved[1])), 'duplicate': True}
 
 
 def plan(candidates, settings, seen, now):
@@ -164,21 +212,21 @@ async def preview(app):
             'detail': generations.get('reason') or (None if runner_complete else 'Runner inspection reached its time limit; those copies were kept.')}
 
 
-async def run(app, identity, *, expected_revision=None, automatic=False):
+async def run(app, identity, *, expected_revision=None, automatic=False, authority=None):
     from . import update_retention, managed_runner_updates, test_dependency_layers
     async with lock(app):
         key = 'storage-cleanup-run:' + identity
-        previous = record(app, key)
+        previous = retained_run(app, identity, expected_revision, (authority or {}).get('sessionId'))
         if previous is not None:
-            if previous.get('expectedRevision') != expected_revision:
-                raise ValueError('This cleanup request ID was used with different contents.')
             return previous  # Re-observe the same attempt; never submit it anew.
+        check(app, authority)
         settings = policy(app)
         if expected_revision is not None and settings['revision'] != expected_revision:
             raise ValueError('Cleanup settings changed. Reload them before cleaning up.')
         if automatic and not settings['enabled']:
             return {'status': 'disabled', 'removedFileBytes': 0}
         report = await preview(app)
+        check(app, authority)
         if policy(app) != settings or update_retention.maintenance_blocked(app.update_manager):
             return {'status': 'deferred', 'removedFileBytes': 0, 'detail': 'Settings or update activity changed. Existing files were kept.'}
         seen = record(app, OBSERVATION, {}) or {}
@@ -193,12 +241,20 @@ async def run(app, identity, *, expected_revision=None, automatic=False):
         result = {'id': identity, 'expectedRevision': expected_revision, 'status': 'running', 'startedAt': now, 'policy': settings,
                   'selectedFileBytes': report['selectedFileBytes'], 'removedFileBytes': 0,
                   'effects': [], 'completeInspection': report['complete']}
+        if authority is not None:
+            result['_authority'] = authority
         store(app, key, result)
         store(app, LATEST, result)
         chosen = {(row['kind'], row['id']): row for row in report['rows'] if row['selected']}
         def evidence(status, item):
-            if status == 'attempting' and policy(app) != settings:
-                raise ValueError('Cleanup settings changed before removal; files were kept.')
+            if status == 'attempting':
+                try:
+                    check(app, authority)
+                except ValueError as exc:
+                    result.update(status='interrupted', detail=str(exc))
+                    raise
+                if policy(app) != settings:
+                    raise ValueError('Cleanup settings changed before removal; files were kept.')
             effect = next((row for row in result['effects'] if (row['kind'], row['id']) == (item['kind'], item['id'])), None)
             if effect is None:
                 effect = {**item, 'fileBytes': item.get('fileBytes', chosen[(item['kind'], item['id'])]['fileBytes'])}
@@ -210,10 +266,10 @@ async def run(app, identity, *, expected_revision=None, automatic=False):
         try:
             await update_retention.reclaim(app.update_manager,
                 selected={identity for kind, identity in chosen if kind == 'ecosystem'}, evidence=evidence)
-            if policy(app) == settings:
+            if result['status'] == 'running' and policy(app) == settings:
                 await managed_runner_updates.retire(app,
                     selected={identity for kind, identity in chosen if kind == 'runner'}, evidence=evidence)
-            if policy(app) == settings:
+            if result['status'] == 'running' and policy(app) == settings:
                 loop = asyncio.get_running_loop()
                 async def dependency_evidence(status, item):
                     evidence(status, item)
@@ -223,7 +279,8 @@ async def run(app, identity, *, expected_revision=None, automatic=False):
                     asyncio.run_coroutine_threadsafe(dependency_evidence(status, item), loop).result(timeout=10)
                 await asyncio.to_thread(test_dependency_layers.retire, app.data_dir,
                     {identity: row for (kind, identity), row in chosen.items() if kind == 'test-dependencies'}, record_dependency)
-            result['status'] = 'needs-inspection' if any(row['status'] == 'attempting' for row in result['effects']) else 'completed'
+            if result['status'] == 'running':
+                result['status'] = 'needs-inspection' if any(row['status'] == 'attempting' for row in result['effects']) else 'completed'
         finally:
             if result['status'] == 'running':
                 result['status'] = 'interrupted'
@@ -233,8 +290,7 @@ async def run(app, identity, *, expected_revision=None, automatic=False):
         return result
 
 
-async def dispatch(app, action, args, origin, command_id):
-    from .service import AppError
+async def dispatch(app, action, args, origin, command_id, caller_session_id=None):
     if action == 'storage.cleanup.read':
         return {'accepted': True, 'result': read(app)}
     if action == 'storage.cleanup.evidence':
@@ -246,21 +302,35 @@ async def dispatch(app, action, args, origin, command_id):
     if action == 'storage.cleanup.preview':
         async with lock(app):
             return {'accepted': True, 'result': await preview(app)}
+    source = None
     if origin not in {'ui', 'user'}:
-        raise AppError('Only the user can change global cleanup settings or request cleanup.', 403)
+        if origin not in {'agent', 'system'} or not caller_session_id:
+            raise AppError('Only the user or a calling conversation with Full access can change cleanup settings or request cleanup.', 403)
+        source = app._session(caller_session_id, hydrate=False)
     identity = command_id or str(uuid.uuid4())
     if action == 'storage.cleanup.run':
         try:
-            return {'accepted': True, 'result': await run(app, identity, expected_revision=args['expectedRevision'])}
+            previous = retained_run(app, identity, args['expectedRevision'], source['id'] if source else None)
+            if previous is not None:
+                return {'accepted': True, 'result': public(previous)}
+            authority = capture(app, source, origin) if source else None
+            return {'accepted': True, 'result': public(await run(app, identity,
+                expected_revision=args['expectedRevision'], authority=authority))}
         except ValueError as exc:
             raise AppError(str(exc), 409) from None
-    digest = fingerprint([action, args])
+    digest = fingerprint([action, args] + ([{'sourceSessionId': source['id']}] if source else []))
+    saved = saved_command(app, identity, digest)
+    if saved:
+        return saved
+    authority = capture(app, source, origin) if source else None
     async with app.lock:
-        saved = app.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (identity,)).fetchone()
+        saved = saved_command(app, identity, digest)
         if saved:
-            if saved[0] != digest:
-                raise AppError('This command ID was used with different contents.', 409)
-            return {**json.loads(saved[1]), 'duplicate': True}
+            return saved
+        try:
+            check(app, authority)
+        except ValueError as exc:
+            raise AppError(str(exc), 409) from None
         current = policy(app)
         if args['expectedRevision'] != current['revision']:
             raise AppError('Cleanup settings changed. Reload them before saving.', 409)
@@ -270,6 +340,8 @@ async def dispatch(app, action, args, origin, command_id):
             raise AppError('Choose valid cleanup settings.', 400)
         value['revision'] = current['revision'] + 1
         receipt = {'accepted': True, 'commandAction': action, 'result': {**read(app), 'policy': value}}
+        if authority is not None:
+            receipt['_authority'] = authority
         try:
             app.db.execute('INSERT OR REPLACE INTO commands VALUES(?,?,?)', (POLICY, POLICY, json.dumps({'result': value})))
             app.db.execute('INSERT INTO commands VALUES(?,?,?)', (identity, digest, json.dumps(receipt)))
@@ -278,4 +350,4 @@ async def dispatch(app, action, args, origin, command_id):
             app.db.rollback()
             raise
         request_maintenance(app)
-        return receipt
+        return public(receipt)
