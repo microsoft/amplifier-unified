@@ -178,7 +178,7 @@ test('inherited choices are displayed without pinning and the popup opens before
  assert.equal(root.root.findAllByType('input').length,0);
  state={...state,view:{newSessionDraft:{workspace:'/new',bundle:'another',selection:{}}}};
  await renderAct(async()=>root.update(React.createElement(ModelControl,{state,act,working:false})));
- assert.ok(root.root.findByProps({'aria-label':'Model and reasoning settings'}).findByType('span').children.includes('one · actual-model (high)'));
+ assert.ok(root.root.findByProps({'aria-label':'Model and reasoning settings'}).findByType('span').children.includes('Loading model…'));
  await renderAct(async()=>{await new Promise(r=>setTimeout(r,300))});
  assert.equal(calls.some(c=>c.name==='providers.list'),false);
  await renderAct(async()=>root.unmount());

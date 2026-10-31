@@ -65,13 +65,10 @@ export function ModelControl({state,session,act,working,embedded=false,compact=f
  const descriptionId=useId();
  const setup=newChatSetup(state),isDraft=!session,sessionId=session?.id||null,defaults=draftDefaults(state);
  const nextMessage=useNextMessageConfiguration(session,act,nextMessageControl);
- // A bundle change validates defaults in the background. Keep the current
- // workspace's resolved choices visible until the new result is ready.
+ // A different bundle has different defaults. Until its probe resolves, do not
+ // present the previous bundle's connection as the next request's destination.
  const configurationRevision=state.configurationRevision||0,nextMessageRevision=session?.nextMessageRevision||0;
- const defaultsContext=JSON.stringify([setup.location?.kind||'workspace',setup.workspace,configurationRevision]);
- const previousDefaults=useRef(null);
- if(isDraft&&defaults.phase==='ready')previousDefaults.current={context:defaultsContext,value:defaults};
- const resolvedDefaults=defaults.phase==='ready'||defaults.phase==='error'?defaults:previousDefaults.current?.context===defaultsContext?previousDefaults.current.value:defaults;
+ const resolvedDefaults=defaults;
  const checkingDefaults=isDraft&&defaults.phase!=='ready'&&defaults.phase!=='error';
  const unavailable=!!state.navigationPending||session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||conversationHistoryPending(session);
  const blocked=unavailable||nextMessageBlocked(session,working)||nextMessage.pending;
