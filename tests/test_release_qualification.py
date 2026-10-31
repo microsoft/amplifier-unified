@@ -503,7 +503,12 @@ def test_cold_control_restore_is_exclusive_manual_locked_and_bounded():
     for path in (ROOT / '.github/workflows').glob('*.yml'):
         if path.name != 'python-checks.yml':
             assert 'cold-control-restore' not in path.read_text()
-            assert 'cold_restore_checks.py' not in path.read_text()
+            # Other fixed checks can retain/reuse its wheel verifier without
+            # invoking the cold-control qualification entrypoint.
+            for line in path.read_text().splitlines():
+                if 'cold_restore_checks.py' in line:
+                    assert path.name == 'browser-checks.yml'
+                    assert line.strip().startswith(('cp ', 'sha256sum '))
 
 
 def test_cold_control_restore_keeps_exact_cases_import_proof_and_cleanup_contract():
@@ -1065,7 +1070,7 @@ def test_permissions_environment_keeps_only_named_ci_and_tool_certificate_inputs
     assert permissions_checks.qualification_environment({**permitted, **refused}) == permitted
 
 
-@pytest.mark.parametrize('mutation', [None, 'duplicate', 'missing', 'wrong', 'skip', 'fail', 'cancel', 'todo'])
+@pytest.mark.parametrize('mutation', [None, 'duplicate', 'missing', 'wrong', 'skip', 'fail', 'cancel', 'todo', 'skip-directive', 'todo-directive'])
 def test_permissions_tap_rejects_partial_or_substituted_execution(permissions_checks, mutation):
     text = ('TAP version 13\nok 1 - first\nok 2 - second\n1..2\n'
             '# tests 2\n# pass 2\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n')
@@ -1075,6 +1080,9 @@ def test_permissions_tap_rejects_partial_or_substituted_execution(permissions_ch
         text = text.replace('ok 2 - second\n', '')
     elif mutation == 'wrong':
         text = text.replace('second', 'unselected')
+    elif mutation in ('skip-directive', 'todo-directive'):
+        directive = mutation.split('-', 1)[0].upper()
+        text = text.replace('ok 2 - second', 'ok 2 - second # ' + directive + ' blocked')
     elif mutation:
         key = {'skip': 'skipped', 'cancel': 'cancelled'}.get(mutation, mutation)
         text = text.replace(f'# {key} 0', f'# {key} 1')

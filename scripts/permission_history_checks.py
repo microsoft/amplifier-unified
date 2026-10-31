@@ -162,7 +162,7 @@ def verify_tap(text, selected):
     assert counts == {'tests': len(names), 'pass': len(names), 'fail': 0,
                       'cancelled': 0, 'skipped': 0, 'todo': 0}, counts
     assert re.findall(r'^1\.\.(\d+)$', text, re.M) == [str(len(names))]
-    assert not re.search(r'^\s*not ok\b|#\s*(?:SKIP|TODO)\b', text, re.M | re.I)
+    assert not re.search(r'^\s*not ok\b|^\s*ok\s+\d+[^\n]*#\s*(?:SKIP|TODO)\b', text, re.M | re.I)
     return {'counts': counts, 'names': names, 'selectedFiles': list(selected)}
 
 
