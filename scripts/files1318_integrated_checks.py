@@ -34,6 +34,15 @@ owns processes, always cwd=root/frontend; one call per phase supplies fail-stop.
 The copied fixture invokes its existing package_identity guard, then records
 origins and verifies payload/static/RECORD in that SAME process before and after.
 No selectors, environment overrides, retries, preparation or publication CLI.
+
+--corner-diagnostic is a separate, source-only checkpoint, NOT qualification.
+It uses /artifacts/files1318-corner-diagnostic and the fixed retained inputs in
+output/files1318-corner-inputs/{reuse.json,static.tar}. The schema-2 manifest must
+also bind diagnosticReuse={metadataSha256,archiveSha256,sourceRevision,sourceTree}.
+Only this driver and the generated-file producer may differ from the retained
+8ca6ac6d manifest. No build, unit suite, full journey, wheel or install runs.
+Exit 0 means checkpoint observed with cleanup/integrity verified; cause and
+visual judgment remain unknown/pending. An original false assertion stays exit 1.
 """
 from __future__ import annotations
 
@@ -54,6 +63,7 @@ import signal
 import stat
 import sys
 import sysconfig
+import tarfile
 import time
 import tomllib
 import xml.etree.ElementTree as ET
@@ -72,9 +82,23 @@ NPM = PREPARED / 'node-runtime/bin/npm'
 UV = PREPARED / 'bootstrap/bin/uv'
 CONTRACT = PREPARED / 'execution-contract.json'
 MANIFEST = ROOT / 'output/files1318-frozen-manifest.json'
+CORNER_MANIFEST = ROOT / 'output/files1318-corner-manifest.json'
 HARNESS = OUT / 'harness'
 VENV = OUT / 'installed'
 DRIVER = 'scripts/files1318_integrated_checks.py'
+PRODUCER = 'frontend/tests/generated-file-controls-browser.mjs'
+CORNER_OUT = Path('/artifacts/files1318-corner-diagnostic')
+REUSE_INPUT = ROOT / 'output/files1318-corner-inputs'
+REUSE_BINDING = {
+    'metadataSha256': '56123cca65eb88bb8ddbcf4fc66e2eed47fb102bb6c7d663ed39cf8798d32b8e',
+    'archiveSha256': '4eedcfb31fc612490c83641b04cedab8851f6d75cb3a4131042fd989e35695a7',
+    'sourceRevision': '8ca6ac6dff5ca75c4ca9cc944c40ae04296b2bdf',
+    'sourceTree': '5a2b4dfe20402463ec153579b4bf5985cad801f7',
+}
+REUSE_MANIFEST = ROOT / 'output/files1318-integrated-v1-result/parent-manifest.json'
+REUSE_MANIFEST_SHA = 'b5c2e56b5e868a9b986eeb140f490ac85a6554c309f7cb8dd2d2930d1036eb79'
+REUSE_ARCHIVE_BYTES = 23603200
+REUSE_WORKSPACE_SHA = '5500763b6c47aa1ee3f6054c29e293fee30b86033e831a12dcac8f13fc0737c4'
 REVIEWED_CHANGES = frozenset((
     DRIVER, 'frontend/tests/canvas-renderers-browser.mjs',
     'tests/fixtures/empty_host_ui_server.py',
@@ -216,6 +240,84 @@ def frozen_inputs(frozen, *, built=False):
         actual[name] = file_identity(path)
         require(actual[name] == expected, f'Frozen input changed: {name}')
     return actual
+
+
+def diagnostic_static(frozen):
+    """Validate ALL reuse inputs before replacing static, in the admitted guest only."""
+    require(ROOT == Path('/workspace') and Path.cwd().resolve() == ROOT
+            and Path(__file__).resolve() == ROOT / DRIVER and not (ROOT / '.git').exists(),
+            'Static reuse is guest-only')
+    require(frozen.get('diagnosticReuse') == REUSE_BINDING, 'Missing exact diagnostic reuse binding')
+    archive, metadata_path = REUSE_INPUT / 'static.tar', REUSE_INPUT / 'reuse.json'
+    for path, digest in ((archive, REUSE_BINDING['archiveSha256']),
+                         (metadata_path, REUSE_BINDING['metadataSha256']),
+                         (REUSE_MANIFEST, REUSE_MANIFEST_SHA)):
+        require(path.resolve() == path and stat.S_ISREG(path.lstat().st_mode)
+                and sha(path) == digest, f'Reuse input identity mismatch: {path}')
+    reuse, previous = read(metadata_path), read(REUSE_MANIFEST)
+    require(reuse['schemaVersion'] == 1 and reuse['archiveSha256'] == REUSE_BINDING['archiveSha256']
+            and reuse['archiveBytes'] == archive.stat().st_size == REUSE_ARCHIVE_BYTES
+            and reuse['sourceWorkspaceArchiveSha256'] == REUSE_WORKSPACE_SHA
+            and reuse['build'] == {'version': '0.41.0', 'id': '3e60a9007f094b31'}
+            and reuse['sourceRevision'] == previous['revision'] == REUSE_BINDING['sourceRevision']
+            and reuse['sourceTree'] == previous['tree'] == REUSE_BINDING['sourceTree'],
+            'Wrong retained build provenance')
+    require(previous['schemaVersion'] == 2 and previous['reviewed'] is True
+            and all(previous[key] == frozen[key] for key in ('baselineRevision', 'baselineTree'))
+            and set(previous['changedPaths']) == REVIEWED_CHANGES
+            and previous['files'].keys() == frozen['files'].keys(), 'Old/new source inventory mismatch')
+    changed = {name for name in frozen['files'] if previous['files'][name] != frozen['files'][name]}
+    require(changed == {DRIVER, PRODUCER}, 'Reuse requires all other tracked inputs unchanged')
+    expected = reuse['files']
+    require(isinstance(expected, dict) and len(expected) == 311
+            and 'amplifier_web/static/index.html' in expected, 'Wrong retained static inventory')
+    for name, digest in expected.items():
+        require(name.startswith('amplifier_web/static/') and str(Path(name)) == name
+                and not Path(name).is_absolute() and '..' not in Path(name).parts
+                and '\\' not in name and re.fullmatch('[a-f0-9]{64}', digest),
+                'Unsafe retained static path/hash')
+    # Every member must be a unique ordinary file, with exactly the retained
+    # canonical path set and content hashes. No extractall, links or path repair.
+    with tarfile.open(archive, 'r:') as bundle:
+        members = {}
+        for member in bundle:
+            require(member.isfile() and not member.issparse() and member.name in expected
+                    and member.name not in members and 0 <= member.size <= REUSE_ARCHIVE_BYTES,
+                    'Unexpected/duplicate/nonregular static archive member')
+            with bundle.extractfile(member) as stream:
+                require(hashlib.file_digest(stream, 'sha256').hexdigest() == expected[member.name],
+                        f'Retained static bytes differ: {member.name}')
+            members[member.name] = member
+        require(members.keys() == expected.keys(), 'Static archive file set differs')
+        require(all(parent.as_posix() not in members for name in members for parent in Path(name).parents),
+                'Static archive file/directory collision')
+        static = ROOT / 'amplifier_web/static'
+        require(static.resolve() == static and static.is_dir(), 'Unsafe source static directory')
+        require(all(not path.is_symlink() and (path.is_dir() or path.is_file())
+                    for path in static.rglob('*')), 'Unexpected original static entry')
+        before = tree(static)
+        save('static-before.json', before)
+        shutil.copytree(static, OUT / 'static-before')
+        require(tree(OUT / 'static-before') == before, 'Original static preservation failed')
+        save('reuse-metadata.json', reuse)
+        save('reuse-parent-manifest.json', previous)
+        save('reuse-validation.json', {
+            **REUSE_BINDING, 'parentManifestSha256': REUSE_MANIFEST_SHA,
+            'sourceWorkspaceArchiveSha256': REUSE_WORKSPACE_SHA,
+            'changedPaths': sorted(changed), 'fileCount': len(members),
+            'archiveBytes': REUSE_ARCHIVE_BYTES, 'validatedBeforeRestore': True})
+        shutil.rmtree(static)  # Only the guest directory, after verified preservation.
+        static.mkdir()
+        for name, member in members.items():
+            destination = ROOT / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            require(destination.parent.resolve().is_relative_to(static), 'Static destination escape')
+            with bundle.extractfile(member) as source, destination.open('xb') as target:
+                shutil.copyfileobj(source, target)
+            destination.chmod(0o644)  # Never apply archived permissions/owners.
+        require({f'amplifier_web/static/{name}': digest for name, digest in tree(static).items()} == expected,
+                'Restored static differs from retained build')
+    require(sha(archive) == REUSE_BINDING['archiveSha256'], 'Reuse archive changed during restore')
 
 
 def candidate(frozen):
@@ -520,6 +622,85 @@ def generated_proof(mode):
         'frameBindingCounts': dict(Counter(c['binding']['status'] for c in proof['fileFrameCaptures']))})
 
 
+def corner_diagnostic_proof(exit_code):
+    """Validate checkpoint evidence even for exit 1; never turn that exit into PASS."""
+    reports = list((OUT / 'generated-source/evidence').glob('generated-file-controls-*/observations.json'))
+    require(len(reports) == 1, 'Require one corner diagnostic producer report')
+    proof = read(reports[0])
+    require(exit_code in (0, 1) and proof['mode'] == 'corner-diagnostic'
+            and proof['passed'] is (exit_code == 0), 'Wrong diagnostic mode/exit')
+    captures = proof['cornerDiagnostics']
+    controls = [g for g in proof['geometry'] if 'corners' in g]
+    require(len(captures) == len(controls) == 4
+            and [g['name'] for g in controls[1:]] ==
+            ['Copy full path', 'Copy relative path', 'Download saved file'],
+            'First desktop checkpoint did not reach all controls')
+    for index, (capture, control) in enumerate(zip(captures, controls)):
+        require(capture['label'] == control['label'] == 'desktop'
+                and capture['controlIndex'] == index and capture['complete'] is True
+                and not capture.get('captureError') and not capture.get('disposeError'),
+                'Incomplete first desktop corner capture')
+        first, rect = capture['first'], control['rect']
+        require(first['rect'] == rect and len(first['corners']) == len(control['corners']) == 4,
+                'Diagnostic must bind the original rectangle and all four points')
+        points = [(rect['left'] + 3, rect['top'] + 3), (rect['right'] - 3, rect['top'] + 3),
+                  (rect['left'] + 3, rect['bottom'] - 3), (rect['right'] - 3, rect['bottom'] - 3)]
+        for label, point, raw, observed in zip(
+                ('top-left', 'top-right', 'bottom-left', 'bottom-right'),
+                points, control['corners'], first['corners']):
+            in_view = 0 <= point[0] < control['viewport']['width'] and 0 <= point[1] < control['viewport']['height']
+            require((raw['x'], raw['y']) == point and type(raw['reachable']) is bool
+                    and {key: observed[key] for key in ('x', 'y', 'reachable')} == raw
+                    and observed['corner'] == label and observed['hitTested'] is in_view
+                    and 'hit' in observed and isinstance(observed['stack'], list)
+                    and len(observed['stack']) <= 8, 'Original 3px corner hit evidence missing/changed')
+        require(all(key in first['computed'] for key in (
+                    'borderTopLeftRadius', 'borderTopRightRadius', 'borderBottomLeftRadius',
+                    'borderBottomRightRadius', 'pointerEvents', 'clipPath', 'overflowX', 'overflowY'))
+                and first['node']['connected'] is True and first['viewport']['dpr'] > 0
+                and all(first['viewport'][k] == control['viewport'][k] for k in ('width', 'height'))
+                and isinstance(first['ancestors'], list) and len(first['ancestors']) <= 16
+                and 'scroll' in first and 'fonts' in first, 'Diagnostic context incomplete')
+    if exit_code == 0:
+        require(proof['diagnosticComplete'] is True and proof['stoppedAfter'] == 'first-desktop-measure'
+                and not proof.get('failure') and not proof.get('error') and proof['preCleanupSnapshots'] == []
+                and all(g['rect']['width'] >= 44 and g['rect']['height'] >= 44
+                        and all(c['reachable'] is True for c in g['corners']) for g in controls),
+                'Exit zero without the complete original checkpoint oracle')
+    else:
+        require(proof['diagnosticComplete'] is False and proof['stoppedAfter'] is None
+                and proof.get('failure') and proof.get('error'), 'Missing original diagnostic failure')
+    require(proof['errors'] == [] and proof['screenshotErrors'] == []
+            and Counter(c['check'] for c in proof['checks']) == Counter({
+                'negative control: missing buttons rejected by the same oracle': 1,
+                'real clipboard + Copied.': 2,
+                'v1 browser download remains original after v2 is saved before URL resolution': 1})
+            and [d['label'] for d in proof['downloads']] == ['desktop-race-v1']
+            and proof['fileFrameCaptures'] == []
+            and not any(r['path'].endswith('/document') for r in proof['requests']),
+            'Diagnostic exceeded checkpoint scope or failed before it')
+    cleanup = proof['cleanup']
+    require(set(cleanup) == {'pid', 'code', 'signal'} and type(cleanup['pid']) is int and cleanup['pid'] > 0
+            and type(cleanup['code']) is int and cleanup['code'] == 0 and cleanup['signal'] is None
+            and proof['fixtureCleanup'] == {'pid': cleanup['pid'], 'homeRemoved': True}
+            and proof['browserCleanup'] == [{'label': 'desktop', 'closed': True, 'connected': False}],
+            'Diagnostic fixture/browser cleanup failed')
+    expected = read(OUT / 'candidate.json')
+    require(proof['installed'] == {
+                'packageRoot': str(ROOT / 'amplifier_web'), 'verified': False,
+                'staticSha256': {p.removeprefix('amplifier_web/static/'): h for p, h in expected['static'].items()}}
+            and all(read(OUT / f'source-fixture-origins-{when}.json')['pid'] == cleanup['pid']
+                    for when in ('before', 'after'))
+            and read(OUT / 'source-fixture-payload-before.json') == read(OUT / 'source-fixture-payload-after.json'),
+            'Diagnostic fixture package/static identity changed')
+    result = {'path': str(reports[0]), 'sha256': sha(reports[0]), 'exitCode': exit_code,
+              'checkpointObserved': True, 'producerDiagnosticComplete': proof['diagnosticComplete'],
+              'originalCornerFalse': any(not c['reachable'] for g in controls for c in g['corners']),
+              'productAcceptance': False, 'cause': 'unknown', 'visualJudgment': 'pending'}
+    save('generated-source/diagnostic-report.json', result)
+    return result
+
+
 def renderer_proof(negative=False):
     phase = 'renderer-stalled-response' if negative else 'canvas-renderers'
     mode = 'stalled-body' if negative else 'normal'
@@ -647,13 +828,18 @@ def evidence_manifest(deadline):
 
 
 def main():
+    global OUT
     started = time.monotonic()
     hard_deadline = started + BUDGET
     work_deadline = hard_deadline - FINALIZATION_RESERVE
     evidence_deadline = hard_deadline - RECEIPT_RESERVE
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--manifest', required=True, type=Path, choices=[MANIFEST])
+    parser.add_argument('--manifest', required=True, type=Path, choices=[MANIFEST, CORNER_MANIFEST])
+    parser.add_argument('--corner-diagnostic', action='store_true')
     args = parser.parse_args()
+    if args.manifest != (CORNER_MANIFEST if args.corner_diagnostic else MANIFEST):
+        parser.error('The manifest must match the selected qualification mode')
+    OUT = CORNER_OUT if args.corner_diagnostic else Path('/artifacts/files1318-qualified')
     OUT.mkdir(parents=True, exist_ok=False)  # No replay or overwrite of a prior cycle.
     report = {'schemaVersion': 1, 'passed': False, 'complete': False,
               'budgetSeconds': BUDGET, 'preparationBudgetSeconds': 1800,
@@ -663,6 +849,18 @@ def main():
               'limits': ['Synthetic fixtures, Chromium desktop/touch emulation; not physical devices.',
                          'Locked prepared test dependencies reused, not a minimal dependency install.',
                          'No publication, full suite, provider, OS reveal or independent pixel acceptance.']}
+    if args.corner_diagnostic:
+        selected = {'snapshot', 'runtime-readiness', 'browser-readiness', 'static-reuse',
+                    'source-freeze', 'topology-source', 'generated-source', 'final-integrity'}
+        report['phases']['static-reuse'] = {'status': 'unrun', 'reason': 'not_started'}
+        for name, row in report['phases'].items():
+            if name not in selected:
+                row['reason'] = 'outside_corner_diagnostic_scope'
+        report.update(mode='corner-diagnostic', outcome='not_started', cause='unknown',
+                      productAcceptance=False, checkpointObserved=False)
+        report['limits'].append(
+            'Checkpoint only: reused static; no build, unit suites, later journeys, wheel or install. '
+            'Topology includes touch readiness, not a touch product journey. Prior integrated failure unchanged.')
     save('report.json', report)
     def expired(_signum, _frame):
         remaining = hard_deadline - time.monotonic()
@@ -721,7 +919,7 @@ def main():
                         'frontend/tests/standard-ux-canvas-files-browser.mjs'}
             require(required <= frozen['files'].keys(), 'Parent manifest omits required source')
             renderer_source = (ROOT / 'frontend/tests/canvas-renderers-browser.mjs').read_text()
-            if ('CANVAS_RENDERER_STALLED_BODY' not in renderer_source
+            if not args.corner_diagnostic and ('CANVAS_RENDERER_STALLED_BODY' not in renderer_source
                     or 'expectedFailureVerified' not in renderer_source):
                 report['phases']['renderer-stalled-response']['reason'] = 'renderer_negative_interface_unavailable'
                 raise RuntimeError('Renderer interface unavailable; negative explicitly unrun')
@@ -734,21 +932,25 @@ def main():
                     and plan['nodeDirectory'] == 'frontend', 'Prepared source identity mismatch')
             require(contract['source']['gitMetadataAvailable'] is False
                     and contract['source']['sourceHead'] == frozen['revision'], 'Wrong admitted HEAD')
-            build = contract['pythonBuild']
-            require(build['available'] is True and build['python'] == str(BUILD_PYTHON),
-                    'Prepared build prerequisites unavailable')
-            expected = [str(BUILD_PYTHON), '-m', 'build', '--wheel', '--no-isolation',
-                        '--outdir', '/artifacts/dist', '/workspace']
-            require(shlex.split(build['command']) == expected, 'Unexpected configured build command')
-            require(not Path('/artifacts/dist').exists(), 'Wheel output must be fresh')
-            require(read(ROOT / 'frontend/package.json')['scripts']['test:canvas-renderers-browser']
-                    == 'node tests/canvas-renderers-browser.mjs', 'Configured renderer command changed')
-            require(read(ROOT / 'frontend/package.json')['scripts']['build'] == 'vite build',
-                    'Canonical frontend build command changed')
-            for path in (PYTHON, BUILD_PYTHON, NODE, NPM, UV):
+            expected = None
+            executables = (PYTHON, NODE)
+            if not args.corner_diagnostic:
+                build = contract['pythonBuild']
+                require(build['available'] is True and build['python'] == str(BUILD_PYTHON),
+                        'Prepared build prerequisites unavailable')
+                expected = [str(BUILD_PYTHON), '-m', 'build', '--wheel', '--no-isolation',
+                            '--outdir', '/artifacts/dist', '/workspace']
+                require(shlex.split(build['command']) == expected, 'Unexpected configured build command')
+                require(not Path('/artifacts/dist').exists(), 'Wheel output must be fresh')
+                require(read(ROOT / 'frontend/package.json')['scripts']['test:canvas-renderers-browser']
+                        == 'node tests/canvas-renderers-browser.mjs', 'Configured renderer command changed')
+                require(read(ROOT / 'frontend/package.json')['scripts']['build'] == 'vite build',
+                        'Canonical frontend build command changed')
+                executables = (PYTHON, BUILD_PYTHON, NODE, NPM, UV)
+            for path in executables:
                 require(path.is_file() and os.access(path, os.X_OK), f'Missing executable: {path}')
             save('executables.json', {str(path): {'resolved': str(path.resolve()), 'sha256': sha(path)}
-                                     for path in (PYTHON, BUILD_PYTHON, NODE, NPM, UV)})
+                                     for path in executables})
             save('execution-contract.json', contract)
             save('prepared-inventory.json', inventory)
             save('prepared-plan.json', plan)
@@ -772,6 +974,8 @@ def main():
             'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
             'GIT_TERMINAL_PROMPT': '0',
         }
+        if args.corner_diagnostic:
+            env['FILES1318_CORNER_DIAGNOSTIC'] = '1'  # Fixed child evidence destination only.
         for key in ('HOME', 'TMPDIR', 'XDG_CACHE_HOME'):
             Path(env[key]).mkdir()
         os.environ.clear()
@@ -795,6 +999,12 @@ def main():
                 raw, = result['scenarios']
                 row['process'] = raw  # Raw negative remains failed/nonzero.
                 save('report.json', report)
+                if args.corner_diagnostic and name == 'generated-source':
+                    # Preserve/validate the producer's first false sample before
+                    # the ordinary fail-stop exit check. This is NOT a negative test.
+                    row['diagnostic'] = corner_diagnostic_proof(raw['exitCode'])
+                    report['checkpointObserved'] = row['diagnostic']['checkpointObserved']
+                    save('report.json', report)
                 require(raw['cleanup'] == CLEAN and raw['reason'] is None, f'{name}: process/cleanup failure')
                 require(result['complete'] is True and result['passed'] is (not negative)
                         and raw['status'] == ('failed' if negative else 'passed')
@@ -803,26 +1013,37 @@ def main():
                 if verify:
                     verify()
                 require(time.monotonic() < work_deadline, f'{name}: verification exceeded work deadline')
-                row['verdict'] = 'expected_stalled_response_failure' if negative else 'passed'
+                row['verdict'] = ('checkpoint_observed_cause_unknown'
+                                  if args.corner_diagnostic and name == 'generated-source'
+                                  else 'expected_stalled_response_failure' if negative else 'passed')
             step(name, execute)
 
         run('runtime-readiness', [PYTHON, '-I', '-B', ROOT / DRIVER, '--runtime-ready'], cap=45)
-        run('build-readiness', [BUILD_PYTHON, '-I', '-B', '-c',
-            "import build,hatchling,sys; assert sys.version_info >= (3,13); "
-            "assert not build.ProjectBuilder('/workspace').check_dependencies('wheel')"], cap=30)
-        run('browser-readiness', [NODE, '--input-type=module', '-e', BROWSER_READY], cap=45)
-        run('frontend-build', [NPM, 'run', 'build'], cap=240)
+        if not args.corner_diagnostic:
+            run('build-readiness', [BUILD_PYTHON, '-I', '-B', '-c',
+                "import build,hatchling,sys; assert sys.version_info >= (3,13); "
+                "assert not build.ProjectBuilder('/workspace').check_dependencies('wheel')"], cap=30)
+        run('browser-readiness', [NODE, '--input-type=module', '-e',
+            BROWSER_READY.replace('/artifacts/files1318-qualified', str(OUT))], cap=45)
+        if args.corner_diagnostic:
+            step('static-reuse', lambda: diagnostic_static(frozen))
+        else:
+            run('frontend-build', [NPM, 'run', 'build'], cap=240)
 
         def source_freeze():
-            save('source-after-build.json', frozen_inputs(frozen, built=True))
+            save('source-after-reuse.json' if args.corner_diagnostic else 'source-after-build.json',
+                 frozen_inputs(frozen, built=True))
             value = candidate(frozen)
             require(value['static'] and 'amplifier_web/static/index.html' in value['static'], 'No built static')
+            if args.corner_diagnostic:
+                require(value['static'] == read(OUT / 'reuse-metadata.json')['files'], 'Reused static changed')
             save('candidate.json', value)
             save('static.json', value['static'])
         step('source-freeze', source_freeze)
-        run('python-tests', [PYTHON, '-I', '-B', ROOT / DRIVER, '--python-tests'], cap=180, verify=junit)
-        run('frontend-units', [NODE, '--test', '--test-reporter=tap',
-                              *(ROOT / name for name in UNIT_FILES)], cap=60, verify=unit_proof)
+        if not args.corner_diagnostic:
+            run('python-tests', [PYTHON, '-I', '-B', ROOT / DRIVER, '--python-tests'], cap=180, verify=junit)
+            run('frontend-units', [NODE, '--test', '--test-reporter=tap',
+                                  *(ROOT / name for name in UNIT_FILES)], cap=60, verify=unit_proof)
 
         def generated(mode):
             root = HARNESS if mode == 'installed' else ROOT
@@ -830,79 +1051,84 @@ def main():
             if mode == 'installed':
                 extra.update(AMPLIFIER_TEST_PYTHON=str(VENV / 'bin/python'), AMPLIFIER_TEST_INSTALLED='1',
                              AMPLIFIER_TEST_PACKAGE_ROOT=read(OUT / 'installed-identity.json')['packageRoot'])
+            if args.corner_diagnostic:
+                require(mode == 'source', 'Diagnostic cannot exercise installed mode')
+                extra['FILE_CONTROLS_CORNER_DIAGNOSTIC'] = '1'
             run('topology-' + mode, [NODE, 'tests/file-controls-topology-preflight.mjs'], root=root,
                 extra={'FILE_CONTROLS_PREFLIGHT_EVIDENCE': str(OUT / f'topology-{mode}/evidence')},
                 cap=80, verify=lambda: topology_proof(mode))
             run('generated-' + mode, [NODE, 'tests/generated-file-controls-browser.mjs'],
-                root=root, extra=extra, cap=160, verify=lambda: generated_proof(mode))
+                root=root, extra=extra, cap=160,
+                verify=None if args.corner_diagnostic else lambda: generated_proof(mode))
 
         generated('source')
-        run('canvas-renderers', [NPM, 'run', 'test:canvas-renderers-browser'],
-            verify=renderer_proof)
-        # Raw nonzero is retained; only the exact correlated negative qualifies.
-        run('renderer-stalled-response', [NPM, 'run', 'test:canvas-renderers-browser'],
-            extra={'CANVAS_RENDERER_STALLED_BODY': '1'}, cap=120,
-            verify=lambda: renderer_proof(True), negative=True)
-        run('canvas-usability', [NODE, 'tests/canvas-usability-browser.mjs'], verify=usability_proof)
-        run('standard-ux-canvas-files', [NODE, 'tests/standard-ux-canvas-files-browser.mjs'],
-            verify=standard_files_proof)
-        # The renderer test builds its independent example, NOT the bundled app.
-        # Freeze those forced-included bytes before the ONE application wheel.
-        frozen_inputs(frozen, built=True)
-        built = read(OUT / 'candidate.json')
-        final_source = candidate(frozen)
-        require(final_source['static'] == built['static'], 'Source journeys changed static')
-        save('candidate.json', final_source)
-        run('wheel-build', wheel_command, cap=120)
+        if not args.corner_diagnostic:
+            run('canvas-renderers', [NPM, 'run', 'test:canvas-renderers-browser'],
+                verify=renderer_proof)
+            # Raw nonzero is retained; only the exact correlated negative qualifies.
+            run('renderer-stalled-response', [NPM, 'run', 'test:canvas-renderers-browser'],
+                extra={'CANVAS_RENDERER_STALLED_BODY': '1'}, cap=120,
+                verify=lambda: renderer_proof(True), negative=True)
+            run('canvas-usability', [NODE, 'tests/canvas-usability-browser.mjs'], verify=usability_proof)
+            run('standard-ux-canvas-files', [NODE, 'tests/standard-ux-canvas-files-browser.mjs'],
+                verify=standard_files_proof)
+            # The renderer test builds its independent example, NOT the bundled app.
+            # Freeze those forced-included bytes before the ONE application wheel.
+            frozen_inputs(frozen, built=True)
+            built = read(OUT / 'candidate.json')
+            final_source = candidate(frozen)
+            require(final_source['static'] == built['static'], 'Source journeys changed static')
+            save('candidate.json', final_source)
+            run('wheel-build', wheel_command, cap=120)
 
-        def verify_package():
-            wheel, = Path('/artifacts/dist').glob('*.whl')
-            value = read(OUT / 'candidate.json')
-            value.update(wheel=str(wheel), wheelSha256=sha(wheel))
-            save('candidate.json', value)
-            save('wheel.json', verify_wheel(wheel, value))
-            for name in COPY:
-                destination = HARNESS / name
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(ROOT / name, destination)
-                require(file_identity(destination) == frozen['files'][name], f'Copied harness differs: {name}')
-            save('harness.json', {name: file_identity(HARNESS / name) for name in COPY})
-            plan = read(PREPARED / 'plan.json')
-            dependency = (PREPARED / 'node' / plan['nodeKey']).resolve()
-            require(dependency.is_relative_to(PREPARED / 'node') and dependency.is_dir(), 'Missing locked Node tree')
-            (HARNESS / 'frontend/node_modules').symlink_to(dependency, target_is_directory=True)
-        step('wheel-verify', verify_package)
-        run('fresh-venv', [PYTHON, '-I', '-B', '-m', 'venv', '--without-pip', VENV], root=HARNESS, cap=30)
-        run('install-wheel', [UV, 'pip', 'install', '--python', VENV / 'bin/python',
-                              '--no-deps', '--no-index', read(OUT / 'candidate.json')['wheel']],
-            root=HARNESS, cap=45)
+            def verify_package():
+                wheel, = Path('/artifacts/dist').glob('*.whl')
+                value = read(OUT / 'candidate.json')
+                value.update(wheel=str(wheel), wheelSha256=sha(wheel))
+                save('candidate.json', value)
+                save('wheel.json', verify_wheel(wheel, value))
+                for name in COPY:
+                    destination = HARNESS / name
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(ROOT / name, destination)
+                    require(file_identity(destination) == frozen['files'][name], f'Copied harness differs: {name}')
+                save('harness.json', {name: file_identity(HARNESS / name) for name in COPY})
+                plan = read(PREPARED / 'plan.json')
+                dependency = (PREPARED / 'node' / plan['nodeKey']).resolve()
+                require(dependency.is_relative_to(PREPARED / 'node') and dependency.is_dir(), 'Missing locked Node tree')
+                (HARNESS / 'frontend/node_modules').symlink_to(dependency, target_is_directory=True)
+            step('wheel-verify', verify_package)
+            run('fresh-venv', [PYTHON, '-I', '-B', '-m', 'venv', '--without-pip', VENV], root=HARNESS, cap=30)
+            run('install-wheel', [UV, 'pip', 'install', '--python', VENV / 'bin/python',
+                                  '--no-deps', '--no-index', read(OUT / 'candidate.json')['wheel']],
+                root=HARNESS, cap=45)
 
-        def link_dependencies():
-            purelib = Path(read(OUT / 'runtime-readiness.json')['purelib']).resolve()
-            require(purelib.is_relative_to(PREPARED / 'venv') and purelib.is_dir(), 'Wrong prepared purelib')
-            site, = VENV.glob('lib/python*/site-packages')
-            require(not list(site.glob('*.pth')), 'Fresh venv contains unexpected path configuration')
-            require((site / 'amplifier_web/__init__.py').is_file(), 'Wheel must be installed BEFORE pth')
-            pth = site / 'dependency.pth'
-            pth.write_text(str(purelib) + '\n')
-            save('dependency-reuse.json', {'pth': str(pth), 'sha256': sha(pth), 'content': pth.read_text(),
-                                          'site': str(site), 'installedBeforeLink': True})
-        step('dependency-link', link_dependencies)
-        run('installed-readiness', [VENV / 'bin/python', '-I', '-B', HARNESS / DRIVER, '--installed-ready'],
-            root=HARNESS, cap=45)
-        generated('installed')
+            def link_dependencies():
+                purelib = Path(read(OUT / 'runtime-readiness.json')['purelib']).resolve()
+                require(purelib.is_relative_to(PREPARED / 'venv') and purelib.is_dir(), 'Wrong prepared purelib')
+                site, = VENV.glob('lib/python*/site-packages')
+                require(not list(site.glob('*.pth')), 'Fresh venv contains unexpected path configuration')
+                require((site / 'amplifier_web/__init__.py').is_file(), 'Wheel must be installed BEFORE pth')
+                pth = site / 'dependency.pth'
+                pth.write_text(str(purelib) + '\n')
+                save('dependency-reuse.json', {'pth': str(pth), 'sha256': sha(pth), 'content': pth.read_text(),
+                                              'site': str(site), 'installedBeforeLink': True})
+            step('dependency-link', link_dependencies)
+            run('installed-readiness', [VENV / 'bin/python', '-I', '-B', HARNESS / DRIVER, '--installed-ready'],
+                root=HARNESS, cap=45)
+            generated('installed')
 
-        def final_integrity():
-            save('source-after.json', frozen_inputs(frozen, built=True))
-            expected = read(OUT / 'candidate.json')
-            require(candidate(frozen)['files'] == expected['files'], 'Source payload changed')
-            require({name: file_identity(HARNESS / name) for name in COPY} == read(OUT / 'harness.json'),
-                    'Copied harness changed')
-            package = Path(read(OUT / 'installed-identity.json')['packageRoot']).parent
-            require(wheel_proof(package) == read(OUT / 'installed-wheel-after.json'), 'Final installed integrity')
-            save('source-payload-final.json', expected['files'])
-            save('static-final.json', tree(package / 'amplifier_web/static'))
-        step('final-integrity', final_integrity)
+            def final_integrity():
+                save('source-after.json', frozen_inputs(frozen, built=True))
+                expected = read(OUT / 'candidate.json')
+                require(candidate(frozen)['files'] == expected['files'], 'Source payload changed')
+                require({name: file_identity(HARNESS / name) for name in COPY} == read(OUT / 'harness.json'),
+                        'Copied harness changed')
+                package = Path(read(OUT / 'installed-identity.json')['packageRoot']).parent
+                require(wheel_proof(package) == read(OUT / 'installed-wheel-after.json'), 'Final installed integrity')
+                save('source-payload-final.json', expected['files'])
+                save('static-final.json', tree(package / 'amplifier_web/static'))
+            step('final-integrity', final_integrity)
         checks_finished = True  # Not qualified until bounded evidence finalization also finishes.
     except BaseException as error:
         report['failure'] = {'type': type(error).__name__, 'message': str(error)}
@@ -917,11 +1143,33 @@ def main():
         try:
             report['finalization'] = {'status': 'running'}
             save('report.json', report)  # A killed finalizer cannot leave an overall pass.
+            if args.corner_diagnostic and report['phases']['source-freeze']['status'] == 'passed':
+                # Failure at an original corner still gets source preservation
+                # checks. Keep its raw failed phase and producer report intact.
+                integrity = report['phases']['final-integrity']
+                integrity.update(status='running', reason=None)
+                save('report.json', report)
+                try:
+                    save('source-after.json', frozen_inputs(frozen, built=True))
+                    expected = read(OUT / 'candidate.json')
+                    require(candidate(frozen)['files'] == expected['files'], 'Diagnostic source payload changed')
+                    require(expected['static'] == read(OUT / 'reuse-metadata.json')['files'],
+                            'Diagnostic static binding changed')
+                    require(tree(OUT / 'static-before') == read(OUT / 'static-before.json'),
+                            'Preserved original static changed')
+                    save('source-payload-final.json', expected['files'])
+                    save('static-final.json', tree(ROOT / 'amplifier_web/static'))
+                    integrity.update(status='passed', reason=None)
+                except BaseException as error:
+                    checks_finished = False
+                    integrity.update(status='failed', reason=str(error))
+                    report['integrityFailure'] = {'type': type(error).__name__, 'message': str(error)}
+                save('report.json', report)
             save('evidence-manifest.json', evidence_manifest(evidence_deadline))
             report['evidenceManifestSha256'] = sha(OUT / 'evidence-manifest.json')
             require(time.monotonic() < evidence_deadline, 'Evidence finalization exceeded deadline')
             report['finalization'] = {'status': 'passed'}
-            report.update(passed=checks_finished, complete=checks_finished)
+            report.update(passed=checks_finished and not args.corner_diagnostic, complete=checks_finished)
         except BaseException as error:
             report.update(passed=False, complete=False)
             report['finalization'] = {'status': 'failed', 'type': type(error).__name__, 'message': str(error)}
@@ -929,15 +1177,19 @@ def main():
             # Only the bounded final receipt gets the last five seconds. Never
             # replace the browser runner's SIGTERM/SIGINT cleanup policy.
             signal.setitimer(signal.ITIMER_REAL, max(.001, hard_deadline - time.monotonic()))
+            if args.corner_diagnostic:
+                report['outcome'] = 'checkpoint_observed_cause_unknown' if report['complete'] else 'failed'
             report['durationSeconds'] = round(time.monotonic() - started, 3)
             save('report.json', report)
             signal.setitimer(signal.ITIMER_REAL, 0)
             signal.signal(signal.SIGALRM, old_alarm)
-    return 0 if report['passed'] else 1
+    return 0 if report['passed'] or (args.corner_diagnostic and report['complete']) else 1
 
 
 if __name__ == '__main__':
     # Private, fixed child entrypoints. No arbitrary command or selector input.
+    if os.environ.get('FILES1318_CORNER_DIAGNOSTIC') == '1':
+        OUT = CORNER_OUT
     if os.environ.get('FILES1318_FIXTURE') in ('source', 'installed'):
         fixture_process(os.environ['FILES1318_FIXTURE'])
     elif sys.argv[1:] == ['--runtime-ready']:

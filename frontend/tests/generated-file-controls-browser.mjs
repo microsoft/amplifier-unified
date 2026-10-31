@@ -30,6 +30,9 @@ const fileFrameCaptures=[];
 const metadataExchanges=[],detailsReadiness=[],preCleanupSnapshots=[],metadataPending=new Set();
 const metadataByRequest=new WeakMap();
 const pageLabels=new WeakMap(),routeCleanups=new Set(),browserOwners=[];
+const cornerDiagnosticMode=process.env.FILE_CONTROLS_CORNER_DIAGNOSTIC==='1';
+const cornerDiagnostics=[];
+let cornerDiagnosticComplete=false;
 let logs='',lineBuffer='',page,ready,seed,failure,cleanup,timer,running;
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
 const errorEvidence=error=>error&&({name:error.name,message:error.message,stack:error.stack,
@@ -325,26 +328,81 @@ async function preserved(target,draft){
 }
 
 async function measureControls(target,controls,label){
- for(const control of controls){
+ const diagnostic=cornerDiagnosticMode&&label==='desktop';
+ for(const [controlIndex,control] of controls.entries()){
   await control.scrollIntoViewIfNeeded();
   // The inspector has a sticky heading. Center within real scroll containers
   // before hit testing rather than accepting a button covered by that heading.
   await control.evaluate(node=>node.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'}));
-  const measured=await control.evaluate(node=>{
+  const sample=(node,diagnostic)=>{
    const r=node.getBoundingClientRect(),inset=3,style=getComputedStyle(node);
    const points=[[r.left+inset,r.top+inset],[r.right-inset,r.top+inset],
     [r.left+inset,r.bottom-inset],[r.right-inset,r.bottom-inset]];
-   return {name:node.getAttribute('aria-label')||node.textContent.trim(),tag:node.tagName,className:node.className,
+   const hits=[];
+   const measured={name:node.getAttribute('aria-label')||node.textContent.trim(),tag:node.tagName,className:node.className,
     rect:r.toJSON(),computed:{height:style.height,minHeight:style.minHeight,minWidth:style.minWidth,
      padding:style.padding,borderWidth:style.borderWidth,boxSizing:style.boxSizing,
      whiteSpace:style.whiteSpace,overflowWrap:style.overflowWrap},
     context:{inspector:!!node.closest('.a-canvas-inspector'),viewTools:!!node.closest('.a-canvas-view-tools')},
-    viewport:{width:innerWidth,height:innerHeight},corners:points.map(([x,y])=>({x,y,
-     reachable:x>=0&&y>=0&&x<innerWidth&&y<innerHeight&&node.contains(document.elementFromPoint(x,y))}))};
-  });
+    viewport:{width:innerWidth,height:innerHeight},corners:points.map(([x,y],index)=>({x,y,
+     reachable:x>=0&&y>=0&&x<innerWidth&&y<innerHeight&&node.contains(
+      diagnostic?(hits[index]=document.elementFromPoint(x,y)):document.elementFromPoint(x,y))}))};
+   if(diagnostic){
+    // No await/RAF, repeated oracle, UI write or text capture. The oracle above
+    // and this diagnostic share the FIRST rect and exact elementFromPoint hits.
+    const capture={complete:false,first:{rect:measured.rect,corners:measured.corners}};
+    measured.cornerDiagnostic=capture;
+    try{
+     const id=window.__fileControlsNodeId;
+     const describe=element=>element?{nodeId:id(element),tag:element.tagName,connected:element.isConnected}:null;
+     const properties=['borderTopLeftRadius','borderTopRightRadius','borderBottomLeftRadius','borderBottomRightRadius',
+      'borderTopWidth','borderRightWidth','borderBottomWidth','borderLeftWidth',
+      'borderTopStyle','borderRightStyle','borderBottomStyle','borderLeftStyle',
+      'pointerEvents','display','visibility','opacity','position','zIndex','transform','transformOrigin',
+      'clip','clipPath','overflowX','overflowY','overflowClipMargin'];
+     const computed=value=>Object.fromEntries(properties.map(key=>[key,value[key]]));
+     const corners=measured.corners.map((point,index)=>{
+      const stack=document.elementsFromPoint(point.x,point.y);
+      return {...point,corner:['top-left','top-right','bottom-left','bottom-right'][index],
+       hitTested:index in hits,hit:describe(hits[index]),stack:stack.slice(0,8).map(describe),
+       stackTruncated:stack.length>8};
+     });
+     const ancestors=[];let parent=node.parentElement;
+     for(;parent&&ancestors.length<16;parent=parent.parentElement){
+      ancestors.push({...describe(parent),rect:parent.getBoundingClientRect().toJSON(),
+       computed:computed(getComputedStyle(parent)),scroll:{x:parent.scrollLeft,y:parent.scrollTop,
+        clientWidth:parent.clientWidth,clientHeight:parent.clientHeight,
+        scrollWidth:parent.scrollWidth,scrollHeight:parent.scrollHeight}});
+     }
+     Object.assign(capture.first,{at:Date.now(),node:describe(node),corners,computed:computed(style),
+      controlRadius:style.getPropertyValue('--a-control-radius'),ancestors,ancestorsTruncated:!!parent,
+      viewport:{...measured.viewport,dpr:devicePixelRatio,visual:visualViewport&&{
+       width:visualViewport.width,height:visualViewport.height,offsetLeft:visualViewport.offsetLeft,
+       offsetTop:visualViewport.offsetTop,pageLeft:visualViewport.pageLeft,pageTop:visualViewport.pageTop,scale:visualViewport.scale}},
+      scroll:{x:scrollX,y:scrollY},fonts:{status:document.fonts.status,ready:document.fonts.status==='loaded'}});
+     capture.complete=true;
+    }catch{
+     // Missing diagnostics must fail, but never replace an original false corner.
+     capture.captureError='Synchronous corner diagnostic capture failed';
+    }
+   }
+   return measured;
+  };
+  let result,disposeError;
+  if(diagnostic){
+   const handle=await control.elementHandle();
+   assert.ok(handle,'Corner diagnostic control handle missing');
+   try{result=await handle.evaluate(sample,true)}
+   finally{try{await handle.dispose()}catch(error){disposeError=error}}
+  }else result=await control.evaluate(sample,false);
+  const {cornerDiagnostic,...measured}=result;
+  if(diagnostic)cornerDiagnostics.push({label,controlIndex,...cornerDiagnostic,
+   ...(disposeError?{disposeError:errorEvidence(disposeError)}:{})});
   geometry.push({label,...measured});
   assert.ok(measured.rect.width>=44&&measured.rect.height>=44,`${label} ${measured.name}: target below 44px`);
   assert.ok(measured.corners.every(point=>point.reachable),`${label} ${measured.name}: obscured/offscreen corner`);
+  if(diagnostic)assert.equal(cornerDiagnostic?.complete,true,'Corner diagnostic capture missing or incomplete');
+  if(disposeError)throw disposeError;
  }
  assert.ok(await target.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Document horizontal overflow');
 }
@@ -770,6 +828,12 @@ async function run(){
  checks.push({check:'v1 browser download remains original after v2 is saved before URL resolution'});
  await preserved(page,draft);
  await measure(page,details,'desktop');
+ if(cornerDiagnosticMode){
+  assert.equal(cornerDiagnostics.length,4,'Corner diagnostic must retain summary and all three controls');
+  assert.ok(cornerDiagnostics.every(row=>row.complete),'Corner diagnostic capture missing or incomplete');
+  cornerDiagnosticComplete=true;
+  return; // Diagnostic checkpoint only, never a full-journey qualification.
+ }
 
  // Inject only clipboard write failure; readText remains the real browser API.
  const deniedSentinel='denied-write:'+randomUUID();
@@ -997,6 +1061,8 @@ try{
  const writes=await Promise.allSettled([
   writeFile(join(evidence,'fixture.log'),logs),
   writeFile(join(evidence,'observations.json'),JSON.stringify({passed:!failure,error:failure?.stack,failure:errorEvidence(failure),screenshotErrors,
+  ...(cornerDiagnosticMode?{mode:'corner-diagnostic',diagnosticComplete:cornerDiagnosticComplete,
+   stoppedAfter:cornerDiagnosticComplete?'first-desktop-measure':null,cornerDiagnostics}:{}),
   installed:ready&&{packageRoot:ready.packageRoot,verified:ready.installedVerified,staticSha256:ready.staticSha256},
   seed,checks,geometry,fileFrameCaptures,downloads,requests,commands,metadataExchanges,detailsReadiness,preCleanupSnapshots,
   errors,cleanup,fixtureCleanup:records.find(row=>row.cleanup)?.cleanup,
@@ -1014,4 +1080,5 @@ try{
  assert.ok(entries.every(entry=>entry.isFile()),'Export only ordinary evidence files, never fixture sockets/profile/state');
 }
 if(failure)throw failure;
-console.log(`Generated file controls passed; evidence: ${evidence}`);
+console.log(cornerDiagnosticMode?`Generated file controls corner diagnostic complete (not full qualification); evidence: ${evidence}`:
+ `Generated file controls passed; evidence: ${evidence}`);
