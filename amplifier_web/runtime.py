@@ -1428,9 +1428,9 @@ class RuntimeManager:
                 row = self.workers.get(session_id)
                 if not row or row['process'].returncode is not None or row.get('closing'):
                     raise ValueError('The prepared task owner retired before limit admission; no effect was sent.')
-                pending = await self._admit(session_id, 'control', {
-                    'operation': operation, 'arguments': arguments or {}})
-            return await self._reply(*pending)
+                envelope = {'operation': operation, 'arguments': arguments or {}}
+                pending = await self._admit(session_id, 'control', envelope)
+            return await self._reply(*pending, op='control', args=envelope)
         return await self._request(session_id, "control", operation=operation, arguments=arguments or {},
             **({'guard': guard} if guard is not None else {}))
 

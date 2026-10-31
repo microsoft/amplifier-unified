@@ -37,6 +37,30 @@ ADMIT = 'assignment.taskLimit.admit'
 REASON = 'Revise the owner planning estimate within the original delegated task.'
 
 
+async def test_runtime_manager_limit_control_uses_real_reply_and_never_revives(monkeypatch):
+    from amplifier_web.runtime import RuntimeManager
+    manager = RuntimeManager()
+    row = {'process': SimpleNamespace(returncode=None), 'pending': {},
+           'inflight': set(), 'parked': True}
+    manager.workers['member'] = row
+    writes = []
+    async def write(owner, command):
+        assert manager._locks['member'].locked()
+        writes.append(command)
+        owner['pending'][command['id']].set_result({'receipt': 'native-transaction'})
+        owner['inflight'].discard(command['id'])
+    monkeypatch.setattr(manager, '_write', write)
+    assert await manager.control('member', NATIVE, {'commandId': 'limit'},
+                                 guard=lambda: None) == {'receipt': 'native-transaction'}
+    assert len(writes) == 1 and not row['pending']
+    manager.workers.clear()
+    manager._retired['member'] = ({'id': 'member'}, None)
+    with pytest.raises(ValueError, match='retired'):
+        await manager.control('member', NATIVE, {'commandId': 'next'}, guard=lambda: None)
+    assert len(writes) == 1
+    await manager.close()
+
+
 class NativeCommandError(RuntimeError):
     def __init__(self, reply):
         self.reply = reply
@@ -155,6 +179,7 @@ class InProcessTransport:
 async def harness(app, monkeypatch, tmp_path):
     from amplifier_foundation.session.shared_state import SharedSessionStore, file_stamp
     from amplifier_module_loop_live.runtime import Runtime
+    from amplifier_web.management import Management
 
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(app.data_dir))
     monkeypatch.setenv('AMPLIFIER_SESSION_STATE_HOME', str(tmp_path / 'native-locks'))
@@ -165,6 +190,7 @@ async def harness(app, monkeypatch, tmp_path):
     target['status'] = 'idle'
     target['collaborationGeneration']['terminal'] = True
     initial_inputs = copy.deepcopy(app.runtime.inputs)
+    app.management = Management(app)
 
     w = Worker()
     w.workspace, w.home = Path(target['workspace']), app.data_dir
