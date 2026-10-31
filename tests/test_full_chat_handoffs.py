@@ -87,7 +87,7 @@ async def test_full_preserves_client_drafts_and_cannot_upgrade_review(handoff):
 
 
 @pytest.mark.parametrize('phase', ['session.create', 'conversation.send'])
-@pytest.mark.parametrize('change', ['stop', 'revoke', 'off-on', 'owner', 'complete'])
+@pytest.mark.parametrize('change', ['stop', 'revoke', 'off-on', 'owner', 'complete', 'placement'])
 async def test_full_delayed_effect_guard(handoff, monkeypatch, phase, change):
     app, runtime, source, _, args = await headless(handoff)
     entered, release = asyncio.Event(), asyncio.Event()
@@ -109,11 +109,13 @@ async def test_full_delayed_effect_guard(handoff, monkeypatch, phase, change):
             await save(app, source_row)
     elif change == 'owner':
         source_row['runtimeSessionId'] = 'replacement-root'
+    elif change == 'placement':
+        source_row.update(workingDirectory=source_row['workspace'] + '/another-checkout', executionRevision=1)
     else:
         source_row['collaborationGeneration']['terminal'] = True
     release.set()
     result = await finish(app, row)
-    if change == 'complete':
+    if change in {'complete', 'placement'}:
         assert result['status'] == 'accepted', result
         assert len(runtime.sent) == 1
     else:
@@ -196,7 +198,7 @@ async def test_full_raw_create_and_peer_send_are_not_handoff_authority(handoff):
         await app.dispatch('session.create', {'workspace': args['workspace']}, origin='system', caller_session_id=source)
 
 
-@pytest.mark.parametrize('change', ['unchanged', 'complete', 'stop', 'revoke', 'off-on', 'target-stop'])
+@pytest.mark.parametrize('change', ['unchanged', 'complete', 'stop', 'revoke', 'off-on', 'target-stop', 'target-access', 'target-placement'])
 async def test_full_final_native_write_rechecks_after_preparation(handoff, monkeypatch, change):
     from unittest.mock import AsyncMock
     from amplifier_web.runtime import RuntimeManager
@@ -225,6 +227,10 @@ async def test_full_final_native_write_rechecks_after_preparation(handoff, monke
             await save(app, app._session(source))
     elif change == 'complete':
         app._session(source)['collaborationGeneration']['terminal'] = True
+    elif change == 'target-access':
+        await save(app, app._session(row['targetSessionId']), mode='ask')
+    elif change == 'target-placement':
+        app._session(row['targetSessionId']).update(workingDirectory=args['workspace'] + '/moved', executionRevision=1)
     release.set()
     for _ in range(300):
         retained = app.handoffs.load(row['requestId'])
@@ -373,3 +379,15 @@ async def test_full_host_restart_retains_lineage_actor_and_exact_receipt(handoff
         assert not runtime.sent
     finally:
         await reopened.close()
+
+
+async def test_full_creation_respects_existing_destination_ask(handoff):
+    app, runtime, source, _, args = await headless(handoff)
+    made = await app.dispatch('session.create', {'title': 'Destination preference owner',
+        'workspace': args['workspace'], 'select': False})
+    destination = app._session(made['sessionId'])
+    await save(app, destination, mode='ask', scope='workspace')
+    result = await finish(app, await start(app, source, args))
+    assert result['delivery'] == 'accepted'
+    assert app.access_mode.snapshot(app._session(result['targetSessionId']))['mode'] == 'ask'
+    assert len(runtime.sent) == 1

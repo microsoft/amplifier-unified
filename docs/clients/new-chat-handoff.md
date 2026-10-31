@@ -28,9 +28,15 @@ Full requests belong to the calling conversation in the existing handoff journal
 They capture its standing-access revision, canonical execution owner and Stop
 revision. Creation and initial native-input admission recheck that capture,
 including after lock and runtime-preparation waits. Revocation, off/on, Stop,
-changed ownership or changed destination prevent the next effect. Ordinary source
-turn completion does not revoke accepted work. A stopped worker cannot start
-another request; a fresh trusted system can initiate distinct work under current
+changed ownership or changed destination prevent the next effect. The new target's
+access and execution-placement revisions are retained after creation and checked
+through final input admission; an explicit destination Ask choice already present
+at creation remains valid. A later change prevents this initial send rather than
+using a worker prepared under the older policy. Ordinary source turn completion
+does not revoke accepted work. Moving the same source to another execution checkout
+without Stop also preserves this independently located work; source execution
+placement is neither inherited nor part of the destination's authorization. A
+stopped worker cannot start another request; a fresh trusted system can initiate distinct work under current
 Full access. Exact receipt reads require no live generation or new authority.
 
 `session.handoff.propose` remains available for suggestions that the user has

@@ -251,6 +251,11 @@ class NewChatHandoffs:
             if any(file.exists() or file.is_symlink() for file in (session_file, config_file)):
                 self.error("The new chat's settings changed before the brief was submitted. Nothing was resent.")
             target = self.service._session(row["targetSessionId"], hydrate=False)
+            if row.get('mode') == 'full' and (
+                    self.service.access_mode.snapshot(target)['revision'] != row.get('targetAccessRevision')
+                    or target.get('executionRevision', 0) != row.get('targetExecutionRevision')
+                    or (target.get('workingDirectory') or target['workspace']) != row['workspace']):
+                self.error("The new chat's access or execution placement changed before the brief was submitted. Nothing was resent.")
             if (target.get("interruptionRevision", 0) != row.get("interruptionRevision", 0)
                     or target["workspace"] != row["workspace"] or target["bundle"] != row["bundle"]
                     or target.get("selection", {}) != row["selection"]):
@@ -465,6 +470,10 @@ class NewChatHandoffs:
             with service.clients.bind(row["executionClientId"]):
                 creation = await self.perform(row, 'session.create')
                 async with service.lock:
+                    if row.get('mode') == 'full':
+                        target = service._session(row['targetSessionId'], hydrate=False)
+                        row.update(targetAccessRevision=service.access_mode.snapshot(target)['revision'],
+                                   targetExecutionRevision=target.get('executionRevision', 0))
                     row.update(status="created", creation="created", createReceipt=creation,
                                message="Chat created. Its initial brief has not yet been accepted.")
                     self.save(row, publish=True)
