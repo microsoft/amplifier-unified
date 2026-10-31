@@ -5024,6 +5024,17 @@ class AppService:
         binding_token = BINDING.set(args)
         try:
             return await self._bound_app_bridge(operation, args, session_id)
+        except Exception as exc:
+            if args.get('_handoffSnapshot') is not None:
+                from .handoff_drain import failed_disposition
+                try:
+                    async with self.lock:
+                        disposition = failed_disposition(self, session_id, operation, args)
+                    if disposition is not None:
+                        exc._handoff_disposition = disposition
+                except Exception:
+                    pass  # An unreadable receipt remains unknown, never absent.
+            raise
         finally:
             PRINCIPAL.reset(token)
             BINDING.reset(binding_token)
@@ -5035,7 +5046,9 @@ class AppService:
         transport = args
         args = {key: value for key, value in args.items()
                 if key not in {'_generationId', '_runtimeSessionId', '_inputBindings', '_inputClients',
-                               '_workOrigin', '_workDispatchGuarded', '_responseMode'}}
+                               '_workOrigin', '_workDispatchGuarded', '_responseMode', '_childOrigin', '_runtimeOwnerId',
+                               '_handoffSnapshot'}
+                and (operation == 'capacity.admit' or key not in {'_handoffDrain', '_nativeChild'})}
         from .workspace_work_effects import APP_EFFECT, app_request
         token = APP_EFFECT.set(app_request(operation, args, session_id))
         try:

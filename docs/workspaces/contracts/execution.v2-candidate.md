@@ -594,9 +594,18 @@ boundary. Later declarations require the observed response revision. Every
 accepted declaration has a monotonic revision and a stable operation identity;
 exact retries return the same receipt and conflicting payloads are rejected.
 Earlier declarations remain in existing command receipts. A question or deferral
-is a report, not request completion. At most 32 declarations and 32 automatic
-outcome notifications belong to one request; reaching the bound is visible and
-requires a new intentional request rather than silent replay or unbounded loops.
+is a report, not request completion. Meaningful declarations and automatic outcome
+notifications have no lifetime count ceiling: continued work retains the original
+request and operation identities. Each payload and result view remains bounded;
+`coordination.result` returns the latest 32 declarations without discarding older
+command receipts. This does not relax queue pressure, Stop or task budgets.
+
+Existing current-protocol version-two waits stopped solely by the former automatic
+notification ceiling may recover through ordinary admission. Recovery requires the
+exact legacy diagnostic and a saved outcome revision greater than 32; it preserves
+the continuation identity and last claimed revision. Generic limits, cancelled or
+expired waits are not reopened, and existing unknown notification receipts are not
+replayed. Restart recovery does not itself grant execution authority.
 
 Typed negative reports and questions can notify the requester immediately as
 unqualified agent claims. Exact successful root terminal evidence can qualify a
@@ -608,6 +617,24 @@ saved task and Stop boundary. A newer meaningful report supersedes an
 unsubmitted earlier success notification, preserving both receipts and preventing
 stale dependency success. Requests made under older single-notification
 subscriptions keep that behavior until explicitly replaced by a new request.
+
+### Optional message rates and complete one-shot observations — 2026-10-30
+
+Global Work concurrency settings also expose `maxPeerMessagesPerMinute` (per
+sender/recipient pair, including notify) and `maxPendingWatchesPerTarget`. Both
+have default 0, meaning no count limit. Explicit positive values gate only new
+requests atomically, before message/watch effects. Exact retries return their
+receipts. Changing these limits neither retries rejected requests nor restarts
+work. Automatic retained returns use their existing guarded inbox, not the
+new-message rate check.
+
+A root lifecycle event captures its status, workspace, time, and retained command
+row high-water once. Every pending watch registered by then is considered using
+64-row keyset pages; later registrations cannot consume that older event. Expiry
+uses that captured time throughout. Each matching watch records one observation
+and at most one guarded notification. Restart also reads watch receipts in bounded
+pages. This preserves Stop, ownership, cancellation and unknown-input handling;
+observation still neither starts the target nor proves successful task completion.
 
 ### Continuing-objective result delivery — 2026-10-19
 
@@ -645,9 +672,16 @@ outcome, not approval or denial. Restart preserves pending watch receipts and
 never replays a claimed notification. Idle means a root status boundary, not proof
 that external effects or all background work have finished.
 
-A destination retains at most 64 queued inputs and reserved reply slots, with
-16 queued inputs from one sender and 32 from one assignment. Admission rotates
-between pending senders using retained admission order. New queued instructions
+Peer inbox counts have no ceiling by default. Global Work concurrency settings
+can optionally bound a destination’s pending inputs plus reserved reply slots,
+pending inputs from one sender, and pending inputs from one assignment; 0 means
+no count ceiling. Positive limits remain atomic admission checks, including
+reserved returns, and never discard existing work. Admission gives the least
+recently admitted pending sender the next turn using durable admission order,
+with oldest pending input breaking ties. Sender selection considers the complete
+pending set; only a bounded FIFO batch of that sender’s receipts is loaded.
+Raising a limit resumes saved backpressured returns through the same guarded
+inbox without replaying accepted or unknown operations. New queued instructions
 expire after a caller-selected duration (default and maximum one day);
 expiration remains an inspectable failed dependency without executing the input.
 Accepted substantive inputs are never silently coalesced or dropped. Informational

@@ -1,4 +1,6 @@
 """Exact reviewed outcomes retire notifications, not work or uncertainty."""
+from amplifier_web import test_execution_settings as execution_settings
+
 import asyncio
 import copy
 
@@ -208,7 +210,7 @@ async def test_reviewed_backpressured_outcome_never_enqueues_later(app, monkeypa
     # Exercise actual admission: a final reviewed backpressured result must
     # release its reservation rather than permanently occupying this inbox.
     with monkeypatch.context() as bounded:
-        bounded.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 1)
+        bounded.setitem(execution_settings.CONCURRENCY_DEFAULTS, 'maxPendingPeerInputs', 1)
         original(source['id'])
     if restart:
         await app.close()
@@ -218,7 +220,7 @@ async def test_reviewed_backpressured_outcome_never_enqueues_later(app, monkeypa
             # Durable acknowledgment frees the slot and prevents automatic
             # replay after a restart, not just in the original process.
             with monkeypatch.context() as bounded:
-                bounded.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 1)
+                bounded.setitem(execution_settings.CONCURRENCY_DEFAULTS, 'maxPendingPeerInputs', 1)
                 reopened.collaboration.require_inbox_slot(source['id'])
             reopened.collaboration.resume_outcomes(source['id'])
             assert not reopened.runtime.inputs
