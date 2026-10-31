@@ -10,12 +10,17 @@ from urllib.parse import urlsplit
 
 
 def git_source(uri):
+    """Read Foundation-consumed declarations without resolving their sources.
+
+    Foundation's parse_uri defaults an omitted Git ref to main, not remote
+    HEAD. Keep explicit refs verbatim; source_key must not alias the two.
+    """
     if not isinstance(uri, str) or not uri.startswith('git+'):
         return None
     parsed = urlsplit(uri[4:])
     path, separator, ref = parsed.path.rpartition('@')
     return {'url': parsed._replace(path=path if separator else parsed.path, fragment='').geturl(),
-            'ref': ref if separator else 'HEAD'}
+            'ref': ref if separator else 'main'}
 
 
 def included_sources():

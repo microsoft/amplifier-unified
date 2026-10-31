@@ -266,7 +266,7 @@ def core_registry_migration(name, source, baseline):
 class ProtectedRuntimeSource(ValueError):
     """A fixed reason and package name, never source paths or exception text."""
     def __init__(self, package, reason='protected-runtime-source'):
-        super().__init__('A worker dependency has protected changes; preserve its source configuration before updating.')
+        super().__init__('A worker dependency source could not be verified; preserve its source configuration before updating.')
         self.diagnostic_facts = {'errorType': 'ValueError', 'reason': reason, 'package': package}
 
 
