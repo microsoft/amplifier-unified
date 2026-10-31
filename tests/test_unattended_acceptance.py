@@ -138,7 +138,7 @@ async def journey(tmp_path, monkeypatch):
     context = tmp_path / 'shared-context.txt'
     context.write_text('Strip surrounding spaces and normalize uppercase text to lowercase.\n')
     value = SimpleNamespace(app=app, builder=builder, initiator=initiator, reviewer=reviewer,
-                            project=project, context=context, checks=checks, mounts=[], trace=[])
+                            project=project, context=context, checks=checks, mounts=[], trace=[], review_deliveries=[])
     try:
         yield value
     finally:
@@ -154,6 +154,7 @@ async def journey(tmp_path, monkeypatch):
             rows = [json.loads(row[0]) for row in app.db.execute("SELECT receipt FROM commands WHERE "
                 "json_extract(receipt,'$.commandAction') IN ('workspace.tests.submit','coordination.send','coordination.reply')")]
             (evidence / (tmp_path.name + '.json')).write_text(json.dumps({'trace': value.trace,
+                'reviewDeliveries': value.review_deliveries,
                 'receipts': rows, 'physicalCalls': checks.calls, 'retainedArchives': checks.archives,
                 'processesExited': all(job['process'].poll() is not None for job in checks.jobs.values()),
                 'limits': 'Controlled lifecycle/peer transports; actual owned local processes and native mounts; no live provider or nested-container proof.'}, indent=2))
@@ -257,12 +258,12 @@ async def invoke(m, action, args, identity, coordinator=None):
     return result.output
 
 
-async def child(m, name, operation, *, resume=False):
+async def child(m, name, operation, *, resume=False, prompt='Complete the assigned step'):
     m.actions[name] = operation
     if resume:
-        result = await m.registry.resume(name, 'Apply the review correction', m.parent)
+        result = await m.registry.resume(name, prompt, m.parent)
     else:
-        result = await m.registry.spawn('worker', 'Complete the assigned step', m.parent, sub_session_id=name)
+        result = await m.registry.spawn('worker', prompt, m.parent, sub_session_id=name)
     if m.failures:
         raise m.failures.pop(0)
     return result
@@ -354,13 +355,20 @@ async def test_unattended_native_build_test_review_correct_and_exact_delivery(jo
     reviewed = await invoke(builder, 'coordination.artifact', {'sessionId': j.builder['id'],
         'requestId': 'review-request', 'reference': reference}, 'read-review')
     assert reviewed['result']['qualified'] and reviewed['result']['text'] == review_text
+    review_prompt = f"Apply this verified peer review ({reference}):\n{reviewed['result']['text']}"
     async def correction(coordinator):
+        messages = await coordinator.get('context').get_messages()
+        delivered = next(row['content'] for row in reversed(messages) if row['role'] == 'user')
+        assert delivered == review_prompt
+        assert reference in delivered and reviewed['result']['text'] in delivered
+        j.review_deliveries.append({'actor': coordinator.session_id, 'reference': reference,
+                                    'nativeInput': delivered})
         for name, content in {'normalize.py': 'def normalize(text):\n    return text.strip().casefold()\n',
             'check.py': "from normalize import normalize\nassert normalize(' HELLO ') == 'hello'\nprint('uppercase and trim checks passed')\n"}.items():
             assert (await execute_tool(coordinator, 'read_file', {'file_path': str(j.project / name)})).success
             assert (await execute_tool(coordinator, 'write_file', {'file_path': str(j.project / name), 'content': content})).success
         return 'Applied the actual peer correction.'
-    await child(builder, 'implementation-child', correction, resume=True)
+    await child(builder, 'implementation-child', correction, resume=True, prompt=review_prompt)
     corrected = await check(j, builder, 'corrected-check', sys.executable + ' check.py')
     assert corrected['exitCode'] == 0 and 'uppercase and trim checks passed' in corrected['text']
     result_file = j.project / 'result.txt'
@@ -406,11 +414,16 @@ async def test_native_child_reads_actual_completed_test_receipt(journey, tmp_pat
         return 'Recorded the actual owner responses; no command replayed.'
     await child(builder, 'result-observer-child', observe)
     assert len(j.checks.jobs) == 1
+    # Validate every successful response before classifying any known refusal:
+    # a partial owner fix must not hide a stale or malformed successful result.
+    if observations[0].success:
+        assert observations[0].output['result'] == {'items': [completed['check']], 'nextOffset': None}
+    if observations[1].success:
+        assert observations[1].output['result'] == completed
     refusals = [response for response in observations if not response.success]
     if refusals:
         assert all('A child cannot borrow' in str(response.error) for response in refusals), refusals
         pytest.xfail('Verified baseline gap: actual Full child cannot read saved workspace.tests.read/result; multi-worker owns the pending fix. This is not full unattended acceptance.')
-    assert observations[1].output['result']['text'] == completed['text']
 
 
 async def test_native_root_cancels_real_active_check_and_observes_without_replay(journey, tmp_path, monkeypatch):

@@ -16,7 +16,9 @@ Worker and RuntimeManager bridge, filesystem tools and the streaming loop's tool
 hooks. A child reads context outside its project and writes an initial candidate.
 The root submits a canonical queued check. A separate native peer reads the
 actual source, identifies a missing behavior and returns a hash-bound file. The
-original child resumes, applies that correction and a second check runs. Final
+original child resumes with the verified review text and hash-bound reference in
+its assigned input. The test checks that input in the child's native context
+before the scripted correction writes any files; a second check then runs. Final
 source and test-output files are retained through the ordinary collaboration
 reply/artifact owners, and remain readable after deleting the original result
 file. Retrying the exact declaration retains its original artifacts.
@@ -42,7 +44,9 @@ One separate case sends `workspace.tests.read` and `workspace.tests.result`
 through an actual Full child after a real test completes. On the initial baseline
 the owner refuses both with the root-collaboration-authority error. That exact
 known refusal is reported as an expected failure, not a successful unattended
-journey. Other failures remain failures. When the passive observation owner is
+journey. Each successful list or result response is compared with the completed
+canonical check before any known refusal is classified, so a partial fix cannot
+hide a bad successful response. Other failures remain failures. When the passive observation owner is
 fixed, the same case must read the actual saved output without relaying it through
 the parent. Full unattended acceptance remains incomplete until this case passes.
 
