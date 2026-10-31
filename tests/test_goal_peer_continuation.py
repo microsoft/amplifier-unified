@@ -23,6 +23,7 @@ pytest.importorskip("amplifier_module_context_simple")
 from fixtures.collaboration_native_probe import (
     DirectNativeHost, ScriptedProvider, message_text, peer_envelopes, tool_output,
 )
+from amplifier_operations.coordination import peer_input
 from amplifier_web import runtime_worker
 from amplifier_web.management import Management
 from amplifier_web.service import AppService
@@ -35,10 +36,25 @@ REASON = "Continue the synthetic objective after checking the exact peer result.
 
 
 def last_input(request):
-    # Fresh workspace observations are provider reference data, not another
-    # admitted input. Keep the peer-versus-goal ordering oracle on that input.
-    return next(m for m in reversed(request.messages)
-                if m.role == "user" and not (m.metadata or {}).get("coordinationObservation"))
+    # The provider sees user-role reference messages as well as actual inputs.
+    # Streaming a876e6a writes a separate ephemeral, framed tail reminder after
+    # steering. Exclude only its producer metadata AND complete envelope; never
+    # discard an admitted input, arbitrary ephemeral row, or lookalike text.
+    for message in reversed(request.messages):
+        if message.role != "user":
+            continue
+        metadata = message.metadata or {}
+        if "amplifier_input" not in metadata:
+            if metadata.get("coordinationObservation") is True:
+                continue
+            text = message_text(message)
+            if (metadata.get("ephemeral") is True
+                    and metadata.get("reminder_placement") in {"pre_user", "tail"}
+                    and text.startswith("<system-reminders>\n")
+                    and text.endswith("\n</system-reminders>")):
+                continue
+        return message
+    raise AssertionError("Provider request has no non-reference user input")
 
 
 class OrderingHost(DirectNativeHost):
@@ -129,15 +145,27 @@ class Parent(ScriptedProvider):
             return self.final("First parent answer; the qualified peer result is queued.")
         last_user = last_input(request)
         text = message_text(last_user)
-        peer = next((e for e, t in peer_envelopes(request)
+        envelopes = peer_envelopes(request)
+        peer = next((e for e, t in envelopes
                      if e["inputId"] == self.continuation_id and t == text), None)
         worker = self.host.roots[self.host.parent_id]
+        if peer:
+            saved = next(m for m in self.host.app._session(self.host.parent_id)["messages"]
+                         if m.get("inputId") == self.continuation_id and m.get("inputOrigin") == "peer")
+            assert peer == saved["peerEnvelope"]
+            assert text == peer_input(saved["peerEnvelope"], saved["text"])
         self.boundaries.append({
-            "kind": "peer" if peer else "goal",
+            "kind": "peer" if peer else "goal" if text == REASON else "unexpected",
             "generationId": worker.runtime.generation["id"],
             "inputIds": list(worker.runtime.generation["input_ids"]),
             "goal": copy.deepcopy(worker.session.coordinator.session_state.get("goal")),
             "text": text,
+            "selectedMetadata": copy.deepcopy(last_user.metadata),
+            "peerCandidates": [{"envelope": e, "text": t} for e, t in envelopes
+                               if e["inputId"] == self.continuation_id],
+            "userRows": [{"metadata": copy.deepcopy(m.metadata),
+                          "textStart": message_text(m)[:160], "textLength": len(message_text(m))}
+                         for m in request.messages if m.role == "user"],
         })
         if len(self.boundaries) == 1:
             self.next_request.set()
