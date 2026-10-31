@@ -50,6 +50,10 @@ def source(row):
 
 def event(row):
     result = {}
+    from .update_diagnostics import sanitized_application_extras
+    extras = sanitized_application_extras(row.get('applicationExtras'))
+    if extras is not None:
+        result['applicationExtras'] = extras
     for key in ('id', 'attemptId', 'revision', 'commandId', 'expectedRevision', 'observedRevision'):
         if scalar(row.get(key), r'[a-f0-9]{32,64}'):
             result[key] = row[key]

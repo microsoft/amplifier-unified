@@ -1,7 +1,8 @@
 import React from 'react';
 export function AttentionBadge({state={},section,page,count:explicit,settings=false}){
  const count=explicit??(settings?state.attention?.settingsUnread:page?state.attention?.pages?.[page]:section?state.attention?.sections?.[section]:(state.attention?.badgeUnread??state.attention?.unread));
- return count>0?<span className="a-attention-badge" role="status" aria-label={`${count} unread items`}>{count}</span>:null;
+ const unresolved=state.attention?.items?.some(i=>i.actionRequired&&(!page||i.page===page)&&(!section||i.section===section));
+ return count>0?<span className="a-attention-badge" role="status" aria-label={`${count} ${unresolved?'items needing attention':'unread items'}`}>{count}</span>:null;
 }
 // A notice is read only after its rendered content is visible in the focused tab.
 // Exact fingerprints prevent a late acknowledgement from hiding a newer notice.
@@ -52,9 +53,10 @@ export function CompletionBadgePreference({state,act}){
 export function ActivityPanel({state,act}){
  const [showReviewed,setShowReviewed]=React.useState(false),[limit,setLimit]=React.useState(10),[busy,setBusy]=React.useState(false),[error,setError]=React.useState('');
  const reviewing=React.useRef(false);
- const all=state.attention?.items||[],unread=all.filter(i=>!i.read),reviewable=unread.filter(i=>i.reviewable!==false);
+ const all=state.attention?.items||[],unread=all.filter(i=>!i.read&&!i.informational),reviewable=unread.filter(i=>i.reviewable!==false);
+ const unresolved=all.filter(i=>i.actionRequired),information=all.filter(i=>i.informational);
  const finished=unread.filter(i=>i.id.startsWith('completion:')).sort((a,b)=>(b.completedAt||0)-(a.completedAt||0));
- const needsReview=unread.filter(i=>!i.id.startsWith('completion:')),reviewed=all.filter(i=>i.read);
+ const needsReview=unread.filter(i=>!i.actionRequired&&!i.id.startsWith('completion:')),reviewed=all.filter(i=>i.read&&!i.actionRequired&&!i.informational);
  async function review(items){
   if(reviewing.current||!items.length)return;reviewing.current=true;setBusy(true);setError('');
   try{await reviewItems(act,items)}catch(e){setError(e.message||'Could not mark these items reviewed. Try again.')}finally{reviewing.current=false;setBusy(false)}
@@ -66,16 +68,18 @@ export function ActivityPanel({state,act}){
    else await act('view.update',{patch:{panel:'settings',settingsSection:item.section,settingsExpanded:[item.page]}});
   }catch(e){setError(e.message)}
  }
- function row(item){return <div className="a-attention-item" key={item.id}><button className="a-attention-open" type="button" data-action={item.sessionId?'session.select':'view.update'} onClick={()=>open(item)}><strong>{item.label||item.title}</strong>{!item.id.startsWith('completion:')&&<span>{item.label?item.title:item.detail}</span>}</button>{!item.read&&item.reviewable!==false&&<button className="a-soft a-attention-dismiss" type="button" disabled={busy} aria-label={`Mark reviewed: ${item.label||item.title}`} onClick={()=>review([item])}>Mark reviewed</button>}</div>}
+ function row(item){return <div className="a-attention-item" key={item.id}><button className="a-attention-open" type="button" data-action={item.sessionId?'session.select':'view.update'} onClick={()=>open(item)}><strong>{item.label||item.title}</strong>{!item.id.startsWith('completion:')&&<span>{item.label?item.title:item.detail}</span>}{item.actionRequired&&<span>{item.read?'Reviewed · still unresolved':'Unresolved'}{item.occurrences>1?` · ${item.occurrences} occurrences`:''}</span>}</button>{!item.read&&!item.informational&&item.reviewable!==false&&<button className="a-soft a-attention-dismiss" type="button" disabled={busy} aria-label={`Mark reviewed: ${item.label||item.title}`} onClick={()=>review([item])}>Mark reviewed</button>}</div>}
  return <section className="a-activity-inbox" aria-label="Activity to review">
  <div className="a-inbox-toolbar"><p>Review updates here without opening every chat.</p><button className="a-soft" type="button" disabled={busy||!reviewable.length} onClick={()=>review(reviewable)}>{busy?'Marking reviewed…':'Mark all reviewed'}</button></div>
- <p className="a-caption">Marking reviewed clears unread notices across your devices. Questions and approvals still wait for your answer.</p>
+ <p className="a-caption">Marking reviewed records what you have seen. Unresolved update failures stay here until recovery. Questions and approvals still wait for your answer.</p>
  {error&&<p role="alert">{error}</p>}
+ {unresolved.length>0&&<section aria-label="Needs action"><h4>Needs action <span className="a-caption">{unresolved.length}</span></h4>{unresolved.map(row)}</section>}
  {needsReview.length>0&&<section aria-label="To review"><h4>To review <span className="a-caption">{needsReview.length}</span></h4>{needsReview.map(row)}</section>}
  {finished.length>0&&<section aria-label="Finished responses"><div className="a-inbox-group-head"><h4>Finished responses <span className="a-caption">{finished.length}</span></h4><button className="a-link" disabled={busy} onClick={()=>review(finished)}>Mark responses reviewed</button></div>{finished.slice(0,limit).map(row)}{finished.length>limit&&<button className="a-link" onClick={()=>setLimit(limit+10)}>Show more responses ({finished.length-limit} remaining)</button>}</section>}
- {!unread.length&&<p className="a-inbox-empty">All caught up.</p>}
+ {!unread.length&&!unresolved.length&&<p className="a-inbox-empty">All caught up.</p>}
  <CompletionBadgePreference {...{state,act}}/>
  {reviewed.length>0&&<><button className="a-link" type="button" onClick={()=>setShowReviewed(!showReviewed)}>{showReviewed?'Hide reviewed items':'Show reviewed items'}</button>{showReviewed&&<section aria-label="Reviewed items">{reviewed.slice(0,limit).map(row)}{reviewed.length>limit&&<button className="a-link" onClick={()=>setLimit(limit+10)}>Show more reviewed items</button>}</section>}</>}
+ {information.length>0&&<details><summary>News and receipts</summary><p className="a-caption">For reference; these do not count in the app or Settings badges.</p>{information.slice(0,limit).map(row)}{information.length>limit&&<button className="a-link" onClick={()=>setLimit(limit+10)}>Show more news and receipts</button>}</details>}
  </section>;
 }
 

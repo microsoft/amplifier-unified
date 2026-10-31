@@ -263,9 +263,10 @@ async def stage(manager, *, feature=None, request_id=None):
     from .app_features import selection
     selected = selection(manager, feature, request_id) if feature else None
     revision = selected['hostApp']['revision'] if selected else manager.service.state['updates'].get('application',{}).get('revision')
-    manager.diagnostics.begin('application',revision)
+    extras = validated_extras(selected['extras'] if selected else installed_extras())
+    manager.diagnostics.begin('application',revision,application_extras=extras)
     manager.diagnostics.record('stage','started')
-    try:await _stage(manager, selected=selected)
+    try:await _stage(manager, selected=selected, extras=extras)
     except asyncio.CancelledError:raise
     except Exception:
         phase=manager.diagnostics.state.get('latest',{}).get('phase','stage')
@@ -274,7 +275,7 @@ async def stage(manager, *, feature=None, request_id=None):
         raise
 
 
-async def _stage(manager, *, selected=None):
+async def _stage(manager, *, selected=None, extras):
     release=({'status':'update','revision':selected['hostApp']['revision'],
               'latest':selected['hostApp']['version'],'featureSelection':selected}
              if selected else manager.service.state['updates'].get('application',{}))
@@ -289,7 +290,6 @@ async def _stage(manager, *, selected=None):
     env={**git_environment(),'UV_TOOL_DIR':str(folder/'tools'),'UV_TOOL_BIN_DIR':str(folder/'bin')}
     uv=shutil.which('uv')
     if not uv:raise ValueError('Install uv before updating the application')
-    extras=selected['extras'] if selected else validated_extras(installed_extras())
     host_graph=manager.diagnostics.sync('host-components',components.installed_graph)
     resolution_args=['--upgrade','--refresh']
     if selected:
@@ -319,7 +319,7 @@ async def _stage(manager, *, selected=None):
     manager.diagnostics.sync('candidate-record',write_private,folder/'validated.json',json.dumps({'revision':revision,'version':installed,'hostVersion':__version__,'attemptId':manager.diagnostics.state['attemptId'],'extras':extras,'generation':generation,'componentGraph':graph,'componentDigest':components.digest(graph),'hostGraph':host_graph,'hostDigest':components.digest(host_graph),**({'featureSelection':selected} if selected else {})}))
     manager.diagnostics.clear_failure()
     manager.diagnostics.record('stage','succeeded',observedVersion=installed)
-    await manager.publish(phase='app-staged',pendingApp={**release,'attemptId':manager.diagnostics.state['attemptId'],'generation':generation},detail='Application release validated. Waiting for work to finish before restarting.')
+    await manager.publish(phase='app-staged',pendingApp={**release,'attemptId':manager.diagnostics.state['attemptId'],'generation':generation,'extras':extras},detail='Application release validated. Waiting for work to finish before restarting.')
     if selected:
         from .app_features import record
         await record(manager, selected['requestId'], 'qualified', selection=selected,
@@ -359,7 +359,7 @@ async def _activate_serialized(manager, *, force=None):
             from .update_diagnostics import exception_type
             last=manager.diagnostics.state.get('latest',{})
             if last.get('status')!='failed':
-                manager.diagnostics.begin('application',manager.service.state['updates'].get('pendingApp',{}).get('revision'))
+                manager.diagnostics.begin('application',pending.get('revision'),application_extras=pending.get('extras'))
                 manager.diagnostics.record('activation-validation','failed',errorType=exception_type(error))
             state=manager.service.state['updates']
             if isinstance(state.get('pendingApp'),dict) and state['pendingApp'].get('generation') and state.get('phase')!='activating':
@@ -438,7 +438,8 @@ async def _activate(manager, *, force=None):
         extras_match=False
     if not extras_match:
         message='Optional features changed after validation. Install the update again to validate the current selection.'
-        manager.diagnostics.begin('application',revision,validated.get('attemptId') or release.get('attemptId'))
+        manager.diagnostics.begin('application',revision,validated.get('attemptId') or release.get('attemptId'),
+                                  application_extras=validated.get('extras'))
         manager.diagnostics.record('activation-validation','failed',errorType='ValueError')
         # Removing the pending pointer lets the normal install command stage a
         # fresh candidate. Keep its receipt on disk for diagnosis, never reuse it.
@@ -460,7 +461,8 @@ async def _activate(manager, *, force=None):
     if force is None:
         from .update_drain import prepare
         if not await prepare(manager, release):return
-    manager.diagnostics.begin('application',revision,validated.get('attemptId') or release.get('attemptId'))
+    manager.diagnostics.begin('application',revision,validated.get('attemptId') or release.get('attemptId'),
+                              application_extras=validated.get('extras'))
     uv,executable,installed_python,previous=await manager.diagnostics.run('target-discovery',installed_target)
     helper_python=marker.parent/'tools/amplifier-unified'/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
     if not helper_python.is_file():
