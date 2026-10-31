@@ -1325,6 +1325,24 @@ command lock. It yields saved goals at their completed-turn boundary and require
 the existing checkpoint/park path before cooperative writer release. It does not
 cancel a tool to make a move possible or acquire a foreign conversation writer.
 
+The originating worker records the already admitted native jobs and exact child
+runs before publishing its move request. New delegation is briefly fenced even
+when that attempted move is later rejected; known rejection releases the fence.
+Preparation admitted before the fence, including nested preparation without a UI
+row yet, keeps its existing run identity and may settle. Ordinary tools continue.
+The host preserves queued and in-transit child model requests only when their
+private run identity matches that receipt. Root observations may include only
+completion inputs tied to those captured native jobs. Unknown input provenance,
+Stop, changed source/configuration/task authority and model budgets remain gates.
+
+A bridge error carries the exact receipt disposition only after the host handler
+finishes: positively absent releases the provisional marker; a committed receipt
+retains its actual state; unreadable or lost acknowledgement stays uncertain.
+Existing native boundary inspection can bind that same receipt after reply loss.
+No second action is issued and no input or operation is replayed. Native result
+identity depends on loop-live preserving the existing `Input.call_id` field;
+older producers without it cannot qualify late completion observations.
+
 `worktrees.py` persists positive release evidence separately from placement and
 recovers that confirmed boundary after host replacement. Earlier preflight/wait
 interruptions reject safely; unconfirmed release stays unknown. Active work gets
