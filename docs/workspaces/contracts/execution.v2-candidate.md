@@ -523,18 +523,27 @@ Membership, limits and Stop are retained in existing command receipts; model
 usage stays in existing execution receipts and is attributed at admission.
 
 Assignment limits cover aggregate supported model calls and open commissioned
-roots. New assignments have no execution count ceiling: `maxOpenTasks` and
-`maxConcurrentCalls` default to `null`. Each accepts a positive integer for an
+roots. New assignments have no execution count ceiling: `maxOpenTasks`,
+`maxMembers` and `maxConcurrentCalls` default to `null`. Each accepts a positive integer for an
 explicit ceiling or `null` for no count limit (blank in the UI). Existing saved
 finite values are preserved until their owner explicitly changes them. The
-retained member roster remains structurally bounded by `maxMembers` (1–64,
-default 64); removing execution ceilings never discards members or unknown
+retained member roster has no arbitrary maximum; `maxMembers` counts current
+bound and reserved members when explicitly set. Removing execution ceilings never discards members or unknown
 receipts, changes Stop/ownership, or bypasses token/cost budgets, the installation's
 separate per-source task-chat policy, or host resource admission. Optional
 token/cost reservations are declared allowances per call, not
 provider-enforced maxima. Settled receipts replace their allowances; missing
 outcomes remain unknown. Limits cannot promise an exact spend cap. Already
 running effects may finish. Admission is serialized before provider effects.
+
+The host-wide model waiting policy defaults to no queue-count or wait-time
+ceiling (`maxWaitingCalls=0`, `waitTimeoutSeconds=0`). Positive values are optional
+operator limits. Waiting uses the existing admission queue and resumes on capacity
+changes; removing the count ceiling does not admit calls beyond a selected
+assignment allowance or bypass provider admission. Existing saved finite settings
+remain in force until changed, including after restart. The global settings UI
+offers a single action to select unlimited waiting without resetting spend,
+already admitted calls, or Stop.
 
 The commissioning owner may manage the assignment; members may inspect it.
 Membership does not confer control over existing independent peers. Assignment

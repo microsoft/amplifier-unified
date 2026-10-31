@@ -77,7 +77,8 @@ async def admit(service, sid, args):
         # calls. The queue bound applies only after a call actually must wait.
         if ticket in queue:
             return None
-        if len(queue) >= policy(service)['maxWaitingCalls']:
+        maximum = policy(service)['maxWaitingCalls']
+        if maximum and len(queue) >= maximum:
             return {'allowed': False, 'state': 'wait_expired',
                     'reasons': ['Too many model requests are already waiting. No provider request was sent.']}
         queue.append(ticket)
