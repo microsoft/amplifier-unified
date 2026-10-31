@@ -34,6 +34,49 @@ def definitions(schema, string):
     }
 
 
+def recovery_child(service, session, request=None):
+    """Route an exact live Full child call to this operation's recovery owner.
+
+    An unresolved outcome blocks ordinary execution, not observation or explicit
+    recovery of that same settled operation. This grants no effect: command()
+    still verifies the retained request, authority, revision and sealed evidence.
+    The request is the actual tool body, never an argument claiming a bypass.
+    """
+    if request is None:
+        from .workspace_work_effects import APP_EFFECT
+        request = APP_EFFECT.get()
+        if not request or request.get('sessionId') != session['id']:
+            return None
+    if request.get('toolName') != 'app_control':
+        return None
+    tool = request.get('toolInput')
+    if not isinstance(tool, dict) or tool.get('operation') not in {'dispatch', 'action.dispatch'}:
+        return None
+    dispatch = tool.get('args')
+    if not isinstance(dispatch, dict) or dispatch.get('action') not in {
+            'configuration.operation.read', 'configuration.operation.reconcile', 'configuration.operation.resume'}:
+        return None
+    args = dispatch.get('args')
+    if not isinstance(args, dict) or args.get('sessionId') != session['id']:
+        return None
+    pending = session.get('pendingConfiguration') or {}
+    operation = args.get('operationId')
+    if operation is None and dispatch['action'] == 'configuration.operation.read':
+        operation = pending.get('operationId')
+    if (not operation or operation != pending.get('operationId')
+            or pending.get('phase') != 'error' and not (
+                pending.get('phase') == 'applying' and pending.get('stage') == 'interrupted')
+            or session.get('configurationOperationFence') not in {None, operation}
+            or session.get('configurationBusy') and session.get('configurationOperationFence') != operation
+            or not service.access_mode.full(session)):
+        return None
+    task = service.management.pending_config_tasks.get(session['id'])
+    if task is not None and not task.done() or service.management.lock.locked():
+        return None
+    from .child_execution import live_assignment
+    return live_assignment(service, session)
+
+
 def binding(record):
     """Allocate privately; neither this key nor the envelope enters public state."""
     return {
