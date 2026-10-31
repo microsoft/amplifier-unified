@@ -882,6 +882,14 @@ class AppService:
 
     def state_context(self, *, complete=False):
         """Read-only active context; complete legacy snapshots are explicit."""
+        if not complete:
+            # Navigation, attention and workspace projections consume the same
+            # admitted metadata. Prepare it once within this synchronous read,
+            # as the bundled browser does, rather than per derived section.
+            return self.directory.read_frame(self._state_context)
+        return self._state_context(complete=True)
+
+    def _state_context(self, *, complete=False):
         from .attention import snapshot
         from .workspace_navigation import snapshot as workspace_snapshot
         from .browser_state import navigation
