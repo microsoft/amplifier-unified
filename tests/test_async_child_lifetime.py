@@ -17,7 +17,9 @@ from test_assignments import app, start, limits, until
     for change in ['finished', 'new_parent', 'stop', 'configuration', 'assignment', 'owner', 'release',
                    'dependency_block', 'human_block', 'overflow_inputs', 'old_run', 'replaced_run', 'terminated_run',
                    'replaced_same_generation', 'terminated_same_generation']]
-    + [('work', 'finished'), ('work', 'new_parent'), ('model', 'unassigned'), ('model', 'unassigned_configuration')])
+    + [('work', 'finished'), ('work', 'new_parent'), ('model', 'unassigned'), ('model', 'unassigned_configuration')]
+    + [('full_work', change) for change in ['finished', 'new_parent', 'stop', 'owner', 'assignment',
+                                           'configuration', 'terminated_same_generation', 'replaced_same_generation']])
 async def test_native_child_continues_after_parent_finished(app, tmp_path, monkeypatch, operation, change):
     from amplifier_core import ToolResult
     from amplifier_core.message_models import ToolCall
@@ -49,7 +51,10 @@ async def test_native_child_continues_after_parent_finished(app, tmp_path, monke
     if change not in {'unassigned', 'unassigned_configuration'}:
         await start(app)
     required = None
-    if operation == 'work':
+    if operation == 'full_work':
+        from test_full_work_authority import commissioned_full
+        _, _, _, source = await commissioned_full(app)
+    elif operation == 'work':
         from test_work_invocation import prepared_work, assert_available_commission, current_work
         item = await prepared_work(app, source, 'native-child-work')
         _, source = await assert_available_commission(app, source, item, 'native-child-commission')
@@ -77,6 +82,15 @@ async def test_native_child_continues_after_parent_finished(app, tmp_path, monke
     owner = {'process': SimpleNamespace(returncode=None), 'runtimeOwnerId': 'fixture-owner'}
     manager.workers[sid] = owner
     app.runtime.workers = manager.workers
+    full_bindings = []
+    active_binding = app.collaboration.active_binding
+    def observe_binding(source, **options):
+        result = active_binding(source, **options)
+        if operation == 'full_work' and options.get('allow_descendant'):
+            from amplifier_web.collaboration import PRINCIPAL
+            full_bindings.append((PRINCIPAL.get(), deepcopy(result[1])))
+        return result
+    monkeypatch.setattr(app.collaboration, 'active_binding', observe_binding)
     async def bridge(operation, args):
         replies = []
         async def write(row, reply): replies.append(reply)
@@ -105,7 +119,7 @@ async def test_native_child_continues_after_parent_finished(app, tmp_path, monke
         ready.set()
         await release.wait()
         assert operation == 'queued_model' or 'same_generation' in change or (runtime.generation or {}).get('id') != generation_id
-        if operation in {'tool', 'work'}:
+        if operation in {'tool', 'work', 'full_work'}:
             class Probe:
                 name = 'probe'
                 description = 'Read fixture state'
@@ -219,7 +233,16 @@ async def test_native_child_continues_after_parent_finished(app, tmp_path, monke
             assert not allowed, repr(exc)
         else:
             if allowed: assert outcome['output'] == 'child complete'
-        assert calls == (['tool' if operation in {'tool', 'work'} else 'model'] if allowed else []), results
+        assert calls == (['tool' if operation in {'tool', 'work', 'full_work'} else 'model'] if allowed else []), results
+        if operation == 'full_work' and allowed:
+            # The real Worker/RuntimeManager bridge supplied this assignment;
+            # no fitted Work proof or new parent input supplies Full authority.
+            assert full_bindings
+            for actor, active in full_bindings:
+                assert actor == 'native-child'
+                assert active['id'] == generation_id
+                assert active['inputIds'] == [original_input]
+                assert active['interruptionRevision'] == 0 and not active['terminal']
         if blocking is not None: assert not blocking.done()
     finally:
         release.set()
