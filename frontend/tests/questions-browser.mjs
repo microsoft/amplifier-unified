@@ -6,13 +6,31 @@ import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {chromium,expect} from '@playwright/test';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[process.env.AMPLIFIER_QUESTIONS_FIXTURE||fileURLToPath(new URL('../../tests/fixtures/questions_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
-let browser;
+const stopFixture=ownFixture(fixture,{label:'Questions fixture'});
+let browser,failure;
 const output=process.env.AMPLIFIER_QUESTIONS_OUTPUT,layoutChecks=[];
-if(output)await mkdir(output,{recursive:true});
 try{
- const ready=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),15000);fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value)}}catch{}});fixture.once('exit',code=>reject(Error('Fixture exit '+code)))});
+ const ready=await new Promise((resolve,reject)=>{
+  let pending='';
+  const cleanup=()=>{clearTimeout(timer);fixture.stdout.off('data',data);fixture.off('exit',exited);fixture.off('error',failed)};
+  const failed=error=>{cleanup();reject(error)};
+  const exited=(code,signal)=>failed(Error(`Questions fixture exited before readiness (${code??signal})`));
+  const data=chunk=>{
+   pending+=chunk;
+   for(let end;(end=pending.indexOf('\n'))>=0;){
+    const line=pending.slice(0,end);pending=pending.slice(end+1);
+    let value;try{value=JSON.parse(line)}catch{continue}
+    if(value.url){cleanup();resolve(value);return}
+   }
+   if(pending.length>8000)failed(Error('Questions fixture readiness output exceeded its bound'));
+  };
+  const timer=setTimeout(()=>failed(Error('Questions fixture timeout')),15000);
+  fixture.stdout.on('data',data);fixture.once('exit',exited);fixture.once('error',failed);
+ });
+ if(output)await mkdir(output,{recursive:true});
  browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]});
  const context=await browser.newContext({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
@@ -522,5 +540,16 @@ try{
   }finally{await deliveryContext.close()}
  }
  assert.deepEqual(errors,[]);
- console.log('Durable questions browser passed: unique cards alongside handoff updates and reload, reconnect, explicit required/optional UI, option and free-text answers, cancellation, duplicate rejection, preserved draft, shared voice provenance, mobile layout, timeout retained across reload, late exact acceptance and passive delivery checks without replay on keyboard/touch.');
-}finally{if(output){await mkdir(output,{recursive:true});await writeFile(join(output,'layout-checks.json'),JSON.stringify(layoutChecks,null,2)+'\n')}await browser?.close();fixture.kill()}
+}catch(error){failure=error;throw error}
+finally{
+ await finishFixture({label:'Questions fixture',originalError:failure,
+  close:[
+   ['Questions browser',()=>browser?.close()],
+   ['Question layout evidence',async()=>{if(output){await mkdir(output,{recursive:true});await writeFile(join(output,'layout-checks.json'),JSON.stringify(layoutChecks,null,2)+'\n')}}]],
+  stop:async()=>{
+   const exit=await stopFixture();
+   console.log('Questions fixture normal exit: '+JSON.stringify(exit));
+   if(output)await writeFile(join(output,'fixture-exit.json'),JSON.stringify(exit,null,2)+'\n');
+  }});
+}
+console.log('Durable questions browser passed: unique cards alongside handoff updates and reload, reconnect, explicit required/optional UI, option and free-text answers, cancellation, duplicate rejection, preserved draft, shared voice provenance, mobile layout, timeout retained across reload, late exact acceptance and passive delivery checks without replay on keyboard/touch.');

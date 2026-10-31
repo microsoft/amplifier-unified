@@ -1,6 +1,7 @@
 """Real service/browser question flow with a deterministic, isolated runtime."""
 import asyncio
 import json
+import signal
 from pathlib import Path
 import tempfile
 
@@ -197,11 +198,17 @@ async def main(home):
     await site.start()
     url = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
     app['allowed_origins'] = app['allowed_origins'] | {url}
+    stopped = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stopped.set)
     print(json.dumps({'url': url, 'sessionId': sid, 'required': required['id'], 'optional': optional['id'], 'skipped': skipped['id']}), flush=True)
     try:
-        await asyncio.Event().wait()
+        await stopped.wait()
     finally:
         await runner.cleanup()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.remove_signal_handler(sig)
 
 
 if __name__ == '__main__':
