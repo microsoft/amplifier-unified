@@ -1,4 +1,4 @@
-import {ApprovalPanel} from './approval-card';
+import {ApprovalPanel,isCapabilityCardAction,createCapabilityStopFence,stopFailureOutcome} from './approval-card';
 import {AutomationHub} from './automation-hub';
 import {createArchiveAction} from './archive-action.js';
 import {quoteNotice as makeQuoteNotice,quoteNoticeAfterRemoval,quoteNoticeAfterSend,visibleQuoteNotice} from './quote-notice.js';
@@ -114,6 +114,9 @@ const nowLabel=value=>{try{return new Date(typeof value==='number'&&value<1e12?v
 function App(){
  const archiveRevision=useRef(0),archiveAction=useRef(null),[archiveFeedback,setArchiveFeedback]=useState({notice:null,pending:[]});
  const canvasInputRevision=useRef(0),permissionHistoryFocus=useRef(null);
+ const capabilityCardQueue=useRef(Promise.resolve());
+ const capabilityStopFence=useRef(null);
+ if(!capabilityStopFence.current)capabilityStopFence.current=createCapabilityStopFence();
  useEffect(()=>{
   const supersede=()=>{canvasInputRevision.current++};
   for(const name of ['pointerdown','keydown','input'])document.addEventListener(name,supersede,true);
@@ -215,6 +218,12 @@ function App(){
   });
  },[acceptState]);
  const dispatch=useCallback((action,args={},meta={})=>{
+  const capabilityCard=isCapabilityCardAction(action,args,meta);
+  const capabilityRead=capabilityCard&&action==='capability.read'?capabilityStopFence.current.beginRead(args):null;
+  const capabilityMutation=capabilityCard&&action!=='capability.read';
+  if(capabilityMutation){
+   try{capabilityStopFence.current.assertMutation(args,meta.capabilityRead)}catch(error){return Promise.reject(error)}
+  }
   const permissionHistory=action==='view.update'&&args.patch?.canvasDraft?.delivery==='permissions';
   if(permissionHistory){
    const key=crypto.randomUUID();
@@ -283,6 +292,12 @@ function App(){
    })().finally(()=>{referenceDraftLock.current=false;setReferencingDraft(false)});
   }
   if(['conversation.send','conversation.stop','worker.spawn','worker.stop','worker.steer','approval.respond','attachment.add','attachment.remove'].includes(action))args={sessionId:latest.current?.selectedSessionId,...args};
+  // This is synchronous request intent, before the command can wait on Canvas.
+  // Reads may still reconcile display; later mutations cannot overtake this Stop.
+  const stop=action==='conversation.stop'&&args.sessionId
+   ?capabilityStopFence.current.beginStop(args.sessionId,meta.id||crypto.randomUUID()):null;
+  if(stop)meta={...meta,id:stop.commandId};
+  let stopPostStarted=false;
   if(action==='conversation.send'&&args.expectedConfigurationRevision===undefined){const target=latest.current?.sessions?.find(row=>row.id===args.sessionId);args={...args,expectedConfigurationRevision:target?.nextMessageRevision||0}}
   if(action==='conversation.send'&&!meta.checkpointed)return checkpointSurfaces(args.sessionId).then(()=>dispatch(action,args,{...meta,checkpointed:true}));
   if(action==='view.update'&&Object.keys(args.patch||{}).some(key=>key==='draft'||key.startsWith('canvas')))args={sessionId:latest.current?.selectedSessionId,...args};
@@ -313,6 +328,7 @@ function App(){
    // Navigation and answers have separate queues; neither may overtake an
    // already declared renderer edit when its transition can remove the view.
    if((navigation||['question.answer','question.cancel','question.supersede'].includes(action))&&dirtyBarrier)await dirtyBarrier;
+   if(capabilityMutation)capabilityStopFence.current.assertMutation(args,meta.capabilityRead);
    if(meta.chatLink&&!meta.chatLinkIsCurrent())return {accepted:false};
    if(meta.archiveIsCurrent&&!meta.archiveIsCurrent())return {accepted:false};
    if(chatReference&&(meta.chatReferenceIntent!==archiveRevision.current||
@@ -323,7 +339,15 @@ function App(){
    const historyVisit=meta.historyVisit?destinationHistory.current.begin(meta.historyVisit):meta.recentPlace?destinationHistory.current.beginRecent(destinationKey(meta.recentPlace.entry),meta.recentPlace.entry,meta.recentPlace.scope):null;
    if((meta.historyVisit||meta.recentPlace)&&!historyVisit)return {accepted:false};
    try{
-    const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
+    let result;
+    try{
+     if(stop)stopPostStarted=true;
+     result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
+    }catch(error){
+     if(stop)capabilityStopFence.current.settleStop(stop,stopFailureOutcome(error,stopPostStarted));
+     throw error;
+    }
+    if(stop)capabilityStopFence.current.settleStop(stop,result.accepted===true?'accepted':'unknown');
     if(historyVisit)destinationHistory.current.finish(result);
     if(result.state)acceptState(result.state);
     // Exact annotation and read-only preview receipts settle locally. Navigation
@@ -336,7 +360,9 @@ function App(){
      const confirmed=await historyVisit.confirmed;
      if(!confirmed)throw Error('Navigation was not confirmed. History was kept; no action was retried.');
     }
-    return result;
+    return capabilityRead&&result.result?.request
+     ?{...result,result:{...result.result,capabilityRead:capabilityStopFence.current.finishRead(capabilityRead,result.result.request.requestHash)}}
+     :result;
    }catch(error){if(historyVisit)destinationHistory.current.finish(null);throw error}
   };
   // Browse and chat selections share intent order. A later optimistic browse
@@ -351,7 +377,9 @@ function App(){
   // Reveal joins document ordering AND visibility ordering without merging their
   // queues globally. Capture the prior visibility tail before publishing this one.
   const after=permissionHistory?canvasVisibilityQueue.current:catalogRead&&!choiceRead?commandQueue.current:null;
-  const queue=usesNavigationQueue(action,args)?navigationQueue:action==='call.mute'?voiceControlQueue:localVoiceControl||action.startsWith('coordination.')||meta.presentation||defaultsRead||choiceRead||planRead?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
+  // A read-only Canvas reveal must not hold a pending card's guarded read or
+  // decision. Keep those individual calls ordered, independent of Canvas work.
+  const queue=capabilityCard?capabilityCardQueue:usesNavigationQueue(action,args)?navigationQueue:action==='call.mute'?voiceControlQueue:localVoiceControl||action.startsWith('coordination.')||meta.presentation||defaultsRead||choiceRead||planRead?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
   const queuedAt=performance.now();
   const timedExecute=()=>{const startedAt=performance.now();return Promise.resolve().then(execute).finally(()=>recordActionTiming(action,queuedAt,startedAt))};
   const promise=enqueueSettings.current(queue,timedExecute,settingsDraftKey(action,args,meta),after).then(result=>{
@@ -375,7 +403,7 @@ function App(){
    });
    if(!handledActionResults.current.has(result)){handledActionResults.current.add(result);handleEffects(result.effects)}
    return result;
-  }).catch(error=>{if(navigationToken){conversationNavigation.current.settle(navigationToken);if(serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}}if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}if(chatReference&&meta.chatReferenceIntent!==archiveRevision.current)error.navigationSuperseded=true;throw error}).finally(()=>{settleTracking();settleFeedback()});
+  }).catch(error=>{if(stop&&!stopPostStarted)capabilityStopFence.current.settleStop(stop,'not-applied');if(navigationToken){conversationNavigation.current.settle(navigationToken);if(serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}}if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}if(chatReference&&meta.chatReferenceIntent!==archiveRevision.current)error.navigationSuperseded=true;throw error}).finally(()=>{settleTracking();settleFeedback()});
   queue.current=promise.catch(()=>{});
   if(permissionHistory)canvasVisibilityQueue.current=queue.current;
   if(action==='canvas.views.dirty'){
@@ -735,7 +763,7 @@ function App(){
   // Before a first state arrives there is no mounted editor to checkpoint.
   // The existing local draft journal remains intact across this recovery reload.
   if(!latest.current)return;
-  await Promise.all([navigationQueue.current,commandQueue.current,sendQueue.current,uploadQueue.current]);
+  await Promise.all([navigationQueue.current,commandQueue.current,capabilityCardQueue.current,sendQueue.current,uploadQueue.current]);
   await checkpointSurfaces(latest.current?.selectedSessionId);
   // Flush the composer before navigating away, including a just-typed debounce.
   clearTimeout(draftTimer.current);

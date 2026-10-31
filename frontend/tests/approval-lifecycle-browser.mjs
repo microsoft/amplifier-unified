@@ -3,6 +3,8 @@ import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
+import {appendFileSync,writeFileSync} from 'node:fs';
+import {randomUUID} from 'node:crypto';
 import {join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -13,12 +15,73 @@ const root=process.env.AMPLIFIER_TEST_ROOT||fileURLToPath(new URL('../../',impor
 const base=resolve(process.env.AMPLIFIER_TEST_OUTPUT_DIR||join(root,'working-files'));
 await mkdir(base,{recursive:true});
 const output=await mkdtemp(join(base,'approval-lifecycle-'));
+// Append as events happen, not only in finally: an outer kill must not erase
+// the distinction between queued dispatch, outstanding HTTP and state recovery.
+let diagnosticSequence=0;
+const diagnostic=(event,detail={})=>{
+ const row={sequence:++diagnosticSequence,at:Date.now(),event,...detail};
+ appendFileSync(join(output,'diagnostics.jsonl'),JSON.stringify(row)+'\n');
+ return row;
+};
+const stateIdentity=value=>({revision:value?.revision,clientId:value?.client?.id,hostInstanceId:value?.client?.hostInstanceId,
+ sessionId:value?.selectedSessionId,canvasId:value?.canvas?.id,canvasOpen:value?.canvas?.open,
+ visibilityPending:value?.canvas?.visibilityPending,library:value?.view?.canvasDraft?.library,delivery:value?.view?.canvasDraft?.delivery});
+const bounded=async(label,work,milliseconds=15000)=>{
+ let timer;
+ try{return await Promise.race([work,new Promise((_,reject)=>{timer=setTimeout(()=>{
+  diagnostic('watchdog-timeout',{label,milliseconds});
+  reject(Error(`${label} exceeded ${milliseconds}ms; original operation was not replayed`));
+ },milliseconds)})])}finally{clearTimeout(timer)}
+};
+writeFileSync(join(output,'launch.json'),JSON.stringify({
+ node:process.execPath,argv:process.argv,cwd:process.cwd(),fixture:[process.env.AMPLIFIER_TEST_PYTHON||'python',root+'/tests/fixtures/approval_lifecycle_server.py'],
+ environment:Object.fromEntries(['AMPLIFIER_TEST_PYTHON','AMPLIFIER_TEST_ROOT','AMPLIFIER_TEST_OUTPUT_DIR','AMPLIFIER_SHELL_NODE_MODULES','PLAYWRIGHT_BROWSERS_PATH','PYTHONPATH','UV_OFFLINE','PIP_NO_INDEX'].map(key=>[key,process.env[key]??null])),
+ // Do not dump arbitrary environment values or request Authorization headers.
+},null,2));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||'python',[root+'/tests/fixtures/approval_lifecycle_server.py'],{
  stdio:['ignore','pipe','pipe'],env:{...process.env,AMPLIFIER_TEST_OUTPUT_DIR:output}});
-let browser,page,fixtureLog='',releaseHeld;
+let browser,page,fixtureLog='',releaseHeld,completedReport,terminalError;
 const http=[],observedReceipts=new Map(),checks=[];
+const requestStarts=new Map(),responseBodies=[];
 const unwrap=raw=>raw?.action==='shell.command'?(raw.args.command||raw.args):raw;
 const isAction=request=>request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions';
+const observedRequest=request=>isAction(request)||new URL(request.url()).pathname==='/api/state';
+const requestIdentity=request=>{
+ const url=new URL(request.url());
+ return {method:request.method(),path:url.pathname,clientId:request.headers()['x-amplifier-client']??url.searchParams.get('clientId'),
+  ...(isAction(request)?{command:unwrap(request.postDataJSON())}:{})};
+};
+const saveFailure=async error=>{
+ diagnostic('failure',{error:error.stack||String(error)});
+ writeFileSync(join(output,'failure.txt'),error.stack||String(error));
+ if(!page)return;
+ await bounded('failure diagnostics',Promise.allSettled([
+  page.screenshot({path:join(output,'failure.png'),fullPage:true,timeout:3000}),
+  page.locator('body').innerText({timeout:3000}).then(text=>writeFileSync(join(output,'failure-page.txt'),text)),
+  page.evaluate(()=>{const s=window.amplifier?.getState();return {state:{revision:s?.revision,client:s?.client,sessionId:s?.selectedSessionId,
+   canvasId:s?.canvas?.id,canvasOpen:s?.canvas?.open,visibilityPending:s?.canvas?.visibilityPending,library:s?.view?.canvasDraft?.library},
+   visibility:document.visibilityState,inspect:window.__permissionInspectDiagnostic};})
+   .then(value=>diagnostic('failure-browser-state',value))
+ ]),4000).catch(captureError=>diagnostic('failure-capture-incomplete',{error:captureError.message}));
+};
+let handlingSignal=false;
+const onTermination=signal=>{
+ if(handlingSignal)return;handlingSignal=true;process.exitCode=1;
+ terminalError=Error(`Harness received ${signal}; pending operations remain uncertain`);
+ diagnostic('process-signal',{signal});
+ // Synchronous evidence + exit: no callback window for further test actions.
+ // Normal screenshot/drain cleanup cannot be claimed on a terminated harness.
+ writeFileSync(join(output,'failure.txt'),terminalError.message);
+ writeFileSync(join(output,'http.json'),JSON.stringify(http,null,2));
+ writeFileSync(join(output,'checks.json'),JSON.stringify(checks,null,2));
+ writeFileSync(join(output,'fixture.log'),fixtureLog);
+ writeFileSync(join(output,'report.json'),JSON.stringify({passed:false,incomplete:true,error:terminalError.message}));
+ writeFileSync(join(output,'cleanup.json'),JSON.stringify({status:'unconfirmed',signal,pendingOperations:'not replayed',screenshot:'not captured after termination; prior frames retained'}));
+ fixture.kill('SIGTERM');
+ process.exit(signal==='SIGINT'?130:143);
+};
+const onTerm=()=>onTermination('SIGTERM'),onInterrupt=()=>onTermination('SIGINT');
+process.once('SIGTERM',onTerm);process.once('SIGINT',onInterrupt);
 fixture.stderr.on('data',chunk=>fixtureLog+=chunk);
 try{
  const url=await new Promise((resolve,reject)=>{
@@ -30,17 +93,45 @@ try{
  const context=await browser.newContext({viewport:{width:1100,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-approval-control-token'}});
  page=await context.newPage();const other=await context.newPage();
  page.setDefaultTimeout(8000);
- page.on('response',response=>{
-  if(!isAction(response.request()))return;
-  const row={request:unwrap(response.request().postDataJSON()),status:response.status()};http.push(row);
-  const settled=response.json().then(body=>{row.body=body},error=>{row.readError=error.message});
-  observedReceipts.set(response.request(),{row,settled});
+ await page.exposeFunction('__recordPermissionDiagnostic',detail=>diagnostic('browser-dispatch',detail));
+ page.on('request',request=>{
+  if(!observedRequest(request))return;
+  const entry=diagnostic('request-start',{...requestIdentity(request),page:request.frame().url()});
+  requestStarts.set(request,entry);
  });
- page.on('requestfailed',request=>{if(isAction(request))http.push({request:unwrap(request.postDataJSON()),transportError:request.failure()})});
+ page.on('response',response=>{
+  const request=response.request();if(!observedRequest(request))return;
+  const start=requestStarts.get(request);
+  diagnostic('response-headers',{requestSequence:start?.sequence,...requestIdentity(request),status:response.status()});
+  const row=isAction(request)?{request:unwrap(request.postDataJSON()),status:response.status()}:null;
+  if(row)http.push(row);
+  const settled=response.json().then(body=>{
+   if(row)row.body=body;
+   diagnostic('response-body',{requestSequence:start?.sequence,...requestIdentity(request),status:response.status(),
+    accepted:body?.accepted,revision:body?.stateRevision??body?.revision,hostInstanceId:body?.hostInstanceId,
+    ...(row?{error:body?.error,state:body?.state?stateIdentity(body.state):undefined}:{state:stateIdentity(body)})});
+  },error=>{
+   if(row)row.readError=error.message;
+   diagnostic('response-body-failed',{requestSequence:start?.sequence,...requestIdentity(request),error:error.message});
+  });
+  responseBodies.push(settled);
+  if(row)observedReceipts.set(request,{row,settled});
+ });
+ page.on('requestfailed',request=>{
+  if(!observedRequest(request))return;
+  diagnostic('request-failed',{requestSequence:requestStarts.get(request)?.sequence,...requestIdentity(request),failure:request.failure()});
+  if(isAction(request))http.push({request:unwrap(request.postDataJSON()),transportError:request.failure()});
+ });
+ page.on('close',()=>diagnostic('page-closed'));
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const serverSnapshot=async clientId=>{
-  const response=await page.request.get(url+'/api/state?clientId='+encodeURIComponent(clientId),{timeout:8000});
-  assert.equal(response.status(),200);return response.json();
+  const entry=diagnostic('request-start',{channel:'node-api',path:'/api/state',clientId});
+  try{
+   const response=await page.request.get(url+'/api/state?clientId='+encodeURIComponent(clientId),{timeout:8000});
+   diagnostic('response-headers',{channel:'node-api',requestSequence:entry.sequence,status:response.status()});
+   assert.equal(response.status(),200);const snapshot=await response.json();
+   diagnostic('response-body',{channel:'node-api',requestSequence:entry.sequence,state:stateIdentity(snapshot)});return snapshot;
+  }catch(error){diagnostic('request-failed',{channel:'node-api',requestSequence:entry.sequence,error:error.message});throw error}
  };
  const responseFor=predicate=>page.waitForResponse(response=>isAction(response.request())&&predicate(unwrap(response.request().postDataJSON())),{timeout:8000}).then(response=>({response}),error=>({error}));
  const acceptedResponse=async waiting=>{
@@ -172,6 +263,50 @@ try{
  await touch.screenshot({path:join(output,'history-touch.png'),animations:'disabled'});
  await touch.getByRole('button',{name:'Close canvas panel',exact:true}).tap();
  await expect(touch.locator('#workspace-canvas')).toBeHidden();await touchContext.close();
+ // Pending cards must complete the ordinary guarded path while a different,
+ // read-only history reveal is held. Releasing history cannot make this pass.
+ await page.setViewportSize({width:1400,height:900});
+ for(const decision of ['approve','deny']){
+  const created=await page.request.post(url+'/fixture',{data:{change:'held-decision',decision}});
+  assert.equal(created.status(),200);const id=(await created.json()).created;
+  const card=page.locator(`[data-approval-id="${id}"]`);
+  const button=card.getByRole('button',{name:decision==='approve'?'Allow':'Deny',exact:true});
+  await expect(button).toBeEnabled();
+  const before=await inspect(),beforeState=await state(),expectedStatus=decision==='approve'?'allow':'deny';
+  let heldRequest,released=false;
+  const gate=new Promise(resolve=>{releaseHeld=()=>{released=true;resolve()}});
+  const hold=async route=>{
+   const command=unwrap(route.request().postDataJSON());
+   if(command?.action==='view.update'&&command.args?.patch?.canvasDraft?.delivery==='permissions'){heldRequest=route.request();await gate}
+   await route.continue();
+  };
+  await page.route('**/api/actions',hold);
+  const opening=responseFor(command=>command.action==='view.update'&&command.args?.patch?.canvasDraft?.delivery==='permissions');
+  try{
+   await historyEntry().click();await expect.poll(()=>!!heldRequest).toBe(true);
+   const preflight=responseFor(command=>command.action==='capability.read'&&command.args.id===id);
+   const deciding=responseFor(command=>command.action==='approval.respond'&&command.args.id===id);
+   await button.click();
+   const reviewed=await acceptedResponse(preflight),applied=await acceptedResponse(deciding);
+   assert.equal(released,false,'Decision must finish before history is released');
+   assert.equal(observedReceipts.has(heldRequest),false,'Held history has no response yet');
+   assert.equal(reviewed.body.result.request.canDecide,true);
+   assert.equal(applied.request.args.expectedRequestHash,reviewed.body.result.request.requestHash);
+   assert.equal(applied.request.args.sessionId,beforeState.selectedSessionId);
+   assert.equal(applied.request.args.decision,decision);
+   await expect(card).toHaveCount(0);
+   const after=await inspect();
+   assert.equal(after.approvals.find(row=>row.id===id).status,expectedStatus);
+   assert.deepEqual(after.approvals.filter(row=>row.id!==id),before.approvals.filter(row=>row.id!==id));
+   assert.equal((await serverSnapshot(beforeState.client.id)).selectedSessionId,beforeState.selectedSessionId);
+   await expect(composer).toHaveDraft('Keep this private draft');
+   checks.push({name:`Pending ${decision} completes during held history`,preflight:reviewed,decision:applied,historyUnreleased:true});
+   releaseHeld();await acceptedResponse(opening);
+   await expect(history).toBeVisible();
+   await expect(history.locator(`[data-permission-history-id="${id}"]`)).toContainText(decision==='approve'?'Permission allowed':'Permission denied');
+   await closeHistory();
+  }finally{releaseHeld?.();await page.unroute('**/api/actions',hold)}
+ }
  // Dirty renderer-local edits survive history browsing. Replacement still refuses.
  await page.setViewportSize({width:1400,height:900});
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
@@ -201,7 +336,34 @@ try{
  await expect(newerTab).toBeFocused();
  // Allow the presentation frame, then flush queued housekeeping before the host read.
  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
- await action('canvas.views.inspect');
+ // One explicit operation. Node bounds the wait; page defaultTimeout does not
+ // bound a dispatch promise. No retry, no synthetic success and no forced flush.
+ const inspectId='permission-history-post-selection-'+randomUUID();
+ diagnostic('dispatch-requested',{id:inspectId,action:'canvas.views.inspect',after:'two animation frames completed',identity:stateIdentity(beforeSelection)});
+ const inspectDispatch=page.evaluate(async id=>{
+  const snapshot=()=>{const s=window.amplifier.getState();return {revision:s.revision,clientId:s.client?.id,hostInstanceId:s.client?.hostInstanceId,
+   sessionId:s.selectedSessionId,canvasId:s.canvas?.id,canvasOpen:s.canvas?.open,visibilityPending:s.canvas?.visibilityPending,
+   library:s.view?.canvasDraft?.library,delivery:s.view?.canvasDraft?.delivery,visibility:document.visibilityState}};
+  window.__permissionInspectDiagnostic={id,phase:'entered',identity:snapshot()};
+  void window.__recordPermissionDiagnostic(window.__permissionInspectDiagnostic).catch(()=>{});
+  try{
+   const operation=window.amplifier.dispatch('canvas.views.inspect',{}, {id});
+   window.__permissionInspectDiagnostic={id,phase:'dispatch-returned-promise',identity:snapshot()};
+   void window.__recordPermissionDiagnostic(window.__permissionInspectDiagnostic).catch(()=>{});
+   const receipt=await operation;
+   window.__permissionInspectDiagnostic={id,phase:'settled',accepted:receipt?.accepted,revision:receipt?.stateRevision??receipt?.revision,identity:snapshot()};
+   await window.__recordPermissionDiagnostic(window.__permissionInspectDiagnostic);
+   return receipt;
+  }catch(error){
+   window.__permissionInspectDiagnostic={id,phase:'rejected',error:error.message,identity:snapshot()};
+   await window.__recordPermissionDiagnostic(window.__permissionInspectDiagnostic);throw error;
+  }
+ },inspectId);
+ // Observe any eventual settlement even after the watchdog; never call dispatch again.
+ const inspected=await bounded(`single ${inspectId}`,inspectDispatch.then(receipt=>{
+  diagnostic('dispatch-settled',{id:inspectId,accepted:receipt?.accepted,revision:receipt?.stateRevision??receipt?.revision});return receipt;
+ },error=>{diagnostic('dispatch-rejected',{id:inspectId,error:error.message});throw error}),15000);
+ assert.equal(inspected?.accepted,true);
  const selected=await serverSnapshot(beforeSelection.client.id);
  assert.equal(selected.client.id,beforeSelection.client.id);
  assert.equal(selected.client.hostInstanceId,beforeSelection.client.hostInstanceId);
@@ -276,26 +438,95 @@ try{
  assert.equal(final.attention.length,0);assert.notEqual(final.navigation.label,'Approval requested');
  assert.deepEqual(errors,[]);
  await settleCanvasReceipts(observedReceipts.values());
- const report={passed:true,source:final.source,authoritySha256:final.authoritySha256,coldState:true,
+ // Separate synthetic chats keep Stop from altering the already-qualified
+ // history/dirty document fixture. These cases exercise the actual dispatch path.
+ for(const scenario of ['later-allow','pending-preflight']){
+  const created=await page.request.post(url+'/fixture',{data:{change:'stop-case',case:scenario}});
+  assert.equal(created.status(),200);const target=await created.json();
+  const stopContext=await browser.newContext({viewport:{width:1400,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-approval-control-token'}});
+  const stopPage=await stopContext.newPage(),mutations=[],stopRequests=[];
+  stopPage.setDefaultTimeout(8000);
+  stopPage.on('request',request=>{
+   if(!isAction(request))return;
+   const command=unwrap(request.postDataJSON());diagnostic('stop-case-request',{scenario,command});
+   if(command.action==='approval.respond'&&command.args?.id===target.pendingId)mutations.push(command);
+   if(command.action==='conversation.stop')stopRequests.push(command);
+  });
+  let heldHistory=false,heldPreflight=false,releasePreflight=()=>{};
+  const historyGate=new Promise(resolve=>{releaseHeld=resolve});
+  const preflightGate=new Promise(resolve=>{releasePreflight=resolve});
+  const hold=async route=>{
+   const command=unwrap(route.request().postDataJSON());
+   if(command.action==='view.update'&&command.args?.patch?.canvasDraft?.delivery==='permissions'){heldHistory=true;await historyGate}
+   if(scenario==='pending-preflight'&&command.action==='capability.read'&&command.args?.id===target.pendingId){heldPreflight=true;await preflightGate}
+   await route.continue();
+  };
+  const inspectTarget=()=>stopPage.request.get(url+'/fixture?sessionId='+encodeURIComponent(target.sessionId)).then(r=>r.json());
+  try{
+   await stopPage.goto(url);await showFixtureConversation(stopPage);
+   await stopPage.evaluate(id=>window.amplifier.dispatch('session.select',{id}),target.sessionId);
+   const card=stopPage.locator(`[data-approval-id="${target.pendingId}"]`),allow=card.getByRole('button',{name:'Allow',exact:true});
+   await expect(allow).toBeEnabled();
+   await stopPage.route('**/api/actions',hold);
+   await stopPage.getByRole('button',{name:/^Permissions history \(/}).click();
+   await expect.poll(()=>heldHistory).toBe(true);
+   if(scenario==='pending-preflight'){await allow.click();await expect.poll(()=>heldPreflight).toBe(true)}
+   const stopResponse=stopPage.waitForResponse(response=>isAction(response.request())&&unwrap(response.request().postDataJSON()).action==='conversation.stop')
+    .then(response=>({response}),error=>({error}));
+   await stopPage.locator('button[data-action="conversation.stop"]').click();
+   if(scenario==='later-allow')await allow.click();else releasePreflight();
+   await expect(card.getByRole('alert')).toContainText('Stop was requested');
+   assert.deepEqual(mutations,[],'Later mutation is refused, not queued for automatic execution');
+   assert.deepEqual(stopRequests,[],'Stop is still queued behind the held history');
+   const before=(await inspectTarget());
+   assert.equal(before.interruptionRevision,0);
+   assert.equal(before.approvals.find(row=>row.id===target.pendingId).status,'pending');
+   releaseHeld();
+   const received=await stopResponse;if(received.error)throw received.error;
+   const body=await received.response.json(),command=unwrap(received.response.request().postDataJSON());
+   assert.equal(received.response.status(),200);assert.equal(body.accepted,true);
+   assert.equal(command.args.sessionId,target.sessionId);
+   const after=await inspectTarget();
+   assert.equal(after.interruptionRevision,1);
+   assert.equal(after.lastInterruption.commandId,command.id);
+   assert.notEqual(after.approvals.find(row=>row.id===target.pendingId).status,'allow');
+   assert.deepEqual(mutations,[],'Confirmed Stop never replays the rejected Allow');
+   checks.push({name:`Stop fences ${scenario}`,before,after,stopReceipt:body,stopCommand:command,decisionRequests:mutations});
+  }finally{
+   releasePreflight();releaseHeld?.();await stopPage.unroute('**/api/actions',hold);await stopContext.close();
+  }
+ }
+ completedReport={source:final.source,authoritySha256:final.authoritySha256,coldState:true,
   passiveReview:true,twoTabs:true,scopeRace:true,expiryRace:true,exactDismiss:true,adjacentCycle:true,
-  keyboard:true,narrow:true,touch:true,reload:true,privateDraft:true,canvasHistory:true,laterPermission:true,dirtyRefusal:true,retainedEditor:true,lateClose:true,newerDocument:true,scriptedRuntime:true,realProvider:false,checks};
- await writeFile(join(output,'report.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({output,...report}));
+  keyboard:true,narrow:true,touch:true,reload:true,privateDraft:true,canvasHistory:true,laterPermission:true,heldHistoryPendingDecisions:true,stopIntentOrdering:true,dirtyRefusal:true,retainedEditor:true,lateClose:true,newerDocument:true,scriptedRuntime:true,realProvider:false,checks};
 }catch(error){
- if(page){await page.screenshot({path:join(output,'failure.png'),fullPage:true}).catch(()=>{});await writeFile(join(output,'failure.txt'),(await page.locator('body').innerText().catch(()=>''))+'\n'+error.stack)}
- console.error(JSON.stringify({output,passed:false,error:error.message}));throw error;
+ terminalError=error;
+ await saveFailure(error);
 }finally{
  releaseHeld?.();
  try{await settleCanvasReceipts(observedReceipts.values())}catch(error){
-  checks.push({name:'Receipt drain failed',error:error.message});process.exitCode=1;
+  checks.push({name:'Receipt drain failed',error:error.message});terminalError??=error;
  }
+ await bounded('state response evidence drain',Promise.allSettled(responseBodies),8000).catch(error=>{
+  checks.push({name:'State response evidence drain failed',error:error.message});terminalError??=error;
+ });
  await writeFile(join(output,'http.json'),JSON.stringify(http,null,2));
  await writeFile(join(output,'checks.json'),JSON.stringify(checks,null,2));
  await writeFile(join(output,'fixture.log'),fixtureLog);
- await browser?.close();
+ await bounded('browser cleanup',browser?.close(),8000).catch(error=>{
+  checks.push({name:'Browser cleanup failed',error:error.message});terminalError??=error;
+ });
  if(fixture.exitCode===null&&fixture.signalCode===null){
   const ended=once(fixture,'exit');fixture.kill('SIGTERM');
   const timer=setTimeout(()=>fixture.kill('SIGKILL'),5000);
   try{await ended}finally{clearTimeout(timer)}
  }
- await writeFile(join(output,'cleanup.json'),JSON.stringify({exitCode:fixture.exitCode,signal:fixture.signalCode}));
+ const cleanup={exitCode:fixture.exitCode,signal:fixture.signalCode,observed:fixture.exitCode!==null||fixture.signalCode!==null};
+ if(!cleanup.observed)terminalError??=Error('Fixture termination was not observed');
+ await writeFile(join(output,'cleanup.json'),JSON.stringify(cleanup));
+ process.removeListener('SIGTERM',onTerm);process.removeListener('SIGINT',onInterrupt);
+ const report={...completedReport,passed:!!completedReport&&!terminalError,incomplete:!completedReport,error:terminalError?.message??null,checks,cleanup};
+ await writeFile(join(output,'report.json'),JSON.stringify(report,null,2));
+ console.log(JSON.stringify({output,passed:report.passed,incomplete:report.incomplete,error:report.error}));
+ if(!report.passed)process.exitCode=1;
 }

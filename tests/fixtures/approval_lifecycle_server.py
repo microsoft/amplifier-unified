@@ -23,6 +23,7 @@ TOKEN = 'fixture-approval-control-token'
 class Runtime:
     def __init__(self):
         self.starts, self.inputs, self.controls, self.decisions = [], [], [], []
+        self.stops = []
 
     async def start(self, session, emit):
         self.starts.append(session['id'])
@@ -39,6 +40,9 @@ class Runtime:
     async def approval(self, sid, identity, decision, **kwargs):
         self.decisions.append({'id':identity, 'decision':decision, 'kwargs':kwargs})
         return {'accepted':True}
+
+    async def stop(self, sid):
+        self.stops.append(sid)
 
     async def close(self):
         pass
@@ -86,6 +90,7 @@ async def main(home):
     app['control_token'] = TOKEN
     service = app['service']
     sid = session['id']
+    fixture_sessions = {sid}
     await service.dispatch('session.select', {'id':sid})
 
     async def fixture(request):
@@ -93,10 +98,31 @@ async def main(home):
             raise web.HTTPUnauthorized()
         if request.method == 'POST':
             body = await request.json()
-            if body['change'] == 'later':
-                grant = {'id':'capability:later', 'sessionId':sid, 'workspace':session['workspace'],
+            if body['change'] == 'stop-case':
+                if body.get('case') not in {'later-allow', 'pending-preflight'}:
+                    raise web.HTTPBadRequest()
+                target = service._new_session({'title':'Stop ordering '+body['case']})
+                target.update(status='working', interruptionRevision=0)
+                service.state['sessions'].append(target)
+                fixture_sessions.add(target['id'])
+                for suffix, status in [('history','denied'), ('pending','pending')]:
+                    grant = {'id':'capability:'+target['id']+':'+suffix, 'sessionId':target['id'],
+                             'workspace':target['workspace'], 'interruptionRevision':0, 'revision':1,
+                             'status':status, 'createdAt':time.time(), 'effects':['file_access'],
+                             'scopes':['session'], 'reason':suffix+' Stop ordering permission', 'nativeWait':False}
+                    service.configuration_authority.save(grant)
+                    target['approvals'].append({'id':grant['id'],'status':'deny' if status=='denied' else status,'prompt':grant['reason']})
+                service._publish_changes(sessions={target['id']})
+                return web.json_response({'sessionId':target['id'],'pendingId':grant['id']})
+            if body['change'] in {'later', 'held-decision'}:
+                suffix = 'later'
+                if body['change'] == 'held-decision':
+                    if body.get('decision') not in {'approve', 'deny'}:
+                        raise web.HTTPBadRequest()
+                    suffix = 'held-' + body['decision']
+                grant = {'id':'capability:'+suffix, 'sessionId':sid, 'workspace':session['workspace'],
                          'interruptionRevision':1, 'revision':1, 'status':'pending', 'createdAt':time.time(),
-                         'effects':['file_access'], 'scopes':['session'], 'reason':'Later independent permission',
+                         'effects':['file_access'], 'scopes':['session'], 'reason':suffix+' independent permission',
                          'nativeWait':False}
                 service.configuration_authority.save(grant)
                 service._session(sid)['approvals'].append({'id':grant['id'],'status':'pending','prompt':grant['reason']})
@@ -111,14 +137,18 @@ async def main(home):
                 raise web.HTTPBadRequest()
             service.configuration_authority.save(grant)
             service.db.commit()  # Deliberately no pushed card: exercise stale UI preflight.
-        current = service._session(sid)
+        requested_sid = request.query.get('sessionId', sid)
+        if requested_sid not in fixture_sessions:
+            raise web.HTTPForbidden()
+        current = service._session(requested_sid)
         from amplifier_web.attention import session_item_at, session_item_count
         from amplifier_web.navigation_summary import activity
-        return web.json_response({'sessionId':sid, 'approvals':current['approvals'],
+        return web.json_response({'sessionId':requested_sid, 'approvals':current['approvals'],
+            'interruptionRevision':current.get('interruptionRevision',0), 'lastInterruption':current.get('lastInterruption'),
             'attention':[item for index in range(session_item_count(current))
                          if (item:=session_item_at(current,{},index)) and item['id'].startswith('approval:')],
             'navigation':activity(current),
-            'starts':runtime.starts,'inputs':runtime.inputs,'controls':runtime.controls,'decisions':runtime.decisions,
+            'starts':runtime.starts,'inputs':runtime.inputs,'controls':runtime.controls,'decisions':runtime.decisions,'stops':runtime.stops,
             'source':str(Path(amplifier_web.__file__).resolve()),
             'authoritySha256':hashlib.sha256(Path(amplifier_web.__file__).with_name('configuration_authority.py').read_bytes()).hexdigest()})
 
