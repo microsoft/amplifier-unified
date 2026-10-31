@@ -3,22 +3,33 @@ on:
   workflow_run:
     workflows: [Publish application release]
     types: [completed]
+  workflow_dispatch:
+    inputs:
+      publication_run_id:
+        description: Successful main publisher run whose existing release will be verified
+        required: true
+        type: string
 permissions:
   contents: read
 concurrency:
-  group: post-release-${{ github.event.workflow_run.id }}
+  # Manual input is untrusted until resolve; reports use verified identity below.
+  group: post-release-${{ github.event.workflow_run.id || github.run_id }}
   cancel-in-progress: false
 jobs:
   resolve:
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
     outputs:
+      publication_run_id: ${{ steps.release.outputs.publication_run_id }}
+      publication_run_attempt: ${{ steps.release.outputs.publication_run_attempt }}
       revision: ${{ steps.release.outputs.revision }}
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
@@ -31,10 +42,7 @@ jobs:
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_RUN_ID: ${{ github.event.workflow_run.id }}
-        run: |
-          gh run download "$RELEASE_RUN_ID" --repo "$GITHUB_REPOSITORY" --name host-source-resolution --dir "$RUNNER_TEMP/published-candidate"
-          python scripts/post_release_checks.py resolve --candidate "$RUNNER_TEMP/published-candidate/candidate.json" --output "$GITHUB_OUTPUT"
+        run: python scripts/post_release_checks.py resolve --output "$GITHUB_OUTPUT"
   installed-package:
     needs: resolve
     runs-on: ubuntu-latest
@@ -67,6 +75,9 @@ jobs:
       revision: ${{ needs.resolve.outputs.revision }}
   python:
     needs: resolve
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/python-checks.yml
     secrets:
       LOOP_LIVE_CI_READ_KEY: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
@@ -86,13 +97,16 @@ jobs:
       revision: ${{ needs.resolve.outputs.revision }}
   report:
     if: >-
-      always() && github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
+      always() &&
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
     needs: [resolve, installed-package, readiness, python, browser, integrations]
     runs-on: ubuntu-latest
     concurrency:
-      group: post-release-report-${{ needs.resolve.outputs.tag || github.event.workflow_run.id }}
+      group: post-release-report-${{ needs.resolve.outputs.tag || needs.resolve.outputs.publication_run_id || github.run_id }}
       cancel-in-progress: false
     permissions:
       contents: read
@@ -106,5 +120,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_RESULTS: ${{ toJSON(needs) }}
-          RELEASE_RUN_ID: ${{ github.event.workflow_run.id }}
+          RELEASE_RUN_ID: ${{ needs.resolve.outputs.publication_run_id }}
         run: python scripts/post_release_checks.py report

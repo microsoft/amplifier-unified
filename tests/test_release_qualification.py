@@ -234,12 +234,17 @@ def test_exhaustive_checks_follow_publication_at_the_exact_released_source():
     release = yaml.load((workflows / 'release.yml').read_text(), Loader=yaml.BaseLoader)
     assert 'public-readiness' not in release['jobs']
     post = yaml.load((workflows / 'post-release.yml').read_text(), Loader=yaml.BaseLoader)
+    assert set(post['on']) == {'workflow_run', 'workflow_dispatch'}
     assert post['on']['workflow_run'] == {'workflows': ['Publish application release'], 'types': ['completed']}
+    assert post['on']['workflow_dispatch']['inputs'] == {'publication_run_id': {
+        'description': 'Successful main publisher run whose existing release will be verified',
+        'required': 'true', 'type': 'string'}}
     assert post['permissions'] == {'contents': 'read'}
     for lane in ('readiness', 'python', 'browser'):
         assert post['jobs'][lane]['needs'] == 'resolve'
         assert post['jobs'][lane]['with']['revision'] == '${{ needs.resolve.outputs.revision }}'
         if lane == 'python':
+            assert post['jobs'][lane]['permissions'] == {'contents': 'read', 'actions': 'read'}
             assert post['jobs'][lane]['secrets'] == {
                 'LOOP_LIVE_CI_READ_KEY': '${{ secrets.LOOP_LIVE_CI_READ_KEY }}'}
         else:
@@ -248,7 +253,9 @@ def test_exhaustive_checks_follow_publication_at_the_exact_released_source():
     assert "conclusion == 'success'" in resolve['if']
     assert 'head_repository.full_name == github.repository' in resolve['if']
     assert 'head_branch' in resolve['if']
-    assert 'host-source-resolution' in resolve['steps'][-1]['run']
+    assert resolve['steps'][-1]['run'] == 'python scripts/post_release_checks.py resolve --output "$GITHUB_OUTPUT"'
+    assert resolve['steps'][-1]['env'] == {'GH_TOKEN': '${{ github.token }}'}
+    assert release['jobs']['prepare']['steps'][-1]['with']['name'] == 'host-source-resolution'
     assert post['jobs']['report']['permissions'] == {'contents': 'read', 'issues': 'write'}
     assert 'always()' in post['jobs']['report']['if']
     assert set(post['jobs']['report']['needs']) == {'resolve', 'installed-package', 'readiness', 'python', 'browser', 'integrations'}
@@ -256,6 +263,55 @@ def test_exhaustive_checks_follow_publication_at_the_exact_released_source():
     assert 'npm test --prefix frontend' in frontend
     assert 'npm run build --prefix frontend' in frontend
     assert 'git diff --exit-code -- amplifier_web/static' in frontend
+
+
+def test_post_release_python_caller_covers_callee_permissions_without_widening_other_jobs():
+    workflows = ROOT / '.github/workflows'
+    post = yaml.load((workflows / 'post-release.yml').read_text(), Loader=yaml.BaseLoader)
+    python = yaml.load((workflows / 'python-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    assert post['permissions'] == python['permissions'] == {'contents': 'read'}
+    assert {name: job['permissions'] for name, job in post['jobs'].items() if 'permissions' in job} == {
+        'resolve': {'contents': 'read', 'actions': 'read'},
+        'python': {'contents': 'read', 'actions': 'read'},
+        'report': {'contents': 'read', 'issues': 'write'}}
+    caller = post['jobs']['python']
+    assert caller['uses'] == './.github/workflows/python-checks.yml'
+    assert caller['with'] == {'revision': '${{ needs.resolve.outputs.revision }}'}
+    for job in python['jobs'].values():
+        for scope, level in job.get('permissions', python['permissions']).items():
+            assert caller['permissions'].get(scope) == level
+    # GitHub validates the permission ceiling even for this skipped manual job.
+    guarded = python['jobs']['goal-peer-publisher-0410']
+    assert guarded['permissions'] == {'contents': 'read', 'actions': 'read'}
+    assert guarded['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && inputs.suite == 'goal-peer-publisher-0410' }}"
+    assert python['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
+
+
+def test_post_release_manual_guard_and_report_share_verified_identity():
+    post = yaml.load((ROOT / '.github/workflows/post-release.yml').read_text(), Loader=yaml.BaseLoader)
+    resolve, report = post['jobs']['resolve'], post['jobs']['report']
+    automatic = ("github.event_name == 'workflow_run' && "
+                 "github.event.workflow_run.conclusion == 'success' && "
+                 "github.event.workflow_run.head_branch == 'main' && "
+                 "github.event.workflow_run.head_repository.full_name == github.repository")
+    manual = "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'"
+    assert ' '.join(resolve['if'].split()) == f'({manual}) || ({automatic})'
+    assert ' '.join(report['if'].split()) == f'always() && (({manual}) || ({automatic}))'
+    assert resolve['outputs'] == {
+        name: '${{ steps.release.outputs.' + name + ' }}'
+        for name in ('publication_run_id', 'publication_run_attempt', 'revision', 'tag', 'version')}
+    assert post['concurrency'] == {
+        'group': 'post-release-${{ github.event.workflow_run.id || github.run_id }}', 'cancel-in-progress': 'false'}
+    assert report['concurrency'] == {
+        'group': 'post-release-report-${{ needs.resolve.outputs.tag || needs.resolve.outputs.publication_run_id || github.run_id }}',
+        'cancel-in-progress': 'false'}
+    assert report['steps'][-1]['env']['RELEASE_RUN_ID'] == '${{ needs.resolve.outputs.publication_run_id }}'
+    assert report['steps'][-1]['env']['RELEASE_RESULTS'] == '${{ toJSON(needs) }}'
+    assert report['steps'][-1]['run'] == 'python scripts/post_release_checks.py report'
+    for job in post['jobs'].values():
+        for step in job.get('steps', []):
+            assert '${{' not in step.get('run', '')
+    assert 'inputs.publication_run_id' not in str(post['jobs'])
 
 
 def test_installed_media_diagnostic_is_explicit_full_scenario_and_cannot_replace_readiness():
