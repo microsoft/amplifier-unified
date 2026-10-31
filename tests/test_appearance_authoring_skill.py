@@ -12,6 +12,7 @@ import copy
 import csv
 import hashlib
 import importlib.metadata
+from importlib.resources import files
 import io
 import json
 import os
@@ -149,11 +150,12 @@ if __name__ == "__main__":
     installed = Path(sys.argv[2]).resolve(strict=True)
     sys.path.insert(0, str(installed))
     import amplifier_web
-    from amplifier_web import appearance_packages
+    from amplifier_web import appearance_packages, theme_library
     from amplifier_web.builtin_behaviors import resource_root
 
     assert Path(amplifier_web.__file__).resolve().is_relative_to(installed)
     distribution = importlib.metadata.distribution("amplifier-unified")
+    assert Path(distribution.locate_file("")).resolve(strict=True) == installed
     direct = json.loads(distribution.read_text("direct_url.json") or "{}")
     assert not direct.get("dir_info", {}).get("editable")
     expected = json.loads(Path(sys.argv[4]).read_text(encoding="utf-8"))
@@ -172,6 +174,28 @@ if __name__ == "__main__":
     for entry in ("SKILL.md", "examples.md", "quiet-study.json"):
         assert "amplifier_web/bundle_data/skills/appearance-authoring/" + entry in {
             str(path) for path in distribution.files}
+    records = {str(path): path for path in distribution.files}
+    lightline_expected = expected["lightline"]
+    resource = Path(files("amplifier_web").joinpath("appearances", "lightline.amplifier.css"))
+    for relative, actual in (("amplifier_web/theme_library.py", Path(theme_library.__file__)),
+                             (lightline_expected["resource"], resource)):
+        actual = actual.resolve(strict=True)
+        assert actual.is_relative_to(installed)
+        record = records[relative]
+        assert actual == Path(distribution.locate_file(record)).resolve(strict=True)
+        assert record.hash and record.hash.mode == "sha256"
+        assert record.hash.value == base64.urlsafe_b64encode(
+            hashlib.sha256(actual.read_bytes()).digest()).decode("ascii").rstrip("=")
+    data = resource.read_bytes()
+    assert hashlib.sha256(data).hexdigest() == lightline_expected["sha256"]
+    # Resource presets need no AppService, user library or provider configuration.
+    lightline = theme_library.preset(None, "lightline")
+    css = lightline.pop("css")
+    assert lightline == lightline_expected["metadata"]
+    assert css.encode("utf-8") == data
+    assert theme_library.fingerprint(css) == lightline_expected["sha256"]
+    assert theme_library.metadata(css)[0] == {
+        key: lightline_expected["metadata"][key] for key in ("name", "description")}
     asyncio.run(_loader_probe(resource_root(), Path(sys.argv[3])))
     _installed_package_probe(appearance_packages)
     print("APPEARANCE_PACKAGE_INSTALLED_OK")
@@ -265,8 +289,19 @@ async def test_app_shell_discovery_preserves_selected_loader_policy(tmp_path, mo
 
 def test_wheel_installed_loader_outside_checkout(tmp_path):
     from hatchling.builders.wheel import WheelBuilder
+    from amplifier_web import theme_library
 
     checkout = Path(__file__).resolve().parents[1]
+    assert Path(theme_library.__file__).resolve() == checkout / "amplifier_web/theme_library.py"
+    resource = checkout / "amplifier_web/appearances/lightline.amplifier.css"
+    # Capture checkout expectations before building; the isolated probe imports
+    # only the installed package and receives these independent values as JSON.
+    lightline_expected = {
+        "resource": resource.relative_to(checkout).as_posix(),
+        "sha256": hashlib.sha256(resource.read_bytes()).hexdigest(),
+        "metadata": {"id": "builtin:lightline", "source": "built-in",
+                     **theme_library.RESOURCE_PRESETS["lightline"]},
+    }
     wheels = tmp_path / "wheels"
     wheels.mkdir()
     wheel = Path(next(WheelBuilder(str(checkout)).build(directory=str(wheels))))
@@ -279,7 +314,7 @@ def test_wheel_installed_loader_outside_checkout(tmp_path):
         assert hashlib.sha256(archive.read(module_name)).hexdigest() == source_sha256
     expected = tmp_path / "installed-expectations.json"
     expected.write_text(json.dumps({"sourceSha256": source_sha256, "recordHash": row[1],
-                                    "recordSize": int(row[2])}), encoding="utf-8")
+                                    "recordSize": int(row[2]), "lightline": lightline_expected}), encoding="utf-8")
     target = tmp_path / "installed"
     uv = shutil.which("uv")
     assert uv, "Wheel qualification requires uv (no packages are downloaded)"

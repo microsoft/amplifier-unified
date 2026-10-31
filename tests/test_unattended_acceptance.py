@@ -22,8 +22,8 @@ import pytest
 
 from amplifier_web import task_environments as environments
 from amplifier_web.service import AppService
+from native_tool_helpers import execute_tool
 from test_collaborative_workspaces import Runtime, generation, settled, until
-from test_file_source_native_children import execute_tool
 from test_full_child_configuration import dispatch
 
 

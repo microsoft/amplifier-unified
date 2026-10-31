@@ -71,7 +71,6 @@ try{
     configuration:style(el.querySelector('.a-compose-configuration')).backgroundColor,
     user:style(el.querySelector('.a-message.a-user')).backgroundColor,
     input:style(el.querySelector('[data-part="composer-surface"]')).backgroundColor,
-    mask:style(el.querySelector('[data-part="messages"]')).maskImage,
     font:style(el.querySelector('.a-message.a-user p')).fontFamily};
   });
   assert.equal(styles.images,3);assert.equal(styles.animation,'digital-rain-drift');
@@ -89,7 +88,8 @@ try{
   assert.notEqual(assistant.body,'rgba(0, 0, 0, 0)');assert.equal(assistant.bodyBorder,'1px');
   assert.equal(assistant.footer,'rgba(0, 0, 0, 0)');
   assert.ok(assistant.actionsTop>=assistant.bodyBottom,'Assistant actions sit beneath the boxed body');
-  assert.match(styles.mask,/linear-gradient/);assert.match(styles.font,/mono|Menlo|Consolas/i);
+  assert.doesNotMatch(theme.css,/(?:-webkit-)?mask-image\s*:/,'Rain inherits native transcript edges');
+  assert.match(styles.font,/mono|Menlo|Consolas/i);
   const after=await geometry();assert.equal(after.railPosition,'absolute');
   assert.ok(Math.abs(after.railTop-baseline.railTop)<16,'Navigator retains native top anchoring');
   assert.ok(Math.abs((after.composerTop-after.messagesBottom)-(baseline.composerTop-baseline.messagesBottom))<24,
