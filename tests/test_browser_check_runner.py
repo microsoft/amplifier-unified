@@ -530,6 +530,34 @@ def test_destination_history_evidence_gate_rejects_incomplete_results(tmp_path, 
     assert result['passed'] is (fault == 'none')
 
 
+@pytest.mark.parametrize('provider', ['provider-selection', 'provider-native'])
+@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'different-command', 'readiness-owner'])
+def test_provider_browser_additions_reject_missing_or_duplicate_ordinary_owner(provider, fault):
+    plan = json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())
+    script = f'tests/{provider}-browser.mjs'
+    rows = plan['scenarios']
+    readiness_scripts = set()
+    if fault == 'missing':
+        rows = [row for row in rows if script not in row['command']]
+    elif fault in {'duplicate', 'different-command'}:
+        rows.append({'id': provider + '-extra', 'command': ['node', script] +
+                     (['--extra'] if fault == 'different-command' else [])})
+    else:
+        readiness_scripts.add(script)
+    with pytest.raises(AssertionError, match=re.escape(script)):
+        provider_browser_additions(rows, readiness_scripts)
+
+
+def provider_browser_additions(rows, readiness_scripts):
+    """These two source-only owners are additive, not historical baseline scripts."""
+    scripts = {f'tests/{name}-browser.mjs' for name in ('provider-selection', 'provider-native')}
+    for script in scripts:
+        commands = [row['command'] for row in rows if script in row['command']]
+        assert commands == [['node', script]], f'{script}: expected exactly one ordinary source owner'
+        assert script not in readiness_scripts, f'{script}: duplicate readiness owner'
+    return scripts
+
+
 def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     workflows = ROOT / '.github/workflows'
     readiness = yaml.load((workflows / 'public-readiness.yml').read_text(), Loader=yaml.BaseLoader)
@@ -626,7 +654,10 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     update_delivery = 'tests/update-message-delivery-browser.mjs'
     assert update_delivery in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', update_delivery] for row in plan['scenarios']) == 1
-    previous_scripts = (readiness_scripts | extended_scripts) - {state_stream, update_delivery}
+    provider_additions = provider_browser_additions(plan['scenarios'], readiness_scripts)
+    # Freeze all three prior counts; validate each new owner before subtracting
+    # the additions so missing or duplicated provider coverage cannot disappear.
+    previous_scripts = (readiness_scripts | extended_scripts) - {state_stream, update_delivery} - provider_additions
     assert len(previous_scripts - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience, pin_reorder, approval, dormant, shared_work} - feature_additions - voice_additions) == 146
     assert len(previous_scripts - {shared_work, 'tests/delegate-work-stream-browser.mjs', 'tests/client-traffic-browser.mjs'} - voice_additions) == 164
     assert len(previous_scripts) == 171
