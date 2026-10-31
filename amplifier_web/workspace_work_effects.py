@@ -178,6 +178,10 @@ def check(invocation, sid, args):
         # owner; root-only Work authority is checked only when Work applies.
         target = invocation.service._session(sid, hydrate=False)
         if '_childOrigin' in (BINDING.get() or {}) and child_execution(invocation.service, target) is None:
+            from .configuration_recovery import recovery_child
+            if recovery_child(invocation.service, target, args) is not None:
+                return {**result, 'allowed': True,
+                        'reason': 'Current Full child may reach its exact settled configuration recovery owner; no effect was authorized.'}
             return {**result, 'reason': 'The admitted native child execution is no longer current.'}
         applicable, reason = applicability(invocation, target)
         result.update(applicable=applicable, reason=reason)
