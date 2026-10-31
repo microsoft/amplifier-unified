@@ -24,6 +24,11 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / 'output/readiness-trio'
+# CI 41158162026 resolved this supplement, then failed on its context-simple@main
+# URL versus the host lock. Keep that exact source; never re-resolve locked deps.
+CONTEXT_REVISION = '897cb6ce25628dc49a6b463b9127b010828b73b7'
+CONTEXT_REQUIREMENT = ('amplifier-module-context-managed @ git+https://github.com/microsoft/'
+                       'amplifier-bundle-context-managed@' + CONTEXT_REVISION + '#subdirectory=modules/context-managed')
 SELECTORS = [
     *('tests/test_' + name + '.py' for name in ('questions', 'question_handoffs',
       'question_presentation', 'schedule_new_tasks', 'schedule_prepared_admission',
@@ -59,6 +64,9 @@ def probe(installed):
     distributions = sorted([{'name': d.metadata['Name'], 'version': d.version,
         'direct': json.loads(d.read_text('direct_url.json') or 'null')} for d in metadata.distributions()],
         key=lambda row: row['name'])
+    context, = [row for row in distributions if row['name'] == 'amplifier-module-context-managed']
+    assert context['direct']['vcs_info']['commit_id'] == CONTEXT_REVISION
+    assert context['direct']['subdirectory'] == 'modules/context-managed'
     print(json.dumps({'python': sys.version, 'executable': sys.executable,
                      'modules': modules, 'distributions': distributions}))
 
@@ -66,7 +74,6 @@ def probe(installed):
 def main():
     from browser_check_runner import run_scenarios
     from frontend_build_artifact import create, source_identity, verify
-    from integration_native import EXTRA_DEPENDENCIES
     assert sys.version_info[:2] == (3, 13), 'Qualification requires Python 3.13'
     assert os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch'
     assert not sys.flags.optimize, 'Qualification assertions must not be disabled'
@@ -84,7 +91,6 @@ def main():
     wheel = OUTPUT / 'wheel' / ('amplifier_unified-' + tomllib.loads((ROOT / 'pyproject.toml').read_text())['project']['version'] + '-py3-none-any.whl')
     runtime = tomllib.loads((ROOT / 'uv.lock').read_text())
     loop, = [row for row in runtime['package'] if row['name'] == 'amplifier-module-loop-live']
-    context, = [value for value in EXTRA_DEPENDENCIES if value.startswith('amplifier-module-context-managed @ ')]
     # Only the authenticated CI checkout supplies this private dependency. No key is read here.
     common = {'UV_PROJECT_ENVIRONMENT': str(work / 'host'), 'UV_NO_BUILD_PACKAGE': 'amplifier-core',
               'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'url.' + (ROOT / '.ci/loop-live').as_uri() + '.insteadOf',
@@ -102,7 +108,8 @@ def main():
     plans = [
         ('locked-host', 150, ['uv', 'sync', '--project', str(ROOT), '--locked', '--group', 'dev', '--group', 'artifacts', '--no-install-project', '--python', sys.executable], common, ROOT),
         ('locked-freeze', 15, ['uv', '--quiet', 'pip', 'freeze', '--python', str(host)], common, ROOT),
-        ('context-dependency', 90, ['uv', 'pip', 'install', '--python', str(host), '--constraint', str(OUTPUT / 'locked-requirements.txt'), context], common, ROOT),
+        ('context-dependency', 90, ['uv', 'pip', 'install', '--python', str(host), '--no-deps', '--no-build-isolation', CONTEXT_REQUIREMENT], common, ROOT),
+        ('source-dependencies', 15, ['uv', 'pip', 'check', '--python', str(host)], common, ROOT),
         ('source-imports', 20, [str(host), '-I', str(Path(__file__).resolve()), '--probe-source'], common, ROOT),
         ('runtime-freeze', 15, ['uv', '--quiet', 'pip', 'freeze', '--python', str(host)], common, ROOT),
         ('npm-ci', 90, ['npm', 'ci', '--no-audit', '--no-fund'], common, ROOT),
@@ -131,7 +138,7 @@ def main():
         assert not git('status', '--porcelain', '--untracked-files=no')
         source = {'commit': revision, 'tree': git('rev-parse', 'HEAD^{tree}'), 'identity': source_identity(ROOT),
                   'files': {p: sha(ROOT / p) for p in git('ls-files').splitlines() if (ROOT / p).is_file()},
-                  'loopSource': loop['source'], 'contextDeclaration': context,
+                  'loopSource': loop['source'], 'contextDeclaration': CONTEXT_REQUIREMENT,
                   'runId': os.environ['GITHUB_RUN_ID'], 'runAttempt': os.environ['GITHUB_RUN_ATTEMPT']}
         save(OUTPUT / 'source.json', source)
         for selector in SELECTORS:
@@ -160,6 +167,10 @@ def main():
             if name in ('locked-freeze', 'runtime-freeze'):
                 text = log.read_text()
                 assert text.strip() and not any(line.startswith(('-e ', 'amplifier-unified')) for line in text.splitlines())
+                if name == 'runtime-freeze':
+                    locked = (OUTPUT / 'locked-requirements.txt').read_text().splitlines()
+                    assert CONTEXT_REQUIREMENT not in locked
+                    assert sorted(text.splitlines()) == sorted([*locked, CONTEXT_REQUIREMENT]), 'Supplement changed locked dependencies'
                 (OUTPUT / ('locked-requirements.txt' if name == 'locked-freeze' else 'runtime-requirements.txt')).write_text(text)
             elif name == 'python':
                 cases = ET.parse(OUTPUT / 'python.xml').getroot().findall('.//testcase')
