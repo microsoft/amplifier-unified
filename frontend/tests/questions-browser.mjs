@@ -10,7 +10,7 @@ import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[process.env.AMPLIFIER_QUESTIONS_FIXTURE||fileURLToPath(new URL('../../tests/fixtures/questions_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
 const stopFixture=ownFixture(fixture,{label:'Questions fixture'});
-let browser,failure;
+let browser,failure,finishReviewEvidence;
 const output=process.env.AMPLIFIER_QUESTIONS_OUTPUT,layoutChecks=[];
 try{
  const ready=await new Promise((resolve,reject)=>{
@@ -323,12 +323,145 @@ try{
  await expect(frame.locator('#value')).toHaveText('1');
  assert.equal((await reviewAction('session.draft',{})).code,'canvas_view_dirty');
  if(output)await page.screenshot({path:join(output,'question-dirty-answer-rejected.png')});
+ // Failure-local diagnostics only: retain the original nodes, never replace
+ // the continuity assertions with a lookup of a newly mounted equivalent.
+ const reviewEvidence={questionId:review.question.id,resourceId:review.html.id,sessionId:ready.sessionId,
+  initialView:{...reviewTarget},snapshots:[],events:[],errors:[],droppedEvents:0,droppedErrors:0};
+ const evidenceError=(where,error)=>{
+  const row={where,message:String(error?.stack||error).slice(0,1500)};
+  if(reviewEvidence.errors.length<16)reviewEvidence.errors.push(row);else reviewEvidence.droppedErrors++;
+ };
+ let identityObserver,finishEvidencePromise;
+ const networkRequests=new WeakMap();let requestSequence=0;
+ const event=row=>{if(reviewEvidence.events.length<128)reviewEvidence.events.push({at:Date.now(),...row});else reviewEvidence.droppedEvents++};
+ const onReviewRequest=request=>{
+  try{
+   const url=new URL(request.url());
+   if(request.isNavigationRequest()&&url.pathname===`/api/canvas/${review.html.id}/document`){
+    const id=++requestSequence;networkRequests.set(request,id);
+    event({kind:'request',request:id,action:'iframe.document',scope:'resource',url:url.href});return;
+   }
+   if(request.method()!=='POST'||url.pathname!=='/api/actions')return;
+   const raw=request.postDataJSON(),body=raw?.action==='shell.command'?raw.args:raw;
+   const action=body?.action,args=body?.args||{},patch=args.patch||{};
+   const resource=args.resourceId===review.html.id||args.id===review.html.id||args.canvasId===review.html.id||args.viewId===reviewTarget.viewId;
+   const question=action==='question.answer'&&args.id===review.question.id;
+   // Leaving the watched chat can remove its resource without naming that
+   // resource in the destination. Retain only navigation during this window.
+   const navigation=['session.select','session.draft','workspace.select','session.create','canvas.reopen','canvas.close'].includes(action)
+    ||action==='view.update'&&['panel','workSurface','workWorkspaceId','canvasDraft'].some(key=>Object.hasOwn(patch,key));
+   if(!resource&&!question&&!navigation)return;
+   const keys=['id','resourceId','canvasId','viewId','resourceRevision','generation','version','sessionId',
+    'questionId','questionContentRevision','previewId','presentation','presentationRequest','resetPreview',
+    'expectedRevision','dirty','open'];
+   const selected=Object.fromEntries(keys.filter(key=>Object.hasOwn(args,key)).map(key=>[key,args[key]]));
+   if(navigation&&action==='view.update')selected.patch=Object.fromEntries(
+    ['panel','workSurface','workWorkspaceId'].filter(key=>Object.hasOwn(patch,key)).map(key=>[key,patch[key]]));
+   if(navigation&&Object.hasOwn(patch,'canvasDraft'))selected.canvasLibrary=patch.canvasDraft?.library??null;
+   const record={request:++requestSequence,commandId:raw.id??body.id??null,action,
+    scope:resource?'resource':question?'question':'navigation-away-or-within-watched-chat',args:selected};
+   // Serialize immediately: later callbacks cannot revise captured arguments.
+   networkRequests.set(request,record.request);
+   event({kind:'request',...JSON.parse(JSON.stringify(record))});
+  }catch(error){evidenceError('request observer',error)}
+ };
+ const onReviewResponse=response=>{
+  try{const request=networkRequests.get(response.request());if(request)event({kind:'response',request,status:response.status()})}
+  catch(error){evidenceError('response observer',error)}
+ };
+ const onReviewRequestFailed=request=>{
+  try{const id=networkRequests.get(request);if(id)event({kind:'requestfailed',request:id,error:String(request.failure()?.errorText||'unknown').slice(0,500)})}
+  catch(error){evidenceError('requestfailed observer',error)}
+ };
+ const captureReview=async label=>{
+  try{
+   if(identityObserver)reviewEvidence.snapshots.push({label,...await identityObserver.evaluate(observer=>observer.snapshot())});
+   else evidenceError(label,'Identity observer was not installed');
+  }catch(error){evidenceError(label,error)}
+ };
+ finishReviewEvidence=()=>finishEvidencePromise??=(async()=>{
+  await captureReview(failure?'failure-finally':'after-continuity-assertions');
+  page.off('request',onReviewRequest);page.off('response',onReviewResponse);page.off('requestfailed',onReviewRequestFailed);
+  if(identityObserver){
+   try{reviewEvidence.dom=await identityObserver.evaluate(observer=>observer.finish())}
+   catch(error){evidenceError('DOM observer finish',error)}
+   try{await identityObserver.dispose()}catch(error){evidenceError('DOM observer dispose',error)}
+  }
+  reviewEvidence.failure=failure?{name:failure.name,message:failure.message}:null;
+  if(output)await writeFile(join(output,'question-review-continuity.json'),JSON.stringify(reviewEvidence,null,2)+'\n');
+  // Observer faults are awaited test failures, never uncaught callback errors.
+  // finishFixture preserves the original assertion when this runs on failure.
+  assert.deepEqual(reviewEvidence.errors,[],'Question review instrumentation must remain healthy');
+  assert.equal(reviewEvidence.droppedErrors,0);
+  assert.deepEqual(reviewEvidence.dom?.errors,[],'Question review DOM observer must remain healthy');
+ })();
+ page.on('request',onReviewRequest);page.on('response',onReviewResponse);page.on('requestfailed',onReviewRequestFailed);
+ try{
+  identityObserver=await page.evaluateHandle(({frame,questionId,resourceId,sessionId})=>{
+   const nodes={card:frame.closest('[data-question-id]'),preview:frame.closest('[data-full-artifact-preview]'),frame};
+   const ids=new WeakMap();let serial=0,dropped=0;const mutations=[],errors=[];
+   const identity=node=>node?(ids.has(node)?ids.get(node):(ids.set(node,++serial),serial)):null;
+   for(const node of Object.values(nodes))identity(node);
+   const pick=(row,keys)=>row?Object.fromEntries(keys.filter(key=>Object.hasOwn(row,key)).map(key=>[key,row[key]])):null;
+   const currentNodes=()=>{
+    const card=document.querySelector(`[data-question-id="${CSS.escape(questionId)}"]`);
+    const preview=card?.querySelector(`[data-full-artifact-preview="${CSS.escape(resourceId)}"]`);
+    return {card,preview,frame:preview?.querySelector('iframe')};
+   };
+   const snapshot=()=>{
+    const current=currentNodes(),state=window.amplifier.getState();
+    const question=state.sessions?.find(row=>row.id===sessionId)?.questions?.find(row=>row.id===questionId);
+    const refs=rows=>(rows||[]).slice(0,4).map(row=>pick(row,['id','version','sessionId','bodyDigest','kind','title']));
+    const views=(state.canvasWorkspace?.views||[]).filter(row=>row.resourceId===resourceId);
+    const presentations=(state.canvasWorkspace?.presentations||[]).filter(row=>row.id===resourceId);
+    return JSON.parse(JSON.stringify({at:Date.now(),browserTime:performance.now(),
+     nodes:Object.fromEntries(Object.entries(nodes).map(([name,node])=>[name,{
+      original:identity(node),connected:!!node?.isConnected,current:identity(current[name]),
+      currentConnected:!!current[name]?.isConnected,same:node===current[name],
+      ...(name==='frame'?{originalSrc:node?.getAttribute('src'),currentSrc:current[name]?.getAttribute('src')}:{}),
+     }])),
+     selectedSessionId:state.selectedSessionId,navigationPending:state.navigationPending,
+     panel:state.view?.panel,workSurface:state.view?.workSurface,
+     question:question?{...pick(question,['id','revision','contentRevision','status']),delivery:pick(question.delivery,['status','inputId']),
+      artifacts:refs(question.artifacts),answer:question.answer?{questionRevision:question.answer.questionRevision,artifacts:refs(question.answer.artifacts)}:null}:null,
+     primary:pick(state.canvas,['id','selectedVersion','revision','open','_presentationDisposed']),
+     viewCount:views.length,views:views.slice(0,8).map(row=>pick(row,['viewId','resourceId','resourceRevision','generation','dirty','renderer','selectedVersion'])),
+     presentationCount:presentations.length,presentations:presentations.slice(0,8).map(row=>pick(row,['id','version','presentation','sessionId','questionId','questionContentRevision','messageId'])),
+    }));
+   };
+   const record=records=>{
+    try{
+     for(const mutation of records){
+      const current=currentNodes(),affected=[];
+      for(const [name,node] of Object.entries(nodes)){
+       const contains=root=>root===node||root.contains(node)||current[name]&&(root===current[name]||root.contains(current[name]));
+       if(mutation.type==='attributes'&&(mutation.target===node||mutation.target===current[name]))affected.push(name+':src');
+       if([...mutation.removedNodes].some(contains))affected.push(name+':removed');
+       if([...mutation.addedNodes].some(contains))affected.push(name+':added');
+      }
+      if(!affected.length)continue;
+      if(mutations.length<64)mutations.push({affected,...snapshot()});else dropped++;
+     }
+    }catch(error){if(errors.length<16)errors.push(String(error?.stack||error).slice(0,1500));else dropped++}
+   };
+   const observer=new MutationObserver(record);
+   // Observe ancestors too, but retain only changes to the three named nodes;
+   // a parent removal can detach all three without a mutation on the iframe.
+   observer.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['src']});
+   return {snapshot,finish(){record(observer.takeRecords());observer.disconnect();return {mutations,errors,dropped}}};
+  },{frame:mountedFrame,questionId:review.question.id,resourceId:review.html.id,sessionId:ready.sessionId});
+ }catch(error){evidenceError('DOM observer setup',error)}
+ await captureReview('before-dirty-clear');
  assert.equal((await reviewAction('canvas.views.dirty',{...reviewTarget,dirty:false})).accepted,true);
+ await captureReview('after-dirty-clear');
  // New explicit click after confirmed rejection; the same draft must work.
+ await captureReview('before-answer');
  await q.getByRole('button',{name:'Submit answer'}).click();
+ await captureReview('after-answer-click');
  await expect(q.getByText('Answer saved and delivered to Amplifier.')).toBeVisible();
  assert.equal(await mountedFrame.evaluate(element=>element.isConnected),true,'Status revision and delivery updates preserve the open review');
  await expect(frame.locator('#value')).toHaveText('1');
+ await finishReviewEvidence();
  assert.equal((await check()).sent.length,4);
  await history();await expect(q).toHaveCount(1);
  await expect(page.locator('.a-question-history').locator(`[data-question-id="${review.question.id}"]`)).toHaveCount(0);
@@ -544,6 +677,7 @@ try{
 finally{
  await finishFixture({label:'Questions fixture',originalError:failure,
   close:[
+   ['Question review continuity evidence',()=>finishReviewEvidence?.()],
    ['Questions browser',()=>browser?.close()],
    ['Question layout evidence',async()=>{if(output){await mkdir(output,{recursive:true});await writeFile(join(output,'layout-checks.json'),JSON.stringify(layoutChecks,null,2)+'\n')}}]],
   stop:async()=>{
