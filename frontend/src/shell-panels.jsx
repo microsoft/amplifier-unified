@@ -3,7 +3,7 @@ import {OutputSettings} from './outputs';
 import {PublishingSettings} from './publishing';
 import {ChatOverview} from './work-overview';
 import {NavigationOpen,useModalFocus,navigationExpanded} from './responsive-navigation';
-import {CanvasControlsHost,CanvasPrimaryActionsHost,CanvasDocumentRefresh} from './canvas-controls';
+import {CanvasControlsHost,CanvasPrimaryActionsHost,CanvasDocumentRefresh,CanvasVersionLoadProvider} from './canvas-controls';
 import {CanvasOverviewSection,useCanvasReading,useCanvasOverviewState} from './canvas-overview-state';
 import {CanvasWorkspace} from './canvas-workspace';
 import {McpAppVisibilityProvider} from './mcp-app-lifecycle';
@@ -154,7 +154,7 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSur
  },[canvas.open,draft.library,draft.delivery]);
  if(!mounted.current)return null;
  const latestEvent=canvas.events?.at(-1);
- return <CanvasPrimaryActionsHost.Provider value={actionsHost}><CanvasControlsHost.Provider value={controlsHost}><aside ref={panel} id="workspace-canvas" className="a-canvas-panel" hidden={suppressed||!canvas.open||!state.selectedSessionId} inert={suppressed||!canvas.open||!state.selectedSessionId} aria-hidden={suppressed||!canvas.open||!state.selectedSessionId||undefined} data-part="canvas" data-mode={overview?'overview':'artifact'} data-focused={focused} data-controls={controls} data-pinned={!!view.canvasControlsPinned} aria-label="Canvas" role={focused?'dialog':undefined} aria-modal={focused||undefined} aria-owns={focused?'canvas-toggle':undefined} onKeyDown={event=>{
+ return <CanvasVersionLoadProvider view={resourceView}><CanvasPrimaryActionsHost.Provider value={actionsHost}><CanvasControlsHost.Provider value={controlsHost}><aside ref={panel} id="workspace-canvas" className="a-canvas-panel" hidden={suppressed||!canvas.open||!state.selectedSessionId} inert={suppressed||!canvas.open||!state.selectedSessionId} aria-hidden={suppressed||!canvas.open||!state.selectedSessionId||undefined} data-part="canvas" data-mode={overview?'overview':'artifact'} data-focused={focused} data-controls={controls} data-pinned={!!view.canvasControlsPinned} aria-label="Canvas" role={focused?'dialog':undefined} aria-modal={focused||undefined} aria-owns={focused?'canvas-toggle':undefined} onKeyDown={event=>{
   if(controls&&event.key==='Escape'&&!event.defaultPrevented&&!event.target.closest('dialog[open]')){event.preventDefault();closeControls()}
  }}>
 
@@ -198,5 +198,5 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSur
    </aside>
   </div>
   {latestEvent&&<div className="a-canvas-event" role="status"><Check/><span>Response recorded · {latestEvent.name}</span><small>The agent can see this response in app state.</small></div>}
- </aside></CanvasControlsHost.Provider></CanvasPrimaryActionsHost.Provider>;
+ </aside></CanvasControlsHost.Provider></CanvasPrimaryActionsHost.Provider></CanvasVersionLoadProvider>;
 }

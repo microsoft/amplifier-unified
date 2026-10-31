@@ -1,4 +1,4 @@
-import {CanvasControl,CanvasViewControls} from './canvas-controls';
+import {CanvasControl,CanvasViewControls,useCanvasVersionLoad,canvasLoadSelection,canvasLoadBinding,acceptedCanvasLoad,failedCanvasLoad} from './canvas-controls';
 import React,{useEffect,useMemo,useRef,useState} from 'react';
 import {request} from './api';
 import {CanvasAppViewer} from './canvas-app-viewer';
@@ -82,26 +82,34 @@ export function Renderer({view,canvas,dispatch,recovery,connectionKey}){
 
 function ResourceView({view,state,dispatch,recovery}){
  const [error,setError]=useState(''),[choice,setChoice]=useState(null),[choosing,setChoosing]=useState(false),choicePending=useRef(false);
+ const {state:[load,setLoad],pending:loadPending}=useCanvasVersionLoad();
+ const selection=canvasLoadSelection(view),binding=canvasLoadBinding(view);
+ const unresolved=load?.selection===selection&&load.needsCheck;
  const canvas=useMemo(()=>state.canvas?{...state.canvas,...(view.app?{app:view.app}:{}),...targetOf(view),renderIdentity:view.renderIdentity,view:view.view||state.canvas.view,renderReports:view.renderReports}:null,[state.canvas,view]);
  const server=state.smartTools?.servers?.find(row=>row.id===canvas?.mcp?.serverId);
  const connectionKey=JSON.stringify([server?.status,server?.catalogState,server?.catalogRevision,server?.account,server?.accountBinding,canvas?.mcp?.catalogRevision,canvas?.mcp?.contractFingerprint]);
  const run=async(action,args)=>{try{const result=await dispatch(action,args);setError(result?.result?.status==='deferred'?result.result.reason:'')}catch(error){setError(error.message)}};
  const choose=async(version,confirmed=false)=>{
-  if(choicePending.current)return;
+  if(choicePending.current||loadPending.current||unresolved)return;
   if(hasLocalCanvasEdits()){setError('Save or cancel unfinished Canvas edits before changing the preview.');return}
   const executable=['html','babylon'].includes(canvas?.kind)&&!canvas?.app;
   if(executable&&!confirmed&&(version??view.latestVersion)!==view.runningVersion){
    setChoice({id:view.resourceId,version,exactVersion:version??view.latestVersion,target:targetOf(view)});return;
   }
   choicePending.current=true;setChoosing(true);
+  if(confirmed){loadPending.current=true;setLoad({selection,binding,pending:true,source:'details'})}
   try{
    const result=confirmed
     ?await dispatch('canvas.views.loadVersion',{...choice.target,version:choice.exactVersion,followLatest:choice.version===null})
     :await dispatch('canvas.select',{id:view.resourceId,...(version!=null?{version}:{})});
    if(!result?.accepted)throw Error('The saved version was not selected.');
+   if(confirmed){const feedback=acceptedCanvasLoad(result);setLoad(feedback?{selection,binding,source:'details',...feedback}:null)}
    setChoice(null);setError('');
-  }catch(error){setError(error.unconfirmed?'Version load completion is unconfirmed. Check the current version before another Load.':error.message)}
-  finally{choicePending.current=false;setChoosing(false)}
+  }catch(error){
+   if(confirmed){const feedback=failedCanvasLoad(error);setLoad({selection,binding,source:'details',...feedback});if(feedback.needsCheck)setChoice(null)}
+   else setError(error.message);
+  }
+  finally{choicePending.current=false;setChoosing(false);if(confirmed)loadPending.current=false}
  };
  useEffect(()=>{setChoice(null);setError('')},[view.resourceId,view.resourceRevision,view.generation]);
  return <CanvasViewControls label="Artifact controls"><section className="a-resource-view" data-canvas-view={view.viewId} aria-label="Artifact view">
@@ -120,6 +128,7 @@ function ResourceView({view,state,dispatch,recovery}){
   </div></CanvasControl>
   {view.selectedVersion!=null&&<p role="status" className="a-renderer-notice">{canvas?.kind==='browser'?'Saved address · Website is live':'Saved version · Read only'}{canvas?.kind==='mcp-app'&&<button type="button" className="a-link" onClick={()=>run('canvas.select',{id:view.resourceId})}>Open live view</button>}</p>}
   {error&&<p role="alert" className="a-renderer-notice">{error}</p>}
+  {load?.selection===selection&&load.source==='details'&&load.error&&(load.needsCheck||load.binding===binding)&&<p role="alert" className="a-renderer-notice">{load.error}</p>}
   <div className="a-resource-renderer">{canvas?.app?<CanvasAppViewer key={view.resourceId+':'+(view.selectedVersion??'latest')} canvas={canvas} dispatch={dispatch}/>:canvas?<Renderer key={view.resourceId+':'+(view.renderIdentity||view.resourceRevision+':'+view.generation)} view={view} canvas={canvas} dispatch={dispatch} recovery={recovery} connectionKey={connectionKey}/>:<p role="status">Loading saved artifact…</p>}</div>
  </section></CanvasViewControls>;
 }

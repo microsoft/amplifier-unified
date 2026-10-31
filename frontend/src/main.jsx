@@ -305,10 +305,18 @@ function App(){
    try{
     const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
     if(historyVisit)destinationHistory.current.finish(result);
-    if(result.state)acceptState(result.state);
-    // Exact annotation and read-only preview receipts settle locally. Navigation
-    // still waits for its authoritative frame and exact history confirmation.
-    else if(!['message.reaction','peer.preview'].includes(action))await awaitState(result);
+    try{
+     if(result.state)acceptState(result.state);
+     // Exact annotation and read-only preview receipts settle locally. Navigation
+     // still waits for its authoritative frame and exact history confirmation.
+     else if(!['message.reaction','peer.preview'].includes(action))await awaitState(result);
+    }catch(error){
+     // An accepted reset is not a refusal when only its following read fails.
+     // Keep the exact receipt; the Canvas owner offers a read, never a replay.
+     if(action==='canvas.views.loadVersion'&&result.accepted===true)
+      return {...result,stateConfirmation:{status:'unconfirmed',message:error.message}};
+     throw error;
+    }
     if(historyVisit){
      // awaitState's recovery may return without the receipt's revision. The
      // history model requires its own exact route/host/revision evidence.

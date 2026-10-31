@@ -346,6 +346,13 @@ Missed updates, Refresh and transport reconnect do not adopt a new executable
 definition. Newly opened previews behave normally; this does not serialize DOM
 or JavaScript state across a new browser page or a cold restart.
 
+An accepted **Load** and its following state read are separate outcomes. If Load
+is accepted but that read fails, the controls retain its exact receipt and say
+the named version was accepted but the displayed version needs confirmation.
+They do not claim the old preview was retained. A lost mutation response remains
+unconfirmed; a confirmed refusal remains a refusal. Use **Refresh** to read saved
+state before another Load; neither failure automatically retries the reset.
+
 This executable-preview exception was approved on October 28, 2026: “Preserve
 interactive previews; load new versions explicitly.” Passive documents retain
 automatic Latest following; saved histories and exact historical selections are
