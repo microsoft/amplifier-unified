@@ -285,6 +285,28 @@ def test_unknown_application_feature_scope_never_matches_known_base(tmp_path, un
     assert '/private/secret' not in json.dumps(diagnostics.state)
 
 
+def test_legacy_updater_missing_feature_helper_keeps_absent_scope_unknown(tmp_path, monkeypatch):
+    import sys
+    from types import ModuleType
+    from amplifier_web.update_diagnostics import sanitized_application_extras
+    from amplifier_web.update_report import event as public_event
+
+    # The systemd journey runs a historical app_updates module alongside the
+    # current diagnostics owner. That module has no optional-feature validator.
+    legacy = ModuleType('amplifier_web.app_updates')
+    monkeypatch.setitem(sys.modules, legacy.__name__, legacy)
+    assert not hasattr(legacy, 'validated_extras')
+    assert sanitized_application_extras(None) is None
+    state, diagnostics = fixture(tmp_path)
+    diagnostics.begin('application', 'a' * 40)
+    failure = diagnostics.record('service-restart', 'failed', errorType='RuntimeError')
+    assert 'applicationExtras' not in failure
+    assert 'applicationExtras' not in public_event(failure)
+    diagnostics.begin('application', 'a' * 40)
+    diagnostics.record('restart-ack', 'succeeded')
+    assert len(active(state)) == 1  # Unknown never becomes a known base install.
+
+
 def test_application_groups_keep_revision_and_exact_feature_scope(tmp_path):
     state, diagnostics = fixture(tmp_path)
     for revision, extras in [('a'*40, []), ('a'*40, ['tui']), ('b'*40, ['tui']),

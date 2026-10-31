@@ -29,6 +29,8 @@ PROBE_STAGES = {'imports','package','assets','login','terminal','complete','prep
 
 def sanitized_application_extras(value):
     """Public optional-feature scope; missing or malformed is unknown, not base."""
+    if value is None:
+        return None
     from .app_updates import validated_extras
     try:
         return validated_extras(value)
