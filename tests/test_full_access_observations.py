@@ -81,7 +81,7 @@ async def test_full_watch_qualifies_runs_and_resumes_without_human_or_client(tmp
             'accessRevision': app.access_mode.snapshot(source)['revision'], 'at': now[0]}
         if origin == 'agent':
             expected.update(runtimeSessionId=sid, generationId='system-work',
-                inputIds=['trusted-system-input'])
+                inputIds=['trusted-system-input'], inputCoverage='complete')
         assert qualified['authorization'] == expected
         assert qualified['qualification'] == supplied['qualification']
         assert 'approvedBy' not in qualified and 'verified' not in qualified['qualification']
@@ -256,7 +256,8 @@ async def test_full_preview_binds_the_saved_access_revision(tmp_path, monkeypatc
         await app.close()
 
 
-@pytest.mark.parametrize('transport', [{'_inputBindings': []},
+@pytest.mark.parametrize('transport', [{'_inputBindings': None}, {'_inputBindings': {}},
+    {'_inputBindings': [{}]}, {'_inputBindings': ['malformed']},
     {'_inputBindings': [{'inputId': 'never-admitted'}]}, {'_generationId': 'obsolete'}])
 async def test_full_cannot_borrow_current_owner_authority_without_current_work(tmp_path, monkeypatch, transport):
     app, _, _, sid, config, *_ = await full_fixture(tmp_path, monkeypatch)

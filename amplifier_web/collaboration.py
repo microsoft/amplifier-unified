@@ -322,7 +322,7 @@ class Collaboration:
         from .service import AppError
         raise AppError(text, status)
 
-    def source(self, args, origin, caller, *, hydrate=True):
+    def source(self, args, origin, caller, *, hydrate=True, allow_descendant=False):
         sid = caller if origin not in {"ui", "user"} else args.get("senderSessionId") or args.get("sessionId")
         if not sid:
             self.error("A user must explicitly authorize a calling conversation.")
@@ -330,8 +330,10 @@ class Collaboration:
         actor = PRINCIPAL.get()
         native = source.get("runtimeSessionId") or source.get("nativeIdentity") or source["id"]
         if origin not in {"ui", "user"} and actor and actor != native:
-            from .coordination_guidance import ROOT_SCOPE_MESSAGE
-            self.error(ROOT_SCOPE_MESSAGE)
+            if not allow_descendant or not self.service.access_mode.full(source):
+                from .coordination_guidance import ROOT_SCOPE_MESSAGE
+                self.error(ROOT_SCOPE_MESSAGE)
+            self.active_binding(source, allow_descendant=True)
         if source.get("sessionKind", "root") != "root":
             self.error("Collaboration belongs to ordinary root conversations.")
         return source
@@ -536,6 +538,18 @@ class Collaboration:
         binding = BINDING.get() or {}
         native = source.get("runtimeSessionId") or source.get("nativeIdentity") or source["id"]
         active = source.get("collaborationGeneration") or {}
+        if allow_descendant and '_childOrigin' in binding:
+            from .child_execution import current
+            child = current(self.service, source)
+            if child is None:
+                from .configuration_recovery import recovery_child
+                child = recovery_child(self.service, source)
+            if child is None:
+                self.error('The admitted native child execution is no longer current.')
+            # The child owner validates its original assignment independently
+            # of a normal parent turn finish or a newer parent generation.
+            active = {'id': child['generationId'], 'inputIds': list(child['inputIds']),
+                      'interruptionRevision': child['interruptionRevision'], 'terminal': False}
         principal = PRINCIPAL.get()
         descendant = (allow_descendant and isinstance(principal, str) and bool(principal)
             and binding.get('_runtimeSessionId') == principal)
@@ -1639,17 +1653,22 @@ class Collaboration:
         if access == "caller_controlled":
             if not caller:
                 self.error("A user must explicitly authorize a calling conversation.")
-            # A child's transport still belongs to the root worker process;
-            # that does not make root controls or configuration its authority.
-            self.source({}, origin, caller)
+            # Configuration effects use their existing owner, with Full and
+            # the child's assigned binding. Other root controls stay strict.
+            from .configuration_authority import requirement
+            if action == "permissions.save" and "scope" not in args:
+                self.error("Choose an explicit file-access scope: local, project, or global. No settings were changed.", 400)
+            try:
+                configuration = requirement(action, args) is not None
+            except ValueError as exc:
+                self.error(str(exc), 400)
+            self.source({}, origin, caller, allow_descendant=configuration)
             target = target or caller
             if target_key and not args.get("configurationTarget"):
                 args[target_key] = target
             elif not args.get("configurationTarget") and not action.startswith("session.") and action != "configuration.apply":
                 args["sessionId"] = target
             if target == caller:
-                if action == "permissions.save" and "scope" not in args:
-                    self.error("Choose an explicit file-access scope: local, project, or global. No settings were changed.", 400)
                 return None
             if action == "conversation.send":
                 self.error("A user must explicitly authorize a current collaboration grant.")

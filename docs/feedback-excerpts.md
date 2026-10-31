@@ -45,9 +45,9 @@ controls beyond editing the excerpt are outside this initial slice.
 
 ## Initial publication under Full access
 
-A current root agent or a trusted host system with an explicit calling
-conversation can prepare, stage and submit exact initial feedback under that
-conversation's saved Full access. It does not need a browser, a selected chat,
+A current agent, assigned native child or trusted host system with an explicit
+calling conversation can prepare, stage and submit exact initial feedback under
+that conversation's saved Full access. It does not need a browser, a selected chat,
 a new human message or disclosure/warning acknowledgements. The existing
 minimal export and excerpt preparation checks still apply. Selection of an
 immutable same-conversation review retains agent/system attribution; the
@@ -68,13 +68,26 @@ authority check before the write. Full accepts publication/retention risk withou
 `feedback.destination` call; an explicitly supplied `uploadDestination` remains
 an exact precondition. Accepted payloads and request fingerprints stay unchanged.
 New Full receipts retain the actual origin, source conversation, access revision,
-native/execution identity and Stop boundary, plus the admitted root generation
-for an agent. Every upload/issue write checks that retained authority. Revocation
+native/execution identity and Stop boundary, plus the assigned generation and
+actual runtime principal for an agent. Each child invocation keeps its assigned inputs captured before preparation,
+including nested and resumed execution; later root inputs are not substituted.
+The native worker supplies every assigned input ID. Missing or empty input
+transport records unavailable coverage.
+Fresh Full capture shares the access-mode owner with observations. A system call
+without native transport invents no native actor; supplied native transport must
+be current, and malformed or foreign input identities refuse.
+Every upload/issue write checks that retained authority. Revocation
 or Stop prevents later writes; once a write may have happened, its outcome stays
 unknown and is never replayed. An accepted background send can outlive its turn.
 
-This slice supports initial publication only. It does not qualify native child
-publication, Work-bound effects, later-file additions, or general GitHub issue,
-PR or release management. Existing Ask-mode/browser confirmation and ordinary
-direct follow-ups keep their behavior. Root admission consumes the canonical
-current-generation/Stop check; it is not a second generation authority service.
+Initial publication, direct text follow-ups and later ordinary-file additions
+support standing Full through the same retained authority. Later files use
+conversation-owned staging and an exact selected file manifest; review is
+optional under Full. Their existing upload journal retains per-phase receipts
+and supports read-only reconciliation after Stop or revocation. Optional text
+comparison reviews retain their separate client workflow; general GitHub issue,
+PR or release management is outside these feedback actions. Existing Ask-mode/browser
+confirmation keeps its behavior. Admission consumes the canonical current
+generation/Stop check with explicit descendant support, not a second generation
+authority service. Runtime and release qualification remain distinct from this
+source contract.

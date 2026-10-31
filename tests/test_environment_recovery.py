@@ -1086,6 +1086,9 @@ async def test_commissioned_owner_placement_preserves_inherited_execution_folder
     folder = Path(source['workspace']) / 'separate-execution'
     folder.mkdir()
     source.update(workingDirectory=str(folder), executionRevision=7, interruptionRevision=3)
+    # This fixture represents fresh work at the current Stop boundary, not the
+    # earlier peer-woken generation carried across it.
+    source['collaborationGeneration'].update(id='placement-current', interruptionRevision=3)
     receipt = await agent(app, source, 'coordination.create',
         {'title': 'Placement child', 'text': 'Synthetic placement check'}, 'placement-child')
     await until(lambda: len(app.runtime.inputs) == 1)
