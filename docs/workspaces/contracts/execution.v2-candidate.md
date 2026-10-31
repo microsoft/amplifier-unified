@@ -257,8 +257,8 @@ claim with evidence and does not claim physical teardown.
 Stable command IDs retain their exact results across restart, including release
 and later reacquisition. Retries cannot resurrect an old reservation. Updates
 require the observed revision. Admission uses global Advanced execution limits,
-defaulting to 64 held reservations per root (including its children) and 1024 per app data home. Lowering those limits
-only gates new acquisitions; existing held or uncertain claims remain
+defaulting to 0 (no count ceiling) both per root (including its children) and
+per app data home. Explicit positive limits gate new acquisitions; existing held or uncertain claims remain
 readable and releasable at the limit. Reads are paginated, passive and do not
 load or resume conversations. Shared actions serve both clients and agents.
 
@@ -523,18 +523,27 @@ Membership, limits and Stop are retained in existing command receipts; model
 usage stays in existing execution receipts and is attributed at admission.
 
 Assignment limits cover aggregate supported model calls and open commissioned
-roots. New assignments have no execution count ceiling: `maxOpenTasks` and
-`maxConcurrentCalls` default to `null`. Each accepts a positive integer for an
+roots. New assignments have no execution count ceiling: `maxOpenTasks`,
+`maxMembers` and `maxConcurrentCalls` default to `null`. Each accepts a positive integer for an
 explicit ceiling or `null` for no count limit (blank in the UI). Existing saved
 finite values are preserved until their owner explicitly changes them. The
-retained member roster remains structurally bounded by `maxMembers` (1–64,
-default 64); removing execution ceilings never discards members or unknown
+retained member roster has no arbitrary maximum; `maxMembers` counts current
+bound and reserved members when explicitly set. Removing execution ceilings never discards members or unknown
 receipts, changes Stop/ownership, or bypasses token/cost budgets, the installation's
 separate per-source task-chat policy, or host resource admission. Optional
 token/cost reservations are declared allowances per call, not
 provider-enforced maxima. Settled receipts replace their allowances; missing
 outcomes remain unknown. Limits cannot promise an exact spend cap. Already
 running effects may finish. Admission is serialized before provider effects.
+
+The host-wide model waiting policy defaults to no queue-count or wait-time
+ceiling (`maxWaitingCalls=0`, `waitTimeoutSeconds=0`). Positive values are optional
+operator limits. Waiting uses the existing admission queue and resumes on capacity
+changes; removing the count ceiling does not admit calls beyond a selected
+assignment allowance or bypass provider admission. Existing saved finite settings
+remain in force until changed, including after restart. The global settings UI
+offers a single action to select unlimited waiting without resetting spend,
+already admitted calls, or Stop.
 
 The commissioning owner may manage the assignment; members may inspect it.
 Membership does not confer control over existing independent peers. Assignment
@@ -715,31 +724,35 @@ worktree owner's verified move records. Other path changes are unavailable, not
 permission to recreate or relocate storage. Existing app-owned allocations keep
 their original locations. Retries preserve the original placement even after a
 chat moves. No files or pending permissions are migrated automatically.
-The caller does not supply a destination. At most 32 nonretired
-allocations belong to one root and 512 to one app home; these are allocation-count
-limits, not disk quotas. A stopped allocation owner is reconciled to unknown only
+The caller does not supply a destination. Nonretired allocation counts default
+to 0 (no count ceiling), both per root and per app home. Optional positive limits
+in global Advanced execution settings remain allocation-count limits, not disk
+quotas. A stopped allocation owner is reconciled to unknown only
 after its physical owner lock is free. Retirement releases a count slot but never
 reclaims bytes. No automatic garbage collection or deletion action is supplied.
 Read pages contain at most 32 records and do not hydrate conversation history.
 The ready-worker policy check observes supported reference filesystem and patch
 tools only; it does not certify custom tools, shell, browser or database access.
 
-### Optional per-chat execution counts — 2026-10-21
+### Optional work and test execution counts — 2026-10-30
 
-Global execution settings accept explicit zero for outstanding task chats per
-source, owned test environments per chat and pending checks per chat; each
-then has no count ceiling. These optional counts and queue wait default to zero.
+Global execution settings accept zero for all work counts: outstanding task chats
+per source, environments per chat, pending checks per chat and installation,
+retained resources and cooperative reservations per chat and installation. Each
+defaults to zero (no count ceiling), as do local and registered target backend
+running/retained instance counts. Queue wait also defaults to zero.
 Saved positive operator values are preserved. Wait zero means until Stop or
 cancellation; accepted checks retain their original deadline and resource budget.
 
 These choices do not change same-request idempotency, causal depth, assignment
-membership, authorization, Stop, retained-owner bounds or physical resource
+membership, authorization, Stop, retained ownership or physical resource
 admission. Ordered checks retain their earlier-check/cleanup barrier; overlap
 requires both checks to be explicitly independent. Unknown results remain unknown
 and retain exact owners. Disabling a count cannot retire, replay or overwrite them.
 Manual and queued environment allocations share the same atomic admission owner.
-The global pending queue and retained resource/reservation record limits remain
-positive; bounded display pages are not concurrency ceilings.
+CPU, memory and disk budgets remain enforced by their existing machine/backend
+owners where supported. Bounded display pages and record sizes are not
+concurrency ceilings. A default change never rewrites explicit saved limits.
 
 ### Notification display provenance — 2026-10-14
 
