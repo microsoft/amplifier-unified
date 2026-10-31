@@ -4,16 +4,16 @@ import uuid
 
 from amplifier_operations.coordination import fingerprint
 
-DEFAULTS = {'revision': 0, 'maxWaitingCalls': 256, 'waitTimeoutSeconds': 0}
+DEFAULTS = {'revision': 0, 'maxWaitingCalls': 0, 'waitTimeoutSeconds': 0}
 RECORD = 'model-capacity-policy'
 
 
 def definitions(schema, string):
     return {
         'modelCapacity.read': ('Read global model-capacity waiting settings. Does not start workers.', schema({}, [])),
-        'modelCapacity.set': ('User-only: save global model-capacity waiting settings. Zero timeout waits until capacity or Stop. Does not change spending limits or restart work.', schema({
+        'modelCapacity.set': ('User-only: save global model-capacity waiting settings. Zero queue size or timeout means no count or time limit; work waits until capacity or Stop. Does not change spending limits or restart work.', schema({
             'expectedRevision': {'type': 'integer', 'minimum': 0},
-            'maxWaitingCalls': {'type': 'integer', 'minimum': 1},
+            'maxWaitingCalls': {'type': 'integer', 'minimum': 0},
             'waitTimeoutSeconds': {'type': 'integer', 'minimum': 0},
         }, ['expectedRevision', 'maxWaitingCalls', 'waitTimeoutSeconds'])),
     }

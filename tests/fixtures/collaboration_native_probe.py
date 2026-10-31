@@ -39,7 +39,7 @@ from amplifier_foundation.bundle import Bundle, BundleModuleResolver, PreparedBu
 from amplifier_module_loop_live.runtime import Input, Runtime
 from amplifier_web.app_guidance import install_app_access
 from amplifier_web.automatic_history import display_message
-from amplifier_web.collaboration_input import admit, checkpoint_anchors, steer
+from amplifier_web.collaboration_input import admit, checkpoint_anchors, deliver, steer
 from amplifier_web.host.storage import SessionStore
 from amplifier_web.runtime import normalize_event
 from amplifier_web.runtime_controls import RuntimeControls
@@ -370,7 +370,9 @@ class DirectNativeHost:
                 if reason:
                     return {"admitted": False, "reason": reason}
                 return await worker.bridge("coordination.admit", values)
-            adapter = steer if steering else admit
+            # Match RuntimeManager/Worker routing: automatic returns may enter
+            # an active request boundary; explicit queue remains idle-only.
+            adapter = steer if steering else deliver if args.get("automaticDelivery") is True else admit
             result = await adapter(worker.controls, worker.runtime, args, None, authorize,
                                    stop_epoch=lambda: worker.stop_revision)
             self.admissions.append({"sessionId": session["id"], **args, **result})

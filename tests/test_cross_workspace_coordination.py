@@ -134,7 +134,7 @@ async def test_discovery_defaults_to_workspace_and_all_exposes_message_not_contr
     # Root follow-up is an existing alias for attributed peer messaging, not
     # direct runtime control. Worker follow-up/interrupt authority stays narrow.
     assert peer["canFollowup"] is True and peer["canInterrupt"] is False
-    assert {mode for action in peer["peerActions"] for mode in action["modes"]} == {"notify", "queue"}
+    assert {mode for action in peer["peerActions"] for mode in action["modes"]} == {"auto", "notify", "queue"}
     app.history.ensure_loaded.assert_not_awaited()
     assert app.runtime.inputs == []
 
@@ -253,6 +253,7 @@ async def test_typed_result_retained_file_exact_read_and_adjacent_request(cross_
 
     app = cross_app
     source, target = app.state["sessions"]
+    app.runtime.unavailable_boundaries.add(source["id"])
     file, reference = exact_file(target)
     declaration = await begin_reply(app, references=[reference])
     assert declaration["artifactVerification"] == "verified"
@@ -472,6 +473,7 @@ async def test_cross_workspace_retained_file_canvas_and_authenticated_http_downl
 async def test_cross_workspace_exact_outcome_acknowledgement_preserves_result(cross_app):
     app = cross_app
     source, target = app.state["sessions"]
+    app.runtime.unavailable_boundaries.add(source["id"])
     file, reference = exact_file(target)
     await begin_reply(app, references=[reference])
     wait = await agent_action(app, source, "coordination.subscribe", {

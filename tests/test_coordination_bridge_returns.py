@@ -154,6 +154,7 @@ async def test_transport_bound_protocol_returns_are_small_lossless_and_wake_once
     app, bridge_probe, record_property,
 ):
     source, target = app.state["sessions"]
+    app.runtime.unavailable_boundaries.add(source["id"])
     selection, draft = app.state["selectedSessionId"], app.state["view"]["draft"]
     context, raw = await compact_call(app, bridge_probe, source, "coordination.context",
                                       {"sessionId": source["id"]}, "context")

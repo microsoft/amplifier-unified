@@ -1,8 +1,10 @@
 """Offline service/Worker/Core/live+streaming goal/peer ordering discriminator.
 
-Only provider replies and goal evaluation are scripted. The existing native
-probe supplies serial transport in place of a worker process, not fake
-generation events, queue admission, terminal sealing, or execute().
+Provider replies and goal evaluation are scripted. The fallback scenario
+advertises an unavailable steering capability through the coordinator; the real
+delivery adapter must decline before submit and later use the real idle boundary.
+The native probe supplies serial transport in place of a worker process, not
+fake generation events, queue admission, terminal sealing, or execute().
 """
 import asyncio
 import copy
@@ -21,6 +23,7 @@ pytest.importorskip("amplifier_module_context_simple")
 from fixtures.collaboration_native_probe import (
     DirectNativeHost, ScriptedProvider, message_text, peer_envelopes, tool_output,
 )
+from amplifier_operations.coordination import peer_input
 from amplifier_web import runtime_worker
 from amplifier_web.management import Management
 from amplifier_web.service import AppService
@@ -33,10 +36,25 @@ REASON = "Continue the synthetic objective after checking the exact peer result.
 
 
 def last_input(request):
-    # Fresh workspace observations are provider reference data, not another
-    # admitted input. Keep the peer-versus-goal ordering oracle on that input.
-    return next(m for m in reversed(request.messages)
-                if m.role == "user" and not (m.metadata or {}).get("coordinationObservation"))
+    # The provider sees user-role reference messages as well as actual inputs.
+    # Streaming a876e6a writes a separate ephemeral, framed tail reminder after
+    # steering. Exclude only its producer metadata AND complete envelope; never
+    # discard an admitted input, arbitrary ephemeral row, or lookalike text.
+    for message in reversed(request.messages):
+        if message.role != "user":
+            continue
+        metadata = message.metadata or {}
+        if "amplifier_input" not in metadata:
+            if metadata.get("coordinationObservation") is True:
+                continue
+            text = message_text(message)
+            if (metadata.get("ephemeral") is True
+                    and metadata.get("reminder_placement") in {"pre_user", "tail"}
+                    and text.startswith("<system-reminders>\n")
+                    and text.endswith("\n</system-reminders>")):
+                continue
+        return message
+    raise AssertionError("Provider request has no non-reference user input")
 
 
 class OrderingHost(DirectNativeHost):
@@ -55,6 +73,44 @@ class OrderingHost(DirectNativeHost):
 
     async def control(self, sid, operation, args):
         return await self.roots[sid].controls.perform(operation, args)
+
+    async def settle(self):
+        """Observe transport and service-owned work; never force admission."""
+        async with asyncio.timeout(5):
+            while True:
+                await self.flush()
+                if not self.app.tasks:
+                    return
+                await asyncio.gather(*list(self.app.tasks))
+
+
+def unavailable_request_boundary(worker):
+    """Expose the supported 'unavailable' capability mode to the real adapter.
+
+    This models only capability absence, not a native-provider implementation.
+    Keep the native submit callable intact: no admission response or event is
+    forged, and an idle input still traverses deliver() and runtime.submit().
+    """
+    coordinator = worker.session.coordinator
+    capability = coordinator.get_capability("live.steering")
+    assert capability["version"] == 1 and capability["mode"] == "request_boundary"
+    assert callable(capability["submit"])
+    coordinator.register_capability("live.steering", {**capability, "mode": "unavailable"})
+
+
+def assert_waiting_unsubmitted(host, worker, identity):
+    receipt = host.app.collaboration.receipt(identity)
+    assert receipt["mode"] == "auto" and receipt["delivery"] == "queued"
+    attempts = [a for a in host.admissions if a["inputId"] == identity]
+    assert attempts
+    for attempt in attempts:
+        assert attempt["automaticDelivery"] is True
+        assert attempt["accepted"] is False
+        assert attempt["effect"] == "none" and attempt["waitingForBoundary"] is True
+    assert not host.app.collaboration.guard(receipt)
+    assert identity not in worker.runtime.accepted
+    assert not any(e.get("input_id") == identity for e in worker.runtime.events)
+    return receipt
 
 
 class Parent(ScriptedProvider):
@@ -89,15 +145,27 @@ class Parent(ScriptedProvider):
             return self.final("First parent answer; the qualified peer result is queued.")
         last_user = last_input(request)
         text = message_text(last_user)
-        peer = next((e for e, t in peer_envelopes(request)
+        envelopes = peer_envelopes(request)
+        peer = next((e for e, t in envelopes
                      if e["inputId"] == self.continuation_id and t == text), None)
         worker = self.host.roots[self.host.parent_id]
+        if peer:
+            saved = next(m for m in self.host.app._session(self.host.parent_id)["messages"]
+                         if m.get("inputId") == self.continuation_id and m.get("inputOrigin") == "peer")
+            assert peer == saved["peerEnvelope"]
+            assert text == peer_input(saved["peerEnvelope"], saved["text"])
         self.boundaries.append({
-            "kind": "peer" if peer else "goal",
+            "kind": "peer" if peer else "goal" if text == REASON else "unexpected",
             "generationId": worker.runtime.generation["id"],
             "inputIds": list(worker.runtime.generation["input_ids"]),
             "goal": copy.deepcopy(worker.session.coordinator.session_state.get("goal")),
             "text": text,
+            "selectedMetadata": copy.deepcopy(last_user.metadata),
+            "peerCandidates": [{"envelope": e, "text": t} for e, t in envelopes
+                               if e["inputId"] == self.continuation_id],
+            "userRows": [{"metadata": copy.deepcopy(m.metadata),
+                          "textStart": message_text(m)[:160], "textLength": len(message_text(m))}
+                         for m in request.messages if m.role == "user"],
         })
         if len(self.boundaries) == 1:
             self.next_request.set()
@@ -131,6 +199,15 @@ class Peer(ScriptedProvider):
 
 @pytest.mark.parametrize("goal_on", [False, True], ids=["no-goal", "active-goal"])
 async def test_qualified_peer_precedes_automatic_goal_turn(tmp_path, monkeypatch, goal_on):
+    # Keep the publisher's exact JUnit identities. Each case must check both
+    # supported busy delivery and the genuinely unsubmitted idle fallback.
+    for boundary in ("supported", "unavailable"):
+        directory = tmp_path / boundary
+        directory.mkdir()
+        await run_ordering(directory, monkeypatch, goal_on, boundary)
+
+
+async def run_ordering(tmp_path, monkeypatch, goal_on, boundary):
     host = OrderingHost()
     monkeypatch.setattr(runtime_worker, "publish", host.publish)
     workspace = tmp_path / "workspace"
@@ -150,11 +227,14 @@ async def test_qualified_peer_precedes_automatic_goal_turn(tmp_path, monkeypatch
         "amplifier_module_" + name.replace("-", "_")).origin).parent
         for name in ("loop-live", "context-simple")}
     host.pump = asyncio.create_task(host.route_events())
-    trace = {"goalOn": goal_on, "oracle": "eligible exact peer input before generic goal prompt"}
+    trace = {"goalOn": goal_on, "boundary": boundary,
+             "oracle": "eligible exact peer input before generic goal prompt"}
     try:
         async with asyncio.timeout(45):
             worker = await host.mount(source, parent, paths)
             peer_worker = await host.mount(target, peer, paths)
+            if boundary == "unavailable":
+                unavailable_request_boundary(worker)
             evaluations = []
 
             async def evaluate(*args):
@@ -171,6 +251,13 @@ async def test_qualified_peer_precedes_automatic_goal_turn(tmp_path, monkeypatch
                     "objective": "Check the synthetic peer result, then continue.", "maxTurns": 8,
                 }, origin="ui", command_id="ordering-task", include_state=False)
                 assert result["accepted"]
+                # Seed retained progress before execution, not native lifecycle.
+                # Subsequent accounting must preserve it rather than restart at 0.
+                worker.session.coordinator.session_state["goal"].update(
+                    turns_used=2, continuations=1,
+                    reasons=["Retained prior reason."], last_reason="Retained prior reason.",
+                    extra_progress={"retain": ["unknown fields"]})
+                worker.controls.persist(task_only=True)
             task_before = copy.deepcopy(worker.controls.tasks.record())
             epoch_before = source.get("interruptionRevision", 0)
             policy_before = copy.deepcopy(worker.controls.capacity.policy)
@@ -179,59 +266,140 @@ async def test_qualified_peer_precedes_automatic_goal_turn(tmp_path, monkeypatch
             }, origin="ui", command_id=HUMAN, include_state=False)
             await asyncio.wait_for(parent.waiting.wait(), 15)
             original_generation = worker.runtime.generation["id"]
+            goal = worker.session.coordinator.session_state.get("goal")
+            before_goal = copy.deepcopy(goal)
+            trace["goalBeforeReturn"] = before_goal
             peer.release.set()
             await host.outcome(peer_worker, parent.request_id)
+            await host.settle()
             receipt = app.collaboration.receipt(parent.request_id)
-            queued = app.collaboration.receipt(parent.continuation_id)
             assert receipt["response"]["qualified"] and receipt["response"]["status"] == "sealed"
-            assert queued["delivery"] == "queued"
-            assert not app.collaboration.guard(queued)
-            assert parent.continuation_id not in worker.runtime.accepted
+            if boundary == "unavailable":
+                delivery = assert_waiting_unsubmitted(host, worker, parent.continuation_id)
+                ready = worker.session.coordinator.get_capability("web.peer_continuation_ready")
+                assert await ready() is True
+            else:
+                delivery = app.collaboration.receipt(parent.continuation_id)
+                assert delivery["mode"] == "auto" and delivery["delivery"] == "accepted"
+                assert delivery["admissionMode"] == "steer"
+                assert delivery["targetGenerationId"] == original_generation
+                command = worker.runtime.accepted[parent.continuation_id]
+                assert command.kind == "steer" and command.target_generation_id == original_generation
+                accepted = [e for e in worker.runtime.events if e["type"] == "steering.accepted"
+                            and e["input_id"] == parent.continuation_id]
+                assert len(accepted) == 1
+                assert accepted[0]["target_generation_id"] == original_generation
+                assert not any(e["type"] == "steering.applied" and e["input_id"] == parent.continuation_id
+                               for e in worker.runtime.events)
             assert worker.runtime.generation["id"] == original_generation
-            trace["queued"] = copy.deepcopy(queued)
+            assert worker.session.coordinator.session_state.get("goal") == before_goal
+            assert evaluations == []
+            trace["beforeRelease"] = copy.deepcopy(delivery)
             trace["sealed"] = copy.deepcopy(receipt)
             parent.release.set()
             await asyncio.wait_for(parent.next_request.wait(), 15)
             trace["firstNextRequest"] = copy.deepcopy(parent.boundaries[0])
             # Preserve the discriminator before cleanup lets later turns finish.
             trace["orderingPassed"] = parent.boundaries[0]["kind"] == "peer"
+            assert trace["orderingPassed"], (
+                "Generic goal prompt reached the provider before the exact peer input",
+                trace["firstNextRequest"],
+            )
+            if boundary == "supported":
+                assert parent.boundaries[0]["generationId"] == original_generation
+                assert parent.boundaries[0]["inputIds"] == [HUMAN, parent.continuation_id]
+                assert parent.boundaries[0]["goal"] == before_goal
+                assert worker.session.coordinator.session_state.get("goal") is goal
+                assert evaluations == []
+            else:
+                assert parent.boundaries[0]["generationId"] != original_generation
+                assert parent.boundaries[0]["inputIds"] == [parent.continuation_id]
+                if goal_on:
+                    preserved = parent.boundaries[0]["goal"]
+                    assert preserved["turns_used"] == before_goal["turns_used"] + 1
+                    assert preserved["continuations"] == before_goal["continuations"]
+                    assert preserved["cap"] == before_goal["cap"] == 8
+                    assert preserved["reasons"] == before_goal["reasons"] + [REASON]
+                    assert preserved["extra_progress"] == before_goal["extra_progress"]
+                    assert len(evaluations) == 1
+                else:
+                    assert parent.boundaries[0]["goal"] is None and evaluations == []
             parent.release_next.set()
             first = await host.outcome(worker, HUMAN)
             final = await host.outcome(worker, parent.continuation_id)
+            await host.settle()
+            admissions_before = copy.deepcopy(host.admissions)
+            receipt_before = copy.deepcopy(app.collaboration.receipt(parent.continuation_id))
             await app.collaboration.drain(source["id"])
             app.collaboration.start()  # Restart only the observation/drain path.
-            await host.flush()
-            while app.tasks:
-                await asyncio.wait_for(asyncio.gather(*list(app.tasks)), 5)
-            assert final["generation_id"] != original_generation == first["generation_id"]
-            assert final["input_ids"] == [parent.continuation_id]
-            assert sum(a["inputId"] == parent.continuation_id for a in host.admissions) == 1
-            assert app.collaboration.receipt(parent.continuation_id)["delivery"] == "accepted"
+            await host.settle()
+            assert host.admissions == admissions_before
+            assert app.collaboration.receipt(parent.continuation_id) == receipt_before
+            attempts = [a for a in host.admissions if a["inputId"] == parent.continuation_id]
+            assert sum(a["accepted"] is True for a in attempts) == 1
+            for attempt in attempts:
+                if not attempt["accepted"]:
+                    assert attempt["effect"] == "none" and attempt["waitingForBoundary"] is True
+            if boundary == "supported":
+                assert len(attempts) == 1
+                assert final["generation_id"] == original_generation == first["generation_id"]
+                assert final["input_ids"] == [HUMAN, parent.continuation_id]
+                assert receipt_before["delivery"] == "applied"
+            else:
+                assert len(attempts) >= 2  # No-effect wait(s), then exactly one real submit.
+                assert final["generation_id"] != original_generation == first["generation_id"]
+                assert final["input_ids"] == [parent.continuation_id]
+                assert receipt_before["delivery"] == "accepted"
+                assert receipt_before["admissionMode"] == "queue"
             current = worker.controls.tasks.record()
-            assert (current or {}).get("revision") == (task_before or {}).get("revision")
-            assert (current or {}).get("status") == (task_before or {}).get("status")
+            for key in ("id", "revision", "status", "objective", "maxTurns", "continuationEpoch"):
+                assert (current or {}).get(key) == (task_before or {}).get(key)
             assert source.get("interruptionRevision", 0) == epoch_before
             assert worker.controls.capacity.policy == policy_before
             native = worker.runtime.events
             finished = next(e for e in native if e["type"] == "generation.finished"
                             and e["generation_id"] == original_generation)
-            idle = next(e for e in native if e["type"] == "session.idle"
-                        and e["sequence"] > finished["sequence"])
-            started = next(e for e in native if e["type"] == "generation.started"
-                           and e["initial_input_id"] == parent.continuation_id)
-            assert finished["sequence"] < idle["sequence"] < started["sequence"]
+            starts = [e for e in native if e["type"] == "generation.started"]
+            assert [e["initial_input_id"] for e in starts] == (
+                [HUMAN] if boundary == "supported" else [HUMAN, parent.continuation_id])
+            assert sum(e["type"] == "input.accepted" and e.get("input_id") == parent.continuation_id
+                       for e in native) == 1
+            delivered = [e for e in native if e["type"] == "input.delivered"
+                         and e["input_id"] == parent.continuation_id]
+            assert len(delivered) == 1
+            applied = [e for e in native if e["type"] == "steering.applied"
+                       and e["input_id"] == parent.continuation_id]
+            if boundary == "supported":
+                assert len(applied) == 1 and applied[0]["target_generation_id"] == original_generation
+                assert delivered[0]["sequence"] <= applied[0]["sequence"] < finished["sequence"]
+                assert not any(e["type"] == "session.idle"
+                               and starts[0]["sequence"] < e["sequence"] < applied[0]["sequence"]
+                               for e in native)
+            else:
+                assert applied == []
+                idle = next(e for e in native if e["type"] == "session.idle"
+                            and e["sequence"] > finished["sequence"])
+                assert finished["sequence"] < idle["sequence"] < starts[1]["sequence"] < delivered[0]["sequence"]
+            canonical = worker.store.load(worker.session.session_id)[0]
+            persisted = [(m.get("metadata") or {}).get("amplifier_input", {}).get("id")
+                         for m in canonical if m.get("role") == "user"]
+            assert persisted.count(HUMAN) == persisted.count(parent.continuation_id) == 1
             trace.update(boundaries=parent.boundaries, evaluations=evaluations,
                          finalReceipt=app.collaboration.receipt(parent.continuation_id))
-            if goal_on and trace["orderingPassed"]:
-                preserved = parent.boundaries[0]["goal"]
-                assert preserved["turns_used"] == 1 and preserved["continuations"] == 0
-                assert preserved["cap"] == 8 and preserved["reasons"] == [REASON]
-                assert parent.boundaries[1]["kind"] == "goal"
+            if goal_on:
                 assert len(evaluations) == 3
-            assert trace["orderingPassed"], (
-                "Generic goal prompt reached the provider in the original generation "
-                "before the already-qualified exact peer continuation was admitted"
-            )
+                assert [g["turns_used"] for g in evaluations] == [3, 4, 5]
+                assert [g["continuations"] for g in evaluations] == (
+                    [1, 2, 3] if boundary == "supported" else [1, 1, 2])
+                assert [g["reasons"] for g in evaluations] == [
+                    before_goal["reasons"] + [REASON] * index for index in range(3)]
+                assert all(g["cap"] == 8 and g["extra_progress"] == before_goal["extra_progress"]
+                           for g in evaluations)
+                assert [b["kind"] for b in parent.boundaries] == (
+                    ["peer", "goal", "goal"] if boundary == "supported" else ["peer", "goal"])
+                assert worker.session.coordinator.session_state["goal"] is None
+            else:
+                assert evaluations == [] and [b["kind"] for b in parent.boundaries] == ["peer"]
     finally:
         parent.release.set()
         parent.release_next.set()
@@ -243,7 +411,7 @@ async def test_qualified_peer_precedes_automatic_goal_turn(tmp_path, monkeypatch
         if evidence:
             path = Path(evidence)
             path.mkdir(parents=True, exist_ok=True)
-            (path / f"ordering-{'goal' if goal_on else 'control'}.json").write_text(
+            (path / f"ordering-{boundary}-{'goal' if goal_on else 'control'}.json").write_text(
                 json.dumps(trace, indent=2, default=str) + "\n")
         await host.close()
         await app.close()
@@ -275,6 +443,7 @@ async def native_wait(tmp_path, monkeypatch):
     try:
         worker = await host.mount(source, parent, paths)
         peer_worker = await host.mount(target, peer, paths)
+        unavailable_request_boundary(worker)
         async def satisfied(*args):
             return True, "Synthetic cleanup evaluation."
         worker.session.coordinator.get("orchestrator")._evaluate_goal = satisfied
@@ -288,11 +457,20 @@ async def native_wait(tmp_path, monkeypatch):
         await asyncio.wait_for(parent.waiting.wait(), 15)
         peer.release.set()
         await host.outcome(peer_worker, parent.request_id)
-        assert app.collaboration.receipt(parent.continuation_id)["delivery"] == "queued"
+        await host.settle()
+        assert_waiting_unsubmitted(host, worker, parent.continuation_id)
         coordinator = worker.session.coordinator
+        ready = coordinator.get_capability("web.peer_continuation_ready")
+        # Every negative starts from a known-positive, settled native wait.
+        # Otherwise a suppressed/actively submitting fixture could pass vacuously.
+        before_rows = app.db.execute("SELECT id,receipt FROM commands ORDER BY rowid").fetchall()
+        changes = app.db.total_changes
+        assert await ready() is True
+        assert app.db.execute("SELECT id,receipt FROM commands ORDER BY rowid").fetchall() == before_rows
+        assert app.db.total_changes == changes
         yield SimpleNamespace(host=host, app=app, source=source, target=target,
             worker=worker, parent=parent, peer=peer, coordinator=coordinator,
-            ready=coordinator.get_capability("web.peer_continuation_ready"))
+            ready=ready)
     finally:
         parent.release.set()
         parent.release_next.set()
@@ -364,6 +542,7 @@ async def test_ineligible_receipts_do_not_gain_yield_authority(native_wait, chan
         else:
             receipt.pop("dependencyRequestId")
         f.app.collaboration.save(f.parent.continuation_id, receipt)
+    await f.host.settle()
     before, changes = saved_receipts(f), f.app.db.total_changes
     if change == "stop":
         # A stale transport-bound generation is rejected by the host before
@@ -410,6 +589,7 @@ async def test_yield_rechecks_after_awaited_real_bridge(native_wait, change):
     async def delayed(operation, args):
         result = await original(operation, args)
         if operation == "coordination.continuation_ready":
+            assert result["ready"] is True
             reached.set()
             await asyncio.wait_for(release.wait(), 5)
             if change == "error":
@@ -482,16 +662,22 @@ async def test_irrelevant_queues_cannot_hide_qualified_continuation(native_wait)
                  "taskRevision": -1}
         f.app.collaboration.insert(stale["requestId"], str(index), stale)
         f.app.db.execute("UPDATE commands SET rowid=? WHERE id=?", (100 + index, stale["requestId"]))
-    before = saved_receipts(f)
+    before, changes = saved_receipts(f), f.app.db.total_changes
     assert await f.ready()
-    assert saved_receipts(f) == before
+    assert saved_receipts(f) == before and f.app.db.total_changes == changes
     assert f.app.collaboration.pending_continuation(f.source["id"])["inputId"] == valid["inputId"]
     f.parent.release.set()
     f.parent.release_next.set()
     await f.host.outcome(f.worker, HUMAN)
     await f.host.outcome(f.worker, valid["inputId"])
+    await f.host.settle()
     assert f.app.collaboration.receipt(valid["inputId"])["delivery"] == "accepted"
-    assert [a["inputId"] for a in f.host.admissions if a["sessionId"] == f.source["id"]] == [valid["inputId"]]
+    attempts = [a for a in f.host.admissions if a["sessionId"] == f.source["id"]]
+    assert {a["inputId"] for a in attempts} == {valid["inputId"]}
+    assert sum(a["accepted"] is True for a in attempts) == 1
+    for attempt in attempts:
+        if not attempt["accepted"]:
+            assert attempt["effect"] == "none" and attempt["waitingForBoundary"] is True
 
 
 async def test_host_capacity_denial_is_read_only(native_wait):
