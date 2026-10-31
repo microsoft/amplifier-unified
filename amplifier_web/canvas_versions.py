@@ -27,7 +27,7 @@ def definition(row, version=None, db=None):
     """Select a definition without changing canonical content or shared state."""
     if version is None:
         return row
-    from .service import AppError
+    from .errors import AppError
     saved = next((item for item in entries(row) if item['version'] == version), None)
     if saved is None:
         if version == latest(row) and not entries(row):
@@ -118,7 +118,7 @@ def match_file(state, canvas):
 
 
 def assert_clean(service, identity):
-    from .service import AppError
+    from .errors import AppError
     for client in service.clients.records.values():
         if client.get('canvasViews', {}).get('preferences', {}).get('primary:' + identity, {}).get('dirty'):
             raise AppError('Finish or cancel the artifact edit before changing its saved version.', 409, code='canvas_view_dirty')
@@ -136,7 +136,7 @@ def definitions(schema, string):
 
 
 def command(service, action, args, origin):
-    from .service import AppError
+    from .errors import AppError
     from .canvas_library import load, remember
     from .state_storage import resource
     state = service.state
