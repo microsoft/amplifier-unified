@@ -5016,7 +5016,7 @@ class AppService:
         transport = args
         args = {key: value for key, value in args.items()
                 if key not in {'_generationId', '_runtimeSessionId', '_inputBindings', '_inputClients',
-                               '_workOrigin', '_workDispatchGuarded', '_responseMode'}}
+                               '_workOrigin', '_workDispatchGuarded', '_responseMode', '_childOrigin', '_runtimeOwnerId'}}
         from .workspace_work_effects import APP_EFFECT, app_request
         token = APP_EFFECT.set(app_request(operation, args, session_id))
         try:

@@ -622,7 +622,7 @@ class ProcessContractTests(unittest.IsolatedAsyncioTestCase):
         result=await self.manager.send(self.session,'hello','input-1',self.emit)
         self.assertTrue(result['accepted'])
         await asyncio.wait_for(self.received.wait(),3)
-        self.assertEqual(self.bridges,[('get_state',{},'fixture-session')])
+        self.assertEqual(self.bridges, [('get_state', {'_runtimeOwnerId': self.manager.workers['fixture-session']['runtimeOwnerId']}, 'fixture-session')])
         message=next(p for k,p in self.events if k=='assistant.message')
         self.assertEqual(message['text'],'7')
         self.assertEqual(message['inputId'],'input-1')
@@ -636,7 +636,7 @@ class ProcessContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ready['report']['session_id'], 'native-root')
         self.assertEqual(ready['report']['owner_session_id'], 'fixture-session')
         self.assertEqual(ready['sessionId'], 'fixture-session')
-        self.assertEqual(self.bridges, [('get_state', {}, 'fixture-session')])
+        self.assertEqual(self.bridges, [('get_state', {'_runtimeOwnerId': self.manager.workers['fixture-session']['runtimeOwnerId']}, 'fixture-session')])
         root, child = [p for k,p in self.events if k == 'execution.event']
         self.assertEqual((root['sessionId'], root['rootSessionId']), ('fixture-session', 'fixture-session'))
         self.assertEqual((child['sessionId'], child['rootSessionId']), ('native-root-child', 'fixture-session'))

@@ -550,6 +550,7 @@ class RuntimeManager:
         # browser's execution logs, catalogs and attachment history is redundant.
         config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','interruptionRevision','bundle','selection','forkContext','replaceSavedSelection','bundleReplacement') if key in session}
         config['id'] = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
+        config['configurationPendingRevision'] = session.get('configurationPendingRevision', 0)
         config['ownerSessionId'] = sid  # Identity only; workers read current standing policy themselves.
         if preserve_configuration:
             config['_preserveConfiguration'] = True
@@ -652,7 +653,8 @@ class RuntimeManager:
                     else:
                         if not self.app_bridge:
                             raise RuntimeError("App controls are not connected")
-                        result = await self.app_bridge(data["operation"], data.get("args", {}), sid)
+                        result = await self.app_bridge(data["operation"], {**data.get("args", {}),
+                            "_runtimeOwnerId": row["runtimeOwnerId"]}, sid)
                 finally:
                     if timing:
                         timing.mark('handler.end')
