@@ -408,12 +408,12 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     selection = workflow['on']['workflow_dispatch']['inputs']['suite']
     assert selection['type'] == 'choice' and selection['default'] == 'full'
-    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native']
+    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'cold-control-restore']
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['on']['workflow_call']['secrets'] == {'LOOP_LIVE_CI_READ_KEY': {'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
     jobs = workflow['jobs']
-    assert jobs['python']['if'] == "${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' }}"
+    assert jobs['python']['if'] == "${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' }}"
     assert jobs['python']['env']['CHECK_SUITE'] == "${{ inputs.suite || 'full' }}"
     assert jobs['core-wheels']['if'] == "${{ inputs.core_wheels && (!inputs.suite || inputs.suite == 'full') }}"
     remote = jobs['remote-test-origins']
@@ -457,6 +457,98 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     assert manager['if'] == "${{ env.CHECK_SUITE == 'manager-exception-boundary' }}"
     assert 'assert path.is_relative_to(root)' in manager['run']
     assert 'if [ "$CHECK_SUITE" = manager-exception-boundary ]; then' in focused['run']
+
+
+def test_cold_control_restore_is_exclusive_manual_locked_and_bounded():
+    workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
+    assert set(workflow['on']['workflow_dispatch']['inputs']) == {'suite', 'core_wheels'}
+    assert workflow['on']['workflow_dispatch']['inputs']['suite']['default'] == 'full'
+    assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
+    assert workflow['permissions'] == {'contents': 'read'}
+    jobs = workflow['jobs']
+    assert set(jobs) == {'python', 'core-wheels', 'remote-test-origins', 'incompatible-selection', 'cold-control-restore'}
+    job = jobs['cold-control-restore']
+    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && inputs.suite == 'cold-control-restore' }}"
+    assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '15'
+    assert 'needs' not in job and 'permissions' not in job and 'continue-on-error' not in job
+    assert all('needs' not in other for other in jobs.values())
+    steps = job['steps']
+    assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
+    assert steps[1]['run'].splitlines()[0] == 'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'
+    assert 'cp scripts/cold_restore_checks.py scripts/browser_check_runner.py .github/workflows/python-checks.yml pyproject.toml uv.lock' in steps[1]['run']
+    assert steps[2]['with'] == {'python-version': '3.13'}
+    resolve = next(i for i, s in enumerate(steps) if s.get('id') == 'runtime')
+    checkout = next(i for i, s in enumerate(steps)
+                    if s.get('with', {}).get('repository') == 'microsoft/amplifier-module-loop-live')
+    assert resolve < checkout < len(steps) - 2
+    assert "tomllib.load(open('uv.lock', 'rb'))" in steps[resolve]['run']
+    assert "re.fullmatch('[0-9a-f]{40}', revision)" in steps[resolve]['run']
+    assert steps[checkout]['with'] == {
+        'repository': 'microsoft/amplifier-module-loop-live', 'ref': '${{ steps.runtime.outputs.revision }}',
+        'path': '.ci/loop-live', 'ssh-key': '${{ secrets.LOOP_LIVE_CI_READ_KEY }}', 'persist-credentials': 'false'}
+    assert steps[-2] == {
+        'name': 'Qualify fixed source and installed cold restore once', 'timeout-minutes': '11',
+        'run': 'set -o pipefail\npython -u scripts/cold_restore_checks.py 2>&1 | tee output/cold-control-restore-run.log\n'}
+    commands = '\n'.join(step.get('run', '') for step in steps)
+    assert commands.count('python -u scripts/cold_restore_checks.py') == 1
+    assert all(value not in commands for value in ('npm ', 'playwright', 'uv pip install', '@main'))
+    assert all('continue-on-error' not in step for step in steps)
+    assert steps[-1] == {
+        'name': 'Retain all evidence including failed and unrun phases', 'if': 'always()',
+        'uses': 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+        'with': {'name': 'cold-control-restore-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
+                 'path': 'output/cold-control-restore-inputs/\noutput/cold-control-restore-run.log\noutput/cold-control-restore/\n',
+                 'if-no-files-found': 'error', 'retention-days': '14'}}
+    for path in (ROOT / '.github/workflows').glob('*.yml'):
+        if path.name != 'python-checks.yml':
+            assert 'cold-control-restore' not in path.read_text()
+            assert 'cold_restore_checks.py' not in path.read_text()
+
+
+def test_cold_control_restore_keeps_exact_cases_import_proof_and_cleanup_contract():
+    import ast
+    source = (ROOT / 'scripts/cold_restore_checks.py').read_text()
+    tree = ast.parse(source)
+    constants = {node.targets[0].id: ast.literal_eval(node.value)
+                 for node in tree.body if isinstance(node, ast.Assign)
+                 and isinstance(node.targets[0], ast.Name)
+                 and node.targets[0].id in {'SOURCE_SELECTORS', 'INSTALLED_SELECTORS', 'NOT_SELECTED'}}
+    assert constants['SOURCE_SELECTORS'] == [
+        'tests/test_assignment_task_limits.py',
+        'tests/test_assignment_task_limits_native.py::test_native_exhausted_member_receives_fresh_work_after_manager_control',
+        'tests/test_capacity.py::test_running_cas_duplicate_restart_ui_agent_parity_and_wrong_session',
+        'tests/test_runtime_controls.py::test_cancelled_restore_retains_controls_and_releases_persistence_guard']
+    assert constants['INSTALLED_SELECTORS'] == [
+        'tests/test_assignment_task_limits.py::test_cold_limit_correction_preserves_saved_budget_at_every_write',
+        'tests/test_assignment_task_limits.py::test_failed_cold_limit_preparation_keeps_previously_saved_mode',
+        'tests/test_runtime_controls.py::test_cancelled_restore_retains_controls_and_releases_persistence_guard[False]',
+        'tests/test_runtime_controls.py::test_cancelled_restore_retains_controls_and_releases_persistence_guard[True]']
+    assert constants['NOT_SELECTED'] == 'tests/test_runtime_controls.py::test_real_core_controls_and_tool_approval'
+    assert "'--locked', '--group', 'dev', '--group', 'artifacts', '--no-install-project'" in source
+    assert "'.insteadOf'" in source and "'GIT_CONFIG_VALUE_0': 'https://github.com/microsoft/amplifier-module-loop-live'" in source
+    assert source.count("['uv', 'build', '--wheel'") == 1
+    assert "'--no-build-isolation'" in source and "'--no-deps', '-r'" in source
+    assert "sorted(lines) == sorted((OUTPUT / 'requirements.txt').read_text().splitlines())" in source
+    assert 'signal.alarm(600)' in source and "remaining = 600 - (time.monotonic() - started)" in source
+    assert "assert not sys.argv[1:]" in source
+    assert "'scenarios': [{'id': name, 'command': command, 'env': common}]" in source
+    assert "row['cleanup'] == {'remaining': [], 'terminated': 0}" in source
+    assert 'run_scenarios(root, plan' in source and 'subprocess.Popen' not in source
+    assert "shutil.copytree(ROOT / 'tests', harness / 'tests'" in source
+    assert "'-I', str(harness / 'scripts/cold_restore_checks.py'), '--installed-tests'" in source
+    assert source.index("save(evidence / (phase + '-imports-before.json'), record)") < source.index('pytest.main(args')
+    for field in ("'executable': sys.executable", "'cwd': str(Path.cwd())",
+                  "'sysPath': sys.path.copy()", "'PYTHONPATH': os.environ.get('PYTHONPATH')"):
+        assert field in source
+    assert 'assert not path.is_relative_to(source)' in source
+    assert 'assert all(not Path(p).resolve().is_relative_to(source) for p in sys.path)' in source
+    assert "('installed', 4) if installed else ('source', 34)" in source
+    assert "'failure': 0, 'error': 0, 'skipped': 0" in source
+    assert "verify_wheel(wheel, candidate, package_root)" in source
+    assert "assets == candidate['static']" in source and "installed[path] == [encoded, size]" in source
+    assert "candidate['files'] == {p: sha(ROOT / p) for p in files}" in source
+    assert all(value not in source for value in ("'npm'", "'node'", "'--upgrade'", "'--refresh'", '@main'))
 
 
 @pytest.mark.parametrize(('suite', 'targets'), [

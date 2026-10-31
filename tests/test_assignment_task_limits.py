@@ -1,5 +1,6 @@
 """An exhausted member can receive an authorized control correction, not a replay."""
 import copy
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -283,3 +284,113 @@ async def test_committed_receipt_is_not_hidden_by_an_unrelated_late_progress_flu
     result = await change(ctx, args(ctx, sourceMessageId=human(ctx)['id']))
     assert result['accepted'] and result['result']['receipt']['revision'] == 2
     assert ctx.native.tasks.record()['maxTurns'] is None
+
+
+async def test_cold_limit_correction_preserves_saved_budget_at_every_write(limited, monkeypatch):
+    """Saved budget is real control output, not an edited or impossible record.
+
+    The process/mount transport is synthetic. Management preparation, restore,
+    public assignment dispatch, task CAS and disk persistence are unchanged.
+    Every durable write matters: a crash can retain an intermediate restore.
+    """
+    from amplifier_web import runtime_controls
+    from amplifier_web.management import Management
+
+    ctx = limited
+    ctx.native.coordinator.loop.max_iterations = 10
+    ctx.native.coordinator.context.max_tokens = 24000
+    await ctx.native.perform('budget.set', {'maxIterations': 23, 'contextTokens': 16000})
+    before = json.loads(ctx.native.state_path().read_text())
+    old_native, old_management = ctx.native, ctx.app.management
+    target_before = copy.deepcopy({key: ctx.target.get(key) for key in
+                                  ('status', 'interruptionRevision', 'lastInterruption')})
+    writes, started = [], []
+    original_write = runtime_controls.write_private
+
+    def observe(path, text):
+        original_write(path, text)
+        if path == old_native.state_path():
+            writes.append(json.loads(path.read_text()))
+
+    async def cold_start(session, emit, *, guard=None, **options):
+        assert session['id'] == ctx.target['id']
+        if guard:
+            guard()
+        started.append(session['id'])
+        ctx.native = controls(session['id'])
+        ctx.native.coordinator.loop.max_iterations = 10
+        ctx.native.coordinator.context.max_tokens = 24000
+        assert ctx.native.coordinator.loop.max_iterations != before['budget']['maxIterations']
+        await ctx.native.restore()
+        if guard:
+            guard()
+
+    async def control(sid, operation, values, *, guard=None):
+        if guard:
+            guard()
+        return await ctx.native.perform(operation, values)
+
+    monkeypatch.setattr(runtime_controls, 'write_private', observe)
+    monkeypatch.setattr(ctx.app.runtime, 'start', cold_start, raising=False)
+    monkeypatch.setattr(ctx.app.runtime, 'control', control)
+    ctx.app.management = Management(ctx.app)
+    try:
+        result = await change(ctx, args(ctx, sourceMessageId=human(ctx)['id'], maxTurns=12))
+        after = json.loads(ctx.native.state_path().read_text())
+        assert started == [ctx.target['id']]
+        assert result['result']['inputSent'] is False
+        assert after['task']['maxTurns'] == 12
+        assert after['task']['id'] == before['task']['id']
+        assert after['goal']['turns_used'] == 8
+        assert {key: ctx.target.get(key) for key in target_before} == target_before
+        for key in ('status', 'objective', 'constraints', 'questionIds', 'operationIds', 'artifactRefs'):
+            assert after['task'][key] == before['task'][key]
+        assert not ctx.app.runtime.inputs
+        task_fields = {'task', 'goal', 'taskReceipts', 'taskHistory'}
+        unrelated = lambda value: {key: item for key, item in value.items() if key not in task_fields}
+        assert writes
+        assert unrelated(after) == unrelated(before)
+        assert all(unrelated(saved) == unrelated(before) for saved in writes), [
+            saved['budget'] for saved in writes]
+    finally:
+        ctx.app.management = old_management
+        if ctx.native is not old_native:
+            await ctx.native.close()
+        ctx.native = old_native
+
+
+async def test_failed_cold_limit_preparation_keeps_previously_saved_mode(limited, monkeypatch):
+    """A formerly available local mode disappears before a legitimate cold load."""
+    from unittest.mock import AsyncMock
+    from amplifier_web import runtime_controls
+    ctx = limited
+    ctx.native.coordinator.session_state['mode_discovery'] = SimpleNamespace(
+        find=lambda name: SimpleNamespace(name=name),
+        list_modes=lambda: [('review-only', 'Synthetic mode', 'local')])
+    ctx.native.coordinator.hooks = SimpleNamespace(emit=AsyncMock())
+    await ctx.native.perform('mode.set', {'name': 'review-only'})
+    before = ctx.native.state_path().read_bytes()
+    writes = []
+    original_write = runtime_controls.write_private
+    def observe(path, text):
+        original_write(path, text)
+        if path == ctx.native.state_path():
+            writes.append(text)
+    monkeypatch.setattr(runtime_controls, 'write_private', observe)
+    restored = controls(ctx.target['id'])
+    restored.coordinator.session_state['mode_discovery'] = SimpleNamespace(
+        find=lambda name: None, list_modes=lambda: [])
+    async def prepare(session, *, restart_guard=None):
+        if restart_guard:
+            restart_guard()
+        await restored.restore()
+    ctx.app.management.ensure_runtime = prepare
+    try:
+        with pytest.raises(AppError, match='Mode is not available'):
+            await change(ctx, args(ctx, sourceMessageId=human(ctx)['id']))
+        assert not ctx.calls and not ctx.app.runtime.inputs
+        assert ctx.native.state_path().read_bytes() == before
+        assert not writes
+        assert (await read(ctx, commandId='correct-limit'))['receiptStatus'] == 'not_observed'
+    finally:
+        await restored.close()
