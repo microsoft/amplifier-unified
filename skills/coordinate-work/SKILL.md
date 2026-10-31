@@ -185,9 +185,14 @@ compare those exact links, not equal message text.
    Use coordination.watch for one explicit status/idle observation with
    expiresInSeconds, then coordination.watch.read/cancel by watchId. Watching
    never starts the target. Its expiry is an observation, not approval.
-   A conversation admits at most 64 queued inputs plus reserved replies,
-   at most 16 pending inputs per sender and 32 per assignment. Pending senders
-   rotate at admission. New queue inputs expire after one day by default;
+   Pending inbox counts have no ceiling by default. Global Work concurrency
+   settings can optionally limit pending inputs plus reserved replies per chat,
+   pending inputs from one sender, and pending inputs from one assignment;
+   0 means no count ceiling. Respect configured positive limits. Admission
+   selects the least recently served sender across the complete pending queue,
+   then reads that sender’s next bounded FIFO batch. Raising an inbox limit
+   resumes saved backpressured returns through the normal guarded path.
+   New queue inputs expire after one day by default;
    choose expiresInSeconds up to one day when a different deadline is useful.
    Expired input remains inspectable and is not executed. A causal chain is
    bounded to 16 peer hops; only actual new human input resets that boundary.
