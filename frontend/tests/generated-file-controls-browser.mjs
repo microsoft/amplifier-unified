@@ -32,6 +32,8 @@ const metadataByRequest=new WeakMap();
 const pageLabels=new WeakMap(),routeCleanups=new Set(),browserOwners=[];
 const cornerDiagnosticMode=process.env.FILE_CONTROLS_CORNER_DIAGNOSTIC==='1';
 const cornerDiagnostics=[];
+const contourOracle={version:'circular-contour-v1',formula:'d=max(3,r-(r-3)/sqrt(2))',
+ logicChecks:[],negativeCounts:{size:0,regions:0,obstruction:0,paddingOrigin:0}};
 let cornerDiagnosticComplete=false;
 let logs='',lineBuffer='',page,ready,seed,failure,cleanup,timer,running;
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
@@ -327,6 +329,177 @@ async function preserved(target,draft){
  assert.equal(await target.getByRole('textbox',{name:'Message Amplifier',exact:true}).innerText(),draft);
 }
 
+// One deterministic circular-contour definition, also installed verbatim in the
+// page. No passing-point search, CSS radius rescaling or Chromium pixel snapping.
+// Reject geometry outside this deliberately small supported domain.
+function circularContour({rect,radii,transforms,fragments,viewport}){
+ const require=(condition,message)=>{if(!condition)throw Error(`Unsupported contour geometry: ${message}`)};
+ require(['left','top','right','bottom','width','height'].every(key=>Number.isFinite(rect[key])),'nonfinite rect');
+ require(rect.width>0&&rect.height>0&&rect.right-rect.left===rect.width&&rect.bottom-rect.top===rect.height,
+  'inconsistent border box');
+ require(fragments===1,'fragmented border box');
+ require(Number.isFinite(viewport.width)&&viewport.width>0&&Number.isFinite(viewport.height)&&viewport.height>0&&
+  viewport.scale===1&&viewport.offsetLeft===0&&viewport.offsetTop===0,'visual viewport mapping');
+ require(Array.isArray(transforms)&&transforms.length>0&&transforms.every(style=>
+  ['transform','perspective','translate','rotate','scale','offsetPath'].every(key=>style[key]==='none')&&
+  style.transformStyle==='flat'&&['1','normal'].includes(style.zoom)),'transform/perspective/zoom');
+ const px=value=>{
+  require(typeof value==='string'&&/^(?:\d+(?:\.\d+)?|\.\d+)px$/.test(value),'radius must be finite computed px');
+  const number=Number(value.slice(0,-2));require(Number.isFinite(number)&&number>=0,'nonfinite radius');return number;
+ };
+ require(Array.isArray(radii)&&radii.length===4,'four circular radii required');
+ const values=radii.map(value=>{
+  require(typeof value==='string','radius must be computed px');
+  const pair=value.trim().split(/\s+/);
+  require(pair.length===1||pair.length===2,'radius syntax');
+  const radius=px(pair[0]);
+  if(pair.length===2)require(px(pair[1])===radius,'elliptical radius');
+  return radius;
+ });
+ const [tl,tr,bl,br]=values;
+ require(tl+tr<=rect.width&&bl+br<=rect.width&&tl+bl<=rect.height&&tr+br<=rect.height,
+  'overlapping radii require unsupported used-radius scaling');
+ return values.map((radius,index)=>{
+  const inward=Math.max(3,radius-(radius-3)/Math.sqrt(2));
+  require(inward<rect.width/2&&inward<rect.height/2,'four distinct corner regions');
+  const right=index%2===1,bottom=index>=2;
+  return {corner:['top-left','top-right','bottom-left','bottom-right'][index],radius,inward,
+   x:right?rect.right-inward:rect.left+inward,y:bottom?rect.bottom-inward:rect.top+inward};
+ });
+}
+function installContourSampler(){
+ const px=value=>{
+  if(!/^(?:\d+(?:\.\d+)?|\.\d+)px$/.test(value)||!Number.isFinite(Number(value.slice(0,-2))))
+   throw Error('Unsupported contour geometry: border must be finite computed px');
+  return Number(value.slice(0,-2));
+ };
+ window.__fileControlsContourSample=node=>{
+  if(window!==window.top||!node.isConnected)throw Error('Unsupported contour geometry: detached or framed control');
+  const rect=node.getBoundingClientRect().toJSON(),style=getComputedStyle(node),transforms=[],ancestors=[];
+  for(let ancestor=node;ancestor;ancestor=ancestor.parentElement){
+   const computed=getComputedStyle(ancestor);
+   transforms.push(Object.fromEntries(['transform','perspective','translate','rotate','scale','offsetPath','transformStyle','zoom']
+    .map(key=>[key,computed[key]])));
+   ancestors.push({nodeId:window.__fileControlsNodeId(ancestor),x:ancestor.scrollLeft,y:ancestor.scrollTop});
+  }
+  for(const corner of ['top-left','top-right','bottom-left','bottom-right']){
+   const shape=style.getPropertyValue(`corner-${corner}-shape`);
+   if(shape&&shape!=='round')throw Error('Unsupported contour geometry: noncircular corner shape');
+  }
+  const radii=[style.borderTopLeftRadius,style.borderTopRightRadius,style.borderBottomLeftRadius,style.borderBottomRightRadius];
+  const viewport={width:innerWidth,height:innerHeight,scale:visualViewport?.scale??1,
+   offsetLeft:visualViewport?.offsetLeft??0,offsetTop:visualViewport?.offsetTop??0};
+  const points=window.__fileControlsCircularContour({rect,radii,transforms,fragments:node.getClientRects().length,viewport});
+  const borders={left:px(style.borderLeftWidth),top:px(style.borderTopWidth),
+   right:px(style.borderRightWidth),bottom:px(style.borderBottomWidth)};
+  if(borders.left+borders.right>=rect.width||borders.top+borders.bottom>=rect.height)
+   throw Error('Unsupported contour geometry: empty padding box');
+  const hit=point=>{
+   const element=document.elementFromPoint(point.x,point.y);
+   return {...point,reachable:point.x>=0&&point.y>=0&&point.x<innerWidth&&point.y<innerHeight&&
+    !!element&&node.contains(element),hit:element&&{nodeId:window.__fileControlsNodeId(element),tag:element.tagName}};
+  };
+  return {nodeId:window.__fileControlsNodeId(node),name:node.getAttribute('aria-label')||node.textContent.trim(),
+   tag:node.tagName,rect,radii,borders,transforms,viewport,scroll:{x:scrollX,y:scrollY,ancestors},
+   basis:'four contour-relative native hit probes',corners:points.map(hit),
+   legacyCorners:[[rect.left+3,rect.top+3],[rect.right-3,rect.top+3],[rect.left+3,rect.bottom-3],[rect.right-3,rect.bottom-3]]
+    .map(([x,y],index)=>hit({corner:points[index].corner,x,y}))};
+ };
+}
+function nativeSizeOracle(measured,label){
+ assert.ok(measured.rect.width>=44&&measured.rect.height>=44,`${label}: target below 44px`);
+}
+function nativeHitOracle(measured,label){
+ assert.ok(['BUTTON','SUMMARY'].includes(measured.tag),`${label}: native control required`);
+ nativeSizeOracle(measured,label);
+ assert.deepEqual(measured.corners.map(point=>point.corner),['top-left','top-right','bottom-left','bottom-right'],
+  `${label}: four distinct contour regions required`);
+ assert.ok(measured.corners.every(point=>point.reachable===true),`${label}: obscured/offscreen contour probe`);
+}
+function contourLogicChecks(){
+ const rect={left:0,top:0,right:100,bottom:44,width:100,height:44};
+ const plain={transform:'none',perspective:'none',translate:'none',rotate:'none',scale:'none',
+  offsetPath:'none',transformStyle:'flat',zoom:'1'};
+ const base={rect,radii:['0px','0px','0px','0px'],transforms:[plain],fragments:1,
+  viewport:{width:320,height:740,scale:1,offsetLeft:0,offsetTop:0}};
+ const square=circularContour(base);
+ assert.deepEqual(square.map(({x,y})=>({x,y})),[{x:3,y:3},{x:97,y:3},{x:3,y:41},{x:97,y:41}]);
+ contourOracle.logicChecks.push({check:'square radius 0 uses 3px',passed:true});
+ const circle=circularContour({...base,radii:['10px','10px 10px','10px','10px']});
+ assert.ok(circle.every(point=>Math.abs(point.inward-5.050252531694167)<1e-12));
+ assert.deepEqual(circle.map(point=>point.corner),square.map(point=>point.corner));
+ contourOracle.logicChecks.push({check:'circular radius 10 uses 5.050252531694167px',passed:true});
+ const invalid=[
+  ['nonfinite radius',{radii:['Infinitypx','0px','0px','0px']},/finite computed px/],
+  ['nonfinite rect',{rect:{...rect,width:Infinity}},/nonfinite rect/],
+  ['elliptical radius',{radii:['10px 11px','0px','0px','0px']},/elliptical radius/],
+  ['percentage radius',{radii:['10%','0px','0px','0px']},/finite computed px/],
+  ['negative radius',{radii:['-1px','0px','0px','0px']},/finite computed px/],
+  ['overlapping radii',{radii:['30px','30px','30px','30px']},/overlapping radii/],
+  ['transform',{transforms:[{...plain,transform:'matrix(1, 0, 0, 1, 0, 0)'}]},/transform\/perspective/],
+  ['perspective',{transforms:[{...plain,perspective:'100px'}]},/transform\/perspective/],
+  ['fragmented box',{fragments:2},/fragmented border box/],
+  ['inconsistent box',{rect:{...rect,right:101}},/inconsistent border box/],
+  ['coincident regions',{rect:{...rect,right:6,width:6}},/distinct corner regions/],
+  ['scaled viewport',{viewport:{...base.viewport,scale:2}},/visual viewport mapping/]
+ ];
+ for(const [name,change,message] of invalid){
+  assert.throws(()=>circularContour({...base,...change}),message);
+  contourOracle.logicChecks.push({check:`reject ${name}`,passed:true});
+ }
+ checks.push({check:'contour formula and unsupported geometry logic checks',count:contourOracle.logicChecks.length});
+}
+async function contourNegativeChecks(control){
+ await control.evaluate(node=>node.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'}));
+ const before=await control.evaluate(node=>window.__fileControlsContourSample(node));
+ nativeHitOracle(before,'negative baseline');
+ for(const dimension of ['width','height']){
+  assert.throws(()=>nativeHitOracle({...before,rect:{...before.rect,[dimension]:43.99}},'negative size'),/target below 44px/);
+  contourOracle.negativeCounts.size++;
+  checks.push({check:'negative control: native size below 44px rejected',dimension});
+ }
+ for(const [index,point] of before.corners.entries()){
+  const variant={...before,corners:before.corners.map((value,i)=>i===index?{...value,reachable:false}:value)};
+  assert.throws(()=>nativeHitOracle(variant,'negative region'),/obscured\/offscreen contour probe/);
+  contourOracle.negativeCounts.regions++;
+  checks.push({check:'negative control: individual contour region rejected',corner:point.corner});
+ }
+ // A real pointer-intercepting 2x2px DOM overlay, not just a falsified sample.
+ // It covers exactly the first probe; no app CSS, layout, or event is changed.
+ const negative={label:'negative-contour-overlay',before,removed:false};
+ geometry.push(negative);
+ const overlay=await control.evaluateHandle((node,point)=>{
+  const overlay=document.createElement('div');overlay.dataset.fileControlsNegative='one-contour-probe';
+  overlay.style.cssText=`all:initial;position:fixed;left:${point.x-1}px;top:${point.y-1}px;width:2px;height:2px;`+
+   'box-sizing:border-box;margin:0;padding:0;border:0;border-radius:0;pointer-events:auto;z-index:2147483647;';
+  document.documentElement.append(overlay);return overlay;
+ },before.corners[0]);
+ try{
+  const blocked=await control.evaluate(node=>window.__fileControlsContourSample(node));
+  // Do not mix a deliberately failed sample into positive geometry.corners.
+  negative.sample=blocked;
+  assert.deepEqual(blocked.rect,before.rect,'Overlay must not change control layout');
+  assert.deepEqual(blocked.corners.map(({x,y})=>({x,y})),before.corners.map(({x,y})=>({x,y})));
+  assert.deepEqual(blocked.corners.map(point=>point.reachable),[false,true,true,true],'Overlay must obstruct exactly ONE probe');
+  negative.hitOverlay=await overlay.evaluate((node,point)=>document.elementFromPoint(point.x,point.y)===node,before.corners[0]);
+  assert.equal(negative.hitOverlay,true);
+  assert.throws(()=>nativeHitOracle(blocked,'negative overlay'),/obscured\/offscreen contour probe/);
+  negative.rejected=true;
+  contourOracle.negativeCounts.obstruction++;
+  checks.push({check:'negative control: real one-probe pointer overlay rejected by same contour oracle',corner:before.corners[0].corner});
+ }finally{
+  try{
+   negative.removed=await overlay.evaluate(node=>{node.remove();return !node.isConnected});
+   assert.equal(negative.removed,true,'Negative overlay was not removed');
+  }
+  finally{await overlay.dispose()}
+ }
+ const restored=await control.evaluate(node=>window.__fileControlsContourSample(node));
+ negative.restored=restored;
+ nativeHitOracle(restored,'overlay removed');
+ assert.deepEqual(restored.corners,before.corners,'Removing overlay must restore the original hit targets');
+}
+
 async function measureControls(target,controls,label){
  const diagnostic=cornerDiagnosticMode&&label==='desktop';
  for(const [controlIndex,control] of controls.entries()){
@@ -335,6 +508,7 @@ async function measureControls(target,controls,label){
   // before hit testing rather than accepting a button covered by that heading.
   await control.evaluate(node=>node.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'}));
   const sample=(node,diagnostic)=>{
+   const contour=diagnostic?null:window.__fileControlsContourSample(node);
    const r=node.getBoundingClientRect(),inset=3,style=getComputedStyle(node);
    const points=[[r.left+inset,r.top+inset],[r.right-inset,r.top+inset],
     [r.left+inset,r.bottom-inset],[r.right-inset,r.bottom-inset]];
@@ -344,7 +518,7 @@ async function measureControls(target,controls,label){
      padding:style.padding,borderWidth:style.borderWidth,boxSizing:style.boxSizing,
      whiteSpace:style.whiteSpace,overflowWrap:style.overflowWrap},
     context:{inspector:!!node.closest('.a-canvas-inspector'),viewTools:!!node.closest('.a-canvas-view-tools')},
-    viewport:{width:innerWidth,height:innerHeight},corners:points.map(([x,y],index)=>({x,y,
+    ...(contour||{}),viewport:contour?.viewport||{width:innerWidth,height:innerHeight},corners:contour?.corners||points.map(([x,y],index)=>({x,y,
      reachable:x>=0&&y>=0&&x<innerWidth&&y<innerHeight&&node.contains(
       diagnostic?(hits[index]=document.elementFromPoint(x,y)):document.elementFromPoint(x,y))}))};
    if(diagnostic){
@@ -399,8 +573,10 @@ async function measureControls(target,controls,label){
   if(diagnostic)cornerDiagnostics.push({label,controlIndex,...cornerDiagnostic,
    ...(disposeError?{disposeError:errorEvidence(disposeError)}:{})});
   geometry.push({label,...measured});
-  assert.ok(measured.rect.width>=44&&measured.rect.height>=44,`${label} ${measured.name}: target below 44px`);
-  assert.ok(measured.corners.every(point=>point.reachable),`${label} ${measured.name}: obscured/offscreen corner`);
+  if(diagnostic){
+   nativeSizeOracle(measured,`${label} ${measured.name}`);
+   assert.ok(measured.corners.every(point=>point.reachable),`${label} ${measured.name}: obscured/offscreen legacy corner`);
+  }else nativeHitOracle(measured,`${label} ${measured.name}`);
   if(diagnostic)assert.equal(cornerDiagnostic?.complete,true,'Corner diagnostic capture missing or incomplete');
   if(disposeError)throw disposeError;
  }
@@ -552,53 +728,68 @@ async function cornerTap(control,corner){
   const describe=element=>element&&({tag:element.tagName,id:element.id,className:element.className,
    label:element.getAttribute('aria-label')||element.textContent.trim().slice(0,120)});
   const sample=()=>{
-   const r=node.getBoundingClientRect(),style=getComputedStyle(node);
-   const borders={left:parseFloat(style.borderLeftWidth),top:parseFloat(style.borderTopWidth),
-    right:parseFloat(style.borderRightWidth),bottom:parseFloat(style.borderBottomWidth)};
-   const oldPosition={x:corner.endsWith('left')?3:r.width-3,y:corner.startsWith('top')?3:r.height-3};
-   const intended={x:r.left+oldPosition.x,y:r.top+oldPosition.y};
+   const contour=window.__fileControlsContourSample(node),r=contour.rect,borders=contour.borders;
+   const point=contour.corners.find(point=>point.corner===corner);
+   const intended={x:point.x,y:point.y};
+   const oldPosition={x:intended.x-r.left,y:intended.y-r.top};
    // Playwright's explicit positions start at the padding box, not the border
-   // box used by getBoundingClientRect and the four-corner reachability oracle.
+   // box used by getBoundingClientRect and the shared contour oracle. Preserve
+   // the old WRONG conversion as a negative even when it still hits this button.
    const position={x:oldPosition.x-borders.left,y:oldPosition.y-borders.top};
-   const hit=point=>({point,reachable:node.contains(document.elementFromPoint(point.x,point.y)),
+   const hit=point=>({point,reachable:point.x>=0&&point.y>=0&&point.x<innerWidth&&point.y<innerHeight&&
+    node.contains(document.elementFromPoint(point.x,point.y)),
     elements:document.elementsFromPoint(point.x,point.y).map(describe)});
    const fromPosition=offset=>({x:r.left+borders.left+offset.x,y:r.top+borders.top+offset.y});
-   const ancestors=[];for(let parent=node.parentElement;parent;parent=parent.parentElement){
-    if(parent.scrollTop||parent.scrollLeft)ancestors.push({node:describe(parent),x:parent.scrollLeft,y:parent.scrollTop});
-   }
-   return {corner,node:describe(node),rect:r.toJSON(),borders,
-    radii:[style.borderTopLeftRadius,style.borderTopRightRadius,style.borderBottomLeftRadius,style.borderBottomRightRadius],
-    scroll:{x:scrollX,y:scrollY,ancestors},viewport:{width:innerWidth,height:innerHeight},
+   return {...contour,corner,node:describe(node),
     intended,position,oldPosition,corrected:hit(fromPosition(position)),old:hit(fromPosition(oldPosition))};
   };
+  const measured=sample();
   window.__fileControlsLastTap=null;
-  node.addEventListener('pointerdown',event=>{
-   window.__fileControlsLastTap={...sample(),event:{x:event.clientX,y:event.clientY,
-    pointerType:event.pointerType,target:describe(event.target),sameNode:node.contains(event.target)}};
-  },{capture:true,once:true});
-  return sample();
+  const listener=event=>{
+   try{
+    window.__fileControlsLastTap={...sample(),event:{x:event.clientX,y:event.clientY,
+     pointerType:event.pointerType,isTrusted:event.isTrusted,target:describe(event.target),sameNode:node.contains(event.target)}};
+   }catch(error){window.__fileControlsLastTap={captureError:error.message}}
+  };
+  // Observe the delivered event even if it lands on a different native target.
+  document.addEventListener('pointerdown',listener,{capture:true,once:true});
+  window.__fileControlsCancelTap=()=>document.removeEventListener('pointerdown',listener,true);
+  return measured;
  },corner);
- geometry.push({label:'corner-tap-before',...measured});
- const exactCorner=sample=>{
-  assert.deepEqual(sample.point,measured.intended,'Tap must preserve the measured 3px border-box corner');
-  assert.ok(sample.reachable,'Exact corner must hit the native control');
- };
- exactCorner(measured.corrected);
- if(measured.borders.left||measured.borders.top){
-  assert.throws(()=>exactCorner(measured.old),/Tap must preserve the measured 3px border-box corner/);
-  checks.push({check:'old padding-origin conversion rejected by same exact-corner oracle',corner,
-   oldPoint:measured.old.point,intended:measured.intended,oldReachable:measured.old.reachable});
+ try{
+  const {corners,...tapBefore}=measured;
+  geometry.push({label:'corner-tap-before',...tapBefore,acceptance:{basis:measured.basis,corners}});
+  nativeHitOracle(measured,`touch ${corner}`);
+  const exactCorner=sample=>{
+   assert.deepEqual(sample.point,measured.intended,'Tap must preserve the measured contour viewport point');
+   assert.ok(sample.reachable,'Exact contour probe must hit the native control');
+  };
+  exactCorner(measured.corrected);
+  if(measured.borders.left||measured.borders.top){
+   assert.throws(()=>exactCorner(measured.old),/Tap must preserve the measured contour viewport point/);
+   contourOracle.negativeCounts.paddingOrigin++;
+   checks.push({check:'old padding-origin conversion rejected by same exact-contour oracle',corner,
+    oldPoint:measured.old.point,intended:measured.intended,oldReachable:measured.old.reachable});
+  }else assert.deepEqual(measured.old.point,measured.corrected.point,'Zero border has no conversion difference');
+  await control.tap({position:measured.position});
+  const delivered=await control.evaluate(()=>window.__fileControlsLastTap);
+  const {corners:deliveredCorners,...tapDelivered}=delivered||{};
+  geometry.push({label:'corner-tap-delivered',...tapDelivered,
+   acceptance:{basis:delivered?.basis,corners:deliveredCorners}});
+  assert.ok(delivered?.event?.sameNode,'Touch must reach the native control');
+  assert.equal(delivered.nodeId,measured.nodeId,'Native control was replaced before touch delivery');
+  for(const field of ['rect','radii','borders','transforms','viewport','scroll','intended','position'])
+   assert.deepEqual(delivered[field],measured[field],`Control ${field} changed between measurement and gesture`);
+  nativeHitOracle(delivered,`delivered touch ${corner}`);
+  exactCorner(delivered.corrected);
+  assert.equal(delivered.event.pointerType,'touch');assert.equal(delivered.event.isTrusted,true);
+  // Chromium may quantize fractional CSS coordinates; retain actual delivery.
+  // This tolerance is ONLY for event delivery, never for padding reconstruction.
+  assert.ok(Math.abs(delivered.event.x-measured.intended.x)<1&&
+   Math.abs(delivered.event.y-measured.intended.y)<1,'Delivered touch missed the measured contour probe');
+ }finally{
+  await control.evaluate(()=>{window.__fileControlsCancelTap?.();delete window.__fileControlsCancelTap});
  }
- await control.tap({position:measured.position});
- const delivered=await control.evaluate(()=>window.__fileControlsLastTap);
- geometry.push({label:'corner-tap-delivered',...delivered});
- assert.ok(delivered?.event?.sameNode,'Touch must reach the native control');
- assert.deepEqual(delivered.rect,measured.rect,'Control geometry changed between measurement and gesture');
- assert.deepEqual(delivered.scroll,measured.scroll,'Control scrolled between measurement and gesture');
- assert.equal(delivered.event.pointerType,'touch');
- // Chromium may quantize fractional CSS coordinates; retain actual delivery.
- assert.ok(Math.abs(delivered.event.x-measured.intended.x)<1&&
-  Math.abs(delivered.event.y-measured.intended.y)<1,'Delivered touch missed the measured corner');
 }
 
 async function connect(owner,options){
@@ -614,6 +805,7 @@ async function connect(owner,options){
   }
  });
  await target.addInitScript(installDetailsProbe);
+ await target.addInitScript({content:`window.__fileControlsCircularContour=(${circularContour.toString()});(${installContourSampler.toString()})();`});
  await target.addInitScript(()=>{
   window.__fileControlsFrames=[];
   new MutationObserver(records=>{
@@ -778,6 +970,7 @@ async function usePreviewControls(retained,label,mode){
 async function run(){
  ready=await startup;
  if(process.env.AMPLIFIER_TEST_INSTALLED==='1'||process.env.AMPLIFIER_TEST_PACKAGE_ROOT)assert.equal(ready.installedVerified,true);
+ if(!cornerDiagnosticMode)contourLogicChecks();
  const desktopOwner=await launchOwner('desktop',browserOwners);
  page=await connect(desktopOwner,desktopOptions);
  await action(page,'session.create',{title:'Generated file controls'});
@@ -834,6 +1027,7 @@ async function run(){
   cornerDiagnosticComplete=true;
   return; // Diagnostic checkpoint only, never a full-journey qualification.
  }
+ await contourNegativeChecks(button(details,names[2]));
 
  // Inject only clipboard write failure; readText remains the real browser API.
  const deniedSentinel='denied-write:'+randomUUID();
@@ -989,7 +1183,7 @@ async function run(){
   // the fresh opening, instead of racing an external close's native toggle.
  }
  assert.deepEqual(commands.slice(touchStart).filter(row=>['canvas.select','canvas.views.inline','conversation.send','session.send'].includes(row?.action)),[]);
- checks.push({check:'390px/320px emulated touch, actual corner taps, 44px targets, four-corner hit testing and saved PNGs'});
+ checks.push({check:'390px/320px emulated touch, actual contour taps, 44px targets, four contour-relative native hit probes and saved PNGs'});
  // End the card-only phase here. The unrelated read-only Canvas and no-document
  // assertions above remain strict; the next phase intentionally opens our HTML.
  assert.deepEqual(requests.filter(row=>row.path.endsWith('/document')),[],'Card details/download must not request an HTML document');
@@ -1023,6 +1217,11 @@ async function run(){
  assert.equal(final.newer.revision,2);
  assert.equal(requests.filter(row=>row.path.endsWith('/document')).length,2,
   'Only the two deliberate preview setups may request HTML; all copy/download phases must retain them');
+ const {paddingOrigin,...contourNegatives}=contourOracle.negativeCounts;
+ assert.deepEqual(contourNegatives,{size:2,regions:4,obstruction:1},'Required contour negatives did not complete');
+ assert.ok(paddingOrigin>0,'No nonzero-border padding conversion negative ran');
+ assert.equal(paddingOrigin,geometry.filter(row=>row.label==='corner-tap-before'&&(row.borders.left||row.borders.top)).length,
+  'Every nonzero-border touch must reject the old padding conversion');
  assert.deepEqual(errors,[]);
 }
 
@@ -1063,6 +1262,7 @@ try{
   writeFile(join(evidence,'observations.json'),JSON.stringify({passed:!failure,error:failure?.stack,failure:errorEvidence(failure),screenshotErrors,
   ...(cornerDiagnosticMode?{mode:'corner-diagnostic',diagnosticComplete:cornerDiagnosticComplete,
    stoppedAfter:cornerDiagnosticComplete?'first-desktop-measure':null,cornerDiagnostics}:{}),
+  contourOracle,
   installed:ready&&{packageRoot:ready.packageRoot,verified:ready.installedVerified,staticSha256:ready.staticSha256},
   seed,checks,geometry,fileFrameCaptures,downloads,requests,commands,metadataExchanges,detailsReadiness,preCleanupSnapshots,
   errors,cleanup,fixtureCleanup:records.find(row=>row.cleanup)?.cleanup,

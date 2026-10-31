@@ -43,6 +43,16 @@ Only this driver and the generated-file producer may differ from the retained
 8ca6ac6d manifest. No build, unit suite, full journey, wheel or install runs.
 Exit 0 means checkpoint observed with cleanup/integrity verified; cause and
 visual judgment remain unknown/pending. An original false assertion stays exit 1.
+
+--contour-qualification uses /workspace/output/files1318-contour-manifest.json
+and /artifacts/files1318-contour-qualified. It runs the full remaining flow,
+but never reruns frontend-build/python-tests/frontend-units. Those three phases
+are REUSED only after exact old source, 311 static files, 70 JUnit/collection
+identities, 19 TAP identities, process cleanup and current dependency identities
+are verified. The prior integrated run remains FAILED, not a qualification pass.
+Bind contourReuse=REUSE_BINDING and reuseEvidence={relative_path: sha256} for
+every REUSE_EVIDENCE_FILES entry (relative to REUSE_MANIFEST.parent). Raw old
+proofs are copied unchanged to prior-evidence; no old proof is rewritten.
 """
 from __future__ import annotations
 
@@ -53,6 +63,7 @@ import importlib
 import importlib.machinery
 import importlib.metadata as metadata
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -73,7 +84,8 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 ROOT = Path('/workspace')
-OUT = Path('/artifacts/files1318-qualified')
+QUALIFIED_OUT = Path('/artifacts/files1318-qualified')
+OUT = QUALIFIED_OUT
 PREPARED = Path('/opt/unified-prepared')
 PYTHON = PREPARED / 'venv/bin/python'
 BUILD_PYTHON = PREPARED / 'build-venv/bin/python'
@@ -83,11 +95,14 @@ UV = PREPARED / 'bootstrap/bin/uv'
 CONTRACT = PREPARED / 'execution-contract.json'
 MANIFEST = ROOT / 'output/files1318-frozen-manifest.json'
 CORNER_MANIFEST = ROOT / 'output/files1318-corner-manifest.json'
+CONTOUR_MANIFEST = ROOT / 'output/files1318-contour-manifest.json'
 HARNESS = OUT / 'harness'
 VENV = OUT / 'installed'
 DRIVER = 'scripts/files1318_integrated_checks.py'
 PRODUCER = 'frontend/tests/generated-file-controls-browser.mjs'
 CORNER_OUT = Path('/artifacts/files1318-corner-diagnostic')
+CONTOUR_OUT = Path('/artifacts/files1318-contour-qualified')
+CONTOUR_PRODUCER_SHA = '53e1e4cd8dacab4b5976a0e89ff359face2d751006eec77e1fa7f59adca4dee7'
 REUSE_INPUT = ROOT / 'output/files1318-corner-inputs'
 REUSE_BINDING = {
     'metadataSha256': '56123cca65eb88bb8ddbcf4fc66e2eed47fb102bb6c7d663ed39cf8798d32b8e',
@@ -97,8 +112,23 @@ REUSE_BINDING = {
 }
 REUSE_MANIFEST = ROOT / 'output/files1318-integrated-v1-result/parent-manifest.json'
 REUSE_MANIFEST_SHA = 'b5c2e56b5e868a9b986eeb140f490ac85a6554c309f7cb8dd2d2930d1036eb79'
+# run_scenarios hashes the ORIGINAL prepared contract, whereas save() serializes
+# its parsed value into the retained execution-contract.json. They are not the
+# same byte representation; keep both identities rather than conflating them.
+REUSE_CONTRACT_SHA = '955658f45c5089592fde90dcfddf28fb08094c84198ee8f0487840c886ced916'
 REUSE_ARCHIVE_BYTES = 23603200
 REUSE_WORKSPACE_SHA = '5500763b6c47aa1ee3f6054c29e293fee30b86033e831a12dcac8f13fc0737c4'
+REUSED_PHASES = ('frontend-build', 'python-tests', 'frontend-units')
+REUSE_EVIDENCE_FILES = (
+    'parent-manifest.json', 'report.json', 'evidence-manifest.json',
+    'execution-contract.json', 'runtime-readiness.json', 'browser-readiness.json',
+    'executables.json', 'prepared-inventory.json', 'prepared-plan.json',
+    'candidate.json', 'static.json', 'python.xml', 'python-collection.json',
+    'python-counts.json', 'pytest-call.json',
+    'python-origins-before.json', 'python-origins-after.json',
+    *(f'{phase}/{name}' for phase in REUSED_PHASES
+      for name in ('results.json', f'{phase}.log')),
+)
 REVIEWED_CHANGES = frozenset((
     DRIVER, 'frontend/tests/canvas-renderers-browser.mjs',
     'tests/fixtures/empty_host_ui_server.py',
@@ -196,6 +226,14 @@ def require(value, message):
         raise RuntimeError(message)
 
 
+def select_output(folder):
+    """Keep the main process and every private child on the same fixed paths."""
+    global OUT, HARNESS, VENV
+    require(folder in (QUALIFIED_OUT, CORNER_OUT, CONTOUR_OUT), 'Unknown evidence destination')
+    OUT = folder
+    HARNESS, VENV = OUT / 'harness', OUT / 'installed'
+
+
 def read(path):
     return json.loads(Path(path).read_text())
 
@@ -231,7 +269,8 @@ def frozen_inputs(frozen, *, built=False):
     for name, expected in frozen['files'].items():
         path = ROOT / name
         require(not Path(name).is_absolute() and '..' not in Path(name).parts
-                and str(Path(name)) == name and path != MANIFEST, 'Unsafe frozen path')
+                and str(Path(name)) == name
+                and path not in (MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST), 'Unsafe frozen path')
         require(path.parent.resolve().is_relative_to(ROOT), 'Frozen path escapes snapshot')
         require(expected['mode'] in ('100644', '100755', '120000')
                 and re.fullmatch('[a-f0-9]{64}', expected['sha256']), 'Invalid frozen identity')
@@ -242,12 +281,13 @@ def frozen_inputs(frozen, *, built=False):
     return actual
 
 
-def diagnostic_static(frozen):
+def diagnostic_static(frozen, *, binding='diagnosticReuse'):
     """Validate ALL reuse inputs before replacing static, in the admitted guest only."""
     require(ROOT == Path('/workspace') and Path.cwd().resolve() == ROOT
             and Path(__file__).resolve() == ROOT / DRIVER and not (ROOT / '.git').exists(),
             'Static reuse is guest-only')
-    require(frozen.get('diagnosticReuse') == REUSE_BINDING, 'Missing exact diagnostic reuse binding')
+    require(binding in ('diagnosticReuse', 'contourReuse')
+            and frozen.get(binding) == REUSE_BINDING, 'Missing exact static reuse binding')
     archive, metadata_path = REUSE_INPUT / 'static.tar', REUSE_INPUT / 'reuse.json'
     for path, digest in ((archive, REUSE_BINDING['archiveSha256']),
                          (metadata_path, REUSE_BINDING['metadataSha256']),
@@ -265,6 +305,7 @@ def diagnostic_static(frozen):
     require(previous['schemaVersion'] == 2 and previous['reviewed'] is True
             and all(previous[key] == frozen[key] for key in ('baselineRevision', 'baselineTree'))
             and set(previous['changedPaths']) == REVIEWED_CHANGES
+            and len(previous['files']) == len(frozen['files']) == 3187
             and previous['files'].keys() == frozen['files'].keys(), 'Old/new source inventory mismatch')
     changed = {name for name in frozen['files'] if previous['files'][name] != frozen['files'][name]}
     require(changed == {DRIVER, PRODUCER}, 'Reuse requires all other tracked inputs unchanged')
@@ -318,6 +359,112 @@ def diagnostic_static(frozen):
         require({f'amplifier_web/static/{name}': digest for name, digest in tree(static).items()} == expected,
                 'Restored static differs from retained build')
     require(sha(archive) == REUSE_BINDING['archiveSha256'], 'Reuse archive changed during restore')
+
+
+def retained_proofs(frozen):
+    """Read/copy old proofs only; never collect or execute either test suite."""
+    bindings = frozen.get('reuseEvidence')
+    require(isinstance(bindings, dict) and set(bindings) == set(REUSE_EVIDENCE_FILES),
+            'Final manifest must bind the exact retained proof inventory')
+    prior = OUT / 'prior-evidence'
+    prior.mkdir()
+    for name in REUSE_EVIDENCE_FILES:
+        source = REUSE_MANIFEST.parent / name
+        digest = bindings[name]
+        require(isinstance(digest, str) and re.fullmatch('[a-f0-9]{64}', digest)
+                and source.resolve() == source and stat.S_ISREG(source.lstat().st_mode)
+                and sha(source) == digest, f'Retained proof identity mismatch: {name}')
+        target = prior / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        require(sha(target) == digest, f'Retained proof copy mismatch: {name}')
+    require(bindings['parent-manifest.json'] == REUSE_MANIFEST_SHA, 'Wrong old parent manifest')
+    old = read(prior / 'report.json')
+    evidence = read(prior / 'evidence-manifest.json')
+    require(old['schemaVersion'] == 1 and old['passed'] is False and old['complete'] is False
+            and old['finalization'] == {'status': 'passed'}
+            and old['manifestSha256'] == REUSE_MANIFEST_SHA
+            and old['evidenceManifestSha256'] == bindings['evidence-manifest.json']
+            and old['phases']['generated-source']['status'] == 'failed',
+            'Expected retained partial run with later generated-source failure, not a prior full pass')
+    for name, digest in bindings.items():
+        if name not in ('report.json', 'evidence-manifest.json'):
+            require(evidence[name] == digest, f'Old evidence manifest does not bind {name}')
+    previous = read(prior / 'parent-manifest.json')
+    contract = read(prior / 'execution-contract.json')
+    require(previous['revision'] == contract['source']['sourceHead'] == REUSE_BINDING['sourceRevision']
+            and previous['tree'] == REUSE_BINDING['sourceTree'], 'Retained run source mismatch')
+    commands = {
+        'frontend-build': [str(NPM), 'run', 'build'],
+        'python-tests': [str(PYTHON), '-I', '-B', str(ROOT / DRIVER), '--python-tests'],
+        'frontend-units': [str(NODE), '--test', '--test-reporter=tap',
+                           *(str(ROOT / name) for name in UNIT_FILES)],
+    }
+    provenance = {
+        'manifestSha256': REUSE_MANIFEST_SHA, 'revision': previous['revision'], 'tree': previous['tree'],
+        'baselineRevision': previous['baselineRevision'], 'baselineTree': previous['baselineTree'],
+        'contractSha256': REUSE_CONTRACT_SHA,
+    }
+    for phase, command in commands.items():
+        row = old['phases'][phase]
+        result = read(prior / phase / 'results.json')
+        raw, = result['scenarios']
+        require(result['schemaVersion'] == 1 and result['source'] == provenance
+                and result['complete'] is True and result['passed'] is True
+                and row['status'] == row['verdict'] == raw['status'] == 'passed'
+                and row['reason'] is None and raw['reason'] is None
+                and raw['id'] == phase and raw['log'] == f'{phase}.log'
+                and raw['cleanup'] == CLEAN and type(raw['exitCode']) is int and raw['exitCode'] == 0
+                and row['process'] == raw and row['command'] == raw['command'] == command
+                and row['cwd'] == str(ROOT / 'frontend') and row['env'] == raw['env'],
+                f'Old {phase} process/pass/cleanup proof differs')
+    require(read(prior / 'pytest-call.json') ==
+            {'call': 'pytest.main', 'args': pytest_arguments(QUALIFIED_OUT)},
+            'Old pytest command/selection differs')
+    counts = junit(prior)
+    require(len(PYTEST_NODES) == 70 and counts == read(prior / 'python-counts.json'),
+            'Retained Python count mismatch')
+    units = unit_proof(prior)
+    require(read(prior / 'candidate.json')['static'] == read(prior / 'static.json')
+            == read(REUSE_INPUT / 'reuse.json')['files'], 'Old build/static proof mismatch')
+    retained_environment(prior)
+    result = {
+        'sourceRevision': previous['revision'], 'sourceTree': previous['tree'],
+        'priorIntegratedPassed': False, 'priorIntegratedComplete': False,
+        'proofFiles': bindings, 'python': counts, 'frontendUnits': units,
+        'staticFiles': 311, 'processCleanup': CLEAN,
+        'status': 'verified_prior_evidence_only_pending_static_source_validation',
+    }
+    save('reuse-evidence-validation.json', result)
+    return result
+
+
+def retained_environment(prior):
+    """Do not reuse a pass across a changed runtime or resolved dependency graph."""
+    old, current = read(prior / 'runtime-readiness.json'), read(OUT / 'runtime-readiness.json')
+    require(set(old) == set(current) == {'python', 'executable', 'purelib', 'modules', 'distributions'}
+            and old == current, 'Runtime/version/module bytes/dependency version or direct-source graph changed')
+    require(read(prior / 'browser-readiness.json') == read(OUT / 'browser-readiness.json'),
+            'Node/Playwright/browser readiness identity changed')
+    before, after = read(prior / 'executables.json'), read(OUT / 'executables.json')
+    require(before == after, 'Prepared executable bytes/locations changed')
+    before, after = read(prior / 'prepared-inventory.json'), read(OUT / 'prepared-inventory.json')
+    keys = ('profileId', 'python', 'pythonPackages', 'node', 'lockfiles')
+    require(all(before[key] == after[key] for key in keys)
+            and before['preparedFiles']['node'] == after['preparedFiles']['node'],
+            'Prepared dependency inventory or locked Node tree changed')
+    before, after = read(prior / 'prepared-plan.json'), read(OUT / 'prepared-plan.json')
+    keys = ('profileId', 'baseImage', 'lockfiles', 'nodeDirectory', 'nodeKey',
+            'playwrightVersion', 'pythonProject')
+    require(all(before[key] == after[key] for key in keys), 'Prepared dependency inputs changed')
+    save('reuse-environment-validation.json', {
+        'runtimeExact': True, 'dependencyVersionsAndDirectSourcesExact': True,
+        'preparedExecutablesExact': True, 'preparedNodeTreeExact': True,
+        'browserReadinessExact': True, 'planInputsExact': True,
+        'oldRuntimeSha256': sha(prior / 'runtime-readiness.json'),
+        'currentRuntimeSha256': sha(OUT / 'runtime-readiness.json'),
+        'distributionCount': len(current['distributions']),
+    })
 
 
 def candidate(frozen):
@@ -405,16 +552,20 @@ def pytest_process():
             if Counter(collected) != Counter(PYTEST_NODES):
                 raise pytest.UsageError('Files1318 exact collection mismatch')
 
-    args = ['-c', '/dev/null', '--rootdir=/workspace', '--import-mode=importlib',
-            '-p', 'no:cacheprovider', '-p', 'pytest_asyncio.plugin', '-p', 'pytest_aiohttp.plugin',
-            '--asyncio-mode=auto', '-x', '-v', '--tb=short',
-            '--junitxml=' + str(OUT / 'python.xml'), *[str(ROOT / n) for n in PYTEST_NODES]]
+    args = pytest_arguments(OUT)
     save('pytest-call.json', {'call': 'pytest.main', 'args': args})
     try:
         code = pytest.main(args, plugins=[Collection()])
     finally:
         save('python-origins-after.json', origins(ROOT))
     return int(code)
+
+
+def pytest_arguments(folder):
+    return ['-c', '/dev/null', '--rootdir=/workspace', '--import-mode=importlib',
+            '-p', 'no:cacheprovider', '-p', 'pytest_asyncio.plugin', '-p', 'pytest_aiohttp.plugin',
+            '--asyncio-mode=auto', '-x', '-v', '--tb=short',
+            '--junitxml=' + str(folder / 'python.xml'), *[str(ROOT / n) for n in PYTEST_NODES]]
 
 
 def fixture_process(mode):
@@ -459,21 +610,24 @@ def installed_readiness():
                                    'wheel': wheel_proof(package.parent)})
 
 
-def junit():
-    root = ET.parse(OUT / 'python.xml').getroot()
+def junit(folder=None):
+    root = ET.parse((folder or OUT) / 'python.xml').getroot()
     cases = root.findall('.//testcase')
     counts = {'tests': len(cases), **{tag: len(root.findall('.//' + tag))
                                     for tag in ('failure', 'error', 'skipped')}}
-    save('python-counts.json', counts)
+    if folder is None:
+        save('python-counts.json', counts)
     require(counts == {'tests': len(PYTEST_NODES), 'failure': 0, 'error': 0, 'skipped': 0},
             'JUnit must contain exactly the selection, with zero skip/error/fail')
-    require(Counter(read(OUT / 'python-collection.json')) == Counter(PYTEST_NODES), 'Collection changed')
-    require(Counter(c.attrib['name'] for c in cases) ==
-            Counter(n.split('::')[-1] for n in PYTEST_NODES), 'JUnit identities differ')
+    require(Counter(read((folder or OUT) / 'python-collection.json')) == Counter(PYTEST_NODES),
+            'Collection changed')
+    require(Counter(c.attrib['classname'].replace('.', '/') + '.py::' + c.attrib['name'] for c in cases)
+            == Counter(PYTEST_NODES), 'JUnit full node identities differ')
+    return counts
 
 
-def unit_proof():
-    text = (OUT / 'frontend-units/frontend-units.log').read_text()
+def unit_proof(folder=None):
+    text = ((folder or OUT) / 'frontend-units/frontend-units.log').read_text()
     expected = []
     for name in UNIT_FILES:
         expected += re.findall(r"^test\('([^']+)',", (ROOT / name).read_text(), re.M)
@@ -483,6 +637,8 @@ def unit_proof():
         require(re.findall(rf'^# {key} (\d+)$', text, re.M) ==
                 [str(19 if key in ('tests', 'pass') else 0)], f'Frontend {key} mismatch')
     require(not re.search(r'^not ok\b|^Bail out!', text, re.M), 'Frontend failure')
+    return {'tests': 19, 'pass': 19, 'fail': 0, 'cancelled': 0, 'skipped': 0, 'todo': 0,
+            'names': expected}
 
 
 def topology_proof(mode):
@@ -542,15 +698,35 @@ def file_frame_proof(proof, folder):
 
 def generated_coverage(proof, folder):
     source = (ROOT / 'frontend/tests/generated-file-controls-browser.mjs').read_text()
-    counts = Counter(re.findall(r"checks\.push\(\{check:'([^']+)'", source))
-    require(len(counts) == 15 and set(counts.values()) == {1}, 'Journey check definitions changed')
     taps = [g for g in proof['geometry'] if g['label'] == 'corner-tap-before']
     require(len(taps) == 14, 'Missing corner-tap measurements')
-    counts.update({'real clipboard + Copied.': 16, 'deliberate saved-v1 preview setup, not a download': 1,
-                   'right-rail paths/download and primary Download preserve running saved-v1 HTML': 2})
-    counts['old padding-origin conversion rejected by same exact-corner oracle'] = sum(
+    padding_count = sum(
         bool(g['borders']['left'] or g['borders']['top']) for g in taps)
+    counts = Counter({
+        'real clipboard + Copied.': 17,
+        'contour formula and unsupported geometry logic checks': 1,
+        'negative control: native size below 44px rejected': 2,
+        'negative control: individual contour region rejected': 4,
+        'negative control: real one-probe pointer overlay rejected by same contour oracle': 1,
+        'old padding-origin conversion rejected by same exact-contour oracle': padding_count,
+        'deliberate saved-v1 preview setup, not a download': 2,
+        'right-rail paths/download and primary Download preserve running saved-v1 HTML': 3,
+        'negative control: missing buttons rejected by the same oracle': 1,
+        'v1 browser download remains original after v2 is saved before URL resolution': 1,
+        'clipboard refusal reports failure and leaves real clipboard unchanged': 1,
+        '403 has visible feedback and zero downloads, then a legitimate click succeeds': 1,
+        'negative control: real wrong-byte download rejected by the same SHA-256 oracle': 1,
+        'reload after source deletion retains paths, exact saved v1 download and unrelated read-only Canvas/draft': 1,
+        'adjacent Markdown stays distinct; direct saved-only has no paths; outside-current-base has no relative-copy control': 1,
+        'open details refreshes current working folder and rejects delayed prior-placement metadata': 1,
+        '390px/320px emulated touch, actual contour taps, 44px targets, four contour-relative native hit probes and saved PNGs': 1,
+        'card-only phase completed with zero document requests and unrelated historical Canvas retained': 1,
+        'negative controls: lost input and changed execution token rejected by the same retained-preview oracle': 1,
+    })
+    require(Counter(re.findall(r"checks\.push\(\{check:'([^']+)'", source)) ==
+            Counter({name: 1 for name in counts}), 'Journey check definitions changed')
     require(Counter(c['check'] for c in proof['checks']) == counts, 'Journey check coverage/counts changed')
+    contour_proof(proof, taps, padding_count)
     fresh = [r for r in proof['detailsReadiness'] if r.get('kind') != 'atomic-oracle']
     require(len(fresh) == 10 and len(proof['detailsReadiness']) == 23
             and all(r.get('passed') is True and len(r['matches']) == 1
@@ -587,11 +763,160 @@ def generated_coverage(proof, folder):
     file_frame_proof(proof, folder)
 
 
+def contour_sample(sample, *, reachable=(True, True, True, True)):
+    """Independently bind the retained contour points; legacy misses are diagnostic."""
+    labels = ('top-left', 'top-right', 'bottom-left', 'bottom-right')
+    rect, viewport = sample['rect'], sample['viewport']
+    finite = lambda value: type(value) in (int, float) and math.isfinite(value)
+    require(sample['tag'] in ('BUTTON', 'SUMMARY')
+            and type(sample['nodeId']) is int and sample['nodeId'] > 0
+            and sample['basis'] == 'four contour-relative native hit probes'
+            and all(finite(rect[key]) for key in ('left', 'top', 'right', 'bottom', 'width', 'height'))
+            and rect['width'] >= 44 and rect['height'] >= 44
+            and rect['right'] - rect['left'] == rect['width']
+            and rect['bottom'] - rect['top'] == rect['height'], 'Unsupported native contour rectangle')
+    require(all(finite(viewport[key]) and viewport[key] > 0 for key in ('width', 'height'))
+            and viewport['scale'] == 1 and viewport['offsetLeft'] == viewport['offsetTop'] == 0
+            and sample['transforms'] and all(
+                all(style[key] == 'none' for key in
+                    ('transform', 'perspective', 'translate', 'rotate', 'scale', 'offsetPath'))
+                and style['transformStyle'] == 'flat' and style['zoom'] in ('1', 'normal')
+                for style in sample['transforms']), 'Unsupported contour viewport/transform')
+    radii = []
+    require(len(sample['radii']) == 4, 'Four contour radii required')
+    for text in sample['radii']:
+        parts = text.split()
+        require(len(parts) in (1, 2)
+                and all(re.fullmatch(r'(?:\d+(?:\.\d+)?|\.\d+)px', part) for part in parts),
+                'Contour radius must be finite computed px')
+        values = [float(part[:-2]) for part in parts]
+        require(all(finite(value) and value >= 0 and value == values[0] for value in values),
+                'Unsupported nonfinite/elliptical contour radius')
+        radii.append(values[0])
+    tl, tr, bl, br = radii
+    require(tl + tr <= rect['width'] and bl + br <= rect['width']
+            and tl + bl <= rect['height'] and tr + br <= rect['height'],
+            'Overlapping radii require unsupported used-radius scaling')
+    borders = sample['borders']
+    require(set(borders) == {'left', 'top', 'right', 'bottom'}
+            and all(finite(value) and value >= 0 for value in borders.values())
+            and borders['left'] + borders['right'] < rect['width']
+            and borders['top'] + borders['bottom'] < rect['height'], 'Unsupported contour borders')
+    require(len(sample['corners']) == len(sample['legacyCorners']) == 4, 'Four contour/legacy points required')
+    for index, (label, radius, point, legacy) in enumerate(zip(
+            labels, radii, sample['corners'], sample['legacyCorners'])):
+        inward = max(3, radius - (radius - 3) / math.sqrt(2))
+        require(inward < rect['width'] / 2 and inward < rect['height'] / 2,
+                'Contour regions are not distinct')
+        x = rect['right'] - inward if index % 2 else rect['left'] + inward
+        y = rect['bottom'] - inward if index >= 2 else rect['top'] + inward
+        require(point['corner'] == legacy['corner'] == label and point['radius'] == radius
+                and all(finite(point[key]) and math.isclose(point[key], expected, rel_tol=0, abs_tol=1e-9)
+                        for key, expected in (('inward', inward), ('x', x), ('y', y)))
+                and 0 <= point['x'] < viewport['width'] and 0 <= point['y'] < viewport['height']
+                and point['reachable'] is reachable[index] and isinstance(point['hit'], dict)
+                and type(point['hit']['nodeId']) is int and point['hit']['nodeId'] > 0,
+                'Contour formula/region/native hit evidence differs')
+        # Float tolerance above only compares independent Python/JS formula
+        # evaluation. Padding reconstruction and target identity stay exact.
+        require(legacy['x'] == (rect['right'] - 3 if index % 2 else rect['left'] + 3)
+                and legacy['y'] == (rect['bottom'] - 3 if index >= 2 else rect['top'] + 3)
+                and type(legacy['reachable']) is bool and 'hit' in legacy,
+                'Legacy rectangular probe diagnostic missing/changed')
+
+
+def contour_proof(proof, taps, padding_count):
+    oracle = proof['contourOracle']
+    logic = ['square radius 0 uses 3px', 'circular radius 10 uses 5.050252531694167px',
+             *('reject ' + name for name in (
+                 'nonfinite radius', 'nonfinite rect', 'elliptical radius', 'percentage radius',
+                 'negative radius', 'overlapping radii', 'transform', 'perspective',
+                 'fragmented box', 'inconsistent box', 'coincident regions', 'scaled viewport'))]
+    require(oracle['version'] == 'circular-contour-v1'
+            and oracle['formula'] == 'd=max(3,r-(r-3)/sqrt(2))'
+            and oracle['logicChecks'] == [{'check': name, 'passed': True} for name in logic]
+            and padding_count > 0
+            and oracle['negativeCounts'] ==
+            {'size': 2, 'regions': 4, 'obstruction': 1, 'paddingOrigin': padding_count},
+            'Contour logic/negative evidence incomplete')
+    rows = lambda name: [row for row in proof['checks'] if row['check'] == name]
+    require(rows('contour formula and unsupported geometry logic checks') ==
+            [{'check': 'contour formula and unsupported geometry logic checks', 'count': 14}]
+            and Counter(row['dimension'] for row in rows('negative control: native size below 44px rejected'))
+            == Counter(('width', 'height'))
+            and Counter(row['corner'] for row in rows('negative control: individual contour region rejected'))
+            == Counter(('top-left', 'top-right', 'bottom-left', 'bottom-right'))
+            and rows('negative control: real one-probe pointer overlay rejected by same contour oracle') ==
+            [{'check': 'negative control: real one-probe pointer overlay rejected by same contour oracle',
+              'corner': 'top-left'}], 'Contour discriminator identities differ')
+    for sample in proof['geometry']:
+        if 'corners' in sample:
+            contour_sample(sample)
+    negative, = [row for row in proof['geometry'] if row['label'] == 'negative-contour-overlay']
+    require('corners' not in negative and negative['hitOverlay'] is True
+            and negative['rejected'] is True and negative['removed'] is True, 'Overlay negative incomplete')
+    before, blocked, restored = (negative[key] for key in ('before', 'sample', 'restored'))
+    contour_sample(before)
+    contour_sample(blocked, reachable=(False, True, True, True))
+    contour_sample(restored)
+    require(before['nodeId'] == blocked['nodeId'] == restored['nodeId']
+            and before['rect'] == blocked['rect'] == restored['rect']
+            and before['corners'] == restored['corners']
+            and [{key: point[key] for key in ('corner', 'radius', 'inward', 'x', 'y')}
+                 for point in blocked['corners']] ==
+                [{key: point[key] for key in ('corner', 'radius', 'inward', 'x', 'y')}
+                 for point in before['corners']]
+            and blocked['corners'][0]['hit']['nodeId'] != before['corners'][0]['hit']['nodeId'],
+            'Overlay failed to isolate/restore the same first contour region')
+    delivered = [row for row in proof['geometry'] if row['label'] == 'corner-tap-delivered']
+    require(len(delivered) == 14, 'Missing delivered contour touch evidence')
+    old_negatives = []
+    for before, after in zip(taps, delivered):
+        require(not after.get('captureError') and before['nodeId'] == after['nodeId']
+                and before['corner'] == after['corner'], 'Touch target/capture identity changed')
+        for key in ('rect', 'radii', 'borders', 'transforms', 'viewport', 'scroll', 'intended', 'position'):
+            require(before[key] == after[key], f'Touch {key} changed between measurement and delivery')
+        for sample in (before, after):
+            require('corners' not in sample and sample['acceptance']['basis'] == sample['basis'],
+                    'Touch contour acceptance missing/flattened')
+            contour_sample({**sample, 'corners': sample['acceptance']['corners']})
+            point, = [p for p in sample['acceptance']['corners'] if p['corner'] == sample['corner']]
+            require(sample['intended'] == {'x': point['x'], 'y': point['y']}
+                    and sample['corrected']['point'] == sample['intended']
+                    and sample['corrected']['reachable'] is True, 'Exact contour touch coordinate mismatch')
+            for axis, side in (('x', 'left'), ('y', 'top')):
+                old_position = sample['intended'][axis] - sample['rect'][side]
+                require(sample['oldPosition'][axis] == old_position
+                        and sample['position'][axis] == old_position - sample['borders'][side]
+                        and sample['corrected']['point'][axis] ==
+                        sample['rect'][side] + sample['borders'][side] + sample['position'][axis]
+                        and sample['old']['point'][axis] ==
+                        sample['rect'][side] + sample['borders'][side] + sample['oldPosition'][axis],
+                        'Padding-box conversion evidence differs')
+        event = after['event']
+        require(event['sameNode'] is True and event['isTrusted'] is True and event['pointerType'] == 'touch'
+                and all(type(event[axis]) in (int, float) and math.isfinite(event[axis])
+                        and abs(event[axis] - before['intended'][axis]) < 1 for axis in ('x', 'y')),
+                'Delivered event missed the native contour target')
+        if before['borders']['left'] or before['borders']['top']:
+            require(before['old']['point'] != before['intended'] and type(before['old']['reachable']) is bool,
+                    'Old padding conversion did not differ')
+            old_negatives.append({
+                'check': 'old padding-origin conversion rejected by same exact-contour oracle',
+                'corner': before['corner'], 'oldPoint': before['old']['point'],
+                'intended': before['intended'], 'oldReachable': before['old']['reachable']})
+        else:
+            require(before['old']['point'] == before['corrected']['point'], 'Zero-border conversion differs')
+    require(rows('old padding-origin conversion rejected by same exact-contour oracle') == old_negatives,
+            'Missing/changed per-touch padding conversion negatives')
+
+
 def generated_proof(mode):
     reports = list((OUT / f'generated-{mode}/evidence').glob('generated-file-controls-*/observations.json'))
     require(len(reports) == 1, 'Require one generated-file journey report')
     proof = read(reports[0])
-    require(proof['passed'] is True and proof['errors'] == [] and proof['screenshotErrors'] == []
+    require(not any(key in proof for key in ('mode', 'diagnosticComplete', 'stoppedAfter', 'cornerDiagnostics'))
+            and proof['passed'] is True and proof['errors'] == [] and proof['screenshotErrors'] == []
             and not proof.get('error') and not proof.get('failure') and proof['preCleanupSnapshots'] == [],
             'Generated-file journey did not pass')
     # ownFixture returns {pid,code,signal}; the Python fixture separately emits its pid.
@@ -828,18 +1153,23 @@ def evidence_manifest(deadline):
 
 
 def main():
-    global OUT
     started = time.monotonic()
     hard_deadline = started + BUDGET
     work_deadline = hard_deadline - FINALIZATION_RESERVE
     evidence_deadline = hard_deadline - RECEIPT_RESERVE
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--manifest', required=True, type=Path, choices=[MANIFEST, CORNER_MANIFEST])
-    parser.add_argument('--corner-diagnostic', action='store_true')
+    parser.add_argument('--manifest', required=True, type=Path,
+                        choices=[MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST])
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--corner-diagnostic', action='store_true')
+    modes.add_argument('--contour-qualification', action='store_true')
     args = parser.parse_args()
-    if args.manifest != (CORNER_MANIFEST if args.corner_diagnostic else MANIFEST):
+    manifest_path = (CORNER_MANIFEST if args.corner_diagnostic
+                     else CONTOUR_MANIFEST if args.contour_qualification else MANIFEST)
+    if args.manifest != manifest_path:
         parser.error('The manifest must match the selected qualification mode')
-    OUT = CORNER_OUT if args.corner_diagnostic else Path('/artifacts/files1318-qualified')
+    select_output(CORNER_OUT if args.corner_diagnostic
+                  else CONTOUR_OUT if args.contour_qualification else QUALIFIED_OUT)
     OUT.mkdir(parents=True, exist_ok=False)  # No replay or overwrite of a prior cycle.
     report = {'schemaVersion': 1, 'passed': False, 'complete': False,
               'budgetSeconds': BUDGET, 'preparationBudgetSeconds': 1800,
@@ -861,6 +1191,15 @@ def main():
         report['limits'].append(
             'Checkpoint only: reused static; no build, unit suites, later journeys, wheel or install. '
             'Topology includes touch readiness, not a touch product journey. Prior integrated failure unchanged.')
+    if args.contour_qualification:
+        report.update(mode='contour-qualification', priorIntegratedPassed=False)
+        for name in ('reuse-proof', 'static-reuse'):
+            report['phases'][name] = {'status': 'unrun', 'reason': 'not_started'}
+        for name in REUSED_PHASES:
+            report['phases'][name]['reason'] = 'reuse_pending_exact_evidence_and_inputs'
+        report['limits'].append(
+            'Only the earlier 70 Python tests, 19 Node tests and 311 built static files may be REUSED. '
+            'The prior integrated run failed later; no prior full qualification pass is claimed.')
     save('report.json', report)
     def expired(_signum, _frame):
         remaining = hard_deadline - time.monotonic()
@@ -918,6 +1257,9 @@ def main():
                         'frontend/tests/canvas-usability-browser.mjs',
                         'frontend/tests/standard-ux-canvas-files-browser.mjs'}
             require(required <= frozen['files'].keys(), 'Parent manifest omits required source')
+            if args.contour_qualification:
+                require(frozen['files'][PRODUCER]['sha256'] == CONTOUR_PRODUCER_SHA,
+                        'Contour producer differs from the reviewed verifier interface')
             renderer_source = (ROOT / 'frontend/tests/canvas-renderers-browser.mjs').read_text()
             if not args.corner_diagnostic and ('CANVAS_RENDERER_STALLED_BODY' not in renderer_source
                     or 'expectedFailureVerified' not in renderer_source):
@@ -976,6 +1318,8 @@ def main():
         }
         if args.corner_diagnostic:
             env['FILES1318_CORNER_DIAGNOSTIC'] = '1'  # Fixed child evidence destination only.
+        elif args.contour_qualification:
+            env['FILES1318_CONTOUR_QUALIFICATION'] = '1'
         for key in ('HOME', 'TMPDIR', 'XDG_CACHE_HOME'):
             Path(env[key]).mkdir()
         os.environ.clear()
@@ -1027,20 +1371,37 @@ def main():
             BROWSER_READY.replace('/artifacts/files1318-qualified', str(OUT))], cap=45)
         if args.corner_diagnostic:
             step('static-reuse', lambda: diagnostic_static(frozen))
+        elif args.contour_qualification:
+            reused = step('reuse-proof', lambda: retained_proofs(frozen))
+            step('static-reuse', lambda: diagnostic_static(frozen, binding='contourReuse'))
+            # No status changes until every original proof, dependency identity,
+            # tracked input and archived static byte has passed the reuse guard.
+            for name in REUSED_PHASES:
+                report['phases'][name].update(
+                    status='REUSED', reason='exact_prior_pass_and_unchanged_inputs_verified',
+                    executed=False, sourceRevision=REUSE_BINDING['sourceRevision'],
+                    sourceTree=REUSE_BINDING['sourceTree'],
+                    priorEvidence=f'prior-evidence/{name}/results.json',
+                    priorEvidenceSha256=frozen['reuseEvidence'][f'{name}/results.json'])
+            reused['status'] = 'REUSED'
+            save('reuse-evidence-validation.json', reused)
+            report['reuseEvidence'] = reused
+            save('report.json', report)
         else:
             run('frontend-build', [NPM, 'run', 'build'], cap=240)
 
         def source_freeze():
-            save('source-after-reuse.json' if args.corner_diagnostic else 'source-after-build.json',
+            save('source-after-reuse.json' if args.corner_diagnostic or args.contour_qualification
+                 else 'source-after-build.json',
                  frozen_inputs(frozen, built=True))
             value = candidate(frozen)
             require(value['static'] and 'amplifier_web/static/index.html' in value['static'], 'No built static')
-            if args.corner_diagnostic:
+            if args.corner_diagnostic or args.contour_qualification:
                 require(value['static'] == read(OUT / 'reuse-metadata.json')['files'], 'Reused static changed')
             save('candidate.json', value)
             save('static.json', value['static'])
         step('source-freeze', source_freeze)
-        if not args.corner_diagnostic:
+        if not args.corner_diagnostic and not args.contour_qualification:
             run('python-tests', [PYTHON, '-I', '-B', ROOT / DRIVER, '--python-tests'], cap=180, verify=junit)
             run('frontend-units', [NODE, '--test', '--test-reporter=tap',
                                   *(ROOT / name for name in UNIT_FILES)], cap=60, verify=unit_proof)
@@ -1128,6 +1489,16 @@ def main():
                 require(wheel_proof(package) == read(OUT / 'installed-wheel-after.json'), 'Final installed integrity')
                 save('source-payload-final.json', expected['files'])
                 save('static-final.json', tree(package / 'amplifier_web/static'))
+                if args.contour_qualification:
+                    require(expected['static'] == read(OUT / 'reuse-metadata.json')['files']
+                            and tree(OUT / 'static-before') == read(OUT / 'static-before.json'),
+                            'Reused or preserved original static changed')
+                    require(all(sha(OUT / 'prior-evidence' / name) == digest
+                                for name, digest in frozen['reuseEvidence'].items()),
+                            'Copied prior raw evidence changed')
+                    require(all(report['phases'][name]['status'] == 'REUSED'
+                                and report['phases'][name]['executed'] is False for name in REUSED_PHASES),
+                            'Reused phases were rerun or lost their evidence')
             step('final-integrity', final_integrity)
         checks_finished = True  # Not qualified until bounded evidence finalization also finishes.
     except BaseException as error:
@@ -1188,8 +1559,10 @@ def main():
 
 if __name__ == '__main__':
     # Private, fixed child entrypoints. No arbitrary command or selector input.
-    if os.environ.get('FILES1318_CORNER_DIAGNOSTIC') == '1':
-        OUT = CORNER_OUT
+    corner = os.environ.get('FILES1318_CORNER_DIAGNOSTIC') == '1'
+    contour = os.environ.get('FILES1318_CONTOUR_QUALIFICATION') == '1'
+    require(not (corner and contour), 'Conflicting child qualification modes')
+    select_output(CORNER_OUT if corner else CONTOUR_OUT if contour else QUALIFIED_OUT)
     if os.environ.get('FILES1318_FIXTURE') in ('source', 'installed'):
         fixture_process(os.environ['FILES1318_FIXTURE'])
     elif sys.argv[1:] == ['--runtime-ready']:
