@@ -5180,11 +5180,9 @@ class AppService:
         if operation == "voice.visual.read":
             return self.voice_visual.read(session_id, args.get("captureId"))
         if operation == "outputs.image.read":
-            async with self.lock:
-                return self.outputs.image(session_id, args.get('id'), args.get('sha256'))
+            return await self.outputs.image_async(session_id, args.get('id'), args.get('sha256'))
         if operation == "outputs.images.read":
-            async with self.lock:
-                return self.outputs.images(session_id, args.get('images'))
+            return await self.outputs.images_async(session_id, args.get('images'))
         if operation in {'context.manifest', 'context.read'}:
             bindings = args.get('_contextBindings', [])
             async with self.lock:

@@ -96,7 +96,7 @@ async def test_lazy_owner_projection_does_not_reinsert_drafts_or_strip_user_json
     app.clients.records['caller']['drafts'][other['id']] = 'PRIVATE_DORMANT'
     app._save()
     app._state['sessions'] = [row for row in app._state['sessions'] if row['id'] != other['id']]
-    position = _ranked(app.directory, 'id=?', (other['id'],), limit=1)[0][0]
+    position = next(position for position, row in _ranked(app.directory) if row['id'] == other['id'])
     path = '/sessions/' + str(position)
     args = {'path': path, 'clientId': 'caller'}
     value = await app.app_bridge('get_state', args, sid)

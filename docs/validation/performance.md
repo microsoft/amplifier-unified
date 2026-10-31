@@ -169,6 +169,35 @@ call identity and default serialization. No model-provided flag grants this
 behavior. Compare overlapping waits with a serial baseline; do not claim remote
 provider latency or end-to-end live improvement from a synthetic transport.
 
+## Provider requests and cache observations
+
+Keep reusable instructions, tools and accepted history stable while their meaning
+is unchanged. Fresh request observations belong at the existing request-preparation
+boundary; do not insert changing timestamps or reorder unchanged content ahead of
+the reusable prefix. Check the final serialized provider request, including retries
+and continuations, rather than assuming the host's message list is what was sent.
+
+The provider owns wire caching policy: qualify the actual endpoint, API route,
+effective model and deployment. An OpenAI-compatible name or inherited adapter
+does not prove support for OpenAI cache fields. Reuse existing capability/endpoint
+owners; do not create a host-wide model allowlist or a parallel cache manager.
+Preserve caller settings, unsupported-route behavior and request input immutability.
+Exercise more than one model tier and initial/continued requests. A repeat-prompt
+probe establishes functional reuse, not a general latency guarantee.
+
+Carry reported cache usage through both normalized responses and event telemetry.
+A reported zero is a miss; absent usage is unknown. Do not invent cache writes,
+hits or prices. Keep these distinctions in provider tests and host aggregation.
+Measure request bytes separately from input tokens and cached tokens: a high hit
+rate does not remove client encoding, uploads or server-side preparation work.
+
+Historical images and tool results remain with the canonical transcript/context
+owner. Removing them or rewriting opaque native items in a transport adapter to
+meet a byte target is not context management. Qualify any selective context change
+across resume, compaction, authorized retrieval and pending tool pairs before
+adoption. See the [provider audit](provider-cache-audit-20261031.md) for the current
+source checks and remaining limitations; it is not a runtime capability registry.
+
 ## Maintained client smoke
 
 `frontend/tests/client-traffic-browser.mjs` uses the real server and built client
@@ -209,6 +238,17 @@ exact bodies. Summary-only edits still invalidate observations, and frozen reade
 retain their own state. The overlay encoding checks exercise mixed scalar/full
 query order and reuse each variant only until the installed overlay changes.
 These checks bound SQL inputs, not all live-summary preparation or global counts.
+
+`tests/test_observation_receipt_cost.py` varies current read receipts against a
+27,000-row native catalog and changes actual public facts to invalidate warm reuse.
+One scalar join matches fingerprints and canonical owner roles; resolving those
+same owners again in batches must not multiply preparation. Its semantic oracle
+covers root/worker/internal roles, native suppression and stale fingerprints.
+`tests/test_directory_page_cost.py` checks first, middle and late ordinal pages
+without assigning a window rank to every owner. The existing directory-state
+checks retain global positions, negative indices, private-state filtering and
+stale-revision refusal. Their SQL budgets measure query work, not constant-time
+global ordering or a guaranteed live-host latency.
 
 The additive Extended browser registration runs after publication. The separate
 `Client performance smoke` workflow selects affected PR paths and supports manual
