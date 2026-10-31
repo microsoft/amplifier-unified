@@ -1092,7 +1092,8 @@ def test_archive_verification_reason_survives_without_destroy(library, tmp_path,
         if source == '/artifacts':
             with tarfile.open(destination, 'a') as archive:
                 item = tarfile.TarInfo('artifacts/fixture-pipe')
-                item.type = tarfile.FIFOTYPE
+                # Ordinary FIFO rejection stays covered; archive-only now permits it.
+                item.type = tarfile.FIFOTYPE if action == 'remove' else tarfile.CHRTYPE
                 archive.addfile(item)
             receipt.bytes = destination.stat().st_size
             receipt.sha256 = hashlib.sha256(destination.read_bytes()).hexdigest()
@@ -1106,7 +1107,7 @@ def test_archive_verification_reason_survives_without_destroy(library, tmp_path,
     monkeypatch.setattr(worker, 'write_private_record', write)
     result = removal_main(monkeypatch, value)
     assert result['verification'] == {'version': 1, 'reasonCode': 'unsupported_type',
-        'memberType': 'fifo', 'relativePath': 'artifacts/fixture-pipe'}
+        'memberType': 'fifo' if action == 'remove' else 'character', 'relativePath': 'artifacts/fixture-pipe'}
     assert result['code'] == 'archive_verification_failed' and result['phase'] == 'verifying'
     assert result['status'] == 'stopped' and result['effectAdmitted'] is False
     assert result['removal'] == {'version': 1, 'phase': 'verify-exports',
@@ -1123,6 +1124,92 @@ def test_archive_verification_reason_survives_without_destroy(library, tmp_path,
     else:
         assert not (directory / 'removal-failed.json').exists()
     assert str(tmp_path) not in json.dumps(result) and 'private persistence' not in json.dumps(result)
+
+
+def retain_prepared_archive_contract(value):
+    """Bind first-path archive custody to this fixture's exact source/profile."""
+    value['profileId'] = 'python-project'
+    digest = value['snapshot']['archive_sha256']
+    directory = Path(value['root']) / 'preparation'; directory.mkdir(mode=0o700)
+    worker.write_private_record(directory / 'receipt.json', {
+        'status': 'ready', 'profileId': value['profileId'], 'sourceSha256': digest,
+        'executionContract': {'version': 1, 'profileId': value['profileId'],
+            'source': {'archiveSha256': digest},
+            'retention': {'mode': 'archive-only', 'maxBytesPerSelection': worker.retention.RECOVERY_LIMIT}}})
+
+
+@pytest.mark.parametrize('action', ['finishCleanup', 'remove'])
+@pytest.mark.parametrize('fault,reason', [
+    (None, None), ('nonzero', 'invalid_size'), ('device', 'unsupported_type'), ('header', 'invalid_header'),
+])
+def test_fifo_archive_custody_precedes_docker_destroy(library, tmp_path, monkeypatch, action, fault, reason):
+    from test_environment_retention import fifo_selection, guard_fifo_io
+    guard_fifo_io(monkeypatch)
+    lib, calls = library
+    value = payload(tmp_path, action)
+    if action == 'remove':
+        retain_prepared_archive_contract(value)
+    monkeypatch.setattr(worker.shutil, 'disk_usage', lambda root: SimpleNamespace(free=20 * 1024**3))
+    directory = worker.removal_directory(value)
+    exported, order = {}, []
+    original_export, original_destroy = lib.export_files, lib.destroy
+    def export(identity, source, destination, **kwargs):
+        receipt = original_export(identity, source, destination, **kwargs)
+        if source == '/artifacts':
+            destination.write_bytes(fifo_selection('artifacts', fault=fault) + bytes(1024))
+            receipt.bytes = destination.stat().st_size
+            receipt.sha256 = hashlib.sha256(destination.read_bytes()).hexdigest()
+        exported[source] = destination.read_bytes()
+        order.append(source)
+        return receipt
+    def verify_complete():
+        assert set(exported) == {'/workspace', '/artifacts'}
+        retained = json.loads((directory / 'retention.json').read_text())
+        assert retained['verified'] and retained['archiveOnly']
+        manifest = json.loads((directory / 'manifest.json').read_text())
+        assert {row['source'] for row in manifest} == set(exported)
+        for row in manifest:
+            raw = Path(row['destination']).read_bytes()
+            assert raw == exported[row['source']]
+            assert row['verified'] and row['bytes'] == len(raw)
+            assert row['sha256'] == hashlib.sha256(raw).hexdigest()
+        with tarfile.open(directory / 'artifacts.tar') as archive:
+            assert archive.getnames() == ['artifacts', 'artifacts/pipe', 'artifacts/after']
+            assert archive.getmember('artifacts/pipe').type == tarfile.FIFOTYPE
+            assert archive.extractfile('artifacts/after').read() == b'kept'
+    def observe(*args):
+        if not order:
+            order.append('stopped')
+            return {'status': 'stopped', 'observation': {'ownership': 'matched'}}
+        if order[-1] == '/artifacts':
+            verify_complete()  # Both publications precede the second owner check.
+            order.append('rechecked')
+            return {'status': 'stopped', 'observation': {'ownership': 'matched'}}
+        assert order[-1] == 'destroy'
+        order.append('absent')
+        return {'status': 'absent', 'observation': {'ownership': 'absent', 'absenceConfirmed': True}}
+    def destroy(*args, **kwargs):
+        assert order[-1] == 'rechecked'
+        verify_complete()
+        order.append('destroy')
+        return original_destroy(*args, **kwargs)
+    lib.export_files, lib.destroy = export, destroy
+    monkeypatch.setattr(worker, 'docker_reconcile', observe)
+    result = removal_main(monkeypatch, value)
+    if fault:
+        assert result['verification']['reasonCode'] == reason
+        assert result['phase'] == 'verifying' and result['effectAdmitted'] is False
+        assert result['removal']['destroyEffect'] == 'not_dispatched'
+        assert not (directory / 'retention.json').exists()
+        assert not any(name == 'destroy' for name, *_ in calls)
+        assert order == ['stopped', '/workspace', '/artifacts']
+    else:
+        assert result['ok'] and result['status'] == 'removed'
+        assert result['retention']['archiveOnly'] and result['removal']['destroyEffect'] == 'confirmed'
+        assert order == ['stopped', '/workspace', '/artifacts', 'rechecked', 'destroy', 'absent']
+        assert sum(name == 'destroy' for name, *_ in calls) == 1
+    assert all((directory / (root.strip('/') + '.tar')).read_bytes() == raw for root, raw in exported.items())
+    assert not any(name in {'execute', 'stop', 'launch'} for name, *_ in calls)
 
 
 @pytest.mark.parametrize('profile_id', ['linux-python', 'python-project', 'browser-test'])

@@ -1,4 +1,6 @@
 """Bounded regression checks for the reviewed multi-worker defects."""
+from amplifier_web import test_execution_settings as execution_settings
+
 import asyncio
 import json
 from pathlib import Path
@@ -82,7 +84,7 @@ async def test_new_peer_keeps_actual_checkout_and_canonical_history_home(app, tm
 
 
 async def test_full_inbox_preserves_accepted_inputs_and_duplicate_receipts(app, monkeypatch):
-    monkeypatch.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 2)
+    monkeypatch.setitem(execution_settings.CONCURRENCY_DEFAULTS, 'maxPendingPeerInputs', 2)
     source, target = app.state['sessions']
     target['status'] = 'working'
     args = {'sessionId': target['id'], 'text': 'Inspect once'}
@@ -102,20 +104,20 @@ async def test_full_inbox_preserves_accepted_inputs_and_duplicate_receipts(app, 
     assert accepted['accepted']
 
 
-async def test_notify_bursts_are_bounded_without_waking_receiver(app, monkeypatch):
-    monkeypatch.setattr('amplifier_web.collaboration.MAX_PAIR_MESSAGES_PER_MINUTE', 1)
+async def test_configured_notify_rate_is_bounded_without_waking_receiver(app, monkeypatch):
+    monkeypatch.setitem(execution_settings.CONCURRENCY_DEFAULTS, 'maxPeerMessagesPerMinute', 1)
     source, target = app.state['sessions']
     args = {'sessionId': target['id'], 'text': 'Observation', 'mode': 'notify'}
     await agent_action(app, source, 'coordination.send', args, 'notice')
     before = len(target['messages'])
-    with pytest.raises(AppError, match='Too many messages'):
+    with pytest.raises(AppError, match='configured limit of 1'):
         await agent_action(app, source, 'coordination.send', args, 'flood')
     assert len(target['messages']) == before and not app.runtime.inputs
     assert (await agent_action(app, source, 'coordination.send', args, 'notice'))['duplicate']
 
 
 async def test_saved_wait_reserves_outcome_slot_and_old_stop_releases_reservation(app, monkeypatch):
-    monkeypatch.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 1)
+    monkeypatch.setitem(execution_settings.CONCURRENCY_DEFAULTS, 'maxPendingPeerInputs', 1)
     source, target = app.state['sessions']
     # A successful declaration awaits terminal evidence. Negative reports now
     # legitimately exchange this reservation for an immediate queued notice.
@@ -139,7 +141,7 @@ async def test_saved_wait_reserves_outcome_slot_and_old_stop_releases_reservatio
 
 @pytest.mark.parametrize('assignment', [False, True])
 async def test_actual_stop_releases_queued_notice_before_worker_interrupt_returns(app, monkeypatch, assignment):
-    monkeypatch.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 1)
+    monkeypatch.setitem(execution_settings.CONCURRENCY_DEFAULTS, 'maxPendingPeerInputs', 1)
     source, target = app.state['sessions']
     if assignment:
         await app.dispatch('assignment.start', {'sessionId': source['id']})

@@ -126,6 +126,7 @@ class RuntimeControls:
     def __init__(self, session, runtime, telemetry=None, *, preserve_configuration=False, tool_invocation=None):
         self.session, self.runtime, self.telemetry = session, runtime, telemetry
         self.preserve_configuration = preserve_configuration
+        self._restoring = False
         self._tool_invocation = tool_invocation
         self.coordinator = session.coordinator
         self.configurator = self.coordinator.get_capability("web.configurator")
@@ -173,6 +174,17 @@ class RuntimeControls:
         if not self.state_path().exists():
             return
         saved = json.loads(self.state_path().read_text())
+        # A cold mount initially contains module defaults. Intermediate task,
+        # budget and provider restoration must not publish that partial state.
+        # On failure/cancellation retain the original controls for recovery.
+        self._restoring = True
+        try:
+            await self._restore_saved(saved, selection_override=selection_override)
+        finally:
+            self._restoring = False
+        self.persist()
+
+    async def _restore_saved(self, saved, *, selection_override=None):
         if self.configurator:
             await self.configurator.apply_saved_settings(saved.get("configurator", {}))
         self.coordinator.session_state["goal"] = saved.get("goal")
@@ -202,7 +214,7 @@ class RuntimeControls:
             await self.mode("mode.set", {"name":saved["mode"]})
 
     def persist(self, *, task_only=False):
-        if self.preserve_configuration:
+        if self.preserve_configuration or self._restoring:
             return  # A scoped placement mount restores controls without rewriting them.
         snapshot = self.configurator.snapshot() if self.configurator else {}
         loop, context = self.coordinator.get("orchestrator"), self.coordinator.get("context")
