@@ -53,7 +53,11 @@ async def test_full_notes_settings_and_exact_retries_need_no_human_or_browser(ap
     deleted = await change(app, source, 'memory.delete',
         {'id': created['id'], 'expectedRevision': 2}, 'full-delete', origin=origin)
     assert deleted['deleted'] and deleted['provenance']['authority'] == updated['provenance']['authority']
-    assert not app.recall.store.versions(created['id'])
+    for read in (app.recall.store.memory, app.recall.store.versions):
+        with pytest.raises(ValueError, match='unavailable'):
+            read(created['id'])
+    assert app.recall.store.db.execute(
+        'SELECT COUNT(*) FROM memory_versions WHERE id=?', (created['id'],)).fetchone()[0] == 0
     assert not app.recall.store.list_memories(None)['items']
     retained = {key: copy.deepcopy(receipt(app, key)) for key in
                 ('full-settings', 'full-create', 'full-update', 'full-delete')}
