@@ -353,7 +353,6 @@ async def test_cold_limit_correction_preserves_saved_budget_at_every_write(limit
         assert all(unrelated(saved) == unrelated(before) for saved in writes), [
             saved['budget'] for saved in writes]
     finally:
-        await ctx.app.management.close()
         ctx.app.management = old_management
         if ctx.native is not old_native:
             await ctx.native.close()
@@ -363,6 +362,7 @@ async def test_cold_limit_correction_preserves_saved_budget_at_every_write(limit
 async def test_failed_cold_limit_preparation_keeps_previously_saved_mode(limited, monkeypatch):
     """A formerly available local mode disappears before a legitimate cold load."""
     from unittest.mock import AsyncMock
+    from amplifier_web import runtime_controls
     ctx = limited
     ctx.native.coordinator.session_state['mode_discovery'] = SimpleNamespace(
         find=lambda name: SimpleNamespace(name=name),
@@ -370,6 +370,13 @@ async def test_failed_cold_limit_preparation_keeps_previously_saved_mode(limited
     ctx.native.coordinator.hooks = SimpleNamespace(emit=AsyncMock())
     await ctx.native.perform('mode.set', {'name': 'review-only'})
     before = ctx.native.state_path().read_bytes()
+    writes = []
+    original_write = runtime_controls.write_private
+    def observe(path, text):
+        original_write(path, text)
+        if path == ctx.native.state_path():
+            writes.append(text)
+    monkeypatch.setattr(runtime_controls, 'write_private', observe)
     restored = controls(ctx.target['id'])
     restored.coordinator.session_state['mode_discovery'] = SimpleNamespace(
         find=lambda name: None, list_modes=lambda: [])
@@ -383,6 +390,7 @@ async def test_failed_cold_limit_preparation_keeps_previously_saved_mode(limited
             await change(ctx, args(ctx, sourceMessageId=human(ctx)['id']))
         assert not ctx.calls and not ctx.app.runtime.inputs
         assert ctx.native.state_path().read_bytes() == before
+        assert not writes
         assert (await read(ctx, commandId='correct-limit'))['receiptStatus'] == 'not_observed'
     finally:
         await restored.close()
