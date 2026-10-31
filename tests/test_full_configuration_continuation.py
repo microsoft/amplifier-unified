@@ -324,12 +324,13 @@ async def test_full_child_recovery_rechecks_after_dispatch_await(process_boundar
     original_route = b.app.collaboration.route
     async def held_route(action, args, origin, identity, caller):
         result = await original_route(action, args, origin, identity, caller)
-        if action == 'configuration.operation.reconcile':
+        if (action == 'configuration.operation.reconcile' and identity == 'changed-after-check'
+                and caller == b.owner['id'] and args.get('operationId') == saved['id']):
             # AppControl uses service-owned Work guards, not the separate
             # work.effect.check bridge used by other mounted tools. Hold its
             # real routing await after the first guard and before final admission.
             assert len(checks) == 1 and checks[0]['allowed'] and not checks[0]['effectAuthorized']
-            assert result is None and PRINCIPAL.get() == 'native-continuation-child'
+            assert result is None and origin == 'agent' and PRINCIPAL.get() == 'native-continuation-child'
             entered.set()
             await release.wait()
         return result
