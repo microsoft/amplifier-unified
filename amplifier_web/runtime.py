@@ -818,7 +818,9 @@ class RuntimeManager:
                         task.add_done_callback(row['bridge_tasks'].discard)
                 elif data.get("op") == "reply":
                     row["inflight"].discard(data.get("id"))
-                    input_id = row.get('sendInputs', {}).pop(data.get('id'), None)
+                    tracked_input = row.get('sendInputs', {}).pop(data.get('id'), None)
+                    peer_input = tracked_input if isinstance(tracked_input, dict) else None
+                    input_id = None if peer_input else tracked_input
                     future = row["pending"].get(data.get("id"))
                     error = _worker_error(data) if data.get('error') else None
                     if isinstance(error, RuntimeStartupError):
@@ -840,6 +842,13 @@ class RuntimeManager:
                         else:
                             future.set_result(data.get("result"))
                     result = data.get('result')
+                    if (peer_input and not error and isinstance(result, dict)
+                            and self.workers.get(sid) is row
+                            and result.get('inputId', peer_input['inputId']) == peer_input['inputId']):
+                        # Control replies can outlive their caller just like sends.
+                        # Retain exact admission evidence, never another submission.
+                        await row['emit']('runtime.delivery', {'sessionId': sid,
+                            **peer_input, 'peerAdmission': result})
                     if (input_id and not data.get('error') and isinstance(result, dict)
                             and result.get('accepted') is True and result.get('inputId', input_id) == input_id):
                         # The HTTP caller may already have timed out. Reconcile
@@ -951,7 +960,7 @@ class RuntimeManager:
                     root_emitter = data.get("rootSessionId") or data.get("root_session_id") or row["runtime_id"]
                     if data.get("type") == "input.delivered" and emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
                         row["inputId"] = data.get("input_id")
-                    if data.get("type") in {"input.delivered", "steering.applied"} and (emitter != row["runtime_id"] or root_emitter != row["runtime_id"]):
+                    if (data.get("type") == "input.delivered" or data.get("type", "").startswith("steering.")) and (emitter != row["runtime_id"] or root_emitter != row["runtime_id"]):
                         continue  # Child input cannot mutate root admission provenance.
                     if data.get("type", "").startswith("generation.") or data.get("type") == "collaboration.checkpoint":
                         data = dict(data)
@@ -1069,6 +1078,13 @@ class RuntimeManager:
         row = self.workers.get(sid)
         if not row or row["process"].returncode is not None:
             raise RuntimeError("Session is not running")
+        peer_admission = None
+        if op == 'control' and args.get('operation') in {
+                'coordination.submit', 'coordination.deliver', 'coordination.steer'}:
+            peer_admission = args.get('arguments')
+            if (not isinstance(peer_admission, dict)
+                    or not isinstance(peer_admission.get('inputId'), str) or not peer_admission['inputId']):
+                raise ValueError('Peer admission requires an exact input identity.')
         if (op == 'control' and args.get('arguments', {}).get('integrationId') is not None
                 and row.get('integrationValidation') != 'admission-v1'):
             raise RuntimeError('The current worker has not confirmed integration admission support.')
@@ -1088,6 +1104,10 @@ class RuntimeManager:
             # Capture host authority at admission, before execution can emit a
             # generation. Event arrival must never recapture a later Stop epoch.
             interruption = (execution or row.get('start_session', {})).get('interruptionRevision', 0)
+            if peer_admission is not None:
+                row.setdefault('sendInputs', {})[identity] = {
+                    'inputId': peer_admission['inputId'], 'interruptionRevision': interruption,
+                    'targetGenerationId': peer_admission.get('targetGenerationId')}
             await self._write(row, {"op": op, "id": identity, **args,
                                    "interruptionRevision": interruption})
         except (ValueError, TypeError):
