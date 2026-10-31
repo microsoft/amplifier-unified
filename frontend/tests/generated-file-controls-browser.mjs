@@ -329,10 +329,14 @@ async function measureControls(target,controls,label){
   // before hit testing rather than accepting a button covered by that heading.
   await control.evaluate(node=>node.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'}));
   const measured=await control.evaluate(node=>{
-   const r=node.getBoundingClientRect(),inset=3;
+   const r=node.getBoundingClientRect(),inset=3,style=getComputedStyle(node);
    const points=[[r.left+inset,r.top+inset],[r.right-inset,r.top+inset],
     [r.left+inset,r.bottom-inset],[r.right-inset,r.bottom-inset]];
-   return {name:node.getAttribute('aria-label')||node.textContent.trim(),rect:r.toJSON(),
+   return {name:node.getAttribute('aria-label')||node.textContent.trim(),tag:node.tagName,className:node.className,
+    rect:r.toJSON(),computed:{height:style.height,minHeight:style.minHeight,minWidth:style.minWidth,
+     padding:style.padding,borderWidth:style.borderWidth,boxSizing:style.boxSizing,
+     whiteSpace:style.whiteSpace,overflowWrap:style.overflowWrap},
+    context:{inspector:!!node.closest('.a-canvas-inspector'),viewTools:!!node.closest('.a-canvas-view-tools')},
     viewport:{width:innerWidth,height:innerHeight},corners:points.map(([x,y])=>({x,y,
      reachable:x>=0&&y>=0&&x<innerWidth&&y<innerHeight&&node.contains(document.elementFromPoint(x,y))}))};
   });
@@ -348,6 +352,36 @@ async function measure(target,details,label){
  await target.screenshot({path:join(evidence,label+'-controls.png')});
  await details.locator('summary').scrollIntoViewIfNeeded();
  await target.screenshot({path:join(evidence,label+'-paths.png')});
+ // Inspect the text itself, separately from button visibility. Center each path
+ // in the real scroll container and retain line hit evidence + matching pixels.
+ // This investigates the earlier narrow path-overlap observation without
+ // assuming that reachable buttons imply unobscured path text.
+ const codes=details.locator('code');
+ for(let index=0;index<await codes.count();index++){
+  const code=codes.nth(index);
+  await code.evaluate(node=>node.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'}));
+  const textGeometry=await code.evaluate(node=>{
+   const range=document.createRange();range.selectNodeContents(node);
+   const style=getComputedStyle(node),rect=node.getBoundingClientRect();
+   const lines=[...range.getClientRects()].filter(r=>r.width>0&&r.height>0).map(r=>{
+    const y=r.top+r.height/2,inset=Math.min(1,r.width/4);
+    return {rect:r.toJSON(),points:[r.left+inset,r.left+r.width/2,r.right-inset].map(x=>{
+     const hit=document.elementFromPoint(x,y);
+     return {x,y,reachable:x>=0&&y>=0&&x<innerWidth&&y<innerHeight&&node.contains(hit),
+      hit:hit&&{tag:hit.tagName,className:hit.className}};
+    })};
+   });
+   return {text:node.textContent,rect:rect.toJSON(),clientWidth:node.clientWidth,scrollWidth:node.scrollWidth,
+    computed:{whiteSpace:style.whiteSpace,overflowWrap:style.overflowWrap,fontSize:style.fontSize,lineHeight:style.lineHeight},
+    viewport:{width:innerWidth,height:innerHeight},lines};
+  });
+  geometry.push({label:label+'-path-text',index,...textGeometry});
+  await target.screenshot({path:join(evidence,`${label}-path-${index}.png`)});
+  assert.ok(textGeometry.lines.length>0,`${label} path ${index}: no rendered text lines`);
+  assert.ok(textGeometry.scrollWidth<=textGeometry.clientWidth,`${label} path ${index}: horizontal text overflow`);
+  assert.ok(textGeometry.lines.every(line=>line.points.every(point=>point.reachable)),
+   `${label} path ${index}: text line is covered or outside viewport`);
+ }
 }
 async function cornerTap(control,corner){
  await control.scrollIntoViewIfNeeded();
