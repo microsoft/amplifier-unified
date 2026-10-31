@@ -523,6 +523,9 @@ class Collaboration:
             from .child_execution import current
             child = current(self.service, source)
             if child is None:
+                from .configuration_recovery import recovery_child
+                child = recovery_child(self.service, source)
+            if child is None:
                 self.error('The admitted native child execution is no longer current.')
             # The child owner validates its original assignment independently
             # of a normal parent turn finish or a newer parent generation.
