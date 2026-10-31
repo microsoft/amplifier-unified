@@ -74,10 +74,16 @@ async def test_full_addition_needs_no_browser_or_human_review_and_returns_exact_
 
 
 @pytest.mark.parametrize('kind', ['finite', 'persistent', 'nested'])
-async def test_mounted_full_child_files_keep_actual_actor_and_outlive_turn(mounted, remote, monkeypatch, kind):
+@pytest.mark.parametrize('input_count', [1, 17])
+async def test_mounted_full_child_files_keep_actual_actor_and_outlive_turn(mounted, remote, monkeypatch, kind, input_count):
     from amplifier_web.host.children import _PERSISTENT
     h = mounted
     await mode(h.app, h.source)
+    assigned = ['assigned-input'] if input_count == 1 else ['assigned-' + str(i) for i in range(input_count)]
+    h.worker.runtime.generation['input_ids'] = list(assigned)
+    h.source['collaborationGeneration']['inputIds'] = list(assigned)
+    h.worker.context_inputs = list(assigned)
+    h.worker.context_bindings = {identity: {'clientId': None, 'targets': []} for identity in assigned}
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def delayed(endpoint, payload, **kwargs):
@@ -119,7 +125,8 @@ async def test_mounted_full_child_files_keep_actual_actor_and_outlive_turn(mount
     assert receipt['status'] == 'submitted'
     assert actors == (['grandchild'] if kind == 'nested' else ['child'])
     assert receipt['runtimeSessionId'] == receipt['authority']['runtimeSessionId'] == actors[0]
-    assert receipt['authority']['inputIds'] == ['assigned-input']
+    assert receipt['authority']['inputIds'] == (assigned if input_count == 1 else [])
+    assert receipt['authority']['inputCoverage'] == ('complete' if input_count == 1 else 'unavailable')
     assert receipt['authority']['generationId'] == 'generation-1'
     assert receipt['sourceSessionId'] == h.source['id'] and 'clientId' not in receipt
     assert not h.app.clients.records and not h.source['approvals']

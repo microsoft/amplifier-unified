@@ -35,6 +35,14 @@ check validates current generation and Stop revision, while the effect owner
 checks its required delivered-input membership and ordinary authority. Root reply
 and provenance consumers keep the strict default.
 
+`AccessMode.capture_full` shares fresh Full capture for feedback and observations.
+It uses that native check and records the actual bounded input observation;
+missing or empty transport is unavailable coverage, never a verified empty
+assignment or a reason to deny Full. Supplied malformed or foreign inputs refuse.
+Fresh trusted system work needs no native principal; a supplied native envelope
+must remain valid. Effect owners retain placement, payload and delayed-write
+checks in their existing receipts. Passive reads do not capture new authority.
+
 Child invocation captures its app-access installer synchronously, before provider
 resolution or session mounting can await. The retained installer carries the
 original generation, inputs and Stop revision into the eventual child bridge.

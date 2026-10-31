@@ -243,6 +243,34 @@ class AccessMode:
         current = self.snapshot(session)
         return current['mode'] == 'full' and (revision is None or current['revision'] == revision)
 
+    def capture_full(self, session, origin):
+        """Capture standing authority; effect owners retain their own facts.
+
+        The caller supplies the resolved owner and eligible trusted origin.
+        This creates no grant or store entry and never hydrates a conversation.
+        Delayed effects check their retained revision, not a fresh capture.
+        """
+        current = self.snapshot(session)
+        if current['mode'] != 'full':
+            return None
+        authority = {'origin': origin, 'sessionId': session['id'],
+                     'accessRevision': current['revision']}
+        from .collaboration import BINDING, PRINCIPAL
+        if origin == 'agent' or PRINCIPAL.get() or BINDING.get():
+            binding, active = self.service.collaboration.active_binding(session, allow_descendant=True)
+            inputs = binding.get('_inputBindings', [])
+            if (not isinstance(inputs, list)
+                    or any(not isinstance(row, dict) or not isinstance(row.get('inputId'), str)
+                           or row['inputId'] not in active.get('inputIds', []) for row in inputs)):
+                from .service import AppError
+                raise AppError('Full access requires current admitted input bindings when supplied.', 403)
+            # The worker bounds this observation. Missing/overflow transport
+            # cannot prove an empty assignment or borrow the root's later IDs.
+            ids = [row['inputId'] for row in inputs]
+            authority.update(runtimeSessionId=PRINCIPAL.get(), generationId=active['id'],
+                             inputIds=ids, inputCoverage='complete' if ids else 'unavailable')
+        return authority
+
     async def dispatch(self, action, args, origin, command_id, caller, *, admission_check=None, expected_revision=None):
         from .service import AppError
         if action == 'access.set' and origin not in {'ui', 'user'}:
