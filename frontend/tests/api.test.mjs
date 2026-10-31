@@ -15,14 +15,14 @@ test('unexpected HTML response gives useful connection error',async()=>{
 test('unreadable acknowledgements keep mutations unconfirmed and never replay',async()=>{
  const original=globalThis.fetch;let calls=0;
  try{
-  for(const [status,body] of [[502,'<html>proxy failure</html>'],[200,'{"accepted":'],[200,''],[200,'null'],[200,'{}'],[200,'[]'],[200,'{"accepted":"true"}'],[502,'']]){
+  for(const [status,body] of [[502,'<html>proxy failure</html>'],[200,'{"accepted":'],[200,''],[200,'null'],[200,'{}'],[200,'[]'],[200,'{"accepted":"true"}'],[502,''],[502,'{"error":{}}'],[502,'{"message":true}']]){
    globalThis.fetch=async()=>{calls++;return new Response(body,{status})};
    await assert.rejects(request('/api/actions',{method:'POST',body:{action:'canvas.views.loadVersion'}}),error=>{
     assert.equal(error.unconfirmed,true,`Unreadable ${status} acknowledgement is not a refusal`);
     assert.equal(error.code,'invalid_response');assert.equal(error.status,status);return true;
    });
   }
-  assert.equal(calls,8);
+  assert.equal(calls,10);
   globalThis.fetch=async()=>new Response('<html>proxy failure</html>',{status:502});
   await assert.rejects(request('/api/state'),error=>error.code==='invalid_response'&&error.unconfirmed===false);
   for(const status of [409,200]){

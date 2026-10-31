@@ -89,7 +89,8 @@ async function measuredRequest(path, options, timing) {
   // Preserve structured server errors; don't infer nonexecution from proxy bytes.
   const actionAck=mutation&&path.split('?')[0]==='/api/actions';
   if(actionAck&&(!data||typeof data!=='object'||Array.isArray(data)))throw invalidResponse();
-  if(actionAck&&!res.ok&&data.accepted!==false&&!data.error&&!data.message)throw invalidResponse();
+  const readableError=[data?.error,data?.error?.message,data?.message].some(value=>typeof value==='string'&&value.trim());
+  if(actionAck&&!res.ok&&data.accepted!==false&&!readableError)throw invalidResponse();
   // A repeated command can return its original rejection inside an HTTP 200 receipt.
   const rejectionStatus=res.ok&&data.accepted===false?(Number.isInteger(data.status)&&data.status>=400&&data.status<600?data.status:400):res.status;
   if(!res.ok || data.accepted===false) throw Object.assign(new Error(typeof data.error==='string'?data.error:data.error?.message||data.message||`Request failed (${rejectionStatus})`),{code:data.code,state:data.state,receipt:data.receipt,status:rejectionStatus});
