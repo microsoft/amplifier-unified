@@ -17,6 +17,9 @@ import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
+const cornerDiagnosticMode=process.env.FILE_CONTROLS_CORNER_DIAGNOSTIC==='1';
+const touchEventDiagnosticMode=process.env.FILE_CONTROLS_TOUCH_EVENT_DIAGNOSTIC==='1';
+assert.ok(!(cornerDiagnosticMode&&touchEventDiagnosticMode),'Conflicting file-controls diagnostic modes');
 const output=process.env.FILE_CONTROLS_EVIDENCE||process.env.AMPLIFIER_TEST_ARTIFACTS;
 assert.ok(output,'Set an owned AMPLIFIER_TEST_ARTIFACTS or FILE_CONTROLS_EVIDENCE directory');
 await mkdir(output,{recursive:true});
@@ -30,8 +33,8 @@ const fileFrameCaptures=[];
 const metadataExchanges=[],detailsReadiness=[],preCleanupSnapshots=[],metadataPending=new Set();
 const metadataByRequest=new WeakMap();
 const pageLabels=new WeakMap(),routeCleanups=new Set(),browserOwners=[];
-const cornerDiagnosticMode=process.env.FILE_CONTROLS_CORNER_DIAGNOSTIC==='1';
 const cornerDiagnostics=[];
+let touchEventDiagnostic=null,touchEventDiagnosticComplete=false;
 const contourOracle={version:'circular-contour-v1',formula:'d=max(3,r-(r-3)/sqrt(2))',
  logicChecks:[],cornerShapeChecks:[],cornerShapeObservations:[],cornerShapeCaptureErrors:[],browserPreflight:null,
  negativeCounts:{size:0,regions:0,obstruction:0,paddingOrigin:0}};
@@ -811,7 +814,117 @@ async function measure(target,details,label){
    `${label} path ${index}: text line is covered or outside viewport`);
  }
 }
-async function cornerTap(control,corner){
+// Installed only at the first 390px primary Download, after the existing contour
+// measurement/oracles and immediately before its unchanged locator.tap. All
+// listeners are passive document capture observers. No event or DOM is changed.
+function armTouchEventCapture(node,intended){
+ const types=['pointerover','pointerenter','pointerdown','pointermove','pointerup','pointercancel',
+  'pointerout','pointerleave','gotpointercapture','lostpointercapture',
+  'touchstart','touchmove','touchend','touchcancel','mouseover','mouseenter','mousemove',
+  'mousedown','mouseup','click','mouseout','mouseleave','auxclick','contextmenu'];
+ const limits={windowMs:2000,records:64,stack:16,path:24,ancestors:16,notices:4,touches:4,errors:8};
+ const events=[],errors=[],truncations={records:0,stack:0,path:0,ancestors:0,notices:0,touches:0,errors:0};
+ const id=window.__fileControlsNodeId,armedAt=performance.now(),deadline=armedAt+limits.windowMs;
+ let timer,finished,resolveDone,lastPointerId=null;
+ const done=new Promise(resolve=>{resolveDone=resolve});
+ const short=element=>element?{nodeId:id(element),tag:element.tagName||element.nodeName||
+  (element===window?'WINDOW':'UNKNOWN')}:null;
+ const describe=element=>element?{...short(element),connected:element.isConnected??null,
+  rect:element.getBoundingClientRect?.().toJSON()??null,
+  className:typeof element.className==='string'?element.className.slice(0,160):null,
+  classNameTruncated:typeof element.className==='string'&&element.className.length>160}:null;
+ const take=(values,key)=>{const list=Array.from(values);truncations[key]+=Math.max(0,list.length-limits[key]);return list.slice(0,limits[key])};
+ const hit=point=>({point,element:describe(document.elementFromPoint(point.x,point.y)),
+  elements:take(document.elementsFromPoint(point.x,point.y),'stack').map(describe)});
+ const stop=reason=>{
+  if(!finished){
+   clearTimeout(timer);
+   for(const type of types)document.removeEventListener(type,listener,true);
+   finished={reason,at:performance.now(),listenersRemoved:true,timerCleared:true};
+   resolveDone();
+  }
+ };
+ const listener=event=>{
+  if(finished)return;
+  const at=performance.now();
+  if(at>=deadline){stop('deadline-observed');return}
+  if(events.length>=limits.records){truncations.records++;return}
+  const entry={index:events.length,type:event.type,at,wallTime:Date.now(),
+   timeStamp:event.timeStamp,isTrusted:event.isTrusted};
+  events.push(entry); // Keep a partial record if any synchronous read fails.
+  try{
+   const changed=event.changedTouches?take(event.changedTouches,'touches'):null;
+   const coordinate=changed?changed[0]:event;
+   const actual=coordinate&&Number.isFinite(coordinate.clientX)&&Number.isFinite(coordinate.clientY)?
+    {x:coordinate.clientX,y:coordinate.clientY}:null;
+   if(Number.isInteger(event.pointerId))lastPointerId=event.pointerId;
+   const path=take(event.composedPath(),'path'),ancestors=[];
+   let ancestor=event.target instanceof Element?event.target:null;
+   while(ancestor&&ancestors.length<limits.ancestors){
+    ancestors.push({...describe(ancestor),scroll:{x:ancestor.scrollLeft,y:ancestor.scrollTop}});
+    ancestor=ancestor.parentElement;
+   }
+   if(ancestor)truncations.ancestors++;
+   const notices=take((node.closest('#workspace-canvas')||document).querySelectorAll('.a-renderer-notice'),'notices');
+   Object.assign(entry,{
+    actual,coordinateSource:changed?'changedTouches[0]':'event.clientXY',intended,
+    pointerType:event.pointerType??null,pointerId:event.pointerId??null,
+    button:event.button??null,buttons:event.buttons??null,detail:event.detail??null,
+    sourceCapabilities:event.sourceCapabilities?{firesTouchEvents:event.sourceCapabilities.firesTouchEvents}:null,
+    changedTouches:changed?.map(touch=>({identifier:touch.identifier,x:touch.clientX,y:touch.clientY,target:short(touch.target)}))??null,
+    touchesLength:event.touches?.length??null,changedTouchesLength:event.changedTouches?.length??null,
+    target:describe(event.target),sameNode:node.contains(event.target),intendedButton:describe(node),
+    notices:notices.map(describe),composedPath:path.map(short),ancestors,
+    capture:{phase:event.eventPhase,currentTarget:short(event.currentTarget),defaultPrevented:event.defaultPrevented,
+     cancelBubble:event.cancelBubble,cancelable:event.cancelable,pointerIdQueried:lastPointerId,
+     queried:[...new Set([node,event.target,...path])].filter(item=>item instanceof Element).map(element=>({
+      ...short(element),hasPointerCapture:lastPointerId===null?null:element.hasPointerCapture(lastPointerId)})),
+     limitation:'Only these elements at document capture; pending capture, global capture owner and UA target adjustment are not exposed.'},
+    activeElement:short(document.activeElement),scroll:{x:scrollX,y:scrollY},
+    viewport:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio,
+     visual:visualViewport?{width:visualViewport.width,height:visualViewport.height,scale:visualViewport.scale,
+      offsetLeft:visualViewport.offsetLeft,offsetTop:visualViewport.offsetTop,pageLeft:visualViewport.pageLeft,pageTop:visualViewport.pageTop}:null},
+    atActual:actual?hit(actual):null,atIntended:hit(intended)
+   });
+  }catch(error){
+   entry.captureError={name:error.name,message:String(error.message).slice(0,1024),
+    messageTruncated:String(error.message).length>1024};
+   if(errors.length<limits.errors)errors.push({index:entry.index,...entry.captureError});
+   else truncations.errors++;
+  }
+ };
+ const read=()=>({limits,types,armedAt,deadline,finished,events,errors,truncations});
+ try{
+  for(const type of types)document.addEventListener(type,listener,{capture:true,passive:true});
+  timer=setTimeout(()=>stop('deadline'),limits.windowMs);
+ }catch(error){stop('arm-error');throw error}
+ return {wait:async()=>{await done;return read()},stop:()=>{stop('finally');return read()}};
+}
+async function collectTouchEvents(probe,diagnostic){
+ const failures=[];
+ try{diagnostic.capture=await bounded(probe.evaluate(value=>value.wait()),2500,'Passive touch event collection did not settle')}
+ catch(error){failures.push(error)}
+ finally{
+  try{diagnostic.capture=await bounded(probe.evaluate(value=>value.stop()),1000,'Touch listeners/timer cleanup did not settle')}
+  catch(error){failures.push(error)}
+  try{await bounded(probe.dispose(),1000,'Touch event handle disposal did not settle');diagnostic.handleDisposed=true}
+  catch(error){failures.push(error)}
+ }
+ diagnostic.captureErrors=failures.map(errorEvidence);
+ const capture=diagnostic.capture,events=capture?.events||[];
+ const first=type=>events.findIndex(event=>event.type===type);
+ diagnostic.sequence=events.map(event=>event.type);
+ diagnostic.pairPresence={pointerdown:first('pointerdown'),firstMousedown:first('mousedown')};
+ diagnostic.checkpointObserved=!!(capture?.finished?.listenersRemoved&&capture.finished.timerCleared&&
+  diagnostic.handleDisposed&&!failures.length&&!capture.errors.length&&
+  Object.values(capture.truncations).every(count=>count===0)&&
+  diagnostic.pairPresence.pointerdown>=0&&diagnostic.pairPresence.firstMousedown>diagnostic.pairPresence.pointerdown&&
+  events[diagnostic.pairPresence.pointerdown].pointerType==='touch'&&
+  ['pointerdown','mousedown'].every(type=>{const event=events[first(type)];return event?.isTrusted&&event.actual&&event.atActual}));
+ diagnostic.outcome=diagnostic.checkpointObserved?'checkpoint_observed_cause_unknown':'unknown';
+ return failures;
+}
+async function cornerTap(control,corner,diagnostic=null){
  await control.scrollIntoViewIfNeeded();
  await control.evaluate(node=>node.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'}));
  assert.ok(['top-left','top-right','bottom-left','bottom-right'].includes(corner));
@@ -847,6 +960,8 @@ async function cornerTap(control,corner){
   window.__fileControlsCancelTap=()=>document.removeEventListener('pointerdown',listener,true);
   return measured;
  },corner);
+ let originalFailure;
+ const diagnosticFailures=[];
  try{
   const {corners,...tapBefore}=measured;
   geometry.push({label:'corner-tap-before',...tapBefore,acceptance:{basis:measured.basis,corners}});
@@ -862,8 +977,20 @@ async function cornerTap(control,corner){
    checks.push({check:'old padding-origin conversion rejected by same exact-contour oracle',corner,
     oldPoint:measured.old.point,intended:measured.intended,oldReachable:measured.old.reachable});
   }else assert.deepEqual(measured.old.point,measured.corrected.point,'Zero border has no conversion difference');
-  await control.tap({position:measured.position});
+  let probe;
+  if(diagnostic){
+   diagnostic.before=measured;
+   probe=await control.evaluateHandle(armTouchEventCapture,measured.intended);
+   diagnostic.tapAttempts=1;
+  }
+  try{await control.tap({position:measured.position})}
+  finally{
+   // Wait only for passive observation, never repeat or reroute input. Capture
+   // failures cannot suppress the original sameNode/geometry assertion below.
+   if(probe)diagnosticFailures.push(...await collectTouchEvents(probe,diagnostic));
+  }
   const delivered=await control.evaluate(()=>window.__fileControlsLastTap);
+  if(diagnostic)diagnostic.delivered=delivered;
   const {corners:deliveredCorners,...tapDelivered}=delivered||{};
   geometry.push({label:'corner-tap-delivered',...tapDelivered,
    acceptance:{basis:delivered?.basis,corners:deliveredCorners}});
@@ -878,8 +1005,24 @@ async function cornerTap(control,corner){
   // This tolerance is ONLY for event delivery, never for padding reconstruction.
   assert.ok(Math.abs(delivered.event.x-measured.intended.x)<1&&
    Math.abs(delivered.event.y-measured.intended.y)<1,'Delivered touch missed the measured contour probe');
+  if(diagnostic){
+   diagnostic.originalOraclePassed=true;
+   assert.equal(diagnostic.checkpointObserved,true,'Native touch event pair is UNKNOWN: missing event, truncation or capture loss; no retry');
+  }
+ }catch(error){
+  if(!diagnostic)throw error;
+  originalFailure=error;diagnostic.failure=errorEvidence(error);
  }finally{
-  await control.evaluate(()=>{window.__fileControlsCancelTap?.();delete window.__fileControlsCancelTap});
+  try{
+   await control.evaluate(()=>{window.__fileControlsCancelTap?.();delete window.__fileControlsCancelTap});
+   if(diagnostic)diagnostic.originalListenerRemoved=true;
+  }catch(error){if(!diagnostic)throw error;diagnosticFailures.push(error)}
+ }
+ if(diagnostic){
+  diagnostic.cleanupErrors=diagnosticFailures.map(errorEvidence);
+  const failures=[...(originalFailure?[originalFailure]:[]),...diagnosticFailures];
+  if(failures.length===1)throw failures[0];
+  if(failures.length)throw new AggregateError(failures,'Native touch assertion and event-pair capture/cleanup failed');
  }
 }
 
@@ -1007,6 +1150,19 @@ async function usePreviewControls(retained,label,mode){
  await expect(primary).toBeVisible();
  assert.equal(await primary.evaluate(node=>node.tagName),'BUTTON');
  await measureControls(target,[primary,toggle],label+'-primary-before');
+ if(touchEventDiagnosticMode&&mode==='touch'){
+  assert.equal(label,'touch-390-preview','Diagnostic may only observe the first 390px primary Download');
+  assert.equal(touchEventDiagnostic,null,'Only one diagnostic tap is permitted');
+  touchEventDiagnostic={checkpoint:'first-390-primary-download',label,control:'Download canvas source',
+   browser:browserOwners.find(owner=>owner.label==='touch').browser.version(),options:touchOptions,
+   retained:{marker:retained.marker,unfinished:retained.unfinished,state:retained.state,documents:retained.documents},
+   tapAttempts:0,checkpointObserved:false,originalOraclePassed:false,outcome:'unknown',cause:'unknown',productAcceptance:false};
+  // Diagnostic ends at delivery, not download/feedback acceptance. The normal
+  // journey's download verifier and all preceding state-changing steps are intact.
+  await cornerTap(primary,'bottom-right',touchEventDiagnostic);
+  touchEventDiagnosticComplete=true;
+  return;
+ }
  if(mode==='keyboard'){
   // Copy precedes Download in the actual primary action row.
   await panel.locator('.a-canvas-primary-actions').getByRole('button',{name:'Copy canvas source',exact:true}).focus();
@@ -1313,6 +1469,7 @@ async function run(){
    assert.ok(await mobile.evaluate(()=>navigator.maxTouchPoints>0));
    await previewPreserved(touchPreview);
    await usePreviewControls(touchPreview,`touch-${width}-preview`,'touch');
+   if(touchEventDiagnosticMode)return; // No next gesture, control, width or full-journey verdict.
   }
  }finally{await touchPreview.element.dispose()}
  const final=await fixtureRead(page);
@@ -1366,6 +1523,13 @@ try{
   writeFile(join(evidence,'observations.json'),JSON.stringify({passed:!failure,error:failure?.stack,failure:errorEvidence(failure),screenshotErrors,
   ...(cornerDiagnosticMode?{mode:'corner-diagnostic',diagnosticComplete:cornerDiagnosticComplete,
    stoppedAfter:cornerDiagnosticComplete?'first-desktop-measure':null,cornerDiagnostics}:{}),
+  ...(touchEventDiagnosticMode?{mode:'touch-event-diagnostic',diagnosticComplete:touchEventDiagnosticComplete,
+   productAcceptance:false,stoppedAfter:touchEventDiagnosticComplete?'first-390-primary-download':null,
+   touchEventDiagnostic,diagnosticLimits:[
+    'One unchanged locator.tap; passive document capture for at most 2000ms from arm, not a device or product pass.',
+    'Missing compatibility mousedown, capture errors and truncation are UNKNOWN, never a request to repeat input.',
+    'Synchronous DOM reads may affect timing. Each event snapshot is atomic, not proof of unchanged layout between events.',
+    'Capture state is limited to queried nodes; UA target adjustment and pending/global capture ownership are not observable.']}:{}),
   contourOracle,
   installed:ready&&{packageRoot:ready.packageRoot,verified:ready.installedVerified,staticSha256:ready.staticSha256},
   seed,checks,geometry,fileFrameCaptures,downloads,requests,commands,metadataExchanges,detailsReadiness,preCleanupSnapshots,
@@ -1384,5 +1548,6 @@ try{
  assert.ok(entries.every(entry=>entry.isFile()),'Export only ordinary evidence files, never fixture sockets/profile/state');
 }
 if(failure)throw failure;
-console.log(cornerDiagnosticMode?`Generated file controls corner diagnostic complete (not full qualification); evidence: ${evidence}`:
+console.log(touchEventDiagnosticMode?`Generated file controls touch event checkpoint observed (cause unknown; not qualification); evidence: ${evidence}`:
+ cornerDiagnosticMode?`Generated file controls corner diagnostic complete (not full qualification); evidence: ${evidence}`:
  `Generated file controls passed; evidence: ${evidence}`);

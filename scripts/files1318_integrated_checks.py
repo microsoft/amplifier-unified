@@ -55,6 +55,17 @@ are verified. The prior integrated run remains FAILED, not a qualification pass.
 Bind contourReuse=REUSE_BINDING and reuseEvidence={relative_path: sha256} for
 every REUSE_EVIDENCE_FILES entry (relative to REUSE_MANIFEST.parent). Raw old
 proofs are copied unchanged to prior-evidence; no old proof is rewritten.
+
+--touch-event-diagnostic uses /workspace/output/files1318-touch-event-manifest.json
+and /artifacts/files1318-touch-event-diagnostic. Bind touchEventReuse=REUSE_BINDING
+and the SAME 23 reuseEvidence files. The final producer SHA is checked below.
+Reuse the old 70/19/311 proofs, normal runtime/browser readiness and topology;
+run generated-source ONLY through the first 390px primary Download tap. No
+build, unit suite, renderer journey, wheel or install runs. Raw exit 1 remains
+failed even when its event pair was captured. Missing events/capture loss are
+UNKNOWN, not a retry. Exit 0 means checkpoint observed, never product acceptance.
+The private FILES1318_TOUCH_EVENT_DIAGNOSTIC flag keeps fixture child OUT aligned;
+FILE_CONTROLS_TOUCH_EVENT_DIAGNOSTIC enables only the producer's passive recorder.
 """
 from __future__ import annotations
 
@@ -98,13 +109,17 @@ CONTRACT = PREPARED / 'execution-contract.json'
 MANIFEST = ROOT / 'output/files1318-frozen-manifest.json'
 CORNER_MANIFEST = ROOT / 'output/files1318-corner-manifest.json'
 CONTOUR_MANIFEST = ROOT / 'output/files1318-computed-round-manifest.json'
+TOUCH_EVENT_MANIFEST = ROOT / 'output/files1318-touch-event-manifest.json'
 HARNESS = OUT / 'harness'
 VENV = OUT / 'installed'
 DRIVER = 'scripts/files1318_integrated_checks.py'
 PRODUCER = 'frontend/tests/generated-file-controls-browser.mjs'
 CORNER_OUT = Path('/artifacts/files1318-corner-diagnostic')
 CONTOUR_OUT = Path('/artifacts/files1318-computed-round-qualified')
-CONTOUR_PRODUCER_SHA = 'cf1c025909f7149c47dfbacc046dbe532e5203c1b36892a695e05229be1fdc8a'
+TOUCH_EVENT_OUT = Path('/artifacts/files1318-touch-event-diagnostic')
+# Same reviewed producer; the diagnostic flag is off for full qualification.
+CONTOUR_PRODUCER_SHA = 'f7a8eb18f75ac6f7791cf81edf20861312b7b188404774efc18430f0189f104e'
+TOUCH_EVENT_PRODUCER_SHA = 'f7a8eb18f75ac6f7791cf81edf20861312b7b188404774efc18430f0189f104e'
 REUSE_INPUT = ROOT / 'output/files1318-corner-inputs'
 REUSE_BINDING = {
     'metadataSha256': '56123cca65eb88bb8ddbcf4fc66e2eed47fb102bb6c7d663ed39cf8798d32b8e',
@@ -231,7 +246,7 @@ def require(value, message):
 def select_output(folder):
     """Keep the main process and every private child on the same fixed paths."""
     global OUT, HARNESS, VENV
-    require(folder in (QUALIFIED_OUT, CORNER_OUT, CONTOUR_OUT), 'Unknown evidence destination')
+    require(folder in (QUALIFIED_OUT, CORNER_OUT, CONTOUR_OUT, TOUCH_EVENT_OUT), 'Unknown evidence destination')
     OUT = folder
     HARNESS, VENV = OUT / 'harness', OUT / 'installed'
 
@@ -272,7 +287,7 @@ def frozen_inputs(frozen, *, built=False):
         path = ROOT / name
         require(not Path(name).is_absolute() and '..' not in Path(name).parts
                 and str(Path(name)) == name
-                and path not in (MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST), 'Unsafe frozen path')
+                and path not in (MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST), 'Unsafe frozen path')
         require(path.parent.resolve().is_relative_to(ROOT), 'Frozen path escapes snapshot')
         require(expected['mode'] in ('100644', '100755', '120000')
                 and re.fullmatch('[a-f0-9]{64}', expected['sha256']), 'Invalid frozen identity')
@@ -288,7 +303,7 @@ def diagnostic_static(frozen, *, binding='diagnosticReuse'):
     require(ROOT == Path('/workspace') and Path.cwd().resolve() == ROOT
             and Path(__file__).resolve() == ROOT / DRIVER and not (ROOT / '.git').exists(),
             'Static reuse is guest-only')
-    require(binding in ('diagnosticReuse', 'contourReuse')
+    require(binding in ('diagnosticReuse', 'contourReuse', 'touchEventReuse')
             and frozen.get(binding) == REUSE_BINDING, 'Missing exact static reuse binding')
     archive, metadata_path = REUSE_INPUT / 'static.tar', REUSE_INPUT / 'reuse.json'
     for path, digest in ((archive, REUSE_BINDING['archiveSha256']),
@@ -1100,6 +1115,179 @@ def corner_diagnostic_proof(exit_code):
     return result
 
 
+def touch_event_diagnostic_proof(exit_code):
+    """Inspect raw exit-1 evidence before fail-stop; never bless a missing pair."""
+    result = {'exitCode': exit_code, 'checkpointObserved': False, 'outcome': 'unknown',
+              'productAcceptance': False, 'cause': 'unknown', 'visualJudgment': 'pending'}
+    try:
+        reports = list((OUT / 'generated-source/evidence').glob('generated-file-controls-*/observations.json'))
+        require(len(reports) == 1, 'Require one touch event diagnostic producer report')
+        path, = reports
+        result.update(path=str(path), sha256=sha(path))
+        proof = read(path)
+        require(type(exit_code) is int and exit_code in (0, 1)
+                and proof['mode'] == 'touch-event-diagnostic' and proof['passed'] is (exit_code == 0)
+                and proof['productAcceptance'] is False, 'Wrong touch diagnostic mode/exit')
+        diagnostic = proof['touchEventDiagnostic']
+        require(isinstance(diagnostic, dict) and diagnostic['checkpoint'] == 'first-390-primary-download'
+                and diagnostic['label'] == 'touch-390-preview'
+                and diagnostic['control'] == 'Download canvas source' and diagnostic['tapAttempts'] == 1
+                and diagnostic['productAcceptance'] is False and diagnostic['cause'] == 'unknown'
+                and diagnostic['browser'] == read(OUT / 'browser-readiness.json')['browser']
+                and diagnostic['options'] == {'viewport': {'width': 390, 'height': 844},
+                    'isMobile': True, 'hasTouch': True, 'deviceScaleFactor': 1}, 'Wrong/missing touch checkpoint')
+        computed_shape_proof(proof)
+        taps = [g for g in proof['geometry'] if g['label'] == 'corner-tap-before']
+        delivered = [g for g in proof['geometry'] if g['label'] == 'corner-tap-delivered']
+        require(len(taps) == len(delivered) == 7
+                and [t['node']['label'] for t in taps] ==
+                    ['Copy full path', 'Copy relative path', 'Download saved file'] * 2 + ['Download canvas source']
+                and all(t['event']['sameNode'] is True for t in delivered[:-1]),
+                'Preceding card taps missing or checkpoint exceeded')
+        before = diagnostic['before']
+        contour_sample(before)
+        point = before['corners'][3]
+        require(before['corner'] == 'bottom-right' and before['name'] == 'Download canvas source'
+                and before['viewport']['width'] == 390 and before['viewport']['height'] == 844
+                and before['intended'] == {'x': point['x'], 'y': point['y']}
+                and before['position'] == {
+                    'x': point['x'] - before['rect']['left'] - before['borders']['left'],
+                    'y': point['y'] - before['rect']['top'] - before['borders']['top']}
+                and all(taps[-1][key] == before[key] for key in
+                    ('nodeId', 'rect', 'radii', 'borders', 'intended', 'position', 'cornerShapes'))
+                and all(delivered[-1][key] == diagnostic['delivered'][key] for key in
+                    ('nodeId', 'rect', 'intended', 'event')), 'Measured/delivered contour identity changed')
+        # This is the existing journey prefix, not a new product acceptance rule.
+        counts = Counter({
+            'real clipboard + Copied.': 13,
+            'contour formula and unsupported geometry logic checks': 1,
+            'negative control: native size below 44px rejected': 2,
+            'negative control: individual contour region rejected': 4,
+            'negative control: real one-probe pointer overlay rejected by same contour oracle': 1,
+            'computed corner-shape exact-value predicate checks': 1,
+            'actual browser computed round accepted and noncircular corner rejected by same sampler': 1,
+            'old padding-origin conversion rejected by same exact-contour oracle':
+                sum(bool(g['borders']['left'] or g['borders']['top']) for g in taps),
+            'deliberate saved-v1 preview setup, not a download': 2,
+            'right-rail paths/download and primary Download preserve running saved-v1 HTML': 1,
+            'negative control: missing buttons rejected by the same oracle': 1,
+            'v1 browser download remains original after v2 is saved before URL resolution': 1,
+            'clipboard refusal reports failure and leaves real clipboard unchanged': 1,
+            '403 has visible feedback and zero downloads, then a legitimate click succeeds': 1,
+            'negative control: real wrong-byte download rejected by the same SHA-256 oracle': 1,
+            'reload after source deletion retains paths, exact saved v1 download and unrelated read-only Canvas/draft': 1,
+            'adjacent Markdown stays distinct; direct saved-only has no paths; outside-current-base has no relative-copy control': 1,
+            'open details refreshes current working folder and rejects delayed prior-placement metadata': 1,
+            '390px/320px emulated touch, actual contour taps, 44px targets, four contour-relative native hit probes and saved PNGs': 1,
+            'card-only phase completed with zero document requests and unrelated historical Canvas retained': 1,
+            'negative controls: lost input and changed execution token rejected by the same retained-preview oracle': 1,
+        })
+        require(Counter(c['check'] for c in proof['checks']) == counts
+                and [d['label'] for d in proof['downloads']] == [
+                    'desktop-race-v1', 'desktop-after-403', 'negative-wrong-bytes', 'reload-deleted-source-v1',
+                    'adjacent-markdown', 'saved-only', 'touch-390-deleted-v1', 'touch-320-deleted-v1',
+                    'desktop-preview-primary-v1', 'desktop-preview-rail-v1']
+                and len([r for r in proof['requests'] if r['path'].endswith('/document')]) == 2
+                and [c['label'] for c in proof['fileFrameCaptures']] ==
+                    [f'touch-320-{suffix}' for suffix in ('controls', 'paths', 'path-0', 'path-1', 'path-2', 'path-3')],
+                'Missing preceding flow or later journey ran after checkpoint')
+        setup, = [c for c in proof['checks'] if c['check'] == 'deliberate saved-v1 preview setup, not a download'
+                  and c['label'] == 'touch']
+        require(all(diagnostic['retained'][key] == setup[key] for key in ('marker', 'state', 'documents'))
+                and diagnostic['retained']['state']['draft'] == 'Keep touch draft — unsubmitted.'
+                and diagnostic['retained']['state']['canvas'] ==
+                    {'id': proof['seed']['artifacts']['html']['id'], 'version': 1, 'readOnly': True},
+                'Saved-v1 setup/draft binding differs')
+        capture = diagnostic.get('capture') or {}
+        events = capture.get('events', [])
+        sequence = [event['type'] for event in events]
+        pair = {key: next((i for i, event in enumerate(events) if event['type'] == kind), -1)
+                for key, kind in (('pointerdown', 'pointerdown'), ('firstMousedown', 'mousedown'))}
+        result.update(sequence=sequence, pairPresence=pair, originalOraclePassed=diagnostic['originalOraclePassed'],
+                      originalFailure=diagnostic.get('failure'), cleanup={
+                          'capture': capture.get('finished'), 'handleDisposed': diagnostic.get('handleDisposed'),
+                          'originalListenerRemoved': diagnostic.get('originalListenerRemoved'),
+                          'errors': diagnostic.get('cleanupErrors')},
+                      captureErrors=diagnostic.get('captureErrors'), truncations=capture.get('truncations'))
+        require(capture.get('limits') == {'windowMs': 2000, 'records': 64, 'stack': 16, 'path': 24,
+                'ancestors': 16, 'notices': 4, 'touches': 4, 'errors': 8}
+                and len(events) <= 64 and diagnostic['sequence'] == sequence and diagnostic['pairPresence'] == pair,
+                'Capture bounds/sequence/pair summary differs')
+        finite = lambda value: type(value) in (int, float) and math.isfinite(value)
+        for index, event in enumerate(events):
+            require(event['index'] == index and event['type'] in capture['types']
+                    and all(finite(event[k]) for k in ('at', 'timeStamp', 'wallTime'))
+                    and capture['armedAt'] <= event['at'] < capture['deadline'],
+                    'Invalid synchronous event index/time')
+            if event.get('captureError'):
+                continue  # Retain the partial event, but never mark it observed.
+            require(all(key in event for key in ('pointerType', 'pointerId', 'isTrusted', 'actual',
+                    'target', 'intendedButton', 'notices', 'capture', 'scroll', 'viewport', 'atActual', 'atIntended'))
+                    and event['intended'] == before['intended']
+                    and event['intendedButton']['nodeId'] == before['nodeId']
+                    and len(event['composedPath']) <= 24
+                    and all(set(node) == {'nodeId', 'tag'} for node in event['composedPath'])
+                    and len(event['ancestors']) <= 16 and len(event['notices']) <= 4
+                    and event['capture']['phase'] in (1, 2)
+                    and len(event['capture']['queried']) <= 26
+                    and event['atIntended']['point'] == before['intended']
+                    and len(event['atIntended']['elements']) <= 16
+                    and (event['actual'] is None or (
+                        all(finite(event['actual'][k]) for k in ('x', 'y'))
+                        and event['atActual']['point'] == event['actual']
+                        and len(event['atActual']['elements']) <= 16)), 'Incomplete synchronous event snapshot')
+        pair_present = pair['pointerdown'] >= 0 and pair['firstMousedown'] > pair['pointerdown']
+        if pair_present:
+            pointer, mouse = (events[pair[key]] for key in ('pointerdown', 'firstMousedown'))
+            require(pointer['actual'] == {k: diagnostic['delivered']['event'][k] for k in ('x', 'y')}
+                    and pointer['sameNode'] == diagnostic['delivered']['event']['sameNode'],
+                    'Original pointer sampler and passive record disagree')
+            pair_present = pointer.get('pointerType') == 'touch' and all(
+                e.get('isTrusted') and e.get('actual') and e.get('atActual') for e in (pointer, mouse))
+        observed = bool(pair_present and capture.get('finished', {}).get('listenersRemoved')
+                        and capture['finished']['timerCleared'] and diagnostic.get('handleDisposed')
+                        and diagnostic.get('captureErrors') == [] and capture.get('errors') == []
+                        and capture.get('truncations') and all(n == 0 for n in capture['truncations'].values()))
+        require(diagnostic['checkpointObserved'] is observed, 'Unsupported checkpoint observation claim')
+        result.update(checkpointObserved=observed,
+                      outcome='checkpoint_observed_cause_unknown' if observed else 'unknown',
+                      unknownReason=None if observed else 'missing_event_or_capture_loss_or_truncation')
+        require(diagnostic.get('originalListenerRemoved') is True and diagnostic.get('cleanupErrors') == []
+                and proof['errors'] == [] and proof['screenshotErrors'] == [], 'Diagnostic cleanup/page errors')
+        cleanup = proof['cleanup']
+        require(type(cleanup['pid']) is int and cleanup['pid'] > 0 and cleanup['code'] == 0
+                and cleanup['signal'] is None and proof['fixtureCleanup'] == {'pid': cleanup['pid'], 'homeRemoved': True}
+                and proof['browserCleanup'] == [{'label': label, 'closed': True, 'connected': False}
+                                               for label in ('desktop', 'touch')], 'Diagnostic owner cleanup failed')
+        expected = read(OUT / 'candidate.json')
+        require(proof['installed'] == {'packageRoot': str(ROOT / 'amplifier_web'), 'verified': False,
+                'staticSha256': {p.removeprefix('amplifier_web/static/'): h for p, h in expected['static'].items()}}
+                and all(read(OUT / f'source-fixture-origins-{when}.json')['pid'] == cleanup['pid']
+                        for when in ('before', 'after'))
+                and read(OUT / 'source-fixture-payload-before.json') == read(OUT / 'source-fixture-payload-after.json'),
+                'Diagnostic fixture identity/payload differs')
+        if exit_code == 0:
+            require(observed and diagnostic['originalOraclePassed'] is True
+                    and proof['diagnosticComplete'] is True and proof['stoppedAfter'] == 'first-390-primary-download'
+                    and not proof.get('failure') and not proof.get('error'), 'Exit zero without observed checkpoint')
+        else:
+            require(proof['diagnosticComplete'] is False and proof['stoppedAfter'] is None
+                    and proof.get('failure') and proof.get('error'), 'Missing original failure')
+            if diagnostic['delivered']['event']['sameNode'] is False:
+                require(diagnostic['originalOraclePassed'] is False
+                        and 'Touch must reach the native control' in json.dumps(proof['failure']),
+                        'Original sameNode assertion was suppressed')
+        return result
+    except Exception as error:
+        result.update(checkpointObserved=False, outcome='unknown',
+                      validationError={'type': type(error).__name__, 'message': str(error)})
+        raise
+    finally:
+        # Always retain the raw report reference and any partially read sequence,
+        # even when exit 1, malformed capture or a missing mousedown prevents proof.
+        save('generated-source/touch-event-diagnostic-report.json', result)
+
+
 def renderer_proof(negative=False):
     phase = 'renderer-stalled-response' if negative else 'canvas-renderers'
     mode = 'stalled-body' if negative else 'normal'
@@ -1233,16 +1421,21 @@ def main():
     evidence_deadline = hard_deadline - RECEIPT_RESERVE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest', required=True, type=Path,
-                        choices=[MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST])
+                        choices=[MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST])
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--corner-diagnostic', action='store_true')
     modes.add_argument('--contour-qualification', action='store_true')
+    modes.add_argument('--touch-event-diagnostic', action='store_true')
     args = parser.parse_args()
+    checkpoint_mode = args.corner_diagnostic or args.touch_event_diagnostic
+    reuse_mode = args.contour_qualification or args.touch_event_diagnostic
     manifest_path = (CORNER_MANIFEST if args.corner_diagnostic
+                     else TOUCH_EVENT_MANIFEST if args.touch_event_diagnostic
                      else CONTOUR_MANIFEST if args.contour_qualification else MANIFEST)
     if args.manifest != manifest_path:
         parser.error('The manifest must match the selected qualification mode')
     select_output(CORNER_OUT if args.corner_diagnostic
+                  else TOUCH_EVENT_OUT if args.touch_event_diagnostic
                   else CONTOUR_OUT if args.contour_qualification else QUALIFIED_OUT)
     OUT.mkdir(parents=True, exist_ok=False)  # No replay or overwrite of a prior cycle.
     report = {'schemaVersion': 1, 'passed': False, 'complete': False,
@@ -1265,8 +1458,21 @@ def main():
         report['limits'].append(
             'Checkpoint only: reused static; no build, unit suites, later journeys, wheel or install. '
             'Topology includes touch readiness, not a touch product journey. Prior integrated failure unchanged.')
-    if args.contour_qualification:
-        report.update(mode='contour-qualification', priorIntegratedPassed=False)
+    if args.touch_event_diagnostic:
+        selected = {'snapshot', 'runtime-readiness', 'browser-readiness', 'source-freeze',
+                    'topology-source', 'generated-source', 'final-integrity', *REUSED_PHASES}
+        for name, row in report['phases'].items():
+            if name not in selected:
+                row['reason'] = 'outside_touch_event_diagnostic_scope'
+        report.update(mode='touch-event-diagnostic', outcome='not_started', cause='unknown',
+                      productAcceptance=False, checkpointObserved=False)
+        report['limits'].append(
+            'First 390px primary Download event pair only; missing compatibility mousedown or capture loss '
+            'is UNKNOWN. Original touch assertion remains binding. No later gesture, renderer or installed run.')
+    if reuse_mode:
+        if args.contour_qualification:
+            report['mode'] = 'contour-qualification'
+        report['priorIntegratedPassed'] = False
         for name in ('reuse-proof', 'static-reuse'):
             report['phases'][name] = {'status': 'unrun', 'reason': 'not_started'}
         for name in REUSED_PHASES:
@@ -1334,8 +1540,11 @@ def main():
             if args.contour_qualification:
                 require(frozen['files'][PRODUCER]['sha256'] == CONTOUR_PRODUCER_SHA,
                         'Contour producer differs from the reviewed verifier interface')
+            if args.touch_event_diagnostic:
+                require(frozen['files'][PRODUCER]['sha256'] == TOUCH_EVENT_PRODUCER_SHA,
+                        'Touch event producer differs from the reviewed verifier interface')
             renderer_source = (ROOT / 'frontend/tests/canvas-renderers-browser.mjs').read_text()
-            if not args.corner_diagnostic and ('CANVAS_RENDERER_STALLED_BODY' not in renderer_source
+            if not checkpoint_mode and ('CANVAS_RENDERER_STALLED_BODY' not in renderer_source
                     or 'expectedFailureVerified' not in renderer_source):
                 report['phases']['renderer-stalled-response']['reason'] = 'renderer_negative_interface_unavailable'
                 raise RuntimeError('Renderer interface unavailable; negative explicitly unrun')
@@ -1350,7 +1559,7 @@ def main():
                     and contract['source']['sourceHead'] == frozen['revision'], 'Wrong admitted HEAD')
             expected = None
             executables = (PYTHON, NODE)
-            if not args.corner_diagnostic:
+            if not checkpoint_mode:
                 build = contract['pythonBuild']
                 require(build['available'] is True and build['python'] == str(BUILD_PYTHON),
                         'Prepared build prerequisites unavailable')
@@ -1362,6 +1571,10 @@ def main():
                         == 'node tests/canvas-renderers-browser.mjs', 'Configured renderer command changed')
                 require(read(ROOT / 'frontend/package.json')['scripts']['build'] == 'vite build',
                         'Canonical frontend build command changed')
+                executables = (PYTHON, BUILD_PYTHON, NODE, NPM, UV)
+            elif args.touch_event_diagnostic:
+                # Compare all old executable identities for retained_proofs;
+                # checking their bytes is NOT executing build/install readiness.
                 executables = (PYTHON, BUILD_PYTHON, NODE, NPM, UV)
             for path in executables:
                 require(path.is_file() and os.access(path, os.X_OK), f'Missing executable: {path}')
@@ -1392,6 +1605,8 @@ def main():
         }
         if args.corner_diagnostic:
             env['FILES1318_CORNER_DIAGNOSTIC'] = '1'  # Fixed child evidence destination only.
+        elif args.touch_event_diagnostic:
+            env['FILES1318_TOUCH_EVENT_DIAGNOSTIC'] = '1'
         elif args.contour_qualification:
             env['FILES1318_CONTOUR_QUALIFICATION'] = '1'
         for key in ('HOME', 'TMPDIR', 'XDG_CACHE_HOME'):
@@ -1423,6 +1638,11 @@ def main():
                     row['diagnostic'] = corner_diagnostic_proof(raw['exitCode'])
                     report['checkpointObserved'] = row['diagnostic']['checkpointObserved']
                     save('report.json', report)
+                if args.touch_event_diagnostic and name == 'generated-source':
+                    row['diagnostic'] = touch_event_diagnostic_proof(raw['exitCode'])
+                    report['checkpointObserved'] = row['diagnostic']['checkpointObserved']
+                    report['observationOutcome'] = row['diagnostic']['outcome']
+                    save('report.json', report)
                 require(raw['cleanup'] == CLEAN and raw['reason'] is None, f'{name}: process/cleanup failure')
                 require(result['complete'] is True and result['passed'] is (not negative)
                         and raw['status'] == ('failed' if negative else 'passed')
@@ -1432,12 +1652,12 @@ def main():
                     verify()
                 require(time.monotonic() < work_deadline, f'{name}: verification exceeded work deadline')
                 row['verdict'] = ('checkpoint_observed_cause_unknown'
-                                  if args.corner_diagnostic and name == 'generated-source'
+                                  if checkpoint_mode and name == 'generated-source'
                                   else 'expected_stalled_response_failure' if negative else 'passed')
             step(name, execute)
 
         run('runtime-readiness', [PYTHON, '-I', '-B', ROOT / DRIVER, '--runtime-ready'], cap=45)
-        if not args.corner_diagnostic:
+        if not checkpoint_mode:
             run('build-readiness', [BUILD_PYTHON, '-I', '-B', '-c',
                 "import build,hatchling,sys; assert sys.version_info >= (3,13); "
                 "assert not build.ProjectBuilder('/workspace').check_dependencies('wheel')"], cap=30)
@@ -1445,9 +1665,10 @@ def main():
             BROWSER_READY.replace('/artifacts/files1318-qualified', str(OUT))], cap=45)
         if args.corner_diagnostic:
             step('static-reuse', lambda: diagnostic_static(frozen))
-        elif args.contour_qualification:
+        elif reuse_mode:
             reused = step('reuse-proof', lambda: retained_proofs(frozen))
-            step('static-reuse', lambda: diagnostic_static(frozen, binding='contourReuse'))
+            step('static-reuse', lambda: diagnostic_static(
+                frozen, binding='touchEventReuse' if args.touch_event_diagnostic else 'contourReuse'))
             # No status changes until every original proof, dependency identity,
             # tracked input and archived static byte has passed the reuse guard.
             for name in REUSED_PHASES:
@@ -1465,17 +1686,17 @@ def main():
             run('frontend-build', [NPM, 'run', 'build'], cap=240)
 
         def source_freeze():
-            save('source-after-reuse.json' if args.corner_diagnostic or args.contour_qualification
+            save('source-after-reuse.json' if checkpoint_mode or reuse_mode
                  else 'source-after-build.json',
                  frozen_inputs(frozen, built=True))
             value = candidate(frozen)
             require(value['static'] and 'amplifier_web/static/index.html' in value['static'], 'No built static')
-            if args.corner_diagnostic or args.contour_qualification:
+            if checkpoint_mode or reuse_mode:
                 require(value['static'] == read(OUT / 'reuse-metadata.json')['files'], 'Reused static changed')
             save('candidate.json', value)
             save('static.json', value['static'])
         step('source-freeze', source_freeze)
-        if not args.corner_diagnostic and not args.contour_qualification:
+        if not checkpoint_mode and not reuse_mode:
             run('python-tests', [PYTHON, '-I', '-B', ROOT / DRIVER, '--python-tests'], cap=180, verify=junit)
             run('frontend-units', [NODE, '--test', '--test-reporter=tap',
                                   *(ROOT / name for name in UNIT_FILES)], cap=60, verify=unit_proof)
@@ -1489,15 +1710,18 @@ def main():
             if args.corner_diagnostic:
                 require(mode == 'source', 'Diagnostic cannot exercise installed mode')
                 extra['FILE_CONTROLS_CORNER_DIAGNOSTIC'] = '1'
+            if args.touch_event_diagnostic:
+                require(mode == 'source', 'Touch event diagnostic cannot exercise installed mode')
+                extra['FILE_CONTROLS_TOUCH_EVENT_DIAGNOSTIC'] = '1'
             run('topology-' + mode, [NODE, 'tests/file-controls-topology-preflight.mjs'], root=root,
                 extra={'FILE_CONTROLS_PREFLIGHT_EVIDENCE': str(OUT / f'topology-{mode}/evidence')},
                 cap=80, verify=lambda: topology_proof(mode))
             run('generated-' + mode, [NODE, 'tests/generated-file-controls-browser.mjs'],
                 root=root, extra=extra, cap=160,
-                verify=None if args.corner_diagnostic else lambda: generated_proof(mode))
+                verify=None if checkpoint_mode else lambda: generated_proof(mode))
 
         generated('source')
-        if not args.corner_diagnostic:
+        if not checkpoint_mode:
             run('canvas-renderers', [NPM, 'run', 'test:canvas-renderers-browser'],
                 verify=renderer_proof)
             # Raw nonzero is retained; only the exact correlated negative qualifies.
@@ -1588,7 +1812,7 @@ def main():
         try:
             report['finalization'] = {'status': 'running'}
             save('report.json', report)  # A killed finalizer cannot leave an overall pass.
-            if args.corner_diagnostic and report['phases']['source-freeze']['status'] == 'passed':
+            if checkpoint_mode and report['phases']['source-freeze']['status'] == 'passed':
                 # Failure at an original corner still gets source preservation
                 # checks. Keep its raw failed phase and producer report intact.
                 integrity = report['phases']['final-integrity']
@@ -1602,6 +1826,13 @@ def main():
                             'Diagnostic static binding changed')
                     require(tree(OUT / 'static-before') == read(OUT / 'static-before.json'),
                             'Preserved original static changed')
+                    if args.touch_event_diagnostic:
+                        require(all(sha(OUT / 'prior-evidence' / name) == digest
+                                    for name, digest in frozen['reuseEvidence'].items()),
+                                'Copied prior raw evidence changed')
+                        require(all(report['phases'][name]['status'] == 'REUSED'
+                                    and report['phases'][name]['executed'] is False for name in REUSED_PHASES),
+                                'Reused phases were rerun or lost their evidence')
                     save('source-payload-final.json', expected['files'])
                     save('static-final.json', tree(ROOT / 'amplifier_web/static'))
                     integrity.update(status='passed', reason=None)
@@ -1614,7 +1845,7 @@ def main():
             report['evidenceManifestSha256'] = sha(OUT / 'evidence-manifest.json')
             require(time.monotonic() < evidence_deadline, 'Evidence finalization exceeded deadline')
             report['finalization'] = {'status': 'passed'}
-            report.update(passed=checks_finished and not args.corner_diagnostic, complete=checks_finished)
+            report.update(passed=checks_finished and not checkpoint_mode, complete=checks_finished)
         except BaseException as error:
             report.update(passed=False, complete=False)
             report['finalization'] = {'status': 'failed', 'type': type(error).__name__, 'message': str(error)}
@@ -1622,21 +1853,29 @@ def main():
             # Only the bounded final receipt gets the last five seconds. Never
             # replace the browser runner's SIGTERM/SIGINT cleanup policy.
             signal.setitimer(signal.ITIMER_REAL, max(.001, hard_deadline - time.monotonic()))
-            if args.corner_diagnostic:
+            if checkpoint_mode:
                 report['outcome'] = 'checkpoint_observed_cause_unknown' if report['complete'] else 'failed'
+                if args.touch_event_diagnostic and not report['checkpointObserved']:
+                    report['outcome'] = 'unknown'
             report['durationSeconds'] = round(time.monotonic() - started, 3)
             save('report.json', report)
             signal.setitimer(signal.ITIMER_REAL, 0)
             signal.signal(signal.SIGALRM, old_alarm)
-    return 0 if report['passed'] or (args.corner_diagnostic and report['complete']) else 1
+    return 0 if report['passed'] or (checkpoint_mode and report['complete']) else 1
 
 
 if __name__ == '__main__':
     # Private, fixed child entrypoints. No arbitrary command or selector input.
     corner = os.environ.get('FILES1318_CORNER_DIAGNOSTIC') == '1'
     contour = os.environ.get('FILES1318_CONTOUR_QUALIFICATION') == '1'
-    require(not (corner and contour), 'Conflicting child qualification modes')
-    select_output(CORNER_OUT if corner else CONTOUR_OUT if contour else QUALIFIED_OUT)
+    touch_event = os.environ.get('FILES1318_TOUCH_EVENT_DIAGNOSTIC') == '1'
+    require(sum((corner, contour, touch_event)) <= 1, 'Conflicting child qualification modes')
+    select_output(CORNER_OUT if corner else TOUCH_EVENT_OUT if touch_event
+                  else CONTOUR_OUT if contour else QUALIFIED_OUT)
+    if touch_event:
+        require(os.environ.get('FILES1318_FIXTURE') != 'installed'
+                and sys.argv[1:] not in (['--python-tests'], ['--installed-ready']),
+                'Touch event diagnostic cannot run units or installed children')
     if os.environ.get('FILES1318_FIXTURE') in ('source', 'installed'):
         fixture_process(os.environ['FILES1318_FIXTURE'])
     elif sys.argv[1:] == ['--runtime-ready']:
