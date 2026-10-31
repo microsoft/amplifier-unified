@@ -277,7 +277,8 @@ class Schedules:
                     self.decide_notification(self.app._session(run['sessionId']), run)
                 self.changed()
         from .updates import work_paused
-        if work_paused(self.app.state): return
+        from .update_drain import held
+        if work_paused(self.app.state) or held(self.app): return
         for schedule in self.store.list():
             if schedule['status'] != 'active' or schedule.get('nextDue') is None or schedule['nextDue'] > now: continue
             sid = schedule['sessionId']
@@ -298,6 +299,8 @@ class Schedules:
                     self.changed()
                 continue
             async with self.app.lock:
+                if held(self.app):
+                    continue  # The occurrence has not been claimed or submitted.
                 # Refresh authoritative schedule after asynchronous runtime reads.
                 current = self.store.get(sid, schedule['id'])
                 if current['revision'] != schedule['revision'] or current['status'] != 'active': continue

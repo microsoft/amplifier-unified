@@ -457,8 +457,9 @@ async def _activate(manager, *, force=None):
         if selected:
             from .app_features import require_preserved_components
             require_preserved_components(graph, host_graph)
-    async with manager.service.lock:
-        if force is None and manager.busy():return
+    if force is None:
+        from .update_drain import prepare
+        if not await prepare(manager, release):return
     manager.diagnostics.begin('application',revision,validated.get('attemptId') or release.get('attemptId'))
     uv,executable,installed_python,previous=await manager.diagnostics.run('target-discovery',installed_target)
     helper_python=marker.parent/'tools/amplifier-unified'/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
@@ -495,6 +496,9 @@ async def _activate(manager, *, force=None):
             replacement['forceRestart'] = {key: force[key] for key in ('hostInstanceId', 'revision', 'generation', 'attemptId')}
         # Persist this marker before uv can change the active environment. Every
         # error, cancellation and process exit must retain the admission fence.
+        drain = manager.service.state['updates'].get('drain')
+        if drain and drain.get('phase') == 'draining':
+            drain['phase'] = 'replacing'
         manager.service.state['updates'].update(phase='activating',pendingReplacement=replacement,detail='Installing the app update and restarting…')
         manager.service._publish_changes(globals={'updates'})
     try:

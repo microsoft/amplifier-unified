@@ -75,6 +75,8 @@ async def begin(worker, command_id):
 
 def _freeze(worker):
     marker = worker._handoff_boundary
+    detail = ('The app update is waiting for existing workers. Start new delegated work after the update finishes.'
+              if marker.get('update') else 'This checkout move is waiting for existing workers. Start new delegated work after the move finishes.')
     if marker.get('drain'):
         return copy.deepcopy(marker['drain']['snapshot'])
     registry = worker.session.coordinator.get_capability('live.children')
@@ -116,7 +118,7 @@ def _freeze(worker):
             used = any(value['parentSessionId'] == entry['parentSessionId']
                        and value['callId'] == entry['callId'] for value in drain['children'].values())
             if key is None or used:
-                raise ValueError('This checkout move is waiting for existing workers. Start new delegated work after the move finishes.')
+                raise ValueError(detail)
             drain['children'][entry['runId']] = entry
         registry.admission_gate = gate
         def restore():
@@ -131,7 +133,7 @@ def _freeze(worker):
             if data.get('tool_name') in names and not any(
                     key[0] == owner and job['call_id'] == data.get('tool_call_id')
                     for key, (_, job) in jobs.items()):
-                return HookResult(action='deny', reason='This checkout move is waiting for existing workers. Start new delegated work after the move finishes.')
+                return HookResult(action='deny', reason=detail)
             return HookResult()
         unregistrations.append(session.coordinator.hooks.register('tool:pre', no_new_delegation,
             name='unified-checkout-drain', priority=-100))

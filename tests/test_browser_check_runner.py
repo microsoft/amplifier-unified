@@ -297,6 +297,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'semantic-settings': {},
         'history-refresh': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/history-refresh'},
         'voice-work-message': {'EVIDENCE_DIR': '{root}/output/browser-checks/voice-work-message'},
+        'update-message-delivery': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/update-message-delivery'},
     }
     added = [row for row in rows if row['id'] in additions]
     assert len(added) == len(additions)
@@ -313,7 +314,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 129
+    assert len(original) == 65 and len(rows) == 130
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -485,10 +486,11 @@ def test_workflow_keeps_independent_artifacts_and_readiness_unique_python_covera
     readiness = yaml.load((workflows / 'public-readiness.yml').read_text(), Loader=yaml.BaseLoader)
     # Ordered normal critical run blocks from reviewed a99ab643, before the
     # independent diagnostic job was merged, plus host helper recovery coverage.
-    # Eight pytest calls / 99 targets; all previous targets and ordering retained.
+    # Eight pytest calls / 102 targets; cooperative update drain, event-driven
+    # readiness and retention coverage are additive; previous ordering retained.
     assert_readiness_python_coverage(
-        readiness, targets=99,
-        run_blocks_sha256='a965ab7dd574127e46823a19e23a97932416aa5114a6558c60ec042588edbdf5',
+        readiness, targets=102,
+        run_blocks_sha256='a7b446de95533301605ab383391efd8c7c03a3c860c1f35dc8919cdbb2b5443b',
     )
 
 
@@ -618,7 +620,10 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     state_stream = 'tests/state-stream-browser.mjs'
     assert state_stream in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', state_stream] for row in plan['scenarios']) == 1
-    previous_scripts = (readiness_scripts | extended_scripts) - {state_stream}
+    update_delivery = 'tests/update-message-delivery-browser.mjs'
+    assert update_delivery in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', update_delivery] for row in plan['scenarios']) == 1
+    previous_scripts = (readiness_scripts | extended_scripts) - {state_stream, update_delivery}
     assert len(previous_scripts - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience, pin_reorder, approval, dormant, shared_work} - feature_additions - voice_additions) == 146
     assert len(previous_scripts - {shared_work, 'tests/delegate-work-stream-browser.mjs', 'tests/client-traffic-browser.mjs'} - voice_additions) == 164
     assert len(previous_scripts) == 171

@@ -4,6 +4,7 @@ import json
 import time
 
 from .message_delivery import find_message
+from .update_drain import UpdateDeferred
 
 
 def target(session, expected=None, allow_next_turn=False):
@@ -103,6 +104,9 @@ async def send(service, session, text, input_id, preserve_draft):
         if disposition not in {'queued', 'applied', 'next_turn', 'held', 'unknown'}:
             raise RuntimeError('Steering disposition was not recognized.')
         reason = result.get('reason')
+    except UpdateDeferred:
+        from .update_drain import defer_send
+        return await defer_send(service, session['id'], input_id, preserve_draft)
     except Exception:
         # A lost acknowledgement says nothing about effects. Do not mark the
         # running conversation failed, restart its worker, or replay the input.

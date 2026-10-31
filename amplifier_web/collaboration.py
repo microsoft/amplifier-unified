@@ -218,7 +218,7 @@ class Collaboration:
                 OR json_extract(receipt,'$.subscription.status')='waiting')""")
         service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_backpressured_sender ON commands(
             json_extract(receipt,'$.senderSessionId'))
-            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','worktree.handoff')
+            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','worktree.handoff','updates.app')
             AND json_extract(receipt,'$.subscription.status')='backpressured'""")
         service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_replies ON commands(
             json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.result.requestId'))""")
@@ -876,6 +876,10 @@ class Collaboration:
                     return reason
                 if dependency.get('cancellation'):
                     return 'The requester cancelled the originating request; no new automatic return is admitted.'
+                if dependency.get('commandAction') == 'updates.app':
+                    from .update_drain import continuation_guard
+                    if reason := continuation_guard(self.service, dependency):
+                        return reason
                 if dependency.get('commandAction') == 'workspace.tests.submit':
                     if reason := self.service.test_queue.continuation_guard(dependency):
                         return reason
@@ -907,13 +911,15 @@ class Collaboration:
                     target.get("status") in {"stopped", "error", "cancelled", "failed"} and not resuming):
                 return "The recipient is stopped or unavailable."
             task = target.get("task") or self.service.coordination.task(target["id"])
+            from .completed_followup import matches_request
+            completed_followup = matches_request(self.service, receipt, task, for_reply=for_reply)
             if (task.get("status") in {"paused", "blocked", "completed", "cancelled"}
-                    and not resuming and not self.blocked_input(receipt, task)):
+                    and not resuming and not self.blocked_input(receipt, task) and not completed_followup):
                 return "The recipient task is not active."
             task_binding = intake_task_binding(receipt)
             if for_reply and 'replyTaskContinuationEpoch' in receipt:
                 task_binding = {**receipt, 'taskContinuationEpoch': receipt['replyTaskContinuationEpoch']}
-            if not task_matches(task, task_binding):
+            if not task_matches(task, task_binding) and not completed_followup:
                 return "The recipient task changed."
             if target.get("ownership", {}).get("status") in {"blocked", "yielding", "yielded", "yield-failed", "taking-over"}:
                 return "The native owner is unavailable."
@@ -1019,7 +1025,7 @@ class Collaboration:
             FROM commands WHERE json_extract(receipt,'$.commandAction')='coordination.send'
             AND json_extract(receipt,'$.delivery')='queued'
             UNION SELECT json_extract(receipt,'$.senderSessionId') FROM commands
-            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','worktree.handoff')
+            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','worktree.handoff','updates.app')
             AND json_extract(receipt,'$.subscription.status')='backpressured'""").fetchall()
         for (sid,) in recipients:
             if sid:
@@ -1027,7 +1033,7 @@ class Collaboration:
 
     def resume_outcomes(self, sid):
         for (encoded,) in self.service.db.execute("""SELECT receipt FROM commands
-            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','worktree.handoff')
+            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','worktree.handoff','updates.app')
             AND json_extract(receipt,'$.senderSessionId')=?
             AND json_extract(receipt,'$.subscription.status')='backpressured' LIMIT 64""", (sid,)).fetchall():
             self.enqueue_continuation(json.loads(encoded))
@@ -1048,6 +1054,9 @@ class Collaboration:
                         self.cancel_expiry(identity)
                         continue
                     target = self.service._session(sid)
+                    from .update_drain import held
+                    if held(self.service):
+                        break
                     if target.get('fileAccessPending'):
                         break  # Keep queued input until the existing refresh owner retires the old mount.
                     reason = self.guard(receipt)
@@ -1082,8 +1091,8 @@ class Collaboration:
                     result = await self.service.runtime.collaboration_input(
                         snapshot, arguments, lambda: self.guard(self.receipt(identity)), self.service.on_runtime_event)
                     phase = "accepted" if result.get("accepted") else (
-                        "queued" if automatic_delivery(receipt) and result.get('effect') == 'none'
-                        and result.get('waitingForBoundary') is True else
+                        "queued" if result.get('effect') == 'none' and (result.get('waitingForUpdate') is True
+                        or automatic_delivery(receipt) and result.get('waitingForBoundary') is True) else
                         "not_sent" if result.get("delivery") == "not_sent" else "suppressed")
                 except BaseException as exc:
                     result, phase = {"reason": "Admission outcome unknown; no replay."}, "unknown"
@@ -1150,18 +1159,23 @@ class Collaboration:
             return {"admitted": False, "reason": "The saved input delivery policy changed."}
         if receipt.get("mode") == "steer" and args.get("targetGenerationId") != receipt.get("targetGenerationId"):
             return {"admitted": False, "reason": "The steering generation anchor changed."}
+        from .update_drain import held
+        if held(self.service) and receipt.get('mode') != 'steer':
+            return {'admitted': False, 'waitingForUpdate': True, 'reason': 'Waiting for the app update.'}
         reason = self.guard(receipt)
         message = next((row for row in self.service._session(sid).get("messages", [])
                         if row.get("inputId") == args["inputId"] and row.get("inputOrigin") == "peer"), None)
         if message is None:
             return {"admitted": False, "reason": "The saved host-attributed input is unavailable."}
         from .peer_resume import pending
+        from .completed_followup import matches_request
         task = self.service._session(sid).get("task") or self.service.coordination.task(sid)
         active = self.service._session(sid).get('collaborationGeneration') or {}
         return {"admitted": not reason, "reason": reason, "message": copy.deepcopy(message),
                 "currentGenerationId": active.get('id') if not active.get('terminal') else None,
                 "humanResume": not reason and pending(receipt),
-                "blockedTaskInput": not reason and self.blocked_input(receipt, task)}
+                "blockedTaskInput": not reason and self.blocked_input(receipt, task),
+                "completedTaskInput": not reason and matches_request(self.service, receipt, task)}
 
     async def submit_steer(self, identity):
         async with self.service.lock:
@@ -1589,7 +1603,7 @@ class Collaboration:
                 (RETIRED_HOP_LIMIT, RETIRED_NOTIFICATION_LIMIT)).fetchall():
             self.enqueue_continuation(json.loads(encoded))
         for (encoded,) in self.service.db.execute('''SELECT receipt FROM commands
-                WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+                WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','updates.app')
                 AND json_extract(receipt,'$.subscription.status') IN ('waiting','claimed','backpressured')
                 AND (coalesce(json_extract(receipt,'$.outcomeRevision'),0)>coalesce(json_extract(receipt,'$.subscription.lastClaimedRevision'),0)
                     OR json_extract(receipt,'$.subscription.status')='waiting') ''').fetchall():
@@ -1926,6 +1940,8 @@ class Collaboration:
                             or previous["senderSessionId"] != target["id"] or previous.get("protocol") != PROTOCOL):
                         self.error("Reply linkage must identify the exact incoming request.")
                 task = target.get("task") or self.service.coordination.task(target["id"])
+                from .completed_followup import prepare as prepare_completed
+                completed_followup = prepare_completed(self.service, source, target, task, mode, args, creation=creation_owned)
                 blocked_input = (mode in {'queue', 'auto'} and source['id'] != target['id']
                     and not args.get('resume') and not args.get('scheduleRepair')
                     and dependency_blocked(task))
@@ -1943,6 +1959,13 @@ class Collaboration:
                             'remains blocked. Reconcile the dependency; do not infer approval, resume the goal '
                             'automatically, discard conditions or replay older input. You may reply, defer, decline '
                             'or make a separately valid owner decision about your own task.'}
+                if completed_followup:
+                    envelope['completedTaskHandling'] = {**completed_followup,
+                        'instruction': 'Handle this fresh follow-up from your current assignment owner within '
+                            'the existing scope. Keep the earlier objective and evidence completed. Make the '
+                            'requested correction directly, or use task.create for its follow-up objective; '
+                            'that successor retains the existing turn allowance and used turns. Report with '
+                            'coordination.reply for this exact request. Do not replay older or unknown work.'}
                 if target.get("collaboration"):
                     envelope["task"] = {key: target["collaboration"][key] for key in
                         ("creatorSessionId", "requestId", "outputNamespace", "configurationHash")}
@@ -1992,6 +2015,7 @@ class Collaboration:
                     "interruptionRevision": target.get("interruptionRevision", 0),
                     "taskId": task.get("id"), "taskRevision": task.get("revision"),
                     **({'blockedTaskInput': True} if blocked_input else {}),
+                    **({'completedTaskFollowup': completed_followup} if completed_followup else {}),
                     'replyTaskContinuationEpoch': continuation_epoch(task),
                     # Dispatcher provenance is host-owned. Never copy actor
                     # claims from args, message prose, or the peer envelope.

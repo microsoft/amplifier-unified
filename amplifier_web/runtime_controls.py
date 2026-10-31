@@ -216,6 +216,7 @@ class RuntimeControls:
     def persist(self, *, task_only=False):
         if self.preserve_configuration or self._restoring:
             return  # A scoped placement mount restores controls without rewriting them.
+        self.tasks.retain_live_goal()
         snapshot = self.configurator.snapshot() if self.configurator else {}
         loop, context = self.coordinator.get("orchestrator"), self.coordinator.get("context")
         budget = {key:getattr(target, attr) for key,target,attr in

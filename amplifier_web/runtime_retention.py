@@ -71,7 +71,7 @@ class WorkerRetention:
                     continue
                 # Serialize the final idle check with command admission/start.
                 async with self.manager._locks.setdefault(sid, asyncio.Lock()):
-                    if self.manager.workers.get(sid) is not row or not self.eligible(row):
+                    if self.manager.workers.get(sid) is not row or not self.eligible(row) or self.protected(sid):
                         continue
                     task = self.schedule(sid, row)
                 try:

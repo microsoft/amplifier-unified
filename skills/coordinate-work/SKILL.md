@@ -86,7 +86,14 @@ compare those exact links, not equal message text.
    Reconcile the dependency and reply/defer/decline within existing permissions.
    Do not treat the message as human approval, remove unresolved conditions or
    replay older input. Human blocks, unknown provenance, explicit Stop and
-   paused/completed tasks retain their separate refusal boundaries.
+   paused tasks retain their separate refusal boundaries.
+   For a completed current member of your own active assignment, send a fresh
+   correction within the existing scope normally; no new human resume proof is
+   needed. The member can correct/report directly or create a distinct follow-up
+   task. The earlier objective and evidence remain completed. A correction task
+   inherits its prior enforced allowance and used turns; deliberately revise an
+   exhausted allowance through `assignment.task.setLimit` when authorized.
+   This does not reopen stopped chats, independent peers or older requests.
    When the human explicitly asks you to resume your commissioned or explicitly adopted chats, inspect
    their current task, completed effects and `signal.interruptionRevision` through
    `coordination.list`. For each intended unfinished member, send one fresh

@@ -598,7 +598,7 @@ def test_goal_peer_publisher_fixed_cases_environment_and_no_resolve(publisher_ch
         assert len(params) <= 1
         names.update({f'{node.name}[{value}]' for value in ast.literal_eval(params[0].args[1])}
                      if params else {node.name})
-    assert names == module.AUTO_NAMES and len(names) == 18
+    assert names == module.AUTO_NAMES and len(names) == 20
     permitted = {'PATH': '/tools/bin', 'LANG': 'C.UTF-8', 'RUNNER_TEMP': '/owned'}
     refused = dict.fromkeys(('OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GH_TOKEN', 'GITHUB_TOKEN',
                             'LOOP_LIVE_CI_READ_KEY', 'SSH_AUTH_SOCK', 'PYTHONPATH', 'PYTHONOPTIMIZE',
@@ -615,6 +615,18 @@ def test_goal_peer_publisher_fixed_cases_environment_and_no_resolve(publisher_ch
     assert "restored-input-hashes.json" in source and 'candidate-source.tar' in source
     assert "for key in ('graph', 'files', 'coreWheel')" in source
     assert 'source(ROOT)' in source and "git(root, 'ls-files', '--stage', '-z')" in source
+
+
+@pytest.mark.parametrize('state', ['active', 'blocked', 'completed'])
+def test_goal_peer_publisher_rejects_substituting_an_idle_state(publisher_checks, monkeypatch, state):
+    # Preserve the count while substituting an obsolete identity: each state
+    # must be required, rather than accepting any collection of twenty cases.
+    name = 'test_idle_auto_uses_same_id_and_saved_envelope'
+    assert f'{name}[{state}]' in publisher_checks.AUTO_NAMES
+    monkeypatch.setattr(publisher_checks, 'AUTO_NAMES',
+                        (publisher_checks.AUTO_NAMES - {f'{name}[{state}]'}) | {name})
+    with pytest.raises(AssertionError):
+        test_goal_peer_publisher_fixed_cases_environment_and_no_resolve(publisher_checks)
 
 
 @pytest.mark.parametrize('mutation', [None, 'missing', 'extra', 'version', 'commit', 'url'])

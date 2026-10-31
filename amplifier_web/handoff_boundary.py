@@ -2,7 +2,7 @@
 import copy
 
 
-async def inspect(worker, request_id, cancel=False):
+async def inspect(worker, request_id, cancel=False, *, update=False):
     async with worker.command_lock:
         marker = getattr(worker, '_handoff_boundary', None)
         if cancel:
@@ -15,6 +15,9 @@ async def inspect(worker, request_id, cancel=False):
         if not worker.session or not worker.runtime:
             return {'ready': worker.parked, 'waitingFor': ['runtime']}
         coordinator = worker.session.coordinator
+        if (update and worker.runtime.generation and coordinator.session_state.get('goal')
+                and not coordinator.get_capability('live.continuation_guard_supported')):
+            return {'ready': False, 'waitingFor': ['unsupported-native-boundary']}
         if not marker:
             from amplifier_core import HookResult
 
@@ -30,6 +33,13 @@ async def inspect(worker, request_id, cancel=False):
                     coordinator.session_state['goal'] = copy.deepcopy(goal)
                     try:
                         worker.controls.persist(task_only=True)
+                        if update:
+                            from .task_binding import continuation_epoch
+                            worker._handoff_boundary['yieldedGoal'] = copy.deepcopy(goal)
+                            task = coordinator.session_state.get('task') or {}
+                            worker._handoff_boundary['yieldedTaskBinding'] = {
+                                'taskId': task.get('id'), 'taskRevision': task.get('revision'),
+                                'taskContinuationEpoch': continuation_epoch(task)}
                     except BaseException:
                         coordinator.session_state['goal'] = goal
                         raise
@@ -37,8 +47,11 @@ async def inspect(worker, request_id, cancel=False):
 
             unregister = coordinator.hooks.register('orchestrator:goal_progress', finish_turn,
                 name='unified-checkout-boundary', priority=0)
-            worker._handoff_boundary = {'id': request_id, 'unregister': unregister,
+            worker._handoff_boundary = {'id': request_id, 'unregister': unregister, 'update': update,
                 'hadGoal': bool(coordinator.session_state.get('goal'))}
+        if update:
+            from .handoff_drain import _freeze
+            _freeze(worker)
         loop = coordinator.get('orchestrator')
         waiting = []
         if worker.runtime.generation: waiting.append('generation')
@@ -57,4 +70,16 @@ async def inspect(worker, request_id, cancel=False):
         # A host observation must not re-arm that exhausted task as fresh input.
         has_task = bool(coordinator.session_state.get('task'))
         continuation_allowed = (not has_task and not marker['hadGoal']) or bool(coordinator.session_state.get('goal'))
-        return {'ready': not waiting, 'waitingFor': waiting, 'continuationAllowed': continuation_allowed}
+        result = {'ready': not waiting, 'waitingFor': waiting, 'continuationAllowed': continuation_allowed}
+        if update and not waiting:
+            goal = coordinator.session_state.get('goal')
+            yielded = marker.get('yieldedGoal')
+            task = coordinator.session_state.get('task')
+            from .task_binding import matches
+            if (yielded and goal and task and task.get('status') == 'active'
+                    and yielded.get('condition') == goal.get('condition') == task.get('objective')
+                    and matches(task, marker['yieldedTaskBinding'])):
+                result.update(
+                    yieldedGoal={key: goal.get(key) for key in ('task_id', 'cap', 'turns_used', 'continuations')},
+                    task={key: task.get(key) for key in ('id', 'revision', 'status', 'continuationEpoch')})
+        return result
