@@ -679,6 +679,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/api/state/detail", state_detail)
     from .message_interactions import install_routes as install_message_annotation_routes
     install_message_annotation_routes(app)
+    from .conversation_stop import install_routes as install_conversation_stop_routes
+    install_conversation_stop_routes(app)
     async def peer_preview(request):
         return web.json_response(await service.peer_preview.read(dict(request.query)))
 

@@ -116,7 +116,7 @@ function App(){
  const canvasInputRevision=useRef(0),permissionHistoryFocus=useRef(null);
  const capabilityCardQueue=useRef(Promise.resolve());
  const capabilityStopFence=useRef(null);
- if(!capabilityStopFence.current)capabilityStopFence.current=createCapabilityStopFence();
+ if(!capabilityStopFence.current)capabilityStopFence.current=createCapabilityStopFence({request,clientId});
  useEffect(()=>{
   const supersede=()=>{canvasInputRevision.current++};
   for(const name of ['pointerdown','keydown','input'])document.addEventListener(name,supersede,true);
@@ -220,6 +220,9 @@ function App(){
  const dispatch=useCallback((action,args={},meta={})=>{
   const capabilityCard=isCapabilityCardAction(action,args,meta);
   const capabilityRead=capabilityCard&&action==='capability.read'?capabilityStopFence.current.beginRead(args):null;
+  // Capture eligibility BEFORE passive recovery: this preflight cannot become
+  // permission to send a decision merely because it reconciled an unknown Stop.
+  const capabilityRecovery=action==='capability.read'?capabilityStopFence.current.reconcile(args.sessionId??latest.current?.selectedSessionId):null;
   const capabilityMutation=capabilityCard&&action!=='capability.read';
   if(capabilityMutation){
    try{capabilityStopFence.current.assertMutation(args,meta.capabilityRead)}catch(error){return Promise.reject(error)}
@@ -317,6 +320,7 @@ function App(){
   const dirtyBarrier=canvasDirtyBarrier.current;
   const execute=async()=>{
    if(meta.before)await meta.before;
+   if(capabilityRecovery)await capabilityRecovery;
    if(meta.consumePermissionHistory){
     // This is bundled presentation housekeeping, never a saved stale draft.
     // Resolve after queued document changes; an older effect cannot restore Overview.
@@ -344,10 +348,16 @@ function App(){
      if(stop)stopPostStarted=true;
      result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
     }catch(error){
-     if(stop)capabilityStopFence.current.settleStop(stop,stopFailureOutcome(error,stopPostStarted));
+     if(stop){
+      capabilityStopFence.current.settleStop(stop,stopFailureOutcome(error,stopPostStarted));
+      void capabilityStopFence.current.reconcile(stop.sessionId);
+     }
      throw error;
     }
-    if(stop)capabilityStopFence.current.settleStop(stop,result.accepted===true?'accepted':'unknown');
+    if(stop){
+     capabilityStopFence.current.settleStop(stop,result?.accepted===true?'accepted':'unknown');
+     void capabilityStopFence.current.reconcile(stop.sessionId);
+    }
     if(historyVisit)destinationHistory.current.finish(result);
     if(result.state)acceptState(result.state);
     // Exact annotation and read-only preview receipts settle locally. Navigation
@@ -461,7 +471,7 @@ function App(){
    setFeedbackEventStream('connecting');source=createStateStream(clientUrl('/api/events?transport=delta-v1'),attachment.transports);source.addEventListener('state',e=>{if(!alive)return;try{if(e.decodeError)throw e.decodeError;const initial=!latest.current;streamState=e.data;acceptState(streamState,{baseline:historyBaseline});historyBaseline=false;setStreamClient(streamState.client?.id===clientId?streamState.client:null);streamRecovery.current.delay=2000;reconnected();if(initial)setError('');clearTimeout(timer)}catch{}});
    source.addEventListener('state-delta',e=>{if(!alive)return;try{if(e.decodeError)throw e.decodeError;streamState=applyStateDelta(streamState,e.data);acceptState(streamState);setStreamClient(streamState.client?.id===clientId?streamState.client:null);reconnected()}catch{source.close();setFeedbackEventStream('closed');setConnected(false);setStreamClient(null);setBootAttempt(value=>value+1)}});
    source.addEventListener('shell',e=>{try{if(e.decodeError)throw e.decodeError;window.dispatchEvent(new CustomEvent('amplifier-shell',{detail:e.data}))}catch{}});
-   source.onopen=()=>{historyBaseline=true;setFeedbackEventStream('open');reconnected();viewReporter.current.invalidate();publishView();window.dispatchEvent(new Event('amplifier-reconnected'))};source.onerror=()=>{
+   source.onopen=()=>{historyBaseline=true;setFeedbackEventStream('open');reconnected();void capabilityStopFence.current.reconcile();viewReporter.current.invalidate();publishView();window.dispatchEvent(new Event('amplifier-reconnected'))};source.onerror=()=>{
     if(!alive||restarting)return;
     setFeedbackEventStream(source.readyState===2?'closed':'reconnecting');setConnected(false);setStreamClient(null);
     // CONNECTING is owned by EventSource's native retry. CLOSED cannot recover

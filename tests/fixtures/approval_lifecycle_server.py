@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 from pathlib import Path
 import tempfile
 import time
@@ -49,12 +50,32 @@ class Runtime:
 
 
 async def main(home):
-    package = Path(amplifier_web.__file__).parent
+    stopped = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    # Install before any readiness publication; SIGTERM is graceful cleanup,
+    # not a signal-terminated child that the browser harness can call a pass.
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(signum, stopped.set)
+    package = Path(amplifier_web.__file__).resolve().parent
+    expected = os.environ.get('AMPLIFIER_TEST_PACKAGE_ROOT')
+    server_source = Path(create_app.__code__.co_filename).resolve()
+    static_root = (package / 'static').resolve()
+    if expected:
+        assert package == Path(expected).resolve(), 'Fixture must import the exact installed package'
+        assert server_source == package / 'server.py', 'Fixture server must come from that installed package'
+        assert static_root == package / 'static', 'Fixture static assets must come from that installed package'
+    package_identity = {
+        'packageRoot':str(package), 'server':str(server_source), 'staticRoot':str(static_root),
+        'expectedPackageRoot':str(Path(expected).resolve()) if expected else None,
+        'installedPackageVerified':bool(expected),
+        'staticSha256':{str(path.relative_to(static_root)):hashlib.sha256(path.read_bytes()).hexdigest()
+                        for path in sorted(static_root.rglob('*')) if path.is_file()},
+    }
     toolchain = Path(os.environ.get('AMPLIFIER_SHELL_NODE_MODULES', package.parent / 'frontend/node_modules')).resolve()
     readiness = {'node':shutil.which('node'), 'nodeModules':str(toolchain),
                  'playwright':(toolchain / 'playwright').is_dir(),
                  'validationHtml':(package / 'static/shell-validation.html').is_file(),
-                 'source':str(package)}
+                 'source':str(package), 'packageIdentity':package_identity}
     (home.parent / 'validation-readiness.json').write_text(json.dumps(readiness, indent=2))
     assert readiness['node'] and readiness['playwright'] and readiness['validationHtml'], readiness
     workspace = home / 'workspace'
@@ -99,7 +120,7 @@ async def main(home):
         if request.method == 'POST':
             body = await request.json()
             if body['change'] == 'stop-case':
-                if body.get('case') not in {'later-allow', 'pending-preflight'}:
+                if body.get('case') not in {'later-allow', 'pending-preflight', 'lost-ack', 'malformed-ack'}:
                     raise web.HTTPBadRequest()
                 target = service._new_session({'title':'Stop ordering '+body['case']})
                 target.update(status='working', interruptionRevision=0)
@@ -150,6 +171,7 @@ async def main(home):
             'navigation':activity(current),
             'starts':runtime.starts,'inputs':runtime.inputs,'controls':runtime.controls,'decisions':runtime.decisions,'stops':runtime.stops,
             'source':str(Path(amplifier_web.__file__).resolve()),
+            'packageIdentity':package_identity,
             'authoritySha256':hashlib.sha256(Path(amplifier_web.__file__).with_name('configuration_authority.py').read_bytes()).hexdigest()})
 
     app.router.add_get('/fixture', fixture)
@@ -162,7 +184,7 @@ async def main(home):
     app['allowed_origins'] = app['allowed_origins'] | {url}
     print(json.dumps({'url':url}),flush=True)
     try:
-        await asyncio.Event().wait()
+        await stopped.wait()
     finally:
         await runner.cleanup()
 

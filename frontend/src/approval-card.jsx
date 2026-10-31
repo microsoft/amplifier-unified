@@ -11,15 +11,36 @@ export function isCapabilityCardAction(action,args,meta){
 
 // Client-local ordering only. The host still owns interruption, request hashes
 // and permission decisions. A Stop invalidates reads even if its POST is queued.
-export function createCapabilityStopFence(){
+export function createCapabilityStopFence({request,clientId,timeoutMs=5000}={}){
  const sessions=new Map(),reads=new WeakSet();
  const state=sessionId=>{
   if(!sessions.has(sessionId))sessions.set(sessionId,{epoch:0,stops:new Set()});
   return sessions.get(sessionId);
  };
+ // One passive, bounded lookup per retained command at a time. A missing,
+ // malformed or failed lookup is still unknown, never evidence of non-acceptance.
+ const recover=stop=>{
+  if(stop.recovery)return stop.recovery;
+  const identity={sessionId:stop.sessionId,commandId:stop.commandId,clientId:stop.clientId};
+  const controller=new AbortController();let timer;
+  stop.recovery=(async()=>{
+   try{
+    const receipt=await Promise.race([
+     Promise.resolve().then(()=>request('/api/conversation/stop-status',{method:'POST',body:identity,signal:controller.signal})),
+     new Promise(resolve=>{timer=setTimeout(()=>{controller.abort();resolve(null)},timeoutMs)}),
+    ]);
+    if(receipt?.status!=='accepted'||!Object.keys(identity).every(key=>receipt[key]===identity[key]))return;
+    if(stop.outcome==='unknown'&&stop.current.stops.has(stop)){
+     stop.outcome='accepted';stop.current.stops.delete(stop);
+    }
+    // Do not reset epochs or upgrade a read that began while this Stop was held.
+   }catch{}finally{clearTimeout(timer);stop.recovery=null}
+  })();
+  return stop.recovery;
+ };
  return {
   beginStop(sessionId,commandId){
-   const current=state(sessionId),stop={sessionId,commandId,current,outcome:'pending'};
+   const current=state(sessionId),stop={sessionId,commandId,clientId,current,outcome:'pending',recovery:null};
    current.epoch++;current.stops.add(stop);return stop;
   },
   settleStop(stop,outcome){
@@ -27,6 +48,12 @@ export function createCapabilityStopFence(){
    stop.outcome=outcome;
    if(outcome==='accepted'||outcome==='not-applied')stop.current.stops.delete(stop);
    // Unknown stays fenced. A newer Stop cannot erase this unresolved command.
+  },
+  reconcile(sessionId){
+   if(!request||!clientId)return Promise.resolve();
+   const current=sessionId===undefined?[...sessions.values()]:[sessions.get(sessionId)];
+   return Promise.all(current.flatMap(row=>[...(row?.stops||[])])
+    .filter(stop=>stop.outcome==='unknown').map(recover));
   },
   beginRead({sessionId,id}){
    const current=state(sessionId);

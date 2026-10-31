@@ -52,17 +52,80 @@ test('queued mutation rechecks Stop at execution; history without Stop remains i
  }
  assert.deepEqual(posts,['Allow','Deny']);
 });
-test('unknown Stop is not cleared by reads or another Stop outcome',()=>{
- const fence=createCapabilityStopFence(),old=fence.beginStop('chat-a','unknown');
+test('exact passive reconciliation clears only its unknown Stop, never old read tokens',async()=>{
+ const calls=[];
+ const fence=createCapabilityStopFence({clientId:'client-a',request:async(path,options)=>{
+  calls.push({path,body:options.body});
+  return {...options.body,status:'accepted'};
+ }}),before=reviewed(fence),old=fence.beginStop('chat-a','unknown');
  fence.settleStop(old,'unknown');
  const newer=fence.beginStop('chat-a','refused');
  fence.settleStop(newer,'not-applied');
  assert.throws(()=>fence.assertMutation(mutation(),reviewed(fence)),/Stop was requested/);
- fence.settleStop(old,'accepted'); // Exact outcome may arrive later; no Stop replay.
+ const during=fence.beginRead({sessionId:'chat-a',id:'capability:pending'});
+ await fence.reconcile('chat-a');
+ assert.deepEqual(calls,[{path:'/api/conversation/stop-status',body:{sessionId:'chat-a',commandId:'unknown',clientId:'client-a'}}]);
+ for(const token of [before,fence.finishRead(during,'hash')])
+  assert.throws(()=>fence.assertMutation(mutation(),token),/Stop was requested/);
  assert.doesNotThrow(()=>fence.assertMutation(mutation(),reviewed(fence)));
  assert.throws(()=>fence.assertMutation(mutation('chat-b'),reviewed(fence)),/Stop was requested/);
  assert.throws(()=>fence.assertMutation(mutation('chat-a','capability:other'),reviewed(fence)),/Stop was requested/);
  assert.throws(()=>fence.assertMutation(mutation('chat-a','capability:pending','other-hash'),reviewed(fence)),/Stop was requested/);
+});
+for(const [name,reply] of [
+ ['missing',()=>null],['empty',()=>({})],['unknown',body=>({...body,status:'unknown'})],
+ ['wrong status',body=>({...body,status:'completed'})],['boolean acceptance',body=>({...body,accepted:true})],
+ ...['sessionId','commandId','clientId'].map(key=>['wrong '+key,body=>({...body,status:'accepted',[key]:'other'})]),
+ ...['sessionId','commandId','clientId'].map(key=>['missing '+key,body=>{
+  const receipt={...body,status:'accepted'};delete receipt[key];return receipt;
+ }]),
+ ['non-object',()=>('accepted')],
+ ['transport failure',()=>{throw Error('Disconnected')}],
+ ['malformed JSON',()=>{throw SyntaxError('Malformed JSON')}],
+])test(`passive Stop lookup stays fenced on ${name}`,async()=>{
+ let lookups=0;
+ const fence=createCapabilityStopFence({clientId:'client-a',request:async(path,{body})=>{lookups++;return reply(body)}});
+ fence.settleStop(fence.beginStop('chat-a','unknown'),'unknown');
+ await fence.reconcile('chat-a');
+ assert.equal(lookups,1,'No retry or polling');
+ assert.throws(()=>fence.assertMutation(mutation(),reviewed(fence)),/Stop was requested/);
+});
+test('concurrent recovery coalesces exact commands, retains another unknown and ignores pending Stops',async()=>{
+ const calls=[],releases=new Map();
+ const fence=createCapabilityStopFence({clientId:'client-a',request:(path,{body,method,signal})=>{
+  assert.equal(path,'/api/conversation/stop-status');assert.equal(method,'POST');assert.ok(signal);
+  calls.push(body);
+  return new Promise(resolve=>releases.set(body.commandId,status=>resolve({...body,status})));
+ }});
+ for(const commandId of ['old','other'])fence.settleStop(fence.beginStop('chat-a',commandId),'unknown');
+ const pending=fence.beginStop('chat-b','pending');
+ const first=fence.reconcile('chat-a'),second=fence.reconcile();
+ await Promise.resolve();
+ assert.deepEqual(calls.map(row=>row.commandId),['old','other']);
+ releases.get('old')('accepted');releases.get('other')('unknown');
+ await Promise.all([first,second]);
+ assert.throws(()=>fence.assertMutation(mutation(),reviewed(fence)),/Stop was requested/);
+ const third=fence.reconcile('chat-a');await Promise.resolve();
+ assert.deepEqual(calls.map(row=>row.commandId),['old','other','other'],'Only the unresolved command is read again');
+ releases.get('other')('accepted');await third;
+ assert.doesNotThrow(()=>fence.assertMutation(mutation(),reviewed(fence)));
+ assert.throws(()=>fence.assertMutation(mutation('chat-b'),reviewed(fence,'chat-b')),/Stop was requested/);
+ fence.settleStop(pending,'not-applied');
+});
+test('bounded lookup aborts, ignores a late accepted reply, and permits a later explicit read',async()=>{
+ let resolveLate,signal,calls=0;
+ const fence=createCapabilityStopFence({clientId:'client-a',timeoutMs:10,request:(path,options)=>{
+  calls++;signal=options.signal;
+  if(calls===1)return new Promise(resolve=>{resolveLate=()=>resolve({...options.body,status:'accepted'})});
+  return Promise.resolve({...options.body,status:'accepted'});
+ }});
+ fence.settleStop(fence.beginStop('chat-a','unknown'),'unknown');
+ await fence.reconcile('chat-a');assert.equal(signal.aborted,true);assert.equal(calls,1);
+ resolveLate();await Promise.resolve();
+ assert.throws(()=>fence.assertMutation(mutation(),reviewed(fence)),/Stop was requested/);
+ await fence.reconcile('chat-a');
+ assert.equal(calls,2);
+ assert.doesNotThrow(()=>fence.assertMutation(mutation(),reviewed(fence)));
 });
 test('only known pre-POST failure or action ownership refusal is definitely unapplied',()=>{
  assert.equal(stopFailureOutcome(Error('local before-hook rejected'),false),'not-applied');

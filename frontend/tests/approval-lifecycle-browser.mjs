@@ -1,7 +1,7 @@
 import './composer-test-helpers.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
-import {once} from 'node:events';
+import {ownFixture} from './fixture-lifecycle.mjs';
 import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
 import {appendFileSync,writeFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
@@ -35,11 +35,12 @@ const bounded=async(label,work,milliseconds=15000)=>{
 };
 writeFileSync(join(output,'launch.json'),JSON.stringify({
  node:process.execPath,argv:process.argv,cwd:process.cwd(),fixture:[process.env.AMPLIFIER_TEST_PYTHON||'python',root+'/tests/fixtures/approval_lifecycle_server.py'],
- environment:Object.fromEntries(['AMPLIFIER_TEST_PYTHON','AMPLIFIER_TEST_ROOT','AMPLIFIER_TEST_OUTPUT_DIR','AMPLIFIER_SHELL_NODE_MODULES','PLAYWRIGHT_BROWSERS_PATH','PYTHONPATH','UV_OFFLINE','PIP_NO_INDEX'].map(key=>[key,process.env[key]??null])),
+ environment:Object.fromEntries(['AMPLIFIER_TEST_PYTHON','AMPLIFIER_TEST_ROOT','AMPLIFIER_TEST_PACKAGE_ROOT','AMPLIFIER_TEST_OUTPUT_DIR','AMPLIFIER_SHELL_NODE_MODULES','PLAYWRIGHT_BROWSERS_PATH','PYTHONPATH','UV_OFFLINE','PIP_NO_INDEX'].map(key=>[key,process.env[key]??null])),
  // Do not dump arbitrary environment values or request Authorization headers.
 },null,2));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||'python',[root+'/tests/fixtures/approval_lifecycle_server.py'],{
  stdio:['ignore','pipe','pipe'],env:{...process.env,AMPLIFIER_TEST_OUTPUT_DIR:output}});
+const stopFixture=ownFixture(fixture,{label:'Approval lifecycle fixture'});
 let browser,page,fixtureLog='',releaseHeld,completedReport,terminalError;
 const http=[],observedReceipts=new Map(),checks=[];
 const requestStarts=new Map(),responseBodies=[];
@@ -496,9 +497,147 @@ try{
    releasePreflight();releaseHeld?.();await stopPage.unroute('**/api/actions',hold);await stopContext.close();
   }
  }
- completedReport={source:final.source,authoritySha256:final.authoritySha256,coldState:true,
+ // The host really accepts each Stop. Only its response is hidden/corrupted.
+ // No direct fence settlement, fixture receipt forgery or page reload can recover it.
+ for(const scenario of ['lost-ack','malformed-ack']){
+  const created=await page.request.post(url+'/fixture',{data:{change:'stop-case',case:scenario}});
+  assert.equal(created.status(),200);const target=await created.json();
+  const stopContext=await browser.newContext({viewport:{width:1400,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-approval-control-token'}});
+  const stopPage=await stopContext.newPage(),mutations=[],stopRequests=[],lookups=[],routeErrors=[],pageErrors=[];
+  stopPage.setDefaultTimeout(8000);
+  stopPage.on('pageerror',error=>pageErrors.push(error.message));
+  stopPage.on('request',request=>{
+   if(!isAction(request))return;
+   const command=unwrap(request.postDataJSON());diagnostic('stop-recovery-action',{scenario,command});
+   if(['approval.respond','capability.revoke'].includes(command.action)&&command.args?.id===target.pendingId)mutations.push(command);
+   if(command.action==='conversation.stop')stopRequests.push(command);
+  });
+  const inspectTarget=()=>stopPage.request.get(url+'/fixture?sessionId='+encodeURIComponent(target.sessionId),{timeout:8000}).then(r=>r.json());
+  let acceptedLookup=false,stopCommand,stopClientId,stopReceipt,supersedingStop=null;
+  const hideStop=async route=>{
+   const command=unwrap(route.request().postDataJSON());
+   if(command.action!=='conversation.stop')return route.continue();
+   try{
+    assert.equal(stopCommand,undefined,'Never replay the uncertain Stop');stopCommand=command;
+    stopClientId=route.request().headers()['x-amplifier-client'];
+    const response=await route.fetch({timeout:8000});
+    stopReceipt=await response.json();
+    assert.equal(response.status(),200);assert.equal(stopReceipt.accepted,true);
+    diagnostic('stop-accepted-response-hidden',{scenario,command,receipt:stopReceipt});
+    if(scenario==='lost-ack')await route.abort('failed');
+    else await route.fulfill({response,contentType:'application/json',body:'{"accepted":'});
+   }catch(error){routeErrors.push(error.message);await route.abort('failed').catch(()=>{})}
+  };
+  const lookup=async route=>{
+   const request=route.request(),body=request.postDataJSON(),row={body};
+   lookups.push(row);
+   try{
+    assert.equal(request.method(),'POST');
+    assert.deepEqual(body,{sessionId:target.sessionId,commandId:stopCommand.id,clientId:stopClientId});
+    assert.equal(request.headers()['x-amplifier-client'],stopClientId);
+    assert.equal(typeof body.clientId,'string');assert.ok(body.clientId);
+    if(!acceptedLookup){
+     // Keep the lookup unknown through reconnect and a decision attempt.
+     row.response={...body,status:'unknown'};row.injectedUnknown=true;
+     await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(row.response)});
+    }else{
+     const response=await route.fetch({timeout:8000});row.response=await response.json();row.httpStatus=response.status();
+     assert.equal(response.status(),200);
+     assert.deepEqual(row.response,{...body,status:'accepted'});
+     await route.fulfill({response});
+    }
+    diagnostic('stop-passive-lookup',{scenario,...row});
+   }catch(error){row.error=error.message;routeErrors.push(error.message);await route.abort('failed').catch(()=>{})}
+  };
+  try{
+   await stopPage.goto(url);await showFixtureConversation(stopPage);
+   await stopPage.evaluate(id=>window.amplifier.dispatch('session.select',{id}),target.sessionId);
+   const card=stopPage.locator(`[data-approval-id="${target.pendingId}"]`);
+   const review=card.getByRole('button',{name:'Review current scope'}),dismiss=card.getByRole('button',{name:'Dismiss old request'});
+   const note=card.getByRole('textbox',{name:'Note to Amplifier (optional)'}),noteText=`Keep ${scenario} note`;
+   await expect(card.getByRole('button',{name:'Allow',exact:true})).toBeEnabled();
+   await note.fill(noteText);
+   const before=await inspectTarget(),clientBefore=await stopPage.evaluate(()=>window.amplifier.getState().client.id);
+   await stopPage.route('**/api/actions',hideStop);
+   await stopPage.route('**/api/conversation/stop-status',lookup);
+   await stopPage.locator('button[data-action="conversation.stop"]').click();
+   await expect.poll(()=>lookups.some(row=>row.response?.status==='unknown')).toBe(true);
+   assert.equal(stopReceipt.accepted,true);assert.equal(stopRequests.length,1);assert.equal(stopClientId,clientBefore);
+   await expect(dismiss).toBeEnabled();await expect(note).toHaveValue(noteText);
+   await dismiss.click();
+   await expect(card.getByRole('alert')).toContainText('Stop was requested');
+   await expect(review).toBeEnabled();
+   assert.deepEqual(mutations,[],'Unknown Stop sends no decision or dismissal');
+   assert.equal((await inspectTarget()).interruptionRevision,1);
+   checks.push({name:`Unknown ${scenario} stays fenced`,stopCommand,stopReceipt,lookups:structuredClone(lookups),decisionRequests:[...mutations]});
+   if(scenario==='lost-ack'){
+    // A different explicit Stop overwrites lastInterruption. The old command's
+    // ledger entry, not this newer snapshot, must be used to recover the fence.
+    const id='superseding-stop-'+randomUUID();
+    const response=await stopPage.request.post(url+'/api/actions',{data:{action:'conversation.stop',args:{sessionId:target.sessionId},id},timeout:8000});
+    supersedingStop={id,receipt:await response.json()};
+    assert.equal(response.status(),200);assert.equal(supersedingStop.receipt.accepted,true);
+    const overwritten=await inspectTarget();
+    assert.equal(overwritten.interruptionRevision,2);assert.equal(overwritten.lastInterruption.commandId,id);
+    assert.notEqual(overwritten.lastInterruption.commandId,stopCommand.id);
+   }
+   // Exercise the real same-page transport reconnect, not a synthetic settlement.
+   const priorLookups=lookups.length;
+   await stopPage.evaluate(()=>window.dispatchEvent(new Event('online')));
+   await expect.poll(()=>lookups.length).toBeGreaterThan(priorLookups);
+   await expect(review).toBeEnabled();await expect(note).toHaveValue(noteText);
+   assert.equal(await stopPage.evaluate(()=>window.amplifier.getState().client.id),clientBefore);
+   await dismiss.click();await expect(card.getByRole('alert')).toContainText('Stop was requested');
+   await expect(review).toBeEnabled();assert.deepEqual(mutations,[]);
+   acceptedLookup=true;
+   if(scenario==='malformed-ack'){
+    // A decision preflight that obtains exact acceptance is still ineligible.
+    // Recovery is not permission to continue that already-started decision.
+    await dismiss.click();await expect(card.getByRole('alert')).toContainText('Stop was requested');
+    await expect(review).toBeEnabled();assert.deepEqual(mutations,[]);
+    checks.push({name:'Recovering preflight cannot send its decision',lookups:structuredClone(lookups),decisionRequests:[...mutations]});
+   }
+   await review.click();
+   await expect(card.getByRole('region',{name:'Current configuration scope'})).toBeVisible();
+   await expect(review).toBeEnabled();
+   await expect(card.getByRole('alert')).toHaveCount(0);
+   assert.ok(lookups.some(row=>row.httpStatus===200&&row.response?.status==='accepted'),'Production ledger lookup confirmed the original command');
+   assert.deepEqual(mutations,[],'Passive recovery never replays a prior decision');
+   await expect(note).toHaveValue(noteText);
+   const dismissal=stopPage.waitForResponse(response=>isAction(response.request())&&unwrap(response.request().postDataJSON()).action==='capability.revoke',{timeout:8000})
+    .then(response=>({response}),error=>({error}));
+   await dismiss.click();
+   const received=await dismissal;if(received.error)throw received.error;
+   const dismissalReceipt=await received.response.json();
+   assert.equal(received.response.status(),200);assert.equal(dismissalReceipt.accepted,true);
+   await expect(card).toHaveCount(0);
+   assert.equal(mutations.length,1);assert.equal(mutations[0].action,'capability.revoke');
+   assert.equal(mutations[0].args.sessionId,target.sessionId);assert.equal(mutations[0].args.comment,noteText);
+   assert.ok(mutations[0].args.expectedRequestHash);
+   assert.equal(stopRequests.length,1,'Original browser sent Stop exactly once, including across reconnect/review');
+   const expectedStops=supersedingStop?2:1;
+   await expect.poll(async()=>(await inspectTarget()).stops.filter(id=>id===target.sessionId).length).toBe(expectedStops);
+   const after=await inspectTarget(),saved=after.approvals.find(row=>row.id===target.pendingId);
+   assert.ok(saved.dismissedAt);assert.equal(saved.dismissalComment,noteText);
+   assert.deepEqual(after.approvals.filter(row=>row.id!==target.pendingId),before.approvals.filter(row=>row.id!==target.pendingId));
+   for(const key of ['starts','inputs','controls','decisions'])assert.deepEqual(after[key],before[key],`No extra runtime ${key}`);
+   assert.equal(after.interruptionRevision,expectedStops);assert.deepEqual(routeErrors,[]);assert.deepEqual(pageErrors,[]);
+   await stopPage.screenshot({path:join(output,`stop-${scenario}-recovered.png`),animations:'disabled'});
+   checks.push({name:`Passive ${scenario} recovery permits only fresh dismissal`,before,after,clientId:clientBefore,
+    stopCommand,stopReceipt,supersedingStop,lookups,decisionRequests:mutations,dismissalReceipt,samePage:true});
+  }catch(error){
+   diagnostic('stop-recovery-failure',{scenario,error:error.message,routeErrors,lookups,stopRequests,mutations});
+   await stopPage.screenshot({path:join(output,`stop-${scenario}-failure.png`),timeout:3000}).catch(()=>{});
+   throw error;
+  }finally{
+   await stopPage.unroute('**/api/actions',hideStop);
+   await stopPage.unroute('**/api/conversation/stop-status',lookup);
+   await stopContext.close();
+  }
+ }
+ completedReport={source:final.source,authoritySha256:final.authoritySha256,packageIdentity:final.packageIdentity,coldState:true,
   passiveReview:true,twoTabs:true,scopeRace:true,expiryRace:true,exactDismiss:true,adjacentCycle:true,
-  keyboard:true,narrow:true,touch:true,reload:true,privateDraft:true,canvasHistory:true,laterPermission:true,heldHistoryPendingDecisions:true,stopIntentOrdering:true,dirtyRefusal:true,retainedEditor:true,lateClose:true,newerDocument:true,scriptedRuntime:true,realProvider:false,checks};
+  keyboard:true,narrow:true,touch:true,reload:true,privateDraft:true,canvasHistory:true,laterPermission:true,heldHistoryPendingDecisions:true,stopIntentOrdering:true,stopAcknowledgementRecovery:true,overwrittenStopRecovery:true,dirtyRefusal:true,retainedEditor:true,lateClose:true,newerDocument:true,scriptedRuntime:true,realProvider:false,checks};
 }catch(error){
  terminalError=error;
  await saveFailure(error);
@@ -516,13 +655,12 @@ try{
  await bounded('browser cleanup',browser?.close(),8000).catch(error=>{
   checks.push({name:'Browser cleanup failed',error:error.message});terminalError??=error;
  });
- if(fixture.exitCode===null&&fixture.signalCode===null){
-  const ended=once(fixture,'exit');fixture.kill('SIGTERM');
-  const timer=setTimeout(()=>fixture.kill('SIGKILL'),5000);
-  try{await ended}finally{clearTimeout(timer)}
- }
- const cleanup={exitCode:fixture.exitCode,signal:fixture.signalCode,observed:fixture.exitCode!==null||fixture.signalCode!==null};
- if(!cleanup.observed)terminalError??=Error('Fixture termination was not observed');
+ let cleanupError;
+ try{await stopFixture()}catch(error){cleanupError=error;terminalError??=error}
+ const cleanup={exitCode:fixture.exitCode,signal:fixture.signalCode,observed:fixture.exitCode!==null||fixture.signalCode!==null,
+  graceful:!cleanupError,error:cleanupError?.message??null};
+ if(cleanup.exitCode!==0||cleanup.signal!==null)terminalError??=Error('Fixture did not exit normally');
+ await writeFile(join(output,'fixture.log'),fixtureLog);
  await writeFile(join(output,'cleanup.json'),JSON.stringify(cleanup));
  process.removeListener('SIGTERM',onTerm);process.removeListener('SIGINT',onInterrupt);
  const report={...completedReport,passed:!!completedReport&&!terminalError,incomplete:!completedReport,error:terminalError?.message??null,checks,cleanup};
