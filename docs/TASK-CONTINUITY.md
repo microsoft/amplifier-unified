@@ -62,6 +62,14 @@ native control state, including manager and authorization provenance. After a
 lost acknowledgement, read that receipt; absence is not proof that an in-flight
 control did not commit. No new permission store or continuation loop is added.
 
+Cold preparation restores all saved controls before persisting them. It does not
+write mounted defaults over still-unrestored budgets or modes while loading a
+task. If saved-control restoration fails or is cancelled before its final
+persistence, the original control file remains available for recovery; the limit
+correction has not run. This is not rollback for failures during the final write
+or later preparation. Successful restore and later mutations keep ordinary
+persistence.
+
 ## Continuation and recovery
 
 The existing goal controller performs continuation. The task revision applies at
