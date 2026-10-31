@@ -1572,7 +1572,7 @@ class Worker:
                 from amplifier_web.handoff_drain import finish
                 if not data.get('cancel'):
                     await finish(self, data.get('receipt'))
-                result = await inspect(self, data['request_id'], data.get('cancel', False))
+                result = await inspect(self, data['request_id'], data.get('cancel', False), update=data.get('update') is True)
             elif op == "desktop.readiness":
                 if not self.controls:
                     result = {"status": "unavailable", "reason": "Conversation tools are not mounted."}

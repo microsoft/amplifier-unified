@@ -71,6 +71,9 @@ on:
       - 'amplifier_web/worktrees.py'
       - 'amplifier_web/handoff_admission.py'
       - 'amplifier_web/handoff_boundary.py'
+      - 'amplifier_web/update_drain.py'
+      - 'tests/test_update_boundary_native.py'
+      - 'tests/test_update_drain.py'
       - 'amplifier_web/capacity.py'
       - 'amplifier_web/capacity_wait.py'
       - 'tests/test_handoff_model_admission.py'
@@ -196,6 +199,15 @@ jobs:
           assert len(rows) == 3
           assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
           PY
+      - name: Verify cooperative update yield through the native boundary
+        run: |
+          uv run --no-sync pytest -q tests/test_update_boundary_native.py --junitxml=output/update-boundary-native.xml
+          uv run --no-sync python - <<'PYTHON'
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/update-boundary-native.xml').getroot().findall('.//testcase')
+          assert len(rows) == 4
+          assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          PYTHON
       - name: Verify repeated peer returns through real Worker processes
         run: |
           uv run --no-sync pytest -q tests/test_peer_return_workflow.py \

@@ -1350,6 +1350,14 @@ class UpdateManager:
         settings=self.service.state['settings'].get('updates',{})
         state=self.service.state['updates']
         if self.awaiting_restart():return
+        from .update_drain import finish
+        drain = state.get('drain') or {}
+        if drain.get('phase') in {'draining', 'replacing', 'releasing'}:
+            installed = state.get('applicationResult') or {}
+            if all(installed.get(key) == drain.get('target', {}).get(key) for key in ('attemptId', 'revision')):
+                await finish(self, 'installed')
+            elif not state.get('pendingApp') or state.get('phase') in {'error', 'interrupted'} or drain.get('hostInstanceId') != self.service.instance_id:
+                await finish(self, 'withdrawn')
         if (getattr(self, '_storage_policy_due', False) or time.time() - getattr(self, '_storage_last_pass', 0) >= 3600) and (not self.cleanup_task or self.cleanup_task.done()):
             self._storage_policy_due = False
             self._storage_last_pass = time.time()

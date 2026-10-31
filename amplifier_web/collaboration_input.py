@@ -46,7 +46,7 @@ async def admit(controls, runtime, args, activation, authorize, stop_epoch=lambd
     epoch = stop_epoch()
     permission = await authorize(args)
     if not permission.get("admitted"):
-        return {"accepted": False, "reason": permission.get("reason")}
+        return {"accepted": False, "reason": permission.get("reason"), **({"effect": "none", "waitingForUpdate": True} if permission.get("waitingForUpdate") else {})}
     task = controls.tasks.record()
     if not task_matches(task, args):
         return {"accepted": False, "reason": "The saved task changed before native admission."}
@@ -62,7 +62,7 @@ async def admit(controls, runtime, args, activation, authorize, stop_epoch=lambd
     # never a caller-provided envelope/text.
     permission = await authorize(args)
     if not permission.get("admitted"):
-        return {"accepted": False, "reason": permission.get("reason")}
+        return {"accepted": False, "reason": permission.get("reason"), **({"effect": "none", "waitingForUpdate": True} if permission.get("waitingForUpdate") else {})}
     if not await input_allowed(controls, permission) or stop_epoch() != epoch:
         return {"accepted": False, "reason": "Stop, task or budget changed during peer admission."}
     current = controls.tasks.record() or {}
@@ -109,7 +109,7 @@ async def deliver(controls, runtime, args, activation, authorize, stop_epoch=lam
     for _ in range(2):
         permission = await authorize(args)
         if not permission.get("admitted"):
-            return refused(permission.get("reason"))
+            return {**refused(permission.get("reason")), **({"waitingForUpdate": True} if permission.get("waitingForUpdate") else {})}
         if not await input_allowed(controls, permission):
             return refused("The saved task or current budget prevents automatic input.")
         if not task_matches(controls.tasks.record(), args) or exhausted(controls):

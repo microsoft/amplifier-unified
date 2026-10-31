@@ -50,7 +50,7 @@ jobs:
           tests/test_conversation_export.py tests/test_history_query.py tests/test_voice_input_projection.py tests/test_voice.py tests/test_portability_voice.py
           tests/test_questions.py tests/test_auth.py tests/test_browser_auth.py tests/test_server_auth.py tests/test_browser_events.py tests/test_companion.py tests/test_client_observations.py
           tests/test_reset.py tests/test_repository_access.py tests/test_friendly_reset.py tests/test_feedback_diagnostics.py
-          tests/test_update_replacement.py tests/test_update_readiness.py tests/test_deployment_service.py
+          tests/test_update_replacement.py tests/test_update_readiness.py tests/test_update_drain.py tests/test_deployment_service.py
           tests/test_release_qualification.py tests/test_release_automation.py tests/test_release_notes.py
       - name: Check chat naming and internal terminal sessions
         run: uv run --no-sync pytest -q tests/test_automatic_naming.py tests/test_chat_title_preview.py tests/test_naming_backfill.py tests/test_fallback_titles.py tests/test_naming.py tests/test_naming_controls.py tests/test_headless.py tests/test_automatic_history.py tests/test_provider_probe.py tests/test_setup.py tests/test_image_setup.py tests/test_image_defaults.py tests/test_provider_environment.py tests/test_readiness101.py tests/test_installer_script.py tests/test_host_dependencies.py
@@ -196,6 +196,7 @@ jobs:
         working-directory: frontend
         run: |
           node tests/message-outbox-browser.mjs
+          node tests/update-message-delivery-browser.mjs
           node tests/support-diagnostics-browser.mjs
           node tests/multiple-window-stream-browser.mjs
       - name: Check workspace storage, unread state, plans and formatted copy
