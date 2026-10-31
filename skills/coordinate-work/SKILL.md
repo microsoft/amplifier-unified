@@ -197,8 +197,11 @@ compare those exact links, not equal message text.
    choose expiresInSeconds up to one day when a different deadline is useful.
    Expired input remains inspectable and is not executed. Causal depth is retained
    as provenance, not a lifetime hop limit; ordinary admission and Stop still apply.
-   Messages between a pair of conversations are limited to 32 per minute,
-   including notify. On backpressure, wait or combine updates; do not change
+   Pair-message rates (including notify) and pending watches per target have no
+   count ceiling by default. Global Work concurrency settings can set positive
+   limits; 0 removes that count limit. Every watch registered before a lifecycle
+   event can observe it, even beyond one read page. On configured backpressure,
+   wait or combine updates; do not change
    identities to evade a limit. Identical retries still return their receipts.
    Read a retained file with `coordination.artifact`, using the calling session,
    original requestId and exact reference string; supply responseRevision to

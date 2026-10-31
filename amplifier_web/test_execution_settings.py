@@ -13,7 +13,8 @@ PEER_INBOX_COUNTS = ('maxPendingPeerInputs', 'maxPendingPeerInputsPerSender',
 CONCURRENCY_DEFAULTS = {'maxTaskChatsPerSource': 0, 'maxEnvironmentsPerChat': 0,
                         'maxOwnedResources': 0, 'maxOwnedResourcesPerChat': 0,
                         'maxResourceReservations': 0, 'maxResourceReservationsPerChat': 0,
-                        **dict.fromkeys(PEER_INBOX_COUNTS, 0)}
+                        **dict.fromkeys(PEER_INBOX_COUNTS, 0),
+                        'maxPeerMessagesPerMinute': 0, 'maxPendingWatchesPerTarget': 0}
 
 QUEUE_DEFAULTS = {'maxPending': 0, 'maxPendingPerChat': 0, 'defaultWaitSeconds': 0}
 PROFILE_FIELDS = (*profiles.RESOURCE_FIELDS, *profiles.TIMING_FIELDS)
