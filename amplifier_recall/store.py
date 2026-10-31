@@ -143,7 +143,7 @@ class RecallStore:
             raise ValueError('This command ID was already used with different contents.')
         return {**json.loads(row[1]), 'duplicate': True}
 
-    def mutate(self, action, args, *, command_id, provenance, request_fingerprint=None):
+    def mutate(self, action, args, *, command_id, provenance, request_fingerprint=None, receipt_provenance=False):
         fingerprint = request_fingerprint or digest([action,args,provenance])
         with self.atomic():
             old = self.db.execute('SELECT fingerprint,result FROM memory_receipts WHERE id=?', (command_id,)).fetchone()
@@ -183,5 +183,7 @@ class RecallStore:
                 self.db.execute('DELETE FROM memory_versions WHERE id=? AND revision<=?', (record['id'],record['revision']-50))
                 result = {'id': record['id'], 'revision': record['revision'], 'scope': record['scope'], 'target': record['target']}
             # Receipts never retain the deleted note text or prior versions.
+            if receipt_provenance:
+                result['provenance'] = copy.deepcopy(provenance)
             self.db.execute('INSERT INTO memory_receipts VALUES (?,?,?)', (command_id,fingerprint,json.dumps(result)))
             return result

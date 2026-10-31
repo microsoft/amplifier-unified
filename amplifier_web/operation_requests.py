@@ -1,5 +1,6 @@
 """Idempotent admission receipts; an uncertain request is never replayed."""
 
+import copy
 import hashlib
 import json
 import time
@@ -37,7 +38,7 @@ class OperationRequests:
             return self.begin(sid, action, args, actor)[0]
         return None
 
-    def begin(self, sid, action, args, actor, *, resource_id=None):
+    def begin(self, sid, action, args, actor, *, resource_id=None, attribution=None):
         identity = args["requestId"]
         signature = hashlib.sha256(
             json.dumps(
@@ -68,6 +69,9 @@ class OperationRequests:
                 "createdAt": time.time(),
                 "updatedAt": time.time(),
                 **({"resourceId": resource_id} if resource_id is not None else {}),
+                # Attribution is not the stable request owner or a permission.
+                # Exact retries retain the original source and legacy signature.
+                **({"attribution": copy.deepcopy(attribution)} if attribution is not None else {}),
             }
             self.journal.db.execute(
                 "INSERT INTO operation_requests VALUES (?,?,?,?)",

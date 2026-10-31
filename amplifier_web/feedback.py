@@ -49,7 +49,7 @@ def definitions(schema, string):
             schema({"requestId": request_id, "deviceDiagnostics": feedback_diagnostics.DEVICE_SCHEMA}, []),
         ),
         "feedback.submit": (
-            "Create feedback in microsoft/amplifier-unified with exact title/body and explicit attachmentIds. Under saved Full, a current root agent or trusted system with an explicit calling conversation can select its own staged initial files/excerpts without a browser or human confirmation. Staging returns immutable IDs/hashes; the host verifies bytes and records the actual repository identity/visibility before file uploads; plain-text sends need no upload metadata lookup. Optional uploadDestination and confirmedFiles/confirmedExcerpts remain exact preconditions, not human-review claims. Outside this Full path, use reviewed title/body; public ordinary files require uploadDestination plus confirmedFiles after explicit review, and excerpts require feedback.excerpt.review/stage followed by confirmExcerpts:true and the complete confirmedExcerpts set after user review. Files remain in repository history. Allowlisted diagnostics are included by default; includeDiagnostics:false opts out. Never include raw logs, paths or credentials. Reuse requestId and identical payload after a lost response; read /feedback/requests for durable results. Unknown outcomes are not reposted. Native descendants and Work-bound publication require separate qualification.",
+            "Create feedback in microsoft/amplifier-unified with exact title/body and explicit attachmentIds. Under saved Full, a current agent, assigned native child or trusted system with an explicit calling conversation can select its own staged initial files/excerpts without a browser or human confirmation. Staging returns immutable IDs/hashes; the host verifies bytes and records the actual repository identity/visibility before file uploads; plain-text sends need no upload metadata lookup. Optional uploadDestination and confirmedFiles/confirmedExcerpts remain exact preconditions, not human-review claims. Outside this Full path, use reviewed title/body; public ordinary files require uploadDestination plus confirmedFiles after explicit review, and excerpts require feedback.excerpt.review/stage followed by confirmExcerpts:true and the complete confirmedExcerpts set after user review. Files remain in repository history. Allowlisted diagnostics are included by default; includeDiagnostics:false opts out. Never include raw logs, paths or credentials. Reuse requestId and identical payload after a lost response; read /feedback/requests for durable results. Unknown outcomes are not reposted. Later-file additions keep their separate workflow.",
             schema({"requestId": request_id,
                     "title": {**string(200), "minLength": 1}, "body": {**string(16000), "minLength": 1},
                     "category": {"enum": list(CATEGORIES)}, "confirmExcerpts": {"type": "boolean"}, "includeDiagnostics": {"type": "boolean"},
@@ -63,11 +63,11 @@ def definitions(schema, string):
                    ["requestId", "title", "body", "category"]),
         ),
         "feedback.attachment.add": (
-            "Stage exact file/image bytes locally, up to 8 MiB each, 8 files and 24 MiB total. Initial Full agent/system staging belongs to the explicit calling conversation, returns its file ID/SHA256 directly and does not touch browser drafts. Other initial callers keep the browser draft flow. With feedbackId, the separately reviewed attached-client follow-up flow remains required; Full later-file support is not implemented. Nothing uploads until feedback.submit or the separate follow-up action. Pass base64 bytes, a name and stable requestId; exact retries do not add twice or restore removed files.",
+            "Stage exact file/image bytes locally, up to 8 MiB each, 8 files and 24 MiB total. Full agent/system staging belongs to the explicit calling conversation, returns its file ID/SHA256 directly and does not touch browser drafts. Optional feedbackId selects a separate ordinary-file draft for an existing report; Full uses the same conversation owner there. Other callers keep the browser draft and review flow. Nothing uploads until feedback.submit or the separate follow-up action. Pass base64 bytes, a name and stable requestId; exact retries do not add twice or restore removed files.",
             schema({"requestId": request_id, "feedbackId": request_id, "name": {**string(200), "minLength": 1}, "base64": string(12000000)}, ["requestId", "name", "base64"]),
         ),
         "feedback.attachment.remove": (
-            "Remove a locally staged file before submitting. Initial Full agent/system callers affect only their calling conversation's staging. Optional feedbackId selects only this attached client's ordinary-file follow-up draft. Frozen additions cannot be changed. Submitted files cannot be deleted this way; they remain in repository history.",
+            "Remove a locally staged file before submitting. Full agent/system callers affect only their calling conversation's staging. Optional feedbackId selects that owner's ordinary-file follow-up draft; other callers retain the attached-client draft. Frozen additions cannot be changed. Submitted files cannot be deleted this way; they remain in repository history.",
             schema({"id": attachment_id, "feedbackId": request_id}, ["id"]),
         ),
     }
@@ -152,7 +152,7 @@ class Feedback:
     def attachment_command(self, action, args, origin=None, caller=None, *, authority=None):
         """Local-only staging; identical accepted add retries never resurrect removals."""
         if args.get("feedbackId"):
-            return self.additions.stage(action, args)
+            return self.additions.stage(action, args, origin, caller)
         from .service import AppError
         if action == 'feedback.attachment.add':
             previous = self.service.db.execute('SELECT fingerprint,metadata FROM feedback_attachments WHERE request_id=?', (args['requestId'],)).fetchone()

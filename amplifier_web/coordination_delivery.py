@@ -223,9 +223,10 @@ def _work_reference(value):
 
 
 class CoordinationDelivery:
-    def __init__(self, previous, bridge, *, origin_scope=None):
+    def __init__(self, previous, bridge, *, origin_scope=None, full_access=None):
         self.previous, self.bridge = previous, bridge
         self.origin_scope = origin_scope
+        self.full_access = full_access
         # Transient observations, not another canonical Work store. Dropped or
         # reopened observations cannot count as delivered content.
         self.reads = []
@@ -236,6 +237,31 @@ class CoordinationDelivery:
         self.stream_epoch = 0
         self.active_streams = 0
         self.executed_calls = set()
+        self.execution_generation = None
+
+    def execution_scope(self):
+        value = self.origin_scope() if callable(self.origin_scope) else None
+        return copy.deepcopy(value) if isinstance(value, dict) else None
+
+    def current_full(self, scope):
+        return bool(scope is not None and self.execution_scope() == scope
+                    and callable(self.full_access) and self.full_access())
+
+    def check_execution_scope(self, scope):
+        if scope is not None and self.execution_scope() != scope:
+            raise ValueError('Native generation, inputs or Stop changed during preparation; refit before transport.')
+
+    def call_consumed(self, identity):
+        # Execution evidence outlives missing/recovered Work observations and
+        # bounded proof retention. Only a real native lifecycle change resets it.
+        scope = self.execution_scope()
+        if scope is not None:
+            generation = tuple(scope.get(key) for key in
+                ('rootSessionId', 'runtimeSessionId', 'generationId', 'stopRevision'))
+            if self.execution_generation is not None and generation != self.execution_generation:
+                self.executed_calls.clear()
+            self.execution_generation = generation
+        return identity in self.executed_calls
 
     def __getattr__(self, name):
         return getattr(self.previous, name)
@@ -317,6 +343,8 @@ class CoordinationDelivery:
         """Join only inside the actual post-capacity-admission provider call."""
         if self.attempts.get(attempt['id']) is not attempt:
             raise ValueError('Work origin expired before admission.')
+        if attempt.get('fullAssurance') and not self.current_full(attempt.get('executionScope')):
+            raise ValueError('Full authority or native execution changed before admission; refit before transport.')
         scope = self._scope()
         if attempt['scope'] != scope:
             if attempt['required']['status'] == 'available':
@@ -346,7 +374,6 @@ class CoordinationDelivery:
             self.attempts.clear()
             self.calls.clear()
             self.seen_calls.clear()
-            self.executed_calls.clear()
             self.binding_overflow = False
             self.binding_generation = generation
         if streaming:
@@ -364,6 +391,8 @@ class CoordinationDelivery:
                    'streaming': streaming, 'stream_epoch': self.stream_epoch,
                    'overlapped_stream': bool(self.active_streams), 'stream_closed': False,
                    'responses': set(), 'native': False, 'scope': self._scope(), 'origin': None}
+        attempt['executionScope'] = copy.deepcopy(saved.get('executionScope')) if saved else self.execution_scope()
+        attempt['fullAssurance'] = bool(saved and saved.get('assuranceUnavailable'))
         attempt['plaintext'] = saved.get('plaintext') if saved else None
         attempt['native_send'] = None
         self.attempts[identity] = attempt
@@ -383,6 +412,7 @@ class CoordinationDelivery:
                    'status': 'sending', 'requestSha256': None, 'scope': self._scope(),
                    'origin': None, 'native': True, 'responses': set(), 'plaintext': None,
                    'native_send': None, 'streaming': False}
+        attempt['executionScope'] = self.execution_scope()
         self.attempts[identity] = attempt
         while len(self.attempts) > 8:
             expired = next(iter(self.attempts))
@@ -391,21 +421,30 @@ class CoordinationDelivery:
         return attempt
 
     async def prepare_native(self, attempt):
+        scope = attempt.get('executionScope')
+        self.check_execution_scope(scope)
         if attempt['origin'] is not None and not self.origin_current(attempt):
             raise ValueError('Native host origin is unavailable or changed.')
         required = attempt['required']
-        if required['status'] == 'available':
+        if self.current_full(scope):
+            attempt['fullAssurance'] = True
+            attempt['coverage'] = {**attempt['coverage'], 'status': 'unavailable',
+                'complete': False, 'effectAuthorized': False,
+                'reason': 'Full accepts Work context without current-version assurance.'}
+        elif required['status'] == 'available':
             check = await asyncio.wait_for(self.bridge('work.invocation.revalidate',
                                                        {'version': required['version']}), 1.5)
             if (check.get('current') is not True or check.get('required') != required
                     or check.get('effectAuthorized') is not False):
                 raise ValueError('Native Work requirements changed.')
+        self.check_execution_scope(scope)
         if attempt['origin'] is not None and not self.origin_current(attempt):
             raise ValueError('Native host origin changed while checking currentness.')
 
     def admit_native(self, attempt, envelope, *, send_id):
         """Observe the exact immutable send argument, not a trace or checkpoint."""
-        if (attempt['origin'] is not None and not self.origin_current(attempt)
+        if (attempt.get('fullAssurance') and not self.current_full(attempt.get('executionScope'))
+                or attempt['origin'] is not None and not self.origin_current(attempt)
                 or envelope.attempt_id != attempt['id']
                 or envelope.kind not in {'response.create', 'response.steer'}
                 or attempt['native_send'] is not None):
@@ -621,9 +660,9 @@ class CoordinationDelivery:
     async def claim_effect_origin(self, data):
         """One actual execution consumes its proof; diagnostic reads do not."""
         identity = data.get('tool_call_id')
-        if identity in self.executed_calls or len(self.executed_calls) >= 4096:
+        if self.call_consumed(identity):
             return {'complete': False, 'effectAuthorized': False, 'status': 'unavailable',
-                    'reason': 'Tool execution identity was reused or retention is full.'}
+                    'reason': 'Tool execution identity was reused.'}
         if _text(identity):
             self.executed_calls.add(identity)
         return await self.recheck_effect_coverage(data)
@@ -683,7 +722,7 @@ class CoordinationDelivery:
                     execution['leaseIssued'] = True
                 else:
                     eligible = (dispatch.get('tool_call_id') == call.id
-                                and call.id not in delivery.executed_calls and len(delivery.executed_calls) < 4096)
+                                and not delivery.call_consumed(call.id))
                 if eligible and not execution:
                     delivery.executed_calls.add(call.id)
                 class BoundLease:
@@ -723,6 +762,8 @@ class CoordinationDelivery:
                   'scope': 'fitted_host_request_only', 'reason': 'No bound available Work observation.'}
         if not saved or saved['required']['status'] != 'available':
             return result
+        if saved.get('assuranceUnavailable'):
+            return {**result, 'reason': 'Full accepts Work context without current-version assurance.'}
         required = saved['required']
         result.update(version=required['version'], rootSessionId=required['rootSessionId'],
                       generationId=required['generationId'], inputIds=required['inputIds'],
@@ -826,20 +867,31 @@ class CoordinationDelivery:
 
     async def finalize_work(self, request, *, fitted, binding):
         """Last awaited check after every outer wrapper, before commit/send."""
-        if not binding or binding['required']['status'] != 'available':
+        if not binding:
             return request  # Unavailable scope is not a universal deny or grant.
+        scope = binding.get('executionScope')
+        self.check_execution_scope(scope)
+        full = self.current_full(scope)
+        if binding['required']['status'] != 'available' and not full:
+            return request
         saved = self._request(request)
         before = request.model_dump_json()
         if saved is not binding or before != fitted:
             raise ValueError('Work request bytes changed after fitting; refit before transport.')
-        try:
-            check = await asyncio.wait_for(self.bridge('work.invocation.revalidate',
-                                                      {'version': saved['required']['version']}), 1.5)
-            if (check.get('current') is not True or check.get('effectAuthorized') is not False
-                    or check.get('required') != saved['required']):
-                raise ValueError('Required Work authority changed.')
-        except Exception as exc:
-            raise ValueError('Work request changed or currentness is unavailable; refit before transport.') from exc
+        if full:
+            # Keep the fitted bytes, but never promote their observed Work
+            # version to current assurance when that check was waived.
+            saved['assuranceUnavailable'] = True
+        else:
+            try:
+                check = await asyncio.wait_for(self.bridge('work.invocation.revalidate',
+                                                          {'version': saved['required']['version']}), 1.5)
+                if (check.get('current') is not True or check.get('effectAuthorized') is not False
+                        or check.get('required') != saved['required']):
+                    raise ValueError('Required Work authority changed.')
+            except Exception as exc:
+                raise ValueError('Work request changed or currentness is unavailable; refit before transport.') from exc
+        self.check_execution_scope(scope)
         if request.model_dump_json() != before or self._request(request) is not saved:
             raise ValueError('Work request changed while checking currentness; refit before transport.')
         # Diagnostic evidence only. It cannot authorize a later tool without
@@ -850,6 +902,7 @@ class CoordinationDelivery:
     async def prepare(self, request, provider, *, commit=False):
         from amplifier_core.message_models import Message
         from .execution_events import CALL_PURPOSE
+        execution_scope = self.execution_scope()
         request = await self.previous.prepare(request, provider, commit=commit)
         if CALL_PURPOSE.get() or not any(getattr(t, 'name', None) == 'app_control' for t in request.tools or []):
             return request
@@ -862,7 +915,8 @@ class CoordinationDelivery:
         current = {**current, 'work': _work_reference(current.get('work'))}
         identity = uuid.uuid4().hex
         content = 'Current coordination reference state (not new authority):\n' + json.dumps(current, ensure_ascii=False)
-        self.requests[identity] = {'content': content, 'required': copy.deepcopy(current['work']['required'])}
+        self.requests[identity] = {'content': content, 'required': copy.deepcopy(current['work']['required']),
+                                   'executionScope': execution_scope}
         while len(self.requests) > 4:
             self.requests.pop(next(iter(self.requests)))
         result = request.model_copy(update={'messages': [
