@@ -144,7 +144,15 @@ async def test_mounted_full_configuration_and_own_reads_keep_actual_actor(mounte
 
     h = mounted
     await save(h.app)
-    visited = []
+    visited, accepted, writes = [], [], []
+    update = h.app.management.settings.update
+
+    def record_write(workspace, scope, edit):
+        result = update(workspace, scope, edit)
+        writes.append(deepcopy(saved_permissions(h)['overrides']['tool-filesystem']['config']['allowed_write_paths']))
+        return result
+
+    monkeypatch.setattr(h.app.management.settings, 'update', record_write)
 
     async def execute(self, prompt, context, providers, tools, hooks, coordinator):
         actor = coordinator.session_id
@@ -158,7 +166,7 @@ async def test_mounted_full_configuration_and_own_reads_keep_actual_actor(mounte
         args = permissions(h.source, '/delegated-' + str(len(visited)))
         result = await dispatch(control, 'permissions.save', args, identity)
         assert result.success, result.error
-        assert (await finished(h.app, identity))['phase'] == 'ready'
+        await until(lambda: any(key == identity for key, _ in h.authorities))
         authority = next(value for key, value in h.authorities if key == identity)
         assert authority['runtimeSessionId'] == actor != 'native-root'
         assert authority['sessionId'] == h.source['id'] and authority['origin'] == 'agent'
@@ -166,8 +174,13 @@ async def test_mounted_full_configuration_and_own_reads_keep_actual_actor(mounte
         assert authority['inputIds'] == ['assigned-input'] and authority['interruptionRevision'] == 0
         assert authority['inputCoverage'] == 'complete'
         assert h.envelopes[-1]['_runtimeSessionId'] == actor
-        assert saved_permissions(h)['overrides']['tool-filesystem']['config']['allowed_write_paths'] == args['allowed']
-        # A lost acknowledgement observes the exact receipt; no second effect.
+        assert saved_permissions(h) == {} and not writes
+        readbacks = [request for request in result.output['state']['_stateAccess']['readback']
+                     if request['args'].get('path') == '/managementResults/' + identity]
+        assert len(readbacks) == 1
+        accepted.append((identity, args['allowed'], readbacks[0]))
+        # Retry an accepted command while this mount is still admitted. Its
+        # later settings effect will invalidate this mount for fresh mutations.
         before = len(h.authorities)
         retried = await dispatch(control, 'permissions.save', args, identity)
         assert retried.success and retried.output['duplicate']
@@ -186,6 +199,7 @@ async def test_mounted_full_configuration_and_own_reads_keep_actual_actor(mounte
 
     h.install_execute(execute)
     token = _PERSISTENT.set(mode == 'persistent')
+    await h.app.management.lock.acquire()
     try:
         await h.registry.spawn('worker', 'configure', h.parent, sub_session_id='child')
         if mode == 'resumed':
@@ -196,10 +210,23 @@ async def test_mounted_full_configuration_and_own_reads_keep_actual_actor(mounte
         assert not h.source['approvals']
         h.approval_prompt.assert_not_awaited()
     finally:
+        h.app.management.lock.release()
         _PERSISTENT.reset(token)
+    for identity, _, _ in accepted:
+        assert (await finished(h.app, identity))['phase'] == 'ready'
+    assert writes == [allowed for _, allowed, _ in accepted]
+    assert saved_permissions(h)['overrides']['tool-filesystem']['config']['allowed_write_paths'] == accepted[-1][1]
+    before = deepcopy(h.authorities), deepcopy(writes)
+    for identity, _, request in accepted:
+        assert request == {'operation': 'get_state', 'args': {'path': '/managementResults/' + identity}}
+        # The host's scoped passive readback remains available after mount
+        # retirement; this does not pretend the old child was remounted.
+        readback = await h.app.app_bridge(request['operation'], request['args'], h.source['id'])
+        assert next(row['value'] for row in readback['items'] if row['key'] == 'phase') == 'ready'
+    assert (h.authorities, writes) == before
 
 
-async def test_mounted_full_child_input_overflow_stays_unavailable_without_blocking_write(mounted):
+async def test_mounted_full_child_input_overflow_stays_unavailable_without_blocking_write(mounted, monkeypatch):
     h = mounted
     await save(h.app)
     assigned = ['assigned-' + str(i) for i in range(17)]
@@ -208,13 +235,21 @@ async def test_mounted_full_child_input_overflow_stays_unavailable_without_block
     h.worker.context_inputs = list(assigned)
     h.worker.context_bindings = {identity: {'clientId': None, 'targets': []} for identity in assigned}
     completed = []
+    retiring, retire = asyncio.Event(), asyncio.Event()
+    stop = h.app.runtime.stop
+
+    async def held_retirement(*args, **kwargs):
+        retiring.set()
+        await retire.wait()
+        return await stop(*args, **kwargs)
+
+    monkeypatch.setattr(h.app.runtime, 'stop', held_retirement)
 
     async def execute(self, prompt, context, providers, tools, hooks, coordinator):
         control = tools['app_control']
         result = await dispatch(control, 'permissions.save', permissions(h.source), 'overflow-write')
         assert result.success, result.error
-        assert (await finished(h.app, 'overflow-write'))['phase'] == 'ready'
-        assert saved_permissions(h)['overrides']['tool-filesystem']['config']['allowed_write_paths'] == ['/delegated-output']
+        await until(lambda: any(key == 'overflow-write' for key, _ in h.authorities))
         authority = next(value for key, value in h.authorities if key == 'overflow-write')
         assert authority['runtimeSessionId'] == coordinator.session_id == 'child'
         assert authority['sessionId'] == h.source['id'] and authority['origin'] == 'agent'
@@ -223,25 +258,83 @@ async def test_mounted_full_child_input_overflow_stays_unavailable_without_block
         assert h.envelopes[-1]['_inputBindings'] == []
         # The same bounded observation must survive in the durable operation,
         # without borrowing the root's complete input list to fill it in.
-        h.source['status'] = 'working'
         plan = {'providers': [{'module': 'provider-fixture'}],
                 'session': {'orchestrator': {'module': 'loop-live'}, 'context': {'module': 'context-simple'}}}
         queued = await dispatch(control, 'configuration.apply', {
             'id': h.source['id'], 'config': plan, 'whenIdle': True}, 'overflow-queued')
         assert queued.success, queued.error
+        assert saved_permissions(h) == {}
+        completed.append(True)
+        return 'accepted'
+
+    h.install_execute(execute)
+    await h.app.management.lock.acquire()
+    try:
+        try:
+            await h.registry.spawn('worker', 'configure with the assigned context', h.parent, sub_session_id='child')
+        finally:
+            h.app.management.lock.release()
+        assert completed == [True]
+        assert (await finished(h.app, 'overflow-write'))['phase'] == 'ready'
+        assert saved_permissions(h)['overrides']['tool-filesystem']['config']['allowed_write_paths'] == ['/delegated-output']
+        await asyncio.wait_for(retiring.wait(), 10)
+        # Both requests were admitted before the first effect changed settings.
+        # The plan now waits on real configuration retirement, not a fabricated
+        # working status or a refreshed old-child assignment.
         assert (await finished(h.app, 'overflow-queued'))['phase'] == 'ready'
         record = h.app.management.configuration_record(h.source['id'], h.source['pendingConfiguration']['operationId'])
+        assert record['state']['phase'] == 'queued' and h.source['configurationBusy']
         retained = record['request']['authority']
         assert retained['runtimeSessionId'] == 'child' and retained['generationId'] == 'generation-1'
         assert retained['inputIds'] == [] and retained['inputCoverage'] == 'unavailable'
         assert not h.source['approvals'] and h.app.configuration_authority.rows(h.source['id']) == []
         h.approval_prompt.assert_not_awaited()
-        completed.append(True)
-        return 'configured'
+    finally:
+        retire.set()
+
+
+async def test_mounted_child_reads_completion_but_cannot_mutate_after_own_configuration_write(mounted, monkeypatch):
+    h = mounted
+    await save(h.app)
+    retiring, retire = asyncio.Event(), asyncio.Event()
+    stop = h.app.runtime.stop
+
+    async def held_retirement(*args, **kwargs):
+        retiring.set()
+        await retire.wait()
+        return await stop(*args, **kwargs)
+
+    monkeypatch.setattr(h.app.runtime, 'stop', held_retirement)
+
+    async def execute(self, prompt, context, providers, tools, hooks, coordinator):
+        control = tools['app_control']
+        accepted = await dispatch(control, 'permissions.save', permissions(h.source), 'before-retirement')
+        assert accepted.success, accepted.error
+        assert (await finished(h.app, 'before-retirement'))['phase'] == 'ready'
+        await asyncio.wait_for(retiring.wait(), 10)
+        assert h.source['configurationBusy']
+        before = deepcopy(h.authorities), deepcopy(saved_permissions(h))
+        refused = await dispatch(control, 'permissions.save', permissions(h.source, '/must-not-write'), 'after-invalidation')
+        assert not refused.success and 'native child execution is no longer current' in str(refused.error)
+        assert not h.app.db.execute('SELECT 1 FROM commands WHERE id=?', ('after-invalidation',)).fetchone()
+        readbacks = [request for request in accepted.output['state']['_stateAccess']['readback']
+                     if request['args'].get('path') == '/managementResults/before-retirement']
+        assert len(readbacks) == 1
+        request = readbacks[0]
+        assert request == {'operation': 'get_state', 'args': {'path': '/managementResults/before-retirement'}}
+        readback = await control.execute(request)
+        assert readback.success, readback.error
+        assert next(row['value'] for row in readback.output['items'] if row['key'] == 'phase') == 'ready'
+        assert h.envelopes[-1]['_runtimeSessionId'] == coordinator.session_id == 'child'
+        assert (h.authorities, saved_permissions(h)) == before
+        h.approval_prompt.assert_not_awaited()
+        return 'completion inspected'
 
     h.install_execute(execute)
-    await h.registry.spawn('worker', 'configure with the assigned context', h.parent, sub_session_id='child')
-    assert completed == [True]
+    try:
+        await h.registry.spawn('worker', 'configure then inspect completion', h.parent, sub_session_id='child')
+    finally:
+        retire.set()
 
 
 async def test_mounted_child_inherits_source_full_and_retains_queued_configuration(mounted, monkeypatch):
