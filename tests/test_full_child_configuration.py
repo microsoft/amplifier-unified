@@ -28,6 +28,7 @@ async def mounted(app, tmp_path, monkeypatch):
     from amplifier_web.host.children import install_children
     from amplifier_web.host.storage import SessionStore
     from amplifier_web.provider_isolation import ProviderIsolation
+    from amplifier_web.runtime import RuntimeManager
     from amplifier_web.runtime_worker import Worker
 
     spec = importlib.util.spec_from_file_location('full_configuration_child_fixture',
@@ -58,10 +59,29 @@ async def mounted(app, tmp_path, monkeypatch):
     worker.context_inputs = ['assigned-input']
     worker.context_bindings = {'assigned-input': {'clientId': None, 'targets': []}}
     envelopes, authorities = [], []
+    manager = RuntimeManager()
+    manager.app_bridge = app.app_bridge
+    owner = {'process': SimpleNamespace(returncode=None), 'runtimeOwnerId': 'fixture-owner'}
+    manager.workers[source['id']] = owner
+    monkeypatch.setattr(app.runtime, 'workers', manager.workers, raising=False)
+    replies = {}
+
+    async def write(row, reply):
+        assert row is owner
+        replies[reply['id']] = reply
+
+    manager._write = write
 
     async def transport(operation, args):
         envelopes.append(deepcopy(args))
-        return await app.app_bridge(operation, args, source['id'])
+        # Keep the real host authentication boundary; the child producer owns
+        # its assignment, while RuntimeManager supplies the current process ID.
+        identity = 'bridge-' + str(len(envelopes))
+        await manager._bridge(source['id'], owner, {'id': identity, 'operation': operation, 'args': args})
+        reply = replies.pop(identity)
+        if reply.get('error'):
+            raise RuntimeError(reply['error'])
+        return reply['result']
 
     command = app.management.command
 
