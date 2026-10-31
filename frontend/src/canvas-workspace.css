@@ -33,6 +33,15 @@
 #amp-one .a-canvas-artifact-toolbar .a-saved-file-download>span{grid-column:1/-1;grid-row:2;min-width:0;padding:0 2px 6px}
 #amp-one .a-canvas-artifact-toolbar .a-saved-file-download>span:empty{display:none}
 
+/* Controlled coarse-pointer topology variant: the portal host owns only the
+   existing Copy/Download tracks. Subgrid preserves their track sizes and gap;
+   inner wrappers remain contents. Feedback wraps within the action group. */
+@media (pointer:coarse){
+ #amp-one .a-canvas-artifact-toolbar:has(.a-saved-file-download)>.a-canvas-primary-actions{display:grid;grid-column:3/5;grid-row:1;grid-template-columns:subgrid;align-items:center;row-gap:4px;min-width:0}
+ #amp-one .a-canvas-artifact-toolbar:has(.a-saved-file-download)>.a-canvas-primary-actions .a-canvas-common-actions>.a-icon{grid-column:1}
+ #amp-one .a-canvas-artifact-toolbar:has(.a-saved-file-download)>.a-canvas-primary-actions .a-saved-file-download>button{grid-column:2}
+}
+
 #amp-one .a-resource-view-controls.a-canvas-toolbar label{flex:1 1 230px;min-width:180px;white-space:nowrap}
 #amp-one .a-resource-view-controls.a-canvas-toolbar select{flex:1;max-width:100%;min-width:0}
 #amp-one .a-resource-view-controls [role="status"]{flex-basis:100%;font-size:var(--a-text-base,14px);color:var(--muted)}

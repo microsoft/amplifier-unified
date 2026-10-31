@@ -93,6 +93,17 @@ journey or retry. One bounded CDP DOM snapshot/current quads and gesture-window
 trace accompany the original first-390 tap and passive events. A successful
 gesture must pass the original byte/preservation checks, then stop. A wrong
 target remains exit 1. Captured evidence is not a product or root-cause verdict.
+
+--portal-host-experiment uses /workspace/output/files1318-portal-host-manifest.json
+and /artifacts/files1318-portal-host-experiment. This distinct topology falsifier
+preserves all 17 outcomes. Bind portalHostReuse=REUSE_BINDING, the same 23
+reuseEvidence files, and portalHostBefore=PORTAL_HOST_BEFORE. Only 70 Python/19
+Node tests may be reused after exact input/environment checks. A fresh canonical
+frontend build is required; old static is before-context, never restored.
+The original first-390 tap is admitted only after exact check-17 Download/Details
+geometry and a real portal-host box agree. No CDP trace, extra gesture, full
+journey, wheel or installed phase follows. A successful checkpoint supports
+topology dependence, not candidate pruning or product acceptance.
 """
 from __future__ import annotations
 
@@ -139,6 +150,7 @@ CONTOUR_MANIFEST = ROOT / 'output/files1318-computed-round-manifest.json'
 TOUCH_EVENT_MANIFEST = ROOT / 'output/files1318-touch-event-manifest.json'
 COARSE_TOOLBAR_MANIFEST = ROOT / 'output/files1318-coarse-toolbar-manifest.json'
 NATIVE_STATE_MANIFEST = ROOT / 'output/files1318-native-state-manifest.json'
+PORTAL_HOST_MANIFEST = ROOT / 'output/files1318-portal-host-manifest.json'
 HARNESS = OUT / 'harness'
 VENV = OUT / 'installed'
 DRIVER = 'scripts/files1318_integrated_checks.py'
@@ -148,6 +160,19 @@ CONTOUR_OUT = Path('/artifacts/files1318-computed-round-qualified')
 TOUCH_EVENT_OUT = Path('/artifacts/files1318-touch-event-diagnostic')
 COARSE_TOOLBAR_OUT = Path('/artifacts/files1318-coarse-toolbar-qualified')
 NATIVE_STATE_OUT = Path('/artifacts/files1318-native-state-diagnostic')
+PORTAL_HOST_OUT = Path('/artifacts/files1318-portal-host-experiment')
+PORTAL_HOST_PRODUCER_SHA = '31dc5d7895fea5223b4b7b32de767e384ebc923cb1c28da644c764af832827ae'
+PORTAL_HOST_CSS_SHA = 'a3ca24cd47c7df134cc32d6f096dc071684dc438203ce4109f1fe0d21632d13b'
+PORTAL_HOST_BEFORE_ROOT = ROOT / 'output/files1318-native-state-v1-result'
+PORTAL_HOST_BEFORE = {
+    'sourceRevision': '2c66c2c3be0fe9c33cfd04ccf0ded85ff1dc9cd4',
+    'sourceTree': '2885cde3365d400d3a58d99e5fc6fb3ae84f592e',
+    'files': {
+        'parent-manifest.json': 'ea03e6a682224857404bc9d56f6cfcad4aa927d172123e3e43875e7a94440c00',
+        'generated-source/evidence/generated-file-controls-gUIeI4/observations.json':
+            'eedecc305886fd1d31b5a7c864876b95d4e4d2c0a9fab1145eb9a5106637bcce',
+    },
+}
 NATIVE_STATE_PRODUCER_SHA = '447e829658c586a0c63bde131affe2dfff5858b6639e497ed3d64ca54cf14c21'
 NATIVE_STATE_CSS_SHA = '82010a69d3fb1e27f5b5e6d35c5c2be9191006d52e804963e21fb3e58685dbb0'
 COARSE_TOOLBAR_CSS = 'frontend/src/canvas-workspace.css'
@@ -295,7 +320,8 @@ def require(value, message):
 def select_output(folder):
     """Keep the main process and every private child on the same fixed paths."""
     global OUT, HARNESS, VENV
-    require(folder in (QUALIFIED_OUT, CORNER_OUT, CONTOUR_OUT, TOUCH_EVENT_OUT, COARSE_TOOLBAR_OUT, NATIVE_STATE_OUT),
+    require(folder in (QUALIFIED_OUT, CORNER_OUT, CONTOUR_OUT, TOUCH_EVENT_OUT, COARSE_TOOLBAR_OUT,
+                      NATIVE_STATE_OUT, PORTAL_HOST_OUT),
             'Unknown evidence destination')
     OUT = folder
     HARNESS, VENV = OUT / 'harness', OUT / 'installed'
@@ -338,7 +364,7 @@ def frozen_inputs(frozen, *, built=False):
         require(not Path(name).is_absolute() and '..' not in Path(name).parts
                 and str(Path(name)) == name
                 and path not in (MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST,
-                                 COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST), 'Unsafe frozen path')
+                                 COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST, PORTAL_HOST_MANIFEST), 'Unsafe frozen path')
         require(path.parent.resolve().is_relative_to(ROOT), 'Frozen path escapes snapshot')
         require(expected['mode'] in ('100644', '100755', '120000')
                 and re.fullmatch('[a-f0-9]{64}', expected['sha256']), 'Invalid frozen identity')
@@ -354,9 +380,10 @@ def diagnostic_static(frozen, *, binding='diagnosticReuse'):
     require(ROOT == Path('/workspace') and Path.cwd().resolve() == ROOT
             and Path(__file__).resolve() == ROOT / DRIVER and not (ROOT / '.git').exists(),
             'Static reuse is guest-only')
-    unit_only = binding == 'coarseToolbarReuse'
-    require(not unit_only or OUT == COARSE_TOOLBAR_OUT, 'Unit-only reuse is coarse-toolbar mode only')
-    require(binding in ('diagnosticReuse', 'contourReuse', 'touchEventReuse', 'coarseToolbarReuse', 'nativeStateReuse')
+    unit_only = binding in ('coarseToolbarReuse', 'portalHostReuse')
+    require(not unit_only or OUT in (COARSE_TOOLBAR_OUT, PORTAL_HOST_OUT), 'Unexpected unit-only reuse mode')
+    require(binding in ('diagnosticReuse', 'contourReuse', 'touchEventReuse', 'coarseToolbarReuse', 'nativeStateReuse',
+                        'portalHostReuse')
             and frozen.get(binding) == REUSE_BINDING, 'Missing exact static reuse binding')
     archive, metadata_path = REUSE_INPUT / 'static.tar', REUSE_INPUT / 'reuse.json'
     for path, digest in ((archive, REUSE_BINDING['archiveSha256']),
@@ -446,7 +473,7 @@ def diagnostic_static(frozen, *, binding='diagnosticReuse'):
 
 def retained_proofs(frozen, *, unit_only=False):
     """Read/copy old proofs only; never collect or execute either test suite."""
-    require(not unit_only or OUT == COARSE_TOOLBAR_OUT, 'Unit-only proof reuse is coarse-toolbar mode only')
+    require(not unit_only or OUT in (COARSE_TOOLBAR_OUT, PORTAL_HOST_OUT), 'Unexpected unit-only proof reuse mode')
     bindings = frozen.get('reuseEvidence')
     require(isinstance(bindings, dict) and set(bindings) == set(REUSE_EVIDENCE_FILES),
             'Final manifest must bind the exact retained proof inventory')
@@ -553,6 +580,65 @@ def retained_environment(prior):
         'currentRuntimeSha256': sha(OUT / 'runtime-readiness.json'),
         'distributionCount': len(current['distributions']),
     })
+
+
+def portal_host_inputs(frozen):
+    """Derive immutable geometry from failed check 17; never repair its report."""
+    require(OUT == PORTAL_HOST_OUT and frozen.get('portalHostReuse') == REUSE_BINDING
+            and frozen.get('portalHostBefore') == PORTAL_HOST_BEFORE
+            and frozen['files'][PRODUCER]['sha256'] == PORTAL_HOST_PRODUCER_SHA
+            and frozen['files'][COARSE_TOOLBAR_CSS]['sha256'] == PORTAL_HOST_CSS_SHA,
+            'Missing exact portal-host source/before bindings')
+    require(set(frozen['changedPaths']) == REVIEWED_CHANGES | {COARSE_TOOLBAR_CSS},
+            'Unexpected baseline-to-portal-host changes')
+    for name, digest in PORTAL_HOST_BEFORE['files'].items():
+        source, destination = PORTAL_HOST_BEFORE_ROOT / name, OUT / 'before-evidence' / name
+        require(source.resolve() == source and source.is_file() and sha(source) == digest,
+                'Check-17 before evidence changed')
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        require(sha(destination) == digest, 'Check-17 before copy differs')
+    previous = read(OUT / 'before-evidence/parent-manifest.json')
+    require(previous['revision'] == PORTAL_HOST_BEFORE['sourceRevision']
+            and previous['tree'] == PORTAL_HOST_BEFORE['sourceTree']
+            and previous['files'].keys() == frozen['files'].keys()
+            and {name for name in frozen['files'] if previous['files'][name] != frozen['files'][name]}
+                == COARSE_TOOLBAR_CHANGES, 'Only the portal CSS/producer/driver may differ from check 17')
+    name, = [name for name in PORTAL_HOST_BEFORE['files'] if name.endswith('/observations.json')]
+    proof = read(OUT / 'before-evidence' / name)
+    gesture = proof['touchEventDiagnostic']
+    require(proof['passed'] is False and proof['mode'] == 'native-state-diagnostic'
+            and gesture['tapAttempts'] == 1 and gesture['delivered']['event']['sameNode'] is False,
+            'Require original failed check-17 gesture')
+    host, = [row for row in gesture['nativeState']['candidates']
+             if row.get('attributes', {}).get('class') == 'a-canvas-primary-actions']
+    require(host['isClickable'] is True and host['layout'] == [] and host['backendNodeId'] == 102,
+            'Check-17 portal-host topology differs')
+    fields = ('rect', 'radii', 'borders', 'viewport', 'transforms', 'cornerShapes', 'computed')
+    def geometry(label):
+        row, = [row for row in proof['geometry']
+                if row.get('label') == 'touch-390-preview-primary-before' and row['name'] == label]
+        return {**{key: row[key] for key in fields},
+                'scroll': {'x': row['scroll']['x'], 'y': row['scroll']['y'],
+                           'ancestors': [{key: a[key] for key in ('x', 'y')} for a in row['scroll']['ancestors']]}}
+    pointer, = [event for event in gesture['capture']['events'] if event['type'] == 'pointerdown']
+    body, = [node for node in pointer['ancestors'] if node['className'] == 'a-canvas-body']
+    roots = {row['kind']: row for row in gesture['nativeState']['roots']}
+    copy_quad, download_quad = host['quads']
+    require(copy_quad == [244, 207.5, 288, 207.5, 288, 251.5, 244, 251.5]
+            and download_quad == [292, 207.5, 336, 207.5, 336, 251.5, 292, 251.5],
+            'Check-17 Copy/Download quads differ')
+    baseline = {
+        'source': PORTAL_HOST_BEFORE, 'oldHost': host,
+        'download': geometry('Download canvas source'), 'details': geometry('Canvas details'),
+        'toolbarRect': roots['toolbar']['rect'], 'bodyRect': body['rect'],
+        'copyRect': {'x': 244, 'y': 207.5, 'left': 244, 'top': 207.5, 'right': 288, 'bottom': 251.5,
+                     'width': 44, 'height': 44},
+        'tap': {key: gesture['before'][key] for key in ('rect', 'radii', 'borders', 'viewport', 'intended', 'position')},
+        'html': {'bytes': proof['seed']['artifacts']['html']['byteLength'],
+                 'sha256': proof['seed']['artifacts']['html']['sha256']},
+    }
+    save('portal-host-baseline.json', baseline)
 
 
 def coarse_toolbar_inputs(frozen):
@@ -1556,7 +1642,7 @@ def corner_diagnostic_proof(exit_code):
     return result
 
 
-def touch_event_diagnostic_proof(exit_code, *, native_state=False):
+def touch_event_diagnostic_proof(exit_code, *, native_state=False, portal_host=False):
     """Inspect raw exit-1 evidence before fail-stop; never bless a missing pair."""
     result = {'exitCode': exit_code, 'checkpointObserved': False, 'outcome': 'unknown',
               'productAcceptance': False, 'cause': 'unknown', 'visualJudgment': 'pending'}
@@ -1567,7 +1653,8 @@ def touch_event_diagnostic_proof(exit_code, *, native_state=False):
         result.update(path=str(path), sha256=sha(path))
         proof = read(path)
         require(type(exit_code) is int and exit_code in (0, 1)
-                and proof['mode'] == ('native-state-diagnostic' if native_state else 'touch-event-diagnostic')
+                and proof['mode'] == ('portal-host-experiment' if portal_host
+                                     else 'native-state-diagnostic' if native_state else 'touch-event-diagnostic')
                 and proof['passed'] is (exit_code == 0)
                 and proof['productAcceptance'] is False, 'Wrong touch diagnostic mode/exit')
         diagnostic = proof['touchEventDiagnostic']
@@ -1629,7 +1716,7 @@ def touch_event_diagnostic_proof(exit_code, *, native_state=False):
                     'desktop-race-v1', 'desktop-after-403', 'negative-wrong-bytes', 'reload-deleted-source-v1',
                     'adjacent-markdown', 'saved-only', 'touch-390-deleted-v1', 'touch-320-deleted-v1',
                     'desktop-preview-primary-v1', 'desktop-preview-rail-v1'] +
-                    (['touch-390-preview-primary-v1'] if native_state and diagnostic.get('download') else [])
+                    (['touch-390-preview-primary-v1'] if (native_state or portal_host) and diagnostic.get('download') else [])
                 and len([r for r in proof['requests'] if r['path'].endswith('/document')]) == 2
                 and [c['label'] for c in proof['fileFrameCaptures']] ==
                     [f'touch-320-{suffix}' for suffix in ('controls', 'paths', 'path-0', 'path-1', 'path-2', 'path-3')],
@@ -1714,6 +1801,8 @@ def touch_event_diagnostic_proof(exit_code, *, native_state=False):
             result['nativeStateCapture'] = {key: native.get(key) for key in
                                             ('version', 'complete', 'errors', 'snapshot', 'detached')}
             result['nativeState'] = native_state_proof(proof, path.parent, exit_code)
+        if portal_host:
+            result['portalHost'] = portal_host_proof(proof, path.parent, exit_code)
         if exit_code == 0:
             require(observed and diagnostic['originalOraclePassed'] is True
                     and proof['diagnosticComplete'] is True and proof['stoppedAfter'] == 'first-390-primary-download'
@@ -1733,8 +1822,88 @@ def touch_event_diagnostic_proof(exit_code, *, native_state=False):
     finally:
         # Always retain the raw report reference and any partially read sequence,
         # even when exit 1, malformed capture or a missing mousedown prevents proof.
-        save('generated-source/native-state-diagnostic-report.json' if native_state
+        save('generated-source/portal-host-experiment-report.json' if portal_host
+             else 'generated-source/native-state-diagnostic-report.json' if native_state
              else 'generated-source/touch-event-diagnostic-report.json', result)
+
+
+def portal_host_proof(proof, folder, exit_code):
+    gesture = proof['touchEventDiagnostic']
+    experiment, baseline = gesture['portalHost'], read(OUT / 'portal-host-baseline.json')
+    require(gesture['portalHostRequested'] is True and gesture['nativeStateRequested'] is False
+            and 'nativeState' not in gesture and experiment['version'] == 'portal-host-v1'
+            and experiment['baseline'] == baseline and experiment['baselinePassed'] is True,
+            'Portal experiment must use check-17 geometry, not a new trace/cap recovery')
+    for key, expected in baseline['tap'].items():
+        require(gesture['before'][key] == expected, 'Original contour/position changed')
+
+    def layout(snapshot):
+        require(snapshot['coarse'] is True and snapshot['dpr'] == 1, 'Wrong portal pointer/scale')
+        for key in ('download', 'details'):
+            button = snapshot[key]
+            require(button['connected'] is True and button['geometry'] == baseline[key]
+                    and len(button['corners']) == 4 and all(c['reachable'] for c in button['corners'])
+                    and all(button['geometry']['rect'][k] >= 44 for k in ('width', 'height')),
+                    f'Portal {key} geometry or native hit target changed')
+        host, copy, download = snapshot['host'], snapshot['copy'], snapshot['download']['geometry']['rect']
+        require(snapshot['toolbar']['rect'] == baseline['toolbarRect']
+                and snapshot['body']['rect'] == baseline['bodyRect'] and snapshot['body']['computed']['margin'] == '0px'
+                and copy['rect'] == baseline['copyRect'] and host['connected'] is True
+                and host['rectCount'] == 1 and host['computed']['display'] == 'grid'
+                and host['computed']['position'] == 'static'
+                and all(host['computed'][k] == '0px' for k in ('margin', 'padding', 'borderWidth'))
+                and host['computed']['pointerEvents'] != 'none' and host['computed']['touchAction'] != 'none'
+                and host['rect'] == {**copy['rect'], 'right': download['right'],
+                                     'width': download['right'] - copy['rect']['left']}
+                and download['left'] - copy['rect']['right'] == 4
+                and snapshot['details']['geometry']['rect']['left'] - download['right'] == 4
+                and all(w['connected'] and w['computed']['display'] == 'contents' for w in snapshot['innerWrappers']),
+                'Portal box must occupy only the existing action tracks, without body gap or shield')
+
+    layout(experiment['before'])
+    events = [e for e in gesture['capture']['events']
+              if e['type'] in ('pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click')]
+    require([e['type'] for e in events] == ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click']
+            and all(e['isTrusted'] is True for e in events), 'Missing/duplicate/untrusted portal gesture events')
+    for event in events:
+        layout(event['portalHost'])
+        require(all(event['portalHost'][key]['nodeId'] == experiment['before'][key]['nodeId']
+                    for key in ('download', 'details', 'host')), 'Portal identity changed during gesture')
+    require(proof['tapDrain'].get('settled') is True and proof['tapDrain']['pendingAfter'] == 0
+            and len(proof['tapSettlements']) == 7 and all(
+                row['settled'] and row['listenerCleanup']['state'] == 'removed' and row['handleDisposed']
+                and not row['otherFailures'] and all(op['state'] == 'fulfilled' for op in row['operations'])
+                for row in proof['tapSettlements'])
+            and len(proof['downloadSettlements']) == 11 and all(
+                row['settled'] and row['observation']['listenerRemoved'] and row['observation']['timerCleared']
+                for row in proof['downloadSettlements']), 'Portal branches/listeners not settled')
+    last = proof['tapSettlements'][-1]
+    require(last == gesture['settlement'] and last['retained']['connected'] is True
+            and last['retained']['nodeId'] == experiment['before']['download']['nodeId'], 'Original Download not retained')
+    wrong = next((e for e in events if e['sameNode'] is False), None)
+    if wrong:
+        require(exit_code == 1 and last.get('primaryFailure') and
+                ('Touch must reach the native control' if wrong['type'] == 'pointerdown'
+                 else 'click must reach the native control' if wrong['type'] == 'click'
+                 else wrong['type'] + ' must reach the native control') in json.dumps(last['primaryFailure']),
+                'Portal wrong target suppressed')
+    if exit_code == 0:
+        download, preserved = gesture['download'], gesture['preservation']
+        html = proof['seed']['artifacts']['html']
+        path = folder / (download['label'] + '-' + download['filename'])
+        require(not wrong and gesture['strictEventsPassed'] is True
+                and download['label'] == 'touch-390-preview-primary-v1' and download['filename'] == html['filename']
+                and download['bytes'] == baseline['html']['bytes'] == 426
+                and download['sha256'] == baseline['html']['sha256'] == sha(path)
+                and path.read_bytes() == html['body'].encode()
+                and preserved['iframeConnected'] is True and preserved['sameIframe'] is True
+                and preserved['iframeCount'] == 1 and preserved['prohibitedCommands'] == []
+                and all(preserved[k] == gesture['retained'][k] for k in ('marker', 'unfinished', 'state', 'documents')),
+                'Portal success requires bytes and retained input/token/lease/draft')
+    return {'sameGeometry': True, 'realHostBox': True, 'wrongTarget': bool(wrong),
+            'checkpointPassed': exit_code == 0, 'productAcceptance': False,
+            'interpretation': 'topology-dependence-supported-not-pruning-proof' if exit_code == 0
+                              else 'topology-hypothesis-not-supported-by-this-gesture'}
 
 
 def native_state_proof(proof, folder, exit_code):
@@ -2017,19 +2186,22 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest', required=True, type=Path,
                         choices=[MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST,
-                                 COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST])
+                                 COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST, PORTAL_HOST_MANIFEST])
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--corner-diagnostic', action='store_true')
     modes.add_argument('--contour-qualification', action='store_true')
     modes.add_argument('--touch-event-diagnostic', action='store_true')
     modes.add_argument('--native-state-diagnostic', action='store_true')
+    modes.add_argument('--portal-host-experiment', action='store_true')
     modes.add_argument('--coarse-toolbar-qualification', action='store_true')
     args = parser.parse_args()
-    touch_checkpoint = args.touch_event_diagnostic or args.native_state_diagnostic
+    touch_checkpoint = args.touch_event_diagnostic or args.native_state_diagnostic or args.portal_host_experiment
     checkpoint_mode = args.corner_diagnostic or touch_checkpoint
-    reuse_mode = args.contour_qualification or touch_checkpoint
-    reused_phases = COARSE_TOOLBAR_REUSED_PHASES if args.coarse_toolbar_qualification else REUSED_PHASES
+    reuse_mode = args.contour_qualification or args.touch_event_diagnostic or args.native_state_diagnostic
+    fresh_product = args.coarse_toolbar_qualification or args.portal_host_experiment
+    reused_phases = COARSE_TOOLBAR_REUSED_PHASES if fresh_product else REUSED_PHASES
     manifest_path = (CORNER_MANIFEST if args.corner_diagnostic
+                     else PORTAL_HOST_MANIFEST if args.portal_host_experiment
                      else NATIVE_STATE_MANIFEST if args.native_state_diagnostic
                      else TOUCH_EVENT_MANIFEST if args.touch_event_diagnostic
                      else COARSE_TOOLBAR_MANIFEST if args.coarse_toolbar_qualification
@@ -2037,6 +2209,7 @@ def main():
     if args.manifest != manifest_path:
         parser.error('The manifest must match the selected qualification mode')
     select_output(CORNER_OUT if args.corner_diagnostic
+                  else PORTAL_HOST_OUT if args.portal_host_experiment
                   else NATIVE_STATE_OUT if args.native_state_diagnostic
                   else TOUCH_EVENT_OUT if args.touch_event_diagnostic
                   else COARSE_TOOLBAR_OUT if args.coarse_toolbar_qualification
@@ -2068,7 +2241,8 @@ def main():
         for name, row in report['phases'].items():
             if name not in selected:
                 row['reason'] = 'outside_touch_event_diagnostic_scope'
-        report.update(mode='native-state-diagnostic' if args.native_state_diagnostic else 'touch-event-diagnostic',
+        report.update(mode='portal-host-experiment' if args.portal_host_experiment
+                      else 'native-state-diagnostic' if args.native_state_diagnostic else 'touch-event-diagnostic',
                       outcome='not_started', cause='unknown',
                       productAcceptance=False, checkpointObserved=False)
         report['limits'].append(
@@ -2090,8 +2264,10 @@ def main():
         report['limits'].append(
             'Only the earlier 70 Python tests, 19 Node tests and 311 built static files may be REUSED. '
             'The prior integrated run failed later; no prior full qualification pass is claimed.')
-    if args.coarse_toolbar_qualification:
-        report.update(mode='coarse-toolbar-qualification', priorChecksConsumed=15, prospectiveCheckOrdinal=16,
+    if fresh_product:
+        report.update(mode='portal-host-experiment' if args.portal_host_experiment else 'coarse-toolbar-qualification',
+                      priorChecksConsumed=17 if args.portal_host_experiment else 15,
+                      prospectiveCheckOrdinal=18 if args.portal_host_experiment else 16,
                       priorIntegratedPassed=False, reusedBuild=False)
         for name in ('reuse-proof', 'prior-build-context'):
             report['phases'][name] = {'status': 'unrun', 'reason': 'not_started'}
@@ -2099,8 +2275,10 @@ def main():
             report['phases'][name]['reason'] = 'reuse_pending_exact_evidence_and_inputs'
         report['limits'].append(
             'Only the exact earlier 70 Python and 19 Node tests may be REUSED. '
-            'The old build remains immutable before-context; fresh canonical frontend build is required. '
-            'One full source/installed qualification; no spacing sweep, repair or retry.')
+            'The old build remains immutable before-context; fresh canonical frontend build is required. ' +
+            ('First-390 same-geometry topology falsifier only; no CDP trace, later gesture, wheel or install.'
+             if args.portal_host_experiment else
+             'One full source/installed qualification; no spacing sweep, repair or retry.'))
     save('report.json', report)
     def expired(_signum, _frame):
         remaining = hard_deadline - time.monotonic()
@@ -2144,7 +2322,7 @@ def main():
                     'Require the committed, parent-reviewed candidate, not dirty baseline bytes')
             changed = frozen['changedPaths']
             allowed_changes = (REVIEWED_CHANGES | {COARSE_TOOLBAR_CSS}
-                               if args.coarse_toolbar_qualification else REVIEWED_CHANGES)
+                               if fresh_product else REVIEWED_CHANGES)
             require(isinstance(changed, list) and len(changed) == len(set(changed))
                     and DRIVER in changed and set(changed) <= allowed_changes
                     and set(changed) <= frozen['files'].keys(), 'Candidate changes exceed selected fixed scope')
@@ -2171,6 +2349,8 @@ def main():
                         and frozen['files'][PRODUCER]['sha256'] == NATIVE_STATE_PRODUCER_SHA
                         and frozen['files'][COARSE_TOOLBAR_CSS]['sha256'] == NATIVE_STATE_CSS_SHA,
                         'Native-state producer/reuse/rolled-back CSS differs from reviewed inputs')
+            if args.portal_host_experiment:
+                portal_host_inputs(frozen)
             if args.coarse_toolbar_qualification:
                 require(isinstance(COARSE_TOOLBAR_PRODUCER_SHA, str)
                         and re.fullmatch('[a-f0-9]{64}', COARSE_TOOLBAR_PRODUCER_SHA)
@@ -2210,6 +2390,9 @@ def main():
                 # Compare all old executable identities for retained_proofs;
                 # checking their bytes is NOT executing build/install readiness.
                 executables = (PYTHON, BUILD_PYTHON, NODE, NPM, UV)
+            if args.portal_host_experiment:
+                require(read(ROOT / 'frontend/package.json')['scripts']['build'] == 'vite build',
+                        'Portal experiment requires the canonical frontend build')
             for path in executables:
                 require(path.is_file() and os.access(path, os.X_OK), f'Missing executable: {path}')
             save('executables.json', {str(path): {'resolved': str(path.resolve()), 'sha256': sha(path)}
@@ -2239,6 +2422,8 @@ def main():
         }
         if args.corner_diagnostic:
             env['FILES1318_CORNER_DIAGNOSTIC'] = '1'  # Fixed child evidence destination only.
+        elif args.portal_host_experiment:
+            env['FILES1318_PORTAL_HOST_EXPERIMENT'] = '1'
         elif args.native_state_diagnostic:
             env['FILES1318_NATIVE_STATE_DIAGNOSTIC'] = '1'
         elif args.touch_event_diagnostic:
@@ -2260,7 +2445,7 @@ def main():
                 save('report.json', report)
                 remaining = work_deadline - CLEANUP_RESERVE - time.monotonic()
                 require(remaining > 0, 'Combined budget exhausted; cleanup/finalization reserved')
-                if args.coarse_toolbar_qualification:
+                if fresh_product:
                     row['executed'] = True
                 code = run_scenarios(root, {'schemaVersion': 1, 'scenarios': [
                     {'id': name, 'command': row['command'], 'env': selected_env}]},
@@ -2279,7 +2464,8 @@ def main():
                     report['checkpointObserved'] = row['diagnostic']['checkpointObserved']
                     save('report.json', report)
                 if touch_checkpoint and name == 'generated-source':
-                    row['diagnostic'] = touch_event_diagnostic_proof(raw['exitCode'], native_state=args.native_state_diagnostic)
+                    row['diagnostic'] = touch_event_diagnostic_proof(
+                        raw['exitCode'], native_state=args.native_state_diagnostic, portal_host=args.portal_host_experiment)
                     report['checkpointObserved'] = row['diagnostic']['checkpointObserved']
                     report['observationOutcome'] = row['diagnostic']['outcome']
                     save('report.json', report)
@@ -2305,11 +2491,12 @@ def main():
             BROWSER_READY.replace('/artifacts/files1318-qualified', str(OUT))], cap=45)
         if args.corner_diagnostic:
             step('static-reuse', lambda: diagnostic_static(frozen))
-        elif reuse_mode or args.coarse_toolbar_qualification:
+        elif reuse_mode or fresh_product:
             reused = step('reuse-proof', lambda: retained_proofs(
-                frozen, unit_only=args.coarse_toolbar_qualification))
-            if args.coarse_toolbar_qualification:
-                step('prior-build-context', lambda: diagnostic_static(frozen, binding='coarseToolbarReuse'))
+                frozen, unit_only=fresh_product))
+            if fresh_product:
+                step('prior-build-context', lambda: diagnostic_static(
+                    frozen, binding='portalHostReuse' if args.portal_host_experiment else 'coarseToolbarReuse'))
             else:
                 step('static-reuse', lambda: diagnostic_static(
                     frozen, binding='nativeStateReuse' if args.native_state_diagnostic
@@ -2327,18 +2514,25 @@ def main():
             save('reuse-evidence-validation.json', reused)
             report['reuseEvidence'] = reused
             save('report.json', report)
-        if not checkpoint_mode and not reuse_mode:
+        if args.portal_host_experiment:
+            # Preserve committed static as before-context. Never restore either
+            # the failed gap build or native17's reused build for this variant.
+            before = tree(ROOT / 'amplifier_web/static')
+            save('static-before.json', before)
+            shutil.copytree(ROOT / 'amplifier_web/static', OUT / 'static-before')
+            require(tree(OUT / 'static-before') == before, 'Pre-build static preservation differs')
+        if (not checkpoint_mode and not reuse_mode) or args.portal_host_experiment:
             run('frontend-build', [NPM, 'run', 'build'], cap=240)
 
         def source_freeze():
-            save('source-after-reuse.json' if checkpoint_mode or reuse_mode
+            save('source-after-reuse.json' if (checkpoint_mode or reuse_mode) and not args.portal_host_experiment
                  else 'source-after-build.json',
                  frozen_inputs(frozen, built=True))
             value = candidate(frozen)
             require(value['static'] and 'amplifier_web/static/index.html' in value['static'], 'No built static')
-            if checkpoint_mode or reuse_mode:
+            if (checkpoint_mode or reuse_mode) and not args.portal_host_experiment:
                 require(value['static'] == read(OUT / 'reuse-metadata.json')['files'], 'Reused static changed')
-            if args.coarse_toolbar_qualification:
+            if fresh_product:
                 old_build = read(OUT / 'reuse-metadata.json')
                 build_identity = read(ROOT / 'amplifier_web/static/build.json')
                 require(set(build_identity) == {'id', 'version'}
@@ -2349,7 +2543,7 @@ def main():
                         and value['static'] != old_build['files']
                         and report['phases']['frontend-build']['status'] == 'passed'
                         and report['phases']['frontend-build']['executed'] is True,
-                        'Coarse-toolbar qualification requires a fresh changed canonical build')
+                        'Product variant requires a fresh changed canonical build')
                 save('frontend-build-identity.json', {
                     'build': build_identity, 'sourceRevision': frozen['revision'], 'sourceTree': frozen['tree'],
                     'manifestSha256': report['manifestSha256'], 'css': frozen['files'][COARSE_TOOLBAR_CSS],
@@ -2377,6 +2571,9 @@ def main():
             if args.native_state_diagnostic:
                 require(mode == 'source', 'Native-state diagnostic cannot exercise installed mode')
                 extra['FILE_CONTROLS_NATIVE_STATE_DIAGNOSTIC'] = '1'
+            if args.portal_host_experiment:
+                require(mode == 'source', 'Portal experiment cannot exercise installed mode')
+                extra['FILE_CONTROLS_PORTAL_HOST_EXPERIMENT'] = '1'
             if args.coarse_toolbar_qualification:
                 extra['FILE_CONTROLS_COARSE_TOOLBAR_QUALIFICATION'] = '1'
             run('topology-' + mode, [NODE, 'tests/file-controls-topology-preflight.mjs'], root=root,
@@ -2512,8 +2709,20 @@ def main():
                     save('source-after.json', frozen_inputs(frozen, built=True))
                     expected = read(OUT / 'candidate.json')
                     require(candidate(frozen)['files'] == expected['files'], 'Diagnostic source payload changed')
-                    require(expected['static'] == read(OUT / 'reuse-metadata.json')['files'],
-                            'Diagnostic static binding changed')
+                    if args.portal_host_experiment:
+                        built = read(OUT / 'frontend-build-identity.json')
+                        require(expected['static'] == built['static'] and built['reusedBuild'] is False
+                                and read(ROOT / 'amplifier_web/static/build.json') == built['build']
+                                and report['phases']['frontend-build']['status'] == 'passed'
+                                and report['phases']['frontend-build']['executed'] is True,
+                                'Portal experiment fresh-build identity changed')
+                        require(all(sha(folder / name) == digest
+                                    for folder in (PORTAL_HOST_BEFORE_ROOT, OUT / 'before-evidence')
+                                    for name, digest in PORTAL_HOST_BEFORE['files'].items()),
+                                'Immutable check-17 before evidence changed')
+                    else:
+                        require(expected['static'] == read(OUT / 'reuse-metadata.json')['files'],
+                                'Diagnostic static binding changed')
                     require(tree(OUT / 'static-before') == read(OUT / 'static-before.json'),
                             'Preserved original static changed')
                     if touch_checkpoint:
@@ -2521,7 +2730,7 @@ def main():
                                     for name, digest in frozen['reuseEvidence'].items()),
                                 'Copied prior raw evidence changed')
                         require(all(report['phases'][name]['status'] == 'REUSED'
-                                    and report['phases'][name]['executed'] is False for name in REUSED_PHASES),
+                                    and report['phases'][name]['executed'] is False for name in reused_phases),
                                 'Reused phases were rerun or lost their evidence')
                     save('source-payload-final.json', expected['files'])
                     save('static-final.json', tree(ROOT / 'amplifier_web/static'))
@@ -2560,12 +2769,14 @@ if __name__ == '__main__':
     contour = os.environ.get('FILES1318_CONTOUR_QUALIFICATION') == '1'
     touch_event = os.environ.get('FILES1318_TOUCH_EVENT_DIAGNOSTIC') == '1'
     native_state = os.environ.get('FILES1318_NATIVE_STATE_DIAGNOSTIC') == '1'
+    portal_host = os.environ.get('FILES1318_PORTAL_HOST_EXPERIMENT') == '1'
     coarse_toolbar = os.environ.get('FILES1318_COARSE_TOOLBAR_QUALIFICATION') == '1'
-    require(sum((corner, contour, touch_event, native_state, coarse_toolbar)) <= 1, 'Conflicting child qualification modes')
-    select_output(CORNER_OUT if corner else NATIVE_STATE_OUT if native_state else TOUCH_EVENT_OUT if touch_event
+    require(sum((corner, contour, touch_event, native_state, portal_host, coarse_toolbar)) <= 1, 'Conflicting child qualification modes')
+    select_output(CORNER_OUT if corner else PORTAL_HOST_OUT if portal_host
+                  else NATIVE_STATE_OUT if native_state else TOUCH_EVENT_OUT if touch_event
                   else COARSE_TOOLBAR_OUT if coarse_toolbar
                   else CONTOUR_OUT if contour else QUALIFIED_OUT)
-    if touch_event or native_state:
+    if touch_event or native_state or portal_host:
         require(os.environ.get('FILES1318_FIXTURE') != 'installed'
                 and sys.argv[1:] not in (['--python-tests'], ['--installed-ready']),
                 'Touch event diagnostic cannot run units or installed children')

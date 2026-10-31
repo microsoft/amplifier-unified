@@ -20,8 +20,9 @@ const root=fileURLToPath(new URL('../../',import.meta.url));
 const cornerDiagnosticMode=process.env.FILE_CONTROLS_CORNER_DIAGNOSTIC==='1';
 const touchEventDiagnosticMode=process.env.FILE_CONTROLS_TOUCH_EVENT_DIAGNOSTIC==='1';
 const nativeStateDiagnosticMode=process.env.FILE_CONTROLS_NATIVE_STATE_DIAGNOSTIC==='1';
+const portalHostExperimentMode=process.env.FILE_CONTROLS_PORTAL_HOST_EXPERIMENT==='1';
 const coarseToolbarQualificationMode=process.env.FILE_CONTROLS_COARSE_TOOLBAR_QUALIFICATION==='1';
-assert.ok([cornerDiagnosticMode,touchEventDiagnosticMode,nativeStateDiagnosticMode,coarseToolbarQualificationMode].filter(Boolean).length<=1,
+assert.ok([cornerDiagnosticMode,touchEventDiagnosticMode,nativeStateDiagnosticMode,portalHostExperimentMode,coarseToolbarQualificationMode].filter(Boolean).length<=1,
  'Conflicting file-controls diagnostic/qualification modes');
 // Fixed binding to the retained failed first-390 gesture, NOT a new measurement
 // chosen to fit this candidate. No predecessor report is modified or rerun.
@@ -38,6 +39,10 @@ const coarseToolbarBaseline={
  bodyTop:254,toolbarRect:{x:0,y:206,width:390,height:48,top:206,right:390,bottom:254,left:0},
  html:{bytes:426,sha256:'93229c6d39952ff4ab7b89ec66ae6d92e49da7a0d4da4269b736b8430caabfb0'}
 };
+// The driver derives this from immutable check-17 observations, not candidate
+// geometry. A missing binding stops before fixture startup.
+const portalHostBaseline=portalHostExperimentMode?JSON.parse(await readFile(
+ '/artifacts/files1318-portal-host-experiment/portal-host-baseline.json','utf8')):null;
 const output=process.env.FILE_CONTROLS_EVIDENCE||process.env.AMPLIFIER_TEST_ARTIFACTS;
 assert.ok(output,'Set an owned AMPLIFIER_TEST_ARTIFACTS or FILE_CONTROLS_EVIDENCE directory');
 await mkdir(output,{recursive:true});
@@ -1006,6 +1011,49 @@ function qualifyToolbarEvents(gesture){
   actual:{pointerdown:pointerdown.actual,mousedown:mousedown.actual,click:click.actual},
   mouseDelta:{x:mousedown.actual.x-pointerdown.actual.x,y:mousedown.actual.y-pointerdown.actual.y}});
 }
+// Read-only topology falsifier. All geometry expectations come from check 17.
+// Identity numbers are local to this browser; compare them within this gesture,
+// not across runs. No CDP trace or added target listener is needed in this mode.
+function portalHostSnapshot(node){
+ const toolbar=node.closest('.a-canvas-artifact-toolbar'),host=node.closest('.a-canvas-primary-actions');
+ const details=toolbar.querySelector(':scope > .a-canvas-details'),body=toolbar.nextElementSibling;
+ const button=value=>{
+  const sample=window.__fileControlsContourSample(value),style=getComputedStyle(value);
+  return {nodeId:sample.nodeId,connected:value.isConnected,geometry:{
+   ...Object.fromEntries(['rect','radii','borders','viewport','transforms','cornerShapes'].map(key=>[key,sample[key]])),
+   scroll:{x:sample.scroll.x,y:sample.scroll.y,ancestors:sample.scroll.ancestors.map(({x,y})=>({x,y}))},
+   computed:Object.fromEntries(['height','minHeight','minWidth','padding','borderWidth','boxSizing','whiteSpace','overflowWrap']
+    .map(key=>[key,style[key]]))},corners:sample.corners};
+ };
+ const box=value=>({nodeId:window.__fileControlsNodeId(value),connected:value.isConnected,
+  rect:value.getBoundingClientRect().toJSON(),rectCount:value.getClientRects().length,
+  computed:Object.fromEntries(['display','position','margin','padding','borderWidth','columnGap','rowGap','pointerEvents','touchAction']
+   .map(key=>[key,getComputedStyle(value)[key]]))});
+ const copy=host.querySelector('.a-canvas-common-actions > button');
+ return {download:button(node),details:button(details),host:box(host),copy:box(copy),
+  toolbar:box(toolbar),body:box(body),coarse:matchMedia('(pointer:coarse)').matches,dpr:devicePixelRatio,
+  innerWrappers:[node.closest('.a-saved-file-download'),node.closest('.a-canvas-common-actions')].map(box)};
+}
+function portalHostOracle(snapshot,baseline){
+ assert.equal(snapshot.coarse,true);assert.equal(snapshot.dpr,1);
+ for(const key of ['download','details']){
+  assert.deepEqual(snapshot[key].geometry,baseline[key],`${key} changed from native17; do not change the tap or baseline`);
+  assert.equal(snapshot[key].connected,true);
+  nativeHitOracle({tag:'BUTTON',rect:snapshot[key].geometry.rect,corners:snapshot[key].corners},`portal-host ${key}`);
+ }
+ assert.deepEqual(snapshot.toolbar.rect,baseline.toolbarRect);assert.deepEqual(snapshot.body.rect,baseline.bodyRect);
+ assert.equal(snapshot.body.computed.margin,'0px','No body separation is permitted');
+ const host=snapshot.host,copy=snapshot.copy,download=snapshot.download.geometry.rect;
+ assert.equal(host.connected,true);assert.equal(host.rectCount,1);assert.equal(host.computed.display,'grid');
+ for(const key of ['margin','padding','borderWidth'])assert.equal(host.computed[key],'0px');
+ assert.equal(host.computed.position,'static');assert.notEqual(host.computed.pointerEvents,'none');
+ assert.notEqual(host.computed.touchAction,'none');
+ assert.deepEqual(copy.rect,baseline.copyRect);
+ assert.deepEqual(host.rect,{...copy.rect,width:download.right-copy.rect.left,right:download.right},
+  'Portal host must box only the existing Copy/Download tracks, not shield other controls');
+ assert.equal(download.left-copy.rect.right,4);assert.equal(snapshot.details.geometry.rect.left-download.right,4);
+ assert.ok(snapshot.innerWrappers.every(row=>row.connected&&row.computed.display==='contents'));
+}
 // Installed only at the first 390px primary Download, after the existing contour
 // measurement/oracles and immediately before its unchanged locator.tap. All
 // listeners are passive document capture observers. No event or DOM is changed.
@@ -1079,6 +1127,8 @@ function armTouchEventCapture(node,intended){
     atActual:actual?hit(actual):null,atIntended:hit(intended)
    });
    if(window.__fileControlsToolbarSnapshot)entry.toolbarLayout=window.__fileControlsToolbarSnapshot(node);
+   if(window.__fileControlsPortalHostSnapshot&&['pointerdown','pointerup','mousedown','mouseup','click'].includes(event.type))
+    entry.portalHost=window.__fileControlsPortalHostSnapshot(node);
   }catch(error){
    entry.captureError={name:error.name,message:String(error.message).slice(0,1024),
     messageTruncated:String(error.message).length>1024};
@@ -1436,6 +1486,16 @@ async function cornerTap(control,corner,diagnostic=null,beforeTap=null){
     qualifyToolbarBaseline(diagnostic);
    }
    if(diagnostic.nativeStateRequested)native=await prepareNativeState(target,original,measured,diagnostic,tap);
+   if(diagnostic.portalHostRequested){
+    diagnostic.portalHost={version:'portal-host-v1',baseline:portalHostBaseline,baselinePassed:false};
+    const snapshot=await tapOperation(tap,'portal-host-before',()=>original.evaluate(node=>window.__fileControlsPortalHostSnapshot(node)));
+    diagnostic.portalHost.before=snapshot;
+    for(const key of ['rect','radii','borders','viewport','intended','position'])
+     assert.deepEqual(measured[key],portalHostBaseline.tap[key],`Portal-host original tap ${key} changed`);
+    assert.equal(snapshot.download.nodeId,measured.nodeId);
+    portalHostOracle(snapshot,portalHostBaseline);
+    diagnostic.portalHost.baselinePassed=true;
+   }
    probe=await tapOperation(tap,'arm-passive-capture',()=>original.evaluateHandle(armTouchEventCapture,measured.intended));
   }
   try{
@@ -1503,12 +1563,18 @@ async function cornerTap(control,corner,diagnostic=null,beforeTap=null){
    diagnostic.originalOraclePassed=true;
    assert.equal(diagnostic.checkpointObserved,true,'Native touch event pair is UNKNOWN: missing event, truncation or capture loss; no retry');
    if(diagnostic.qualification)qualifyToolbarEvents(diagnostic);
-   if(diagnostic.nativeStateRequested){
+   if(diagnostic.nativeStateRequested||diagnostic.portalHostRequested){
     const events=diagnostic.capture.events;
     for(const type of ['pointerdown','pointerup','mousedown','mouseup','click']){
      const matches=events.filter(event=>event.type===type);
      assert.equal(matches.length,1,`Native-state diagnostic requires exactly one ${type}`);
      assert.equal(matches[0].isTrusted,true);assert.equal(matches[0].sameNode,true,`${type} must reach the native control`);
+     if(diagnostic.portalHostRequested){
+      const snapshot=matches[0].portalHost;
+      portalHostOracle(snapshot,portalHostBaseline);
+      for(const key of ['download','details','host'])
+       assert.equal(snapshot[key].nodeId,diagnostic.portalHost.before[key].nodeId,`Portal ${key} replaced during gesture`);
+     }
     }
     diagnostic.strictEventsPassed=true;
    }
@@ -1565,6 +1631,8 @@ async function connect(owner,options){
  await target.addInitScript(installDetailsProbe);
  if(coarseToolbarQualificationMode)
   await target.addInitScript({content:`window.__fileControlsToolbarSnapshot=(${coarseToolbarSnapshot.toString()});`});
+ if(portalHostExperimentMode)
+  await target.addInitScript({content:`window.__fileControlsPortalHostSnapshot=(${portalHostSnapshot.toString()});`});
  await target.addInitScript({content:`window.__fileControlsCircularContour=(${circularContour.toString()});`+
   `window.__fileControlsSupportedCircularCornerShape=(${supportedCircularCornerShape.toString()});`+
   `(${installContourSampler.toString()})(${JSON.stringify(cornerShapeLogPrefix)});`});
@@ -1677,10 +1745,11 @@ async function usePreviewControls(retained,label,mode){
  assert.equal(await primary.evaluate(node=>node.tagName),'BUTTON');
  await measureControls(target,[primary,toggle],label+'-primary-before');
  if(coarseToolbarQualificationMode)await qualifyToolbarLayout(primary,label,'before',mode==='touch');
- if(nativeStateDiagnosticMode&&mode==='touch'){
+ if((nativeStateDiagnosticMode||portalHostExperimentMode)&&mode==='touch'){
   assert.equal(label,'touch-390-preview','Native-state diagnostic may only observe the first 390px primary Download');
   assert.equal(touchEventDiagnostic,null,'Only one native-state diagnostic tap is permitted');
-  touchEventDiagnostic={nativeStateRequested:true,checkpoint:'first-390-primary-download',label,control:'Download canvas source',
+  touchEventDiagnostic={nativeStateRequested:nativeStateDiagnosticMode,portalHostRequested:portalHostExperimentMode,
+   checkpoint:'first-390-primary-download',label,control:'Download canvas source',
    browser:browserOwners.find(owner=>owner.label==='touch').browser.version(),options:touchOptions,
    retained:{marker:retained.marker,unfinished:retained.unfinished,state:retained.state,documents:retained.documents},
    tapAttempts:0,checkpointObserved:false,originalOraclePassed:false,strictEventsPassed:false,
@@ -1690,6 +1759,11 @@ async function usePreviewControls(retained,label,mode){
   touchEventDiagnostic.download=await saveControlAndVerify(target,primary,row,label+'-primary-v1',
    (control,arm)=>cornerTap(control,'bottom-right',touchEventDiagnostic,arm),true);
   touchEventDiagnostic.preservation=await previewPreserved(retained);
+  if(portalHostExperimentMode){
+   assert.equal(touchEventDiagnostic.download.bytes,426);
+   assert.equal(touchEventDiagnostic.download.sha256,portalHostBaseline.html.sha256);
+   touchEventDiagnostic.portalHost.outcome='same-geometry-gesture-passed-topology-dependence-supported-not-pruning-proof';
+  }
   touchEventDiagnosticComplete=true;
   return; // No next control, gesture or viewport.
  }
@@ -2035,7 +2109,7 @@ async function run(){
    assert.ok(await mobile.evaluate(()=>navigator.maxTouchPoints>0));
    await previewPreserved(touchPreview);
    await usePreviewControls(touchPreview,`touch-${width}-preview`,'touch');
-   if(touchEventDiagnosticMode||nativeStateDiagnosticMode)return; // No next gesture, control, width or full-journey verdict.
+   if(touchEventDiagnosticMode||nativeStateDiagnosticMode||portalHostExperimentMode)return; // No next gesture, control, width or full-journey verdict.
   }
  }finally{await touchPreview.element.dispose()}
  const final=await fixtureRead(page);
@@ -2116,7 +2190,9 @@ try{
   writeFile(join(evidence,'observations.json'),JSON.stringify({passed:!failure,error:failure?.stack,failure:errorEvidence(failure),screenshotErrors,
   ...(cornerDiagnosticMode?{mode:'corner-diagnostic',diagnosticComplete:cornerDiagnosticComplete,
    stoppedAfter:cornerDiagnosticComplete?'first-desktop-measure':null,cornerDiagnostics}:{}),
-  ...(touchEventDiagnosticMode||nativeStateDiagnosticMode?{mode:nativeStateDiagnosticMode?'native-state-diagnostic':'touch-event-diagnostic',diagnosticComplete:touchEventDiagnosticComplete,
+  ...(touchEventDiagnosticMode||nativeStateDiagnosticMode||portalHostExperimentMode?{
+   mode:portalHostExperimentMode?'portal-host-experiment':nativeStateDiagnosticMode?'native-state-diagnostic':'touch-event-diagnostic',
+   diagnosticComplete:touchEventDiagnosticComplete,
    productAcceptance:false,stoppedAfter:touchEventDiagnosticComplete?'first-390-primary-download':null,
    touchEventDiagnostic,diagnosticLimits:[
     'One unchanged locator.tap; passive document capture for at most 2000ms from arm, not a device or product pass.',
@@ -2150,6 +2226,6 @@ try{
  assert.ok(entries.every(entry=>entry.isFile()),'Export only ordinary evidence files, never fixture sockets/profile/state');
 }
 if(failure)throw failure;
-console.log(touchEventDiagnosticMode||nativeStateDiagnosticMode?`Generated file controls touch event checkpoint observed (cause unknown; not qualification); evidence: ${evidence}`:
+console.log(touchEventDiagnosticMode||nativeStateDiagnosticMode||portalHostExperimentMode?`Generated file controls touch event checkpoint observed (cause unknown; not qualification); evidence: ${evidence}`:
  cornerDiagnosticMode?`Generated file controls corner diagnostic complete (not full qualification); evidence: ${evidence}`:
  `Generated file controls passed; evidence: ${evidence}`);
