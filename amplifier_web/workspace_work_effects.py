@@ -48,7 +48,7 @@ SAFE_ACTIONS = frozenset({
     'outputs.list', 'outputs.read', 'outputs.image', 'outputs.images',
     'coordination.recap', 'workspace.resources.list', 'workspace.resources.read',
     'workspace.resources.managed', 'session.inspect', 'access.get',
-    'schedule.list', 'schedule.read', 'schedule.overview',
+    'schedule.list', 'schedule.read', 'schedule.overview', 'session.handoff.read',
     'worktree.inspect', 'worktree.status',
     'memory.status', 'memory.list', 'memory.read', 'memory.source',
     'recall.status', 'recall.search', 'recall.read',

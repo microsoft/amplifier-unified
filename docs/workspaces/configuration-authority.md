@@ -254,8 +254,9 @@ own mode with `access.get` but cannot enable it. Repository settings cannot opt 
 Records live in the existing host command database with revision-checked,
 idempotent saves. New native workers read exact policy and task-source records.
 
-Commissioned and new-task scheduled roots inherit through their retained creator
-or scheduled-origin relationship. The scheduler's validated source/run relationship
+Commissioned, new-task scheduled and Full independent-handoff roots inherit
+through their retained creator, scheduled-origin or exact accepted handoff
+relationship. The scheduler's validated source/run relationship
 is saved with the new root, before its first native preparation. The receiving
 chat's explicit choice wins.
 Otherwise a source chat's specific choice follows the task ahead of workspace
@@ -297,8 +298,10 @@ Accepted delayed work keeps its captured Full revision and the existing final
 effect checks; the finite child finishing does not itself revoke accepted work.
 
 Ask-mode discrete grants remain root-owned, and children cannot grant/request/revoke
-those root grants or change access mode. Other collaboration consumers keep their
-strict root default. Existing child file-policy composition is unchanged.
+those root grants or change access mode. Independent chat handoffs also accept qualified Full descendants and explicit
+trusted systems, retaining the actual input origin and actor; they use the
+[detailed handoff contract](../clients/new-chat-handoff.md). Other collaboration
+consumers keep their strict root default. Existing child file-policy composition is unchanged.
 The configuration operation and patch-placement owners accept qualified Full
 descendants through this same source check. They validate the calling conversation
 themselves. A Full patch bind retains the explicit `bind-to-execution` choice,
