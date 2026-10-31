@@ -26,6 +26,7 @@ const python=process.env.AMPLIFIER_TEST_PYTHON||process.env.FIXTURE_PYTHON||join
 const fixture=spawn(python,['-u',fixturePath],{cwd:dirname(fixturePath),stdio:['ignore','pipe','pipe']});
 const stop=ownFixture(fixture,{label:'Generated file controls fixture'});
 const records=[],checks=[],geometry=[],downloads=[],requests=[],commands=[],errors=[],screenshotErrors=[];
+const fileFrameCaptures=[];
 const metadataExchanges=[],detailsReadiness=[],preCleanupSnapshots=[],metadataPending=new Set();
 const metadataByRequest=new WeakMap();
 const pageLabels=new WeakMap(),routeCleanups=new Set(),browserOwners=[];
@@ -116,6 +117,7 @@ function installDetailsProbe(){
   text:node.textContent,iframes:node.querySelectorAll('iframe').length
  });
  window.__fileDetailsSnapshot=snapshot;
+ window.__fileControlsNodeId=id;
  window.__fileDetailsProbe=node=>{
   const events=[];let overflow=false;
   const record=kind=>{
@@ -346,14 +348,115 @@ async function measureControls(target,controls,label){
  }
  assert.ok(await target.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Document horizontal overflow');
 }
+// One synchronous, RAF-aligned page read per sample: include OFFSCREEN siblings,
+// not only the path just centered by the existing journey. No scroll or UI writes.
+function fileFrameSnapshot(anchor){
+ return new Promise((resolve,reject)=>requestAnimationFrame(rafAt=>{try{
+  const id=window.__fileControlsNodeId,rect=node=>node.getBoundingClientRect().toJSON();
+  const describe=node=>({nodeId:id(node),tag:node.tagName,id:node.id,className:node.getAttribute('class'),
+   connected:node.isConnected});
+  const properties=['display','visibility','opacity','position','zIndex','top','transform','clipPath',
+   'width','height','minWidth','minHeight','maxWidth','maxHeight','boxSizing','margin','padding',
+   'borderWidth','overflowX','overflowY','whiteSpace','overflowWrap','wordBreak','textOverflow',
+   'fontSize','lineHeight','color','backgroundColor','pointerEvents','gridTemplateColumns','gap'];
+  const computed=node=>{const style=getComputedStyle(node);return Object.fromEntries(properties.map(key=>[key,style[key]]))};
+  const details=anchor.matches('details.a-canvas-file-path')?[anchor]:
+   [...anchor.closest('#workspace-canvas').querySelectorAll('details.a-canvas-file-path')];
+  const headers=[...document.querySelectorAll('header,.a-canvas-artifact-toolbar')];
+  const toolbars=[...document.querySelectorAll('.a-canvas-artifact-toolbar')];
+  const selector='code,p,summary,button,label,strong,[role="status"],[role="alert"]';
+  const nodes=[...new Set([anchor,...details.flatMap(node=>[node,...node.querySelectorAll(selector)]),
+   ...headers,...toolbars.flatMap(node=>[...node.querySelectorAll(selector)])])];
+  const textRects=node=>{
+   // Paragraphs can contain code blocks. Keep their OWN label fragments separate
+   // from the code's lines rather than calling the whole paragraph a label line.
+   const contents=node.tagName==='CODE'?[node]:[...node.childNodes].filter(child=>child.nodeType===3&&child.textContent.trim());
+   return contents.flatMap(child=>{const range=document.createRange();range.selectNodeContents(child);
+    return [...range.getClientRects()].filter(r=>r.width>0&&r.height>0).map(r=>r.toJSON())});
+  };
+  const elements=nodes.map(node=>({...describe(node),label:node.getAttribute('aria-label'),text:node.textContent,rect:rect(node),
+   rects:[...node.getClientRects()].map(r=>r.toJSON()),textRects:textRects(node),computed:computed(node),
+   path:node.tagName==='CODE',header:headers.includes(node),open:node.open??null}));
+  const ancestors=new Set();
+  for(const node of nodes)for(let parent=node;parent;parent=parent.parentElement)ancestors.add(parent);
+  const scrollContainers=[...ancestors].filter(node=>{
+   const style=getComputedStyle(node);
+   return node===document.scrollingElement||/(auto|scroll|hidden|clip)/.test(style.overflowX+' '+style.overflowY)||
+    node.scrollWidth>node.clientWidth||node.scrollHeight>node.clientHeight;
+  }).map(node=>({...describe(node),rect:rect(node),x:node.scrollLeft,y:node.scrollTop,
+   clientWidth:node.clientWidth,clientHeight:node.clientHeight,scrollWidth:node.scrollWidth,scrollHeight:node.scrollHeight,
+   overflowX:getComputedStyle(node).overflowX,overflowY:getComputedStyle(node).overflowY}));
+  const scrollIds=new Set(scrollContainers.map(node=>node.nodeId));
+  nodes.forEach((node,index)=>{
+   const ids=[];for(let parent=node;parent;parent=parent.parentElement)if(scrollIds.has(id(parent)))ids.push(id(parent));
+   elements[index].scrollContainerIds=ids;
+  });
+  const overlap=(a,b)=>{
+   const left=Math.max(a.left,b.left),top=Math.max(a.top,b.top),right=Math.min(a.right,b.right),bottom=Math.min(a.bottom,b.bottom);
+   return right>left&&bottom>top?{left,top,right,bottom,width:right-left,height:bottom-top}:null;
+  };
+  const intersections=[],headerIntersections=[];
+  for(let a=0;a<elements.length;a++)for(let b=a+1;b<elements.length;b++){
+   const first=elements[a],second=elements[b],box=overlap(first.rect,second.rect);
+   if(!box)continue;
+   const text=[];
+   first.textRects.forEach((r,i)=>second.textRects.forEach((s,j)=>{const intersection=overlap(r,s);
+    if(intersection)text.push({firstLine:i,secondLine:j,rect:intersection})}));
+   intersections.push({first:first.nodeId,second:second.nodeId,rect:box,text,
+    nested:nodes[a].contains(nodes[b])||nodes[b].contains(nodes[a])});
+  }
+  for(const [index,item] of elements.entries())for(const [line,r] of item.textRects.entries())for(const header of headers){
+   if(header.contains(nodes[index]))continue;
+   const intersection=overlap(r,rect(header));if(!intersection)continue;
+   const x=intersection.left+intersection.width/2,y=intersection.top+intersection.height/2;
+   const inViewport=x>=0&&y>=0&&x<innerWidth&&y<innerHeight,hit=inViewport?document.elementFromPoint(x,y):null;
+   headerIntersections.push({nodeId:item.nodeId,line,headerId:id(header),rect:intersection,
+    sample:{x,y,inViewport,hit:hit&&{nodeId:id(hit),tag:hit.tagName,className:hit.getAttribute('class')},
+     headerOnTop:!!hit&&header.contains(hit)}});
+  }
+  resolve({at:Date.now(),rafAt,state:{documentId:id(document),url:location.href,
+   anchorId:id(anchor),anchorConnected:anchor.isConnected,
+   viewport:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio,visual:visualViewport&&{
+    width:visualViewport.width,height:visualViewport.height,offsetLeft:visualViewport.offsetLeft,
+    offsetTop:visualViewport.offsetTop,pageLeft:visualViewport.pageLeft,pageTop:visualViewport.pageTop,scale:visualViewport.scale}},
+   scroll:{x:scrollX,y:scrollY,containers:scrollContainers},elements,intersections,headerIntersections}});
+ }catch(error){reject(error)}}));
+}
+async function captureFileFrame(target,anchor,label){
+ const path=join(evidence,label+'.png');
+ if(target.viewportSize()?.width!==320){await target.screenshot({path});return}
+ const capture={label,png:{path},visualJudgment:'pending',
+  binding:{atomic:false,status:'not-matched',basis:'Exact before/after RAF samples only; no continuous or atomic pixel-stability claim.'}};
+ fileFrameCaptures.push(capture);
+ let handle;
+ try{
+  handle=await anchor.elementHandle();
+  capture.before=await target.evaluate(fileFrameSnapshot,handle);
+  const png=await target.screenshot({path}); // Immediate next browser operation; same existing shot.
+  capture.png.sha256=digest(png);capture.png.bytes=png.length;
+  capture.after=await target.evaluate(fileFrameSnapshot,handle);
+  const before=capture.before.state,after=capture.after.state,same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+  const scroll=state=>({x:state.scroll.x,y:state.scroll.y,
+   containers:state.scroll.containers.map(({nodeId,x,y})=>({nodeId,x,y}))});
+  Object.assign(capture.binding,{
+   domIdentityUnchanged:before.anchorConnected&&after.anchorConnected&&before.documentId===after.documentId&&
+    before.anchorId===after.anchorId&&same(before.elements.map(item=>item.nodeId),after.elements.map(item=>item.nodeId)),
+   viewportUnchanged:same(before.viewport,after.viewport),scrollUnchanged:same(scroll(before),scroll(after)),
+   layoutUnchanged:same(before,after)});
+  if(before.viewport.width===320&&after.viewport.width===320&&capture.binding.domIdentityUnchanged&&
+   capture.binding.viewportUnchanged&&capture.binding.scrollUnchanged&&capture.binding.layoutUnchanged)capture.binding.status='matched-before-after-only';
+ }catch(error){capture.error=errorEvidence(error);throw error}
+ finally{await handle?.dispose()}
+}
 async function measure(target,details,label){
  await measureControls(target,[details.locator('summary'),...names.map(name=>button(details,name))],label);
  assert.ok(await details.evaluate(node=>node.scrollWidth<=node.clientWidth),'File-details horizontal overflow');
- await target.screenshot({path:join(evidence,label+'-controls.png')});
+ await captureFileFrame(target,details,label+'-controls');
  await details.locator('summary').scrollIntoViewIfNeeded();
- await target.screenshot({path:join(evidence,label+'-paths.png')});
+ await captureFileFrame(target,details,label+'-paths');
  // Inspect the text itself, separately from button visibility. Center each path
- // in the real scroll container and retain line hit evidence + matching pixels.
+ // in the real scroll container; 320px shots additionally retain sibling geometry
+ // and explicit PNG brackets, including raw occlusion under the sticky heading.
  // This investigates the earlier narrow path-overlap observation without
  // assuming that reachable buttons imply unobscured path text.
  const codes=details.locator('code');
@@ -376,7 +479,7 @@ async function measure(target,details,label){
     viewport:{width:innerWidth,height:innerHeight},lines};
   });
   geometry.push({label:label+'-path-text',index,...textGeometry});
-  await target.screenshot({path:join(evidence,`${label}-path-${index}.png`)});
+  await captureFileFrame(target,details,`${label}-path-${index}`);
   assert.ok(textGeometry.lines.length>0,`${label} path ${index}: no rendered text lines`);
   assert.ok(textGeometry.scrollWidth<=textGeometry.clientWidth,`${label} path ${index}: horizontal text overflow`);
   assert.ok(textGeometry.lines.every(line=>line.points.every(point=>point.reachable)),
@@ -571,7 +674,7 @@ async function usePreviewControls(retained,label,mode){
  });
  geometry.push({label:label+'-visible-feedback',...feedback});
  assert.ok(feedback.contained&&feedback.lines.length>0,'Download completion feedback must remain visible and bounded');
- await target.screenshot({path:join(evidence,label+'-primary.png')});
+ await captureFileFrame(target,primary,label+'-primary');
  if(mode==='keyboard'){
   // Download temporarily disables its button. Re-anchor after completion so a
   // browser's native disabled-control blur is not mistaken for wrong tab order.
@@ -895,13 +998,15 @@ try{
   writeFile(join(evidence,'fixture.log'),logs),
   writeFile(join(evidence,'observations.json'),JSON.stringify({passed:!failure,error:failure?.stack,failure:errorEvidence(failure),screenshotErrors,
   installed:ready&&{packageRoot:ready.packageRoot,verified:ready.installedVerified,staticSha256:ready.staticSha256},
-  seed,checks,geometry,downloads,requests,commands,metadataExchanges,detailsReadiness,preCleanupSnapshots,
+  seed,checks,geometry,fileFrameCaptures,downloads,requests,commands,metadataExchanges,detailsReadiness,preCleanupSnapshots,
   errors,cleanup,fixtureCleanup:records.find(row=>row.cleanup)?.cleanup,
   browserCleanup:browserOwners.map(owner=>({label:owner.label,closed:owner.closed,connected:owner.browser?.isConnected()??false})),
   limits:['Synthetic runtime and fixture bearer authentication; no provider, login, remote server or physical touch-device claim.',
    'Clipboard/403/wrong-byte faults are deliberate test injections; positive clipboard reads and downloaded files are real browser results.',
    'The two later HTML previews execute deliberately as setup; copy/download must retain each original frame and execution token.',
    'Exact-byte identity covers ordinary saved UTF-8 HTML/Markdown, not Babylon engine-prepending exports.',
+   '320px fileFrameCaptures preserve raw intersections/occlusion at existing scroll positions; sampling is not a visual pass.',
+   'Geometry reads are atomic within each RAF callback, but PNGs are separate. matched-before-after-only is bracket equality, not proof of unchanged intervening frames. Visual judgment remains pending.',
    'PNG capture and measured reachability do not claim independent human visual review.']},null,2)+'\n')]);
  const writeErrors=writes.filter(row=>row.status==='rejected').map(row=>row.reason);
  if(writeErrors.length)failure=new AggregateError([...(failure?[failure]:[]),...writeErrors],'File controls evidence write failed');

@@ -1,19 +1,32 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Public local-file path, exact server location, copy and Canvas lifecycle.
 import {spawn} from 'node:child_process';
-import {once} from 'node:events';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {fileURLToPath} from 'node:url';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {dirname} from 'node:path';
+import {mkdir,writeFile,lstat} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 const root=fileURLToPath(new URL('../../',import.meta.url)),out=process.env.AMPLIFIER_TEST_ARTIFACTS;
 if(!out)throw Error('Owned artifact directory is required');
 await mkdir(out,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/outputs_ui_server.py','--canvas-reading'],{stdio:['ignore','pipe','pipe']});
-let browser,page,logs='',failure;const errors=[],checks=[];
+const stopFixture=ownFixture(fixture,{label:'Canvas files fixture',timeoutMs:5000});
+let browser,page,ready,logs='',failure,uiFailure,uiPassed=false,browserClosed=null,fixtureExit=null,fixtureCleanup=null,homeRemoved=null,fixtureStopSucceeded=false;
+const errors=[],checks=[],cleanupFailures=[];
+const errorRecord=error=>({name:error?.name||'Error',message:String(error?.message||error),...(error instanceof AggregateError?{errors:error.errors.map(errorRecord)}:{})});
+fixture.once('close',(code,signal)=>{fixtureExit={pid:fixture.pid,code,signal,settled:true}});
+let fixtureLines='';
+fixture.stdout.on('data',chunk=>{
+ fixtureLines+=chunk;let newline;
+ while((newline=fixtureLines.indexOf('\n'))!==-1){
+  const line=fixtureLines.slice(0,newline);fixtureLines=fixtureLines.slice(newline+1);
+  try{const receipt=JSON.parse(line).outputsFixtureCleanup;if(receipt)fixtureCleanup=receipt}catch{}
+ }
+});
 fixture.stderr.on('data',chunk=>logs+=chunk);
 try{
- const ready=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('File fixture timed out')),15000);fixture.once('error',reject);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('File fixture exited '+code))});fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value)}}catch{}})});
+ ready=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('File fixture timed out')),15000);fixture.once('error',reject);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('File fixture exited '+code))});fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value)}}catch{}})});
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1280,height:950},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(ready.url);await showFixtureConversation(page,{navPinned:true});const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Keep private file-inspection draft');
@@ -51,7 +64,35 @@ try{
  assert.equal(await page.evaluate(()=>window.amplifier.getState().view.draft),'Keep private file-inspection draft');
  const final=await page.request.get(ready.url+'/fixture').then(response=>response.json());assert.equal(final.selected,ready.sessionId);assert.equal(final.message,ready.original);assert.equal(final.file,'Original report bytes.');assert.deepEqual(final.outputs,[]);assert.deepEqual(final.sent,[]);assert.deepEqual(errors,[]);
  checks.push('Narrow Back to chat preserves the exact draft, selection, original message and original file; no output or model input created.');
- await page.screenshot({path:out+'/canvas-files.png'});await writeFile(out+'/observations.json',JSON.stringify({passed:true,checks,limits:['Synthetic local Linux host with no file manager; no actual OS reveal action or remote browser/server pair.','Native selectOption exercises form state, not native picker gesture.','Desktop ordinary path plus keyboard focus/Escape and narrow Back; not complete four-mode repetition.','No Canvas resize or physical user-scroll gesture claim; anchor positioned through locator before public close/reopen.']},null,2)+'\n');
- console.log('Canvas file path passed: exact local bytes and owner, absolute/relative copy, unavailable reveal, focus return, narrow Back and unchanged chat/draft/file.');
-}catch(error){failure=error;if(page)await page.screenshot({path:out+'/failure.png'}).catch(()=>{});throw error}
-finally{const cleanup=[];try{await browser?.close()}catch(error){cleanup.push(error)}finally{if(fixture.exitCode===null){const done=once(fixture,'exit');fixture.kill('SIGTERM');const timer=setTimeout(()=>fixture.kill('SIGKILL'),5000);try{await done}catch(error){cleanup.push(error)}finally{clearTimeout(timer)}}await writeFile(out+'/fixture.log',logs)}if(cleanup.length)throw new AggregateError([...(failure?[failure]:[]),...cleanup],'Canvas file cleanup failed')}
+ await page.screenshot({path:out+'/canvas-files.png'});uiPassed=true;
+}catch(error){uiFailure=error}
+finally{
+ try{
+  await finishFixture({label:'Canvas files fixture',close:[
+   ...(uiFailure&&page?[['Canvas files failure screenshot',()=>page.screenshot({path:out+'/failure.png'})]]:[]),
+   ['Canvas files browser',async()=>{if(browser){try{await browser.close()}finally{browserClosed=!browser.isConnected()}assert.equal(browserClosed,true)}}]
+  ],stop:async()=>{await stopFixture();fixtureStopSucceeded=true}});
+ }catch(error){cleanupFailures.push(error)}
+ const expectedHome=ready?.workspace?dirname(ready.workspace):null;
+ if(expectedHome){
+  try{await lstat(expectedHome);homeRemoved=false}catch(error){if(error.code==='ENOENT')homeRemoved=true;else cleanupFailures.push(error)}
+ }
+ try{
+  assert.equal(fixtureExit?.settled,true);assert.equal(fixtureExit?.code,0);assert.equal(fixtureExit?.signal,null);
+  assert.equal(fixtureStopSucceeded,true);assert.equal(browserClosed,true);
+  assert.ok(expectedHome);assert.equal(fixtureCleanup?.pid,fixture.pid);assert.equal(fixtureCleanup?.home,expectedHome);
+  assert.equal(fixtureCleanup?.signal,'SIGTERM');assert.equal(fixtureCleanup?.runnerCleanup,true);assert.equal(fixtureCleanup?.homeRemoved,true);
+  assert.equal(homeRemoved,true);
+ }catch(error){cleanupFailures.push(error)}
+ try{await writeFile(out+'/fixture.log',logs)}catch(error){cleanupFailures.push(error)}
+ const failures=[...(uiFailure?[uiFailure]:[]),...cleanupFailures];
+ failure=failures.length>1?new AggregateError(failures,'Canvas files UI and/or cleanup failed'):failures[0];
+ const observations={schemaVersion:1,passed:uiPassed&&!failure,uiPassed,checks,browserClosed,fixtureExit,fixtureStopSucceeded,fixtureCleanup,homeRemoved,uiFailure:uiFailure?errorRecord(uiFailure):null,cleanupFailures:cleanupFailures.map(errorRecord),failure:failure?errorRecord(failure):null,limits:['Synthetic local Linux host with no file manager; no actual OS reveal action or remote browser/server pair.','Native selectOption exercises form state, not native picker gesture.','Desktop ordinary path plus keyboard focus/Escape and narrow Back; not complete four-mode repetition.','No Canvas resize or physical user-scroll gesture claim; anchor positioned through locator before public close/reopen.']};
+ try{await writeFile(out+'/observations.json',JSON.stringify(observations,null,2)+'\n')}
+ catch(error){
+  failure=failure?new AggregateError([failure,error],'Canvas files observations could not be saved'):error;
+  observations.passed=false;observations.reportWriteFailure=errorRecord(error);observations.failure=errorRecord(failure);
+ }finally{console.log(JSON.stringify({canvasFilesQualification:observations}))}
+}
+if(failure)throw failure;
+console.log('Canvas file path passed: exact local bytes and owner, absolute/relative copy, unavailable reveal, focus return, narrow Back and unchanged chat/draft/file.');

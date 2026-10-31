@@ -4,10 +4,27 @@ import {fileURLToPath} from 'node:url';
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
+const stalledBody=process.env.CANVAS_RENDERER_STALLED_BODY==='1',mode=stalledBody?'stalled-body':'normal';
+const reportDirectory=process.env.AMPLIFIER_TEST_ARTIFACTS||root+'output/canvas-proof';
+const proof={schemaVersion:1,mode,request:null,observedHeaders:null,hostAcceptance:null,fixtureEvents:[],browserErrors:[],optimisticPanel:false,bodyWaitStarted:false,bodyWaitCompleted:false,acceptedCompleteResponse:false,reloadStarted:false,reloadNavigationCount:0,watchdog:{budgetMs:25000,fired:false},cleanup:{budgetMs:5000,pageStopRequested:false,pageClosed:false,drained:false,failures:[]},fixtureExit:null};
+const unhandledRejections=[],onUnhandled=reason=>unhandledRejections.push({source:'node',message:String(reason?.stack||reason)});
+process.on('unhandledRejection',onUnhandled);
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
-let browser;
+const stopFixture=ownFixture(fixture,{label:'Canvas renderer fixture'});
+fixture.once('close',(code,signal)=>{proof.fixtureExit={pid:fixture.pid,code,signal,settled:true}});
+let fixtureLines='';
+fixture.stdout.on('data',chunk=>{
+ fixtureLines+=chunk;let newline;
+ while((newline=fixtureLines.indexOf('\n'))!==-1){
+  const line=fixtureLines.slice(0,newline);fixtureLines=fixtureLines.slice(newline+1);
+  try{const event=JSON.parse(line).canvasRendererStalledBody;if(event){proof.fixtureEvents.push(event);if(event.event==='accepted')proof.hostAcceptance=event}}catch{}
+ }
+});
+const errorRecord=error=>({name:error?.name||'Error',message:String(error?.message||error),...(error?.code?{code:error.code}:{}),...(error instanceof AggregateError?{errors:error.errors.map(errorRecord)}:{})});
+let browser,failure;
 try{
  const url=await new Promise((resolve,reject)=>{
   const timer=setTimeout(()=>reject(Error('Fixture startup timed out')),15000);let output='';
@@ -16,7 +33,9 @@ try{
  });
  browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1500,height:1050},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
- const page=await context.newPage(),errors=[];let streams=0,resourceReads=0;
+ await context.addInitScript(()=>window.addEventListener('unhandledrejection',event=>console.error('canvas-renderer-unhandled:'+String(event.reason?.stack||event.reason))));
+ const page=await context.newPage(),errors=proof.browserErrors;let streams=0,resourceReads=0;
+ page.on('console',message=>{if(message.type()==='error'&&message.text().startsWith('canvas-renderer-unhandled:'))unhandledRejections.push({source:'browser',message:message.text()})});
  page.on('pageerror',error=>errors.push(error.message));
  page.on('websocket',socket=>{if(new URL(socket.url()).pathname==='/api/events/ws')streams++});page.on('request',request=>{if(new URL(request.url()).pathname==='/api/events')streams++;if(request.url().includes('/api/canvas/views/'))resourceReads++});
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
@@ -119,6 +138,9 @@ try{
  };
  let releaseDetails,markHeld,heldRequest,forwarded,requestedDetails,reloadAfterReceipt,acceptedDetails=false,reloadStarted=false,cancelReload=false;
  let rejectDetails,detailsTimer,drainTimer,detailsFailure,pageStop;
+ const detailsStarted=performance.now();let detailsPhase='capture';
+ const observeReload=request=>{if(request.isNavigationRequest()&&request.frame()===page.mainFrame())proof.reloadNavigationCount++};
+ page.on('request',observeReload);
  const pendingDetails=[],detailsFailures=[],cleanupFailures=[];
  const heldDetails=new Promise(resolve=>{releaseDetails=resolve});
  const capturedDetails=new Promise(resolve=>{markHeld=resolve});
@@ -134,13 +156,16 @@ try{
    const request=route.request();
    if(heldRequest||!openingDetails(request))return route.continue();
    heldRequest=request;markHeld(request);
-   forwarded=heldDetails.then(()=>route.continue());
+   forwarded=heldDetails.then(()=>route.continue(stalledBody?{headers:{...request.headers(),'x-canvas-renderer-stall':request.postDataJSON().id}}:undefined));
    return forwarded;
   })();
   // The handler must not leak a rejection; retain it and fail the lifecycle.
   return retainDetails(operation).catch(()=>{});
  };
- detailsTimer=setTimeout(()=>failDetails(Error('Details reload lifecycle exceeded 25 seconds')),25000);
+ detailsTimer=setTimeout(()=>{
+  proof.watchdog={...proof.watchdog,fired:true,phase:detailsPhase,elapsedMs:performance.now()-detailsStarted};
+  failDetails(Object.assign(Error('Details reload lifecycle exceeded 25 seconds'),{code:'CANVAS_DETAILS_LIFECYCLE_TIMEOUT'}));
+ },25000);
  const detailsLifecycle=(async()=>{
   await page.route(actionsURL,holdDetails);
   if(cancelReload)return;
@@ -153,23 +178,29 @@ try{
   const detailsPayload=detailsRequest.postDataJSON();
   assert.equal(detailsPayload.action,'view.update');assert.deepEqual(detailsPayload.args,detailsArgs);
   assert.equal(typeof detailsPayload.id,'string');assert.ok(detailsPayload.id);
+  proof.request={...detailsPayload,clientId:beforeReload,hostInstanceId:reloadState.client.hostInstanceId,url:detailsRequest.url(),method:detailsRequest.method()};
   // Correlate by the captured Request object, not another view.update response.
   reloadAfterReceipt=retainDetails((async()=>{
    const response=await page.waitForResponse(response=>response.request()===detailsRequest);
    assert.equal(response.request(),detailsRequest);assert.equal(response.status(),200);
+   proof.observedHeaders={status:response.status(),requestId:detailsPayload.id,stallRequestId:response.headers()['x-canvas-renderer-stalled-request']||null,contentLength:response.headers()['content-length']||null,elapsedMs:performance.now()-detailsStarted};
+   if(stalledBody)assert.equal(proof.observedHeaders.stallRequestId,detailsPayload.id);
+   detailsPhase='response.finished';proof.bodyWaitStarted=true;
    assert.equal(await response.finished(),null);
+   proof.bodyWaitCompleted=true;detailsPhase='response.json';
    const receipt=await response.json();
    assert.equal(receipt.accepted,true);assert.equal(receipt.hostInstanceId,reloadState.client.hostInstanceId);
    assert.deepEqual(response.request().postDataJSON(),detailsPayload);
-   acceptedDetails=true;
+   acceptedDetails=true;proof.acceptedCompleteResponse=true;
    if(cancelReload)return;
-   reloadStarted=true;
+   reloadStarted=true;proof.reloadStarted=true;detailsPhase='reload';
    await page.reload();
   })());
   await expect(inspector).toBeVisible();await expect(reader).toHaveJSProperty('inert',true);
   assert.equal(acceptedDetails,false,'Optimistic Details is not an accepted update');
   assert.equal(reloadStarted,false,'Visible Details must not release the reload barrier');
   assert.equal((await state()).client.id,beforeReload);
+  proof.optimisticPanel=true;detailsPhase='forward/headers';
   releaseDetails();await forwarded;
   await reloadAfterReceipt;
   assert.equal(acceptedDetails,true);assert.equal(reloadStarted,true);
@@ -177,22 +208,31 @@ try{
  try{await Promise.race([detailsLifecycle,detailsDeadline])}catch(error){detailsFailure=error}
  finally{
   clearTimeout(detailsTimer);cancelReload=true;releaseDetails();markHeld(null);
+  proof.lifecycleFailure=detailsFailure?errorRecord(detailsFailure):null;
+  proof.timeoutCause=proof.watchdog.fired?proof.lifecycleFailure:null;
+  const drainStarted=performance.now();
   // This test owns this page. Stop its I/O before draining failed work, never
   // close another page/context or wait indefinitely for a response body.
   const stopDetailsIO=()=>pageStop??=(async()=>{
-   try{await page.close({runBeforeUnload:false})}catch(error){cleanupFailures.push(error)}
+   proof.cleanup.pageStopRequested=true;
+   try{await page.close({runBeforeUnload:false});proof.cleanup.pageClosed=page.isClosed()}catch(error){cleanupFailures.push(error)}
   })();
   const drainDetails=(async()=>{
    if(detailsFailure||detailsFailures.length)await stopDetailsIO();
    try{await page.unroute(actionsURL,holdDetails)}catch(error){cleanupFailures.push(error);await stopDetailsIO()}
    const settled=await Promise.allSettled([detailsLifecycle,...pendingDetails]);
    for(const result of settled)if(result.status==='rejected')detailsFailures.push(result.reason);
+   proof.cleanup.drained=true;
   })();
   try{
    await Promise.race([drainDetails,new Promise((_,reject)=>{
     drainTimer=setTimeout(()=>{stopDetailsIO();reject(Error('Details reload cleanup exceeded 5 seconds; owned page stop requested'))},5000);
    })]);
-  }catch(error){cleanupFailures.push(error)}finally{clearTimeout(drainTimer)}
+  }catch(error){cleanupFailures.push(error)}finally{
+   clearTimeout(drainTimer);proof.cleanup.elapsedMs=performance.now()-drainStarted;
+   proof.cleanup.failures=cleanupFailures.map(errorRecord);
+   page.off('request',observeReload);
+  }
  }
  const detailsErrors=[...new Set([detailsFailure,...detailsFailures,...cleanupFailures].filter(error=>error!==undefined))];
  if(detailsErrors.length)throw detailsErrors.length===1?detailsErrors[0]:new AggregateError(detailsErrors,'Details reload failed, including retained I/O/cleanup failures');
@@ -236,4 +276,60 @@ try{
  assert.equal(streams,3,'One event stream per page load');
  await writeFile(root+'output/canvas-proof/evidence.json',JSON.stringify({externalDigest:staged.digest,resourceId:markdown.resourceId,streams,resourceReads,checks:['production hot loading after independent build','single viewer and retained saved artifacts','draft and conversation retention','renderer choices and state after reload','stale action rejection','failed live renderer fallback and recovery']},null,2));
  console.log('Canvas renderer proof passed: external validated hot loading, single viewer and preserved draft, reload retention, stale actions, fallback/recovery.');
-}finally{await browser?.close();fixture.kill();}
+}catch(error){failure=error}
+finally{
+ try{
+  await finishFixture({label:'Canvas renderer fixture',close:[['Canvas renderer browser',()=>browser?.close()]],stop:async()=>{
+   await stopFixture();proof.fixtureStopSucceeded=true;
+  }});
+ }catch(error){
+  proof.finalCleanupFailure=errorRecord(error);
+  failure=failure?new AggregateError([failure,error],'Canvas renderer scenario and cleanup failed'):error;
+ }
+ proof.noReload=!proof.reloadStarted&&proof.reloadNavigationCount===0;
+ proof.unhandledRejectionCount=unhandledRejections.length;proof.unhandledRejections=unhandledRejections;
+ if(unhandledRejections.length){
+  const error=Error('Canvas renderer had unhandled rejections');
+  failure=failure?new AggregateError([failure,error],'Canvas renderer failed with unhandled rejections'):error;
+ }
+ proof.expectedFailureVerified=false;
+ if(stalledBody){
+  try{
+   assert.ok(failure);assert.ok(proof.request?.id);
+   assert.equal(proof.watchdog.fired,true);assert.equal(proof.watchdog.phase,'response.finished');
+   assert.equal(proof.timeoutCause?.code,'CANVAS_DETAILS_LIFECYCLE_TIMEOUT');
+   assert.equal(proof.observedHeaders?.status,200);assert.equal(proof.observedHeaders?.stallRequestId,proof.request.id);
+   assert.equal(proof.hostAcceptance?.id,proof.request.id);assert.equal(proof.hostAcceptance?.clientId,proof.request.clientId);
+   assert.equal(proof.hostAcceptance?.hostInstanceId,proof.request.hostInstanceId);
+   assert.deepEqual(proof.hostAcceptance?.args,proof.request.args);assert.equal(proof.hostAcceptance?.accepted,true);
+   assert.equal(proof.optimisticPanel,true);assert.equal(proof.bodyWaitStarted,true);assert.equal(proof.bodyWaitCompleted,false);
+   assert.equal(proof.acceptedCompleteResponse,false);assert.equal(proof.noReload,true);
+   assert.equal(proof.cleanup.pageStopRequested,true);assert.equal(proof.cleanup.pageClosed,true);assert.equal(proof.cleanup.drained,true);
+   assert.deepEqual(proof.cleanup.failures,[]);assert.equal(proof.finalCleanupFailure,undefined);
+   assert.equal(proof.unhandledRejectionCount,0);
+   assert.deepEqual(proof.browserErrors,[]);
+   assert.equal(proof.fixtureExit?.settled,true);assert.equal(proof.fixtureExit?.code,0);assert.equal(proof.fixtureExit?.signal,null);
+   assert.equal(proof.fixtureStopSucceeded,true);
+   assert.ok(proof.fixtureEvents.some(event=>event.event==='headers-sent'&&event.id===proof.request.id&&event.bodyBytesSent===1&&event.bodyBytesTotal>1));
+   assert.ok(proof.fixtureEvents.some(event=>event.event==='cleanup-complete'&&event.stalledResponses===1));
+   proof.expectedFailureVerified=true;
+  }catch(error){
+   proof.negativeVerificationFailure=errorRecord(error);
+   failure=failure?new AggregateError([failure,error],'Stalled-body qualification did not meet its evidence requirements'):error;
+  }
+ }
+ proof.outcome=proof.expectedFailureVerified?'expected-failure':failure?'failed':'passed';
+ proof.failure=failure?errorRecord(failure):null;
+ try{
+  await mkdir(reportDirectory,{recursive:true});
+  await writeFile(reportDirectory+'/canvas-renderers-'+mode+'.json',JSON.stringify(proof,null,2)+'\n');
+ }catch(error){
+  proof.reportWriteFailure=errorRecord(error);proof.outcome='failed';proof.expectedFailureVerified=false;
+  failure=failure?new AggregateError([failure,error],'Canvas renderer proof could not be saved'):error;
+  proof.failure=errorRecord(failure);
+ }finally{
+  console.log(JSON.stringify({canvasRendererQualification:proof}));
+  process.off('unhandledRejection',onUnhandled);
+ }
+}
+if(failure)throw failure; // A verified negative is still a nonzero watchdog failure.
