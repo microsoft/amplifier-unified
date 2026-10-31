@@ -1669,7 +1669,20 @@ async def test_sealing_rejects_invalid_link_without_breaking_next_runtime_event(
     assert qualified["messageIds"] == [valid_anchor["messageId"]]
     assert app.collaboration.receipt(valid_continuation)["dependencyRequestId"] == "valid-next"
     assert app.collaboration.receipt(request) == rejected
-    assert app.collaboration.receipt(continuation) == notification
+    await until(lambda: app.collaboration.receipt(continuation).get("admission", {}).get("waitingForBoundary") is True)
+    current_notification = app.collaboration.receipt(continuation)
+    # Later event processing may attempt this automatic return for the first
+    # time. Only its positively-unadmitted attempt diagnostics may change;
+    # the entire rejected outcome, identity and provenance remain exact.
+    assert current_notification["admission"] == {
+        "accepted": False, "effect": "none", "waitingForBoundary": True}
+    assert type(current_notification["admissionOrder"]) is int
+    assert current_notification["admissionOrder"] >= notification.get("admissionOrder", 1)
+    assert current_notification["admittedAt"] >= notification.get("admittedAt", 0)
+    attempt_fields = {"admission", "admissionOrder", "admittedAt"}
+    assert {key: value for key, value in current_notification.items() if key not in attempt_fields} == {
+        key: value for key, value in notification.items() if key not in attempt_fields}
+    assert not any(identity == continuation for _, identity, _ in app.runtime.inputs)
     assert not target.get("error")
 
 
