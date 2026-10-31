@@ -266,7 +266,7 @@ def prepare(home, sid, workspace, actor, source, backend_key, request_id, instal
         if not _qualification and limits['maxEnvironmentsPerChat'] and count >= limits['maxEnvironmentsPerChat']:
             raise ValueError('This task already owns its allowed environments. Inspect or remove one, or adjust Advanced execution limits in Settings.')
         total, owned = db.execute("SELECT COUNT(*), coalesce(sum(root=?),0) FROM allocations WHERE status!='retired'", (sid,)).fetchone()
-        if not _qualification and (total >= limits['maxOwnedResources'] or owned >= limits['maxOwnedResourcesPerChat']):
+        if not _qualification and ((limits['maxOwnedResources'] and total >= limits['maxOwnedResources']) or (limits['maxOwnedResourcesPerChat'] and owned >= limits['maxOwnedResourcesPerChat'])):
             raise ValueError('The resource owner capacity has been reached. Inspect retained owners or adjust Advanced execution limits in Settings.')
         row = {'id': str(uuid.uuid4()), 'kind': KIND, 'workspaceId': workspace, 'sessionId': sid,
                'owner': actor, 'source': source, 'profileId': profile_id, 'backendKey': backend_key,

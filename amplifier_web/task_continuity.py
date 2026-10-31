@@ -477,6 +477,8 @@ class TaskController:
             return {**self.canonical_snapshot(), **_saved_receipt(self.receipts, identity), "duplicate": True,
                     "currentRef": _ref("task.get", self.controls.session.session_id)}
         previous = self.record()
+        if args.get('expectedTaskId') is not None and (previous or {}).get('id') != args['expectedTaskId']:
+            raise ValueError('The saved task was replaced; inspect its current identity before changing it')
         revision = previous["revision"] if previous else 0
         if type(args.get("expectedRevision")) is not int or args["expectedRevision"] != revision:
             raise ValueError("The task revision changed; inspect the current task before applying this change")
@@ -564,6 +566,8 @@ class TaskController:
                                   "receipt": {"commandId": identity, "action": operation,
                                               "taskId": task["id"], "revision": task["revision"],
                                               "status": task["status"], "fingerprint": fingerprint}}
+        if args.get('_managerLimit'):
+            self.receipts[identity]['receipt']['managerLimit'] = copy.deepcopy(args['_managerLimit'])
         # Receipts live with existing control state; no second continuation loop.
         try:
             if not getattr(self.controls.runtime, "generation", None):
@@ -647,7 +651,7 @@ def _public_unavailable(reason):
             "authority": "Missing saved state is not an empty task or permission to continue."}
 
 
-async def dispatch(service, operation, args, origin, command_id, include_state):
+async def dispatch(service, operation, args, origin, command_id, include_state, *, guard=None):
     """Shared UI/agent path. Worker owns CAS and persists before acknowledging."""
     from .service import AppError
     sid = args["sessionId"]
@@ -681,8 +685,11 @@ async def dispatch(service, operation, args, origin, command_id, include_state):
         raise AppError("Task mutations require a stable command ID.", 400)
     forwarded.update(commandId=command_id, origin=origin)
     try:
-        await service.management.ensure_runtime(session)
-        result = await service.runtime.control(sid, operation, forwarded)
+        if guard is not None:
+            guard()
+        await service.management.ensure_runtime(session, **({'restart_guard': guard} if guard is not None else {}))
+        result = await service.runtime.control(sid, operation, forwarded,
+            **({'guard': guard} if guard is not None else {}))
     except ValueError as exc:
         raise AppError(str(exc), 409) from None
     receipt = copy.deepcopy(result["receipt"])

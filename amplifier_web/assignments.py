@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager, AsyncExitStack
 from amplifier_operations.coordination import fingerprint
 from .capacity import LIVE, aggregate, evaluate, number, usage_snapshot
 
-DEFAULTS = dict(maxOpenTasks=None, maxMembers=64, maxConcurrentCalls=None,
+DEFAULTS = dict(maxOpenTasks=None, maxMembers=None, maxConcurrentCalls=None,
                 maxTotalTokens=None, maxCostUsd=None, reserveTokens=0,
                 reserveCostUsd=0, unknownPolicy='pause', includeEstimatedCost=False)
 
@@ -20,22 +20,23 @@ def definitions(schema, string):
     target = {'sessionId': string(200)}
     revision = {**target, 'expectedRevision': {'type': 'integer', 'minimum': 0}}
     limits = {key: {'type': ['integer', 'null'], 'minimum': 1}
-              for key in ('maxOpenTasks', 'maxConcurrentCalls')}
-    limits['maxMembers'] = {'type': 'integer', 'minimum': 1, 'maximum': 64}
+              for key in ('maxOpenTasks', 'maxMembers', 'maxConcurrentCalls')}
     limits.update(maxTotalTokens={'type': ['integer', 'null'], 'minimum': 1},
                   maxCostUsd={'type': ['number', 'null'], 'exclusiveMinimum': 0},
                   reserveTokens={'type': 'integer', 'minimum': 0},
                   reserveCostUsd={'type': 'number', 'minimum': 0},
                   unknownPolicy={'enum': ['pause', 'allow']}, includeEstimatedCost={'type': 'boolean'})
     from .assignment_tasks import definitions as task_definitions
+    from .assignment_task_limits import definitions as limit_definitions
     return {
         **task_definitions(schema, string),
+        **limit_definitions(schema, string),
         'assignment.brief': ('Read a compact paged current-member brief with blockers and latest direct-request outcome links. Passive and bounded; no history, worker admission or permission changes. Previews do not replace exact constraints or evidence.', schema({**target, 'after': string(2048), 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 16}}, ['sessionId'])),
         'assignment.read': ('Inspect this explicit assignment, its members and aggregate usage without starting workers. Independent peers are not members.', schema(target, ['sessionId'])),
         'assignment.start': ('Start an assignment for this unassigned root. New commissioned chats join automatically. Adding an existing chat requires explicit adoption.', schema(target, ['sessionId'])),
         'assignment.adoption': ('Review adding one settled existing workspace chat to this manager’s assignment. Does not start work or change membership.', schema({**target, 'targetSessionId': string(200)}, ['sessionId', 'targetSessionId'])),
         'assignment.adopt': ('Explicitly add a reviewed existing chat to this owner’s active assignment. Agents require the current human instruction; do not infer permission from a shared workspace. Preserves history and previous usage, sends no input, and does not clear Stop. Use ordinary guarded resume separately when authorized.', schema({**revision, 'targetSessionId': string(200), 'expectedTargetRevision': string(200), 'sourceMessageId': string(200)}, ['sessionId', 'targetSessionId', 'expectedRevision', 'expectedTargetRevision'])),
-        'assignment.set': ('Owner sets revision-bound aggregate limits. Null maxOpenTasks/maxConcurrentCalls means no execution count limit. maxMembers counts current bound and reserved members, not retired history. Per-call reservations are allowances, not exact provider spend caps. Existing effects may finish.', schema({**revision, **limits}, ['sessionId', 'expectedRevision'])),
+        'assignment.set': ('Owner sets revision-bound aggregate limits. Null maxOpenTasks/maxMembers/maxConcurrentCalls means no count limit. maxMembers counts current bound and reserved members, not retired history. Per-call reservations are allowances, not exact provider spend caps. Existing effects may finish.', schema({**revision, **limits}, ['sessionId', 'expectedRevision'])),
         'assignment.integration': ('Owner explicitly assigns integration responsibility to a current member, or clears it. Does not start work, enroll peers or grant execution authority.', schema({**revision, 'responsibleSessionId': {'type': ['string', 'null'], 'minLength': 1, 'maxLength': 200}}, ['sessionId', 'expectedRevision', 'responsibleSessionId'])),
         'assignment.stop': ('Owner closes assignment admission before requesting interruption of still-bound roots and native children. Does not stop independent peers or remove resources.', schema(revision, ['sessionId', 'expectedRevision'])),
         'assignment.resume': ('User reopens a settled stopped assignment for new requests, preserving members, shared tasks and cumulative usage. Does not send input, resume paused tasks or replay queued work.', schema(revision, ['sessionId', 'expectedRevision'])),
@@ -209,7 +210,7 @@ class Assignments:
         if sid in value['members'] and value['members'][sid]['status'] != 'retired':
             return value['id']
         limits = value['limits']
-        if self.active_member_count(value) >= limits['maxMembers']:
+        if limits['maxMembers'] is not None and self.active_member_count(value) >= limits['maxMembers']:
             self.service.collaboration.error('The assignment member limit is reached. Retire a finished member to release a slot; its history and usage stay retained.', 429)
         pending = {row[0] for row in self.service.db.execute("""SELECT DISTINCT
             json_extract(receipt,'$.target.sessionId') FROM commands
@@ -355,6 +356,9 @@ class Assignments:
                     self.service._task(self.interrupt(identity, stops))
 
     async def _dispatch(self, action, args, origin, command_id, caller):
+        if action in {'assignment.task.read', 'assignment.task.setLimit'}:
+            from .assignment_task_limits import dispatch
+            return await dispatch(self, action, args, origin, command_id, caller)
         if action == 'assignment.retire':
             from .assignment_retirement import dispatch
             return await dispatch(self, action, args, origin, command_id, caller)
@@ -419,10 +423,10 @@ class Assignments:
                     limits = {**value['limits'], **{key: args[key] for key in DEFAULTS if key in args}}
                     for key in ('maxOpenTasks', 'maxMembers', 'maxConcurrentCalls'):
                         val = limits[key]
-                        if val is None and key != 'maxMembers':
+                        if val is None:
                             continue
-                        if type(val) is not int or val < 1 or (key == 'maxMembers' and val > 64):
-                            collaboration.error('Assignment execution counts must be positive integers or null; current members must be between 1 and 64.', 400)
+                        if type(val) is not int or val < 1:
+                            collaboration.error('Assignment counts must be positive integers or null for no count limit.', 400)
                     for key in ('maxTotalTokens', 'maxCostUsd', 'reserveTokens', 'reserveCostUsd'):
                         val = limits[key]
                         if val is None and key.startswith('max'):
