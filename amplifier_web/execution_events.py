@@ -159,7 +159,7 @@ class ExecutionEvents:
     def admission_input(self, sid):
         return self.admission_inputs.get(sid, self.admission_inputs.get(self.root_id, self.turn_id))
 
-    async def _begin_provider_call(self, sid, provider, request, *, label=None):
+    async def _begin_provider_call(self, sid, provider, request, *, label=None, run_id=None):
         parent,turn = self.parent(sid)
         admission_input = self.admission_input(sid)
         purpose=CALL_PURPOSE.get()
@@ -176,6 +176,8 @@ class ExecutionEvents:
                "model":str(getattr(request,"model",None) or defaults.get("model") or defaults.get("default_model") or "")[:160],
                "purpose": purpose.get("purpose") if purpose else None,
                "startedAt":time.time(),"lifecycle":"background" if purpose and purpose.get("lifecycle")=="background" else "turn"}
+        if run_id is not None:
+            row['runId'] = run_id  # Captured by this provider's native coordinator, not the current registry.
         if self.admission_guard:
             await self.admission_guard(row)
         # The outer fitted-request boundary retains its own attempt object.
@@ -187,7 +189,7 @@ class ExecutionEvents:
             delivery.admit_work(attempt, row, guarded=self.admission_guard is not None)
         return row
 
-    async def provider_call(self, sid, provider, request, invoke, *, label=None):
+    async def provider_call(self, sid, provider, request, invoke, *, label=None, run_id=None):
         """Observe one host-owned provider action through the same admission gate.
 
         Optional provider actions such as explicit compaction do not implement
@@ -202,13 +204,13 @@ class ExecutionEvents:
             purpose_token = CALL_PURPOSE.set({**(CALL_PURPOSE.get() or {}), "label": "Context compaction", "purpose": "context_compaction"})
             label = "Context compaction"
         try:
-            return await self._observed_provider_call(sid, provider, request, invoke, label=label)
+            return await self._observed_provider_call(sid, provider, request, invoke, label=label, run_id=run_id)
         finally:
             if purpose_token is not None:
                 CALL_PURPOSE.reset(purpose_token)
 
-    async def _observed_provider_call(self, sid, provider, request, invoke, *, label=None):
-        row = await self._begin_provider_call(sid, provider, request, label=label)
+    async def _observed_provider_call(self, sid, provider, request, invoke, *, label=None, run_id=None):
+        row = await self._begin_provider_call(sid, provider, request, label=label, run_id=run_id)
         token = CURRENT_CALL.set(row["id"])
         owner = CURRENT_PROVIDER.set(id(provider))
         admitted = ADMITTED_CALL.set(AdmittedProviderCall(row['id'], self.root_id, sid,
@@ -229,7 +231,7 @@ class ExecutionEvents:
             CURRENT_PROVIDER.reset(owner)
             ADMITTED_CALL.reset(admitted)
 
-    def instrument_provider(self, sid, provider):
+    def instrument_provider(self, sid, provider, *, run_id=None):
         """Observe the public complete boundary; Core hook callbacks may use new tasks.
 
         Keeping request identity here avoids pairing concurrent responses by
@@ -247,12 +249,12 @@ class ExecutionEvents:
         async def complete(request, **kwargs):
             if CURRENT_PROVIDER.get() == id(provider):
                 return await original(request, **kwargs)
-            return await self.provider_call(sid, provider, request, lambda: original(request, **kwargs))
+            return await self.provider_call(sid, provider, request, lambda: original(request, **kwargs), run_id=run_id)
 
         original_compact = getattr(provider, "compact_context", None)
         async def compact_context(request, **kwargs):
             return await self.provider_call(sid, provider, request,
-                lambda: original_compact(request, **kwargs), label="Context compaction")
+                lambda: original_compact(request, **kwargs), label="Context compaction", run_id=run_id)
 
         original_stream = getattr(provider, "stream", None)
         async def stream(request, **kwargs):
@@ -265,7 +267,7 @@ class ExecutionEvents:
                     if callable(getattr(iterator, "aclose", None)):
                         await iterator.aclose()
                 return
-            row = await self._begin_provider_call(sid, provider, request)
+            row = await self._begin_provider_call(sid, provider, request, run_id=run_id)
             self.streaming_calls.add(row["id"])
             self.publish(row)
             iterator = None

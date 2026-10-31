@@ -60,6 +60,43 @@ host-owned responsive spacing and target sizes take precedence.
 For only an accent-color edit, prefer `tokens` and explicitly retain the current
 background. Do not claim that a partial palette edit created a complete theme.
 
+## Share styling with local assets
+
+Use an ordinary ZIP for assets that would be awkward to maintain inside one CSS
+file. Follow the full manifest and limits in the linked theme guide. This is a
+styling package, not a shell/component installer.
+
+```json
+{
+  "type": "appearance",
+  "formatVersion": 1,
+  "name": "Quiet studio",
+  "stylesheet": "theme.css",
+  "assets": [
+    {"path": "assets/paper.png", "mediaType": "image/png", "license": "licenses/artwork.txt"}
+  ],
+  "licenses": ["licenses/artwork.txt"]
+}
+```
+
+Put this at root `appearance.json`, next to `theme.css`. Include the exact asset
+and notice bytes at the declared paths. Reference the image with
+`url("assets/paper.png")` from that root stylesheet. Import validates and embeds
+supported references; it does not download missing assets.
+
+After discovering the installed schema, use `theme.import` with `packageBase64`
+containing the actual base64 ZIP bytes and no `css` argument. Check the returned
+library entry, preview its compiled CSS, and apply only when authorized. Export
+that saved ID with `format: "zip"` to retain its original assets and notices.
+Default/no-format export remains CSS. Inspect a real downloaded ZIP and reimport
+it into disposable storage before claiming a working portable package.
+
+Do not infer font rights from an OFL-looking filename. Retain the upstream
+copyright and license text, source revision and file hashes. For modified or
+subset fonts, check reserved names and format-conversion conditions. Render
+realistic text and controls in both schemes before choosing fonts; close-looking
+alternatives need not all become bundled dependencies.
+
 ## Selectors that preserve the host
 
 Inspect the current DOM; these selectors are examples from the bundled web shell,

@@ -6,13 +6,19 @@ import json
 import os
 import stat
 import uuid
+from collections import OrderedDict
 from contextlib import contextmanager
 from importlib.resources import files
 from pathlib import Path
 import re
+import threading
+
+from . import appearance_packages as packages
 
 LIMIT = 1_000_000
 MARKER = '/* amplifier-appearance: '
+PACKAGE_SUMMARY_CACHE_LIMIT = 128
+_PACKAGE_SUMMARY_LOCK = threading.Lock()
 TOKENS = ('bg', 'surface', 'soft', 'ink', 'muted', 'line', 'accent', 'tint', 'green', 'danger')
 RESOURCE_PRESETS = {
     'digital-rain': {
@@ -115,19 +121,23 @@ PRESETS = {
 def definitions(schema, string):
     content = {'name': string(100), 'css': string(LIMIT), 'description': string(240)}
     target = {'id': string(240), 'expectedFingerprint': {'type': 'string', 'pattern': '^[a-f0-9]{64}$'}}
+    importing = schema({**content, 'fallbackName': string(100),
+                        'packageBase64': string(packages.PACKAGE_BASE64_LIMIT)}, [])
+    importing['oneOf'] = [{'required': ['css'], 'not': {'required': ['packageBase64']}},
+                          {'required': ['packageBase64'], 'not': {'required': ['css']}}]
     return {
         'theme.list': ('List bundled and saved appearances without applying them.', schema()),
         'theme.read': ('Read a bundled or saved appearance, including its current fingerprint.', schema({'id': string(240)}, ['id'])),
         'theme.save': ('Validate and save a portable CSS appearance in the shared library without applying it.',
                        schema(content, ['name', 'css'])),
-        'theme.import': ('Import portable CSS without applying or overwriting an existing appearance. Retains embedded name and description unless supplied.',
-                         schema({**content, 'fallbackName': string(100)}, ['css'])),
+        'theme.import': ('Import exactly one of portable CSS (1 MB) or a base64 ZIP appearance (4 MB raw, at most 5,333,336 base64 characters) without applying or overwriting an entry. A root appearance.json identifies a ZIP; retains metadata unless supplied.',
+                         importing),
         'theme.update': ('Update a saved appearance in place using the fingerprint from theme.read. Bundled appearances are read-only. Does not change applied CSS.',
                          schema({**content, **target}, ['id', 'expectedFingerprint', 'name', 'css'])),
         'theme.delete': ('Delete only a saved library entry using its current fingerprint. Applied CSS remains intact.',
                          schema(target, ['id', 'expectedFingerprint'])),
         'theme.export': ('Export a bundled or saved appearance by id, or the applied appearance when id is omitted. Includes portable metadata; never exports an unsaved draft or preview.',
-                         schema({'id': string(240)}, [])),
+                         schema({'id': string(240), 'format': {'enum': ['css', 'zip']}}, [])),
     }
 
 
@@ -221,6 +231,10 @@ def portable(css, name, description=None):
         meta['description'] = str(meta.get('description') or '')[:240]
     # JSON stays inside a CSS comment, including unusual imported names.
     header = json.dumps(meta, ensure_ascii=True).replace('*/', '*\\/')
+    # New package notices can quote HTML examples. Keep them as comment text
+    # without changing the canonical bytes of ordinary legacy CSS metadata.
+    if '</style' in header.lower():
+        header = header.replace('<', '\\u003c')
     content = MARKER + header + ' */\n' + body
     if len(content.encode('utf-8')) > LIMIT:
         raise AppError('Choose an appearance smaller than 1 MB.')
@@ -230,6 +244,9 @@ def portable(css, name, description=None):
 
 def read_file(path, descriptor):
     from .service import AppError, validate_theme
+    if path.name.endswith('.zip'):
+        raw, package = read_package(path, descriptor)
+        return package_row(path, raw, package)
     fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
     with os.fdopen(fd, encoding='utf-8', newline='') as stream:
         info = os.fstat(stream.fileno())
@@ -246,11 +263,68 @@ def read_file(path, descriptor):
             'css': css, 'fingerprint': fingerprint(css), 'source': 'saved', 'tag': 'Your library'}
 
 
+def read_package_bytes(path, descriptor):
+    from .service import AppError
+    fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > packages.PACKAGE_LIMIT:
+            raise AppError('This appearance is unavailable or exceeds the 4 MB raw ZIP limit.')
+        raw = stream.read(packages.PACKAGE_LIMIT + 1)
+    if len(raw) > packages.PACKAGE_LIMIT:
+        raise AppError('This appearance exceeds the 4 MB raw ZIP limit.')
+    return raw
+
+
+def read_package(path, descriptor):
+    raw = read_package_bytes(path, descriptor)
+    return raw, packages.load(raw)
+
+
+def package_metadata(package):
+    return {'name': package.manifest['name'], 'description': package.manifest.get('description', ''),
+            'source': 'saved', 'tag': 'Your library', **package.summary}
+
+
+def package_row(path, raw, package):
+    return {'id': 'saved:' + path.name, **package_metadata(package),
+            'css': package.css, 'fingerprint': hashlib.sha256(raw).hexdigest()}
+
+
+def package_listing_row(service, path, descriptor):
+    """Cache only validated small metadata, never CSS, manifest or asset bodies.
+
+    Each listing still performs one bounded no-follow read and SHA-256 per ZIP.
+    Exact bytes, not mtime/size, witness invalidation. Cold/changed bytes get full
+    archive/CSS validation; full theme.read always validates and compiles anew.
+    Each service retains at most 128 successful metadata summaries until eviction
+    or service disposal. Failed validation never populates this derived cache.
+    """
+    raw = read_package_bytes(path, descriptor)
+    digest = hashlib.sha256(raw).hexdigest()
+    with _PACKAGE_SUMMARY_LOCK:
+        cache = getattr(service, '_appearance_package_summaries', None)
+        if cache is None:
+            cache = service._appearance_package_summaries = OrderedDict()
+        cached = cache.get(digest)
+        if cached is not None:
+            cache.move_to_end(digest)
+            return {'id': 'saved:' + path.name, 'fingerprint': digest, **cached}
+    # Compile outside the metadata lock; concurrent cold misses may both validate.
+    metadata_row = package_metadata(packages.load(raw))
+    with _PACKAGE_SUMMARY_LOCK:
+        cache[digest] = metadata_row
+        cache.move_to_end(digest)
+        while len(cache) > PACKAGE_SUMMARY_CACHE_LIMIT:
+            cache.popitem(last=False)
+    return {'id': 'saved:' + path.name, 'fingerprint': digest, **metadata_row}
+
+
 def saved_name(identity):
     from .service import AppError
     name = identity.removeprefix('saved:')
     if (not identity.startswith('saved:') or Path(name).name != name
-            or not name.endswith('.css') or '/' in name or '\\' in name or '\0' in name):
+            or not name.endswith(('.css', '.zip')) or '/' in name or '\\' in name or '\0' in name):
         raise AppError('Choose a saved appearance from the library.', 404)
     return name
 
@@ -276,14 +350,17 @@ def listing(service):
     if root.exists() or root.is_symlink():
         with directory(service) as descriptor:
             for name in sorted(os.listdir(descriptor), key=str.casefold):
-                if not name.endswith('.css'):
+                if not name.endswith(('.css', '.zip')):
                     continue
                 try:
-                    rows.append(read_file(Path(name), descriptor))
+                    rows.append(package_listing_row(service, Path(name), descriptor) if name.endswith('.zip')
+                                else read_file(Path(name), descriptor))
                 except (OSError, UnicodeError, AppError) as exc:
                     errors.append({'name': name, 'message': str(exc)})
     for row in rows:
-        row['fingerprint'] = fingerprint(row.pop('css'))
+        css = row.pop('css', None)
+        if 'fingerprint' not in row:
+            row['fingerprint'] = fingerprint(css)
     return {'items': rows, 'errors': errors, 'directory': str(root)}
 
 
@@ -296,8 +373,8 @@ def publish(descriptor, name, content, *, replace=False):
     temporary = '.' + uuid.uuid4().hex + '.tmp'
     fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600, dir_fd=descriptor)
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-            stream.write(content)
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(content if isinstance(content, bytes) else content.encode('utf-8'))
             stream.flush()
             os.fsync(stream.fileno())
         if replace:
@@ -307,7 +384,8 @@ def publish(descriptor, name, content, *, replace=False):
                 os.link(temporary, name, src_dir_fd=descriptor, dst_dir_fd=descriptor, follow_symlinks=False)
             except FileExistsError:
                 try:
-                    existing = read_file(Path(name), descriptor)['css']
+                    existing = (read_package(Path(name), descriptor)[0] if isinstance(content, bytes)
+                                else read_file(Path(name), descriptor)['css'])
                 except (OSError, UnicodeError, AppError) as exc:
                     raise AppError('This library file is unavailable. Nothing was replaced.') from exc
                 if existing != content:
@@ -327,8 +405,9 @@ def summary(service, row):
 def import_name(descriptor, name, content):
     """An updated entry may still own its old content-addressed file name."""
     from .service import AppError
-    stem = name.removesuffix('.amplifier.css')
-    candidates = {name if index == 1 else f'{stem}-{index}.amplifier.css': index
+    extension = '.zip' if isinstance(content, bytes) else '.amplifier.css'
+    stem = name.removesuffix(extension)
+    candidates = {name if index == 1 else f'{stem}-{index}{extension}': index
                   for index in range(1, 1001)}
     occupied = set()
     # Inspect only existing members of this bounded collision family. A deleted
@@ -338,9 +417,10 @@ def import_name(descriptor, name, content):
             if (index := candidates.get(entry.name)) is not None:
                 occupied.add(index)
     for index in sorted(occupied):
-        candidate = name if index == 1 else f'{stem}-{index}.amplifier.css'
+        candidate = name if index == 1 else f'{stem}-{index}{extension}'
         try:
-            existing = read_file(Path(candidate), descriptor)['css']
+            existing = (read_package(Path(candidate), descriptor)[0] if isinstance(content, bytes)
+                        else read_file(Path(candidate), descriptor)['css'])
         except FileNotFoundError:
             occupied.discard(index)
             continue
@@ -350,7 +430,7 @@ def import_name(descriptor, name, content):
             return candidate
     for index in range(1, 1001):
         if index not in occupied:
-            return name if index == 1 else f'{stem}-{index}.amplifier.css'
+            return name if index == 1 else f'{stem}-{index}{extension}'
     raise AppError('Too many appearances share this import identity. Choose another name.')
 
 
@@ -367,12 +447,34 @@ def save(service, args):
         return summary(service, read_file(Path(filename), descriptor))
 
 
+def import_appearance(service, args):
+    from .service import AppError
+    if ('css' in args) == ('packageBase64' in args):
+        raise AppError('Import exactly one of css or packageBase64.')
+    if 'css' in args:
+        return save(service, args)
+    package = packages.load(packages.decode_input(args['packageBase64']))
+    # A ZIP manifest always supplies a name; fallbackName is for metadata-free CSS.
+    package = packages.with_metadata(package, args.get('name'), args.get('description'))
+    content = packages.encode(package.files)
+    filename = f"{slug(package.manifest['name'])}-{hashlib.sha256(content).hexdigest()[:16]}.zip"
+    with directory(service, create=True) as descriptor:
+        filename = import_name(descriptor, filename, content)
+        publish(descriptor, filename, content)
+        return summary(service, package_row(Path(filename), content, package))
+
+
 def mutate(service, args, *, deleting=False):
     from .service import AppError
     filename = saved_name(args['id'])
     with directory(service, writing=True) as descriptor:
         try:
-            previous = read_file(Path(filename), descriptor)
+            package = None
+            if filename.endswith('.zip'):
+                raw, package = read_package(Path(filename), descriptor)
+                previous = package_row(Path(filename), raw, package)
+            else:
+                previous = read_file(Path(filename), descriptor)
         except (OSError, UnicodeError) as exc:
             raise AppError('Appearance not found.', 404) from exc
         if previous['fingerprint'] != args['expectedFingerprint']:
@@ -381,17 +483,42 @@ def mutate(service, args, *, deleting=False):
             os.unlink(filename, dir_fd=descriptor)
             os.fsync(descriptor)
             return {'id': args['id'], 'deleted': True, 'appliedAppearanceUnchanged': True}
-        content = portable(args['css'], args['name'], args.get('description', previous['description']))
+        if package is not None:
+            updated = packages.with_metadata(package, args['name'],
+                                             args.get('description', previous['description']), args['css'])
+            content = packages.encode(updated.files)
+        else:
+            content = portable(args['css'], args['name'], args.get('description', previous['description']))
         publish(descriptor, filename, content, replace=True)
         return summary(service, read_file(Path(filename), descriptor))
 
 
-def export(service, identity=None):
+def export(service, identity=None, format='css'):
+    from .service import AppError
+    if format not in ('css', 'zip'):
+        raise AppError('Choose css or zip for an appearance export.')
+    if format == 'zip' and identity and identity.startswith('saved:') and saved_name(identity).endswith('.zip'):
+        try:
+            with directory(service) as descriptor:
+                raw, package = read_package(Path(saved_name(identity)), descriptor)
+        except (OSError, UnicodeError) as exc:
+            raise AppError('Appearance not found.', 404) from exc
+        return zip_export(identity, package.manifest['name'], raw)
     if identity:
         row = read(service, identity)
     else:
         row = service.state['theme']
     # Preserve the established no-id export: exact committed CSS, not a preview.
     css = portable(row['css'], row['name'], row.get('description')) if identity else row['css']
+    if format == 'zip':
+        package = packages.from_css(css, row['name'], row.get('description'))
+        return zip_export(identity, row['name'], packages.encode(package.files))
     return {'id': identity, 'name': row['name'], 'css': css,
             'fingerprint': fingerprint(css), 'filename': slug(row['name']) + '.amplifier.css'}
+
+
+def zip_export(identity, name, raw):
+    import base64
+    return {'id': identity, 'name': name, 'format': 'zip', 'filename': slug(name) + '.zip',
+            'mimeType': 'application/zip', 'base64': base64.b64encode(raw).decode('ascii'),
+            'fingerprint': hashlib.sha256(raw).hexdigest()}

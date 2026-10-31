@@ -28,7 +28,7 @@ for line in sys.stdin:
     if op == 'retire':
         time.sleep(.04)
         result = {'retired': True}
-    if op == 'control' and data['operation'] == 'coordination.submit':
+    if op == 'control' and data['operation'] in {'coordination.submit', 'coordination.deliver'}:
         args = data['arguments']
         print(json.dumps({'op': 'bridge', 'id': 'admit', 'operation': 'coordination.admit', 'args': args}), flush=True)
         answer = json.loads(sys.stdin.readline())
