@@ -27,8 +27,10 @@ def definitions(schema, string):
                   reserveCostUsd={'type': 'number', 'minimum': 0},
                   unknownPolicy={'enum': ['pause', 'allow']}, includeEstimatedCost={'type': 'boolean'})
     from .assignment_tasks import definitions as task_definitions
+    from .assignment_task_limits import definitions as limit_definitions
     return {
         **task_definitions(schema, string),
+        **limit_definitions(schema, string),
         'assignment.brief': ('Read a compact paged current-member brief with blockers and latest direct-request outcome links. Passive and bounded; no history, worker admission or permission changes. Previews do not replace exact constraints or evidence.', schema({**target, 'after': string(2048), 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 16}}, ['sessionId'])),
         'assignment.read': ('Inspect this explicit assignment, its members and aggregate usage without starting workers. Independent peers are not members.', schema(target, ['sessionId'])),
         'assignment.start': ('Start an assignment for this unassigned root. New commissioned chats join automatically. Adding an existing chat requires explicit adoption.', schema(target, ['sessionId'])),
@@ -354,6 +356,9 @@ class Assignments:
                     self.service._task(self.interrupt(identity, stops))
 
     async def _dispatch(self, action, args, origin, command_id, caller):
+        if action in {'assignment.task.read', 'assignment.task.setLimit'}:
+            from .assignment_task_limits import dispatch
+            return await dispatch(self, action, args, origin, command_id, caller)
         if action == 'assignment.retire':
             from .assignment_retirement import dispatch
             return await dispatch(self, action, args, origin, command_id, caller)

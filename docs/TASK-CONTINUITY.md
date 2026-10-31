@@ -5,7 +5,8 @@ revisioned corrections, status, question IDs, operation IDs, artifact references
 and explicit completion evidence. UI and `app_control` use the same `task.*`
 actions: `get`, `create`, `update`, `pause`, `resume`, `block`, `complete`.
 Agent actions are bound to the calling conversation, including the legacy
-`runtime.control` forwarding alias. These controls do not send input, change a
+`runtime.control` forwarding alias. The narrow assignment-owner limit control
+below is separate from general cross-chat task editing. These controls do not send input, change a
 draft/selection, grant permissions, resolve questions, or create a scheduler.
 
 Mutations require exact `expectedRevision` and an idempotent dispatch command ID.
@@ -32,6 +33,34 @@ A completed objective remains immutable; `task.create` can record an already
 authorized follow-up and retains the completed task in history. Neither action
 supplies permission, resolves a pending user choice or overrides Stop. This is
 operating guidance for existing controls, not a new grant or automatic migration.
+
+An assignment owner can use `assignment.task.read` to inspect a bound member's
+canonical task identity, revision, limit, used turns and exact limit-change receipt
+without starting its worker. `assignment.task.setLimit` edits only `maxTurns` and
+a retained correction through the existing native task controller. It requires
+the current assignment owner, same bound member, exact assignment revision and
+exact task identity/revision. The member does not need another model turn, even
+when its current limit is exhausted. Preparation rechecks ownership, location,
+Stop, configuration and authorization at control admission; native application
+checks the exact task identity/revision. An already admitted control may finish,
+but cannot clear a later Stop or resume work.
+
+Increasing or removing an existing limit uses the manager's user-selected Full
+access policy or an original user message / verified saved question answer
+authorizing that correction. A saved answer remains usable after its answering
+turn ends; the user need not repeat it. Generic agent origin does not classify a
+legacy cap as a planning estimate. Full access does not change a deliberate cap
+automatically: the manager still explicitly chooses and records the correction
+within the user's mandate. In Ask mode, missing authorization leaves the cap
+unchanged. Tightening a limit does not require additional permission.
+
+The change retains the same task, accumulated turns, status, evidence, questions,
+operation references and other budgets. It does not clear Stop/pause, resolve an
+unknown effect, or send/replay input. Continuation uses the existing separate
+controls and admission checks. Its exact command receipt stays in the existing
+native control state, including manager and authorization provenance. After a
+lost acknowledgement, read that receipt; absence is not proof that an in-flight
+control did not commit. No new permission store or continuation loop is added.
 
 ## Continuation and recovery
 
