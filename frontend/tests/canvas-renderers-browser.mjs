@@ -106,9 +106,97 @@ try{
  const beforeClose=await view('primary');
  await action('canvas.close');await action('canvas.reopen');
  await assert.rejects(()=>action('canvas.views.command',{...target(beforeClose),action:'canvas.view',args:{patch:{readerScale:99}}}),/changed/);
- await openDetails();
- const beforeReload=(await state()).client.id;
- await page.reload();await closeDetails();await page.getByRole('article',{name:'Reading view'}).first().waitFor();
+ const reloadState=await state(),beforeReload=reloadState.client.id;
+ // The visible inspector is optimistic. Hold only this client's exact opening
+ // update and exercise the receipt barrier while that panel is already visible.
+ const detailsArgs={sessionId:reloadState.selectedSessionId,patch:{canvasControlsExpanded:true}};
+ const actionsURL=new URL('/api/actions',url).href;
+ const openingDetails=request=>{
+  if(request.url()!==actionsURL||request.method()!=='POST'||request.headers()['x-amplifier-client']!==beforeReload)return false;
+  let body;try{body=request.postDataJSON()}catch(error){failDetails(error);return false}
+  return body?.action==='view.update'&&body.args?.sessionId===detailsArgs.sessionId&&
+   body.args?.patch?.canvasControlsExpanded===true&&Object.keys(body.args.patch).length===1&&Object.keys(body.args).length===2;
+ };
+ let releaseDetails,markHeld,heldRequest,forwarded,requestedDetails,reloadAfterReceipt,acceptedDetails=false,reloadStarted=false,cancelReload=false;
+ let rejectDetails,detailsTimer,drainTimer,detailsFailure,pageStop;
+ const pendingDetails=[],detailsFailures=[],cleanupFailures=[];
+ const heldDetails=new Promise(resolve=>{releaseDetails=resolve});
+ const capturedDetails=new Promise(resolve=>{markHeld=resolve});
+ // One lifecycle watchdog includes capture, forwarding, the complete response
+ // body and reload. Reserve five seconds for cleanup: at most 30 seconds total.
+ const detailsDeadline=new Promise((_,reject)=>{rejectDetails=reject});
+ const failDetails=error=>{detailsFailures.push(error);cancelReload=true;releaseDetails();rejectDetails(error)};
+ const retainDetails=promise=>{
+  pendingDetails.push(promise);promise.catch(failDetails);return promise;
+ };
+ const holdDetails=route=>{
+  const operation=(async()=>{
+   const request=route.request();
+   if(heldRequest||!openingDetails(request))return route.continue();
+   heldRequest=request;markHeld(request);
+   forwarded=heldDetails.then(()=>route.continue());
+   return forwarded;
+  })();
+  // The handler must not leak a rejection; retain it and fail the lifecycle.
+  return retainDetails(operation).catch(()=>{});
+ };
+ detailsTimer=setTimeout(()=>failDetails(Error('Details reload lifecycle exceeded 25 seconds')),25000);
+ const detailsLifecycle=(async()=>{
+  await page.route(actionsURL,holdDetails);
+  if(cancelReload)return;
+  requestedDetails=retainDetails(page.waitForRequest(openingDetails));
+  await openDetails();
+  const requested=await requestedDetails;
+  const detailsRequest=await capturedDetails;
+  if(cancelReload)return;
+  assert.equal(detailsRequest,requested);
+  const detailsPayload=detailsRequest.postDataJSON();
+  assert.equal(detailsPayload.action,'view.update');assert.deepEqual(detailsPayload.args,detailsArgs);
+  assert.equal(typeof detailsPayload.id,'string');assert.ok(detailsPayload.id);
+  // Correlate by the captured Request object, not another view.update response.
+  reloadAfterReceipt=retainDetails((async()=>{
+   const response=await page.waitForResponse(response=>response.request()===detailsRequest);
+   assert.equal(response.request(),detailsRequest);assert.equal(response.status(),200);
+   assert.equal(await response.finished(),null);
+   const receipt=await response.json();
+   assert.equal(receipt.accepted,true);assert.equal(receipt.hostInstanceId,reloadState.client.hostInstanceId);
+   assert.deepEqual(response.request().postDataJSON(),detailsPayload);
+   acceptedDetails=true;
+   if(cancelReload)return;
+   reloadStarted=true;
+   await page.reload();
+  })());
+  await expect(inspector).toBeVisible();await expect(reader).toHaveJSProperty('inert',true);
+  assert.equal(acceptedDetails,false,'Optimistic Details is not an accepted update');
+  assert.equal(reloadStarted,false,'Visible Details must not release the reload barrier');
+  assert.equal((await state()).client.id,beforeReload);
+  releaseDetails();await forwarded;
+  await reloadAfterReceipt;
+  assert.equal(acceptedDetails,true);assert.equal(reloadStarted,true);
+ })();
+ try{await Promise.race([detailsLifecycle,detailsDeadline])}catch(error){detailsFailure=error}
+ finally{
+  clearTimeout(detailsTimer);cancelReload=true;releaseDetails();markHeld(null);
+  // This test owns this page. Stop its I/O before draining failed work, never
+  // close another page/context or wait indefinitely for a response body.
+  const stopDetailsIO=()=>pageStop??=(async()=>{
+   try{await page.close({runBeforeUnload:false})}catch(error){cleanupFailures.push(error)}
+  })();
+  const drainDetails=(async()=>{
+   if(detailsFailure||detailsFailures.length)await stopDetailsIO();
+   try{await page.unroute(actionsURL,holdDetails)}catch(error){cleanupFailures.push(error);await stopDetailsIO()}
+   const settled=await Promise.allSettled([detailsLifecycle,...pendingDetails]);
+   for(const result of settled)if(result.status==='rejected')detailsFailures.push(result.reason);
+  })();
+  try{
+   await Promise.race([drainDetails,new Promise((_,reject)=>{
+    drainTimer=setTimeout(()=>{stopDetailsIO();reject(Error('Details reload cleanup exceeded 5 seconds; owned page stop requested'))},5000);
+   })]);
+  }catch(error){cleanupFailures.push(error)}finally{clearTimeout(drainTimer)}
+ }
+ const detailsErrors=[...new Set([detailsFailure,...detailsFailures,...cleanupFailures].filter(error=>error!==undefined))];
+ if(detailsErrors.length)throw detailsErrors.length===1?detailsErrors[0]:new AggregateError(detailsErrors,'Details reload failed, including retained I/O/cleanup failures');
+ await closeDetails();await page.getByRole('article',{name:'Reading view'}).first().waitFor();
  assert.notEqual((await state()).client.id,beforeReload);
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep this draft through viewer changes');
  // A module can pass fixtures but still fail on live data: contain and recover.
