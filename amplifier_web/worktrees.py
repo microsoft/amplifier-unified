@@ -629,6 +629,11 @@ class Worktrees:
                     record['finishingTurn'] = {'workerInstance': instance,
                         'generationId': active['id'], 'inputIds': copy.deepcopy(active.get('inputIds', [])),
                         'configurationRevision': session.get('configurationPendingRevision', 0)}
+                    from .collaboration import BINDING, PRINCIPAL
+                    native_snapshot = (BINDING.get() or {}).get('_handoffSnapshot')
+                    if (origin == 'agent' and PRINCIPAL.get() == (session.get('runtimeSessionId') or sid)
+                            and isinstance(native_snapshot, dict)):
+                        record['finishingTurn']['nativeDrain'] = copy.deepcopy(native_snapshot)
             if manager:
                 source = self.app._session(manager['sourceSessionId'])
                 self.app.collaboration.require_inbox_slot(source['id'])
@@ -778,7 +783,8 @@ class Worktrees:
                 while True:
                     reason = self.authority_changed(record)
                     if reason: raise HandoffSuperseded(reason)
-                    status = await boundary(record['sessionId'], record['id'])
+                    from .handoff_drain import receipt_disposition
+                    status = await boundary(record['sessionId'], record['id'], receipt=receipt_disposition(record))
                     if status.get('ready'):
                         if status.get('continuationAllowed') is False and not record.get('managerPlacement'):
                             record['resumeRequested'] = False

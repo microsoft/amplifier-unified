@@ -120,9 +120,12 @@ class WorkspaceWork:
         if origin not in {'ui', 'user'} and (not owner or owner['workspace'] != workspace['path']):
             self.error('Work is outside the calling workspace.', 403)
         if origin not in {'ui', 'user'}:
-            # Passive reads do not need an active generation, but a delegated
-            # child cannot borrow the transport's root identity.
-            self.receipts.source({}, origin, caller, hydrate=False)
+            # Native descendants may read their existing workspace without
+            # becoming the root actor for mutations below.
+            from .child_execution import current
+            row = self.service._session(caller, hydrate=False)
+            if current(self.service, row) is None:
+                self.receipts.source({}, origin, caller, hydrate=False)
         return workspace
 
     def actor(self, args, origin, caller, workspace):
