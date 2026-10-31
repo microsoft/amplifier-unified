@@ -225,7 +225,8 @@ def main():
                 name: digest(ROOT / name) for name in (
                     'scripts/qualify_omitted_ref.py', 'tests/fixtures/omitted_ref_expanded_lock.py',
                     'tests/fixtures/omitted_ref_acquisition_experiment.py',
-                    'tests/fixtures/omitted_ref_worker_probe.py', 'scripts/qualification_diagnostics.py')})
+                    'tests/fixtures/omitted_ref_worker_probe.py', 'scripts/qualification_diagnostics.py',
+                    'scripts/uv_diagnostic_forms.py')})
         runtime_path = ROOT / 'amplifier_web/runtime_deps/pyproject.toml'
         raw = runtime_path.read_text()
         canonical = tomllib.loads(raw)
@@ -325,15 +326,31 @@ Path(sys.argv[1]).write_text(json.dumps({'python':sys.executable,'prefix':sys.pr
                 run('expanded-offline-lock', command, env=clean_env, timeout=490)
             finally:
                 status['fixtureCleanup'] = 'unknown'
+                status['fixtureReceiptHealth'] = 'unknown'
                 try:
                     receipt = json.loads((output / 'expanded-fixture/result.json').read_text())
                     if (receipt.get('finalized') is True
                             and receipt.get('cleanup', {}).get('processes') == 'confirmed-absent'):
                         status['fixtureCleanup'] = 'settled'
+                    # The saved JSON is write intent, not proof of its own fsync.
+                    # Bind the fixed final process summary without exporting text.
+                    with (raw_logs / 'expanded-offline-lock.log').open('rb') as stream:
+                        final = stream.read(4097)
+                    if len(final) <= 4096:
+                        summary = json.loads(final)
+                        if (type(summary) is dict and set(summary) == {'status', 'phase', 'receiptHealth'}
+                                and summary['status'] == receipt.get('status')
+                                and summary['phase'] == receipt.get('phase')
+                                and type(summary['receiptHealth']) is str
+                                and summary['receiptHealth'] in ('durable', 'failed')):
+                            status['fixtureReceiptHealth'] = summary['receiptHealth']
                 except (OSError, ValueError):
                     pass
             assert receipt['status'] == 'passed' and receipt['expandedLock']['canonicalRowsPreserved']
             assert status['fixtureCleanup'] == 'settled'
+            assert status['fixtureReceiptHealth'] == 'durable' and receipt['receiptHealth'] == 'write-intent'
+            assert (receipt['observer']['grammarVersion'] == 1
+                    and receipt['observer']['sourceSha256'] == source['sourceHashes']['scripts/uv_diagnostic_forms.py'])
             status.update(status='passed', modelCalls=0, mode='offline-expanded-lock', actualWorkerStarted=False)
         else:
             # Existing actual-worker path; the preflight never enters it.

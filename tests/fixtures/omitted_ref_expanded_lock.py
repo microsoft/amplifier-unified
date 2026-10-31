@@ -1,4 +1,4 @@
-"""Supporting check 13: offline expansion of the canonical lock, not adoption.
+"""Supporting offline expansion of the canonical lock, not adoption.
 
 Source authoring is not execution evidence. The caller owns the admitted guest,
 NET/PID namespaces, nonroot setpriv/capability drop and timeout supervisor.
@@ -48,6 +48,7 @@ import types
 from urllib.parse import parse_qs, urlsplit
 
 CHECKOUT = Path(__file__).resolve().parents[2]
+FORMS_SHA256 = 'bdae0ba56eaee027ec09823561b2a6dea3204c2b20f861ba9f03c278ce23d5a1'
 EXPERIMENT_SHA256 = '8ed5a8ecef086f96df3f77208c8ec5c4dc7a18274a196843d0f89e40daf385ca'
 CANONICAL_SHA256 = 'a533406d51eb2877b08d1be6dac163c3108d6526db4a066dc905de7837eaa179'
 REPOSITORY_LOCK_SHA256 = 'd819bbe081b1c292f0914456a31962458df5fc8a04ef288b079ce60393d4db8f'
@@ -100,6 +101,7 @@ def load_forms():
     """Load only the task's pure recognizer; no product or resolver execution."""
     path = CHECKOUT / 'scripts/uv_diagnostic_forms.py'
     source = path.read_bytes()
+    require(hashlib.sha256(source).hexdigest() == FORMS_SHA256)
     module = types.ModuleType('uv_diagnostic_forms')
     module.__file__ = str(path)
     exec(compile(source, str(path), 'exec', dont_inherit=True), module.__dict__)
@@ -304,7 +306,7 @@ def main():
                     for path in (args.runtime_manifest, args.runtime_lock, args.uv)))
     output.mkdir(parents=True, mode=0o700)
     report = {
-        'schema': 1, 'supportingCheck': 13, 'scope': 'expanded-offline-lock-only',
+        'schema': 1, 'supportingCheck': 15, 'scope': 'expanded-offline-lock-only',
         'status': 'not-run', 'phase': 'readiness', 'finalized': False,
         'phases': {phase: 'unrun' for phase in PHASES},
         'commands': [{'phase': phase, 'role': role, 'status': 'unrun',
@@ -434,6 +436,11 @@ def main():
         experiment, experiment_path = load_experiment()
         forms, forms_path, forms_hash = load_forms()
         bind('diagnostic-forms', forms_path, forms_hash)
+        grammar = forms.parse_form(b'', 1, uv_version='0.13.6')
+        require(forms.validate_form(grammar) and grammar['grammarVersion'] == 1
+                and grammar['uvVersion'] == '0.13.6' and grammar['kind'] == 'unknown')
+        report['observer'] = {'grammarVersion': grammar['grammarVersion'],
+                              'sourceSha256': forms_hash, 'verifiedBeforeCommands': True}
         fixture_path = CHECKOUT / 'tests/fixtures/omitted_ref_worker_probe.py'
         helper_path = CHECKOUT / 'scripts/qualification_diagnostics.py'
         bind('experiment', experiment_path, EXPERIMENT_SHA256)
