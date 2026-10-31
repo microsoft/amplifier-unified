@@ -3,6 +3,8 @@
 These checks do not establish native Worker/provider efficacy. The parent owns
 joined workflow qualification; no admission/subscription guard is replaced here.
 """
+from amplifier_web import test_execution_settings as execution_settings
+
 import asyncio
 import copy
 import hashlib
@@ -145,7 +147,7 @@ async def test_unsupported_return_refuses_before_input_or_wait(app, monkeypatch)
 async def test_preflight_both_inboxes_without_partial_send(app, monkeypatch, full_side):
     source, target = app.state['sessions']
     target['status'] = 'working'
-    monkeypatch.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 1)
+    monkeypatch.setitem(execution_settings.CONCURRENCY_DEFAULTS, 'maxPendingPeerInputs', 1)
     full = source if full_side == 'sender' else target
     await send(app, 'occupies-slot', sessionId=full['id'])
     before = projections(app)
@@ -158,11 +160,11 @@ async def test_preflight_both_inboxes_without_partial_send(app, monkeypatch, ful
 
 async def test_self_send_reserves_input_and_return_together(app, monkeypatch):
     source = app.state['sessions'][0]
-    monkeypatch.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 1)
+    monkeypatch.setitem(execution_settings.CONCURRENCY_DEFAULTS, 'maxPendingPeerInputs', 1)
     with pytest.raises(AppError, match='inbox is full'):
         await send(app, sessionId=source['id'], returnNotification=True)
     assert not source['messages'] and not committed(app, 'request-1')
-    monkeypatch.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 2)
+    monkeypatch.setitem(execution_settings.CONCURRENCY_DEFAULTS, 'maxPendingPeerInputs', 2)
     sent = await send(app, sessionId=source['id'], returnNotification=True)
     assert sent['subscription']['status'] == 'waiting'
     assert len(source['messages']) == 1
@@ -175,7 +177,7 @@ async def test_self_send_reserves_input_and_return_together(app, monkeypatch):
 
 async def test_concurrent_optins_cannot_oversubscribe(app, monkeypatch):
     app.state['sessions'][1]['status'] = 'working'
-    monkeypatch.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 1)
+    monkeypatch.setitem(execution_settings.CONCURRENCY_DEFAULTS, 'maxPendingPeerInputs', 1)
     responses = await asyncio.gather(
         send(app, 'first', returnNotification=True),
         send(app, 'second', returnNotification=True), return_exceptions=True)
@@ -262,7 +264,8 @@ async def test_exact_retry_keeps_cancelled_policy_at_full_capacity(app, monkeypa
     await agent_action(app, source, 'coordination.cancel', {
         'sessionId': source['id'], 'requestId': 'request-1'}, 'cancel-request')
     before = app.collaboration.receipt('request-1')
-    monkeypatch.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 0)
+    monkeypatch.setitem(execution_settings.CONCURRENCY_DEFAULTS, 'maxPendingPeerInputs', 1)
+    await send(app, 'occupies-slot')
     retry = await send(app, returnNotification=True)
     assert retry['duplicate'] and retry['delivery'] == 'cancelled'
     assert retry['subscription'] == before['subscription']
@@ -355,7 +358,7 @@ async def test_sealed_return_is_revision_specific_and_review_is_not_consumption(
 
 async def test_backpressured_review_without_notification_is_not_delivery(app, monkeypatch):
     source, target = app.state['sessions']
-    monkeypatch.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 1)
+    monkeypatch.setitem(execution_settings.CONCURRENCY_DEFAULTS, 'maxPendingPeerInputs', 1)
     await send(app, returnNotification=True)
     await settled(app, 'request-1', 'accepted')
     # An interim report keeps a reservation for the next revision; with one
@@ -374,7 +377,7 @@ async def test_backpressured_review_without_notification_is_not_delivery(app, mo
     assert reviewed['acknowledgement']['status'] == 'recorded'
     assert reviewed['notification']['status'] == 'not_queued'
     assert not committed(app, identity)
-    monkeypatch.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 64)
+    monkeypatch.setitem(execution_settings.CONCURRENCY_DEFAULTS, 'maxPendingPeerInputs', 64)
     app.collaboration.resume_outcomes(source['id'])
     app.collaboration.enqueue_continuation(app.collaboration.receipt('request-1'))
     assert not committed(app, identity)

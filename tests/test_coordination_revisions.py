@@ -299,7 +299,9 @@ async def test_watch_cancellation_suppresses_unsubmitted_notification_and_foreig
         await app.dispatch('coordination.watch.read', {'sessionId': target['id'], 'watchId': 'watch'})
 
 
-async def test_sender_quota_reserves_capacity_for_an_independent_sender_and_round_robin(app):
+async def test_sender_quota_reserves_capacity_for_an_independent_sender_and_round_robin(app, monkeypatch):
+    from amplifier_web import test_execution_settings as execution_settings
+    monkeypatch.setitem(execution_settings.CONCURRENCY_DEFAULTS, 'maxPendingPeerInputsPerSender', 16)
     source, target = app.state['sessions']
     target['status'] = 'working'
     other = app._new_session({'title': 'Independent'})
