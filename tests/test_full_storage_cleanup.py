@@ -17,6 +17,8 @@ from test_dependency_layers import prepared, source as dependency_source, settle
 
 @pytest.fixture
 def storage(app, tmp_path, monkeypatch):
+    from amplifier_web.smart_tools import SmartToolsManager
+    app.smart_tools = SmartToolsManager(app)
     manager, names, project = manager_fixture(tmp_path / 'owned-code', monkeypatch)
     manager.service = app
     manager.wakeup = asyncio.Event()
