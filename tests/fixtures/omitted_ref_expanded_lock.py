@@ -96,6 +96,85 @@ def load_experiment():
     return module, path
 
 
+def load_forms():
+    """Load only the task's pure recognizer; no product or resolver execution."""
+    path = CHECKOUT / 'scripts/uv_diagnostic_forms.py'
+    source = path.read_bytes()
+    module = types.ModuleType('uv_diagnostic_forms')
+    module.__file__ = str(path)
+    exec(compile(source, str(path), 'exec', dont_inherit=True), module.__dict__)
+    return module, path, hashlib.sha256(source).hexdigest()
+
+
+def observe_form(path, facts, returncode, forms, *, uv_version):
+    """Add a closed-form observation without replacing the process outcome."""
+    # This failure envelope must not call the parser that may itself be failing.
+    supported = type(uv_version) is str and uv_version == '0.13.6'
+    unknown = {'grammarVersion': 1, 'uvVersion': '0.13.6' if supported else 'unsupported',
+               'parseHealth': 'incomplete' if supported else 'unsupported-version',
+               'kind': 'unknown', 'form': 'unknown',
+               'flags': {'resolutionProof': None, 'offlineAbsence': None, 'tomlDiagnostic': None}}
+    try:
+        require(type(facts) is dict and type(facts['rawLogBytes']) is int and facts['rawLogBytes'] >= 0)
+        require(type(facts['rawLogSha256']) is str
+                and re.fullmatch('[a-f0-9]{64}', facts['rawLogSha256']) is not None)
+        require(facts['complete'] is True)
+        with path.open('rb') as stream:
+            payload = stream.read(65537)
+        if facts['rawLogBytes'] <= 65536:
+            require(len(payload) == facts['rawLogBytes']
+                    and hashlib.sha256(payload).hexdigest() == facts['rawLogSha256'])
+        else:
+            require(len(payload) == 65537)
+        parsed = forms.parse_form(payload, returncode, complete=True, uv_version=uv_version)
+        require(forms.validate_form(parsed))
+        return {'captureHealth': 'complete', 'form': parsed}
+    except BaseException:
+        return {'captureHealth': 'failed', 'form': unknown}
+
+
+def durable_report(output, report, forms):
+    """Commit a bounded receipt before teardown; IO failure never means success.
+
+    The saved receipt contains only a write intent. Actual durability is returned
+    after file AND directory fsync; it cannot truthfully attest to its own future
+    write. Callers retain the returned health and fail on any failed write.
+    A stored status alone is never acceptance: the caller must observe exit 0.
+    In particular, a directory-fsync failure can follow a successful replace.
+    """
+    fd = None
+    try:
+        for row in report.get('commands', []):
+            observation = row.get('diagnostic')
+            if observation is not None:
+                require(type(observation) is dict and set(observation) == {'captureHealth', 'form'})
+                require(type(observation['captureHealth']) is str
+                        and observation['captureHealth'] in ('complete', 'failed'))
+                require(forms is not None and forms.validate_form(observation['form']))
+                if observation['captureHealth'] == 'failed':
+                    require(observation['form']['kind'] == 'unknown'
+                            and observation['form']['parseHealth'] != 'recognized')
+        payload = serialized({**report, 'receiptHealth': 'write-intent'}) + b'\n'
+        require(len(payload) <= 65536)
+        temporary = output / 'result.json.pending'
+        with temporary.open('wb') as stream:
+            require(stream.write(payload) == len(payload))
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(output / 'result.json')
+        fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY)
+        os.fsync(fd)
+        return True
+    except BaseException:
+        return False
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
 class SupplyEvidence:
     """The original helper writes to a PRIVATE report; save copies only facts."""
 
@@ -238,7 +317,7 @@ def main():
         'immutableInputs': 'unrun',
     }
     immutable = {}
-    experiment = fixture = None
+    experiment = fixture = forms = None
     root_created = False
     deadline = False
     capture_failed = False
@@ -252,17 +331,12 @@ def main():
 
     def save():
         nonlocal capture_failed
-        try:
-            # Only the locally authored fixed-schema report reaches output.
-            payload = serialized(report) + b'\n'
-            require(len(payload) <= 65536)
-            temporary = output / 'result.json.pending'
-            temporary.write_bytes(payload)
-            temporary.replace(output / 'result.json')
-            return True
-        except BaseException:
+        if not durable_report(output, report, forms):
             capture_failed = True
+            report['receiptHealth'] = 'failed'
             return False
+        report['receiptHealth'] = 'durable'
+        return True
 
     def phase(name):
         current = report['phase']
@@ -322,6 +396,13 @@ def main():
                             complete=normal and not deadline)
                     row[channel] = {key: facts[key] for key in (
                         'complete', 'rawLogBytes', 'rawLogSha256', 'classifierVersion')}
+                    if channel == 'stderr':
+                        row['diagnostic'] = observe_form(
+                            path, facts, row['returncode'], forms,
+                            uv_version=report.get('versions', {}).get('uv', 'unsupported'))
+                        if row['diagnostic']['captureHealth'] != 'complete':
+                            failed = True
+                            row['capture'] = 'failed'
                     if channel == 'stderr' and bindings is not None and row['returncode'] != 0:
                         row['acquisition'] = acquisition_failure(path, facts, row['returncode'], bindings)
                 except BaseException:
@@ -351,6 +432,8 @@ def main():
                 and all(int(identity[key].strip(), 16) == 0
                         for key in ('CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb')))
         experiment, experiment_path = load_experiment()
+        forms, forms_path, forms_hash = load_forms()
+        bind('diagnostic-forms', forms_path, forms_hash)
         fixture_path = CHECKOUT / 'tests/fixtures/omitted_ref_worker_probe.py'
         helper_path = CHECKOUT / 'scripts/qualification_diagnostics.py'
         bind('experiment', experiment_path, EXPERIMENT_SHA256)
@@ -502,7 +585,7 @@ def main():
                 report['cleanup']['fixtureSymlinks'] = 'unrun-unsettled'
             else:
                 report['immutableInputs'] = 'incomplete'
-                require(len(immutable) == 9)
+                require(len(immutable) == 10)
                 checks = [not path.is_symlink() and file_hash(path) == digest
                           for path, digest in immutable.values()]
                 unchanged = all(checks)
@@ -535,7 +618,8 @@ def main():
         if not save():
             report['status'] = 'unknown' if deadline or report['status'] == 'unknown' else 'failed'
         signal.signal(signal.SIGTERM, previous_term)
-    print(json.dumps({'status': report['status'], 'phase': report['phase']}))
+    print(json.dumps({'status': report['status'], 'phase': report['phase'],
+                      'receiptHealth': report.get('receiptHealth', 'failed')}))
     return 0 if report['status'] == 'passed' else 1
 
 
