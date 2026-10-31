@@ -112,6 +112,11 @@ def snapshot(state, *, session_items=None):
             status=row['status'];label={'update':'Update available','check_failed':'Could not check','local_changes':'Local edits preserved'}[status]
             add('source:'+row['id'],label+' · '+row['label'],'maintenance','updates',row.get('detail',''),[status,row.get('latest'),row.get('current')])
     failures = updates.get('diagnostics', {}).get('activeFailures', {})
+    overflow = updates.get('diagnostics', {}).get('failureOverflow')
+    if overflow:
+        add('updates:failure-overflow', 'Additional update failures need review', 'maintenance', 'updates',
+            'More distinct failures occurred than the active summary can retain. Original receipts remain in update diagnostics; recovery of these additional failures is unverified.',
+            overflow.get('firstAt'), actionRequired=True, occurrences=overflow['occurrences'])
     for key, failure in sorted(failures.items(), key=lambda pair: pair[1]['first'].get('at', 0), reverse=True):
         kind = failure['kind']
         event = failure['first']

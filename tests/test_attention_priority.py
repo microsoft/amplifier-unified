@@ -16,7 +16,7 @@ def fixture(tmp_path, updates=None):
 
 
 def fail(diagnostics, *, component='amplifier-module-loop-live', kind='ecosystem'):
-    diagnostics.begin(kind)
+    diagnostics.begin(kind, 'c' * 40, components=[component])
     return diagnostics.record(kind + '-validation', 'failed', component=component,
                               reason='runtime-resolution-mismatch', errorType='ValueError',
                               expectedRevision='a' * 40, observedRevision='b' * 40)
@@ -71,7 +71,7 @@ def test_read_repeat_distinct_recovery_and_next_failure(tmp_path):
     read_all(state)
     # Checking, preparation and clearing a transient error are NOT recovery.
     state['updates'].update(phase='checking', error=None)
-    diagnostics.begin('ecosystem')
+    diagnostics.begin('ecosystem', components=['amplifier-module-loop-live','amplifier-module-hooks-approval'])
     diagnostics.clear_failure()
     diagnostics.record('ecosystem-stage', 'succeeded')
     assert len(active(state)) == 2
@@ -90,7 +90,7 @@ def test_application_success_does_not_resolve_ecosystem_failure(tmp_path, phase)
     fail(diagnostics)
     fail(diagnostics, kind='application')
     assert len(active(state)) == 2
-    diagnostics.begin('application')
+    diagnostics.begin('application', 'c' * 40)
     diagnostics.clear_failure()
     diagnostics.record(phase, 'succeeded')
     assert len(active(state)) == 1
@@ -105,11 +105,12 @@ def test_legacy_previously_read_failure_is_migrated_only_with_active_evidence(tm
                'diagnostics': {'events': [failure], 'lastFailure': failure}}
     state, _ = fixture(tmp_path, updates)
     read_all(state)
-    assert len(active(state)) == 1 and snapshot(state)['badgeUnread'] == 1
+    assert len(active(state)) == 2 and snapshot(state)['badgeUnread'] == 2
     # A healthy old installation may retain lastFailure solely as history.
+    app_failure = {**failure, 'kind': 'application', 'phase': 'restart-request'}
     healthy, _ = fixture(tmp_path, {'phase': 'interrupted',
         'reconciliation': {'attemptId': 'old-attempt', 'verifiedAt': 10},
-        'diagnostics': {'events': [failure], 'lastFailure': failure}})
+        'diagnostics': {'events': [app_failure], 'lastFailure': app_failure}})
     assert active(healthy) == []
     # An error without a structured receipt still needs attention.
     plain, _ = fixture(tmp_path, {'phase': 'error', 'error': 'Check failed.'})
@@ -129,15 +130,15 @@ def test_preference_and_projection_cost_do_not_turn_history_into_badge_debt(tmp_
 
 def test_other_tier_and_smart_tool_skip_are_not_component_recovery(tmp_path):
     state, diagnostics = fixture(tmp_path)
-    diagnostics.begin('ecosystem', tier='included')
+    diagnostics.begin('ecosystem', tier='included', components=['component-a'])
     diagnostics.record('ecosystem-validation', 'failed', errorType='ValueError')
     diagnostics.begin('smart-tools')
     diagnostics.record('smart-tools-complete', 'succeeded')
     assert len(active(state)) == 1
-    diagnostics.begin('ecosystem', tier='other')
+    diagnostics.begin('ecosystem', tier='other', components=['component-a'])
     diagnostics.record('ecosystem-activation', 'succeeded')
     assert len(active(state)) == 1
-    diagnostics.begin('ecosystem', tier='included')
+    diagnostics.begin('ecosystem', tier='included', components=['component-a'])
     diagnostics.record('ecosystem-activation', 'succeeded')
     assert active(state) == []
 
@@ -165,6 +166,84 @@ def test_repeat_keeps_original_evidence_beyond_the_recent_event_window(tmp_path)
     assert first not in diagnostics.state['events']
     originals = [json.loads(line) for line in diagnostics.path.read_text().splitlines()]
     assert originals[0] == first
+
+
+def test_matching_scope_and_order_are_required_to_settle(tmp_path):
+    state, diagnostics = fixture(tmp_path)
+    fail(diagnostics, component='amplifier-module-a')
+    diagnostics.begin('ecosystem', components=['amplifier-module-b'])
+    diagnostics.record('ecosystem-activation', 'succeeded')
+    assert len(active(state)) == 1
+    diagnostics.begin('ecosystem', components=['amplifier-module-a'])
+    diagnostics.record('ecosystem-validation', 'failed', component='amplifier-module-a',
+                       reason='runtime-resolution-mismatch', errorType='ValueError',
+                       expectedRevision='a'*40, observedRevision='b'*40)
+    diagnostics.record('ecosystem-activation', 'succeeded')
+    assert len(active(state)) == 1  # The completion cannot clear a newer occurrence.
+    diagnostics.begin('ecosystem', components=['amplifier-module-a'])
+    diagnostics.record('ecosystem-activation', 'succeeded')
+    assert active(state) == []
+
+
+def test_same_cause_in_different_tiers_recovers_independently(tmp_path):
+    state, diagnostics = fixture(tmp_path)
+    for tier in ('included', 'other'):
+        diagnostics.begin('ecosystem', tier=tier, components=['component-a'])
+        diagnostics.record('ecosystem-validation', 'failed', errorType='ValueError')
+    assert len(active(state)) == 2
+    diagnostics.begin('ecosystem', tier='included', components=['component-a'])
+    diagnostics.record('ecosystem-activation', 'succeeded')
+    assert len(active(state)) == 1
+    assert next(iter(diagnostics.state['activeFailures'].values()))['tier'] == 'other'
+
+
+@pytest.mark.parametrize('components', [[], [f'component-{i}' for i in range(6)]])
+def test_unknown_or_truncated_scope_cannot_claim_recovery(tmp_path, components):
+    state, diagnostics = fixture(tmp_path)
+    diagnostics.begin('ecosystem', components=components)
+    diagnostics.record('ecosystem-validation', 'failed', errorType='ValueError')
+    diagnostics.begin('ecosystem', components=components)
+    diagnostics.record('ecosystem-activation', 'succeeded')
+    assert len(active(state)) == 1
+
+
+def test_wrong_application_target_cannot_claim_recovery(tmp_path):
+    state, diagnostics = fixture(tmp_path)
+    fail(diagnostics, kind='application')
+    diagnostics.begin('application', 'd' * 40)
+    diagnostics.record('restart-ack', 'succeeded')
+    assert len(active(state)) == 1
+    diagnostics.begin('application', 'c' * 40)
+    diagnostics.record('restart-ack', 'succeeded')
+    assert active(state) == []
+
+
+def test_migration_keeps_unrelated_current_error_and_ecosystem_failure(tmp_path):
+    failure = {'id': 'old', 'kind': 'ecosystem', 'attemptId': 'old-attempt',
+               'phase': 'ecosystem-validation', 'status': 'failed'}
+    state, _ = fixture(tmp_path, {'phase': 'error', 'error': 'Application check failed.',
+        'reconciliation': {'attemptId': 'old-attempt', 'verifiedAt': 10},
+        'diagnostics': {'events': [failure], 'lastFailure': failure}})
+    assert len(active(state)) == 2
+    assert active(state)[0]['id'] == 'updates:error'
+
+
+def test_distinct_code_location_and_bounded_unresolved_overflow(tmp_path):
+    from amplifier_web.update_diagnostics import MAX_ACTIVE_FAILURES
+    state, diagnostics = fixture(tmp_path)
+    for i in range(MAX_ACTIVE_FAILURES + 4):
+        diagnostics.begin('ecosystem', components=['component-a'])
+        diagnostics.record('ecosystem-validation', 'failed', errorType='ValueError',
+                           failureLocation=f'amplifier_web.updates:validate:{i+1}')
+    assert len(diagnostics.state['activeFailures']) == MAX_ACTIVE_FAILURES
+    assert len(active(state)) == MAX_ACTIVE_FAILURES + 1
+    assert diagnostics.state['failureOverflow']['occurrences'] == 4
+    read_all(state)
+    assert snapshot(state)['badgeUnread'] == MAX_ACTIVE_FAILURES + 1
+    diagnostics.begin('ecosystem', components=['component-a'])
+    diagnostics.record('ecosystem-activation', 'succeeded')
+    assert len(active(state)) == 1  # Unknown overflow is not silently evicted or resolved.
+    assert active(state)[0]['id'] == 'updates:failure-overflow'
 
 
 async def test_real_attention_read_and_restart_preserve_unresolved_failure(tmp_path):

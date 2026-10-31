@@ -182,7 +182,7 @@ async def main():
                 elif step == 'check':
                     updates.update(phase='checked', error=None)
                 elif step == 'recover':
-                    diagnostics.begin('ecosystem')
+                    diagnostics.begin('ecosystem', components=['amplifier-module-loop-live','amplifier-module-hooks-approval'])
                     diagnostics.clear_failure()
                     diagnostics.record('ecosystem-activation', 'succeeded')
                     updates.update(phase='installed', error=None)

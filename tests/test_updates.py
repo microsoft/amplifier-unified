@@ -59,7 +59,7 @@ async def test_stage_activate_and_rollback_preserve_original_cache(app,repo):
         assert git(stage/'foundation/cache/repository','rev-parse','HEAD')==repo[2]
         assert git(root,'rev-parse','HEAD')==repo[1]
     manager.validate=validate
-    manager.diagnostics.begin('ecosystem')
+    manager.diagnostics.begin('ecosystem', components=['repo'])
     failure=manager.diagnostics.record('ecosystem-validation','failed',errorType='ValueError')
     from amplifier_web.attention import snapshot
     assert any(item.get('actionRequired') for item in snapshot(app.state)['items'])

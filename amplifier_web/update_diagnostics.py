@@ -11,6 +11,7 @@ import time
 import uuid
 
 PROBE_PREFIX = 'AMPLIFIER_UPDATE_PROBE='
+MAX_ACTIVE_FAILURES = 32
 ERROR_TYPES = {'Exception','CommandFailure','CommandTimeout','AssertionError','ImportError','ModuleNotFoundError','FileNotFoundError','PermissionError',
                'OSError','RuntimeError','ValueError','TimeoutError','CancelledError','ModuleActivationError',
                'BundleNotFoundError','BundleLoadError','BundleValidationError','BundleDependencyError','HostComponentConflict','AmbiguousBundleReferenceError',
@@ -171,13 +172,11 @@ class UpdateDiagnostics:
             updates = manager.service.state['updates']
             failure = self.state.get('lastFailure')
             reconciliation = updates.get('reconciliation') or {}
-            recovered = bool(failure and failure.get('attemptId') and
+            recovered = bool(failure and failure.get('kind') == 'application' and failure.get('attemptId') and
                 reconciliation.get('attemptId') == failure['attemptId'] and
                 reconciliation.get('verifiedAt', 0) >= failure.get('at', 0))
             if failure and not recovered:
                 self._track_failure(failure)
-                for group in self.state['activeFailures'].values():
-                    group['displayError'] = updates.get('error')
         self._pending_failure = None
 
     def _track_failure(self, event):
@@ -193,10 +192,11 @@ class UpdateDiagnostics:
         cause = {key: event[key] for key in (
             'phase', 'reason', 'component', 'package', 'errorType', 'osError',
             'expectedRevision', 'observedRevision', 'resolutionMismatches',
-            'expectedVersion', 'observedVersion', 'probe') if key in event}
+            'expectedVersion', 'observedVersion', 'failureLocation', 'probe') if key in event}
         if 'probe' in cause:
             cause['probe'] = {key: value for key, value in cause['probe'].items()
                               if key not in {'elapsedMs', 'profileIndex'}}
+        cause['tier'] = self.state.get('batch', {}).get('tier')
         fingerprint = hashlib.sha256(json.dumps(cause, sort_keys=True).encode()).hexdigest()
         active = self.state.setdefault('activeFailures', {})
         key = kind + ':' + fingerprint
@@ -204,9 +204,16 @@ class UpdateDiagnostics:
         if previous:
             previous.update(occurrences=previous['occurrences'] + 1, latest=event)
         else:
+            if len(active) >= MAX_ACTIVE_FAILURES:
+                overflow = self.state.setdefault('failureOverflow', {'occurrences': 0, 'firstAt': event.get('at')})
+                overflow.update(occurrences=overflow['occurrences'] + 1, latest=event)
+                self._pending_failure = None
+                return  # Truthful unresolved overflow; never infer those causes recovered.
             identity = event.get('id') or hashlib.sha256(json.dumps(event, sort_keys=True).encode()).hexdigest()
+            batch = self.state.get('batch', {})
             active[key] = {'id': identity, 'cause': fingerprint, 'kind': kind,
-                           'tier': self.state.get('batch', {}).get('tier'),
+                           'tier': batch.get('tier'), 'components': batch.get('components', []),
+                           'componentCount': batch.get('componentCount', 0),
                            'first': event, 'latest': event, 'occurrences': 1}
         self._pending_failure = key
 
@@ -220,11 +227,13 @@ class UpdateDiagnostics:
             return
         if self.state.get('kind') not in {kind, 'rollback' if kind == 'ecosystem' else kind}:
             return
-        tier = self.state.get('batch', {}).get('tier')
+        batch = self.state.get('batch', {})
         active = self.state.setdefault('activeFailures', {})
-        for key, group in list(active.items()):
-            if group['kind'] == kind and (kind == 'application' or phase == 'ecosystem-rollback' or
-                    group.get('tier') in {None, 'ecosystem', tier}):
+        for key, observed in batch.get('recoveringFailures', {}).items():
+            group = active.get(key)
+            # Only failures covered when this exact attempt began. A later
+            # occurrence invalidates that evidence, including an identical cause.
+            if group and group['kind'] == kind and group['latest'].get('id') == observed:
                 del active[key]
 
     def begin(self,kind,revision=None,attempt_id=None,*,tier=None,components=()):
@@ -237,8 +246,28 @@ class UpdateDiagnostics:
         # workspaces, credential-bearing URLs or exception messages.
         names=sorted({name for name in components if isinstance(name,str) and
                       re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}',name)})
+        previous_batch = self.state.get('batch', {})
         self.state['batch']={'attemptId':identity,'kind':kind,'tier':tier if tier in {'included','other'} else kind,
                              'startedAt':time.time(),'components':names[:5],'componentCount':len(names)}
+        recovering = {}
+        for key, group in self.state.get('activeFailures', {}).items():
+            failure = group['latest']
+            if group['kind'] == kind == 'application':
+                matches = bool(revision and failure.get('revision') == revision)
+            elif group['kind'] == kind == 'ecosystem':
+                component = failure.get('component') or failure.get('package') or failure.get('probe', {}).get('package')
+                scope = set(group.get('components', []))
+                matches = (group.get('tier') in {None, 'ecosystem', tier} and
+                           (component in names if component else bool(scope) and
+                            len(scope) == group.get('componentCount') and scope <= set(names)))
+            else:
+                matches = False
+            if matches:
+                recovering[key] = failure.get('id')
+        if previous_batch.get('attemptId') == identity and kind != 'application':
+            # Re-entering an existing attempt cannot adopt intervening failures.
+            recovering = previous_batch.get('recoveringFailures', {})
+        self.state['batch']['recoveringFailures'] = recovering
         self.manager.service.state['updates'].pop('probeProgress',None)
         return identity
 
