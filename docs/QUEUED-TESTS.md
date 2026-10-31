@@ -37,6 +37,15 @@ The result does not satisfy a shared-task dependency or prove product acceptance
   into every queue row or workspace catalog.
 - `workspace.tests.result` pages that exact recorded output after cleanup,
   preserving the exit code and any capture-limit indicator.
+- Full-access reviewers and their currently admitted native children can use
+  these two read actions directly with the producer's `sessionId` and
+  `workspaceId`. Same-workspace evidence is the default; another registered
+  workspace requires explicit `scope: all`. This uses the existing history
+  selector and saved receipts, without waking the producer, copying evidence
+  into another report, or rerunning a check. Ask-mode owners retain their own
+  reads. Submit, cancel, cleanup, acceptance and output-library ownership are
+  unchanged. Child reads require their actual current assignment; Stop, worker
+  replacement and withdrawal of Full access invalidate that assignment.
 - Reads also show a separate `recoveredOutcome` when later, independently named
   cleanup has confirmed removal of the exact queued environment. This projection
   binds the allocation, original launch, owner, source, profile, backend and
