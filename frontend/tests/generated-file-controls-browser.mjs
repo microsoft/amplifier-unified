@@ -33,7 +33,9 @@ const pageLabels=new WeakMap(),routeCleanups=new Set(),browserOwners=[];
 const cornerDiagnosticMode=process.env.FILE_CONTROLS_CORNER_DIAGNOSTIC==='1';
 const cornerDiagnostics=[];
 const contourOracle={version:'circular-contour-v1',formula:'d=max(3,r-(r-3)/sqrt(2))',
- logicChecks:[],negativeCounts:{size:0,regions:0,obstruction:0,paddingOrigin:0}};
+ logicChecks:[],cornerShapeChecks:[],cornerShapeObservations:[],cornerShapeCaptureErrors:[],browserPreflight:null,
+ negativeCounts:{size:0,regions:0,obstruction:0,paddingOrigin:0}};
+const cornerShapeLogPrefix='FILE_CONTROLS_CORNER_SHAPES ';
 let cornerDiagnosticComplete=false;
 let logs='',lineBuffer='',page,ready,seed,failure,cleanup,timer,running;
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
@@ -367,7 +369,13 @@ function circularContour({rect,radii,transforms,fragments,viewport}){
    x:right?rect.right-inward:rect.left+inward,y:bottom?rect.bottom-inward:rect.top+inward};
  });
 }
-function installContourSampler(){
+// An unsupported corner-*-shape property returns ''. In that case the browser
+// has only the border-radius contour. Chromium 153 serializes round as
+// superellipse(1). Accept ONLY these exact computed forms, without normalization.
+function supportedCircularCornerShape(value){
+ return value===''||value==='round'||value==='superellipse(1)';
+}
+function installContourSampler(logPrefix){
  const px=value=>{
   if(!/^(?:\d+(?:\.\d+)?|\.\d+)px$/.test(value)||!Number.isFinite(Number(value.slice(0,-2))))
    throw Error('Unsupported contour geometry: border must be finite computed px');
@@ -376,15 +384,28 @@ function installContourSampler(){
  window.__fileControlsContourSample=node=>{
   if(window!==window.top||!node.isConnected)throw Error('Unsupported contour geometry: detached or framed control');
   const rect=node.getBoundingClientRect().toJSON(),style=getComputedStyle(node),transforms=[],ancestors=[];
+  const cornerShapes=['top-left','top-right','bottom-left','bottom-right'].map(corner=>{
+   const raw=style.getPropertyValue(`corner-${corner}-shape`);
+   return {corner,raw,quoted:JSON.stringify(raw)};
+  });
+  // Synchronous console events are collected in Node, not in app state/UI. Emit
+  // ALL raw values before validation, and again on rejection: a failed evaluate
+  // must not discard the computed value that explains the failed guard.
+  const record=stage=>console.debug(logPrefix+JSON.stringify({stage,at:Date.now(),
+   nodeId:window.__fileControlsNodeId(node),tag:node.tagName,cornerShapes}));
+  record('before-validation');
+  for(const {corner,raw} of cornerShapes){
+   if(!window.__fileControlsSupportedCircularCornerShape(raw)){
+    record('rejected');
+    throw Error(`Unsupported contour geometry: noncircular corner shape ${corner}=${JSON.stringify(raw)}; `+
+     `cornerShapes=${JSON.stringify(cornerShapes)}`);
+   }
+  }
   for(let ancestor=node;ancestor;ancestor=ancestor.parentElement){
    const computed=getComputedStyle(ancestor);
    transforms.push(Object.fromEntries(['transform','perspective','translate','rotate','scale','offsetPath','transformStyle','zoom']
     .map(key=>[key,computed[key]])));
    ancestors.push({nodeId:window.__fileControlsNodeId(ancestor),x:ancestor.scrollLeft,y:ancestor.scrollTop});
-  }
-  for(const corner of ['top-left','top-right','bottom-left','bottom-right']){
-   const shape=style.getPropertyValue(`corner-${corner}-shape`);
-   if(shape&&shape!=='round')throw Error('Unsupported contour geometry: noncircular corner shape');
   }
   const radii=[style.borderTopLeftRadius,style.borderTopRightRadius,style.borderBottomLeftRadius,style.borderBottomRightRadius];
   const viewport={width:innerWidth,height:innerHeight,scale:visualViewport?.scale??1,
@@ -400,7 +421,7 @@ function installContourSampler(){
     !!element&&node.contains(element),hit:element&&{nodeId:window.__fileControlsNodeId(element),tag:element.tagName}};
   };
   return {nodeId:window.__fileControlsNodeId(node),name:node.getAttribute('aria-label')||node.textContent.trim(),
-   tag:node.tagName,rect,radii,borders,transforms,viewport,scroll:{x:scrollX,y:scrollY,ancestors},
+   tag:node.tagName,rect,radii,cornerShapes,borders,transforms,viewport,scroll:{x:scrollX,y:scrollY,ancestors},
    basis:'four contour-relative native hit probes',corners:points.map(hit),
    legacyCorners:[[rect.left+3,rect.top+3],[rect.right-3,rect.top+3],[rect.left+3,rect.bottom-3],[rect.right-3,rect.bottom-3]]
     .map(([x,y],index)=>hit({corner:points[index].corner,x,y}))};
@@ -448,6 +469,76 @@ function contourLogicChecks(){
   contourOracle.logicChecks.push({check:`reject ${name}`,passed:true});
  }
  checks.push({check:'contour formula and unsupported geometry logic checks',count:contourOracle.logicChecks.length});
+}
+function cornerShapeLogicChecks(){
+ for(const [raw,expected] of [
+  ['',true],['round',true],['superellipse(1)',true],
+  ['bevel',false],['scoop',false],['superellipse(0)',false],['superellipse(2)',false],
+  ['unknown',false],['Round',false],[' round',false],['round ',false],['superellipse(1.0)',false],[null,false]
+ ]){
+  const actual=supportedCircularCornerShape(raw);
+  const row={raw,quoted:JSON.stringify(raw),expected,actual,passed:actual===expected};
+  contourOracle.cornerShapeChecks.push(row);
+  assert.equal(actual,expected,`Computed corner-shape predicate: ${row.quoted}`);
+ }
+ checks.push({check:'computed corner-shape exact-value predicate checks',count:contourOracle.cornerShapeChecks.length});
+}
+async function computedCornerPreflight(target,owner){
+ const preflight={passed:false,client:owner.label,timeoutMs:2000,
+  browser:{name:owner.browser.browserType().name(),version:owner.browser.version()},
+  observationRange:{start:contourOracle.cornerShapeObservations.length,end:null}};
+ contourOracle.browserPreflight=preflight;
+ try{
+  // Same browser/context and installed sampler as the journey; no second launch,
+  // retry, app dispatch or product CSS mutation. Both source and installed runs
+  // execute this gate before session creation. The temporary native control is
+  // removed synchronously in finally, including when either sampler call fails.
+  preflight.result=await bounded(target.evaluate(()=>{
+   const result={userAgent:navigator.userAgent,platform:navigator.platform,removed:false,
+    supported:{round:CSS.supports('corner-top-left-shape','round'),bevel:CSS.supports('corner-top-left-shape','bevel')},
+    positive:null,negative:null,error:null};
+   const control=document.createElement('button');
+   control.type='button';control.textContent='Contour preflight';
+   control.style.cssText='all:initial;position:fixed;left:8px;top:8px;display:block;box-sizing:border-box;'+
+    'width:120px;height:44px;margin:0;padding:0;border:2px solid black;border-radius:10px;corner-shape:round;'+
+    'background:white;color:black;font:12px sans-serif;pointer-events:auto;z-index:2147483647;';
+   try{
+    document.documentElement.append(control);
+    result.positive=window.__fileControlsContourSample(control);
+    control.style.setProperty('corner-top-left-shape','bevel');
+    result.negative={corner:'top-left',authored:'bevel',
+     raw:getComputedStyle(control).getPropertyValue('corner-top-left-shape'),accepted:null,error:null};
+    result.negative.quoted=JSON.stringify(result.negative.raw);
+    try{result.negative.sample=window.__fileControlsContourSample(control);result.negative.accepted=true}
+    catch(error){result.negative.accepted=false;result.negative.error={name:error.name,message:error.message,stack:error.stack}}
+   }catch(error){result.error={name:error.name,message:error.message,stack:error.stack}}
+   finally{control.remove();result.removed=!control.isConnected}
+   return result;
+  }),preflight.timeoutMs,'Computed corner-shape browser preflight exceeded 2 seconds');
+  preflight.observationRange.end=contourOracle.cornerShapeObservations.length;
+  const {result}=preflight;
+  assert.equal(result.removed,true,'Preflight native button was not removed');
+  assert.equal(result.error,null,`Browser preflight failed: ${JSON.stringify(result.error)}`);
+  assert.deepEqual(result.supported,{round:true,bevel:true},'Browser cannot demonstrate actual corner-shape discrimination');
+  assert.equal(result.positive.tag,'BUTTON');
+  assert.ok(result.positive.cornerShapes.every(({raw})=>raw!==''&&supportedCircularCornerShape(raw)),
+   'Preflight must observe a supported, computed round form, not an unsupported-property empty value');
+  nativeHitOracle(result.positive,'computed-round preflight');
+  assert.ok(['bevel','superellipse(0)'].includes(result.negative.raw),'Preflight did not compute the authored bevel');
+  assert.equal(supportedCircularCornerShape(result.negative.raw),false);
+  assert.equal(result.negative.accepted,false,'Same sampler accepted a noncircular corner');
+  assert.match(result.negative.error?.message||'',/Unsupported contour geometry: noncircular corner shape top-left=/);
+  const observed=contourOracle.cornerShapeObservations.slice(preflight.observationRange.start,preflight.observationRange.end);
+  assert.deepEqual(contourOracle.cornerShapeCaptureErrors,[],'Corner-shape console evidence capture failed');
+  assert.deepEqual(observed.map(row=>row.stage),['before-validation','before-validation','rejected'],
+   'Preflight must retain raw computed values before both validations and on rejection');
+  assert.deepEqual(observed[0].cornerShapes,result.positive.cornerShapes);
+  assert.deepEqual(observed[1].cornerShapes,observed[2].cornerShapes);
+  assert.equal(observed[2].cornerShapes[0].raw,result.negative.raw);
+  preflight.passed=true;
+  checks.push({check:'actual browser computed round accepted and noncircular corner rejected by same sampler'});
+ }catch(error){preflight.error=errorEvidence(error);throw error}
+ finally{preflight.observationRange.end=contourOracle.cornerShapeObservations.length}
 }
 async function contourNegativeChecks(control){
  await control.evaluate(node=>node.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'}));
@@ -795,6 +886,15 @@ async function cornerTap(control,corner){
 async function connect(owner,options){
  const label=owner.label,target=await ownerPage(owner,ready.url,options);pageLabels.set(target,label);
  target.on('pageerror',error=>errors.push(error.message));
+ target.on('console',message=>{
+  const text=message.text();if(!text.startsWith(cornerShapeLogPrefix))return;
+  try{
+   assert.ok(contourOracle.cornerShapeObservations.length<512,'Corner-shape evidence exceeded 512 observations');
+   contourOracle.cornerShapeObservations.push({client:label,...JSON.parse(text.slice(cornerShapeLogPrefix.length))});
+  }catch(error){
+   if(!contourOracle.cornerShapeCaptureErrors.length)contourOracle.cornerShapeCaptureErrors.push(errorEvidence(error));
+  }
+ });
  target.on('request',request=>{
   const pathname=new URL(request.url()).pathname;
   if(pathname.startsWith('/api/canvas/'))requests.push({client:label,path:pathname,query:new URL(request.url()).search});
@@ -805,7 +905,9 @@ async function connect(owner,options){
   }
  });
  await target.addInitScript(installDetailsProbe);
- await target.addInitScript({content:`window.__fileControlsCircularContour=(${circularContour.toString()});(${installContourSampler.toString()})();`});
+ await target.addInitScript({content:`window.__fileControlsCircularContour=(${circularContour.toString()});`+
+  `window.__fileControlsSupportedCircularCornerShape=(${supportedCircularCornerShape.toString()});`+
+  `(${installContourSampler.toString()})(${JSON.stringify(cornerShapeLogPrefix)});`});
  await target.addInitScript(()=>{
   window.__fileControlsFrames=[];
   new MutationObserver(records=>{
@@ -970,9 +1072,10 @@ async function usePreviewControls(retained,label,mode){
 async function run(){
  ready=await startup;
  if(process.env.AMPLIFIER_TEST_INSTALLED==='1'||process.env.AMPLIFIER_TEST_PACKAGE_ROOT)assert.equal(ready.installedVerified,true);
- if(!cornerDiagnosticMode)contourLogicChecks();
+ if(!cornerDiagnosticMode){contourLogicChecks();cornerShapeLogicChecks()}
  const desktopOwner=await launchOwner('desktop',browserOwners);
  page=await connect(desktopOwner,desktopOptions);
+ if(!cornerDiagnosticMode)await computedCornerPreflight(page,desktopOwner);
  await action(page,'session.create',{title:'Generated file controls'});
  await showFixtureConversation(page,{navPinned:false});
  seed=await fixturePost(page,'seed');
@@ -1222,6 +1325,7 @@ async function run(){
  assert.ok(paddingOrigin>0,'No nonzero-border padding conversion negative ran');
  assert.equal(paddingOrigin,geometry.filter(row=>row.label==='corner-tap-before'&&(row.borders.left||row.borders.top)).length,
   'Every nonzero-border touch must reject the old padding conversion');
+ assert.deepEqual(contourOracle.cornerShapeCaptureErrors,[],'Corner-shape console evidence capture failed');
  assert.deepEqual(errors,[]);
 }
 

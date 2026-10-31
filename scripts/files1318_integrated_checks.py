@@ -44,8 +44,10 @@ Only this driver and the generated-file producer may differ from the retained
 Exit 0 means checkpoint observed with cleanup/integrity verified; cause and
 visual judgment remain unknown/pending. An original false assertion stays exit 1.
 
---contour-qualification uses /workspace/output/files1318-contour-manifest.json
-and /artifacts/files1318-contour-qualified. It runs the full remaining flow,
+--contour-qualification uses /workspace/output/files1318-computed-round-manifest.json
+and /artifacts/files1318-computed-round-qualified. This compatibility repair is
+one separately authorized execution; all prior failed checks remain consumed.
+It runs the full remaining flow,
 but never reruns frontend-build/python-tests/frontend-units. Those three phases
 are REUSED only after exact old source, 311 static files, 70 JUnit/collection
 identities, 19 TAP identities, process cleanup and current dependency identities
@@ -95,14 +97,14 @@ UV = PREPARED / 'bootstrap/bin/uv'
 CONTRACT = PREPARED / 'execution-contract.json'
 MANIFEST = ROOT / 'output/files1318-frozen-manifest.json'
 CORNER_MANIFEST = ROOT / 'output/files1318-corner-manifest.json'
-CONTOUR_MANIFEST = ROOT / 'output/files1318-contour-manifest.json'
+CONTOUR_MANIFEST = ROOT / 'output/files1318-computed-round-manifest.json'
 HARNESS = OUT / 'harness'
 VENV = OUT / 'installed'
 DRIVER = 'scripts/files1318_integrated_checks.py'
 PRODUCER = 'frontend/tests/generated-file-controls-browser.mjs'
 CORNER_OUT = Path('/artifacts/files1318-corner-diagnostic')
-CONTOUR_OUT = Path('/artifacts/files1318-contour-qualified')
-CONTOUR_PRODUCER_SHA = '53e1e4cd8dacab4b5976a0e89ff359face2d751006eec77e1fa7f59adca4dee7'
+CONTOUR_OUT = Path('/artifacts/files1318-computed-round-qualified')
+CONTOUR_PRODUCER_SHA = 'cf1c025909f7149c47dfbacc046dbe532e5203c1b36892a695e05229be1fdc8a'
 REUSE_INPUT = ROOT / 'output/files1318-corner-inputs'
 REUSE_BINDING = {
     'metadataSha256': '56123cca65eb88bb8ddbcf4fc66e2eed47fb102bb6c7d663ed39cf8798d32b8e',
@@ -708,6 +710,8 @@ def generated_coverage(proof, folder):
         'negative control: native size below 44px rejected': 2,
         'negative control: individual contour region rejected': 4,
         'negative control: real one-probe pointer overlay rejected by same contour oracle': 1,
+        'computed corner-shape exact-value predicate checks': 1,
+        'actual browser computed round accepted and noncircular corner rejected by same sampler': 1,
         'old padding-origin conversion rejected by same exact-contour oracle': padding_count,
         'deliberate saved-v1 preview setup, not a download': 2,
         'right-rail paths/download and primary Download preserve running saved-v1 HTML': 3,
@@ -782,6 +786,12 @@ def contour_sample(sample, *, reachable=(True, True, True, True)):
                     ('transform', 'perspective', 'translate', 'rotate', 'scale', 'offsetPath'))
                 and style['transformStyle'] == 'flat' and style['zoom'] in ('1', 'normal')
                 for style in sample['transforms']), 'Unsupported contour viewport/transform')
+    shapes = sample['cornerShapes']
+    require(isinstance(shapes, list) and len(shapes) == 4
+            and [row['corner'] for row in shapes] == list(labels)
+            and all(row['raw'] in ('', 'round', 'superellipse(1)')
+                    and row['quoted'] == json.dumps(row['raw']) for row in shapes),
+            'Unsupported or unrecorded computed circular corner shape')
     radii = []
     require(len(sample['radii']) == 4, 'Four contour radii required')
     for text in sample['radii']:
@@ -825,7 +835,71 @@ def contour_sample(sample, *, reachable=(True, True, True, True)):
                 'Legacy rectangular probe diagnostic missing/changed')
 
 
+def computed_shape_proof(proof):
+    oracle = proof['contourOracle']
+    inputs = ['', 'round', 'superellipse(1)', 'bevel', 'scoop', 'superellipse(0)',
+              'superellipse(2)', 'unknown', 'Round', ' round', 'round ',
+              'superellipse(1.0)', None]
+    require(oracle['cornerShapeChecks'] == [
+        {'raw': raw, 'quoted': json.dumps(raw), 'expected': index < 3,
+         'actual': index < 3, 'passed': True} for index, raw in enumerate(inputs)],
+        'Exact computed-shape predicate cases differ')
+    require([row for row in proof['checks'] if row['check'] ==
+             'computed corner-shape exact-value predicate checks'] ==
+            [{'check': 'computed corner-shape exact-value predicate checks', 'count': 13}],
+            'Computed-shape predicate count differs')
+    preflight = oracle['browserPreflight']
+    result, observations = preflight['result'], oracle['cornerShapeObservations']
+    require(preflight['passed'] is True and not preflight.get('error')
+            and preflight['client'] == 'desktop' and preflight['timeoutMs'] == 2000
+            and preflight['browser'] == {'name': 'chromium',
+                'version': read(OUT / 'browser-readiness.json')['browser']}
+            and preflight['observationRange'] == {'start': 0, 'end': 3}
+            and result['removed'] is True and result['error'] is None
+            and result['supported'] == {'round': True, 'bevel': True}
+            and isinstance(result['userAgent'], str) and result['userAgent']
+            and isinstance(result['platform'], str) and result['platform'],
+            'Actual browser computed-shape preflight incomplete')
+    contour_sample(result['positive'])
+    require(result['positive']['tag'] == 'BUTTON'
+            and all(row['raw'] in ('round', 'superellipse(1)')
+                    for row in result['positive']['cornerShapes']),
+            'Preflight must observe computed round, not unsupported empty property')
+    negative = result['negative']
+    require(negative['corner'] == 'top-left' and negative['authored'] == 'bevel'
+            and negative['raw'] in ('bevel', 'superellipse(0)')
+            and negative['quoted'] == json.dumps(negative['raw'])
+            and negative['accepted'] is False and 'sample' not in negative
+            and 'Unsupported contour geometry: noncircular corner shape top-left='
+                in negative['error']['message'], 'Real noncircular guard discriminator failed')
+    require(oracle['cornerShapeCaptureErrors'] == [] and 3 <= len(observations) <= 512
+            and [row['stage'] for row in observations[:3]] ==
+                ['before-validation', 'before-validation', 'rejected']
+            and all(row['stage'] == 'before-validation' for row in observations[3:]),
+            'Computed shapes missing before validation or unexpected rejection')
+    for index, row in enumerate(observations):
+        require(row['client'] in ('desktop', 'touch')
+                and type(row['nodeId']) is int and row['nodeId'] > 0
+                and row['tag'] in ('BUTTON', 'SUMMARY')
+                and type(row['at']) in (int, float) and math.isfinite(row['at'])
+                and [shape['corner'] for shape in row['cornerShapes']] ==
+                    ['top-left', 'top-right', 'bottom-left', 'bottom-right']
+                and all(isinstance(shape['raw'], str)
+                        and shape['quoted'] == json.dumps(shape['raw'])
+                        and (shape['raw'] in ('', 'round', 'superellipse(1)')
+                             or (index in (1, 2) and shape['corner'] == 'top-left'
+                                 and shape['raw'] == negative['raw']))
+                        for shape in row['cornerShapes']), 'Invalid raw computed-shape evidence')
+    require(all(row['client'] == 'desktop' and row['nodeId'] == result['positive']['nodeId']
+                for row in observations[:3])
+            and observations[0]['cornerShapes'] == result['positive']['cornerShapes']
+            and observations[1]['cornerShapes'] == observations[2]['cornerShapes']
+            and observations[2]['cornerShapes'][0]['raw'] == negative['raw'],
+            'Preflight capture does not bind the same native control')
+
+
 def contour_proof(proof, taps, padding_count):
+    computed_shape_proof(proof)
     oracle = proof['contourOracle']
     logic = ['square radius 0 uses 3px', 'circular radius 10 uses 5.050252531694167px',
              *('reject ' + name for name in (
