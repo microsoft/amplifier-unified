@@ -1,6 +1,7 @@
 """Host current-work checks; native producer integration is qualified separately."""
 import copy
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 import pytest
 
@@ -108,3 +109,36 @@ async def test_terminal_generation_start_does_not_reopen_authority(app):
     with bound(source):
         with pytest.raises(AppError, match='current transport-bound'):
             app.collaboration.active_binding(source)
+
+
+@pytest.mark.parametrize('fault', ['none', 'missing-origin', 'foreign-root', 'foreign-child',
+                                  'generation', 'owner', 'stop'])
+async def test_supplied_child_origin_uses_canonical_owner_without_root_fallback(app, fault):
+    source = app.state['sessions'][0]
+    await started(app, source, 'current-root', interruptionRevision=0)
+    source['collaborationGeneration']['inputIds'] = ['assigned-input']
+    native = source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']
+    app.runtime.workers = {source['id']: {'process': SimpleNamespace(returncode=None),
+                                         'runtimeOwnerId': 'current-process'}}
+    with bound(source, principal='native-child'):
+        binding = BINDING.get()
+        origin = {'rootSessionId': native, 'runtimeSessionId': 'native-child',
+                  'generationId': 'current-root', 'inputIds': ['assigned-input'], 'runId': 'child-run',
+                  **{key: source.get(key, 0) for key in
+                     ('interruptionRevision', 'executionRevision', 'configurationPendingRevision')}}
+        binding.update(_childOrigin=origin, _runtimeOwnerId='current-process')
+        if fault == 'missing-origin': binding['_childOrigin'] = None
+        elif fault == 'foreign-root': origin['rootSessionId'] = 'foreign-root'
+        elif fault == 'foreign-child': origin['runtimeSessionId'] = 'foreign-child'
+        elif fault == 'generation': origin['generationId'] = 'foreign-generation'
+        elif fault == 'owner': binding['_runtimeOwnerId'] = 'replaced-process'
+        elif fault == 'stop': source['interruptionRevision'] = source.get('interruptionRevision', 0) + 1
+        # Root reply/provenance still cannot borrow even a valid child origin.
+        with pytest.raises(AppError, match='root generation'):
+            app.collaboration.active_binding(source)
+        if fault == 'none':
+            _, active = app.collaboration.active_binding(source, allow_descendant=True)
+            assert active['id'] == 'current-root' and active['inputIds'] == ['assigned-input']
+        else:
+            with pytest.raises(AppError, match='native child execution'):
+                app.collaboration.active_binding(source, allow_descendant=True)
