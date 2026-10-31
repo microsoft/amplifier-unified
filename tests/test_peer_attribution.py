@@ -400,7 +400,7 @@ def test_page_lookup_is_one_bound_in_query_not_per_message_or_history_scan(store
     assert "'input-0'" not in selects[0] and "'input-129'" in selects[0]
 
 
-@pytest.mark.parametrize("mode", ["notify", "queue", "steer"])
+@pytest.mark.parametrize("mode", ["auto", "notify", "queue", "steer"])
 async def test_dispatch_actor_does_not_come_from_caller_and_caption_is_not_delivery(app, mode):
     source, target = app.state["sessions"]
     if mode == "steer":

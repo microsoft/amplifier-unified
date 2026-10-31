@@ -67,7 +67,8 @@ async def test_active_request_is_cooperative_preserves_mixed_work_and_pending_re
     assert target['coordinationReference']['cancellations']['items'][0]['status'] == 'reported_pending'
 
 
-async def test_cancel_while_admission_in_flight_fences_native_authorization(app):
+@pytest.mark.parametrize('mode', ['queue', 'auto'])
+async def test_cancel_while_admission_in_flight_fences_native_authorization(app, mode):
     entered, release = asyncio.Event(), asyncio.Event()
     async def pending(session, args, guard, emit):
         entered.set()
@@ -76,7 +77,7 @@ async def test_cancel_while_admission_in_flight_fences_native_authorization(app)
         assert not allowed['admitted']
         return {'accepted': False, 'reason': allowed['reason']}
     app.runtime.collaboration_input = pending
-    await send(app)
+    await send(app, mode=mode)
     await entered.wait()
     result = await cancel(app)
     assert result['result']['status'] == 'requested'  # No guessed absence during dispatch.
@@ -88,9 +89,10 @@ async def test_cancel_while_admission_in_flight_fences_native_authorization(app)
     assert not app.state['sessions'][1]['coordinationReference']['cancellations']['items']
 
 
-async def test_unknown_admission_never_claims_stopped_or_replays(app):
+@pytest.mark.parametrize('mode', ['queue', 'auto'])
+async def test_unknown_admission_never_claims_stopped_or_replays(app, mode):
     app.runtime.fail = True
-    await send(app)
+    await send(app, mode=mode)
     await settled(app, 'request-1', 'unknown')
     result = await cancel(app)
     assert result['result']['status'] == 'requested'
@@ -99,7 +101,7 @@ async def test_unknown_admission_never_claims_stopped_or_replays(app):
     assert len(app.runtime.inputs) == 1
 
 
-@pytest.mark.parametrize('mode', ['queue', 'steer'])
+@pytest.mark.parametrize('mode', ['queue', 'auto', 'steer'])
 async def test_shutdown_during_admission_keeps_committed_cancellation_and_closed_wait(app, mode):
     entered = asyncio.Event()
     async def held(*args):
@@ -118,7 +120,7 @@ async def test_shutdown_during_admission_keeps_committed_cancellation_and_closed
     accepted = await cancel(app, reason='Stop only this request')
     saved = copy.deepcopy(app.collaboration.receipt('request-1'))
     assert saved['subscription']['open'] is False
-    # queue dispatch is service-owned; steer is held by the transport caller.
+    # Queue/auto dispatch is service-owned; steer is held by the transport caller.
     dispatch.cancel()
     await asyncio.gather(dispatch, return_exceptions=True)
     await app.close()

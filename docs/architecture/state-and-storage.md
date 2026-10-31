@@ -180,3 +180,47 @@ Selected-history Work projections use the disposable process-owned read model in
 sparse checkpoints and spool files are derived caches, never resume or execution
 authority. Native sources remain intact; generation fencing and bounded JIT import
 apply before publication.
+
+## Long-lived conversations
+
+The same conversation may remain useful for months. Keep three independent sets:
+the complete durable record, the current execution/presentation working set, and
+the model's selected context. A smaller browser page does not bound the host's
+save cost or the model request. A compaction summary is not a replacement for the
+original messages, receipts or pending command authority.
+
+The current implementation has bounded `TranscriptWindows` and `WorkWindows` for
+the bundled web client, plus an explicitly complete compatibility reader. It does
+not yet meet the target throughout the host. Admitted mutable session records can
+retain completed messages, worker reports and execution/accounting rows.
+`session_projection.persist`, `MessagePreparation` and `ExecutionPreparation`
+still inspect historical content during current-owner saves. Caching prepared
+bytes reduces encoding but does not make those comparisons independent of history.
+The complete `EventIndex` reader also verifies its previous file prefix after an
+append; this is not the bounded web-reader path. Do not describe all readers as
+incremental merely because they retain an offset.
+
+Implement the remaining separation at the owning write/read boundary:
+
+1. Keep current status, live work and unresolved receipts independently updateable.
+   Completed bodies use the existing native history or scoped durable host records
+   according to their authority, with exact references and demand-driven pages.
+2. Consolidate mutable writers before trusting a change revision. Existing borrowed
+   nested aliases can change without a setter; replacing content comparisons with
+   object identity, length or an unowned dirty flag would lose changes. Prefer
+   explicit owner operations and immutable completed records to another cache layer.
+3. Resolve the requested resource before hydration/copying. Whole-history recovery,
+   export and legacy complete reads remain explicit, with their cost and coverage
+   visible. Preserve historical editing, attribution, accounting and pending effects;
+   an arbitrary last-N slice cannot replace their authority.
+4. Keep model-context selection with the installed context owner. Qualify compaction,
+   durable summaries and on-demand retrieval across resume, including instructions,
+   pending tool pairs and task continuity. Do not send raw event logs as context or
+   silently discard older user requirements to make a request faster.
+
+This is an implementation sequence, not a claim of completed migration. Validate
+each owner independently with a fixed current workload and growing completed history;
+include cold/restart and explicit older-detail reads. The
+[diagnostic baseline](../validation/performance.md#long-lived-conversation-baseline)
+records current save costs without inventing a universal latency threshold. This
+work applies to the existing application and does not depend on AHP/ACP adoption.

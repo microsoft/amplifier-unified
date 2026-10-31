@@ -5,6 +5,7 @@ import pytest
 from amplifier_foundation.session import SharedSessionStore
 from amplifier_web.runtime import RuntimeManager, normalize_event
 from amplifier_web.service import AppError
+from amplifier_web.session_health import current_terminal_failure
 from test_assignments import app, child, generation
 from test_collaborative_workspaces import agent_action
 from test_collaborative_workspaces import settled
@@ -19,7 +20,9 @@ async def submit(app, source, target, human):
 
 async def historical_failure(app, event='generation.failed', native=False):
     source = app.state['sessions'][0]
-    target, creation = await child(app, source)
+    # A native observation belongs to a later generation, not a duplicate start
+    # of the commissioning generation (which must preserve its admitted inputs).
+    target, creation = await child(app, source, identity='initial-helper' if native else 'helper')
     input_id = creation['initialInputId']
     if native:
         from amplifier_web.automatic_history import display_message
@@ -30,6 +33,8 @@ async def historical_failure(app, event='generation.failed', native=False):
         target['messages'].append(display_message(row, 1, target))
         await generation(app, target, 'generation-helper', [input_id])
         assert not app.db.execute('SELECT 1 FROM commands WHERE id=?', (input_id,)).fetchone()
+    assert target['collaborationGeneration']['id'] == 'generation-helper'
+    assert target['collaborationGeneration']['inputIds'] == [input_id]
     # Older producers did not always classify their terminal event. Exercise
     # the real projection: it retains the event, then projects a generic exit.
     await app.on_runtime_event(*normalize_event({
@@ -41,6 +46,7 @@ async def historical_failure(app, event='generation.failed', native=False):
     await app.on_runtime_event('runtime.ended', {'sessionId': target['id']})
     assert target['failure']['category'] == 'unknown'
     assert 'generationId' not in target['failure']
+    assert current_terminal_failure(target)
     human = app._message(source, 'user', 'Inspect the finished work and resume the remaining task.',
                          inputId='fresh-human-recovery', inputOrigin='ui')
     await generation(app, source, 'fresh-owner-generation', ['fresh-human-recovery'])
