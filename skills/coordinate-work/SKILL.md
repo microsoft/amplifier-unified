@@ -131,8 +131,9 @@ compare those exact links, not equal message text.
    reads the receipt; it never creates another root or replays a brief. On host
    restart, known unperformed preparation can resume from the captured plan;
    an unacknowledged root effect remains unknown. Stop and changed assignment
-   or placement suppress remaining preparation. There is
-   a bound of eight outstanding tasks per source, not eight historical chats.
+   or placement suppress remaining preparation. Outstanding task counts have no
+   ceiling by default; honor any deliberate limits configured in Work concurrency
+   settings.
    First-child runtime qualification may take longer than worker startup.
    The peer keeps the source's actual execution folder while retaining the
    canonical workspace for history. This shares that checkout; it does not
@@ -291,10 +292,13 @@ for it; preserve failed results and avoid repeating unchanged successful checks.
 If repeated failures show no progress, change the approach or report the concrete
 blocker instead of repeating the same work.
 
-Keep estimated turns and attempts in the brief as revisable plans. Use `maxTurns`
-only when an enforced limit is actually required. A manager may revise its own
-plan and tell its workers the updated scope. Explicit user, commissioning-owner
-and host limits remain binding; an agent-written record may encode a user limit,
+Give an owner a deliverable, acceptance criteria and the authority to correct
+known failures and run the affected checks through completion. Do not add a
+fixed number of attempts, turns or review cycles by habit, or require another
+manager disposition after each ordinary failed check. Keep estimates separate
+from permissions. Use `maxTurns` only for a deliberate enforced limit. A manager
+may revise its own plan and tell its workers the updated scope. Explicit user,
+commissioning-owner and host limits remain binding; an agent-written record may encode a user limit,
 so unknown historical provenance is not permission to discard it. Existing
 enforced limits continue to apply until deliberately updated through supported
 controls by an authorized owner. `task.update` retains used turns and correction
@@ -305,6 +309,18 @@ Use questions for missing user decisions or authority, not to approve your own
 routine implementation choices. An unresolved user choice, explicit Stop,
 permission refusal or uncertain prior effect still requires its actual resolution.
 An agent's plan changing is not itself any of those conditions.
+
+Use the existing managed test profiles and the project's maintained check commands.
+`workspace.environments.read` exposes the available profiles and preparation
+contract; `python-project` prepares Python dependencies and `browser-test` also
+prepares the browser/frontend tools. Prefer a focused command or a small extension
+to an existing runner over a new qualification framework for each feature. Let
+the author run cheap imports/preflight and focused regressions during repair;
+source review is not a prerequisite for every reversible check. Reserve independent
+review for the changed behavior and integration risks. Reuse passing evidence when
+the exact relevant source, dependencies and inputs are unchanged; rerun the affected
+checks when they change. A diagnostic pass does not replace the original acceptance
+criterion.
 
 A test waiting for resource capacity blocks that dependency, not unrelated
 implementation, review or documentation. For a bounded isolated check, discover

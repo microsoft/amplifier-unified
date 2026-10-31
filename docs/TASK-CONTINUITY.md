@@ -21,7 +21,13 @@ outcomes remain unknown until their actual evidence is reconciled.
 
 A standing user request to complete work includes ordinary corrections,
 verification and agreed handoffs within its scope. Managers can revise their own
-planning checkpoints without requesting fresh user approval. The optional
+planning checkpoints without requesting fresh user approval. Ordinary failure
+correction and the affected focused checks remain part of that mandate; a manager
+does not manufacture fixed attempt allowances or repeated approval cycles.
+Estimates belong in planning, not in enforced limits or instructions that forbid
+ordinary verification. Existing managed profiles and maintained project checks
+should supply qualification; independent review focuses on changed risks and
+original acceptance, with unchanged passing evidence reused. The optional
 `maxTurns` field is an enforced limit, not an estimate; guidance therefore omits
 it unless a hard limit is required. Explicit user, commissioning-owner and host
 limits remain effective. An agent-origin record can contain a user's limit, and
