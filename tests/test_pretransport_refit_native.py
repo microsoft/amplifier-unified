@@ -50,6 +50,9 @@ async def native_case(mode='stale_visual', max_iterations=-1, legacy_budget=Fals
         if operation == 'work.invocation.revalidate':
             if mode == 'authority_unavailable' and len(state.measurements) > 1:
                 raise TimeoutError('Synthetic unavailable authority')
+            if mode == 'authority_typed_error' and len(state.measurements) > 1:
+                from amplifier_web.request_refit import RequestFitChanged
+                raise RequestFitChanged('content_changed')
             if mode == 'currentness_changed' and len(state.measurements) > 1:
                 return {'current': False, 'effectAuthorized': False, 'required': required}
             return {'current': True, 'effectAuthorized': False, 'required': required}
@@ -89,7 +92,8 @@ async def native_case(mode='stale_visual', max_iterations=-1, legacy_budget=Fals
             # before the provider's transport entrypoint is reached.
             if any(isinstance(m.content, list) and any(b.type == 'image' for b in m.content)
                    for m in request.messages):
-                if mode not in {'authority_unavailable', 'currentness_changed', 'provider_error', 'provider_typed_error', 'binding_missing'}:
+                if mode not in {'authority_unavailable', 'authority_typed_error', 'currentness_changed',
+                                'provider_error', 'provider_typed_error', 'binding_missing'}:
                     state.stale = True
                 if mode == 'authority_changed':
                     required['version'] = 'changed-authority'
@@ -162,6 +166,7 @@ async def test_actual_loop_refits_without_repeating_completed_tool(mode, max_ite
 @pytest.mark.parametrize('mode, measurements, transports, reason', [
     ('authority_changed', 2, 1, 'authority_changed'),
     ('authority_unavailable', 2, 1, 'authority_unavailable'),
+    ('authority_typed_error', 2, 1, 'authority_unavailable'),
     ('currentness_changed', 2, 1, 'authority_changed'),
     ('stop', 2, 1, 'native_scope_changed'),
     ('new_generation', 2, 1, 'native_scope_changed'),

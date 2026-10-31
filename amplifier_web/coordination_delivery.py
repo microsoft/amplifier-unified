@@ -889,13 +889,13 @@ class CoordinationDelivery:
             try:
                 check = await asyncio.wait_for(self.bridge('work.invocation.revalidate',
                                                           {'version': saved['required']['version']}), 1.5)
-                if (check.get('current') is not True or check.get('effectAuthorized') is not False
-                        or check.get('required') != saved['required']):
-                    raise RequestFitChanged('authority_changed')
-            except RequestFitChanged:
-                raise
             except Exception:
                 raise RequestFitChanged('authority_unavailable') from None
+            if not isinstance(check, dict):
+                raise RequestFitChanged('authority_unavailable')
+            if (check.get('current') is not True or check.get('effectAuthorized') is not False
+                    or check.get('required') != saved['required']):
+                raise RequestFitChanged('authority_changed')
         self.check_execution_scope(scope)
         after = request.model_dump_json()
         if self._request(request) is not saved:
