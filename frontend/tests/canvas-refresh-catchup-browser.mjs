@@ -185,12 +185,15 @@ try{
   };
   const failRead=async route=>{reads++;await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic readback unavailable'})})};
   await page.route('**/api/actions',intercept);
-  await page.route('**/api/state',failRead);
   try{
    if(mode==='accepted-details'){
     await panel.getByRole('button',{name:'Choose artifact version',exact:true}).click();
     await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('2');
    }
+   // Opening Details is itself an asynchronous state action. Drain it before
+   // withholding frames so its recovery cannot race this Load's readback.
+   await action('canvas.views.inspect');
+   await page.route('**/api/state',failRead);
    held=true;
    const load=mode==='accepted-details'
     ?page.getByRole('group',{name:'Confirm saved preview version'}).getByRole('button',{name:'Load v2 — resets preview and runs its code',exact:true})
