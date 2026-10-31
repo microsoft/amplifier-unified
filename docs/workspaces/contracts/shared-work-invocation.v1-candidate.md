@@ -47,6 +47,18 @@ workspace, actual root/principal, Work owner, open accepted commitment, exact
 record/promise/candidate and current task/Stop/assignment guards. The current Work
 candidate must already be recorded; this field cannot silently choose or change it.
 A root merely linked to somebody else's Work cannot commission on the owner's behalf.
+
+For a new item, `workspace.work.create` returns `candidate: null`: its `intentKey`
+deduplicates capture and is not a candidate. Before commissioning, the accountable
+owner calls `workspace.work.link` at that item's exact revision with its own
+`linkedSessionId`, `role: "executor"`, and the actual candidate identity (for code,
+the source commit). That executor link establishes the candidate without starting
+work. Build `workReferences` from the returned item's `id`, `revision`,
+`promiseRevision`, and `candidate`. A reviewer link does not select a candidate.
+Re-read the item if it has changed; never substitute a creation command or request
+ID for its saved candidate. This is the existing link lifecycle, not a new
+commissioning approval or a claim that the candidate passed review.
+
 Malformed reference schema refuses with status 400; missing Work with 404;
 borrowed root/principal or nonowner authority with 403; changed record, promise,
 candidate or generation with 409. Each refusal names its actual cause. A missing

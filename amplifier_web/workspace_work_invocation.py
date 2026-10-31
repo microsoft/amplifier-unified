@@ -32,7 +32,8 @@ def references_schema(schema, string):
     revision = {'type': 'integer', 'minimum': 1}
     return {'type': 'array', 'minItems': 1, 'maxItems': 8, 'items': schema({
         'workId': {**string(200), 'minLength': 1}, 'expectedRevision': revision,
-        'promiseRevision': revision, 'candidate': {**string(100), 'minLength': 1},
+        'promiseRevision': revision, 'candidate': {**string(100), 'minLength': 1,
+            'description': 'Copy the current saved Work candidate. If candidate is null, establish an executor link with workspace.work.link first. intentKey and command/request IDs do not establish a candidate.'},
         'role': {'enum': ['executor', 'reviewer']}},
         ['workId', 'expectedRevision', 'promiseRevision', 'candidate', 'role'])}
 
