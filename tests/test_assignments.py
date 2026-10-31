@@ -38,13 +38,13 @@ async def child(app, source, identity='helper'):
     return target, created
 
 
-async def test_new_assignment_has_optional_execution_counts_and_bounded_members(app):
+async def test_new_assignment_has_no_default_count_limits(app):
     value = await start(app)
     assert value['limits']['maxOpenTasks'] is None
     assert value['limits']['maxConcurrentCalls'] is None
-    assert value['limits']['maxMembers'] == 64
+    assert value['limits']['maxMembers'] is None
     source = app.state['sessions'][0]
-    # Execution ceilings are independent of the structural member bound.
+    # A deliberately selected member cap still applies.
     await limits(app, source, maxOpenTasks=100, maxConcurrentCalls=100, maxMembers=1)
     plan(app, source)
     with pytest.raises(AppError, match='assignment member limit'):
@@ -57,7 +57,7 @@ async def test_saved_finite_and_explicit_uncapped_counts_survive_restart(app, co
     source = app.state['sessions'][0]
     await start(app)
     await limits(app, source, maxOpenTasks=3, maxConcurrentCalls=2)
-    await limits(app, source, maxOpenTasks=counts[0], maxConcurrentCalls=counts[1])
+    await limits(app, source, maxOpenTasks=counts[0], maxConcurrentCalls=counts[1], maxMembers=counts[0])
     before = copy.deepcopy(app.assignments.current(source))
     app._save()
     await app.close()
@@ -70,7 +70,7 @@ async def test_saved_finite_and_explicit_uncapped_counts_survive_restart(app, co
 
 @pytest.mark.parametrize('field,value', [
     ('maxOpenTasks', 0), ('maxOpenTasks', True), ('maxConcurrentCalls', -1),
-    ('maxConcurrentCalls', 1.5), ('maxMembers', None), ('maxMembers', 65),
+    ('maxConcurrentCalls', 1.5), ('maxMembers', 0), ('maxMembers', True),
 ])
 async def test_optional_execution_counts_still_validate_values(app, field, value):
     source = app.state['sessions'][0]
@@ -440,3 +440,21 @@ async def test_new_task_schedule_inherits_assignment_and_stop_suppresses_future_
         assert len(runtime.inputs) == 1
     finally:
         await app.close()
+
+
+async def test_member_reservation_crosses_old_roster_ceiling_without_losing_history(app):
+    source = app.state['sessions'][0]
+    await start(app)
+    for index in range(65):
+        app.assignments.reserve_member(source, f'reserved-{index}', f'create-{index}')
+    before = copy.deepcopy(app.assignments.current(source))
+    assert app.assignments.active_member_count(before) == 66
+    # Operators may choose a larger explicit ceiling or remove a previous one.
+    await limits(app, source, maxMembers=66)
+    with pytest.raises(AppError, match='assignment member limit'):
+        app.assignments.reserve_member(source, 'next-member', 'create-next')
+    await limits(app, source, maxMembers=None)
+    app.assignments.reserve_member(source, 'next-member', 'create-next')
+    after = app.assignments.current(source)
+    assert all(after['members'][key] == row for key, row in before['members'].items())
+    assert app.assignments.active_member_count(after) == 67

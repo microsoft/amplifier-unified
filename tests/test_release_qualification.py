@@ -234,12 +234,17 @@ def test_exhaustive_checks_follow_publication_at_the_exact_released_source():
     release = yaml.load((workflows / 'release.yml').read_text(), Loader=yaml.BaseLoader)
     assert 'public-readiness' not in release['jobs']
     post = yaml.load((workflows / 'post-release.yml').read_text(), Loader=yaml.BaseLoader)
+    assert set(post['on']) == {'workflow_run', 'workflow_dispatch'}
     assert post['on']['workflow_run'] == {'workflows': ['Publish application release'], 'types': ['completed']}
+    assert post['on']['workflow_dispatch']['inputs'] == {'publication_run_id': {
+        'description': 'Successful main publisher run whose existing release will be verified',
+        'required': 'true', 'type': 'string'}}
     assert post['permissions'] == {'contents': 'read'}
     for lane in ('readiness', 'python', 'browser'):
         assert post['jobs'][lane]['needs'] == 'resolve'
         assert post['jobs'][lane]['with']['revision'] == '${{ needs.resolve.outputs.revision }}'
         if lane == 'python':
+            assert post['jobs'][lane]['permissions'] == {'contents': 'read', 'actions': 'read'}
             assert post['jobs'][lane]['secrets'] == {
                 'LOOP_LIVE_CI_READ_KEY': '${{ secrets.LOOP_LIVE_CI_READ_KEY }}'}
         else:
@@ -248,7 +253,9 @@ def test_exhaustive_checks_follow_publication_at_the_exact_released_source():
     assert "conclusion == 'success'" in resolve['if']
     assert 'head_repository.full_name == github.repository' in resolve['if']
     assert 'head_branch' in resolve['if']
-    assert 'host-source-resolution' in resolve['steps'][-1]['run']
+    assert resolve['steps'][-1]['run'] == 'python scripts/post_release_checks.py resolve --output "$GITHUB_OUTPUT"'
+    assert resolve['steps'][-1]['env'] == {'GH_TOKEN': '${{ github.token }}'}
+    assert release['jobs']['prepare']['steps'][-1]['with']['name'] == 'host-source-resolution'
     assert post['jobs']['report']['permissions'] == {'contents': 'read', 'issues': 'write'}
     assert 'always()' in post['jobs']['report']['if']
     assert set(post['jobs']['report']['needs']) == {'resolve', 'installed-package', 'readiness', 'python', 'browser', 'integrations'}
@@ -256,6 +263,55 @@ def test_exhaustive_checks_follow_publication_at_the_exact_released_source():
     assert 'npm test --prefix frontend' in frontend
     assert 'npm run build --prefix frontend' in frontend
     assert 'git diff --exit-code -- amplifier_web/static' in frontend
+
+
+def test_post_release_python_caller_covers_callee_permissions_without_widening_other_jobs():
+    workflows = ROOT / '.github/workflows'
+    post = yaml.load((workflows / 'post-release.yml').read_text(), Loader=yaml.BaseLoader)
+    python = yaml.load((workflows / 'python-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    assert post['permissions'] == python['permissions'] == {'contents': 'read'}
+    assert {name: job['permissions'] for name, job in post['jobs'].items() if 'permissions' in job} == {
+        'resolve': {'contents': 'read', 'actions': 'read'},
+        'python': {'contents': 'read', 'actions': 'read'},
+        'report': {'contents': 'read', 'issues': 'write'}}
+    caller = post['jobs']['python']
+    assert caller['uses'] == './.github/workflows/python-checks.yml'
+    assert caller['with'] == {'revision': '${{ needs.resolve.outputs.revision }}'}
+    for job in python['jobs'].values():
+        for scope, level in job.get('permissions', python['permissions']).items():
+            assert caller['permissions'].get(scope) == level
+    # GitHub validates the permission ceiling even for this skipped manual job.
+    guarded = python['jobs']['goal-peer-publisher-0410']
+    assert guarded['permissions'] == {'contents': 'read', 'actions': 'read'}
+    assert guarded['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && inputs.suite == 'goal-peer-publisher-0410' }}"
+    assert python['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
+
+
+def test_post_release_manual_guard_and_report_share_verified_identity():
+    post = yaml.load((ROOT / '.github/workflows/post-release.yml').read_text(), Loader=yaml.BaseLoader)
+    resolve, report = post['jobs']['resolve'], post['jobs']['report']
+    automatic = ("github.event_name == 'workflow_run' && "
+                 "github.event.workflow_run.conclusion == 'success' && "
+                 "github.event.workflow_run.head_branch == 'main' && "
+                 "github.event.workflow_run.head_repository.full_name == github.repository")
+    manual = "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'"
+    assert ' '.join(resolve['if'].split()) == f'({manual}) || ({automatic})'
+    assert ' '.join(report['if'].split()) == f'always() && (({manual}) || ({automatic}))'
+    assert resolve['outputs'] == {
+        name: '${{ steps.release.outputs.' + name + ' }}'
+        for name in ('publication_run_id', 'publication_run_attempt', 'revision', 'tag', 'version')}
+    assert post['concurrency'] == {
+        'group': 'post-release-${{ github.event.workflow_run.id || github.run_id }}', 'cancel-in-progress': 'false'}
+    assert report['concurrency'] == {
+        'group': 'post-release-report-${{ needs.resolve.outputs.tag || needs.resolve.outputs.publication_run_id || github.run_id }}',
+        'cancel-in-progress': 'false'}
+    assert report['steps'][-1]['env']['RELEASE_RUN_ID'] == '${{ needs.resolve.outputs.publication_run_id }}'
+    assert report['steps'][-1]['env']['RELEASE_RESULTS'] == '${{ toJSON(needs) }}'
+    assert report['steps'][-1]['run'] == 'python scripts/post_release_checks.py report'
+    for job in post['jobs'].values():
+        for step in job.get('steps', []):
+            assert '${{' not in step.get('run', '')
+    assert 'inputs.publication_run_id' not in str(post['jobs'])
 
 
 def test_installed_media_diagnostic_is_explicit_full_scenario_and_cannot_replace_readiness():
@@ -408,12 +464,12 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     selection = workflow['on']['workflow_dispatch']['inputs']['suite']
     assert selection['type'] == 'choice' and selection['default'] == 'full'
-    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native']
+    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'cold-control-restore', 'goal-peer-publisher-0410']
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['on']['workflow_call']['secrets'] == {'LOOP_LIVE_CI_READ_KEY': {'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
     jobs = workflow['jobs']
-    assert jobs['python']['if'] == "${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' }}"
+    assert jobs['python']['if'] == "${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' }}"
     assert jobs['python']['env']['CHECK_SUITE'] == "${{ inputs.suite || 'full' }}"
     assert jobs['core-wheels']['if'] == "${{ inputs.core_wheels && (!inputs.suite || inputs.suite == 'full') }}"
     remote = jobs['remote-test-origins']
@@ -457,6 +513,238 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     assert manager['if'] == "${{ env.CHECK_SUITE == 'manager-exception-boundary' }}"
     assert 'assert path.is_relative_to(root)' in manager['run']
     assert 'if [ "$CHECK_SUITE" = manager-exception-boundary ]; then' in focused['run']
+
+
+def test_goal_peer_publisher_is_exclusive_fixed_manual_and_preserves_failure_evidence():
+    workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['goal-peer-publisher-0410']
+    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && inputs.suite == 'goal-peer-publisher-0410' }}"
+    assert job['runs-on'] == 'ubuntu-24.04' and job['timeout-minutes'] == '30'
+    assert job['permissions'] == {'contents': 'read', 'actions': 'read'} and 'needs' not in job
+    steps = job['steps']
+    assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
+    assert steps[1]['run'] == 'python scripts/goal_peer_publisher_checks.py --initialize'
+    assert steps[2]['with'] == {'python-version': '3.13.17'}
+    assert steps[3]['with'] == {'version': '0.13.6', 'enable-cache': 'false'}
+    fetch = steps[4]
+    assert fetch['timeout-minutes'] == '2' and fetch['env'] == {'GH_TOKEN': '${{ github.token }}'}
+    assert 'actions/runs/41179992422/attempts/1' in fetch['run']
+    assert 'actions/artifacts/13033939559/zip' in fetch['run']
+    assert fetch['run'].endswith('python scripts/goal_peer_publisher_checks.py --inputs\n')
+    assert steps[5]['with'] == {
+        'repository': 'microsoft/amplifier-module-loop-live', 'ref': 'ccc4aa8a0bb0efdbc9e4023c2feab47d19c4bcaf',
+        'path': '.ci/loop-live', 'ssh-key': '${{ secrets.LOOP_LIVE_CI_READ_KEY }}', 'persist-credentials': 'false'}
+    assert steps[6]['with'] == {
+        'repository': 'microsoft/amplifier-bundle-recipes', 'ref': '7afaba7455743fb26b8d8a11cd1394eb7a01628a',
+        'path': '.ci/recipes', 'persist-credentials': 'false'}
+    assert str(job).count('secrets.LOOP_LIVE_CI_READ_KEY') == 1
+    assert 'set -o pipefail' in steps[7]['run'] and ' --run ' in steps[7]['run']
+    assert steps[-2]['if'] == 'always()' and steps[-2]['run'].endswith(' --finalize')
+    assert steps[-1]['if'] == 'always()'
+    assert steps[-1]['with']['path'] == 'output/goal-peer-publisher0410/'
+    assert steps[-1]['with']['if-no-files-found'] == 'error'
+    assert all('continue-on-error' not in step for step in steps)
+    for path in (ROOT / '.github/workflows').glob('*.yml'):
+        if path.name != 'python-checks.yml':
+            assert 'goal-peer-publisher-0410' not in path.read_text()
+
+
+@pytest.fixture
+def publisher_checks(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / 'scripts'))
+    spec = importlib.util.spec_from_file_location('publisher_checks', ROOT / 'scripts/goal_peer_publisher_checks.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize('mutation', [None, 'attempt', 'head', 'digest', 'artifact', 'expired', 'run'])
+def test_goal_peer_publisher_rejects_wrong_api_identity(publisher_checks, mutation):
+    module = publisher_checks
+    run = {'id': 41179992422, 'run_attempt': 1, 'head_sha': module.PUBLISHER,
+           'status': 'completed', 'conclusion': 'failure', 'event': 'push', 'head_branch': 'main',
+           'repository': {'full_name': 'microsoft/amplifier-unified'}, 'path': '.github/workflows/release.yml'}
+    artifact = {'id': 13033939559, 'name': 'runtime-source-resolution', 'expired': False,
+                'digest': 'sha256:' + module.ARCHIVE_SHA,
+                'workflow_run': {'id': run['id'], 'head_sha': module.PUBLISHER}}
+    if mutation == 'attempt': run['run_attempt'] = 2
+    elif mutation == 'head': run['head_sha'] = '0' * 40
+    elif mutation == 'digest': artifact['digest'] = 'sha256:' + '0' * 64
+    elif mutation == 'artifact': artifact['id'] += 1
+    elif mutation == 'expired': artifact['expired'] = True
+    elif mutation == 'run': artifact['workflow_run']['id'] += 1
+    if mutation:
+        with pytest.raises(AssertionError):
+            module.verify_api(run, artifact)
+    else:
+        module.verify_api(run, artifact)
+
+
+def test_goal_peer_publisher_fixed_cases_environment_and_no_resolve(publisher_checks):
+    import ast
+    module = publisher_checks
+    assert module.SELECTORS == {
+        'native': ['tests/test_goal_peer_continuation.py', 'tests/test_task_goal_runtime.py'],
+        'auto': ['tests/test_peer_auto_delivery.py']}
+    assert sum(map(len, module.EXPECTED.values())) == 43
+    # Expand only this file's literal single-axis parameterizations, without
+    # importing the product or running collection to define our expected oracle.
+    names = set()
+    for node in ast.parse((ROOT / 'tests/test_peer_auto_delivery.py').read_text()).body:
+        if not isinstance(node, ast.AsyncFunctionDef) or not node.name.startswith('test_'):
+            continue
+        params = [d for d in node.decorator_list if isinstance(d, ast.Call)
+                  and isinstance(d.func, ast.Attribute) and d.func.attr == 'parametrize']
+        assert len(params) <= 1
+        names.update({f'{node.name}[{value}]' for value in ast.literal_eval(params[0].args[1])}
+                     if params else {node.name})
+    assert names == module.AUTO_NAMES and len(names) == 18
+    permitted = {'PATH': '/tools/bin', 'LANG': 'C.UTF-8', 'RUNNER_TEMP': '/owned'}
+    refused = dict.fromkeys(('OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GH_TOKEN', 'GITHUB_TOKEN',
+                            'LOOP_LIVE_CI_READ_KEY', 'SSH_AUTH_SOCK', 'PYTHONPATH', 'PYTHONOPTIMIZE',
+                            'PYTEST_ADDOPTS', 'UV_PROJECT_ENVIRONMENT', 'UV_INDEX_URL',
+                            'GIT_CONFIG_COUNT', 'HOME'), 'do-not-inherit')
+    assert module.clean_environment({**permitted, **refused}) == permitted
+    source = (ROOT / 'scripts/goal_peer_publisher_checks.py').read_text()
+    assert "['uv', 'sync', '--project', str(runtime), '--locked', '--python', sys.executable]" in source
+    assert "['uv', 'export', '--project', str(runtime), '--frozen'" in source
+    assert all(value not in source for value in ("['uv', 'add'", "['uv', 'lock'", '--upgrade', '--refresh'))
+    assert 'time.monotonic() + 900' in source and 'time.monotonic() + 300' in source
+    assert 'run_scenarios(ROOT' in source and "row['cleanup'] == {'remaining': [], 'terminated': 0}" in source
+    assert "assert check_native(OUTPUT / 'native.xml') == 43" in source
+    assert "restored-input-hashes.json" in source and 'candidate-source.tar' in source
+    assert "for key in ('graph', 'files', 'coreWheel')" in source
+    assert 'source(ROOT)' in source and "git(root, 'ls-files', '--stage', '-z')" in source
+
+
+@pytest.mark.parametrize('mutation', [None, 'missing', 'extra', 'version', 'commit', 'url'])
+def test_goal_peer_publisher_installed_graph_must_match_locked_export(publisher_checks, tmp_path, monkeypatch, mutation):
+    module = publisher_checks
+    monkeypatch.setattr(module, 'OUTPUT', tmp_path)
+    (tmp_path / 'original').mkdir()
+    commit = 'a' * 40
+    (tmp_path / 'original/uv.lock').write_text(
+        '[[package]]\nname="amplifier-core"\nversion="2.0.2"\nsource={registry="https://pypi.org/simple"}\n'
+        '[[package]]\nname="amplifier-foundation"\nversion="1.0.0"\n'
+        f'source={{git="https://github.com/microsoft/amplifier-foundation?rev=main#{commit}"}}\n')
+    (tmp_path / 'resolved-requirements.txt').write_text(
+        'amplifier-core==2.0.2\n'
+        f'amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@{commit}\n')
+    (tmp_path / 'candidate.json').write_text('{"files": {}}')
+    (tmp_path / 'dependency-sources.json').write_text('{}')
+    value = {'graph': [
+        {'name': 'amplifier-core', 'version': '2.0.2', 'direct': None},
+        {'name': 'amplifier-foundation', 'version': '1.0.0', 'direct': {
+            'url': 'https://github.com/microsoft/amplifier-foundation',
+            'vcs_info': {'vcs': 'git', 'commit_id': commit}}}],
+        'files': {}, 'origins': {}, 'coreWheel': {'version': '2.0.2'}}
+    if mutation == 'missing': value['graph'].pop()
+    elif mutation == 'extra': value['graph'].append({'name': 'unexpected'})
+    elif mutation == 'version': value['graph'][0]['version'] = '9.0'
+    elif mutation == 'commit': value['graph'][1]['direct']['vcs_info']['commit_id'] = 'b' * 40
+    elif mutation == 'url': value['graph'][1]['direct']['url'] = 'https://example.com/other'
+    if mutation:
+        with pytest.raises(AssertionError):
+            module.verify_inventory(value)
+    else:
+        module.verify_inventory(value)
+
+
+def test_cold_control_restore_is_exclusive_manual_locked_and_bounded():
+    workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
+    assert set(workflow['on']['workflow_dispatch']['inputs']) == {'suite', 'core_wheels'}
+    assert workflow['on']['workflow_dispatch']['inputs']['suite']['default'] == 'full'
+    assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
+    assert workflow['permissions'] == {'contents': 'read'}
+    jobs = workflow['jobs']
+    assert set(jobs) == {'python', 'core-wheels', 'remote-test-origins', 'incompatible-selection', 'cold-control-restore', 'goal-peer-publisher-0410'}
+    job = jobs['cold-control-restore']
+    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && inputs.suite == 'cold-control-restore' }}"
+    assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '15'
+    assert 'needs' not in job and 'permissions' not in job and 'continue-on-error' not in job
+    assert all('needs' not in other for other in jobs.values())
+    steps = job['steps']
+    assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
+    assert steps[1]['run'].splitlines()[0] == 'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'
+    assert 'cp scripts/cold_restore_checks.py scripts/browser_check_runner.py .github/workflows/python-checks.yml pyproject.toml uv.lock' in steps[1]['run']
+    assert steps[2]['with'] == {'python-version': '3.13'}
+    resolve = next(i for i, s in enumerate(steps) if s.get('id') == 'runtime')
+    checkout = next(i for i, s in enumerate(steps)
+                    if s.get('with', {}).get('repository') == 'microsoft/amplifier-module-loop-live')
+    assert resolve < checkout < len(steps) - 2
+    assert "tomllib.load(open('uv.lock', 'rb'))" in steps[resolve]['run']
+    assert "re.fullmatch('[0-9a-f]{40}', revision)" in steps[resolve]['run']
+    assert steps[checkout]['with'] == {
+        'repository': 'microsoft/amplifier-module-loop-live', 'ref': '${{ steps.runtime.outputs.revision }}',
+        'path': '.ci/loop-live', 'ssh-key': '${{ secrets.LOOP_LIVE_CI_READ_KEY }}', 'persist-credentials': 'false'}
+    assert steps[-2] == {
+        'name': 'Qualify fixed source and installed cold restore once', 'timeout-minutes': '11',
+        'run': 'set -o pipefail\npython -u scripts/cold_restore_checks.py 2>&1 | tee output/cold-control-restore-run.log\n'}
+    commands = '\n'.join(step.get('run', '') for step in steps)
+    assert commands.count('python -u scripts/cold_restore_checks.py') == 1
+    assert all(value not in commands for value in ('npm ', 'playwright', 'uv pip install', '@main'))
+    assert all('continue-on-error' not in step for step in steps)
+    assert steps[-1] == {
+        'name': 'Retain all evidence including failed and unrun phases', 'if': 'always()',
+        'uses': 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+        'with': {'name': 'cold-control-restore-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
+                 'path': 'output/cold-control-restore-inputs/\noutput/cold-control-restore-run.log\noutput/cold-control-restore/\n',
+                 'if-no-files-found': 'error', 'retention-days': '14'}}
+    for path in (ROOT / '.github/workflows').glob('*.yml'):
+        if path.name != 'python-checks.yml':
+            assert 'cold-control-restore' not in path.read_text()
+            # Other fixed checks can retain/reuse its wheel verifier without
+            # invoking the cold-control qualification entrypoint.
+            for line in path.read_text().splitlines():
+                if 'cold_restore_checks.py' in line:
+                    assert path.name == 'browser-checks.yml'
+                    assert line.strip().startswith(('cp ', 'sha256sum '))
+
+
+def test_cold_control_restore_keeps_exact_cases_import_proof_and_cleanup_contract():
+    import ast
+    source = (ROOT / 'scripts/cold_restore_checks.py').read_text()
+    tree = ast.parse(source)
+    constants = {node.targets[0].id: ast.literal_eval(node.value)
+                 for node in tree.body if isinstance(node, ast.Assign)
+                 and isinstance(node.targets[0], ast.Name)
+                 and node.targets[0].id in {'SOURCE_SELECTORS', 'INSTALLED_SELECTORS', 'NOT_SELECTED'}}
+    assert constants['SOURCE_SELECTORS'] == [
+        'tests/test_assignment_task_limits.py',
+        'tests/test_assignment_task_limits_native.py::test_native_exhausted_member_receives_fresh_work_after_manager_control',
+        'tests/test_capacity.py::test_running_cas_duplicate_restart_ui_agent_parity_and_wrong_session',
+        'tests/test_runtime_controls.py::test_cancelled_restore_retains_controls_and_releases_persistence_guard']
+    assert constants['INSTALLED_SELECTORS'] == [
+        'tests/test_assignment_task_limits.py::test_cold_limit_correction_preserves_saved_budget_at_every_write',
+        'tests/test_assignment_task_limits.py::test_failed_cold_limit_preparation_keeps_previously_saved_mode',
+        'tests/test_runtime_controls.py::test_cancelled_restore_retains_controls_and_releases_persistence_guard[False]',
+        'tests/test_runtime_controls.py::test_cancelled_restore_retains_controls_and_releases_persistence_guard[True]']
+    assert constants['NOT_SELECTED'] == 'tests/test_runtime_controls.py::test_real_core_controls_and_tool_approval'
+    assert "'--locked', '--group', 'dev', '--group', 'artifacts', '--no-install-project'" in source
+    assert "'.insteadOf'" in source and "'GIT_CONFIG_VALUE_0': 'https://github.com/microsoft/amplifier-module-loop-live'" in source
+    assert source.count("['uv', 'build', '--wheel'") == 1
+    assert "'--no-build-isolation'" in source and "'--no-deps', '-r'" in source
+    assert "sorted(lines) == sorted((OUTPUT / 'requirements.txt').read_text().splitlines())" in source
+    assert 'signal.alarm(600)' in source and "remaining = 600 - (time.monotonic() - started)" in source
+    assert "assert not sys.argv[1:]" in source
+    assert "'scenarios': [{'id': name, 'command': command, 'env': common}]" in source
+    assert "row['cleanup'] == {'remaining': [], 'terminated': 0}" in source
+    assert 'run_scenarios(root, plan' in source and 'subprocess.Popen' not in source
+    assert "shutil.copytree(ROOT / 'tests', harness / 'tests'" in source
+    assert "'-I', str(harness / 'scripts/cold_restore_checks.py'), '--installed-tests'" in source
+    assert source.index("save(evidence / (phase + '-imports-before.json'), record)") < source.index('pytest.main(args')
+    for field in ("'executable': sys.executable", "'cwd': str(Path.cwd())",
+                  "'sysPath': sys.path.copy()", "'PYTHONPATH': os.environ.get('PYTHONPATH')"):
+        assert field in source
+    assert 'assert not path.is_relative_to(source)' in source
+    assert 'assert all(not Path(p).resolve().is_relative_to(source) for p in sys.path)' in source
+    assert "('installed', 4) if installed else ('source', 34)" in source
+    assert "'failure': 0, 'error': 0, 'skipped': 0" in source
+    assert "verify_wheel(wheel, candidate, package_root)" in source
+    assert "assets == candidate['static']" in source and "installed[path] == [encoded, size]" in source
+    assert "candidate['files'] == {p: sha(ROOT / p) for p in files}" in source
+    assert all(value not in source for value in ("'npm'", "'node'", "'--upgrade'", "'--refresh'", '@main'))
 
 
 @pytest.mark.parametrize(('suite', 'targets'), [
@@ -564,7 +852,7 @@ def test_browser_runner_matcher_excludes_test_names_without_hiding_extra_invocat
 def test_canvas_qualification_is_fixed_manual_and_installed_not_a_release_gate():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     job = workflow['jobs']['canvas-qualification']
-    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.canvas_qualification }}"
+    assert job['if'] == "${{ !inputs.permissions_history && !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && inputs.canvas_qualification }}"
     assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '20'
     assert workflow['permissions'] == {'contents': 'read'}
     assert 'secrets.' not in str(job)
@@ -594,7 +882,8 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     inputs = workflow['on']['workflow_dispatch']['inputs']
     assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption',
                            'canvas_qualification', 'destination_history', 'settings_close_diagnostic',
-                           'multi_quote', 'attachment_experience', 'compact_composer', 'peer_messages'}
+                           'multi_quote', 'attachment_experience', 'compact_composer', 'peer_messages',
+                           'readiness_trio', 'permissions_history'}
     assert inputs['canvas_qualification']['type'] == 'boolean'
     assert inputs['canvas_qualification']['default'] == 'false'
     assert inputs['multi_quote']['type'] == 'boolean'
@@ -619,12 +908,12 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert workflow['on']['workflow_call'] == {
         'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
     job = workflow['jobs']['browser']
-    assert job['if'] == '${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
+    assert job['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
     assert job['timeout-minutes'] == '45'
     mcp = workflow['jobs']['mcp-boundary']
-    assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
+    assert mcp['if'] == "${{ !inputs.permissions_history && !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
     history = workflow['jobs']['destination-history']
-    assert history['if'] == '${{ !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}'
+    assert history['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}'
     assert history['steps'][0] == {
         'name': 'Require the fixed navigation selection for diagnostic mode',
         'if': '${{ inputs.settings_close_diagnostic && !inputs.destination_history }}',
@@ -710,12 +999,376 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert 'output/browser-checks/' in diagnostics['with']['path']
 
 
+def test_readiness_trio_is_exclusive_manual_fixed_and_not_a_default_gate():
+    workflows = ROOT / '.github/workflows'
+    workflow = yaml.load((workflows / 'browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
+    inputs = workflow['on']['workflow_dispatch']['inputs']
+    assert inputs['readiness_trio'] == {
+        'description': 'Only fixed question delivery, scheduler and compaction diagnostics qualification',
+        'type': 'boolean', 'default': 'false',
+    }
+    assert workflow['on']['workflow_call'] == {
+        'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
+    assert workflow['permissions'] == {'contents': 'read'}
+    # Exact old predicates remain intact behind one additional conjunct.
+    previous_conditions = {
+        'browser': '!inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience',
+        'attachment-experience': 'inputs.attachment_experience',
+        'mcp-boundary': "github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic",
+        'canvas-qualification': "github.event_name == 'workflow_dispatch' && inputs.canvas_qualification",
+        'compact-composer': "github.event_name == 'workflow_dispatch' && inputs.compact_composer",
+        'destination-history': '!inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic)',
+        'peer-messages': "github.event_name == 'workflow_dispatch' && inputs.peer_messages",
+    }
+    jobs = workflow['jobs']
+    assert set(jobs) == {*previous_conditions, 'readiness-trio', 'permissions-history'}
+    for name, condition in previous_conditions.items():
+        assert jobs[name]['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && ' + condition + ' }}'
+        assert 'needs' not in jobs[name], 'Manual qualification cannot gate existing jobs'
+    job = jobs['readiness-trio']
+    assert job['if'] == "${{ !inputs.permissions_history && github.event_name == 'workflow_dispatch' && inputs.readiness_trio == true }}"
+    assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '15'
+    assert 'needs' not in job and 'continue-on-error' not in job
+    steps = job['steps']
+    mixed = ('attachment_experience', 'peer_messages', 'destination_history', 'settings_close_diagnostic',
+             'mcp_boundary', 'app004_qualification', 'attachment_consumption', 'canvas_qualification',
+             'multi_quote', 'compact_composer')
+    assert set(inputs) == {'readiness_trio', 'permissions_history', *mixed}
+    assert steps[0] == {
+        'name': 'Reject mixed readiness trio selections before setup',
+        'if': '${{ ' + ' || '.join('inputs.' + name for name in mixed) + ' }}',
+        'run': "echo 'Readiness trio requires its own explicit manual selection; no qualification was run.'\nexit 1\n",
+    }
+    assert steps[1] == {
+        'uses': 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+        'with': {'ref': '${{ github.sha }}', 'persist-credentials': 'false'},
+    }
+    assert steps[2]['name'] == 'Retain intended checks before dependency preparation'
+    assert steps[2]['run'].splitlines()[0] == 'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'
+    assert 'cp .github/workflows/browser-checks.yml output/readiness-trio-inputs/' in steps[2]['run']
+    execute = {
+        'name': 'Qualify once with fail-stop cleanup and a ten-minute overall budget',
+        'timeout-minutes': '11',
+        'run': 'set -o pipefail\npython -u scripts/readiness_trio_checks.py 2>&1 | tee output/readiness-trio-run.log\n',
+    }
+    assert steps[-2] == execute
+    assert sum('python -u scripts/readiness_trio_checks.py' in step.get('run', '') for step in steps) == 1
+    assert all('continue-on-error' not in step for step in steps)
+    assert 'signal.alarm(600)' in (ROOT / 'scripts/readiness_trio_checks.py').read_text()
+    uploads = [step for step in steps if step.get('uses', '').startswith('actions/upload-artifact@')]
+    assert uploads == [steps[-1]]
+    assert uploads[0] == {
+        'name': 'Make all evidence downloadable, including failed and unrun phases',
+        'if': 'always()',
+        'uses': 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+        'with': {
+            'name': 'readiness-trio-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
+            'path': 'output/readiness-trio-inputs/\noutput/readiness-trio-run.log\noutput/readiness-trio/\ntest-results/\n',
+            'if-no-files-found': 'error', 'retention-days': '14',
+        },
+    }
+    # No PR/push trigger, reusable opt-in, external caller or publication gate.
+    for path in workflows.glob('*.yml'):
+        if path.name != 'browser-checks.yml':
+            assert 'readiness_trio' not in path.read_text()
+            assert 'readiness-trio' not in path.read_text()
+
+
+def test_permissions_history_is_exclusive_manual_fixed_and_preserves_default_jobs():
+    workflows = ROOT / '.github/workflows'
+    workflow = yaml.load((workflows / 'browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    inputs = workflow['on']['workflow_dispatch']['inputs']
+    assert inputs['permissions_history'] == {
+        'description': 'Only fixed permissions history source and installed-wheel qualification',
+        'type': 'boolean', 'default': 'false',
+    }
+    assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
+    assert workflow['on']['workflow_call'] == {
+        'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
+    assert workflow['permissions'] == {'contents': 'read'}
+    jobs = workflow['jobs']
+    job = jobs['permissions-history']
+    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.permissions_history == true }}"
+    assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '15'
+    assert 'needs' not in job and 'continue-on-error' not in job
+    for name, other in jobs.items():
+        if name != 'permissions-history':
+            assert other['if'].startswith('${{ !inputs.permissions_history && ')
+            assert 'needs' not in other
+    steps = job['steps']
+    assert set(re.findall(r'inputs\.([a-z_0-9]+)', steps[0]['if'])) == set(inputs) - {'permissions_history'}
+    assert steps[0]['run'].endswith('exit 1\n')
+    assert steps[1]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
+    assert steps[2]['run'].startswith('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"\n')
+    assert 'scripts/permission_history_checks.py' in steps[2]['run']
+    actions = {step['uses'] for step in steps if 'uses' in step}
+    assert actions == {
+        'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+        'actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065',
+        'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020',
+        'astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e',
+        'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+    }
+    private = next(s for s in steps if s.get('with', {}).get('repository'))
+    assert private['with'] == {
+        'repository': 'microsoft/amplifier-module-loop-live',
+        'ref': '${{ steps.runtime.outputs.revision }}', 'path': '.ci/loop-live',
+        'ssh-key': '${{ secrets.LOOP_LIVE_CI_READ_KEY }}', 'persist-credentials': 'false'}
+    resolve = next(s['run'] for s in steps if s.get('id') == 'runtime')
+    assert "tomllib.load(open('uv.lock', 'rb'))" in resolve and "rsplit('#', 1)" in resolve
+    assert steps[-2]['timeout-minutes'] == '11'
+    assert steps[-2]['run'] == (
+        'set -o pipefail\npython -u scripts/permission_history_checks.py '
+        '2>&1 | tee output/permissions-history-run.log\n')
+    assert sum('python -u scripts/permission_history_checks.py' in s.get('run', '') for s in steps) == 1
+    assert all('continue-on-error' not in s for s in steps)
+    assert steps[-1]['if'] == 'always()'
+    assert steps[-1]['with']['include-hidden-files'] == 'true'
+    assert steps[-1]['with']['if-no-files-found'] == 'error'
+    assert steps[-1]['with']['path'].splitlines() == [
+        'output/permissions-history-inputs/', 'output/permissions-history-run.log',
+        'output/permissions-history/', 'test-results/']
+    for path in workflows.glob('*.yml'):
+        if path.name != 'browser-checks.yml':
+            assert 'permissions_history' not in path.read_text()
+            assert 'permissions-history' not in path.read_text()
+
+
+@pytest.fixture
+def permissions_checks(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / 'scripts'))
+    spec = importlib.util.spec_from_file_location('permissions_checks', ROOT / 'scripts/permission_history_checks.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_permissions_history_plan_has_only_fixed_checks_and_strict_evidence():
+    import ast
+    source = (ROOT / 'scripts/permission_history_checks.py').read_text()
+    tree = ast.parse(source)
+    plans, = [n.value for n in ast.walk(tree) if isinstance(n, ast.Assign)
+              and any(isinstance(t, ast.Name) and t.id == 'plans' for t in n.targets)]
+    assert [ast.literal_eval(row.elts[0]) for row in plans.elts] == [
+        'locked-host', 'locked-freeze', 'host-dependencies', 'npm-ci', 'chromium', 'python', 'node',
+        'build', 'source-approval', 'wheel', 'fresh-runtime', 'install-dependencies', 'install-wheel',
+        'installed-dependencies', 'installed-freeze', 'installed-imports', 'installed-approval', 'questions']
+    assert source.count("['npm', 'run', 'build']") == 1
+    assert source.count("['uv', 'build', '--wheel'") == 1
+    assert source.count("['node', 'tests/approval-lifecycle-browser.mjs']") == 2
+    assert source.count("['node', 'tests/questions-browser.mjs']") == 1
+    assert "'--locked', '--group', 'dev', '--group', 'artifacts', '--no-install-project'" in source
+    assert "'--no-build-isolation'" in source and "'--no-deps'" in source
+    assert 'CONTEXT_REQUIREMENT' not in source and 'context-dependency' not in source
+    assert 'signal.alarm(600)' in source and "'normalBudgetSeconds': 300" in source
+    assert 'from browser_check_runner import run_scenarios' in source
+    assert "'scenarios': [{'id': phase, 'command': command, 'env': env}]" in source
+    assert "row['cleanup'] == {'remaining': [], 'terminated': 0}" in source
+    assert "report['phases'] = {name: {'status': 'not_run'}" in source
+    assert 'verify_wheel(wheel, candidate, package.parent)' in source
+    assert 'source_identity(ROOT)' in source and 'create(ROOT,' in source and 'verify(ROOT,' in source
+    assert "harness / 'frontend/node_modules', symlinks=False" in source
+    assert 'symlink_to' not in source and 'manifest(harness) == copied' in source
+    assert source.count("'AMPLIFIER_SHELL_NODE_MODULES':") == 2
+    assert source.count("'AMPLIFIER_TEST_PACKAGE_ROOT':") == 2
+    assert "source['version']" in source and "dist['direct']['url'] == wheel.as_uri()" in source
+    assert source.index('retained = qualification_environment(os.environ)') < source.index('os.environ.clear()')
+    assert source.index('os.environ.clear()') < source.index('code = run_scenarios(')
+    assert "'GIT_CONFIG_GLOBAL': '/dev/null'" in source and "'GIT_CONFIG_NOSYSTEM': '1'" in source
+    assert "'UV_CACHE_DIR': str(work / 'uv-cache')" in source
+    assert "'NPM_CONFIG_USERCONFIG': str(work / 'npm-user.conf')" in source
+
+
+def test_permissions_history_selection_comes_from_actual_source(permissions_checks):
+    module = permissions_checks
+    assert module.PYTHON_TESTS == ('tests/test_approval_recovery.py', 'tests/test_approval_feedback.py',
+                                   'tests/test_host_approvals.py', 'tests/test_conversation_stop_status.py')
+    assert module.NODE_TESTS == ('tests/approval-card.test.mjs', 'tests/settings-action-queue.test.mjs',
+                                'tests/pending-view.test.mjs', 'tests/conversation-navigation.test.mjs',
+                                'tests/fixture-lifecycle.test.mjs')
+    python = module.python_selection(ROOT)
+    assert python['tests/test_host_approvals.py::test_real_worker_canonical_decision_returns_exact_offered_label_with_note'] == 6
+    assert python['tests/test_approval_feedback.py::test_overlapping_approval_retries_share_delivery_and_settle_waiter'] == 5
+    assert sum(value for name, value in python.items() if name.startswith('tests/test_conversation_stop_status.py::')) == 42
+    assert python['tests/test_conversation_stop_status.py::test_identifiers_are_nonempty_bounded_strings'] == 18
+    assert sum(python.values()) == 73
+    node = module.node_selection(ROOT)
+    assert set(node) == set(module.NODE_TESTS)
+    assert {name: len(names) for name, names in node.items()} == {
+        'tests/approval-card.test.mjs': 27, 'tests/settings-action-queue.test.mjs': 7,
+        'tests/pending-view.test.mjs': 9, 'tests/conversation-navigation.test.mjs': 16,
+        'tests/fixture-lifecycle.test.mjs': 5}
+    approval = node['tests/approval-card.test.mjs']
+    assert {name.removeprefix('passive Stop lookup stays fenced on ') for name in approval
+            if name.startswith('passive Stop lookup stays fenced on ')} == {
+        'missing', 'empty', 'unknown', 'wrong status', 'boolean acceptance',
+        'wrong sessionId', 'wrong commandId', 'wrong clientId',
+        'missing sessionId', 'missing commandId', 'missing clientId',
+        'non-object', 'transport failure', 'malformed JSON'}
+    assert all('Stop during preflight invalidates it after ' + value + '; no automatic replay' in approval
+               for value in ('accepted', 'not-applied'))
+    assert all('note accompanies ' + value + ', targets the rendered chat and survives failure' in approval
+               for value in ('approve', 'deny'))
+    assert all('opening ' + value + ' from a workspace paints the chat before the server responds'
+               in node['tests/conversation-navigation.test.mjs'] for value in ('a', 'b'))
+    assert all('delayed ' + value + ' cannot overtake later browsing, while later drawer intent still wins'
+               in node['tests/conversation-navigation.test.mjs'] for value in ('navExpanded', 'navPinned'))
+    assert 'unexpected fixture exit is never reported as successful cleanup' in node['tests/fixture-lifecycle.test.mjs']
+
+
+def test_permissions_python_selection_counts_rows_without_evaluating_fixture_constants(
+    permissions_checks, tmp_path, monkeypatch,
+):
+    path = tmp_path / 'selected.py'
+    path.write_text(
+        "class WaitingRuntime:\n    pass\n"
+        "@pytest.mark.parametrize('body', [{'clientId': CLIENT}, {}])\n"
+        "@pytest.mark.parametrize('field,limit', [('sessionId', 200), ('clientId', 100)])\n"
+        "def test_identity(body, field, limit):\n    pass\n")
+    monkeypatch.setattr(permissions_checks, 'PYTHON_TESTS', ('selected.py',))
+    assert permissions_checks.python_selection(tmp_path) == {'selected.py::test_identity': 4}
+    path.write_text(path.read_text().replace("[{'clientId': CLIENT}, {}]", '[*EXTRA]'))
+    with pytest.raises(AssertionError):
+        permissions_checks.python_selection(tmp_path)
+
+
+def test_permissions_node_names_expand_literals_and_refuse_unknown_loops(permissions_checks):
+    module = permissions_checks
+    text = ("test('literal',()=>{});\nfor(const value of ['one','two'])test(`case ${value}`,()=>{});\n"
+            "for(const value of ['a','b'])test('prefix '+value+' suffix',()=>{});\n")
+    assert module.node_names(text) == ['literal', 'case one', 'case two', 'prefix a suffix', 'prefix b suffix']
+    with pytest.raises(AssertionError, match='Unrecognized'):
+        module.node_names("test('literal',()=>{});\nfor(const [name,fn] of cases)test(`case ${name}`,fn);\n")
+    with pytest.raises(AssertionError):
+        module.node_names(text.replace('${value}', '${other}'))
+    with pytest.raises(AssertionError, match='Unrecognized'):
+        module.node_names((ROOT / 'frontend/tests/approval-card.test.mjs').read_text().replace(
+            "['missing',()=>null]", "['renamed',()=>null]"))
+
+
+def test_permissions_environment_keeps_only_named_ci_and_tool_certificate_inputs(permissions_checks):
+    permitted = {'PATH': '/tools/bin', 'LD_LIBRARY_PATH': '/tools/lib', 'LANG': 'C.UTF-8',
+                 'SSL_CERT_FILE': '/certs/root.pem', 'NODE_EXTRA_CA_CERTS': '/certs/node.pem',
+                 'GITHUB_ACTIONS': 'true', 'GITHUB_SHA': 'a' * 40, 'RUNNER_TEMP': '/ci/temp'}
+    refused = {key: 'must-not-inherit' for key in (
+        'HOME', 'PYTHONPATH', 'PYTHONHOME', 'PYTHONSTARTUP', 'PYTHONOPTIMIZE', 'PYTEST_ADDOPTS',
+        'NODE_PATH', 'NODE_OPTIONS', 'UV_PROJECT_ENVIRONMENT', 'UV_INDEX_URL', 'PIP_INDEX_URL',
+        'NPM_TOKEN', 'NPM_CONFIG_USERCONFIG', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS',
+        'GIT_SSH_COMMAND', 'SSH_AUTH_SOCK', 'AWS_ACCESS_KEY_ID', 'AZURE_CLIENT_SECRET',
+        'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GITHUB_TOKEN', 'GH_TOKEN',
+        'ACTIONS_RUNTIME_TOKEN', 'LOOP_LIVE_CI_READ_KEY', 'AMPLIFIER_TEST_PACKAGE_ROOT')}
+    assert permissions_checks.qualification_environment({**permitted, **refused}) == permitted
+
+
+@pytest.mark.parametrize('mutation', [None, 'duplicate', 'missing', 'wrong', 'skip', 'fail', 'cancel', 'todo', 'skip-directive', 'todo-directive'])
+def test_permissions_tap_rejects_partial_or_substituted_execution(permissions_checks, mutation):
+    text = ('TAP version 13\nok 1 - first\nok 2 - second\n1..2\n'
+            '# tests 2\n# pass 2\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n')
+    if mutation == 'duplicate':
+        text = text.replace('ok 2 - second', 'ok 2 - first')
+    elif mutation == 'missing':
+        text = text.replace('ok 2 - second\n', '')
+    elif mutation == 'wrong':
+        text = text.replace('second', 'unselected')
+    elif mutation in ('skip-directive', 'todo-directive'):
+        directive = mutation.split('-', 1)[0].upper()
+        text = text.replace('ok 2 - second', 'ok 2 - second # ' + directive + ' blocked')
+    elif mutation:
+        key = {'skip': 'skipped', 'cancel': 'cancelled'}.get(mutation, mutation)
+        text = text.replace(f'# {key} 0', f'# {key} 1')
+    if mutation:
+        with pytest.raises(AssertionError):
+            permissions_checks.verify_tap(text, {'fixed.test.mjs': ['first', 'second']})
+    else:
+        assert permissions_checks.verify_tap(text, {'fixed.test.mjs': ['first', 'second']})['names'] == ['first', 'second']
+
+
+@pytest.mark.parametrize('mutation', [None, 'sigterm', 'failed', 'incomplete', 'checks', 'wrong-root',
+                                     'renderer', 'fixture-origin', 'report-origin', 'substitute-check',
+                                     'recovery-flag', 'preflight-replay', 'wrong-command', 'old-stop'])
+def test_permissions_browser_requires_full_report_and_normal_fixture_exit(permissions_checks, tmp_path, mutation):
+    import hashlib
+    package, modules = tmp_path / 'package', tmp_path / 'node_modules'
+    package.mkdir()
+    (package / 'configuration_authority.py').write_text('exact authority')
+    (package / 'static').mkdir()
+    (package / 'static/index.html').write_text('exact static')
+    folder = tmp_path / 'evidence'
+    output = folder / 'approval-lifecycle-owned'
+    output.mkdir(parents=True)
+    cleanup = {'exitCode': 0, 'signal': None, 'observed': True, 'graceful': True, 'error': None}
+    # Independent names retain all original checks (four Close receipts) and
+    # the five added unknown/recovery assertions, not merely a minimum count.
+    names = [
+        'Close accepted', 'Close accepted', 'Close accepted', 'Close accepted',
+        'Pending approve completes during held history', 'Pending deny completes during held history',
+        'Held history/newer document wins', 'Dirty edit retained and replacement refused',
+        'Newer Close hides immediately before either receipt', 'Held history/newer Close accepted',
+        'Stop fences later-allow', 'Stop fences pending-preflight', 'Unknown lost-ack stays fenced',
+        'Passive lost-ack recovery permits only fresh dismissal', 'Unknown malformed-ack stays fenced',
+        'Recovering preflight cannot send its decision', 'Passive malformed-ack recovery permits only fresh dismissal']
+    checks = [{'name': name, 'decisionRequests': []} for name in names]
+    binding = {'sessionId': 'chat-a', 'commandId': 'original', 'clientId': 'client-a'}
+    for row in checks:
+        if row['name'].startswith('Passive '):
+            row.update(samePage=True, stopReceipt={'accepted': True}, dismissalReceipt={'accepted': True},
+                       stopCommand={'id': 'original', 'args': {'sessionId': 'chat-a'}}, clientId='client-a',
+                       supersedingStop={'id': 'newer', 'receipt': {'accepted': True}},
+                       decisionRequests=[{'action': 'capability.revoke'}],
+                       lookups=[{'body': binding, 'response': {**binding, 'status': 'accepted'}, 'httpStatus': 200}])
+    proof = {'passed': True, 'incomplete': False, 'error': None, 'checks': checks,
+             'stopAcknowledgementRecovery': True, 'overwrittenStopRecovery': True,
+             'source': str(package / '__init__.py'), 'cleanup': cleanup,
+             'authoritySha256': hashlib.sha256(b'exact authority').hexdigest()}
+    readiness = {'source': str(package), 'nodeModules': str(modules),
+                 'node': '/node', 'playwright': True, 'validationHtml': True,
+                 'packageIdentity': {'installedPackageVerified': True,
+                     'expectedPackageRoot': str(package), 'packageRoot': str(package),
+                     'server': str(package / 'server.py'), 'staticRoot': str(package / 'static'),
+                     'staticSha256': {'index.html': hashlib.sha256(b'exact static').hexdigest()}}}
+    proof['packageIdentity'] = json.loads(json.dumps(readiness['packageIdentity']))
+    if mutation == 'sigterm':
+        cleanup.update(exitCode=None, signal='SIGTERM')
+    elif mutation == 'failed':
+        proof['passed'] = False
+    elif mutation == 'incomplete':
+        proof['incomplete'] = True
+    elif mutation == 'checks':
+        proof['checks'].pop()
+    elif mutation == 'wrong-root':
+        proof['source'] = str(tmp_path / 'other/__init__.py')
+    elif mutation == 'renderer':
+        readiness['nodeModules'] = str(tmp_path / 'source/node_modules')
+    elif mutation == 'fixture-origin':
+        readiness['packageIdentity']['expectedPackageRoot'] = str(tmp_path / 'source')
+    elif mutation == 'report-origin':
+        proof['packageIdentity']['server'] = str(tmp_path / 'source/server.py')
+    elif mutation == 'substitute-check':
+        checks[-1]['name'] = 'Unrelated passing check'
+    elif mutation == 'recovery-flag':
+        proof['stopAcknowledgementRecovery'] = False
+    elif mutation == 'preflight-replay':
+        next(row for row in checks if row['name'].startswith('Recovering '))['decisionRequests'] = [{}]
+    elif mutation == 'wrong-command':
+        checks[-1]['lookups'][0]['response']['commandId'] = 'different'
+    elif mutation == 'old-stop':
+        next(row for row in checks if row['name'].startswith('Passive lost-ack'))['supersedingStop']['id'] = 'original'
+    for name, value in [('report', proof), ('cleanup', cleanup), ('validation-readiness', readiness)]:
+        (output / (name + '.json')).write_text(json.dumps(value))
+    if mutation:
+        with pytest.raises(AssertionError):
+            permissions_checks.verify_approval(folder, package, modules)
+    else:
+        assert permissions_checks.verify_approval(folder, package, modules)['checks'] == 17
+
+
 def test_compact_composer_is_fixed_manual_only_with_independent_failure_evidence():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert workflow['permissions'] == {'contents': 'read'}
     assert 'compact_composer' not in workflow['on']['workflow_call']['inputs']
     job = workflow['jobs']['compact-composer']
-    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.compact_composer }}"
+    assert job['if'] == "${{ !inputs.permissions_history && !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && inputs.compact_composer }}"
     assert job['timeout-minutes'] == '30'
     steps = job['steps']
     assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}

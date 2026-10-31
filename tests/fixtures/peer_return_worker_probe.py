@@ -245,7 +245,10 @@ class PeerReturnProvider:
 
         assert envelope["recipientSessionId"] == self.sid
         assert envelope["senderSessionId"] == (reviewer if self.role == "author" else author)
-        assert envelope["mode"] == "queue"
+        # Explicit fixture requests retain idle-only delivery. Host-generated
+        # outcome returns use the public automatic-delivery contract.
+        authored = self.input_id in (REVIEW, *CORRECTIONS, STOP_REQUEST)
+        assert envelope["mode"] == ("queue" if authored else "auto")
         assert "humanResume" not in envelope and "task" not in envelope
         if self.input_id in CORRECTIONS:
             assert self.role == "author"
@@ -553,6 +556,7 @@ async def run(root):
             assert len(receipts) == 9  # Four explicit requests, five automatic returns.
             for row in receipts:
                 assert row["delivery"] == "accepted" and row["admission"]["accepted"], row
+                assert row["mode"] == ("auto" if row.get("dependencyRequestId") else "queue")
                 assert row["target"]["sessionId"] in original_ids
                 assert row["senderSessionId"] in original_ids
                 assert row["senderLocation"] != row["recipientLocation"]
