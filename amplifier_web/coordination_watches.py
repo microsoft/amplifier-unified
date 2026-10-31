@@ -53,11 +53,12 @@ class Watches:
             if receipt['watch']['status'] == 'waiting' and receipt['watch']['expiresAt'] <= time.time():
                 self.finish(receipt, 'expired', 'The one-shot observation expired without observing its requested boundary.')
 
-    def finish(self, receipt, status, text):
-        receipt['watch'].update(status=status, observedAt=time.time())
+    def finish(self, receipt, status, text, *, observed_at=None):
+        observed_at = time.time() if observed_at is None else observed_at
+        receipt['watch'].update(status=status, observedAt=observed_at)
         receipt['terminalOutcome'] = {'status': 'observed', 'kind': 'observation', 'outcome': status,
             'qualified': False, 'requestId': receipt['requestId'], 'text': text,
-            'observedAt': time.time(), 'outcomeRevision': 1}
+            'observedAt': observed_at, 'outcomeRevision': 1}
         receipt['outcomeRevision'] = 1
         self.owner.save(receipt['requestId'], receipt)
         self.owner.enqueue_continuation(receipt)
@@ -66,44 +67,56 @@ class Watches:
         if handle:
             handle.cancel()
 
+    def high_water(self):
+        return self.service.db.execute('SELECT coalesce(max(rowid), 0) FROM commands').fetchone()[0]
+
+    def rows(self, where, parameters, high_water):
+        """Bound payload residency while considering the entire captured set."""
+        after = 0
+        while True:
+            rows = self.service.db.execute(f"""SELECT rowid, receipt FROM commands
+                WHERE json_extract(receipt,'$.commandAction')='coordination.watch'
+                AND {where} AND rowid>? AND rowid<=? ORDER BY rowid LIMIT 64""",
+                (*parameters, after, high_water)).fetchall()
+            if not rows:
+                return
+            after = rows[-1][0]
+            for _, encoded in rows:
+                yield json.loads(encoded)
+
     def observe(self, session, kind, payload):
         changed = set()
         if kind != 'runtime.status' or payload.get('activityOnly') or 'status' not in payload:
             return changed
         if payload.get('rootSessionId', session['id']) != session['id']:
             return changed
-        rows = self.service.db.execute("""SELECT receipt FROM commands
-            WHERE json_extract(receipt,'$.commandAction')='coordination.watch'
-            AND json_extract(receipt,'$.target.sessionId')=?
-            AND json_extract(receipt,'$.watch.status')='waiting' LIMIT 64""", (session['id'],)).fetchall()
-        for (encoded,) in rows:
-            receipt = json.loads(encoded)
+        status, workspace, observed_at = session.get('status'), session['workspace'], time.time()
+        high_water = self.high_water()
+        for receipt in self.rows("""json_extract(receipt,'$.target.sessionId')=?
+                AND json_extract(receipt,'$.watch.status')='waiting'""", (session['id'],), high_water):
             watch = receipt['watch']
-            status = session.get('status')
-            if watch['expiresAt'] <= time.time():
-                self.finish(receipt, 'expired', 'The observation expired before this lifecycle event.')
-            elif session['workspace'] != receipt['workspace']:
-                self.finish(receipt, 'cancelled', 'The observed conversation moved outside the saved workspace.')
+            if watch['expiresAt'] <= observed_at:
+                self.finish(receipt, 'expired', 'The observation expired before this lifecycle event.', observed_at=observed_at)
+            elif workspace != receipt['workspace']:
+                self.finish(receipt, 'cancelled', 'The observed conversation moved outside the saved workspace.', observed_at=observed_at)
             elif ((watch['condition'] == 'status_changed' and status != watch['baselineStatus'])
                   or watch['condition'] == 'idle' and status == 'idle' and watch['baselineStatus'] != 'idle'):
                 watch['observedStatus'] = status
                 self.finish(receipt, 'changed' if watch['condition'] == 'status_changed' else 'idle',
-                    f"The observed conversation reached status {status}. This is lifecycle evidence, not proof of result correctness or completed external effects.")
+                    f"The observed conversation reached status {status}. This is lifecycle evidence, not proof of result correctness or completed external effects.",
+                    observed_at=observed_at)
             else:
                 continue
             changed.add(receipt['senderSessionId'])
         return changed
 
     def start(self):
-        for (encoded,) in self.service.db.execute("""SELECT receipt FROM commands
-            WHERE json_extract(receipt,'$.commandAction')='coordination.watch'
-            AND json_extract(receipt,'$.watch.status')='waiting'""").fetchall():
-            self.schedule(json.loads(encoded))
-        for (encoded,) in self.service.db.execute("""SELECT receipt FROM commands
-            WHERE json_extract(receipt,'$.commandAction')='coordination.watch'
-            AND json_extract(receipt,'$.terminalOutcome.status')='observed'
-            AND json_extract(receipt,'$.subscription.status') IN ('waiting','backpressured')""").fetchall():
-            self.owner.enqueue_continuation(json.loads(encoded))
+        high_water = self.high_water()
+        for receipt in self.rows("json_extract(receipt,'$.watch.status')='waiting'", (), high_water):
+            self.schedule(receipt)
+        for receipt in self.rows("""json_extract(receipt,'$.terminalOutcome.status')='observed'
+                AND json_extract(receipt,'$.subscription.status') IN ('waiting','backpressured')""", (), high_water):
+            self.owner.enqueue_continuation(receipt)
 
     async def dispatch(self, action, args, origin, command_id, caller):
         source = self.owner.source(args, origin, caller)
@@ -153,12 +166,15 @@ class Watches:
                     if target['id'] == source['id']:
                         self.owner.error('Observe another conversation; self-watches cannot start continuation loops.', 409)
                     self.owner.require_inbox_slot(source['id'])
-                    count = self.service.db.execute("""SELECT count(*) FROM commands
-                        WHERE json_extract(receipt,'$.commandAction')='coordination.watch'
-                        AND json_extract(receipt,'$.target.sessionId')=?
-                        AND json_extract(receipt,'$.watch.status')='waiting'""", (target['id'],)).fetchone()[0]
-                    if count >= 64:
-                        self.owner.error('This target already has 64 pending observations. Wait or cancel one before adding another.', 429)
+                    from .test_execution_settings import concurrency
+                    limit = concurrency(self.service)['maxPendingWatchesPerTarget']
+                    if limit:
+                        count = self.service.db.execute("""SELECT count(*) FROM commands
+                            WHERE json_extract(receipt,'$.commandAction')='coordination.watch'
+                            AND json_extract(receipt,'$.target.sessionId')=?
+                            AND json_extract(receipt,'$.watch.status')='waiting'""", (target['id'],)).fetchone()[0]
+                        if count >= limit:
+                            self.owner.error(f'This target reached its configured limit of {limit} pending observations. Wait or cancel one before adding another.', 429)
                     from .collaboration import PROTOCOL
                     answer = {'accepted': True, 'commandAction': action, 'requestId': identity,
                         'senderSessionId': source['id'], 'target': {'sessionId': target['id']},

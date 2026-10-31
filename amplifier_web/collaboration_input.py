@@ -94,6 +94,59 @@ def _steering_capability(controls):
     return None
 
 
+async def deliver(controls, runtime, args, activation, authorize, stop_epoch=lambda: 0):
+    """Select a native boundary for one host-owned automatic input.
+
+    Only a refusal before submit may be reconsidered. Once accepted, anchored
+    input keeps the native applied/held/unknown disposition and cannot fall
+    forward into another generation.
+    """
+    def refused(reason, *, waiting=False):
+        return {"accepted": False, "effect": "none", "waitingForBoundary": waiting,
+                "reason": reason}
+
+    epoch = stop_epoch()
+    for _ in range(2):
+        permission = await authorize(args)
+        if not permission.get("admitted"):
+            return refused(permission.get("reason"))
+        if not await input_allowed(controls, permission):
+            return refused("The saved task or current budget prevents automatic input.")
+        if not task_matches(controls.tasks.record(), args) or exhausted(controls):
+            return refused("The saved task or current budget changed before native admission.")
+        if stop_epoch() != epoch or runtime.closed or runtime.stop_requested:
+            return refused("Stop or native ownership changed before peer admission.")
+    message = permission["message"]
+    text = peer_input(message["peerEnvelope"], message["text"])
+    if len(text) > runtime.max_input_chars:
+        return refused("Peer input exceeds this adapter's input limit; use a durable reference.")
+    generation = runtime.generation or {}
+    if generation.get('id') != permission.get('currentGenerationId'):
+        return refused('Waiting for the host to observe the current native boundary.', waiting=True)
+    from amplifier_module_loop_live.runtime import Input
+    if generation.get("id"):
+        capability = _steering_capability(controls)
+        if (capability is None or runtime.steering_closed
+                or permission.get("completedTaskInput") or permission.get("blockedTaskInput")
+                or permission.get("humanResume")):
+            return refused("Waiting for a supported recipient boundary.", waiting=True)
+        # No await between reading the current native generation and submit.
+        # Do not convert a submission exception into a no-effect refusal.
+        outcome = await capability["submit"](
+            Input("steer", text, id=args["inputId"], activation=activation), generation["id"])
+        if not isinstance(outcome, dict) or type(outcome.get("accepted")) is not bool:
+            raise RuntimeError("Automatic steering admission is unknown; do not replay.")
+        return {**outcome, "mode": "steer", "completed": False}
+    try:
+        controls.require_idle()
+    except ValueError:
+        return refused("Waiting for the recipient's existing native work to settle.", waiting=True)
+    if permission.get("blockedTaskInput") is True:
+        controls.tasks.reserve_peer_input(args["inputId"])
+    identity = await runtime.submit(Input("user", text, id=args["inputId"], activation=activation))
+    return {"accepted": True, "inputId": identity, "mode": "queue", "completed": False}
+
+
 async def steer(controls, runtime, args, activation, authorize, stop_epoch=lambda: 0):
     """Admit only to the named live generation, under worker ownership locks.
 

@@ -168,16 +168,18 @@ def inspect_archive(path, expected_root, *, archive_only=False):
 
 
 def validate_member(item, name, names, links, ancestors, *, archive_only=False):
+    inert_fifo = archive_only and item.type == tarfile.FIFOTYPE
     reason = ('duplicate_entry' if name in names else 'invalid_size' if item.size < 0
               else 'sparse_entry' if item.sparse is not None or any(key.startswith('GNU.sparse') for key in item.pax_headers)
-              else 'unsupported_type' if not (item.isfile() or item.isdir() or item.issym() or item.islnk()) else None)
+              else 'invalid_size' if inert_fifo and item.size != 0
+              else 'unsupported_type' if not (item.isfile() or item.isdir() or item.issym() or item.islnk() or inert_fifo) else None)
     if reason:
         raise ValidationFailure(reason, 'The selected filesystem contains unsupported or duplicate entries.', item=item, name=name)
     parts = name.split('/')
     parents = ['/'.join(parts[:i]) for i in range(1, len(parts))]
-    if any(names.get(parent) in {'symbolic', 'file', 'hard'} for parent in parents):
+    if any(names.get(parent) in {'symbolic', 'file', 'hard', 'fifo'} for parent in parents):
         raise ValidationFailure('ancestor_traversal', 'An archive entry traverses another file or link.', item=item, name=name)
-    kind = 'file' if item.isfile() else 'directory' if item.isdir() else 'symbolic' if item.issym() else 'hard'
+    kind = 'file' if item.isfile() else 'directory' if item.isdir() else 'symbolic' if item.issym() else 'fifo' if inert_fifo else 'hard'
     if kind != 'directory' and name in ancestors:
         raise ValidationFailure('ancestor_replaced', 'An archive link replaces a selected directory.', item=item, name=name)
     if item.issym():

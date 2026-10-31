@@ -13,6 +13,7 @@ import copy
 from contextvars import ContextVar
 
 from .collaboration import BINDING
+from .child_execution import current as child_execution, generation as execution_generation
 
 APP_EFFECT = ContextVar('workspace_work_app_effect', default=None)
 
@@ -131,7 +132,7 @@ def _receipt(invocation, identity):
 
 def applicability(invocation, target):
     """Inspect exact host-retained input/creation owners, never a model Work list."""
-    active = target.get('collaborationGeneration') or {}
+    active = execution_generation(invocation.service, target)
     inputs = active.get('inputIds', [])
     if not isinstance(inputs, list) or any(not isinstance(i, str) for i in inputs):
         return True, 'Host delivered-input identity is unavailable.'
@@ -176,6 +177,8 @@ def check(invocation, sid, args):
         # An ordinary delegated child must still reach its existing permission
         # owner; root-only Work authority is checked only when Work applies.
         target = invocation.service._session(sid, hydrate=False)
+        if '_childOrigin' in (BINDING.get() or {}) and child_execution(invocation.service, target) is None:
+            return {**result, 'reason': 'The admitted native child execution is no longer current.'}
         applicable, reason = applicability(invocation, target)
         result.update(applicable=applicable, reason=reason)
         if not applicable:
@@ -206,7 +209,7 @@ def check(invocation, sid, args):
         if not isinstance(witness, dict):
             return {**result, 'reason': 'No authenticated originating-call coverage at this effect boundary.'}
         origin = witness.get('origin')
-        active = target.get('collaborationGeneration') or {}
+        active = execution_generation(invocation.service, target)
         exact_inputs = sorted(set(active.get('inputIds', [])))
         if (not isinstance(origin, dict) or origin.get('schemaVersion') != 1
                 or origin.get('rootSessionId') != sid

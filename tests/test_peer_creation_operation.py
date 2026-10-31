@@ -1,4 +1,6 @@
 """One commissioned-task handle, pre-admission returns and evidence-based recovery."""
+from amplifier_web import test_execution_settings as execution_settings
+
 import asyncio
 import json
 import sqlite3
@@ -109,7 +111,11 @@ async def test_pre_generation_admission_outcome_returns_without_model_reply(app,
     from amplifier_web.runtime import RuntimePreparationCancelled
     source = app.state['sessions'][0]
     plan(app, source)
-    async def unavailable(*args):
+    app.runtime.unavailable_boundaries.add(source['id'])
+    original = app.runtime.collaboration_input
+    async def unavailable(session, *args):
+        if session['id'] == source['id']:
+            return await original(session, *args)
         if failure == 'unknown':
             raise ConnectionError('Lost admission acknowledgment')
         if failure == 'cancelled':
@@ -133,7 +139,7 @@ async def test_pre_generation_admission_outcome_returns_without_model_reply(app,
 async def test_return_capacity_reserved_before_root_effect_and_transferred_once(app, monkeypatch):
     source = app.state['sessions'][0]
     plan(app, source)
-    monkeypatch.setattr('amplifier_web.collaboration.MAX_PENDING_INPUTS', 1)
+    monkeypatch.setitem(execution_settings.CONCURRENCY_DEFAULTS, 'maxPendingPeerInputs', 1)
     release = asyncio.Event()
     original = app.collaboration._finish_create
     async def delayed(*args):
