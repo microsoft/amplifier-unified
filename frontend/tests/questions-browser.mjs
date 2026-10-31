@@ -8,9 +8,98 @@ import {join} from 'node:path';
 import {chromium,expect} from '@playwright/test';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 
+// Observe one explicit preview attempt; never replay the action to obtain evidence.
+async function observePreview(page,button,target){
+ const report={target,snapshots:[],network:[],errors:[],dropped:0},pending=new Set(),requests=new WeakMap();
+ let dom,finished,sequence=0;
+ const pick=(row,keys)=>row?Object.fromEntries(keys.filter(key=>Object.hasOwn(row,key)).map(key=>[key,typeof row[key]==='string'?row[key].slice(0,1500):row[key]])):null;
+ const fault=error=>{if(report.errors.length<8)report.errors.push(String(error?.stack||error).slice(0,1500));else report.dropped++};
+ const onRequest=request=>{
+  try{
+   if(request.method()!=='POST'||new URL(request.url()).pathname!=='/api/actions')return;
+   const raw=request.postDataJSON(),body=raw?.action==='shell.command'?raw.args:raw,args=body?.args;
+   if(body?.action!=='canvas.select'||args?.id!==target.resourceId||args?.version!==target.version||args?.questionId!==target.questionId)return;
+   if(sequence>=16){report.dropped++;return}
+   const row={sequence:++sequence,at:Date.now(),commandId:raw.id??body.id??null,responseState:'not-observed',
+    action:body.action,args:pick(args,['id','version','questionId','questionContentRevision','sessionId','presentation','resetPreview'])};
+   requests.set(request,row);report.network.push(row);
+  }catch(error){fault(error)}
+ };
+ const onResponse=response=>{
+  try{
+   const row=requests.get(response.request());if(!row)return;
+   row.status=response.status();row.responseAt=Date.now();row.responseState='body-pending';
+   // response.json() observes this response through Playwright's body API;
+   // it is not an independent capture/attestation of original wire bytes.
+   const read=response.json().then(body=>{row.response={source:'Playwright observed action response.json',
+    ...pick(body,['accepted','status','code','error','revision','stateRevision','hostInstanceId']),
+    result:pick(body.result,['id','version','presentation','status','code','error'])};row.responseState='observed';
+   }).catch(error=>{row.responseState='body-read-failed';fault(error)}).finally(()=>pending.delete(read));
+   pending.add(read);
+  }catch(error){fault(error)}
+ };
+ const onFailed=request=>{try{const row=requests.get(request);if(row){row.failure=request.failure()?.errorText||'unknown';row.responseState='request-failed'}}catch(error){fault(error)}};
+ const snapshot=async label=>{try{if(dom)report.snapshots.push({label,...await dom.evaluate(value=>value.snapshot())})}catch(error){fault(error)}};
+ const finish=error=>finished??=(async()=>{
+  page.off('request',onRequest);page.off('response',onResponse);page.off('requestfailed',onFailed);
+  await snapshot(error?'failure-finally':'preview-assertions-passed');
+  if(dom){
+   try{report.dom=await dom.evaluate(value=>value.finish())}catch(error){fault(error)}
+   try{await dom.dispose()}catch(error){fault(error)}
+  }
+  let timer;
+  try{await Promise.race([Promise.all([...pending]),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Preview response observation did not drain')),5000)})])}
+  catch(error){fault(error)}finally{clearTimeout(timer)}
+  report.pendingResponseReads=pending.size;
+  report.failure=error?{name:error.name,message:error.message}:null;
+  if(output)await writeFile(join(output,'question-first-preview.json'),JSON.stringify(report,null,2)+'\n');
+  assert.deepEqual(report.errors,[],'First-preview observer must remain healthy');
+  assert.deepEqual(report.dom?.errors,[],'First-preview DOM observer must remain healthy');
+ })();
+ page.on('request',onRequest);page.on('response',onResponse);page.on('requestfailed',onFailed);
+ try{
+  dom=await button.evaluateHandle((original,target)=>{
+   const cardSelector=`[data-question-id="${CSS.escape(target.questionId)}"]`;
+   const wrapperSelector=`[data-full-artifact-preview="${CSS.escape(target.resourceId)}"]`;
+   const originalCard=original.closest('.a-compact-artifact'),events=[],errors=[];let dropped=0;
+   const ordinal=[...original.closest('[data-question-id]').querySelectorAll('.a-compact-artifact')].indexOf(originalCard);
+   const pick=(row,keys)=>row?Object.fromEntries(keys.filter(key=>Object.hasOwn(row,key)).map(key=>[key,row[key]])):null;
+   const snapshot=()=>{
+    const state=window.amplifier.getState(),question=document.querySelector(cardSelector);
+    const card=question?.querySelectorAll('.a-compact-artifact')[ordinal],button=card?.querySelector('.a-document-preview-toggle');
+    return JSON.parse(JSON.stringify({at:Date.now(),selectedSessionId:state.selectedSessionId,panel:state.view?.panel,
+     navigationPending:state.navigationPending,card:{present:!!card,same:card===originalCard,originalConnected:originalCard.isConnected},
+     button:{same:button===original,originalConnected:original.isConnected,expanded:button?.getAttribute('aria-expanded'),disabled:button?.disabled},
+     wrapperCount:question?.querySelectorAll(wrapperSelector).length??0,notice:card?.querySelector('.a-compact-artifact-notice')?.textContent?.slice(0,1500)||'',
+     question:pick(state.sessions?.find(row=>row.id===target.sessionId)?.questions?.find(row=>row.id===target.questionId),['id','revision','contentRevision','status']),
+     primary:pick(state.canvas,['id','selectedVersion','revision','open','_presentationDisposed']),
+     presentations:(state.canvasWorkspace?.presentations||[]).filter(row=>row.id===target.resourceId&&row.version===target.version).slice(0,4).map(row=>pick(row,['id','version','presentation','questionId','questionContentRevision','sessionId'])),
+     views:(state.canvasWorkspace?.views||[]).filter(row=>row.resourceId===target.resourceId).slice(0,8).map(row=>pick(row,['viewId','resourceId','resourceRevision','generation','selectedVersion','dirty'])),
+    }));
+   };
+   const guard=fn=>{try{fn()}catch(error){if(errors.length<8)errors.push(String(error).slice(0,1500));else dropped++}};
+   const record=value=>{if(events.length<32)events.push({...value,...snapshot()});else dropped++};
+   const input=event=>guard(()=>{
+    const button=event.target.closest?.('.a-document-preview-toggle');
+    if(button!==original&&button?.closest('.a-compact-artifact')!==originalCard)return;
+    record({kind:event.type,detail:event.detail,pointerType:event.pointerType,isTrusted:event.isTrusted,x:event.clientX,y:event.clientY});
+   });
+   const mutations=rows=>guard(()=>{for(const row of rows){
+    const matches=node=>node.nodeType===1&&(node.matches(wrapperSelector)||node.querySelector(wrapperSelector));
+    const added=[...row.addedNodes].filter(matches).length,removed=[...row.removedNodes].filter(matches).length;
+    if(added||removed)record({kind:'wrapper-mutation',added,removed});
+   }});
+   const observer=new MutationObserver(mutations);observer.observe(document.body,{childList:true,subtree:true});
+   for(const name of ['pointerdown','pointerup','click'])document.addEventListener(name,input,true);
+   return {snapshot,finish(){const queued=observer.takeRecords();observer.disconnect();for(const name of ['pointerdown','pointerup','click'])document.removeEventListener(name,input,true);mutations(queued);return {events,errors,dropped}}};
+  },target);
+  await snapshot('before-click');return {snapshot,finish};
+ }catch(error){try{await finish(error)}catch(reportError){console.error('First-preview setup cleanup failed:',reportError)}throw error}
+}
+
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[process.env.AMPLIFIER_QUESTIONS_FIXTURE||fileURLToPath(new URL('../../tests/fixtures/questions_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
 const stopFixture=ownFixture(fixture,{label:'Questions fixture'});
-let browser,failure,finishReviewEvidence;
+let browser,failure,finishReviewEvidence,firstPreview;
 const output=process.env.AMPLIFIER_QUESTIONS_OUTPUT,layoutChecks=[];
 try{
  const ready=await new Promise((resolve,reject)=>{
@@ -251,11 +340,15 @@ try{
    return route.continue();
   });
  }
+ firstPreview=await observePreview(page,first.getByRole('button',{name:/^Preview here:/}),
+  {questionId:review.question.id,resourceId:review.markdown.id,version:1,sessionId:ready.sessionId});
  await first.getByRole('button',{name:/^Preview here:/}).click();
+ await firstPreview.snapshot('after-click');
  await first.locator('[data-full-artifact-preview]').scrollIntoViewIfNeeded();
  await expect(first.getByRole('heading',{name:'Pinned document v1'})).toBeVisible();
  await expect(first.getByRole('heading',{name:'Latest document v2'})).toHaveCount(0);
  await expect(q.getByRole('textbox')).toHaveValue(answerDraft);
+ await firstPreview.finish();
  await first.getByRole('button',{name:/^Open in Canvas:/}).click();
  await expect(first.locator('[data-full-artifact-preview]')).toHaveCount(0);
  await expect.poll(()=>page.evaluate(()=>({id:window.amplifier.getState().canvas.id,version:window.amplifier.getState().canvas.selectedVersion}))).toEqual({id:review.markdown.id,version:1});
@@ -764,6 +857,7 @@ try{
 finally{
  await finishFixture({label:'Questions fixture',originalError:failure,
   close:[
+   ['First question preview evidence',()=>firstPreview?.finish(failure)],
    ['Question review continuity evidence',()=>finishReviewEvidence?.()],
    ['Questions browser',()=>browser?.close()],
    ['Question layout evidence',async()=>{if(output){await mkdir(output,{recursive:true});await writeFile(join(output,'layout-checks.json'),JSON.stringify(layoutChecks,null,2)+'\n')}}]],
