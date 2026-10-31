@@ -328,7 +328,7 @@ uncertain effect. Passive removal inspection keeps its bounded cold-owner read
 path. See [test environments](test-environments.md) for this domain's exact scope;
 this does not expand generic task-resource or queued-check admission.
 Work and provider admission use their respective canonical owners; this consumer
-adds no exception or duplicate permission policy.
+adds no duplicate permission policy.
 
 Full access preauthorizes configuration effects at all scopes and ordinary
 allow/deny tool permissions. Pending valid permission requests are answered once;
@@ -363,6 +363,17 @@ native principal/generation/input coverage to the existing private history; they
 also record the Full revision used for operator-origin recovery. Public operation
 views omit this attribution. Recovery does not relabel the original actor or
 replace the retained effect authority.
+
+For an already executing Full native child, the exact operation read, reconcile
+and resume calls can reach the recovery owner even when that same settled pending
+operation blocks ordinary child execution. This route authenticates the current
+process and assigned run, Stop and execution/configuration revisions, task and
+assignment controls, current Full and the operation's own fence. The recovery
+owner still checks the original authority, target, revision and sealed attempt;
+unknown effects never become permission to replay. Ordinary child tools remain
+blocked. This qualifies native tool routing, not a fresh model turn: provider and
+capacity admission remain unchanged, and scripted native tests do not establish
+that a blocked child can obtain model capacity to decide to recover.
 
 File, patch, image and search mounts (including child definitions and restored
 plans) use all accessible local filesystem roots under Full access. Original
