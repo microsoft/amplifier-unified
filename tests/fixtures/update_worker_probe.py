@@ -123,6 +123,9 @@ providers:
         await asyncio.wait_for(observed.wait(),10)
         first=json.loads(json.dumps(app.state['updates']['drain']))
         assert first['workers'][sid]['ready'] is False
+        # Exercise the race where parking wakes immediate retention before
+        # the host has refreshed its saved boundary observation.
+        runtime.retention.settings['max_warm_workers']=0
         (root/'release-child').write_text('finish')
         # Below the unchanged 60-second fallback: native park must wake the
         # production owner. The fixture never polls prepare() for readiness.
@@ -130,7 +133,7 @@ providers:
         saved=json.loads(json.dumps(app.state['updates']['drain']))
         assert saved['workers'][sid]['ready']
         assert saved['workers'][sid]['yieldedGoal']['turns_used']==2,saved
-        assert runtime.workers[sid]['parked']
+        assert sid not in runtime.workers or runtime.workers[sid]['parked']
         saved['phase']='replacing';app.state['updates']['drain']=saved;app._publish()
         await app.close()
         app,runtime=create()

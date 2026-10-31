@@ -241,3 +241,22 @@ async def test_native_settlement_reobserves_drain_without_timer_or_publication_l
         await asyncio.sleep(.03)
         assert len(observations) == 2 and not manager.wakeup.is_set()
         assert state['drain']['workers'][session['id']]['ready'] is False
+
+
+async def test_drain_retention_protects_only_exact_unobserved_owner(manager):
+    from types import SimpleNamespace
+    from amplifier_web import update_drain
+    service=manager.service
+    await service.dispatch('session.create', {})
+    sid=service._session()['id']
+    runtime=service.runtime
+    runtime.workers={sid: {'runtimeOwnerId':'current'}}
+    runtime.retention=SimpleNamespace(protected=lambda identity: identity=='voice')
+    update_drain.bind(service,runtime)
+    service.state['updates']['drain']={'phase':'draining','workers':{sid:{'owner':'current','ready':False}}}
+    assert runtime.retention.protected(sid) and runtime.retention.protected('voice')
+    runtime.workers[sid]['runtimeOwnerId']='replacement'
+    assert not runtime.retention.protected(sid)
+    runtime.workers[sid]['runtimeOwnerId']='current'
+    service.state['updates']['drain']['workers'][sid]['ready']=True
+    assert not runtime.retention.protected(sid)

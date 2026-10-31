@@ -516,7 +516,7 @@ class UpdateManager:
             return
         drain = state.get('drain') or {}
         boundary = drain.get('workers', {}).get(settled_session_id)
-        if drain.get('phase') == 'draining' and boundary and not boundary.get('ready'):
+        if drain.get('phase') == 'draining' and boundary:
             # A committed native park/retirement event can invalidate the saved
             # unready observation. Retain it even during an activation attempt;
             # the next owner tick must still obtain positive boundary proof.
@@ -1260,7 +1260,9 @@ class UpdateManager:
                 if hot:
                     def protected(sid):
                         voice = self.service.state.get('voice', {})
-                        return voice.get('sessionId') == sid and voice.get('status') not in {None, 'idle', 'ended', 'error', 'disconnected'}
+                        from .update_drain import retains_worker
+                        return (retains_worker(self.service, self.service.runtime, sid) or
+                            voice.get('sessionId') == sid and voice.get('status') not in {None, 'idle', 'ended', 'error', 'disconnected'})
                     self.service.runtime.promote_generation(target, protected=protected)
                 else:
                     await self.service.replace_runtime(candidate)

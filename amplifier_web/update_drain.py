@@ -38,6 +38,14 @@ def input_gate(service, sid=None, identity=None):
         raise UpdateDeferred(service.state['updates']['drain']['attemptId'])
 
 
+def retains_worker(service, runtime, sid):
+    drain = service.state.get('updates', {}).get('drain') or {}
+    boundary = drain.get('workers', {}).get(sid) or {}
+    worker = getattr(runtime, 'workers', {}).get(sid) or {}
+    return (drain.get('phase') == 'draining' and boundary and not boundary.get('ready')
+            and worker.get('runtimeOwnerId') == boundary.get('owner'))
+
+
 def bind(service, runtime):
     if runtime is None:
         return
@@ -48,6 +56,9 @@ def bind(service, runtime):
             from .runtime import RuntimeStartupError
             raise RuntimeStartupError('Stopped after this message was saved. Nothing was sent.')
     runtime.update_message_guard = message_guard
+    if retention := getattr(runtime, 'retention', None):
+        existing = retention.protected
+        retention.protected = lambda sid: existing(sid) or retains_worker(service, runtime, sid)
 
 
 def binding(session):
