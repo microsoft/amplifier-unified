@@ -408,12 +408,12 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     selection = workflow['on']['workflow_dispatch']['inputs']['suite']
     assert selection['type'] == 'choice' and selection['default'] == 'full'
-    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'updater-omitted-ref']
+    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'updater-omitted-ref', 'updater-synthetic-acquisition']
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['on']['workflow_call']['secrets'] == {'LOOP_LIVE_CI_READ_KEY': {'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
     jobs = workflow['jobs']
-    assert jobs['python']['if'] == "${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'updater-omitted-ref' }}"
+    assert jobs['python']['if'] == "${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'updater-omitted-ref' && inputs.suite != 'updater-synthetic-acquisition' }}"
     assert jobs['python']['env']['CHECK_SUITE'] == "${{ inputs.suite || 'full' }}"
     assert jobs['core-wheels']['if'] == "${{ inputs.core_wheels && (!inputs.suite || inputs.suite == 'full') }}"
     remote = jobs['remote-test-origins']
@@ -423,6 +423,10 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     assert updater['if'] == "${{ !inputs.core_wheels && inputs.suite == 'updater-omitted-ref' }}"
     assert updater['uses'] == './.github/workflows/updater-omitted-ref.yml'
     assert updater['secrets'] == {'LOOP_LIVE_CI_READ_KEY': '${{ secrets.LOOP_LIVE_CI_READ_KEY }}'}
+    assert jobs['updater-synthetic-acquisition'] == {
+        'if': "${{ !inputs.core_wheels && inputs.suite == 'updater-synthetic-acquisition' }}",
+        'uses': './.github/workflows/updater-synthetic-acquisition.yml',
+    }
     rejected = jobs['incompatible-selection']
     assert rejected['if'] == "${{ inputs.core_wheels && inputs.suite && inputs.suite != 'full' }}"
     assert 'exit 1' in rejected['steps'][0]['run']
@@ -461,6 +465,47 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     assert manager['if'] == "${{ env.CHECK_SUITE == 'manager-exception-boundary' }}"
     assert 'assert path.is_relative_to(root)' in manager['run']
     assert 'if [ "$CHECK_SUITE" = manager-exception-boundary ]; then' in focused['run']
+
+
+def test_synthetic_acquisition_workflow_has_only_fixed_public_steps():
+    workflow = yaml.load(
+        (ROOT / '.github/workflows/updater-synthetic-acquisition.yml').read_text(),
+        Loader=yaml.BaseLoader,
+    )
+    # Exact allowlists exclude inputs, secrets, env, private checkouts,
+    # dependency setup and arbitrary commands at every workflow level.
+    assert set(workflow) == {'name', 'on', 'permissions', 'jobs'}
+    assert workflow['on'] == {'workflow_call': {}}
+    assert workflow['permissions'] == {'contents': 'read'}
+    assert set(workflow['jobs']) == {'acquisition'}
+    job = workflow['jobs']['acquisition']
+    assert set(job) == {'runs-on', 'timeout-minutes', 'steps'}
+    assert job['runs-on'] == 'ubuntu-24.04'
+    assert job['timeout-minutes'] == '15'
+    assert job['steps'] == [
+        {
+            'uses': 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+            'with': {'ref': '${{ github.sha }}', 'persist-credentials': 'false'},
+        },
+        {
+            'uses': 'actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065',
+            'with': {'python-version': '3.13'},
+        },
+        {
+            'name': 'Run fixed public synthetic acquisition',
+            'run': 'python -I -S -B scripts/run_omitted_ref_acquisition.py',
+        },
+        {
+            'name': 'Retain complete and partial acquisition evidence',
+            'if': 'always()',
+            'uses': 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+            'with': {
+                'name': 'omitted-acquisition-evidence-${{ github.run_id }}-${{ github.run_attempt }}',
+                'path': '${{ runner.temp }}/omitted-acquisition-evidence/',
+                'if-no-files-found': 'error',
+            },
+        },
+    ]
 
 
 @pytest.mark.parametrize(('suite', 'targets'), [

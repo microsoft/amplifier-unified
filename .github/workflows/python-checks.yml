@@ -20,6 +20,7 @@ on:
           - remote-test-origins
           - shared-work-native
           - updater-omitted-ref
+          - updater-synthetic-acquisition
       core_wheels:
         description: Qualify published Core wheels and real runtime on both Linux architectures
         type: boolean
@@ -36,7 +37,7 @@ permissions:
   contents: read
 jobs:
   python:
-    if: ${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'updater-omitted-ref' }}
+    if: ${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'updater-omitted-ref' && inputs.suite != 'updater-synthetic-acquisition' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -352,3 +353,7 @@ jobs:
     uses: ./.github/workflows/updater-omitted-ref.yml
     secrets:
       LOOP_LIVE_CI_READ_KEY: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
+
+  updater-synthetic-acquisition:
+    if: ${{ !inputs.core_wheels && inputs.suite == 'updater-synthetic-acquisition' }}
+    uses: ./.github/workflows/updater-synthetic-acquisition.yml
