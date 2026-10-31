@@ -2248,7 +2248,7 @@ class AppService:
             return await self.assignments.dispatch(action, args, origin, command_id, caller_session_id)
         if action.startswith("modelCapacity."):
             from .model_capacity_settings import dispatch as model_capacity_dispatch
-            return await model_capacity_dispatch(self, action, args, origin, command_id)
+            return await model_capacity_dispatch(self, action, args, origin, command_id, caller_session_id)
         if action.startswith("capacity."):
             from .capacity import dispatch as capacity_dispatch
             return await capacity_dispatch(self, action, args, origin, command_id, include_state)

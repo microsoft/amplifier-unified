@@ -561,6 +561,18 @@ remain in force until changed, including after restart. The global settings UI
 offers a single action to select unlimited waiting without resetting spend,
 already admitted calls, or Stop.
 
+`modelCapacity.set` also accepts standing Full from an explicit calling
+conversation: its current native root or assigned descendant, or a trusted host
+system. It needs no browser or new human message. The global policy owner retains
+the actual actor and source, binds each command to that source and exact settings,
+and checks captured Full, Stop, execution and placement identity at commit. A
+normal turn finish does not cancel an accepted save. An exact retained command is
+observable by the same source after completion or revocation without renewing
+authority or repeating the change. User controls and Ask behavior are unchanged;
+`modelCapacity.read` remains passive. Saving wakes existing capacity waits and
+never starts/restarts workers or changes spending limits. Once committed, the
+policy remains durable configuration independent of its setter's lifetime.
+
 The commissioning owner may manage the assignment; members may inspect it.
 Membership does not confer control over existing independent peers. Assignment
 Stop closes admission durably before interrupting still-bound roots and their
