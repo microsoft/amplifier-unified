@@ -90,6 +90,34 @@ async def assert_available_commission(app, owner, item, identity):
     return created, child
 
 
+async def test_new_work_establishes_candidate_through_executor_link_before_commission(app):
+    owner = app.state['sessions'][0]
+    intent = 'capture-intent-is-not-a-candidate'
+    item = (await create(app, owner, intent=intent))['result']['item']
+    assert item['candidate'] is None
+    plan(app, owner)
+    before = retained_bytes(app)
+    session_ids = [row['id'] for row in app.state['sessions']]
+    with pytest.raises(AppError, match='Work candidate changed'):
+        await commission(app, owner, identity='unestablished-candidate',
+                         workReferences=[reference(item, candidate=intent)])
+    assert retained_bytes(app) == before
+    assert [row['id'] for row in app.state['sessions']] == session_ids
+    assert not app.runtime.inputs
+
+    linked = (await change_work(app, owner, 'link', item, 'establish-candidate',
+        linkedSessionId=owner['id'], role='executor', candidate='b' * 40))['result']['item']
+    assert linked['candidate'] == 'b' * 40
+    assert linked['revision'] == item['revision'] + 1
+    assert linked['promiseRevision'] == item['promiseRevision']
+    assert not app.runtime.inputs
+    created, target = await assert_available_commission(app, owner, linked, 'established-candidate')
+    association = app.collaboration.receipt(created['requestId'])['workAssociation']
+    assert association['references'][0]['candidate'] == linked['candidate']
+    assert association['references'][0]['expectedRevision'] == linked['revision']
+    assert target['collaborationGeneration']['inputIds'] == [created['initialInputId']]
+
+
 async def test_commission_seals_work_association_before_native_admission(app):
     owner = app.state['sessions'][0]
     item = await prepared_work(app, owner, 'bound')
