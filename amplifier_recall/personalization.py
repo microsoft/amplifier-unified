@@ -37,8 +37,8 @@ class Personalization:
             row = self.store.db.execute('SELECT value FROM memory_settings WHERE workspace=?', (workspace,)).fetchone()
         return {**DEFAULTS, **(json.loads(row[0]) if row else {}), 'workspace': workspace}
 
-    def configure(self, workspace, args, provenance, command_id=None):
-        fingerprint = digest(['memory.configure', workspace, args, provenance])
+    def configure(self, workspace, args, provenance, command_id=None, *, request_fingerprint=None):
+        fingerprint = request_fingerprint or digest(['memory.configure', workspace, args, provenance])
         with self.store.atomic():
             if command_id:
                 previous = self.store.receipt(command_id, fingerprint)

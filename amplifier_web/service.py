@@ -2251,7 +2251,7 @@ class AppService:
             except ValueError as exc:
                 raise AppError(str(exc)) from None
         if action.startswith(('recall.', 'memory.')):
-            return await self.recall.dispatch(action,args,origin,command_id)
+            return await self.recall.dispatch(action,args,origin,command_id,caller_session_id)
         if action in MESSAGE_INTERACTIONS and origin == 'agent' and (not caller_session_id or args['sessionId'] != caller_session_id):
             raise AppError('Message actions must target the calling conversation.', 403)
         reveal_message = None
