@@ -321,8 +321,6 @@ try{
  assert.equal((await check()).sent.length,3,'Rejected dirty answer must not send');
  assert.equal(await mountedFrame.evaluate(element=>element.isConnected),true,'Dirty rejection preserves the mounted renderer');
  await expect(frame.locator('#value')).toHaveText('1');
- assert.equal((await reviewAction('session.draft',{})).code,'canvas_view_dirty');
- if(output)await page.screenshot({path:join(output,'question-dirty-answer-rejected.png')});
  // Failure-local diagnostics only: retain the original nodes, never replace
  // the continuity assertions with a lookup of a newly mounted equivalent.
  const reviewEvidence={questionId:review.question.id,resourceId:review.html.id,sessionId:ready.sessionId,
@@ -375,8 +373,9 @@ try{
  };
  const captureReview=async label=>{
   try{
-   if(identityObserver)reviewEvidence.snapshots.push({label,...await identityObserver.evaluate(observer=>observer.snapshot())});
-   else evidenceError(label,'Identity observer was not installed');
+   if(!identityObserver){evidenceError(label,'Identity observer was not installed');return}
+   const snapshot={label,...await identityObserver.evaluate(observer=>observer.snapshot())};
+   reviewEvidence.snapshots.push(snapshot);return snapshot;
   }catch(error){evidenceError(label,error)}
  };
  finishReviewEvidence=()=>finishEvidencePromise??=(async()=>{
@@ -398,7 +397,10 @@ try{
  page.on('request',onReviewRequest);page.on('response',onReviewResponse);page.on('requestfailed',onReviewRequestFailed);
  try{
   identityObserver=await page.evaluateHandle(({frame,questionId,resourceId,sessionId})=>{
-   const nodes={card:frame.closest('[data-question-id]'),preview:frame.closest('[data-full-artifact-preview]'),frame};
+   // The first existing message proves transcript children survive too, not
+   // merely the outer log element whose children can be replaced by loading UI.
+   const nodes={transcript:frame.closest('[data-part="messages"]').querySelector('[data-message-id]'),
+    card:frame.closest('[data-question-id]'),preview:frame.closest('[data-full-artifact-preview]'),frame};
    const ids=new WeakMap();let serial=0,dropped=0;const mutations=[],errors=[];
    const identity=node=>node?(ids.has(node)?ids.get(node):(ids.set(node,++serial),serial)):null;
    for(const node of Object.values(nodes))identity(node);
@@ -406,7 +408,7 @@ try{
    const currentNodes=()=>{
     const card=document.querySelector(`[data-question-id="${CSS.escape(questionId)}"]`);
     const preview=card?.querySelector(`[data-full-artifact-preview="${CSS.escape(resourceId)}"]`);
-    return {card,preview,frame:preview?.querySelector('iframe')};
+    return {transcript:document.querySelector('[data-part="messages"] [data-message-id]'),card,preview,frame:preview?.querySelector('iframe')};
    };
    const snapshot=()=>{
     const current=currentNodes(),state=window.amplifier.getState();
@@ -420,7 +422,7 @@ try{
       currentConnected:!!current[name]?.isConnected,same:node===current[name],
       ...(name==='frame'?{originalSrc:node?.getAttribute('src'),currentSrc:current[name]?.getAttribute('src')}:{}),
      }])),
-     selectedSessionId:state.selectedSessionId,navigationPending:state.navigationPending,
+     selectedSessionId:state.selectedSessionId,navigationPending:state.navigationPending,draftNavigationPending:state.draftNavigationPending,
      panel:state.view?.panel,workSurface:state.view?.workSurface,
      question:question?{...pick(question,['id','revision','contentRevision','status']),delivery:pick(question.delivery,['status','inputId']),
       artifacts:refs(question.artifacts),answer:question.answer?{questionRevision:question.answer.questionRevision,artifacts:refs(question.answer.artifacts)}:null}:null,
@@ -445,12 +447,97 @@ try{
     }catch(error){if(errors.length<16)errors.push(String(error?.stack||error).slice(0,1500));else dropped++}
    };
    const observer=new MutationObserver(record);
-   // Observe ancestors too, but retain only changes to the three named nodes;
-   // a parent removal can detach all three without a mutation on the iframe.
+   // Observe ancestors too, but retain only changes to the named nodes;
+   // a parent removal can detach the review without a mutation on the iframe.
    observer.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['src']});
    return {snapshot,finish(){record(observer.takeRecords());observer.disconnect();return {mutations,errors,dropped}}};
   },{frame:mountedFrame,questionId:review.question.id,resourceId:review.html.id,sessionId:ready.sessionId});
  }catch(error){evidenceError('DOM observer setup',error)}
+ // Hold the real draft request before host handling. A dirty refusal must
+ // preserve the mounted subtree both while pending and after reconciliation.
+ const originalDraft=await page.evaluate(()=>window.amplifier.getState().view.draft),originalComposer=await composer().innerText();
+ assert.ok(originalDraft.trim(),'The Enter probe needs a nonempty, preserved composer draft');
+ const modelOptions=page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true});
+ const sendMessage=page.getByRole('button',{name:'Send message',exact:true}),originalContent=await mountedFrame.contentFrame();
+ assert.ok(originalContent,'Retain the original iframe browsing context');
+ const sameReview=async label=>{
+  const snapshot=await captureReview(label);assert.ok(snapshot,'Review identity observation is available');
+  for(const [name,node] of Object.entries(snapshot.nodes)){
+   assert.ok(node.original,`${label}: original ${name} exists`);
+   assert.equal(node.connected&&node.same&&node.currentConnected,true,`${label}: preserve the original ${name}`);
+  }
+  assert.equal(snapshot.selectedSessionId,ready.sessionId);
+  assert.equal(snapshot.question?.status,'pending');
+  const lease=snapshot.views.find(view=>view.viewId===reviewTarget.viewId);
+  assert.ok(lease,'The original dirty preview lease remains available');
+  assert.equal(lease.dirty,true);
+  for(const [key,value] of Object.entries(reviewTarget))assert.equal(lease[key],value,`${label}: retain ${key}`);
+  await expect(originalContent.locator('#value')).toHaveText('1');
+  await expect(q.getByRole('textbox')).toHaveValue(answerDraft);
+  await expect(composer()).toHaveDraft(originalDraft);
+  assert.equal(await composer().innerText(),originalComposer);
+ };
+ await sameReview('before-draft-navigation');
+ await expect(modelOptions).toBeEnabled();await expect(composer()).toHaveAttribute('aria-readonly','false');
+ await expect(sendMessage).toBeEnabled();
+ let releaseDraft,heldDrafts=0,sendRequests=0,expired=false,draftResult,draftError,probeFailure,attempt;
+ const gate=new Promise(resolve=>{releaseDraft=resolve}),routes=new Set(),routeErrors=[];
+ const holdDraft=async route=>{
+  routes.add(route);
+  try{
+   if(route.request().method()==='POST'){
+    const raw=route.request().postDataJSON(),body=raw.action==='shell.command'?raw.args:raw;
+    if(body.action==='session.draft'){heldDrafts++;await gate}
+    if(body.action==='conversation.send')sendRequests++;
+   }
+  }catch(error){routeErrors.push(String(error).slice(0,1000))}
+  try{await route.continue()}catch(error){routeErrors.push(String(error).slice(0,1000))}
+  finally{routes.delete(route)}
+ };
+ const beforeDraftSendCount=(await check()).sent.length;
+ const gateTimer=setTimeout(()=>{expired=true;releaseDraft()},15000);
+ try{
+  await page.route('**/api/actions',holdDraft);
+  attempt=reviewAction('session.draft',{}).then(result=>{draftResult=result},error=>{draftError=error});
+  await expect.poll(()=>heldDrafts).toBe(1);
+  await expect.poll(()=>page.evaluate(()=>{const s=window.amplifier.getState();return {
+   navigation:!!s.navigationPending,draft:!!s.draftNavigationPending,selected:s.selectedSessionId,
+  }})).toEqual({navigation:true,draft:true,selected:ready.sessionId});
+  await sameReview('draft-navigation-held');
+  await expect(composer()).toHaveAttribute('aria-readonly','true');
+  await expect(modelOptions).toBeDisabled();await expect(sendMessage).toBeDisabled();
+  await composer().press('Enter');
+  assert.equal((await check()).sent.length,beforeDraftSendCount,'Pending navigation cannot send the retained draft');
+  await sameReview('draft-navigation-after-enter');
+  assert.equal(sendRequests,0,'Enter while navigation is pending cannot dispatch conversation.send');
+  assert.equal(expired,false,'Pending assertions must finish while the real draft request is held');
+  assert.equal(draftResult,undefined,'The held request has not reached the host');
+  assert.deepEqual(routeErrors,[]);
+  clearTimeout(gateTimer);releaseDraft();
+  await expect.poll(()=>draftResult!==undefined||draftError!==undefined).toBe(true);
+  if(draftError)throw draftError;
+  assert.equal(draftResult.accepted,false);assert.equal(draftResult.code,'canvas_view_dirty');
+  await expect.poll(()=>page.evaluate(()=>{const s=window.amplifier.getState();return {
+   navigation:!!s.navigationPending,draft:!!s.draftNavigationPending,selected:s.selectedSessionId,
+  }})).toEqual({navigation:false,draft:false,selected:ready.sessionId});
+  await sameReview('draft-navigation-refused');
+  await expect(composer()).toHaveAttribute('aria-readonly','false');
+  await expect(modelOptions).toBeEnabled();await expect(sendMessage).toBeEnabled();
+  assert.equal((await check()).sent.length,beforeDraftSendCount);assert.equal(sendRequests,0);
+ }catch(error){probeFailure=error;throw error}
+ finally{
+  clearTimeout(gateTimer);releaseDraft();
+  try{
+   await page.unroute('**/api/actions',holdDraft);
+   await expect.poll(()=>routes.size).toBe(0);
+   if(attempt){await expect.poll(()=>draftResult!==undefined||draftError!==undefined).toBe(true);await attempt}
+   assert.deepEqual(routeErrors,[]);
+  }catch(error){if(probeFailure)console.error('Draft navigation gate cleanup failed:',error);else throw error}
+  finally{reviewEvidence.draftNavigation={heldDrafts,sendRequests,expired,
+   result:draftResult?{accepted:draftResult.accepted,code:draftResult.code,error:draftResult.error}:null,
+   error:draftError?String(draftError):null,routeErrors}}
+ }
+ if(output)await page.screenshot({path:join(output,'question-dirty-answer-rejected.png')});
  await captureReview('before-dirty-clear');
  assert.equal((await reviewAction('canvas.views.dirty',{...reviewTarget,dirty:false})).accepted,true);
  await captureReview('after-dirty-clear');
