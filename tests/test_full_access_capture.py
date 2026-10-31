@@ -128,7 +128,7 @@ async def test_native_child_observation_keeps_complete_assigned_inputs(tmp_path,
             assert authority['origin'] == 'agent' and authority['sessionId'] == sid
             assert authority['runtimeSessionId'] == principal == 'native-observer-child'
             assert authority['generationId'] == 'system-work'
-            assert authority['inputIds'] == assigned
+            assert authority['inputIds'] == sorted(assigned)
             assert authority['inputCoverage'] == 'complete'
             assert 'inputCount' not in authority and 'messageId' not in authority
             captured.append(copy.deepcopy(watch))
