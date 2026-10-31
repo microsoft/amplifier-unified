@@ -1762,7 +1762,7 @@ async def test_caller_cannot_turn_an_instruction_into_an_outcome_observation(app
 
 
 async def test_observation_wait_reservation_survives_progress_revisions(app, monkeypatch):
-    import amplifier_web.collaboration as module
+    from amplifier_web import test_execution_settings as execution_settings
     source, target = app.state['sessions']
     source.update(status='working', task={'id': 'objective', 'revision': 1,
                                          'continuationEpoch': 1, 'status': 'active'})
@@ -1771,7 +1771,7 @@ async def test_observation_wait_reservation_survives_progress_revisions(app, mon
     await agent_action(app, source, 'coordination.subscribe',
         {'sessionId': source['id'], 'requestId': 'request-1'}, 'wait')
     source['task']['revision'] = 2
-    monkeypatch.setattr(module, 'MAX_PENDING_INPUTS', 1)
+    monkeypatch.setitem(execution_settings.CONCURRENCY_DEFAULTS, 'maxPendingPeerInputs', 1)
     with pytest.raises(AppError, match='inbox is full'):
         app.collaboration.require_inbox_slot(source['id'])
 

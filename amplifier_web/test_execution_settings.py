@@ -8,10 +8,13 @@ import stat
 from . import test_environment_profiles as profiles
 from .private_policy_file import write as write_policy_file
 
-OPTIONAL_CONCURRENCY_COUNTS = {'maxTaskChatsPerSource', 'maxEnvironmentsPerChat'}
+PEER_INBOX_COUNTS = ('maxPendingPeerInputs', 'maxPendingPeerInputsPerSender',
+                     'maxPendingPeerInputsPerAssignment')
+OPTIONAL_CONCURRENCY_COUNTS = {'maxTaskChatsPerSource', 'maxEnvironmentsPerChat', *PEER_INBOX_COUNTS}
 CONCURRENCY_DEFAULTS = {'maxTaskChatsPerSource': 0, 'maxEnvironmentsPerChat': 0,
                         'maxOwnedResources': 512, 'maxOwnedResourcesPerChat': 32,
-                        'maxResourceReservations': 1024, 'maxResourceReservationsPerChat': 64}
+                        'maxResourceReservations': 1024, 'maxResourceReservationsPerChat': 64,
+                        **dict.fromkeys(PEER_INBOX_COUNTS, 0)}
 
 QUEUE_DEFAULTS = {'maxPending': 64, 'maxPendingPerChat': 0, 'defaultWaitSeconds': 0}
 PROFILE_FIELDS = (*profiles.RESOURCE_FIELDS, *profiles.TIMING_FIELDS)
@@ -132,7 +135,12 @@ async def dispatch(app, action, args, authority):
                 app.test_queue.backoff.clear()
                 app.test_queue.wakeup.set()
                 app.test_queue.start()
+                previous = current['effectiveConcurrency']
                 current = snapshot(app)
+                effective = current['effectiveConcurrency']
+                if any(previous[key] > 0 and (effective[key] == 0 or effective[key] > previous[key])
+                       for key in PEER_INBOX_COUNTS):
+                    app.collaboration.refresh_inboxes()
             return {'accepted': True, 'result': current}
         except (OSError, ValueError, TypeError) as exc:
             raise AppError(str(exc), 409) from None

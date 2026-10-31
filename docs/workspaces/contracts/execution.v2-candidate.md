@@ -636,9 +636,16 @@ outcome, not approval or denial. Restart preserves pending watch receipts and
 never replays a claimed notification. Idle means a root status boundary, not proof
 that external effects or all background work have finished.
 
-A destination retains at most 64 queued inputs and reserved reply slots, with
-16 queued inputs from one sender and 32 from one assignment. Admission rotates
-between pending senders using retained admission order. New queued instructions
+Peer inbox counts have no ceiling by default. Global Work concurrency settings
+can optionally bound a destination’s pending inputs plus reserved reply slots,
+pending inputs from one sender, and pending inputs from one assignment; 0 means
+no count ceiling. Positive limits remain atomic admission checks, including
+reserved returns, and never discard existing work. Admission gives the least
+recently admitted pending sender the next turn using durable admission order,
+with oldest pending input breaking ties. Sender selection considers the complete
+pending set; only a bounded FIFO batch of that sender’s receipts is loaded.
+Raising a limit resumes saved backpressured returns through the same guarded
+inbox without replaying accepted or unknown operations. New queued instructions
 expire after a caller-selected duration (default and maximum one day);
 expiration remains an inspectable failed dependency without executing the input.
 Accepted substantive inputs are never silently coalesced or dropped. Informational
