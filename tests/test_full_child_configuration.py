@@ -175,10 +175,10 @@ async def test_mounted_full_configuration_and_own_reads_keep_actual_actor(mounte
         assert authority['inputCoverage'] == 'complete'
         assert h.envelopes[-1]['_runtimeSessionId'] == actor
         assert saved_permissions(h) == {} and not writes
-        readbacks = [request for request in result.output['state']['_stateAccess']['readback']
-                     if request['args'].get('path') == '/managementResults/' + identity]
-        assert len(readbacks) == 1
-        accepted.append((identity, args['allowed'], readbacks[0]))
+        assert result.output['commandId'] == identity
+        request = {'operation': 'get_state',
+                   'args': {'path': '/managementResults/' + result.output['commandId']}}
+        accepted.append((identity, args['allowed'], request))
         # Retry an accepted command while this mount is still admitted. Its
         # later settings effect will invalidate this mount for fresh mutations.
         before = len(h.authorities)
@@ -317,10 +317,9 @@ async def test_mounted_child_reads_completion_but_cannot_mutate_after_own_config
         refused = await dispatch(control, 'permissions.save', permissions(h.source, '/must-not-write'), 'after-invalidation')
         assert not refused.success and 'native child execution is no longer current' in str(refused.error)
         assert not h.app.db.execute('SELECT 1 FROM commands WHERE id=?', ('after-invalidation',)).fetchone()
-        readbacks = [request for request in accepted.output['state']['_stateAccess']['readback']
-                     if request['args'].get('path') == '/managementResults/before-retirement']
-        assert len(readbacks) == 1
-        request = readbacks[0]
+        assert accepted.output['commandId'] == 'before-retirement'
+        request = {'operation': 'get_state',
+                   'args': {'path': '/managementResults/' + accepted.output['commandId']}}
         assert request == {'operation': 'get_state', 'args': {'path': '/managementResults/before-retirement'}}
         readback = await control.execute(request)
         assert readback.success, readback.error
