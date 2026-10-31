@@ -2,13 +2,14 @@
 
 `workspace.tests.submit` queues bounded checks per root conversation. The global
 **Settings → Testing & resources → Advanced execution limits** controls both the
-total pending queue (default 64) and **Maximum pending checks per chat** (default
-0: no per-chat count ceiling). **Owned test environments per chat** also defaults
-to 0. Positive saved values remain operator ceilings and count all waiting/active
-checks or retained environments, including those beyond the first displayed page.
+total pending queue and **Maximum pending checks per chat**. All work count limits
+default to 0: no count ceiling, including environments, retained resources and
+cooperative reservations. Positive saved values remain operator ceilings and count
+all waiting/active checks or retained owners, including those beyond the first
+displayed page. Existing saved limits are never rewritten by a default change.
 A request with `independent: true` may overlap other independent checks in distinct
-owned environments, subject to physical resource admission and retained-owner
-bounds; default requests preserve ordered work. Queue wait defaults to 0 (until
+owned environments, subject to physical resource admission and any configured count
+limits; default requests preserve ordered work. Queue wait defaults to 0 (until
 Stop or cancellation). An explicit wait limit and already-accepted deadlines keep
 their original meaning; changing defaults never rewrites a queued receipt. The
 host saves the request in the existing command journal, waits for physical
@@ -161,8 +162,8 @@ users, or container systems. The machine resource authority and queue settings
 remain separate owners; their current controls are shown separately in Settings.
 Registered machines use their own verified target authority.
 
-The Docker configuration may set `maxRunning` (default 15), `maxInstances`
-(default 256 retained plus active), and `minFreeBytes` (default 10 GiB). Zero
+The Docker configuration may set `maxRunning` and `maxInstances`
+(both default to 0: no count ceiling), and `minFreeBytes` (default 10 GiB). Zero
 explicitly disables that individual limit. Stopped environments consume storage
 but not running slots. Unknown/paused/starting physical instances remain active.
 Docker admission is serialized for cooperating processes of one host user,

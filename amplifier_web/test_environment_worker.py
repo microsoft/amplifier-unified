@@ -278,7 +278,7 @@ def docker_capacity(payload):
     total = len(projects)+pending
     disk = os.statvfs(daemon['DockerRootDir'])
     free = disk.f_bavail * disk.f_frsize
-    maximum, retained, minimum = payload.get('maxRunning', 15), payload.get('maxInstances', 256), payload.get('minFreeBytes', 10*1024**3)
+    maximum, retained, minimum = payload.get('maxRunning', 0), payload.get('maxInstances', 0), payload.get('minFreeBytes', 10*1024**3)
     blockers = []
     if maximum and active >= maximum:
         blockers.append({'code': 'execution_capacity'})
