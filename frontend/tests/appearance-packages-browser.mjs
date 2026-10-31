@@ -630,15 +630,27 @@ try{
  assert.equal((await state()).theme.name,renamed);
  await page.setViewportSize({width:390,height:844});
  await page.emulateMedia({reducedMotion:'reduce'});
- await openSettingsPage(page,'custom-appearance');
- const decorations=page.getByRole('checkbox',{name:'Show decorative theme background',exact:true});
  for(const scheme of ['light','dark']){
-  await button(scheme==='light'?'Light':'Dark').click();
+  await openSettingsPage(page,'appearance');
+  const appearancePage=page.locator('.a-settings-experience[data-settings-page="appearance"] .a-settings-page-content:not([hidden])');
+  await expect(appearancePage).toBeVisible();
+  await expect(appearancePage.locator('.a-appearance-settings')).toHaveAttribute('data-appearance-simple','true');
+  await appearancePage.getByRole('combobox',{name:'Color mode',exact:true}).selectOption(scheme);
   await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',scheme);
+  const decorations=appearancePage.getByRole('checkbox',{name:'Show decorative theme background',exact:true});
+  if(!await decorations.isVisible()){
+   const summary=appearancePage.locator('summary').filter({hasText:/^Layout & background$/});
+   await expect(summary).toBeVisible();await summary.click();
+  }
+  await expect(decorations).toBeVisible();
   await decorations.check();await embeddedPaint(synthetic.pixelBase64);
   await decorations.uncheck();
   await expect(page.locator('#amp-one')).toHaveAttribute('data-decorations','off');
   await expect.poll(()=>page.locator('#amp-one').evaluate(node=>getComputedStyle(node).backgroundImage)).toBe('none');
+  await appearancePage.getByRole('button',{name:'Save, import & export themes',exact:true}).click();
+  const customPage=page.locator('.a-settings-experience[data-settings-page="custom-appearance"] .a-settings-page-content:not([hidden])');
+  await expect(customPage).toBeVisible();
+  await expect(customPage.locator('.a-appearance-settings')).toHaveAttribute('data-appearance-advanced','true');
   const beforeNarrowImport=await preserved();
   await upload({...packageFile,name:'repeat.zip'},'packageBase64');
   const afterNarrowImport=await preserved();
