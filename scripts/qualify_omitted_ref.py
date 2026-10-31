@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -19,58 +20,25 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 LOOP = 'amplifier-module-loop-live'
-FAILURE_CLASSIFIER_VERSION = 1
-FAILURE_SCAN_BYTES = 64 * 1024
-# Fixed diagnostic signatures, not root-cause proof. Never return matched text.
-FAILURE_SIGNATURES = {
-    'manifest': r'^(?:error: |  Caused by: )?(?:TOML parse error|Failed to parse `pyproject\.toml`)',
-    'dependency-conflict': r'^[ \t]*(?:error: |\u00d7 )?No solution found when resolving dependencies',
-    'transport-auth': r'^(?:fatal: (?:Authentication failed|could not read Username|unable to access)|error: (?:Failed to download|Failed to fetch)|Permission denied \(publickey\))',
-    'unavailable-wheel': r'^error: (?:No binary distribution found|No compatible wheel found)',
-    'build': r'^[ \t]*(?:error: |\u00d7 )?(?:Failed to build |The build backend returned an error)',
-}
+# Load the fixed sibling leaf without depending on the invocation's sys.path.
+_diagnostics_spec = importlib.util.spec_from_file_location(
+    'qualification_diagnostics', Path(__file__).with_name('qualification_diagnostics.py'))
+diagnostics = importlib.util.module_from_spec(_diagnostics_spec)
+_diagnostics_spec.loader.exec_module(diagnostics)
+FAILURE_CLASSIFIER_VERSION = diagnostics.FAILURE_CLASSIFIER_VERSION
+FAILURE_SCAN_BYTES = diagnostics.FAILURE_SCAN_BYTES
 
 
 def command_log_facts(log, returncode):
-    """Hash the full log with bounded memory; classify only complete small logs.
-
-    Unrecognized, ambiguous, oversized or undecodable output stays unknown.
-    Only fixed category strings leave this function, never paths or source text.
-    An unknown command outcome is not classified from possibly partial output.
-    """
-    sha, size = hashlib.sha256(), 0
+    """IO wrapper only; bounded hashing/classification has one shared owner."""
     try:
         with log.open('rb') as stream:
-            sample = stream.read(FAILURE_SCAN_BYTES + 1)
-            sha.update(sample)
-            size += len(sample)
-            for chunk in iter(lambda: stream.read(FAILURE_SCAN_BYTES), b''):
-                sha.update(chunk)
-                size += len(chunk)
+            return diagnostics.stream_facts(
+                iter(lambda: stream.read(FAILURE_SCAN_BYTES), b''), returncode)
     except OSError:
-        # Diagnostic IO must not replace the original command outcome.
-        return {'returncode': returncode, 'rawLogSha256': None, 'rawLogBytes': None,
-                'rawLogExported': False, 'classifierVersion': FAILURE_CLASSIFIER_VERSION,
-                'captureError': 'log-read-failed',
-                **({'failureCategory': 'unknown'} if returncode != 0 else {})}
-    facts = {'returncode': returncode, 'rawLogSha256': sha.hexdigest(),
-             'rawLogBytes': size, 'rawLogExported': False,
-             'classifierVersion': FAILURE_CLASSIFIER_VERSION,
-             'classificationBytes': min(size, FAILURE_SCAN_BYTES),
-             'classificationTruncated': size > FAILURE_SCAN_BYTES}
-    if returncode == 0:
-        return facts
-    categories = set()
-    if type(returncode) is int and returncode > 0 and size <= FAILURE_SCAN_BYTES:
-        try:
-            text = sample.decode('utf-8')
-        except UnicodeDecodeError:
-            pass
-        else:
-            categories = {category for category, pattern in FAILURE_SIGNATURES.items()
-                          if re.search(pattern, text, re.MULTILINE | re.IGNORECASE)}
-    facts['failureCategory'] = next(iter(categories)) if len(categories) == 1 else 'unknown'
-    return facts
+        return diagnostics.capture_error_facts(returncode, 'log-read-failed')
+    except Exception:
+        return diagnostics.capture_error_facts(returncode, 'log-capture-failed')
 
 
 def digest(path):
@@ -84,7 +52,7 @@ def save(path, data):
 def diagnostic_warning(status, message):
     try:
         print(message, file=sys.stderr)
-    except OSError:
+    except Exception:
         status['diagnosticWarningError'] = 'stderr-write-failed'
 
 
@@ -93,7 +61,7 @@ def save_status(path, status):
     try:
         save(path, status)
         return True
-    except OSError:
+    except Exception:
         status['receiptWriteError'] = 'status-write-failed'
         diagnostic_warning(status, 'Omitted-ref diagnostic receipt write failed; no success is certified.')
         return False
@@ -133,6 +101,9 @@ def main():
     assert sys.version_info[:2] == (3, 13), sys.version
     assert os.environ.get('GITHUB_ACTIONS') == 'true', 'Use the fixed isolated CI job'
     assert work != ROOT and not work.is_relative_to(ROOT)
+    if work == output or work.is_relative_to(output) or output.is_relative_to(work):
+        diagnostic_warning({}, 'Qualification work and evidence directories must be separate.')
+        return 1
     work.mkdir(exist_ok=False, parents=True)
     output.mkdir(exist_ok=True, parents=True)
     raw_logs = work / 'private-logs'; raw_logs.mkdir()
@@ -146,17 +117,25 @@ def main():
         status['commands'].append(record)
         if not save_status(output / 'status.json', status):
             raise RuntimeError('Diagnostic receipt unavailable')
+        stream = None
         try:
-            with log.open('w') as stream:
-                result = subprocess.run(command, cwd=cwd, env=env, stdout=stream,
-                                        stderr=subprocess.STDOUT, timeout=timeout)
+            stream = log.open('w')
+            result = subprocess.run(command, cwd=cwd, env=env, stdout=stream,
+                                    stderr=subprocess.STDOUT, timeout=timeout)
             record['returncode'] = result.returncode
             if result.returncode:
                 raise RuntimeError(label + ' failed')
         finally:
-            record.update(command_log_facts(log, record['returncode']))
+            close_failed = False
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:
+                    close_failed = True
+            record.update(diagnostics.capture_error_facts(record['returncode'], 'log-capture-failed')
+                          if close_failed else command_log_facts(log, record['returncode']))
             receipt_saved = save_status(output / 'status.json', status)
-        if not receipt_saved:
+        if not receipt_saved or record.get('captureError') or not record.get('complete'):
             # Reached only after a successful command. An existing failure or
             # timeout propagates unchanged through the guarded finally above.
             raise RuntimeError('Diagnostic receipt unavailable')

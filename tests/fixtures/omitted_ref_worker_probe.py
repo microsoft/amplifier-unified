@@ -36,6 +36,7 @@ import argparse
 import asyncio
 import copy
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -47,6 +48,10 @@ from urllib.parse import parse_qs, urlsplit
 import uuid
 
 CHECKOUT = Path(__file__).resolve().parents[2]
+_diagnostics_spec = importlib.util.spec_from_file_location(
+    'qualification_diagnostics', CHECKOUT / 'scripts/qualification_diagnostics.py')
+diagnostics = importlib.util.module_from_spec(_diagnostics_spec)
+_diagnostics_spec.loader.exec_module(diagnostics)
 URL = "https://example.invalid/approval"
 URI = "git+" + URL  # Intentionally no @ref; the production resolver chooses main.
 PROFILE = "omitted-ref-proof"
@@ -209,6 +214,7 @@ class Evidence:
     def __init__(self, output, replacements):
         self.output, self.replacements = output, sorted(replacements, key=lambda p: len(p[0]), reverse=True)
         self.stream_hashes = {}
+        self.capture_failed = False
         self.report = {'schema': 1, 'status': 'running', 'phase': 'prerequisites',
                        'cycles': [], 'negativeControls': [], 'processes': [], 'cleanup': {'status': 'not-started'}}
         self.save()
@@ -222,6 +228,18 @@ class Evidence:
         text = self.text(json.dumps(self.report, indent=2, sort_keys=True, default=str))
         require(len(text.encode()) <= 512 * 1024, 'Evidence report exceeded its fixed budget')
         (self.output / 'result.json').write_text(text + '\n')
+
+    def save_observation(self):
+        """Diagnostic IO cannot replace a command outcome or certify success."""
+        if self.capture_failed:
+            self.report['status'] = 'failed'
+        try:
+            self.save()
+            return True
+        except Exception:
+            self.capture_failed = True
+            self.report.update(status='failed', captureError='receipt-write-failed')
+            return False
 
     def phase(self, name):
         self.report['phase'] = name
@@ -301,13 +319,38 @@ class ProcessObservations:
         self.evidence = evidence
         self.spawn = asyncio.create_subprocess_exec
         self.owned = []
+        self.baseline_command = None
+
+    def capture_stderr(self, row, payload, *, complete):
+        """Only the declared baseline command gets inner failure classification."""
+        if row.get('commandRole') != 'baseline-install' or row['returncode'] == 0:
+            return
+        try:
+            if not complete:
+                facts = diagnostics.capture_error_facts(row['returncode'], 'stderr-incomplete')
+            else:
+                facts = diagnostics.stream_facts((payload,), row['returncode'])
+                require(not row.get('stderrCaptureError')
+                        and facts['rawLogSha256'] == row['stderrObservedSha256']
+                        and facts['rawLogBytes'] == row['stderrObservedBytes'],
+                        'Diagnostic observation identity mismatch')
+        except Exception:
+            self.evidence.capture_failed = True
+            facts = diagnostics.capture_error_facts(row['returncode'], 'stderr-capture-failed')
+        row['stderrFailure'] = {'phase': 'baseline-install', 'role': 'baseline-install',
+                                'channel': 'stderr', **facts}
 
     async def __call__(self, *args, **kwargs):
         require(len(self.owned) < 256, 'Subprocess evidence budget exhausted; no process launched')
-        process = await self.spawn(*args, **kwargs)
         argv = list(map(str, args))
         kind = ('probe' if any(a.endswith('/update_probe.py') for a in argv) else
                 'worker' if any(a.endswith('/runtime_worker.py') for a in argv) else 'command')
+        # Bind intent before awaiting spawn. Neither a later phase nor an ordinal
+        # process ID may cause another command's bytes to be classified.
+        baseline = (self.evidence.report.get('phase') == 'baseline-install'
+                    and self.baseline_command is not None
+                    and tuple(argv) == self.baseline_command)
+        process = await self.spawn(*args, **kwargs)
         row = {'id': f'process-{len(self.owned):03d}', 'pid': process.pid, 'kind': kind,
                'argvSha256': hashlib.sha256(json.dumps(argv).encode()).hexdigest(),
                'returncode': None, 'probeReports': [], 'ready': [],
@@ -318,41 +361,61 @@ class ProcessObservations:
         if kind == 'probe':
             row['probeRole'] = ('collect' if '--source-policy-only' in argv else
                                 'prepare' if '--checked-sources' in argv else 'compatibility')
+        if baseline:
+            row['commandRole'] = 'baseline-install'
         self.owned.append((process, row))
         self.evidence.report['processes'].append(row)
         communicate = process.communicate
         async def observed_communicate(*a, **kw):
             # On cancellation/timeout, communicate may not return consumed
             # bytes. Keep *Complete false; never label a partial hash complete.
-            result = await communicate(*a, **kw)
+            try:
+                result = await communicate(*a, **kw)
+            except BaseException:
+                row['returncode'] = process.returncode
+                self.capture_stderr(row, b'', complete=False)
+                self.evidence.save_observation()
+                raise
             for channel, value in zip(('stdout', 'stderr'), result):
-                if value:
-                    self.evidence.log(row, channel, value)
-                    if channel == 'stdout' and kind == 'probe':
-                        from amplifier_web.update_diagnostics import probe_record
-                        facts = probe_record(value)
-                        if facts is not None:
-                            row['probeReports'].append(facts)
-                row[channel + 'Complete'] = True
+                try:
+                    if value:
+                        self.evidence.log(row, channel, value)
+                        if channel == 'stdout' and kind == 'probe':
+                            from amplifier_web.update_diagnostics import probe_record
+                            facts = probe_record(value)
+                            if facts is not None:
+                                row['probeReports'].append(facts)
+                    row[channel + 'Complete'] = True
+                except Exception:
+                    self.evidence.capture_failed = True
+                    row[channel + 'CaptureError'] = 'stream-capture-failed'
+                    row[channel + 'Complete'] = False
             row['returncode'] = process.returncode
+            self.capture_stderr(row, result[1] or b'', complete=True)
+            self.evidence.save_observation()
             return result
         process.communicate = observed_communicate
         def tap_reader(reader, channel):
             readline = reader.readline
             async def observed_readline():
                 value = await readline()
-                if value:
-                    self.evidence.log(row, channel, value)
-                    if channel == 'stdout':
-                        try:
-                            item = json.loads(value)
-                        except (ValueError, UnicodeError):
-                            item = None
-                        safe = ready_record(item)
-                        if safe is not None and len(row['ready']) < 4:
-                            row['ready'].append(safe)
-                else:
-                    row[channel + 'Complete'] = True
+                try:
+                    if value:
+                        self.evidence.log(row, channel, value)
+                        if channel == 'stdout':
+                            try:
+                                item = json.loads(value)
+                            except (ValueError, UnicodeError):
+                                item = None
+                            safe = ready_record(item)
+                            if safe is not None and len(row['ready']) < 4:
+                                row['ready'].append(safe)
+                    else:
+                        row[channel + 'Complete'] = not row.get(channel + 'CaptureError', False)
+                except Exception:
+                    self.evidence.capture_failed = True
+                    row[channel + 'CaptureError'] = 'stream-capture-failed'
+                    row[channel + 'Complete'] = False
                 return value
             reader.readline = observed_readline
         if kind == 'worker':
@@ -608,7 +671,11 @@ async def run(args, evidence):
         require(digest(baseline / 'uv.lock') == evidence.report['supply']['setupLockSha256'], 'Baseline lock copy changed')
         # The exact supplied lock is the starting point. Adding only three
         # dependency-free fixtures requires a lock update, not --locked here.
-        await updates.process(uv, 'sync', '--project', str(baseline), '--python', '3.13', timeout=900)
+        observations.baseline_command = (uv, 'sync', '--project', str(baseline), '--python', '3.13')
+        try:
+            await updates.process(*observations.baseline_command, timeout=900)
+        finally:
+            observations.baseline_command = None
         require(lock_identity(tomllib.loads((baseline / 'uv.lock').read_text()), project_name) == setup_graph,
                 'Adding fixture dependencies changed the exact setup package graph')
         baseline_graph = qualification.installed_graph(baseline)
@@ -852,8 +919,11 @@ async def run(args, evidence):
         os.environ.update(original_environment)
         sys.path[:] = original_path
         sys.dont_write_bytecode = original_bytecode
+        if evidence.capture_failed:
+            failure = failure or RuntimeError('Qualification diagnostic capture failed')
         evidence.report['status'] = 'failed' if failure else 'passed'
-        evidence.save()
+        if not evidence.save_observation():
+            failure = failure or RuntimeError('Qualification diagnostic receipt unavailable')
     return 1 if failure else 0
 
 
@@ -890,7 +960,7 @@ def main():
         code = asyncio.run(run(args, evidence))
     except BaseException as error:
         evidence.report.update(status='failed', launcherFailure=safe_failure(error, evidence.report['phase']))
-        evidence.save()
+        evidence.save_observation()
         code = 1
     print(json.dumps({'status': evidence.report['status'], 'completedCycles': len(evidence.report['cycles']),
                       'phase': evidence.report['phase'], 'evidence': 'result.json'}), flush=True)

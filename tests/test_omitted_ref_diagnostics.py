@@ -32,7 +32,8 @@ class SafeResolverFacts(unittest.TestCase):
         self.assertEqual(result['classifierVersion'], 1)
         self.assertEqual(set(result), {'returncode', 'rawLogSha256', 'rawLogBytes',
             'rawLogExported', 'classifierVersion', 'classificationBytes',
-            'classificationTruncated'} | ({'failureCategory'} if returncode != 0 else set()))
+            'classificationTruncated', 'complete'} | ({'failureCategory'} if returncode != 0 else set()))
+        self.assertTrue(result['complete'])
         return result
 
     def test_fixed_category_signatures_do_not_export_sensitive_suffixes(self):
