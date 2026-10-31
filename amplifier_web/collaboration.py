@@ -1201,7 +1201,10 @@ class Collaboration:
         if kind == "runtime.status" and payload.get("event") == "input.delivered":
             active = session.get("collaborationGeneration") or {}
             if active and not active.get("terminal") and payload.get("inputId"):
-                active["inputIds"] = list(dict.fromkeys([*active.get("inputIds", []), payload["inputId"]]))[-128:]
+                # Native membership is authority, not a display-history window.
+                inputs = active.setdefault("inputIds", [])
+                if payload["inputId"] not in inputs:
+                    inputs.append(payload["inputId"])
         if kind == "runtime.steering" and payload.get("input_id"):
             try:
                 receipt = self.receipt(payload["input_id"])

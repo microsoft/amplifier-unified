@@ -534,7 +534,7 @@ class ConfigurationAuthority:
                         workspace=source['workspace'], interruptionRevision=source.get('interruptionRevision', 0), revision=1,
                         status='active' if action == 'capability.grant' or full or routine_test else 'pending', createdAt=time.time(),
                         origin=origin, approvedBy='user' if action == 'capability.grant' else None,
-                        authorizedInputIds=list((source.get('collaborationGeneration') or {}).get('inputIds', []))[:64])
+                        authorizedInputIds=list((source.get('collaborationGeneration') or {}).get('inputIds', [])))
                     from .collaboration import BINDING
                     grant['nativeWait'] = action == 'capability.request' and (BINDING.get() or {}).get('_configurationWait') is True
                     if full and action == 'capability.request':
