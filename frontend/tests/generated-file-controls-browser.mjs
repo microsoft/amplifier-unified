@@ -47,6 +47,7 @@ const fixture=spawn(python,['-u',fixturePath],{cwd:dirname(fixturePath),stdio:['
 const stop=ownFixture(fixture,{label:'Generated file controls fixture'});
 const records=[],checks=[],geometry=[],downloads=[],requests=[],commands=[],errors=[],screenshotErrors=[];
 const fileFrameCaptures=[];
+const downloadSettlements=[],tapSettlements=[],tapPending=new Set(),tapDrain={};
 const metadataExchanges=[],detailsReadiness=[],preCleanupSnapshots=[],metadataPending=new Set();
 const metadataByRequest=new WeakMap();
 const pageLabels=new WeakMap(),routeCleanups=new Set(),browserOwners=[];
@@ -319,10 +320,44 @@ async function saveAndVerify(target,details,row,label,trigger=control=>control.c
 }
 async function saveControlAndVerify(target,control,row,label,trigger=control=>control.click()){
  assert.equal(await control.evaluate(node=>node.tagName),'BUTTON','Exercise the rendered native download control');
- const event=target.waitForEvent('download',{timeout:5000});
- // Attach both rejection handlers immediately, including when a failed gesture
- // leaves the download wait to time out during cleanup.
- const [download]=await Promise.all([event,trigger(control)]);
+ const settlement={label,trigger:{state:'pending'},observation:{state:'pending'},settled:false};
+ downloadSettlements.push(settlement);
+ let resolveEvent,eventTimer;
+ // Own this observer so a failed gesture can REMOVE it, clear its deadline and
+ // settle its promise. A rejected Promise.all does none of those things.
+ const event=new Promise(resolve=>{resolveEvent=resolve});
+ const finish=outcome=>{
+  if(settlement.observation.state!=='pending')return;
+  clearTimeout(eventTimer);
+  target.off('download',onDownload);target.off('close',onClose);
+  Object.assign(settlement.observation,{state:outcome.state,at:Date.now(),listenerRemoved:true,timerCleared:true,
+   ...(outcome.error?{error:errorEvidence(outcome.error)}:{}),
+   ...(outcome.download?{filename:outcome.download.suggestedFilename(),url:outcome.download.url()}:{}),
+   ...(outcome.reason?{reason:outcome.reason}:{})});
+  resolveEvent(outcome);
+ };
+ const onDownload=download=>finish({state:'received',download});
+ const onClose=()=>finish({state:'closed',error:Error('Page closed before the download observation settled')});
+ target.on('download',onDownload);target.on('close',onClose);
+ eventTimer=setTimeout(()=>finish({state:'timed-out',error:Error('Download observation exceeded 5000ms')}),5000);
+ let triggerFailure;
+ try{await trigger(control);settlement.trigger.state='fulfilled'}
+ catch(error){
+  triggerFailure=error;
+  Object.assign(settlement.trigger,{state:'rejected',error:errorEvidence(error)});
+ }finally{
+  settlement.trigger.settledAt=Date.now();
+  if(triggerFailure)finish({state:'cancelled',reason:'gesture-failed'});
+ }
+ // The gesture (including its finally) is already settled. Its error takes
+ // precedence over a concurrent timeout/close, but neither error is discarded.
+ const outcome=await event;
+ settlement.settled=true;
+ settlement.primaryFailure=errorEvidence(triggerFailure||outcome.error);
+ const failures=[triggerFailure,outcome.error].filter(Boolean);
+ if(failures.length===1)throw failures[0];
+ if(failures.length)throw new AggregateError(failures,'Gesture failed; concurrent download observation also failed');
+ const download=outcome.download;
  assert.equal(await download.failure(),null);
  assert.equal(download.suggestedFilename(),row.filename,'Filename must describe the saved source');
  const path=join(evidence,label+'-'+row.filename);
@@ -1048,14 +1083,52 @@ function armTouchEventCapture(node,intended){
  }catch(error){stop('arm-error');throw error}
  return {wait:async()=>{await done;return read()},stop:()=>{stop('finally');return read()}};
 }
-async function collectTouchEvents(probe,diagnostic){
+// Only the native-tap lifecycle uses this boundary. A timer is not cancellation:
+// on an RPC deadline, close that tap's owned browser, then collect the ORIGINAL
+// operation's outcome. A failed close/drain remains explicit, never "settled".
+async function tapOperation(tap,name,perform,timeout=1000){
+ const row={name,timeoutMs:timeout,state:'pending',startedAt:Date.now()};tap.record.operations.push(row);
+ if(tap.abort){
+  row.state='not-started';row.reason='tap browser shutdown already requested';
+  throw Error(`${name}: browser shutdown already requested`);
+ }
+ const pending=Promise.resolve().then(perform).then(value=>{
+  row.state='fulfilled';row.settledAt=Date.now();return {value};
+ },error=>{row.state='rejected';row.settledAt=Date.now();row.error=errorEvidence(error);return {error}});
+ tapPending.add(pending);pending.then(()=>tapPending.delete(pending));
+ let outcome;
+ try{outcome=await bounded(pending,timeout,`${name} exceeded ${timeout}ms`)}
+ catch(deadline){
+  row.deadlineExceeded=true;
+  const failures=[deadline],abort={reason:name,state:'pending'};tap.record.browserAbort=abort;
+  tap.abort=Promise.resolve().then(()=>{
+   assert.ok(tap.owner,'Tap has no owned browser to shut down');
+   return closeOwner(tap.owner);
+  }).then(()=>{abort.state='fulfilled';return {}},error=>{
+   abort.state='rejected';abort.error=errorEvidence(error);return {error};
+  });
+  tapPending.add(tap.abort);tap.abort.then(()=>tapPending.delete(tap.abort));
+  try{
+   const closed=await bounded(tap.abort,3000,'Owned tap browser shutdown did not settle');
+   if(closed.error)failures.push(closed.error);
+  }catch(error){abort.waitError=errorEvidence(error);failures.push(error)}
+  try{
+   const drained=await bounded(pending,1000,`${name} remained in flight after shutdown`);
+   row.drainedAfterAbort=true;if(drained.error)failures.push(drained.error);
+  }catch(error){row.drainError=errorEvidence(error);failures.push(error)}
+  throw new AggregateError(failures,`${name} deadline; owned-browser shutdown and drain required`);
+ }
+ if(outcome.error)throw outcome.error;
+ return outcome.value;
+}
+async function collectTouchEvents(probe,diagnostic,tap){
  const failures=[];
- try{diagnostic.capture=await bounded(probe.evaluate(value=>value.wait()),2500,'Passive touch event collection did not settle')}
+ try{diagnostic.capture=await tapOperation(tap,'passive-capture-wait',()=>probe.evaluate(value=>value.wait()),2500)}
  catch(error){failures.push(error)}
  finally{
-  try{diagnostic.capture=await bounded(probe.evaluate(value=>value.stop()),1000,'Touch listeners/timer cleanup did not settle')}
+  try{diagnostic.capture=await tapOperation(tap,'passive-capture-stop',()=>probe.evaluate(value=>value.stop()))}
   catch(error){failures.push(error)}
-  try{await bounded(probe.dispose(),1000,'Touch event handle disposal did not settle');diagnostic.handleDisposed=true}
+  try{await tapOperation(tap,'passive-capture-dispose',()=>probe.dispose());diagnostic.handleDisposed=true}
   catch(error){failures.push(error)}
  }
  diagnostic.captureErrors=failures.map(errorEvidence);
@@ -1073,10 +1146,23 @@ async function collectTouchEvents(probe,diagnostic){
  return failures;
 }
 async function cornerTap(control,corner,diagnostic=null){
- await control.scrollIntoViewIfNeeded();
- await control.evaluate(node=>node.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'}));
+ const target=control.page(),record={corner,client:pageLabels.get(target),operations:[],settled:false,
+  listenerCleanup:{state:'not-armed'},handleDisposed:false};
+ tapSettlements.push(record);if(diagnostic)diagnostic.settlement=record;
+ const tap={record,owner:browserOwners.find(owner=>owner.label===record.client),abort:null};
+ let original,measured,originalFailure,listenerArmed=false;
+ const diagnosticFailures=[];
+ try{
+ await tapOperation(tap,'scroll-control',()=>control.scrollIntoViewIfNeeded(),4500);
+ await tapOperation(tap,'center-control',()=>control.evaluate(node=>
+  node.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'})),4500);
  assert.ok(['top-left','top-right','bottom-left','bottom-right'].includes(corner));
- const measured=await control.evaluate((node,corner)=>{
+ // Retain ONCE while the role is visible. Later reads/cleanup never resolve the
+ // role again: a wrong-target click can make this same node inert/aria-hidden.
+ original=await tapOperation(tap,'retain-native-control',()=>control.elementHandle({timeout:4000}),4500);
+ assert.ok(original,'Native control handle missing');
+ record.listenerCleanup={state:'arm-unconfirmed'};
+ measured=await tapOperation(tap,'measure-and-arm-pointer',()=>original.evaluate((node,corner)=>{
   const describe=element=>element&&({tag:element.tagName,id:element.id,className:element.className,
    label:element.getAttribute('aria-label')||element.textContent.trim().slice(0,120)});
   const sample=()=>{
@@ -1098,19 +1184,23 @@ async function cornerTap(control,corner,diagnostic=null){
   const measured=sample();
   window.__fileControlsLastTap=null;
   const listener=event=>{
+   const raw={x:event.clientX,y:event.clientY,pointerType:event.pointerType,isTrusted:event.isTrusted,
+    target:describe(event.target),sameNode:node.contains(event.target)};
+   // Save the raw target even if subsequent geometry sampling fails.
+   window.__fileControlsLastTap={event:raw};
    try{
-    window.__fileControlsLastTap={...sample(),event:{x:event.clientX,y:event.clientY,
-     pointerType:event.pointerType,isTrusted:event.isTrusted,target:describe(event.target),sameNode:node.contains(event.target)}};
-   }catch(error){window.__fileControlsLastTap={captureError:error.message}}
+    window.__fileControlsLastTap={...sample(),event:raw};
+   }catch(error){window.__fileControlsLastTap.captureError=error.message}
   };
   // Observe the delivered event even if it lands on a different native target.
   document.addEventListener('pointerdown',listener,{capture:true,once:true});
-  window.__fileControlsCancelTap=()=>document.removeEventListener('pointerdown',listener,true);
+  window.__fileControlsCancelTap=()=>{
+   document.removeEventListener('pointerdown',listener,true);
+   return {nodeId:window.__fileControlsNodeId(node),listenerRemoved:true};
+  };
   return measured;
- },corner);
- let originalFailure;
- const diagnosticFailures=[];
- try{
+ },corner));
+ listenerArmed=true;record.nodeId=measured.nodeId;record.listenerCleanup={state:'armed',nodeId:measured.nodeId};
   const {corners,...tapBefore}=measured;
   geometry.push({label:'corner-tap-before',...tapBefore,acceptance:{basis:measured.basis,corners}});
   nativeHitOracle(measured,`touch ${corner}`);
@@ -1129,24 +1219,50 @@ async function cornerTap(control,corner,diagnostic=null){
   if(diagnostic){
    diagnostic.before=measured;
    if(diagnostic.qualification){
-    diagnostic.beforeLayout=await control.evaluate(node=>window.__fileControlsToolbarSnapshot(node));
+    diagnostic.beforeLayout=await tapOperation(tap,'baseline-layout',()=>original.evaluate(node=>window.__fileControlsToolbarSnapshot(node)));
     qualifyToolbarBaseline(diagnostic);
    }
-   probe=await control.evaluateHandle(armTouchEventCapture,measured.intended);
+   probe=await tapOperation(tap,'arm-passive-capture',()=>original.evaluateHandle(armTouchEventCapture,measured.intended));
    diagnostic.tapAttempts=1;
   }
-  try{await control.tap({position:measured.position})}
+  try{await tapOperation(tap,'native-tap',()=>control.tap({position:measured.position}),4500)}
+  catch(error){diagnosticFailures.push(error)}
   finally{
    // Wait only for passive observation, never repeat or reroute input. Capture
    // failures cannot suppress the original sameNode/geometry assertion below.
-   if(probe)diagnosticFailures.push(...await collectTouchEvents(probe,diagnostic));
+   if(probe)diagnosticFailures.push(...await collectTouchEvents(probe,diagnostic,tap));
   }
-  const delivered=await control.evaluate(()=>window.__fileControlsLastTap);
+  // Evaluate trusted raw event targets BEFORE any later geometry/cleanup error.
+  // Retain both events even on failure; do not let an absent download mask them.
+  record.rawTargets=(diagnostic?.capture?.events||[]).filter(event=>['pointerdown','click'].includes(event.type))
+   .map(({index,type,isTrusted,sameNode,target,actual,intendedButton})=>
+    ({index,type,isTrusted,sameNode,target,actual,intendedButton}));
+  const wrongTarget=record.rawTargets.find(event=>event.isTrusted&&event.sameNode===false);
+  if(wrongTarget){
+   try{assert.ok(false,wrongTarget.type==='pointerdown'?'Touch must reach the native control':
+    'Trusted click must reach the native control')}
+   catch(error){originalFailure=error;record.rawFailureAt=Date.now()}
+  }
+  let delivered,retained;
+  try{
+   const readback=await tapOperation(tap,'read-retained-native-control',()=>original.evaluate(node=>({
+    delivered:window.__fileControlsLastTap,
+    retained:{nodeId:window.__fileControlsNodeId(node),connected:node.isConnected,tag:node.tagName,
+     rect:node.getBoundingClientRect().toJSON(),inert:!!node.closest('[inert]'),
+     ariaHidden:!!node.closest('[aria-hidden="true"]')}
+   })));
+   ({delivered,retained}=readback);record.retained=retained;
+  }catch(error){diagnosticFailures.push(error)}
   if(diagnostic)diagnostic.delivered=delivered;
   const {corners:deliveredCorners,...tapDelivered}=delivered||{};
   geometry.push({label:'corner-tap-delivered',...tapDelivered,
    acceptance:{basis:delivered?.basis,corners:deliveredCorners}});
+  if(originalFailure)throw originalFailure;
+  if(!retained)throw diagnosticFailures.shift()||Error('Retained native control read is missing');
   assert.ok(delivered?.event?.sameNode,'Touch must reach the native control');
+  assert.equal(retained.connected,true,'Original native control was detached after touch');
+  assert.equal(retained.nodeId,measured.nodeId,'Retained native control identity changed');
+  assert.equal(retained.tag,measured.tag,'Retained native control tag changed');
   assert.equal(delivered.nodeId,measured.nodeId,'Native control was replaced before touch delivery');
   for(const field of ['rect','radii','borders','transforms','viewport','scroll','intended','position'])
    assert.deepEqual(delivered[field],measured[field],`Control ${field} changed between measurement and gesture`);
@@ -1163,20 +1279,27 @@ async function cornerTap(control,corner,diagnostic=null){
    if(diagnostic.qualification)qualifyToolbarEvents(diagnostic);
   }
  }catch(error){
-  if(!diagnostic)throw error;
-  originalFailure=error;diagnostic.failure=errorEvidence(error);
+  originalFailure=error;if(diagnostic)diagnostic.failure=errorEvidence(error);
  }finally{
-  try{
-   await control.evaluate(()=>{window.__fileControlsCancelTap?.();delete window.__fileControlsCancelTap});
+  if(original&&listenerArmed)try{
+   const removed=await tapOperation(tap,'remove-original-pointer-listener',()=>original.evaluate(()=>{
+    const result=window.__fileControlsCancelTap?.();delete window.__fileControlsCancelTap;return result;
+   }));
+   record.listenerCleanup={state:'removal-unconfirmed',result:removed};
+   assert.deepEqual(removed,{nodeId:measured.nodeId,listenerRemoved:true},'Original pointer listener cleanup was not confirmed');
+   record.listenerCleanup.state='removed';
    if(diagnostic)diagnostic.originalListenerRemoved=true;
-  }catch(error){if(!diagnostic)throw error;diagnosticFailures.push(error)}
+  }catch(error){record.listenerCleanup.error=errorEvidence(error);diagnosticFailures.push(error)}
+  if(original)try{await tapOperation(tap,'dispose-native-control',()=>original.dispose());record.handleDisposed=true}
+  catch(error){diagnosticFailures.push(error)}
  }
- if(diagnostic){
-  diagnostic.cleanupErrors=diagnosticFailures.map(errorEvidence);
-  const failures=[...(originalFailure?[originalFailure]:[]),...diagnosticFailures];
-  if(failures.length===1)throw failures[0];
-  if(failures.length)throw new AggregateError(failures,'Native touch assertion and event-pair capture/cleanup failed');
- }
+ record.primaryFailure=errorEvidence(originalFailure);
+ record.otherFailures=diagnosticFailures.map(errorEvidence);
+ record.settled=record.operations.every(row=>row.state!=='pending')&&record.browserAbort?.state!=='pending';
+ if(diagnostic)diagnostic.cleanupErrors=record.otherFailures;
+ const failures=[...(originalFailure?[originalFailure]:[]),...diagnosticFailures];
+ if(failures.length===1)throw failures[0];
+ if(failures.length)throw new AggregateError(failures,'Native touch assertion and event-pair capture/cleanup failed');
 }
 
 async function connect(owner,options){
@@ -1716,6 +1839,19 @@ try{
  if(running)try{await bounded(running,10000,'Driver did not settle after fixture cleanup')}
  catch(error){if(error!==failure)failure=failure?new AggregateError([failure,error],'File controls proof did not settle cleanly'):error}
  try{
+  // These are the original tagged RPC/close promises, not a second await of the
+  // rejected journey aggregate. Browser shutdown above is the cancellation.
+  tapDrain.pendingBefore=tapPending.size;
+  await bounded(Promise.all([...tapPending]),3000,'Tap operations remain in flight after browser cleanup');
+  tapDrain.pendingAfter=tapPending.size;tapDrain.settled=tapPending.size===0;
+  assert.equal(tapDrain.settled,true);
+  assert.ok(downloadSettlements.every(row=>row.settled&&row.observation.listenerRemoved&&row.observation.timerCleared),
+   'Download observation/gesture branch did not settle');
+ }catch(error){
+  Object.assign(tapDrain,{settled:false,pendingAfter:tapPending.size,error:errorEvidence(error)});
+  failure=failure?new AggregateError([failure,error],'File controls proof and tap/download settlement failed'):error;
+ }
+ try{
   await bounded(Promise.all([...metadataPending]),5000,'Metadata observations did not settle after cleanup');
   assert.deepEqual(metadataExchanges.filter(record=>record.error),[],'Metadata response capture failed');
  }
@@ -1742,7 +1878,8 @@ try{
     'Existing screenshots and all 13 narrow PNG brackets remain evidence awaiting independent visual judgment.']}:{}),
   contourOracle,
   installed:ready&&{packageRoot:ready.packageRoot,verified:ready.installedVerified,staticSha256:ready.staticSha256},
-  seed,checks,geometry,fileFrameCaptures,downloads,requests,commands,metadataExchanges,detailsReadiness,preCleanupSnapshots,
+  seed,checks,geometry,fileFrameCaptures,downloads,downloadSettlements,tapSettlements,tapDrain,
+  requests,commands,metadataExchanges,detailsReadiness,preCleanupSnapshots,
   errors,cleanup,fixtureCleanup:records.find(row=>row.cleanup)?.cleanup,
   browserCleanup:browserOwners.map(owner=>({label:owner.label,closed:owner.closed,connected:owner.browser?.isConnected()??false})),
   limits:['Synthetic runtime and fixture bearer authentication; no provider, login, remote server or physical touch-device claim.',
