@@ -224,11 +224,11 @@ async def main(root):
         '    os._exit(78)\n')  # site normally swallows import errors; fail closed.
     install_guard(root, commands)
     os.chdir(root / 'workspace')
-    processes, watchers, ready_events, control_reads, lifecycle = [], [], [], [], []
+    processes, watchers, ready_events, control_reads, lifecycle, routing_reads = [], [], [], [], [], []
     runtime = runner = app = None
     primary_failure = None
     original_spawn = asyncio.create_subprocess_exec
-    original_command = None
+    original_command = original_setup_perform = None
     stopped = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -247,6 +247,7 @@ async def main(root):
         from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
         from amplifier_web.runtime import RuntimeManager
         from amplifier_web.server import create_app
+        from amplifier_web.setup import SetupManager
         from amplifier_web.auth import control_token_path
         from amplifier_web.session_files import validate_id
         package = root / 'provider/amplifier_module_provider_native_fixture'
@@ -274,6 +275,18 @@ async def main(root):
         # Same local prepared-interpreter seam as bundle_switch_probe; real probes.
         original_command = RuntimeManager._command
         RuntimeManager._command = lambda self, *args, **kwargs: list(self.command or command)
+        original_setup_perform = SetupManager.perform
+        async def observed_setup(manager, action, arguments):
+            # Observe the real returned optional diagnostic before another setup
+            # owner replaces the shared view. Never synthesize success or retry.
+            result = await original_setup_perform(manager, action, arguments)
+            if action == 'routing.list':
+                row = {'action': action, 'arguments': copy.deepcopy(arguments),
+                       'atNs': time.time_ns(), 'result': copy.deepcopy(result)}
+                routing_reads.append(row)
+                append(root / 'routing-discovery.jsonl', row)
+            return result
+        SetupManager.perform = observed_setup
         async def observed_spawn(*argv, **kwargs):
             if list(argv) not in commands:
                 raise RuntimeError(f'Unexpected fixture subprocess: {argv!r}')
@@ -358,11 +371,22 @@ async def main(root):
                     'savedSelection': controls.get('selection') if controls is not None else None,
                     'controlsPresent': controls is not None,
                     'catalog': service.state.get('runtimeControl', {}).get(sid, {})})
+            setup = service.state.get('setup', {})
+            discovery = {'revision': service.state.get('revision'),
+                'configurationRevision': service.state.get('configurationRevision', 0),
+                'hostInstanceId': service.instance_id,
+                'setup': {key: copy.deepcopy(setup.get(key)) for key in (
+                    'configurationTarget', 'operations', 'providers', 'providerCatalogs',
+                    'providersWorkspace', 'providersRequestedWorkspace', 'providersLocation',
+                    'providersLoadedAt', 'routingCatalogError')},
+                'draftDefaults': copy.deepcopy(service.state.get('draftDefaults', {}))}
             return {'calls': calls_at(root / 'calls.jsonl'), 'sessions': result,
                 'workers': [{**entry['identity'], 'kind': entry['kind'],
                     'returncode': entry['process'].returncode} for entry in processes],
                 'workerReady': ready_events, 'providerControls': control_reads,
-                'lifecycle': lifecycle, 'readiness': readiness,
+                'lifecycle': lifecycle, 'readiness': readiness, 'discovery': discovery,
+                'routingDiscovery': routing_reads,
+                'guardRefusals': [row for path in sorted(root.glob('guard-*.jsonl')) for row in calls_at(path)],
                 'sharedSettings': {'initial': settings_identity, 'current': file_identity(settings)}}
         async def inspect(request):
             return web.json_response(proof(), headers={'Cache-Control': 'no-store'})
@@ -442,6 +466,8 @@ async def main(root):
             asyncio.create_subprocess_exec = original_spawn
             if original_command is not None:
                 RuntimeManager._command = original_command
+            if original_setup_perform is not None:
+                SetupManager.perform = original_setup_perform
             for signum in (signal.SIGINT, signal.SIGTERM):
                 loop.remove_signal_handler(signum)
             try:

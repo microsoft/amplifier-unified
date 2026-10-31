@@ -21,7 +21,7 @@ const fixturePath=fileURLToPath(new URL('../../tests/fixtures/provider_native_ui
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON,[fixturePath,evidence+'/fixture'],{stdio:['ignore','pipe','pipe']});
 const exit=new Promise(resolve=>fixture.once('exit',(code,signal)=>resolve({code,signal})));
 const drained=new Promise(resolve=>fixture.once('close',resolve));
-let fixtureOutput='',fixtureErrors='',browser,page,primary,proof,flush,journey;
+let fixtureOutput='',fixtureErrors='',browser,page,primary,proof,flush,journey,discoveryRead;
 const cleanupErrors=[];
 let logWrites=Promise.resolve();
 fixture.stdout.on('data',chunk=>{fixtureOutput+=chunk;logWrites=logWrites.then(()=>appendFile(evidence+'/fixture-stdout.log',chunk))});
@@ -84,6 +84,94 @@ try{
  const A={instance:'native-a',model:'native-model',effort:'low'};
  const B={instance:'native-b',model:'native-model',effort:'high'};
  const label=instance=>`${instance==='native-a'?'Native A':'Native B'} (${instance})`;
+ const managedKey=JSON.stringify(['','','managed']);
+ const managedWorkspace=evidence+'/fixture/app';
+ const discoverySnapshots=[];
+ // Read the exact browser client's saved state, not its optimistic pending overlay.
+ discoveryRead=async()=>{
+  const client=(await state()).client;
+  const response=await page.request.get(url+'/api/state?'+new URLSearchParams({clientId:client.id}),{timeout:10000});
+  assert.equal(response.status(),200);
+  const value=await response.json();assert.equal(value.client.id,client.id);
+  assert.equal(value.client.hostInstanceId,client.hostInstanceId);
+  const canonical=(await proof()).discovery;
+  assert.equal(canonical.hostInstanceId,client.hostInstanceId);
+  const row={client:value.client,revision:value.revision,configurationRevision:value.configurationRevision||0,
+   selectedSessionId:value.selectedSessionId,view:{panel:value.view?.panel,setupJourney:value.view?.setupJourney,newSessionDraft:value.view?.newSessionDraft},
+   setup:{...Object.fromEntries(['providers','providerCatalogs','providersWorkspace','providersRequestedWorkspace','providersLocation','providersLoadedAt'].map(key=>[key,value.setup?.[key]]))},
+   defaults:value.draftDefaults?.[managedKey]||null,defaultsKey:managedKey,canonical};
+  discoverySnapshots.push(row);await appendFile(evidence+'/discovery-state.jsonl',JSON.stringify(row)+'\n');
+  return row;
+ };
+ function discoveryProblems(row,binding){
+  const problems=[],draft=row.view?.newSessionDraft,setup=row.setup||{},defaults=row.defaults;
+  if(row.client?.id!==binding.clientId||row.client?.hostInstanceId!==binding.hostInstanceId)problems.push('client/host');
+  if(row.revision<binding.minimumRevision||row.configurationRevision!==binding.configurationRevision)problems.push('stale revision');
+  if(row.selectedSessionId||draft?.workspace!==''||draft?.location?.kind!=='managed'||(draft.bundle||'')!=='')problems.push('draft scope');
+  if(Object.keys(draft?.selection||{}).length)problems.push('explicit draft pin');
+  if(row.defaultsKey!==managedKey||setup.providersWorkspace!==managedWorkspace||setup.providersRequestedWorkspace!==''||setup.providersLocation?.kind!=='managed')problems.push('catalog scope');
+  if(!setup.providersLoadedAt||!['native-a','native-b'].every(id=>setup.providers?.some(p=>p.id===id&&p.enabled!==false)))problems.push('provider rows');
+  if(defaults?.phase!=='ready'||!['native-a','native-b'].every(id=>defaults.providers?.some(p=>p.id===id)))problems.push('default rows');
+  if(defaults?.globalOnly!==true||defaults?.bundle!==evidence+'/fixture/root.yaml')problems.push('default scope');
+  if(defaults?.effective?.instance!==A.instance||defaults?.effective?.model!==A.model||defaults?.effective?.effort!==A.effort)problems.push('effective default');
+  if(!['native-a','native-b'].every(id=>{
+   const entry=setup.providerCatalogs?.[id];
+   return entry?.phase==='ready'&&!entry.error&&!entry.modelsDeferred&&entry.sharedCatalogKey&&
+    entry.metadata?.info&&entry.models?.some(model=>(typeof model==='string'?model:model.id)==='native-model');
+  }))problems.push('catalog settlement');
+  const canonical=row.canonical,operation=canonical?.setup?.operations?.['providers.list:'];
+  if(canonical?.hostInstanceId!==binding.hostInstanceId||canonical?.configurationRevision!==binding.configurationRevision)problems.push('canonical revision');
+  if(canonical?.setup?.configurationTarget!=null)problems.push('targeted settings snapshot');
+  if(operation?.phase!=='ready'||operation?.error||operation?.commandId!==binding.listId)problems.push('list operation');
+  return problems;
+ }
+ async function completionFor(id,name,args,receipt,client){
+  assert.equal(receipt.accepted,true);
+  let completion;
+  await expect.poll(async()=>{
+   const response=await page.request.get(url+'/api/state/detail?'+new URLSearchParams({clientId:client.id,path:'/managementResults/'+id}),{timeout:10000});
+   const body=await response.json();
+   completion={id,name,args,receipt,client,status:response.status(),body};
+   await appendFile(evidence+'/discovery-completions.jsonl',JSON.stringify(completion)+'\n');
+   if(response.status()===400&&body.accepted===false&&body.error==='Invalid request: That state path does not exist.')return 'pending';
+   assert.equal(response.status(),200);
+   return Object.fromEntries((body.items||[]).map(row=>[row.key,row.value])).phase;
+  },{timeout:10000}).toMatch(/^(ready|error)$/);
+  const result=Object.fromEntries(completion.body.items.map(row=>[row.key,row.value]));
+  assert.equal(result.phase,'ready',name+' completion');assert.equal(result.error,null);
+  return completion;
+ }
+ async function completedRead(name,args){
+  const id=crypto.randomUUID(),receipt=await page.evaluate(([name,args,id])=>window.amplifier.dispatch(name,args,{id}),[name,args,id]);
+  return completionFor(id,name,args,receipt,(await state()).client);
+ }
+ async function settleManagedDraft(){
+  const before=await discoveryRead();
+  assert.equal(before.view.setupJourney,'done','Visible first-connection flow must have completed');
+  const completed=await Promise.all([
+   completedRead('providers.list',{workspace:'',location:{kind:'managed'}}),
+   completedRead('configuration.defaults',{workspace:'',bundle:'',location:{kind:'managed'}}),
+  ]);
+  const binding={clientId:before.client.id,hostInstanceId:before.client.hostInstanceId,configurationRevision:before.configurationRevision,
+   minimumRevision:Math.max(before.revision,...completed.map(row=>row.body.revision)),listId:completed[0].id};
+  let ready;
+  await expect.poll(async()=>{ready=await discoveryRead();return discoveryProblems(ready,binding)},{timeout:10000}).toEqual([]);
+  await expect(page.getByRole('dialog',{name:'Settings',exact:true})).toBeHidden();
+  assert.equal(ready.view.setupJourney,'done');
+  const checks=[];
+  for(const [name,mutate,reason] of [
+   ['old-snapshot',row=>{row.revision=binding.minimumRevision-1},'stale revision'],
+   ['wrong-scope',row=>{row.setup.providersLocation={kind:'workspace'}},'catalog scope'],
+   ['empty-provider-snapshot',row=>{row.setup.providers=[];row.setup.providerCatalogs={}},'provider rows'],
+   ['wrong-operation',row=>{row.canonical.setup.operations['providers.list:'].commandId='old-operation'},'list operation'],
+   ['old-configuration',row=>{row.configurationRevision--},'stale revision'],
+  ]){
+   const bad=structuredClone(ready);mutate(bad);const rejected=discoveryProblems(bad,binding);
+   assert.ok(rejected.includes(reason),name);checks.push({name,rejected});
+  }
+  await save('discovery-readiness.json',{binding,completed,ready,negativeControls:checks});
+  return ready;
+ }
  async function close(){
   const current=await state(),baseline=actions.length;
   const matches=request=>{
@@ -120,7 +208,7 @@ try{
   await save('visible.json',boundaries);return row;
  }
  const tuple=value=>({instance:value.instance||value.id,model:value.model,effort:value.effort});
- let sendIndex=0;
+ let sendIndex=0,firstNative=null;
  async function send(expected,existingId=null){
   const index=sendIndex++,text='Native provider boundary '+index;
   if(!existingId){
@@ -168,6 +256,13 @@ try{
    assert.deepEqual(tuple(session.mountedReport.effective_selection),expected);
    assert.equal(session.savedSelection,null);
   }else{
+   assert.ok(firstNative,'A preparation evidence must precede existing-chat B');
+   assert.equal(call.pid,firstNative.call.pid,'Warm B must use the original A worker PID');
+   assert.equal(worker.startTicks,firstNative.worker.startTicks,'Worker PID start identity must not change');
+   assert.equal(session.nativeId,firstNative.session.nativeId);
+   assert.deepEqual(ready,firstNative.ready,'Warm B retains the actual original A-ready event');
+   assert.deepEqual(session.mountedReport,firstNative.session.mountedReport,'Original A mounted report must remain the provenance');
+   assert.deepEqual(tuple(ready.report.effective_selection),A);
    assert.equal(session.savedSelection.instance,expected.instance);
    assert.equal(session.savedSelection.model,expected.model);
    const applied=after.lifecycle.find(row=>row.kind==='runtime.nextMessageApplied'&&row.sessionId===session.id&&row.selection?.instance===expected.instance&&row.atNs<call.atNs);
@@ -185,10 +280,51 @@ try{
   assert.deepEqual(tuple(providerControl.result.effective),expected);
   assert.equal(providerControl.result.pinned,index===1);
   await save(`send-${index}-provider-control.json`,{receipt:controlReceipt,observation:providerControl});
+  if(index===0)firstNative=structuredClone({call,worker,session,ready,providerControl});
+  if(index===1)await save('warm-b-evidence.json',{originalA:firstNative,call,worker,session,ready,providerControl});
   await flush();return session.id;
  }
  await page.goto(url);
  await page.locator('.a-adaptive-home').getByRole('button',{name:'New chat',exact:true}).click();
+ // Do not race first-use discovery with the measured composer journey.
+ // In this fresh fixture the actual onboarding control, not a hidden view patch,
+ // completes setup once a configured connection is visibly ready.
+ const setupJourney=page.getByRole('region',{name:'Get started',exact:true});
+ await expect(setupJourney.getByRole('heading',{name:'Your first connection is ready',exact:true})).toBeVisible();
+ await discoveryRead();
+ // Settings' optional routing catalog may fail under the audit guard. Retain
+ // the real result; do not dispatch it again, install it, or treat admission as success.
+ let routingRequest;
+ await expect.poll(()=>{routingRequest=actions.find(row=>row.command.action==='routing.list'&&row.phase==='received');return !!routingRequest},{timeout:10000}).toBe(true);
+ let routingProof;
+ await expect.poll(async()=>{
+  routingProof=await proof();
+  return routingProof.routingDiscovery.some(row=>row.action==='routing.list'&&row.arguments.configurationTarget?.kind==='global'&&typeof row.result.routingCatalogError==='string');
+ },{timeout:10000}).toBe(true);
+ const routingRecords=routingProof.routingDiscovery.filter(row=>row.action==='routing.list'&&row.arguments.configurationTarget?.kind==='global');
+ assert.equal(actions.filter(row=>row.command.action==='routing.list').length,1,'One observed optional routing request');
+ assert.equal(routingRecords.length,1,'One actual optional routing result');
+ const guard=routingProof.guardRefusals.find(row=>row.event==='subprocess.Popen'&&row.detail.includes('amplifier-bundle-routing-matrix'));
+ assert.ok(guard,'Actual audit refusal retained');
+ const routingCompletion=await completionFor(routingRequest.command.id,'routing.list',routingRequest.command.args,routingRequest.receipt,(await state()).client);
+ await save('optional-routing-discovery.json',{request:routingRequest,completion:routingCompletion,result:routingRecords[0],guard,scope:'Optional Settings discovery; excluded from ordinary fixture root. Guard remains enforced.'});
+ const setupClient=(await state()).client.id;
+ const setupCompletion=page.waitForResponse(response=>{
+  const request=response.request();if(request.method()!=='POST'||new URL(request.url()).pathname!=='/api/actions')return false;
+  const command=request.postDataJSON();
+  return command.action==='view.update'&&command.args?.patch?.setupJourney==='done'&&request.headers()['x-amplifier-client']===setupClient;
+ },{timeout:10000});
+ const setupDraft=page.waitForResponse(response=>{
+  const request=response.request();return request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'&&
+   request.postDataJSON().action==='session.draft'&&request.headers()['x-amplifier-client']===setupClient;
+ },{timeout:10000});
+ await setupJourney.getByRole('button',{name:'Start a chat',exact:true}).click();
+ const setupResponses=await Promise.all([setupCompletion,setupDraft]);
+ const setupReceipts=await Promise.all(setupResponses.map(async response=>({command:response.request().postDataJSON(),status:response.status(),receipt:await bounded(response.json(),10000,'Visible setup receipt')})));
+ await save('onboarding-receipts.json',setupReceipts);
+ for(const row of setupReceipts){assert.equal(row.status,200);assert.equal(row.receipt.accepted,true)}
+ await expect(setupJourney).toBeHidden();
+ await settleManagedDraft();
  const initial=await proof();await save('native-initial.json',initial);assert.equal(initial.calls.length,0);assert.equal(initial.readiness.importsReady,true);
  const originalSession=await send(A);
  await model.click();await showComposerOption(page,'provider');
@@ -211,6 +347,7 @@ try{
  const sessionIds=[originalSession];
  for(let n=0;n<2;n++){
   await flush();const receipt=await action('session.draft');assert.equal(receipt.accepted,true);
+  await settleManagedDraft();
   const id=await send(A);assert.ok(!sessionIds.includes(id));sessionIds.push(id);
  }
  await flush();assert.deepEqual(pageErrors,[]);assert.deepEqual(evidenceErrors,[]);assert.deepEqual(assets.filter(row=>row.error),[]);
@@ -223,7 +360,7 @@ try{
  primary=error;const failure={primary:{name:error.name,message:error.message,stack:error.stack},pageErrors,evidenceErrors};
  const retainFailure=async()=>{try{await save('failure.json',failure)}catch(capture){cleanupErrors.push({stage:'failure-save',error:capture.message})}};
  await retainFailure();
- for(const [name,read] of [['native',()=>proof?.()],['receipts',async()=>{await flush?.();return actions}],['screenshot',async()=>{if(page)await page.screenshot({path:evidence+'/failure.png',timeout:3000});return 'failure.png'}]]){
+ for(const [name,read] of [['native',()=>proof?.()],['discovery',()=>discoveryRead?.()],['receipts',async()=>{await flush?.();return actions}],['screenshot',async()=>{if(page)await page.screenshot({path:evidence+'/failure.png',timeout:3000});return 'failure.png'}]]){
   try{failure[name]=await bounded(Promise.resolve().then(read),15000,'Failure '+name)}catch(capture){failure[name]={error:capture.message}}
   await retainFailure();
  }
