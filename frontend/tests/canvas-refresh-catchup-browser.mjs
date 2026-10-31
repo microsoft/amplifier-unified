@@ -17,7 +17,7 @@ const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[
 let browser,page,stdout='',stderr='',fatal,held=false,dropped=0,connections=0,sockets=[];
 fixture.stderr.on('data',chunk=>stderr+=chunk);
 const capture=async name=>{await page.screenshot({path:join(output,name+'.png')});report.screenshots.push(name+'.png')};
-const check=async(name,run)=>{if(process.env.CANVAS_LOAD_FEEDBACK_ONLY&&!name.startsWith('Load feedback:'))return;const row={name,status:'running'};report.checks.push(row);try{row.observed=await run(row);row.status='passed'}catch(error){row.status='failed';row.error=error.stack||String(error);await capture('failure-'+report.checks.length)}};
+const check=async(name,run)=>{if(process.env.CANVAS_LOAD_FEEDBACK_ONLY&&!name.startsWith('Load feedback:'))return;const row={name,status:'running'};report.checks.push(row);try{row.observed=await run(row);row.status='passed'}catch(error){row.status='failed';row.error=error.stack||String(error);row.surface=await page.evaluate(()=>({inspector:document.querySelector('#canvas-options')?.outerHTML,freshness:document.querySelector('.a-canvas-freshness')?.outerHTML,view:window.amplifier.getState().canvasWorkspace,layout:window.amplifier.getState().view.canvasControlsExpanded}));await capture('failure-'+report.checks.length)}};
 const html=version=>`<h1>Executable version ${version}</h1><label>Local unfinished input <input id="edit"></label><output id="executed"></output><script>document.getElementById('executed').textContent='executed-v${version}-'+crypto.randomUUID()</script>`;
 try{
  const url=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Fixture startup timeout')),20000);fixture.once('error',error=>{clearTimeout(timer);reject(error)});fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{stdout+=chunk;for(const line of stdout.split('\n'))try{const v=JSON.parse(line);if(v.url){clearTimeout(timer);resolve(v.url)}}catch{}})});
@@ -227,6 +227,9 @@ try{
     assert.equal(loads,1,'No automatic or repeated Load while readback is unresolved');
    }
    await capture('load-feedback-'+mode);
+  }catch(error){
+   row.failureSurface=await page.evaluate(()=>({inspector:document.querySelector('#canvas-options')?.outerHTML,freshness:document.querySelector('.a-canvas-freshness')?.outerHTML,view:window.amplifier.getState().canvasWorkspace,expanded:window.amplifier.getState().view.canvasControlsExpanded}));
+   await capture('before-cleanup-'+mode);throw error;
   }finally{
    await page.unroute('**/api/actions',intercept);await page.unroute('**/api/state',failRead);held=false;
    await reconnect();await action('canvas.views.inspect');
