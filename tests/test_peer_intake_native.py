@@ -117,13 +117,13 @@ async def test_native_peer_intake_keeps_only_the_original_continuing_objective(t
                                    command_id='human-stop', include_state=False)
             release.set()
             await host.outcome(source, 'human-request')
-            if change == 'progress':
-                terminal = await host.outcome(recipient, 'original-peer-request')
-                assert terminal['input_ids'] == ['original-peer-request']
             while app.collaboration.receipt('original-peer-request')['delivery'] in {'queued', 'submitting'}:
                 await asyncio.sleep(.01)
             result = app.collaboration.receipt('original-peer-request')
             assert result['delivery'] == ('accepted' if change == 'progress' else 'suppressed'), result
+            if change == 'progress':
+                terminal = await host.outcome(recipient, 'original-peer-request')
+                assert terminal['input_ids'] == ['original-peer-request']
             assert all(result[k] == saved[k] for k in ('requestId', 'inputId', 'taskId', 'taskRevision',
                        'replyTaskContinuationEpoch', 'sourceInputIds', 'displayBinding'))
             await app.collaboration.drain(target['id'])
