@@ -4611,7 +4611,7 @@ class AppService:
                 SessionStore._atomic(directory/'naming.json',json.dumps(data))
             elif kind == "execution.event":
                 self._ingest_runtime_execution(session, payload)
-            elif kind == 'runtime.delivery':
+            elif kind == 'runtime.delivery' and 'peerAdmission' not in payload:
                 self._delivery(session, payload['inputId'], 'failed' if payload.get('delivery') == 'failed' else 'accepted')
             elif kind == "runtime.ended":
                 self.operations.interrupted(session["id"])

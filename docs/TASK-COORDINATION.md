@@ -23,7 +23,13 @@ retention are separate facts. A claimed wait is not proof of notification
 delivery. Queue acceptance is not model consumption; terminal qualification is
 not independent artifact verification or review approval. Negative reports can
 return without satisfying a successful dependency. Unknown evidence remains
-unknown and is never a retry instruction.
+unknown and is never a retry instruction. A timed-out peer control retains its
+original input correlation until its worker replies or exits. An exact late
+acceptance or explicit no-effect refusal reconciles that saved receipt; neither
+resends the request. A delayed native steering event may likewise settle the
+original input/generation while its Stop binding remains current. A recovered
+result or acknowledgement in assistant prose is not delivery evidence. Missing
+native evidence remains unknown, including after process loss.
 
 Saved waits retain task/Stop/location and capacity checks at admission. A busy
 requester waits for a real idle boundary. Backpressure, changed task authority,
