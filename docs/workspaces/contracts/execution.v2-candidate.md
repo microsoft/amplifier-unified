@@ -324,6 +324,22 @@ retroactively labeled retained. Request-scoped artifact reads expose only the
 declared artifact to the request participants in the recorded workspace; they do
 not grant general access to the producing conversation's output library.
 
+`outputs.image` and `outputs.images` use that same request-reader authority for
+an exact retained PNG from another conversation. The output's saved reply
+command selects the original response revision; later replies cannot substitute
+new bytes. The caller still supplies the exact output ID and SHA-256. Image reads
+and validation happen outside the app lock, then every selected relationship is
+rechecked before any pixels are returned. Ordinary output-library reads remain
+conversation-owned; this path does not copy files or grant new permissions.
+
+Image observations describe only the prepared model request, not an acknowledgement
+from the provider or a revision to earlier visual evidence. The existing inspection
+receipt/tool-call identity remains the correlation key; request preparation and
+pre-transport omissions name timeout, changed input/selection, missing receipt,
+unavailable vision or unreadable saved bytes separately. A failed later read does
+not establish that the saved image hash changed or that an earlier request lacked
+pixels. No new observation store or retry loop is introduced.
+
 The discovered reply schema and shipped coordination skill describe the exact
 syntax, an executable example and the acknowledgement's retention status. A
 local reference with an explicit but malformed `@sha256` or `#sha256` marker,
@@ -653,9 +669,14 @@ Creation preparation and initial input admission still require the exact capture
 task revision. Existing receipts without the epoch keep that stricter boundary;
 this change neither retries old refusals nor changes a blocked task to complete.
 
-Only correlated outcome observations and later reports about an already delivered
-request may use that continuing-objective boundary. Ordinary queued instructions
-and active steering retain their exact task revision. Notifications do not grant
+Ordinary automatic and idle-queued peer instructions also use their existing
+host-captured reply continuation epoch for intake. Routine progress, reference or
+constraint updates do not invalidate the same saved request; current constraints
+and budgets still apply. This reuses existing receipt provenance without rewriting
+it or retrying an accepted, uncertain or suppressed delivery. Legacy receipts
+without the epoch, explicit anchored steering, commissioned initial input,
+blocked-task intake and deliberate human resume retain their existing contracts.
+Exact task edits still require their current edit revision. Notifications do not grant
 authority: admission rechecks current task state, budgets, Stop/interruption,
 assignment membership, ownership, permissions and any operation-specific
 placement/cancellation boundary. Current constraints apply before model work.

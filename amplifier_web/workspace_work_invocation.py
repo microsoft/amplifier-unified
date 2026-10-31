@@ -18,6 +18,7 @@ from .task_binding import continuation_epoch, dependency_blocked
 from .child_execution import current as child_execution, generation as execution_generation
 from .workspace_work import CONTEXT_BYTES, EVENT, RECORD, _decode, _encode
 from .workspace_work_evidence import _link_current, mutate
+from .work_projection import input_identity_bytes
 
 PROMISE_KEYS = ('interpretation', 'criteria', 'constraints', 'commitment',
                 'promiseRevision', 'originalSourceRef', 'promiseEventRef')
@@ -334,14 +335,9 @@ class WorkInvocation:
             if (not requested <= delivered
                     or any(not isinstance(i, str) or not 1 <= len(i) <= 200 for i in requested)):
                 self.work.error('Invocation inputs were not observed delivered.')
-            if len(delivered) > 16:
-                header['inputCount'] = len(delivered)
-                coverage.update(reason='input_coverage_overflow',
-                                deliveredInputCount=len(delivered), projectedInputCount=len(requested))
-                self.work.error('Invocation input coverage exceeds the bounded projection.')
-            if not requested:
-                self.work.error('Invocation inputs were not observed delivered.')
             header['inputIds'] = sorted(delivered)
+            if not delivered:
+                self.work.error('Invocation inputs were not observed delivered.')
             if requested != delivered:
                 coverage.update(reason='input_projection_incomplete',
                                 missingInputIds=sorted(delivered - requested),
@@ -384,18 +380,11 @@ class WorkInvocation:
             header.update(status='available', reason=None, version=version, workCount=len(items), requirementCount=count,
                 requirementsRef={'action': 'workspace.work.invocation', 'args': {'sessionId': sid, 'expectedVersion': version}})
             coverage['complete'] = True
-            if len(json.dumps(header, ensure_ascii=False).encode()) > CONTEXT_BYTES - 512:
-                self.work.error('Invocation header exceeds its byte bound.')
             return header, [items[key] for key in sorted(items)]
         except (AppError, KeyError, TypeError, ValueError) as exc:
             header.update(status='unavailable', version=None, reason=str(exc)[:200],
                           workCount=None, requirementCount=None, requirementsRef=None)
             coverage['complete'] = False
-            if len(json.dumps(header, ensure_ascii=False).encode()) > CONTEXT_BYTES - 512:
-                # Expose incomplete coverage, never a false complete empty set.
-                header.update(inputCount=len(header['inputIds']), inputIds=[], associationRequestIds=[])
-                header['coverage'] = {'complete': False, 'reason': 'header_overflow',
-                                      'detail': 'Input identities exceed this bounded projection.'}
             return header, []
 
     def current(self, sid):
@@ -408,7 +397,7 @@ class WorkInvocation:
             while True:
                 discovery = self.work.listing(workspace, {'limit': limit}, owner=target['id'], context=True)
                 packet = {'available': True, 'discovery': discovery, 'required': required}
-                if len(json.dumps(packet, ensure_ascii=False).encode()) <= CONTEXT_BYTES:
+                if len(json.dumps(packet, ensure_ascii=False).encode()) - input_identity_bytes(required) <= CONTEXT_BYTES:
                     return packet
                 if limit <= 1:
                     self.work.error('Work current projection exceeds its byte bound.', 413)
@@ -454,7 +443,7 @@ class WorkInvocation:
             end = offset + len(result['items'])
             result.update(truncated=end < header['requirementCount'],
                           nextAfter=_encode([sid, header['version'], end]) if end < header['requirementCount'] else None)
-            if len(json.dumps({'accepted': True, 'result': result}, ensure_ascii=False).encode()) > CONTEXT_BYTES:
+            if len(json.dumps({'accepted': True, 'result': result}, ensure_ascii=False).encode()) - input_identity_bytes(header) > CONTEXT_BYTES:
                 result['items'].pop()
                 break
             if len(result['items']) >= args.get('limit', 20):

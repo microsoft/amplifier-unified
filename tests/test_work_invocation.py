@@ -418,14 +418,14 @@ async def test_mixed_delivered_inputs_cannot_hide_unsupported_lineage(app):
 
 
 @pytest.mark.parametrize('projection', [
-    'initial-only', 'last-eight', 'overflow', 'overflow-empty',
+    'initial-only', 'last-eight', 'shortened-seventeen', 'empty-seventeen',
     'complete-sixteen', 'complete-seventeen'])
 async def test_shortened_delivered_input_projection_is_explicitly_incomplete(app, projection):
     owner = app.state['sessions'][0]
     item = await prepared_work(app, owner, 'projection')
     created, child = await assert_available_commission(app, owner, item, 'projection-commission')
     delivered = [created['initialInputId']]
-    followups = 16 if projection in {'overflow', 'overflow-empty', 'complete-seventeen'} else 15 if projection == 'complete-sixteen' else 8
+    followups = 16 if projection in {'shortened-seventeen', 'empty-seventeen', 'complete-seventeen'} else 15 if projection == 'complete-sixteen' else 8
     for index in range(followups):
         identity = f'projection-followup-{index}'
         queued = await agent_action(app, owner, 'coordination.send', {
@@ -442,21 +442,13 @@ async def test_shortened_delivered_input_projection_is_explicitly_incomplete(app
     await generation(app, child, 'complete-delivered-set', delivered)
     before = retained_bytes(app)
     supplied = (delivered[:1] if projection == 'initial-only' else []
-                if projection == 'overflow-empty' else delivered
+                if projection == 'empty-seventeen' else delivered
                 if projection.startswith('complete-') else delivered[-8:])
     result = (await current_work(app, child, inputs=supplied))['required']
     assert result['status'] == 'unavailable' and result['version'] is None
     assert result['effectAuthorized'] is False
-    if len(delivered) > 16:
-        assert result['inputIds'] == [] and result['inputCount'] == len(delivered) == 17
-        assert result['coverage']['reason'] == 'input_coverage_overflow'
-        assert result['coverage']['deliveredInputCount'] == 17
-        assert result['coverage']['projectedInputCount'] == len(supplied)
-        assert result['coverage']['complete'] is False
-        assert retained_bytes(app) == before
-        return
     assert set(result['inputIds']) == set(delivered)
-    if projection == 'complete-sixteen':
+    if projection in {'complete-sixteen', 'complete-seventeen'}:
         assert 'reason' not in result['coverage']
         assert result['coverage']['supportedInputIds'] == [created['initialInputId']]
         assert {row['inputId'] for row in result['coverage']['unsupportedInputs']} == set(delivered[1:])
@@ -470,6 +462,29 @@ async def test_shortened_delivered_input_projection_is_explicitly_incomplete(app
     assert set(complete['inputIds']) == set(delivered)
     assert complete['coverage']['supportedInputIds'] == [created['initialInputId']]
     assert {row['inputId'] for row in complete['coverage']['unsupportedInputs']} == set(delivered[1:])
+
+
+async def test_large_native_identity_is_preserved_without_qualifying_unsupported_lineage(app):
+    from amplifier_web.coordination_delivery import _work_reference
+    owner = app.state['sessions'][0]
+    ids = [f'host-observed-input-{index:04}-' + 'x' * 100 for index in range(257)]
+    await generation(app, owner, 'large-native-input-set', ids)
+    before = retained_bytes(app)
+    work = await current_work(app, owner)
+    required = work['required']
+    assert len(json.dumps(work).encode()) > 12 * 1024
+    assert work['available'] and required['status'] == 'unavailable'
+    assert required['inputIds'] == ids
+    assert required['coverage']['complete'] is False
+    assert [row['inputId'] for row in required['coverage']['unsupportedInputs']] == ids
+    assert _work_reference(work) == work
+    # Manifest metadata also remains complete; no body, grant or association is
+    # fabricated for inputs that have no commissioned Work relationship.
+    page = (await agent_action(app, owner, 'workspace.work.invocation', {
+        'sessionId': owner['id']}, 'large-manifest'))['result']
+    assert page['inputIds'] == ids and not page['items']
+    assert page['status'] == 'unavailable' and page['effectAuthorized'] is False
+    assert retained_bytes(app) == before
 
 
 async def test_large_promise_read_is_exact_paged_unicode_and_stale_read_refuses(app):

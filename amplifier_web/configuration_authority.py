@@ -313,13 +313,20 @@ class ConfigurationAuthority:
                 'nextOffset': offset+limit if len(rows)>limit else None, 'limit': limit, 'truncated': len(rows) > limit, 'effects': EFFECTS,
                 'scope': 'configuration only; no shell confinement or peer authority'}
 
-    def source(self, args, origin, caller, *, active=False):
-        source = self.service.collaboration.source(args, origin, caller)
+    def source(self, args, origin, caller, *, active=False, allow_descendant=False):
+        source = self.service.collaboration.source(args, origin, caller, allow_descendant=allow_descendant)
         if origin not in {'ui', 'user'}:
             if args.get('sessionId', caller) != caller:
                 self.error('Configuration grants belong to the calling conversation.')
             if active:
-                self.service.collaboration.active_binding(source)
+                from .collaboration import BINDING, PRINCIPAL
+                # Fresh trusted system work has an explicit conversation owner,
+                # not an invented native generation. A transported worker still
+                # has to satisfy its actual binding, even with system origin.
+                system = (allow_descendant and origin == 'system' and not PRINCIPAL.get()
+                          and not BINDING.get() and self.service.access_mode.full(source))
+                if not system:
+                    self.service.collaboration.active_binding(source, allow_descendant=allow_descendant)
         return source
 
     def continuation_inputs(self, original):
@@ -408,7 +415,7 @@ class ConfigurationAuthority:
             self.error(str(exc), 400)
         if needed is None:
             return None
-        source = self.source({'sessionId': caller}, origin, caller, active=True)
+        source = self.source({'sessionId': caller}, origin, caller, active=True, allow_descendant=True)
         from .configuration_target import resolve
         target = resolve(self.service, args)
         workspace = target['workspace'] if target else args.get('workspace') or source['workspace']
@@ -416,9 +423,16 @@ class ConfigurationAuthority:
             self.error('A configuration grant cannot change another workspace.')
         effect, scope = needed
         if self.service.access_mode.full(source):
+            from .collaboration import BINDING, PRINCIPAL
+            binding = BINDING.get() or {}
+            # Missing or overflowed transport is not a proven empty assignment.
+            input_ids = [row['inputId'] for row in binding.get('_inputBindings', []) if row.get('inputId')]
             return {'accessRevision': self.service.access_mode.snapshot(source)['revision'],
                     'sessionId': source['id'], 'workspace': source['workspace'],
-                    'interruptionRevision': source.get('interruptionRevision', 0), 'effect': effect, 'scope': scope}
+                    'interruptionRevision': source.get('interruptionRevision', 0), 'effect': effect, 'scope': scope,
+                    'origin': origin, 'runtimeSessionId': PRINCIPAL.get(),
+                    'generationId': binding.get('_generationId'),
+                    'inputIds': input_ids, 'inputCoverage': 'complete' if input_ids else 'unavailable'}
         from .service import AppError
         grant, peer_grants, failure = None, [], None
         for candidate in self.eligible(source):
@@ -475,7 +489,8 @@ class ConfigurationAuthority:
             self.error('The configuration effect exceeded its authorized workspace.')
 
     async def dispatch(self, action, args, origin, command_id, caller):
-        source = self.source(args, origin, caller, active=action != 'capability.read')
+        source = self.source(args, origin, caller, active=action != 'capability.read',
+                             allow_descendant=action == 'capability.read')
         if action == 'capability.read':
             if self.reconcile(source):
                 self.service._publish_changes(sessions={source['id']})
@@ -534,7 +549,7 @@ class ConfigurationAuthority:
                         workspace=source['workspace'], interruptionRevision=source.get('interruptionRevision', 0), revision=1,
                         status='active' if action == 'capability.grant' or full or routine_test else 'pending', createdAt=time.time(),
                         origin=origin, approvedBy='user' if action == 'capability.grant' else None,
-                        authorizedInputIds=list((source.get('collaborationGeneration') or {}).get('inputIds', []))[:64])
+                        authorizedInputIds=list((source.get('collaborationGeneration') or {}).get('inputIds', [])))
                     from .collaboration import BINDING
                     grant['nativeWait'] = action == 'capability.request' and (BINDING.get() or {}).get('_configurationWait') is True
                     if full and action == 'capability.request':

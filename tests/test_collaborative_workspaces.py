@@ -17,11 +17,18 @@ class Runtime:
     def __init__(self):
         self.inputs = []
         self.fail = False
+        self.unavailable_boundaries = set()
 
     async def collaboration_input(self, session, args, guard, emit):
         assert guard() is None
         admitted = self.app.collaboration.admission(session["id"], args)
         assert admitted["admitted"]
+        # Some scripted recipients have no supported request boundary while
+        # busy. Model the native positively-unadmitted reply, not idle-only
+        # delivery by changing the host-generated notification mode.
+        if (args.get("automaticDelivery") and session["id"] in self.unavailable_boundaries
+                and session.get("status") in {"working", "ready", "starting"}):
+            return {"accepted": False, "effect": "none", "waitingForBoundary": True}
         message = admitted["message"]
         self.inputs.append((session["id"], args["inputId"], peer_input(message["peerEnvelope"], message["text"])))
         if self.fail:
@@ -231,7 +238,7 @@ async def test_malformed_execution_targets_never_fall_back_to_selection(app, act
 @pytest.mark.parametrize("action,key,args", [
     ("session.warm", "id", {}),
     ("configuration.apply", "id", {"config": {}}),
-    ("permissions.save", "sessionId", {"allowed": [], "denied": []}),
+    ("permissions.save", "sessionId", {"scope": "global", "allowed": [], "denied": []}),
     ("runtime.control", "sessionId", {"operation": "provider.select", "args": {}}),
 ])
 async def test_foreign_executable_and_authority_mutations_still_refuse_through_app_bridge(app, action, key, args):
@@ -757,6 +764,7 @@ async def test_two_artifact_rounds_keep_original_bytes_and_exact_result_links(ap
     from amplifier_operations.coordination import fingerprint
 
     source, target = app.state["sessions"]
+    app.runtime.unavailable_boundaries.add(source["id"])
     original = Path(source["workspace"]) / "original.txt"
     original.write_bytes(b"Original source remains unchanged\n")
     retained_bytes = {original: original.read_bytes()}
@@ -908,6 +916,7 @@ async def test_terminal_without_checkpoint_native_anchor_is_not_qualified(app):
 
 async def test_known_v2_queued_continuation_recovers_after_restart_once(app):
     source, target = app.state["sessions"]
+    app.runtime.unavailable_boundaries.add(source["id"])
     source["status"] = "working"
     await declared_result(app)
     wait = await agent_action(app, source, "coordination.subscribe",
@@ -1597,6 +1606,7 @@ async def test_sealing_rejects_invalid_link_without_breaking_next_runtime_event(
     # retained alias fixture in place so a history refresh cannot repair it.
     app.history.ensure_loaded = AsyncMock()
     source = app.state["sessions"][0]
+    app.runtime.unavailable_boundaries.add(source["id"])
     request = "invalid-link"
     target, web, anchor, continuation, transcript = await staged_message_link(app, request)
     canonical = anchor["messageId"]
@@ -1659,7 +1669,20 @@ async def test_sealing_rejects_invalid_link_without_breaking_next_runtime_event(
     assert qualified["messageIds"] == [valid_anchor["messageId"]]
     assert app.collaboration.receipt(valid_continuation)["dependencyRequestId"] == "valid-next"
     assert app.collaboration.receipt(request) == rejected
-    assert app.collaboration.receipt(continuation) == notification
+    await until(lambda: app.collaboration.receipt(continuation).get("admission", {}).get("waitingForBoundary") is True)
+    current_notification = app.collaboration.receipt(continuation)
+    # Later event processing may attempt this automatic return for the first
+    # time. Only its positively-unadmitted attempt diagnostics may change;
+    # the entire rejected outcome, identity and provenance remain exact.
+    assert current_notification["admission"] == {
+        "accepted": False, "effect": "none", "waitingForBoundary": True}
+    assert type(current_notification["admissionOrder"]) is int
+    assert current_notification["admissionOrder"] >= notification.get("admissionOrder", 1)
+    assert current_notification["admittedAt"] >= notification.get("admittedAt", 0)
+    attempt_fields = {"admission", "admissionOrder", "admittedAt"}
+    assert {key: value for key, value in current_notification.items() if key not in attempt_fields} == {
+        key: value for key, value in notification.items() if key not in attempt_fields}
+    assert not any(identity == continuation for _, identity, _ in app.runtime.inputs)
     assert not target.get("error")
 
 
@@ -1736,19 +1759,59 @@ async def test_retained_outcome_survives_progress_only_without_replaying_work(ap
         assert app.collaboration.receipt('result-request')['response']['qualified'] is True
 
 
-async def test_ordinary_peer_instruction_still_requires_exact_revision(app):
+@pytest.mark.parametrize('mode', ['auto', 'queue'])
+@pytest.mark.parametrize('change', ['progress', 'objective', 'new-task', 'pause-resume', 'stop', 'legacy', 'owner'])
+async def test_ordinary_peer_intake_keeps_only_the_same_objective(app, mode, change):
     source, target = app.state['sessions']
     target.update(status='working', task={'id': 'objective', 'revision': 1,
                                           'continuationEpoch': 1, 'status': 'active'})
-    await send(app)
+    app.runtime.unavailable_boundaries.add(target['id'])
+    await send(app, mode=mode)
+    if mode == 'auto':
+        await until(lambda: app.collaboration.receipt('request-1').get('admission', {}).get('waitingForBoundary'))
+    original = app.collaboration.receipt('request-1')
+    target['task'].update(revision=2, constraints=['Inspect only; do not publish.'])
+    if change == 'objective':
+        target['task']['continuationEpoch'] = 2
+    elif change == 'new-task':
+        target['task']['id'] = 'different-task'
+    elif change == 'pause-resume':
+        target['task'].update(revision=3, continuationEpoch=3)
+    elif change == 'stop':
+        target['interruptionRevision'] = 1
+    elif change == 'legacy':
+        legacy = app.collaboration.receipt('request-1')
+        legacy.pop('replyTaskContinuationEpoch')
+        app.collaboration.save('request-1', legacy)
+    elif change == 'owner':
+        target['ownership'] = {'status': 'yielded'}
+    target['status'] = 'idle'
+    await app.collaboration.drain(target['id'])
+    result = await settled(app, 'request-1', 'accepted' if change == 'progress' else 'suppressed')
+    assert all(result[k] == original[k] for k in ('requestId', 'inputId', 'taskId', 'taskRevision',
+                                                 'sourceInputIds', 'displayBinding'))
+    await app.collaboration.drain(target['id'])
+    assert [value[1] for value in app.runtime.inputs] == (['request-1'] if change == 'progress' else [])
+
+
+@pytest.mark.parametrize('mode', ['auto', 'queue'])
+@pytest.mark.parametrize('unknown', [False, True])
+async def test_routine_task_edits_never_replay_an_admitted_or_unknown_peer(app, mode, unknown):
+    source, target = app.state['sessions']
+    target['task'] = {'id': 'objective', 'revision': 1, 'continuationEpoch': 1, 'status': 'active'}
+    app.runtime.fail = unknown
+    await send(app, mode=mode)
+    saved = await settled(app, 'request-1', 'unknown' if unknown else 'accepted')
     target['task']['revision'] = 2
     target['status'] = 'idle'
     await app.collaboration.drain(target['id'])
-    assert (await settled(app, 'request-1', 'suppressed'))['detail'] == 'The recipient task changed.'
-    assert not app.runtime.inputs
+    retry = await send(app, mode=mode)
+    assert retry['duplicate'] and retry['delivery'] == saved['delivery']
+    assert app.collaboration.receipt('request-1') == saved
+    assert [value[1] for value in app.runtime.inputs] == ['request-1']
 
 
-async def test_caller_cannot_turn_an_instruction_into_an_outcome_observation(app):
+async def test_caller_cannot_change_an_instruction_continuation_identity(app):
     source, target = app.state['sessions']
     target['status'] = 'working'
     await send(app)
@@ -1756,7 +1819,7 @@ async def test_caller_cannot_turn_an_instruction_into_an_outcome_observation(app
     receipt['delivery'] = 'submitting'
     app.collaboration.save('request-1', receipt)
     result = app.collaboration.admission(target['id'], {'inputId': 'request-1',
-        'taskId': None, 'taskRevision': None, 'taskContinuationEpoch': None})
+        'taskId': None, 'taskRevision': None, 'taskContinuationEpoch': 999})
     assert result['admitted'] is False
     assert not app.runtime.inputs
 

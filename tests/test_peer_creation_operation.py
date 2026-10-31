@@ -111,7 +111,11 @@ async def test_pre_generation_admission_outcome_returns_without_model_reply(app,
     from amplifier_web.runtime import RuntimePreparationCancelled
     source = app.state['sessions'][0]
     plan(app, source)
-    async def unavailable(*args):
+    app.runtime.unavailable_boundaries.add(source['id'])
+    original = app.runtime.collaboration_input
+    async def unavailable(session, *args):
+        if session['id'] == source['id']:
+            return await original(session, *args)
         if failure == 'unknown':
             raise ConnectionError('Lost admission acknowledgment')
         if failure == 'cancelled':

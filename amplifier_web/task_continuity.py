@@ -512,6 +512,13 @@ class TaskController:
                 raise ValueError("This task command ID already has different contents")
             return {**self.canonical_snapshot(), **_saved_receipt(self.receipts, identity), "duplicate": True,
                     "currentRef": _ref("task.get", self.controls.session.session_id)}
+        if args.get('_managerCompletion'):
+            # Existing native idle proof includes queued input and live children.
+            # A manager closeout never interrupts or races an executing member.
+            try:
+                self.controls.require_idle()
+            except ValueError as exc:
+                raise ValueError("Wait for this member and its queued or delegated work to settle before recording completion") from exc
         previous = self.record()
         if args.get('expectedTaskId') is not None and (previous or {}).get('id') != args['expectedTaskId']:
             raise ValueError('The saved task was replaced; inspect its current identity before changing it')
@@ -627,8 +634,9 @@ class TaskController:
                                   "receipt": {"commandId": identity, "action": operation,
                                               "taskId": task["id"], "revision": task["revision"],
                                               "status": task["status"], "fingerprint": fingerprint}}
-        if args.get('_managerLimit'):
-            self.receipts[identity]['receipt']['managerLimit'] = copy.deepcopy(args['_managerLimit'])
+        for field in ('managerLimit', 'managerCompletion'):
+            if args.get('_' + field):
+                self.receipts[identity]['receipt'][field] = copy.deepcopy(args['_' + field])
         # Receipts live with existing control state; no second continuation loop.
         try:
             if not getattr(self.controls.runtime, "generation", None):

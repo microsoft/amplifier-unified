@@ -28,6 +28,25 @@ DEFAULT_QUEUE_SECONDS = 86400
 REPORT_OUTCOMES = {'failed', 'deferred', 'declined', 'question', 'conflict', 'cancelled'}
 
 
+def intake_task_binding(receipt):
+    """Use the already captured objective identity for ordinary peer intake.
+
+    The receipt and its original edit revision stay immutable. Special resume,
+    commissioning and blocked-input paths retain their own exact contracts.
+    """
+    binding = {key: receipt.get(key) for key in ('taskId', 'taskRevision')}
+    if 'taskContinuationEpoch' in receipt:
+        binding['taskContinuationEpoch'] = receipt['taskContinuationEpoch']
+    elif (receipt.get('commandAction') == 'coordination.send' and receipt.get('taskId')
+            and receipt.get('mode') in {'auto', 'queue'}
+            and receipt.get('origin') in {'agent', 'ui', 'user'}
+            and 'replyTaskContinuationEpoch' in receipt
+            and not any(receipt.get(key) for key in ('dependencyRequestId', 'creationOperationId',
+                'humanResume', 'scheduleRepair', 'blockedTaskInput', 'completedFollowup'))):
+        binding['taskContinuationEpoch'] = receipt['replyTaskContinuationEpoch']
+    return binding
+
+
 def response_ready(response):
     """A verified negative report can wake a waiter without satisfying its work."""
     return (response.get("kind") != "ack" and (
@@ -303,7 +322,7 @@ class Collaboration:
         from .service import AppError
         raise AppError(text, status)
 
-    def source(self, args, origin, caller, *, hydrate=True):
+    def source(self, args, origin, caller, *, hydrate=True, allow_descendant=False):
         sid = caller if origin not in {"ui", "user"} else args.get("senderSessionId") or args.get("sessionId")
         if not sid:
             self.error("A user must explicitly authorize a calling conversation.")
@@ -311,8 +330,10 @@ class Collaboration:
         actor = PRINCIPAL.get()
         native = source.get("runtimeSessionId") or source.get("nativeIdentity") or source["id"]
         if origin not in {"ui", "user"} and actor and actor != native:
-            from .coordination_guidance import ROOT_SCOPE_MESSAGE
-            self.error(ROOT_SCOPE_MESSAGE)
+            if not allow_descendant or not self.service.access_mode.full(source):
+                from .coordination_guidance import ROOT_SCOPE_MESSAGE
+                self.error(ROOT_SCOPE_MESSAGE)
+            self.active_binding(source, allow_descendant=True)
         if source.get("sessionKind", "root") != "root":
             self.error("Collaboration belongs to ordinary root conversations.")
         return source
@@ -517,6 +538,18 @@ class Collaboration:
         binding = BINDING.get() or {}
         native = source.get("runtimeSessionId") or source.get("nativeIdentity") or source["id"]
         active = source.get("collaborationGeneration") or {}
+        if allow_descendant and '_childOrigin' in binding:
+            from .child_execution import current
+            child = current(self.service, source)
+            if child is None:
+                from .configuration_recovery import recovery_child
+                child = recovery_child(self.service, source)
+            if child is None:
+                self.error('The admitted native child execution is no longer current.')
+            # The child owner validates its original assignment independently
+            # of a normal parent turn finish or a newer parent generation.
+            active = {'id': child['generationId'], 'inputIds': list(child['inputIds']),
+                      'interruptionRevision': child['interruptionRevision'], 'terminal': False}
         principal = PRINCIPAL.get()
         descendant = (allow_descendant and isinstance(principal, str) and bool(principal)
             and binding.get('_runtimeSessionId') == principal)
@@ -879,7 +912,7 @@ class Collaboration:
             if (task.get("status") in {"paused", "blocked", "completed", "cancelled"}
                     and not resuming and not self.blocked_input(receipt, task) and not completed_followup):
                 return "The recipient task is not active."
-            task_binding = receipt
+            task_binding = intake_task_binding(receipt)
             if for_reply and 'replyTaskContinuationEpoch' in receipt:
                 task_binding = {**receipt, 'taskContinuationEpoch': receipt['replyTaskContinuationEpoch']}
             if not task_matches(task, task_binding) and not completed_followup:
@@ -1044,12 +1077,9 @@ class Collaboration:
                     self.service.db.commit()
                     self.cancel_expiry(identity)
                     snapshot = copy.deepcopy(target)
-                arguments = {"inputId": identity,
-                             "taskId": receipt.get("taskId"), "taskRevision": receipt.get("taskRevision")}
+                arguments = {"inputId": identity, **intake_task_binding(receipt)}
                 if automatic_delivery(receipt):
                     arguments['automaticDelivery'] = True
-                if 'taskContinuationEpoch' in receipt:
-                    arguments['taskContinuationEpoch'] = receipt['taskContinuationEpoch']
                 try:
                     result = await self.service.runtime.collaboration_input(
                         snapshot, arguments, lambda: self.guard(self.receipt(identity)), self.service.on_runtime_event)
@@ -1111,11 +1141,12 @@ class Collaboration:
 
     def admission(self, sid, args):
         receipt = self.receipt(args["inputId"])
+        binding = intake_task_binding(receipt)
         if (receipt.get("commandAction") != "coordination.send" or receipt.get("delivery") != "submitting"
                 or receipt.get("protocol") != PROTOCOL or receipt["target"]["sessionId"] != sid
-                or args.get("taskId") != receipt.get("taskId") or args.get("taskRevision") != receipt.get("taskRevision")
-                or ('taskContinuationEpoch' in args) != ('taskContinuationEpoch' in receipt)
-                or args.get('taskContinuationEpoch') != receipt.get('taskContinuationEpoch')):
+                or args.get("taskId") != binding.get("taskId") or args.get("taskRevision") != binding.get("taskRevision")
+                or ('taskContinuationEpoch' in args) != ('taskContinuationEpoch' in binding)
+                or args.get('taskContinuationEpoch') != binding.get('taskContinuationEpoch')):
             return {"admitted": False, "reason": "The exact host request is no longer submitting."}
         if (args.get('automaticDelivery') is True) != automatic_delivery(receipt):
             return {"admitted": False, "reason": "The saved input delivery policy changed."}
@@ -1205,7 +1236,10 @@ class Collaboration:
         if kind == "runtime.status" and payload.get("event") == "input.delivered":
             active = session.get("collaborationGeneration") or {}
             if active and not active.get("terminal") and payload.get("inputId"):
-                active["inputIds"] = list(dict.fromkeys([*active.get("inputIds", []), payload["inputId"]]))[-128:]
+                # Native membership is authority, not a display-history window.
+                inputs = active.setdefault("inputIds", [])
+                if payload["inputId"] not in inputs:
+                    inputs.append(payload["inputId"])
         if kind == "runtime.steering" and payload.get("input_id"):
             try:
                 receipt = self.receipt(payload["input_id"])
@@ -1613,17 +1647,22 @@ class Collaboration:
         if access == "caller_controlled":
             if not caller:
                 self.error("A user must explicitly authorize a calling conversation.")
-            # A child's transport still belongs to the root worker process;
-            # that does not make root controls or configuration its authority.
-            self.source({}, origin, caller)
+            # Configuration effects use their existing owner, with Full and
+            # the child's assigned binding. Other root controls stay strict.
+            from .configuration_authority import requirement
+            if action == "permissions.save" and "scope" not in args:
+                self.error("Choose an explicit file-access scope: local, project, or global. No settings were changed.", 400)
+            try:
+                configuration = requirement(action, args) is not None
+            except ValueError as exc:
+                self.error(str(exc), 400)
+            self.source({}, origin, caller, allow_descendant=configuration)
             target = target or caller
             if target_key and not args.get("configurationTarget"):
                 args[target_key] = target
             elif not args.get("configurationTarget") and not action.startswith("session.") and action != "configuration.apply":
                 args["sessionId"] = target
             if target == caller:
-                if action == "permissions.save" and "scope" not in args:
-                    self.error("Choose an explicit file-access scope: local, project, or global. No settings were changed.", 400)
                 return None
             if action == "conversation.send":
                 self.error("A user must explicitly authorize a current collaboration grant.")

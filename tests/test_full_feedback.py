@@ -280,10 +280,11 @@ async def test_lost_issue_response_retains_unknown_and_exact_retry_without_repla
     assert len([1 for _, value in github[0] if value is not None]) == 1
 
 
-async def test_stale_root_and_child_cannot_gain_initial_full_authority(app, github):
+async def test_stale_root_and_unbound_child_cannot_gain_initial_full_authority(app, github):
     source = app.state['sessions'][0]
     await mode(app, source)
-    for transport in ({'_generationId': 'old-generation'}, {'_runtimeSessionId': 'unqualified-child'}):
+    for transport in ({'_generationId': 'old-generation'},
+                      {'_runtimeSessionId': 'unqualified-child', '_generationId': None}):
         with pytest.raises(AppError, match='current transport-bound root'):
             await agent(app, source, 'feedback.submit', submission(), None, **transport)
     assert not github[0]

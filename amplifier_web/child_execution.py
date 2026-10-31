@@ -8,7 +8,12 @@ from .collaboration import BINDING, PRINCIPAL
 from .task_binding import dependency_blocked
 
 
-def current(service, source, *, child_id=None):
+def live_assignment(service, source, *, child_id=None):
+    """Authenticate the actual assigned run and its cancellation boundaries.
+
+    This is identity, not readiness for ordinary work. Configuration recovery
+    may inspect its own held outcome while that outcome blocks execution.
+    """
     binding = BINDING.get() or {}
     origin = binding.get('_childOrigin')
     if not isinstance(origin, dict):
@@ -33,19 +38,13 @@ def current(service, source, *, child_id=None):
             or not owner.get('runtimeOwnerId') or owner['process'].returncode is not None
             or any(owner.get(key) for key in ('closing', 'yielded', 'yielding'))):
         return None
-    if (source.get('status') in {'stopped', 'stopping', 'interrupted', 'error'}
+    if (source.get('status') in {'stopped', 'stopping', 'interrupted'}
             or source.get('fileAccessPending')
             or any(origin.get(key) != source.get(key, 0) for key in
                    ('interruptionRevision', 'executionRevision', 'configurationPendingRevision'))):
         return None
-    if source.get('configurationBusy'):
-        from .handoff_admission import finishing_turn
-        call = {'rootSessionId': native, 'sessionId': identity, 'admissionInputId': inputs[0]}
-        if not finishing_turn(service, source, call, child=binding.get('_nativeChild')):
-            return None
-    from .management import Management
     from .updates import work_paused
-    if (work_paused(service.state) or Management.unresolved_configuration(source)
+    if (work_paused(service.state)
             or (source.get('failure') or {}).get('category') in {'content_filter', 'computer_capture_stop'}
             or service.assignments.blocked(source)):
         return None
@@ -61,6 +60,22 @@ def current(service, source, *, child_id=None):
                   and row.get('sessionId') == identity), None)
     if (child and child.get('runId') == origin['runId']
             and child.get('phase') in {'completed', 'cancelled', 'error', 'interrupted'}):
+        return None
+    return origin
+
+
+def current(service, source, *, child_id=None):
+    origin = live_assignment(service, source, child_id=child_id)
+    if origin is None or source.get('status') == 'error':
+        return None
+    if source.get('configurationBusy'):
+        from .handoff_admission import finishing_turn
+        call = {'rootSessionId': origin['rootSessionId'],
+                'sessionId': origin['runtimeSessionId'], 'admissionInputId': origin['inputIds'][0]}
+        if not finishing_turn(service, source, call, child=(BINDING.get() or {}).get('_nativeChild')):
+            return None
+    from .management import Management
+    if Management.unresolved_configuration(source):
         return None
     return origin
 

@@ -6,7 +6,26 @@ The host exposes one set of actions to settings and agents. `recall.refresh` bui
 
 `memory.list/read/create/update/delete` manage explicit notes in task, workspace or global scope. The default inspection includes notes available to the current work; an explicit all-scopes view also permits reviewing and deleting notes whose original chat is no longer registered. Corrections use revision comparison. Up to50prior versions remain inspectable; deletion removes the note and all those versions. Command receipts contain identity/revision/digests, not deleted note text. Original conversations, existing private backups and previously emitted tool results are preserved. Deletion is not a forensic erasure guarantee.
 
-Agent writes require a source message with host-attributed user provenance (UI, user or voice). Agent-generated user bubbles, retrieved documents and unattributed historical messages cannot supply that provenance. The agent remains responsible for interpreting whether the user's request authorizes the particular note; provenance is not a semantic consent classifier. Normal new-input attribution depends on the durable-question integration. Automatic workspace consolidation and context use are separately opt-in, as described below. Notes and historical content are reference data, never new authority.
+In Ask when needed, agent writes require a source message with host-attributed user provenance (UI, user or voice). Agent-generated user bubbles, retrieved documents and unattributed historical messages cannot supply that provenance. The agent remains responsible for interpreting whether the user's request authorizes the particular note; provenance is not a semantic consent classifier. Normal new-input attribution depends on the durable-question integration. Automatic workspace consolidation and context use are separately opt-in, as described below. Notes and historical content are reference data, never new authority.
+
+Full access authorizes explicit note creation, correction and deletion, and changes
+to the existing workspace memory settings, without a human message or attached
+browser. The host binds the calling conversation and actual native actor, including
+assigned children. A trusted system can act for an explicit conversation without
+inventing a native or human identity. Captured access, owner placement and Stop
+are checked before saving; finishing the original turn alone does not revoke an
+accepted change. A revoked access revision, including Full off/on, cannot authorize
+the pending write. Exact same-owner command retries return the original receipt
+without renewing authority or repeating the change. Receipts retain bounded actor
+and authority provenance even for deletion, without deleted note text.
+
+Full admission reads bounded owner facts instead of traversing conversation history
+to find a human request. Optional source references still verify their exact indexed
+revision. Authorization and source evidence remain separate: an autonomous note is
+not relabeled as a human quotation. Full does not automatically enable contribution
+or use, and revocation does not undo previously saved preferences or notes. The
+automatic extraction, source verification and context-selection policies below are
+unchanged.
 
 The portable `amplifier_recall` package owns derived indexing/storage only. The Unified adapter owns original source access, action authorization and scope. SQLite uses private file permissions, write-ahead logging and secure-delete settings; recovery makes a consistent SQLite backup. The UI supports index progress, source reads, explicit note creation/correction/deletion and retained revision inspection without changing selected conversation or draft.
 
@@ -37,9 +56,11 @@ The workspace policy captures lasting preferences, settled project decisions and
 human-confirmed successful approaches, with original source identities, hashes,
 exact human quotations and explicitly model-derived wording. This is classification,
 not proof that an outcome occurred. Quotation checks establish attributable evidence,
-not semantic consent or factual correctness. Agents must interpret the actual user
-request before enabling contribution or changing settings; any attributable message
-is not automatically authorization for those changes.
+not semantic consent or factual correctness. In Ask when needed, agents must
+interpret the actual user request before enabling contribution or changing settings;
+any attributable message is not automatically authorization for those changes.
+Full supplies standing authorization for these settings changes while preserving
+the separate contribution/use choices.
 
 Each eligible changed source gets at most one attempt. The default is three model
 attempts per UTC day per workspace, configurable from one to ten. A request includes

@@ -67,7 +67,7 @@ def read_removal(app, args, origin, caller, *, listing=False):
     create operation records. A mutation grant is irrelevant to this read.
     """
     from . import task_resources as storage
-    from .collaboration import PRINCIPAL
+    from .collaboration import BINDING, PRINCIPAL
     from .service import AppError
 
     def root_binding():
@@ -124,9 +124,18 @@ def read_removal(app, args, origin, caller, *, listing=False):
             raise AppError('Removal inspection requires the recorded root owner.', 403) from None
         principal = source.get('runtimeSessionId') or source.get('nativeIdentity') or sid
         workspace = next((w for w in app.state['workspaces'] if w['id'] == args['workspaceId']), None)
-        if (origin not in {'ui', 'user'} and PRINCIPAL.get() != principal
-                or not workspace or source['workspace'] != workspace['path']):
+        if not workspace or source['workspace'] != workspace['path']:
             raise AppError('Removal inspection requires the recorded root owner.', 403)
+        if origin not in {'ui', 'user'} and (PRINCIPAL.get() != principal or origin == 'system'):
+            if not app.access_mode.full(source):
+                raise AppError('Removal inspection requires the recorded root owner.', 403)
+            if not (origin == 'system' and not PRINCIPAL.get() and not BINDING.get()):
+                # Mounted descendants already have a resident owner. Use its
+                # current binding without hydrating a cold root or its history.
+                live = next((row for row in app.state['sessions'] if row['id'] == sid), None)
+                if live is None:
+                    raise AppError('Removal inspection requires current native work.', 403)
+                app.collaboration.active_binding(live, allow_descendant=True)
         return (principal, *((k in source, source.get(k)) for k in fields))
 
     captured = root_binding()

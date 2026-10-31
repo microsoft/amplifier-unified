@@ -15,6 +15,7 @@ from test_task_environments import scope
 async def ready(app, queue, *, identity='check'):
     runtime = Runtime()
     runtime.app = app
+    runtime.unavailable_boundaries.add(app.state["sessions"][0]["id"])
     app.runtime = runtime
     app.state['sessions'][0]['status'] = 'working'
     await submit(app, identity, notify=True)
