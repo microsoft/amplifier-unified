@@ -326,6 +326,7 @@ async def test_sender_quota_reserves_capacity_for_an_independent_sender_and_roun
 
 async def test_queue_expiry_records_negative_outcome_without_admitting_or_losing_input(app):
     source, target = app.state['sessions']
+    app.runtime.unavailable_boundaries.add(source['id'])
     target['status'] = 'working'
     await send(app, 'expiring-input', expiresInSeconds=1)
     await subscribe(app, 'expiring-input')
@@ -529,6 +530,7 @@ async def test_background_activity_never_substitutes_for_exact_root_terminal_evi
 
 async def test_new_report_supersedes_unsubmitted_success_without_erasing_either_revision(app):
     source, target = app.state['sessions']
+    app.runtime.unavailable_boundaries.add(source['id'])
     await declared_result(app)
     wait = await subscribe(app)
     await finish(app, target, 'result-request')
