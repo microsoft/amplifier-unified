@@ -300,6 +300,7 @@ class TaskController:
         self.receipts = {}
         self.history = []
         self.coordinator.register_capability("live.continuation_guard", self.continuation_allowed)
+        self.coordinator.register_capability("goal.turn_already_charged", self.turn_already_charged)
         if getattr(self.coordinator, "hooks", None):
             self.coordinator.hooks.register("provider:request", self.boundary, name="unified-task-boundary", priority=5)
             self.coordinator.hooks.register("orchestrator:goal_progress", self.yield_to_peer,
@@ -334,7 +335,21 @@ class TaskController:
                 "continuity": self.continuity(),
                 "continuationSupported": bool(self.coordinator.get_capability("live.continuation_guard_supported"))}
 
+    def retain_live_goal(self):
+        """Keep current task progress when its live goal pointer is cleared.
+
+        Only exact task identity/revision can share progress. Historical goals
+        and pending task revisions must never overwrite their successor.
+        """
+        task = self.record()
+        goal = self.coordinator.session_state.get("goal")
+        if (task and task.get("status") == "active" and goal
+                and goal.get("task_id") == task.get("id")
+                and goal.get("task_revision") == task.get("revision")):
+            task["goalState"] = goal
+
     def apply(self, *, persist=True):
+        self.retain_live_goal()
         task = self.record()
         if not task or task.get("appliedRevision") == task["revision"]:
             return
@@ -353,6 +368,7 @@ class TaskController:
             goal.setdefault("last_reason", None)
             goal.setdefault("reasons", [])
             self.coordinator.session_state["goal"] = goal
+            self.retain_live_goal()
         else:
             self.coordinator.session_state["goal"] = None
         task["appliedRevision"] = task["revision"]
@@ -373,25 +389,27 @@ class TaskController:
         allowed = {"active", "paused", "blocked", "completed"} if resume else {"active"}
         return task is None or (task["status"] in allowed and bool(self.coordinator.get_capability("live.continuation_guard_supported")))
 
-    async def peer_input_allowed(self):
-        """Handling a fresh handoff is not resuming this blocked objective."""
+    async def peer_input_allowed(self, *, completed=False):
+        """Handle fresh input without reopening the saved inactive objective."""
         self.apply()
         capacity = getattr(self.controls, "capacity", None)
         if capacity and capacity.last_denial and capacity.last_denial.get("budgetRevision") == capacity.policy["revision"]:
             return False
-        return (dependency_blocked(self.record())
+        return ((bool(self.record()) and self.record().get("status") == "completed" if completed
+                 else dependency_blocked(self.record()))
                 and bool(self.coordinator.get_capability("live.continuation_guard_supported")))
 
-    def reserve_peer_input(self, identity):
-        """Charge a finite blocked handoff against saved turns before effects.
+    def reserve_peer_input(self, identity, *, completed=False):
+        """Charge a blocked/completed handoff against saved turns before effects.
 
         An uncertain submit retains its charge, just as its host receipt retains
         uncertainty. No goal is installed and no task revision/epoch is advanced.
         """
         task = self.record()
-        if not dependency_blocked(task):
-            raise ValueError("The dependency block changed before input reservation")
-        if task.get("lastBlockedInputId") == identity:
+        if not (task and task.get("status") == "completed" if completed else dependency_blocked(task)):
+            raise ValueError("The saved task changed before input reservation")
+        field = "lastCompletedInputId" if completed else "lastBlockedInputId"
+        if task.get(field) == identity:
             return
         previous = copy.deepcopy(task)
         goal = task.setdefault("goalState", {})
@@ -400,13 +418,31 @@ class TaskController:
         if cap is not None and used >= cap:
             raise ValueError("The saved task's turn budget is exhausted.")
         goal["turns_used"] = used + 1
-        task["lastBlockedInputId"] = identity
+        task[field] = identity
         try:
             self.controls.persist(task_only=True)
         except BaseException:
             task.clear()
             task.update(previous)
             raise
+
+    def turn_already_charged(self, goal):
+        """Idempotent witness for one reserved input, not subsequent goal turns."""
+        task = self.record() or {}
+        proof = task.get("followupOf")
+        if not proof:
+            return False
+        generation = getattr(self.controls.runtime, "generation", None) or {}
+        if (task.get("status") != "active" or goal is not self.coordinator.session_state.get("goal")
+                or goal.get("task_id") != task.get("id") or goal.get("task_revision") != task.get("revision")
+                or generation.get("id") != proof["generationId"]
+                or proof["inputId"] not in generation.get("input_ids", [])):
+            return False
+        # task.create persisted this witness with the inherited charged count.
+        # Repeating the callback after persistence but before its response is
+        # harmless. The producer increments continuations BEFORE later turns.
+        return (goal["turns_used"] == proof["turnsUsed"]
+                and goal["continuations"] == proof["continuations"])
 
     async def yield_to_peer(self, event, data):
         """Supersede this goal execution, not the goal, before an automatic turn."""
@@ -495,8 +531,33 @@ class TaskController:
             raise ValueError("Create a durable task first")
         else:
             task = copy.deepcopy(previous)
-        if task["status"] == "completed" and operation != "task.create":
+        manager_limit = (operation == "task.update" and bool(args.get("_managerLimit"))
+                         and set(args) <= {"commandId", "origin", "expectedTaskId", "expectedRevision",
+                                           "maxTurns", "correction", "_managerLimit"})
+        if task["status"] == "completed" and operation != "task.create" and not manager_limit:
             raise ValueError("This task is complete; create a new objective explicitly")
+        if operation == "task.create" and previous:
+            generation = getattr(self.controls.runtime, "generation", None) or {}
+            identity_input = previous.get("lastCompletedInputId")
+            origin = previous.get("followupOf") or {}
+            fresh = identity_input and identity_input in generation.get("input_ids", [])
+            same_input = (origin.get("generationId") == generation.get("id")
+                          and origin.get("inputId") in generation.get("input_ids", []))
+            if fresh or same_input:
+                if self.coordinator.get_capability("goal.reserved_turn_accounting") != 1:
+                    raise ValueError("This runtime cannot preserve a reserved follow-up turn. Update its runtime; direct correction and reporting remain available.")
+                if "maxTurns" in args and args["maxTurns"] != previous.get("maxTurns"):
+                    raise ValueError("A correction successor retains the prior turn allowance. Revise the existing limit explicitly before creating it.")
+                goal = previous["goalState"]
+                task["maxTurns"] = previous.get("maxTurns")
+                task["goalState"] = {"turns_used": goal["turns_used"],
+                                     "continuations": goal.get("continuations", 0)}
+                # Multiple objectives within the same correction retain its
+                # origin and allowance, rather than escaping it via task.create.
+                task["followupOf"] = ({"taskId": previous["id"], "revision": previous["revision"],
+                    "inputId": identity_input, "generationId": generation["id"],
+                    "turnsUsed": goal["turns_used"], "continuations": goal.get("continuations", 0)}
+                    if fresh else copy.deepcopy(origin))
         if operation in {"task.create", "task.update"}:
             for key in ("objective", "constraints", "questionIds", "operationIds", "artifactRefs", "maxTurns"):
                 if key in args:
@@ -576,6 +637,7 @@ class TaskController:
         except Exception:
             self.coordinator.session_state["task"] = previous
             self.coordinator.session_state["goal"] = old_goal
+            self.retain_live_goal()
             self.history = old_history
             self.receipts.pop(identity, None)
             raise

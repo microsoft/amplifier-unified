@@ -371,7 +371,7 @@ class DirectNativeHost:
                     return {"admitted": False, "reason": reason}
                 return await worker.bridge("coordination.admit", values)
             adapter = steer if steering else admit
-            result = await adapter(worker.controls, worker.runtime, args, None, authorize,
+            result = await adapter(worker.controls, worker.runtime, args, worker.activation, authorize,
                                    stop_epoch=lambda: worker.stop_revision)
             self.admissions.append({"sessionId": session["id"], **args, **result})
             return result
@@ -381,6 +381,9 @@ class DirectNativeHost:
 
     async def collaboration_steer(self, session, args, guard, emit):
         return await self.automatic_input(session, args, guard, True)
+
+    async def before_execute(self, worker):
+        """Optional fixture setup before the real execution task captures context."""
 
     async def mount(self, row, provider, paths):
         plan = {"session": {
@@ -440,6 +443,7 @@ class DirectNativeHost:
         row.update(runtimeSessionId=session.session_id, nativeIdentity=session.session_id,
                    nativeProject=project_slug(worker.workspace), sessionKind="root",
                    historyManaged=False)
+        await self.before_execute(worker)
         worker.execution = asyncio.create_task(session.execute(""))
         await worker.runtime.wait_for(lambda e: e["type"] == "session.ready", timeout=30)
         await worker.runtime.wait_for(lambda e: e["type"] == "session.idle", timeout=30)
@@ -471,7 +475,7 @@ class DirectNativeHost:
         errors = []
         for worker in self.roots.values():
             if worker.execution and not worker.execution.done() and not worker.runtime.closed:
-                await worker.runtime.submit(Input("stop"))
+                await worker.runtime.submit(Input("stop", activation=worker.activation))
         for worker in self.roots.values():
             try:
                 if worker.execution:

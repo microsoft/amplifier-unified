@@ -15,6 +15,8 @@ async def input_allowed(controls, permission):
     # The saved task remains paused until its owner deliberately resumes it.
     if permission.get("humanResume") is True:
         return await controls.tasks.continuation_allowed(resume=True)
+    if permission.get("completedTaskInput") is True:
+        return await controls.tasks.peer_input_allowed(completed=True)
     if permission.get("blockedTaskInput") is True:
         return await controls.tasks.peer_input_allowed()
     return await controls.tasks.continuation_allowed()
@@ -78,7 +80,9 @@ async def admit(controls, runtime, args, activation, authorize, stop_epoch=lambd
     text = peer_input(message["peerEnvelope"], message["text"])
     if len(text) > runtime.max_input_chars:
         return {"accepted": False, "reason": "Peer input exceeds this adapter's input limit; use a durable reference."}
-    if permission.get("blockedTaskInput") is True:
+    if permission.get("completedTaskInput") is True:
+        controls.tasks.reserve_peer_input(args["inputId"], completed=True)
+    elif permission.get("blockedTaskInput") is True:
         controls.tasks.reserve_peer_input(args["inputId"])
     from amplifier_module_loop_live.runtime import Input
     identity = await runtime.submit(Input("user", text, id=args["inputId"], activation=activation))
@@ -141,7 +145,9 @@ async def deliver(controls, runtime, args, activation, authorize, stop_epoch=lam
         controls.require_idle()
     except ValueError:
         return refused("Waiting for the recipient's existing native work to settle.", waiting=True)
-    if permission.get("blockedTaskInput") is True:
+    if permission.get("completedTaskInput") is True:
+        controls.tasks.reserve_peer_input(args["inputId"], completed=True)
+    elif permission.get("blockedTaskInput") is True:
         controls.tasks.reserve_peer_input(args["inputId"])
     identity = await runtime.submit(Input("user", text, id=args["inputId"], activation=activation))
     return {"accepted": True, "inputId": identity, "mode": "queue", "completed": False}

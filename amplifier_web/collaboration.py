@@ -874,13 +874,15 @@ class Collaboration:
                     target.get("status") in {"stopped", "error", "cancelled", "failed"} and not resuming):
                 return "The recipient is stopped or unavailable."
             task = target.get("task") or self.service.coordination.task(target["id"])
+            from .completed_followup import matches_request
+            completed_followup = matches_request(self.service, receipt, task, for_reply=for_reply)
             if (task.get("status") in {"paused", "blocked", "completed", "cancelled"}
-                    and not resuming and not self.blocked_input(receipt, task)):
+                    and not resuming and not self.blocked_input(receipt, task) and not completed_followup):
                 return "The recipient task is not active."
             task_binding = receipt
             if for_reply and 'replyTaskContinuationEpoch' in receipt:
                 task_binding = {**receipt, 'taskContinuationEpoch': receipt['replyTaskContinuationEpoch']}
-            if not task_matches(task, task_binding):
+            if not task_matches(task, task_binding) and not completed_followup:
                 return "The recipient task changed."
             if target.get("ownership", {}).get("status") in {"blocked", "yielding", "yielded", "yield-failed", "taking-over"}:
                 return "The native owner is unavailable."
@@ -1125,12 +1127,14 @@ class Collaboration:
         if message is None:
             return {"admitted": False, "reason": "The saved host-attributed input is unavailable."}
         from .peer_resume import pending
+        from .completed_followup import matches_request
         task = self.service._session(sid).get("task") or self.service.coordination.task(sid)
         active = self.service._session(sid).get('collaborationGeneration') or {}
         return {"admitted": not reason, "reason": reason, "message": copy.deepcopy(message),
                 "currentGenerationId": active.get('id') if not active.get('terminal') else None,
                 "humanResume": not reason and pending(receipt),
-                "blockedTaskInput": not reason and self.blocked_input(receipt, task)}
+                "blockedTaskInput": not reason and self.blocked_input(receipt, task),
+                "completedTaskInput": not reason and matches_request(self.service, receipt, task)}
 
     async def submit_steer(self, identity):
         async with self.service.lock:
@@ -1887,6 +1891,8 @@ class Collaboration:
                             or previous["senderSessionId"] != target["id"] or previous.get("protocol") != PROTOCOL):
                         self.error("Reply linkage must identify the exact incoming request.")
                 task = target.get("task") or self.service.coordination.task(target["id"])
+                from .completed_followup import prepare as prepare_completed
+                completed_followup = prepare_completed(self.service, source, target, task, mode, args, creation=creation_owned)
                 blocked_input = (mode in {'queue', 'auto'} and source['id'] != target['id']
                     and not args.get('resume') and not args.get('scheduleRepair')
                     and dependency_blocked(task))
@@ -1904,6 +1910,13 @@ class Collaboration:
                             'remains blocked. Reconcile the dependency; do not infer approval, resume the goal '
                             'automatically, discard conditions or replay older input. You may reply, defer, decline '
                             'or make a separately valid owner decision about your own task.'}
+                if completed_followup:
+                    envelope['completedTaskHandling'] = {**completed_followup,
+                        'instruction': 'Handle this fresh follow-up from your current assignment owner within '
+                            'the existing scope. Keep the earlier objective and evidence completed. Make the '
+                            'requested correction directly, or use task.create for its follow-up objective; '
+                            'that successor retains the existing turn allowance and used turns. Report with '
+                            'coordination.reply for this exact request. Do not replay older or unknown work.'}
                 if target.get("collaboration"):
                     envelope["task"] = {key: target["collaboration"][key] for key in
                         ("creatorSessionId", "requestId", "outputNamespace", "configurationHash")}
@@ -1953,6 +1966,7 @@ class Collaboration:
                     "interruptionRevision": target.get("interruptionRevision", 0),
                     "taskId": task.get("id"), "taskRevision": task.get("revision"),
                     **({'blockedTaskInput': True} if blocked_input else {}),
+                    **({'completedTaskFollowup': completed_followup} if completed_followup else {}),
                     'replyTaskContinuationEpoch': continuation_epoch(task),
                     # Dispatcher provenance is host-owned. Never copy actor
                     # claims from args, message prose, or the peer envelope.

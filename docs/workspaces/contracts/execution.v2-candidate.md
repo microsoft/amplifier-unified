@@ -927,3 +927,39 @@ comes only from already resident fields or bounded scalar projections of existin
 retained runtime/session records; absent projections stay unknown. It does not
 open native control files or decode saved view/history bodies to fill a preview.
 The agent bridge also avoids unrelated pending-progress publication for this read.
+
+
+### Fresh corrections to completed assignment members
+
+A new direct queued (including automatic idle delivery) request from the current
+active assignment owner to a bound completed member is ordinary commissioned
+work within existing authority. It needs no fresh target human message or resume
+proof. Stop, paused/cancelled tasks, nonowner peers, membership changes, native
+ownership, current task identity and explicit budget refusals still apply. Host
+receipts bind the completed task and new input; old requests are never replayed.
+
+The native owner reserves that input's turn durably without reopening the
+completed objective. It may correct/report directly or create correction objectives
+through `task.create`. Successor attribution comes from the actual native input
+and generation, not model-supplied predecessor IDs. Its initial allowance and used
+turns are inherited; the prior completed record and evidence remain in canonical
+history. Exact request reporting follows those objectives within the same admitted input;
+additional task creation retains the original correction attribution and allowance.
+A genuinely fresh input retains normal task creation. No old input is admitted
+again and unrelated later objectives cannot report against the earlier request. Assignment cost/token usage
+continues to come from existing execution receipts, not task-history counters.
+
+A reserved successor requires producer `goal.reserved_turn_accounting = 1`.
+The synchronous `goal.turn_already_charged` witness verifies current task, native
+input/generation, reserved count and continuation ordinal idempotently. The
+producer counts later automatic turns normally; errors do not refund or recount
+a reservation. An unsupported producer still permits direct correction/reporting
+but refuses successor creation before mutation. No new continuation loop exists.
+The current task retains the exact bound goal progress, including after terminal
+goal removal. Checkpoint/restore therefore preserves spent turns and selected
+caps; replaced goals and failed mutations retain exact task identity/revision.
+
+The existing authorized `assignment.task.setLimit` action may also revise a
+completed member's limit/correction while preserving its completed status,
+evidence, history and used turns. Ordinary completed task edits remain refused;
+this control sends no input and does not restart work.
