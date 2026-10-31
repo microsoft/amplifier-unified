@@ -19,7 +19,24 @@ import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const cornerDiagnosticMode=process.env.FILE_CONTROLS_CORNER_DIAGNOSTIC==='1';
 const touchEventDiagnosticMode=process.env.FILE_CONTROLS_TOUCH_EVENT_DIAGNOSTIC==='1';
-assert.ok(!(cornerDiagnosticMode&&touchEventDiagnosticMode),'Conflicting file-controls diagnostic modes');
+const coarseToolbarQualificationMode=process.env.FILE_CONTROLS_COARSE_TOOLBAR_QUALIFICATION==='1';
+assert.ok([cornerDiagnosticMode,touchEventDiagnosticMode,coarseToolbarQualificationMode].filter(Boolean).length<=1,
+ 'Conflicting file-controls diagnostic/qualification modes');
+// Fixed binding to the retained failed first-390 gesture, NOT a new measurement
+// chosen to fit this candidate. No predecessor report is modified or rerun.
+const coarseToolbarBaseline={
+ source:{head:'8ac98b80826b136432aa45e263bebd98e0a04407',tree:'f1cb13af2c6d0281e589f7703ab1368d3e0835c3',
+  report:'output/files1318-touch-event-v1-result/generated-source/evidence/generated-file-controls-3W6LLV/observations.json',
+  sha256:'365b1b690f2735f799186bd5170ce82d93b5014eb18c55e0f745af4a8bf8e8bb',
+  checkpoint:'first-390-primary-download',path:'touchEventDiagnostic.before'},
+ before:{rect:{x:292,y:207.5,width:44,height:44,top:207.5,right:336,bottom:251.5,left:292},
+  radii:['9px','9px','9px','9px'],borders:{left:0,top:0,right:0,bottom:0},
+  viewport:{width:390,height:844,scale:1,offsetLeft:0,offsetTop:0},
+  intended:{x:331.24264068711926,y:246.7426406871193},
+  position:{x:39.24264068711926,y:39.24264068711929}},
+ bodyTop:254,toolbarRect:{x:0,y:206,width:390,height:48,top:206,right:390,bottom:254,left:0},
+ html:{bytes:426,sha256:'93229c6d39952ff4ab7b89ec66ae6d92e49da7a0d4da4269b736b8430caabfb0'}
+};
 const output=process.env.FILE_CONTROLS_EVIDENCE||process.env.AMPLIFIER_TEST_ARTIFACTS;
 assert.ok(output,'Set an owned AMPLIFIER_TEST_ARTIFACTS or FILE_CONTROLS_EVIDENCE directory');
 await mkdir(output,{recursive:true});
@@ -35,6 +52,8 @@ const metadataByRequest=new WeakMap();
 const pageLabels=new WeakMap(),routeCleanups=new Set(),browserOwners=[];
 const cornerDiagnostics=[];
 let touchEventDiagnostic=null,touchEventDiagnosticComplete=false;
+const coarseToolbarQualification={version:'coarse-toolbar-v1',baseline:coarseToolbarBaseline,
+ separationCssPx:14,contactRadiusDip:16,layoutChecks:[],gesture:null,complete:false};
 const contourOracle={version:'circular-contour-v1',formula:'d=max(3,r-(r-3)/sqrt(2))',
  logicChecks:[],cornerShapeChecks:[],cornerShapeObservations:[],cornerShapeCaptureErrors:[],browserPreflight:null,
  negativeCounts:{size:0,regions:0,obstruction:0,paddingOrigin:0}};
@@ -814,6 +833,134 @@ async function measure(target,details,label){
    `${label} path ${index}: text line is covered or outside viewport`);
  }
 }
+// Read-only geometry for the real reader -> toolbar + body seam. Installed only
+// in qualification mode; no synthetic toolbar, extra gesture or layout mutation.
+function coarseToolbarSnapshot(node){
+ const toolbar=node.closest('.a-canvas-artifact-toolbar'),body=toolbar?.nextElementSibling;
+ const reader=toolbar?.parentElement,panel=toolbar?.closest('#workspace-canvas');
+ if(!body?.matches('.a-canvas-body')||!reader?.matches('.a-canvas-reader')||!panel)
+  throw Error('Saved-file toolbar is not followed by the whole Canvas body in its reader');
+ const properties=['display','visibility','marginTop','padding','minWidth','minHeight','overflowX','overflowY',
+  'pointerEvents','touchAction','userSelect','flexDirection','borderTopLeftRadius','borderTopRightRadius',
+  'borderBottomLeftRadius','borderBottomRightRadius'];
+ const describe=element=>{
+  const style=getComputedStyle(element);
+  return {nodeId:window.__fileControlsNodeId(element),tag:element.tagName,className:element.className,
+   rect:element.getBoundingClientRect().toJSON(),connected:element.isConnected,hidden:element.hidden,
+   visible:element.checkVisibility({checkVisibilityCSS:true})&&element.getClientRects().length>0,
+   computed:Object.fromEntries(properties.map(key=>[key,style[key]])),
+   clientWidth:element.clientWidth,scrollWidth:element.scrollWidth};
+ };
+ const notices=[...body.querySelectorAll('.a-renderer-notice')],style=getComputedStyle(node);
+ return {at:Date.now(),queries:{coarse:matchMedia('(pointer:coarse)').matches,fine:matchMedia('(pointer:fine)').matches},
+  viewport:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio,scale:visualViewport?.scale??1,
+   offsetLeft:visualViewport?.offsetLeft??0,offsetTop:visualViewport?.offsetTop??0},
+  scroll:{x:scrollX,y:scrollY},documentWidth:document.documentElement.scrollWidth,
+  panelMode:panel.dataset.mode,settings:!!body.querySelector(':scope > .a-settings-canvas'),
+  adjacent:toolbar.nextElementSibling===body&&body.parentElement===reader,
+  reader:describe(reader),toolbar:describe(toolbar),body:describe(body),button:describe(node),
+  radii:[style.borderTopLeftRadius,style.borderTopRightRadius,style.borderBottomLeftRadius,style.borderBottomRightRadius],
+  wrappers:['.a-canvas-primary-actions','.a-canvas-common-actions','.a-saved-file-download'].map(selector=>{
+   const element=node.closest(selector);return {selector,node:element?describe(element):null};
+  }),
+  notices:notices.slice(0,4).map(describe),noticesTruncated:notices.length>4,
+  contactEnvelope:{radiusDip:16,radiusCssPx:16,bottom:node.getBoundingClientRect().bottom+16,
+   basis:'Maximum 16 DIP contact radius; qualified only at DPR=1 and visual scale=1.'}};
+}
+function coarseToolbarLayoutOracle(layout,coarse){
+ assert.deepEqual(layout.queries,{coarse,fine:!coarse},'Expected primary pointer query did not match');
+ assert.equal(layout.adjacent,true);assert.equal(layout.panelMode,'artifact');assert.equal(layout.settings,false);
+ assert.equal(layout.reader.computed.display,'flex');assert.equal(layout.reader.computed.flexDirection,'column');
+ assert.equal(layout.toolbar.hidden,false);assert.equal(layout.toolbar.visible,true);
+ assert.equal(layout.body.visible,true);assert.equal(layout.button.visible,true);
+ const margin=coarse?14:0;
+ assert.equal(layout.body.computed.marginTop,`${margin}px`,'Wrong external Canvas body margin');
+ assert.equal(layout.body.rect.top,layout.toolbar.rect.bottom+margin,'Gap must precede the entire Canvas body');
+ for(const box of [layout.toolbar,layout.body,layout.button]){
+  assert.ok(box.connected&&box.rect.width>0&&box.rect.height>0,'Toolbar/body/control must remain rendered');
+  assert.ok(box.rect.left>=0&&box.rect.right<=layout.viewport.width&&box.rect.top>=0&&
+   box.rect.bottom<=layout.viewport.height,'Toolbar/body/control clipped by viewport');
+  assert.ok(box.rect.left>=layout.reader.rect.left&&box.rect.right<=layout.reader.rect.right&&
+   box.rect.top>=layout.reader.rect.top&&box.rect.bottom<=layout.reader.rect.bottom,'Toolbar/body/control clipped by reader');
+  assert.ok(box.scrollWidth<=box.clientWidth,'Toolbar/body/control horizontal overflow');
+  assert.notEqual(box.computed.pointerEvents,'none','Separation must not suppress hit testing');
+  assert.notEqual(box.computed.touchAction,'none','Separation must not disable touch action');
+ }
+ assert.ok(layout.documentWidth<=layout.viewport.width,'Document horizontal overflow');
+ assert.equal(layout.button.computed.minWidth,'44px');assert.equal(layout.button.computed.minHeight,'44px');
+ assert.ok(layout.button.rect.width>=44&&layout.button.rect.height>=44,'Native button below 44px');
+ assert.ok(layout.wrappers.every(row=>row.node?.computed.display==='contents'),'Plain toolbar wrappers must stay display:contents');
+ assert.equal(layout.noticesTruncated,false,'Notice geometry exceeded four records');
+ assert.ok(layout.notices.some(notice=>notice.visible),'Saved-version notice must remain visible');
+ for(const notice of layout.notices.filter(notice=>notice.visible)){
+  assert.ok(notice.rect.top>=layout.body.rect.top&&notice.rect.bottom<=layout.body.rect.bottom&&
+   notice.rect.left>=layout.body.rect.left&&notice.rect.right<=layout.body.rect.right,'Notice clipped by body');
+  assert.notEqual(notice.computed.userSelect,'none','Saved-version text must remain selectable');
+  assert.notEqual(notice.computed.pointerEvents,'none','Saved-version text must retain hit testing');
+ }
+ if(coarse){
+  assert.equal(layout.viewport.dpr,1);assert.equal(layout.viewport.scale,1);
+  assert.equal(layout.viewport.offsetLeft,0);assert.equal(layout.viewport.offsetTop,0);
+  assert.equal(layout.contactEnvelope.bottom,layout.button.rect.bottom+16);
+  assert.ok(layout.body.rect.top>layout.contactEnvelope.bottom,'Whole following body intersects the maximum contact envelope');
+ }
+}
+async function qualifyToolbarLayout(control,label,phase,coarse){
+ const row={check:'saved-file toolbar external separation and clipping',label,phase,passed:false};
+ coarseToolbarQualification.layoutChecks.push(row);
+ row.snapshot=await control.evaluate(node=>window.__fileControlsToolbarSnapshot(node));
+ coarseToolbarLayoutOracle(row.snapshot,coarse);row.passed=true;
+}
+function qualifyToolbarBaseline(gesture){
+ const row={check:'first-390 baseline geometry and contour point unchanged',passed:false,
+  fields:Object.keys(coarseToolbarBaseline.before)};
+ gesture.baselineCheck=row;
+ for(const field of row.fields)assert.deepEqual(gesture.before[field],coarseToolbarBaseline.before[field],
+  `First-390 ${field} changed from the bound failed gesture; do not move or retry the tap`);
+ coarseToolbarLayoutOracle(gesture.beforeLayout,true);
+ assert.deepEqual(gesture.beforeLayout.toolbar.rect,coarseToolbarBaseline.toolbarRect,'Candidate moved or resized toolbar');
+ assert.deepEqual(gesture.beforeLayout.button.rect,gesture.before.rect);
+ assert.deepEqual(gesture.beforeLayout.radii,gesture.before.radii);
+ assert.equal(gesture.beforeLayout.body.rect.top,coarseToolbarBaseline.bodyTop+14);
+ row.bodyGap=gesture.beforeLayout.body.rect.top-gesture.before.rect.bottom;
+ assert.equal(row.bodyGap,16.5);row.passed=true;
+}
+function qualifyToolbarEvents(gesture){
+ const capture=gesture.capture,events=capture.events;
+ const row={check:'first-390 trusted pointerdown and click on original button',passed:false};
+ gesture.eventCheck=row;
+ assert.equal(gesture.tapAttempts,1);assert.equal(gesture.checkpointObserved,true);
+ assert.deepEqual(gesture.captureErrors,[]);assert.deepEqual(capture.errors,[]);
+ assert.ok(Object.values(capture.truncations).every(count=>count===0),'Truncated event capture cannot qualify');
+ const hasTruncatedField=value=>!!value&&typeof value==='object'&&Object.entries(value).some(([key,child])=>
+  (key.endsWith('Truncated')&&child===true)||hasTruncatedField(child));
+ assert.equal(hasTruncatedField(events),false,'Truncated descriptor or layout cannot qualify');
+ const types=['pointerdown','pointerup','mousedown','mouseup','click'];
+ const pair=types.map(type=>{
+  const matches=events.filter(event=>event.type===type);
+  assert.equal(matches.length,1,`Require exactly one ${type}; never retry input`);
+  return matches[0];
+ });
+ assert.ok(pair.every((event,index)=>index===0||event.index>pair[index-1].index),'Gesture event order changed');
+ assert.equal(events.filter(event=>['pointercancel','touchcancel'].includes(event.type)).length,0);
+ const pointerdown=pair[0],mousedown=pair[2],click=pair[4];
+ assert.equal(pointerdown.pointerType,'touch');assert.equal(mousedown.sourceCapabilities?.firesTouchEvents,true);
+ for(const event of pair){
+  assert.equal(event.isTrusted,true);assert.equal(event.sameNode,true,`${event.type} must target the original Download button`);
+  assert.equal(event.intendedButton.nodeId,gesture.before.nodeId);assert.equal(event.intendedButton.connected,true);
+  assert.ok(event.composedPath.some(node=>node.nodeId===gesture.before.nodeId),'Original button missing from event path');
+  assert.deepEqual(event.intendedButton.rect,gesture.before.rect,`${event.type} button rectangle changed`);
+  assert.deepEqual(event.intended,gesture.before.intended);
+  assert.ok(event.actual&&event.actual.x>=gesture.before.rect.left&&event.actual.x<gesture.before.rect.right&&
+   event.actual.y>=gesture.before.rect.top&&event.actual.y<gesture.before.rect.bottom,'Actual event outside original button');
+  coarseToolbarLayoutOracle(event.toolbarLayout,true);
+  assert.deepEqual(event.toolbarLayout.button.rect,gesture.before.rect);assert.deepEqual(event.toolbarLayout.radii,gesture.before.radii);
+ }
+ Object.assign(row,{passed:true,buttonNodeId:gesture.before.nodeId,pointerdownIndex:pointerdown.index,
+  firstMousedownIndex:mousedown.index,clickIndex:click.index,
+  actual:{pointerdown:pointerdown.actual,mousedown:mousedown.actual,click:click.actual},
+  mouseDelta:{x:mousedown.actual.x-pointerdown.actual.x,y:mousedown.actual.y-pointerdown.actual.y}});
+}
 // Installed only at the first 390px primary Download, after the existing contour
 // measurement/oracles and immediately before its unchanged locator.tap. All
 // listeners are passive document capture observers. No event or DOM is changed.
@@ -886,6 +1033,7 @@ function armTouchEventCapture(node,intended){
       offsetLeft:visualViewport.offsetLeft,offsetTop:visualViewport.offsetTop,pageLeft:visualViewport.pageLeft,pageTop:visualViewport.pageTop}:null},
     atActual:actual?hit(actual):null,atIntended:hit(intended)
    });
+   if(window.__fileControlsToolbarSnapshot)entry.toolbarLayout=window.__fileControlsToolbarSnapshot(node);
   }catch(error){
    entry.captureError={name:error.name,message:String(error.message).slice(0,1024),
     messageTruncated:String(error.message).length>1024};
@@ -980,6 +1128,10 @@ async function cornerTap(control,corner,diagnostic=null){
   let probe;
   if(diagnostic){
    diagnostic.before=measured;
+   if(diagnostic.qualification){
+    diagnostic.beforeLayout=await control.evaluate(node=>window.__fileControlsToolbarSnapshot(node));
+    qualifyToolbarBaseline(diagnostic);
+   }
    probe=await control.evaluateHandle(armTouchEventCapture,measured.intended);
    diagnostic.tapAttempts=1;
   }
@@ -1008,6 +1160,7 @@ async function cornerTap(control,corner,diagnostic=null){
   if(diagnostic){
    diagnostic.originalOraclePassed=true;
    assert.equal(diagnostic.checkpointObserved,true,'Native touch event pair is UNKNOWN: missing event, truncation or capture loss; no retry');
+   if(diagnostic.qualification)qualifyToolbarEvents(diagnostic);
   }
  }catch(error){
   if(!diagnostic)throw error;
@@ -1048,6 +1201,8 @@ async function connect(owner,options){
   }
  });
  await target.addInitScript(installDetailsProbe);
+ if(coarseToolbarQualificationMode)
+  await target.addInitScript({content:`window.__fileControlsToolbarSnapshot=(${coarseToolbarSnapshot.toString()});`});
  await target.addInitScript({content:`window.__fileControlsCircularContour=(${circularContour.toString()});`+
   `window.__fileControlsSupportedCircularCornerShape=(${supportedCircularCornerShape.toString()});`+
   `(${installContourSampler.toString()})(${JSON.stringify(cornerShapeLogPrefix)});`});
@@ -1121,16 +1276,25 @@ async function startPreview(target,row,draft,label){
 }
 async function previewPreserved(retained){
  const {target,row,locator,element,frame,input,unfinished,marker,state,documents}=retained;
- assert.equal(await element.evaluate(node=>node.isConnected),true,'Running preview iframe was removed');
- assert.equal(await locator.evaluate((node,original)=>node===original,element),true,'Running preview iframe was replaced');
- assert.equal(await target.locator('iframe').count(),1,'A second preview frame was mounted');
- assert.deepEqual(await executionMarker(frame),marker,'Preview execution marker changed: script reran or frame reloaded');
- assert.equal(await input.inputValue(),unfinished,'Unfinished preview input changed');
- assert.deepEqual(await previewState(target,row),state,'File controls changed selection, draft, renderer lease or frame attributes');
- assert.deepEqual(documentRequests(target),documents,'File controls issued an extra HTML document request');
- assert.deepEqual(commands.slice(retained.commandStart).filter(row=>
-  ['canvas.select','canvas.views.inline','conversation.send','session.send'].includes(row?.action)),[],
+ const observed={iframeConnected:await element.evaluate(node=>node.isConnected)};
+ assert.equal(observed.iframeConnected,true,'Running preview iframe was removed');
+ observed.sameIframe=await locator.evaluate((node,original)=>node===original,element);
+ assert.equal(observed.sameIframe,true,'Running preview iframe was replaced');
+ observed.iframeCount=await target.locator('iframe').count();
+ assert.equal(observed.iframeCount,1,'A second preview frame was mounted');
+ observed.marker=await executionMarker(frame);
+ assert.deepEqual(observed.marker,marker,'Preview execution marker changed: script reran or frame reloaded');
+ observed.unfinished=await input.inputValue();
+ assert.equal(observed.unfinished,unfinished,'Unfinished preview input changed');
+ observed.state=await previewState(target,row);
+ assert.deepEqual(observed.state,state,'File controls changed selection, draft, renderer lease or frame attributes');
+ observed.documents=documentRequests(target);
+ assert.deepEqual(observed.documents,documents,'File controls issued an extra HTML document request');
+ observed.prohibitedCommands=commands.slice(retained.commandStart).filter(row=>
+  ['canvas.select','canvas.views.inline','conversation.send','session.send'].includes(row?.action));
+ assert.deepEqual(observed.prohibitedCommands,[],
  'File controls selected/mounted a preview or sent input');
+ return observed;
 }
 async function tabTo(target,control){
  // Traverse the real tab order; do not turn a missing/unreachable control into
@@ -1150,6 +1314,7 @@ async function usePreviewControls(retained,label,mode){
  await expect(primary).toBeVisible();
  assert.equal(await primary.evaluate(node=>node.tagName),'BUTTON');
  await measureControls(target,[primary,toggle],label+'-primary-before');
+ if(coarseToolbarQualificationMode)await qualifyToolbarLayout(primary,label,'before',mode==='touch');
  if(touchEventDiagnosticMode&&mode==='touch'){
   assert.equal(label,'touch-390-preview','Diagnostic may only observe the first 390px primary Download');
   assert.equal(touchEventDiagnostic,null,'Only one diagnostic tap is permitted');
@@ -1163,13 +1328,32 @@ async function usePreviewControls(retained,label,mode){
   touchEventDiagnosticComplete=true;
   return;
  }
+ let qualificationGesture=null;
+ if(coarseToolbarQualificationMode&&label==='touch-390-preview'){
+  assert.equal(mode,'touch');assert.equal(coarseToolbarQualification.gesture,null,'Only one first-390 event capture is permitted');
+  qualificationGesture={qualification:true,checkpoint:'first-390-primary-download',label,control:'Download canvas source',
+   browser:browserOwners.find(owner=>owner.label==='touch').browser.version(),options:touchOptions,
+   retained:{marker:retained.marker,unfinished:retained.unfinished,state:retained.state,documents:retained.documents},
+   tapAttempts:0,checkpointObserved:false,originalOraclePassed:false,outcome:'unknown'};
+  coarseToolbarQualification.gesture=qualificationGesture;
+ }
+ let primaryDownload;
  if(mode==='keyboard'){
   // Copy precedes Download in the actual primary action row.
   await panel.locator('.a-canvas-primary-actions').getByRole('button',{name:'Copy canvas source',exact:true}).focus();
   await target.keyboard.press('Tab');await expect(primary).toBeFocused();
-  await saveControlAndVerify(target,primary,row,label+'-primary-v1',()=>target.keyboard.press('Enter'));
- }else await saveControlAndVerify(target,primary,row,label+'-primary-v1',control=>cornerTap(control,'bottom-right'));
- await previewPreserved(retained);
+  primaryDownload=await saveControlAndVerify(target,primary,row,label+'-primary-v1',()=>target.keyboard.press('Enter'));
+ }else primaryDownload=await saveControlAndVerify(target,primary,row,label+'-primary-v1',
+  control=>cornerTap(control,'bottom-right',qualificationGesture));
+ if(qualificationGesture)qualificationGesture.download=primaryDownload;
+ const preservation=await previewPreserved(retained);
+ if(qualificationGesture){
+  assert.equal(primaryDownload.bytes,coarseToolbarBaseline.html.bytes);
+  assert.equal(primaryDownload.sha256,coarseToolbarBaseline.html.sha256);
+  qualificationGesture.postGesture={check:'first-390 exact saved HTML download and running preview preserved',
+   passed:true,download:primaryDownload,preservation};
+  qualificationGesture.outcome='qualified-gesture-download-and-preservation';
+ }
  await measureControls(target,[primary,toggle],label+'-primary-after');
  const notice=primary.locator('..').getByRole('status');
  await expect(notice).toBeVisible();
@@ -1182,6 +1366,10 @@ async function usePreviewControls(retained,label,mode){
  });
  geometry.push({label:label+'-visible-feedback',...feedback});
  assert.ok(feedback.contained&&feedback.lines.length>0,'Download completion feedback must remain visible and bounded');
+ if(coarseToolbarQualificationMode){
+  await qualifyToolbarLayout(primary,label,'after',mode==='touch');
+  coarseToolbarQualification.layoutChecks.at(-1).feedback=feedback;
+ }
  await captureFileFrame(target,primary,label+'-primary');
  if(mode==='keyboard'){
   // Download temporarily disables its button. Re-anchor after completion so a
@@ -1484,6 +1672,20 @@ async function run(){
   'Every nonzero-border touch must reject the old padding conversion');
  assert.deepEqual(contourOracle.cornerShapeCaptureErrors,[],'Corner-shape console evidence capture failed');
  assert.deepEqual(errors,[]);
+ if(coarseToolbarQualificationMode){
+  const {layoutChecks,gesture}=coarseToolbarQualification;
+  assert.deepEqual(layoutChecks.map(({label,phase,passed})=>({label,phase,passed})),
+   ['desktop-preview','touch-390-preview','touch-320-preview'].flatMap(label=>
+    ['before','after'].map(phase=>({label,phase,passed:true}))), 'All six fine/coarse toolbar layout checks must complete');
+  assert.ok(layoutChecks.filter(row=>row.phase==='after').every(row=>row.feedback?.contained&&row.feedback.lines.length>0),
+   'All three toolbar feedback checks must remain visible');
+  assert.equal(gesture?.baselineCheck?.passed,true);assert.equal(gesture?.eventCheck?.passed,true);
+  assert.equal(gesture?.postGesture?.passed,true);assert.equal(gesture.tapAttempts,1);
+  assert.equal(gesture.originalOraclePassed,true);assert.equal(gesture.originalListenerRemoved,true);
+  assert.equal(gesture.handleDisposed,true);assert.deepEqual(gesture.cleanupErrors,[]);
+  assert.deepEqual(gesture.captureErrors,[]);
+  coarseToolbarQualification.complete=true;
+ }
 }
 
 try{
@@ -1530,6 +1732,14 @@ try{
     'Missing compatibility mousedown, capture errors and truncation are UNKNOWN, never a request to repeat input.',
     'Synchronous DOM reads may affect timing. Each event snapshot is atomic, not proof of unchanged layout between events.',
     'Capture state is limited to queried nodes; UA target adjustment and pending/global capture ownership are not observable.']}:{}),
+  ...(coarseToolbarQualificationMode?{mode:'coarse-toolbar-qualification',
+   qualificationComplete:!failure&&coarseToolbarQualification.complete,coarseToolbarQualification,
+   qualificationLimits:[
+    'One fixed 14px coarse-pointer external body margin is a mitigation hypothesis, not a root-cause guarantee.',
+    'First-390 button geometry and intended contour point are bound to the retained failed report; no passing-point search or gesture retry.',
+    'The first-390 gesture retains passive capture plus the full download/preservation verifier; missing click, wrong target, truncation and capture/cleanup loss fail closed.',
+    'The contact-envelope check assumes DPR=1 and visual scale=1; fine desktop and coarse 390/320 layouts are separate observations.',
+    'Existing screenshots and all 13 narrow PNG brackets remain evidence awaiting independent visual judgment.']}:{}),
   contourOracle,
   installed:ready&&{packageRoot:ready.packageRoot,verified:ready.installedVerified,staticSha256:ready.staticSha256},
   seed,checks,geometry,fileFrameCaptures,downloads,requests,commands,metadataExchanges,detailsReadiness,preCleanupSnapshots,

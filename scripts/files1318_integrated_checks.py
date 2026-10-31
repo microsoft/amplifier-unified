@@ -66,6 +66,22 @@ failed even when its event pair was captured. Missing events/capture loss are
 UNKNOWN, not a retry. Exit 0 means checkpoint observed, never product acceptance.
 The private FILES1318_TOUCH_EVENT_DIAGNOSTIC flag keeps fixture child OUT aligned;
 FILE_CONTROLS_TOUCH_EVENT_DIAGNOSTIC enables only the producer's passive recorder.
+
+--coarse-toolbar-qualification uses /workspace/output/files1318-coarse-toolbar-manifest.json
+and /artifacts/files1318-coarse-toolbar-qualified. This is ONE prospective 16th
+check; 15 prior checks remain consumed. Bind coarseToolbarReuse=REUSE_BINDING
+and the same 23 reuseEvidence files. ONLY the 70 Python and 19 Node tests may be
+REUSED after exact source/dependency/runtime validation. The old 311-file build
+is immutable before-context, never restored or qualified as current product.
+A fresh canonical npm run build feeds all source, wheel and installed checks.
+coarseToolbarReview binds the exact CSS/driver/producer identities and reviewed
+14px external coarse-pointer separation below the visible saved-file toolbar.
+coarseToolbarBefore=COARSE_TOOLBAR_BEFORE binds the raw failed 8ac observation,
+not a newly invented geometry baseline. Private FILES1318_COARSE_TOOLBAR_QUALIFICATION
+keeps children aligned; FILE_CONTROLS_COARSE_TOOLBAR_QUALIFICATION selects the
+producer's full journey. The pinned coarse-toolbar-v1 interface is checked
+independently against raw 8ac geometry, all six layout records, the single
+trusted event sequence, exact download and retained running preview.
 """
 from __future__ import annotations
 
@@ -110,6 +126,7 @@ MANIFEST = ROOT / 'output/files1318-frozen-manifest.json'
 CORNER_MANIFEST = ROOT / 'output/files1318-corner-manifest.json'
 CONTOUR_MANIFEST = ROOT / 'output/files1318-computed-round-manifest.json'
 TOUCH_EVENT_MANIFEST = ROOT / 'output/files1318-touch-event-manifest.json'
+COARSE_TOOLBAR_MANIFEST = ROOT / 'output/files1318-coarse-toolbar-manifest.json'
 HARNESS = OUT / 'harness'
 VENV = OUT / 'installed'
 DRIVER = 'scripts/files1318_integrated_checks.py'
@@ -117,6 +134,23 @@ PRODUCER = 'frontend/tests/generated-file-controls-browser.mjs'
 CORNER_OUT = Path('/artifacts/files1318-corner-diagnostic')
 CONTOUR_OUT = Path('/artifacts/files1318-computed-round-qualified')
 TOUCH_EVENT_OUT = Path('/artifacts/files1318-touch-event-diagnostic')
+COARSE_TOOLBAR_OUT = Path('/artifacts/files1318-coarse-toolbar-qualified')
+COARSE_TOOLBAR_CSS = 'frontend/src/canvas-workspace.css'
+COARSE_TOOLBAR_CHANGES = frozenset((DRIVER, PRODUCER, COARSE_TOOLBAR_CSS))
+COARSE_TOOLBAR_REUSED_PHASES = ('python-tests', 'frontend-units')
+# Reviewed producer/mitigation pair; a manifest cannot substitute different bytes.
+COARSE_TOOLBAR_PRODUCER_SHA = 'f1e1abf17be39edec5841b74e59c1e1985083048699e5f117d0085aa2539f8bc'
+COARSE_TOOLBAR_CSS_SHA = 'aa28e10156f52e0c692643a0a8830be850b91bc1e3d7a9ca246d96184e124b66'
+COARSE_TOOLBAR_BEFORE_ROOT = ROOT / 'output/files1318-touch-event-v1-result'
+COARSE_TOOLBAR_BEFORE = {
+    'sourceRevision': '8ac98b80826b136432aa45e263bebd98e0a04407',
+    'sourceTree': 'f1cb13af2c6d0281e589f7703ab1368d3e0835c3',
+    'files': {
+        'parent-manifest.json': '59301f84d07bc9f5d7a781676b1cb3422c49ebf2b47072cf807443e1b579c023',
+        'generated-source/evidence/generated-file-controls-3W6LLV/observations.json':
+            '365b1b690f2735f799186bd5170ce82d93b5014eb18c55e0f745af4a8bf8e8bb',
+    },
+}
 # Same reviewed producer; the diagnostic flag is off for full qualification.
 CONTOUR_PRODUCER_SHA = 'f7a8eb18f75ac6f7791cf81edf20861312b7b188404774efc18430f0189f104e'
 TOUCH_EVENT_PRODUCER_SHA = 'f7a8eb18f75ac6f7791cf81edf20861312b7b188404774efc18430f0189f104e'
@@ -246,7 +280,8 @@ def require(value, message):
 def select_output(folder):
     """Keep the main process and every private child on the same fixed paths."""
     global OUT, HARNESS, VENV
-    require(folder in (QUALIFIED_OUT, CORNER_OUT, CONTOUR_OUT, TOUCH_EVENT_OUT), 'Unknown evidence destination')
+    require(folder in (QUALIFIED_OUT, CORNER_OUT, CONTOUR_OUT, TOUCH_EVENT_OUT, COARSE_TOOLBAR_OUT),
+            'Unknown evidence destination')
     OUT = folder
     HARNESS, VENV = OUT / 'harness', OUT / 'installed'
 
@@ -287,7 +322,8 @@ def frozen_inputs(frozen, *, built=False):
         path = ROOT / name
         require(not Path(name).is_absolute() and '..' not in Path(name).parts
                 and str(Path(name)) == name
-                and path not in (MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST), 'Unsafe frozen path')
+                and path not in (MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST,
+                                 COARSE_TOOLBAR_MANIFEST), 'Unsafe frozen path')
         require(path.parent.resolve().is_relative_to(ROOT), 'Frozen path escapes snapshot')
         require(expected['mode'] in ('100644', '100755', '120000')
                 and re.fullmatch('[a-f0-9]{64}', expected['sha256']), 'Invalid frozen identity')
@@ -299,11 +335,13 @@ def frozen_inputs(frozen, *, built=False):
 
 
 def diagnostic_static(frozen, *, binding='diagnosticReuse'):
-    """Validate ALL reuse inputs before replacing static, in the admitted guest only."""
+    """Validate old static; coarse-toolbar keeps it as context WITHOUT restoring."""
     require(ROOT == Path('/workspace') and Path.cwd().resolve() == ROOT
             and Path(__file__).resolve() == ROOT / DRIVER and not (ROOT / '.git').exists(),
             'Static reuse is guest-only')
-    require(binding in ('diagnosticReuse', 'contourReuse', 'touchEventReuse')
+    unit_only = binding == 'coarseToolbarReuse'
+    require(not unit_only or OUT == COARSE_TOOLBAR_OUT, 'Unit-only reuse is coarse-toolbar mode only')
+    require(binding in ('diagnosticReuse', 'contourReuse', 'touchEventReuse', 'coarseToolbarReuse')
             and frozen.get(binding) == REUSE_BINDING, 'Missing exact static reuse binding')
     archive, metadata_path = REUSE_INPUT / 'static.tar', REUSE_INPUT / 'reuse.json'
     for path, digest in ((archive, REUSE_BINDING['archiveSha256']),
@@ -325,7 +363,8 @@ def diagnostic_static(frozen, *, binding='diagnosticReuse'):
             and len(previous['files']) == len(frozen['files']) == 3187
             and previous['files'].keys() == frozen['files'].keys(), 'Old/new source inventory mismatch')
     changed = {name for name in frozen['files'] if previous['files'][name] != frozen['files'][name]}
-    require(changed == {DRIVER, PRODUCER}, 'Reuse requires all other tracked inputs unchanged')
+    require(changed == (COARSE_TOOLBAR_CHANGES if unit_only else {DRIVER, PRODUCER}),
+            'Reuse requires all other tracked inputs unchanged')
     expected = reuse['files']
     require(isinstance(expected, dict) and len(expected) == 311
             and 'amplifier_web/static/index.html' in expected, 'Wrong retained static inventory')
@@ -349,6 +388,18 @@ def diagnostic_static(frozen, *, binding='diagnosticReuse'):
         require(members.keys() == expected.keys(), 'Static archive file set differs')
         require(all(parent.as_posix() not in members for name in members for parent in Path(name).parents),
                 'Static archive file/directory collision')
+        if unit_only:
+            # Validate the old build as historical context, not candidate product.
+            # No copy into /workspace, no extraction, no REUSED build status.
+            save('reuse-metadata.json', reuse)
+            save('reuse-parent-manifest.json', previous)
+            save('reuse-validation.json', {
+                **REUSE_BINDING, 'parentManifestSha256': REUSE_MANIFEST_SHA,
+                'sourceWorkspaceArchiveSha256': REUSE_WORKSPACE_SHA,
+                'changedPaths': sorted(changed), 'priorStaticFiles': len(members),
+                'archiveBytes': REUSE_ARCHIVE_BYTES, 'staticRestored': False,
+                'buildReusable': False, 'purpose': 'immutable_before_context_only'})
+            return
         static = ROOT / 'amplifier_web/static'
         require(static.resolve() == static and static.is_dir(), 'Unsafe source static directory')
         require(all(not path.is_symlink() and (path.is_dir() or path.is_file())
@@ -378,8 +429,9 @@ def diagnostic_static(frozen, *, binding='diagnosticReuse'):
     require(sha(archive) == REUSE_BINDING['archiveSha256'], 'Reuse archive changed during restore')
 
 
-def retained_proofs(frozen):
+def retained_proofs(frozen, *, unit_only=False):
     """Read/copy old proofs only; never collect or execute either test suite."""
+    require(not unit_only or OUT == COARSE_TOOLBAR_OUT, 'Unit-only proof reuse is coarse-toolbar mode only')
     bindings = frozen.get('reuseEvidence')
     require(isinstance(bindings, dict) and set(bindings) == set(REUSE_EVIDENCE_FILES),
             'Final manifest must bind the exact retained proof inventory')
@@ -452,6 +504,10 @@ def retained_proofs(frozen):
         'staticFiles': 311, 'processCleanup': CLEAN,
         'status': 'verified_prior_evidence_only_pending_static_source_validation',
     }
+    if unit_only:
+        result.pop('staticFiles')
+        result.update(priorStaticFiles=311, buildReusable=False,
+                      reusablePhases=list(COARSE_TOOLBAR_REUSED_PHASES))
     save('reuse-evidence-validation.json', result)
     return result
 
@@ -482,6 +538,353 @@ def retained_environment(prior):
         'currentRuntimeSha256': sha(OUT / 'runtime-readiness.json'),
         'distributionCount': len(current['distributions']),
     })
+
+
+def coarse_toolbar_inputs(frozen):
+    """Bind the one reviewed product exception and immutable raw 8ac baseline."""
+    require(OUT == COARSE_TOOLBAR_OUT and frozen.get('coarseToolbarReuse') == REUSE_BINDING
+            and frozen.get('coarseToolbarBefore') == COARSE_TOOLBAR_BEFORE,
+            'Missing exact coarse-toolbar reuse/before binding')
+    require(set(frozen['changedPaths']) == REVIEWED_CHANGES | {COARSE_TOOLBAR_CSS},
+            'Coarse-toolbar candidate must have the exact baseline-to-candidate paths')
+    require(frozen['files'][COARSE_TOOLBAR_CSS] == {'mode': '100644', 'sha256': COARSE_TOOLBAR_CSS_SHA}
+            and frozen['files'][PRODUCER] == {'mode': '100644', 'sha256': COARSE_TOOLBAR_PRODUCER_SHA},
+            'Coarse-toolbar reviewed CSS/producer identity changed')
+    review = {
+        'reviewed': True,
+        'baseRevision': COARSE_TOOLBAR_BEFORE['sourceRevision'],
+        'baseTree': COARSE_TOOLBAR_BEFORE['sourceTree'],
+        'changedPaths': sorted(COARSE_TOOLBAR_CHANGES),
+        'files': {name: frozen['files'][name] for name in sorted(COARSE_TOOLBAR_CHANGES)},
+        'productChange': '14px external gap below visible saved-file toolbar to whole following body on coarse pointer',
+    }
+    require(frozen.get('coarseToolbarReview') == review, 'Missing exact changed-file review attestation')
+    prior = OUT / 'before-evidence'
+    prior.mkdir()
+    for name, digest in COARSE_TOOLBAR_BEFORE['files'].items():
+        source, target = COARSE_TOOLBAR_BEFORE_ROOT / name, prior / name
+        require(source.resolve() == source and stat.S_ISREG(source.lstat().st_mode)
+                and sha(source) == digest, f'Raw 8ac baseline identity mismatch: {name}')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        require(sha(target) == digest, f'Raw 8ac baseline copy mismatch: {name}')
+    previous = read(prior / 'parent-manifest.json')
+    require(previous['schemaVersion'] == 2 and previous['reviewed'] is True
+            and previous['revision'] == review['baseRevision'] and previous['tree'] == review['baseTree']
+            and all(previous[key] == frozen[key] for key in ('baselineRevision', 'baselineTree'))
+            and previous['touchEventReuse'] == REUSE_BINDING
+            and previous['files'][PRODUCER]['sha256'] == TOUCH_EVENT_PRODUCER_SHA
+            and previous['files'].keys() == frozen['files'].keys()
+            and {name for name in frozen['files'] if previous['files'][name] != frozen['files'][name]}
+                == COARSE_TOOLBAR_CHANGES, 'Only the reviewed CSS/driver/producer may differ from 8ac')
+    observation_name, = [name for name in COARSE_TOOLBAR_BEFORE['files'] if name.endswith('/observations.json')]
+    proof = read(prior / observation_name)
+    diagnostic = proof['touchEventDiagnostic']
+    require(proof['mode'] == 'touch-event-diagnostic' and proof['passed'] is False
+            and diagnostic['checkpoint'] == 'first-390-primary-download'
+            and diagnostic['label'] == 'touch-390-preview' and diagnostic['tapAttempts'] == 1
+            and diagnostic['originalOraclePassed'] is False
+            and diagnostic['checkpointObserved'] is True, 'Wrong before gesture/failure baseline')
+    before = diagnostic['before']
+    contour_sample(before)
+    require(before['name'] == 'Download canvas source' and before['corner'] == 'bottom-right'
+            and before['viewport']['width'] == 390 and before['viewport']['height'] == 844
+            and before['intended'] == {axis: before['corners'][3][axis] for axis in ('x', 'y')},
+            'Raw before contour baseline differs')
+    pointer, = [event for event in diagnostic['capture']['events'] if event['type'] == 'pointerdown']
+    toolbar, = [node for node in pointer['atIntended']['elements']
+                if 'a-canvas-artifact-toolbar' in (node.get('className') or '').split()]
+    body, = [node for node in pointer['ancestors']
+             if 'a-canvas-body' in (node.get('className') or '').split()]
+    html = proof['seed']['artifacts']['html']
+    require(html['byteLength'] == len(html['body'].encode()) == 426
+            and html['sha256'] == hashlib.sha256(html['body'].encode()).hexdigest()
+                == '93229c6d39952ff4ab7b89ec66ae6d92e49da7a0d4da4269b736b8430caabfb0',
+            'Raw before HTML identity differs')
+    baseline = {
+        'source': {'head': previous['revision'], 'tree': previous['tree'],
+                   'report': (COARSE_TOOLBAR_BEFORE_ROOT / observation_name).relative_to(ROOT).as_posix(),
+                   'sha256': COARSE_TOOLBAR_BEFORE['files'][observation_name],
+                   'checkpoint': diagnostic['checkpoint'], 'path': 'touchEventDiagnostic.before'},
+        'before': {key: before[key] for key in ('rect', 'radii', 'borders', 'viewport', 'intended', 'position')},
+        'bodyTop': body['rect']['top'], 'toolbarRect': toolbar['rect'],
+        'html': {'bytes': html['byteLength'], 'sha256': html['sha256']},
+    }
+    save('coarse-toolbar-review.json', review)
+    save('coarse-toolbar-before.json', {
+        'reference': COARSE_TOOLBAR_BEFORE, 'observationPath': str(prior / observation_name),
+        'browser': diagnostic['browser'], 'options': diagnostic['options'],
+        'before': before, 'retained': diagnostic['retained'],
+        'baseline': baseline, 'html': html,
+        'originalOraclePassed': False, 'productAcceptance': False,
+    })
+
+
+def coarse_toolbar_layout(layout, *, coarse, width):
+    """Recompute separation/clipping from raw geometry, never its passed flag."""
+    def rect(value):
+        require(all(type(value[key]) in (int, float) and math.isfinite(value[key])
+                    for key in ('x', 'y', 'left', 'right', 'top', 'bottom', 'width', 'height'))
+                and value['x'] == value['left'] and value['y'] == value['top']
+                and value['right'] - value['left'] == value['width'] > 0
+                and value['bottom'] - value['top'] == value['height'] > 0, 'Invalid toolbar layout rectangle')
+
+    def contained(inner, outer):
+        return (inner['left'] >= outer['left'] and inner['right'] <= outer['right']
+                and inner['top'] >= outer['top'] and inner['bottom'] <= outer['bottom'])
+
+    viewport, reader = layout['viewport'], layout['reader']
+    require(layout['queries'] == {'coarse': coarse, 'fine': not coarse}
+            and (coarse, width) in ((False, 1440), (True, 390), (True, 320))
+            and viewport['width'] == width and viewport['height'] == {1440: 1000, 390: 844, 320: 740}[width]
+            and viewport['scale'] == 1 and viewport['offsetLeft'] == viewport['offsetTop'] == 0
+            and layout['adjacent'] is True and layout['panelMode'] == 'artifact' and layout['settings'] is False
+            and reader['connected'] is True and 'a-canvas-reader' in reader['className'].split()
+            and reader['computed']['display'] == 'flex' and reader['computed']['flexDirection'] == 'column',
+            'Wrong fine/coarse reader/layout context')
+    rect(reader['rect'])
+    toolbar, body, button = (layout[key] for key in ('toolbar', 'body', 'button'))
+    require('a-canvas-artifact-toolbar' in toolbar['className'].split()
+            and 'a-canvas-body' in body['className'].split() and button['tag'] == 'BUTTON'
+            and len({box['nodeId'] for box in (toolbar, body, button, reader)}) == 4,
+            'Toolbar/body/button identity is not distinct')
+    for box in (toolbar, body, button):
+        rect(box['rect'])
+        require(type(box['nodeId']) is int and box['nodeId'] > 0
+                and box['connected'] is True and box['visible'] is True and box['hidden'] is False
+                and contained(box['rect'], {'left': 0, 'top': 0, 'right': width, 'bottom': viewport['height']})
+                and contained(box['rect'], reader['rect'])
+                and type(box['scrollWidth']) is int and type(box['clientWidth']) is int
+                and 0 < box['clientWidth'] >= box['scrollWidth']
+                and box['computed']['pointerEvents'] != 'none' and box['computed']['touchAction'] != 'none',
+                'Toolbar/body/button clipping, overflow or hit suppression')
+    margin = 14 if coarse else 0
+    require(body['computed']['marginTop'] == f'{margin}px'
+            and body['rect']['top'] == toolbar['rect']['bottom'] + margin
+            and contained(button['rect'], toolbar['rect'])
+            and type(layout['documentWidth']) is int and 0 < layout['documentWidth'] <= width
+            and button['computed']['minWidth'] == button['computed']['minHeight'] == '44px'
+            and button['rect']['width'] >= 44 and button['rect']['height'] >= 44
+            and layout['radii'] == [button['computed'][key] for key in
+                ('borderTopLeftRadius', 'borderTopRightRadius', 'borderBottomLeftRadius', 'borderBottomRightRadius')],
+            'External separation/native button geometry differs')
+    require([row['selector'] for row in layout['wrappers']] ==
+            ['.a-canvas-primary-actions', '.a-canvas-common-actions', '.a-saved-file-download']
+            and all(row['node']['connected'] is True and row['node']['computed']['display'] == 'contents'
+                    for row in layout['wrappers']), 'Toolbar wrappers changed layout')
+    notices = layout['notices']
+    require(layout['noticesTruncated'] is False and 1 <= len(notices) <= 4
+            and any(notice['visible'] is True for notice in notices), 'Missing visible saved-version notice')
+    for notice in notices:
+        if notice['visible'] is True:
+            rect(notice['rect'])
+            require(notice['connected'] is True and 'a-renderer-notice' in notice['className'].split()
+                    and contained(notice['rect'], body['rect'])
+                    and notice['computed']['userSelect'] != 'none'
+                    and notice['computed']['pointerEvents'] != 'none', 'Notice clipping/selectability changed')
+    require(layout['contactEnvelope'] == {
+        'radiusDip': 16, 'radiusCssPx': 16, 'bottom': button['rect']['bottom'] + 16,
+        'basis': 'Maximum 16 DIP contact radius; qualified only at DPR=1 and visual scale=1.'},
+        'Contact envelope identity differs')
+    if coarse:
+        require(viewport['dpr'] == 1 and body['rect']['top'] > button['rect']['bottom'] + 16,
+                'Whole following body intersects the contact envelope')
+
+
+def coarse_toolbar_proof(proof, mode):
+    """Independent raw-baseline, layout, native-event and saved-preview acceptance."""
+    require(OUT == COARSE_TOOLBAR_OUT and mode in ('source', 'installed'), 'Wrong coarse-toolbar proof mode')
+    prior = read(OUT / 'coarse-toolbar-before.json')
+    qualification = proof['coarseToolbarQualification']
+    baseline = prior['baseline']
+    require(proof['mode'] == 'coarse-toolbar-qualification' and proof['qualificationComplete'] is True
+            and qualification['version'] == 'coarse-toolbar-v1' and qualification['complete'] is True
+            and qualification['baseline'] == baseline
+            and qualification['separationCssPx'] == 14 and qualification['contactRadiusDip'] == 16,
+            'Coarse-toolbar envelope/bound raw baseline differs')
+    layouts = qualification['layoutChecks']
+    expected_layouts = [(label, phase) for label in
+                        ('desktop-preview', 'touch-390-preview', 'touch-320-preview') for phase in ('before', 'after')]
+    require([(row['label'], row['phase']) for row in layouts] == expected_layouts
+            and all(row['check'] == 'saved-file toolbar external separation and clipping'
+                    and row['passed'] is True for row in layouts), 'Require the exact six layout records')
+    for row in layouts:
+        layout = row['snapshot']
+        coarse = row['label'] != 'desktop-preview'
+        width = 320 if row['label'] == 'touch-320-preview' else 390 if coarse else 1440
+        coarse_toolbar_layout(layout, coarse=coarse, width=width)
+        # Bind every layout to the existing independently checked contour sample.
+        measured, = [sample for sample in proof['geometry']
+                     if sample['label'] == row['label'] + '-primary-' + row['phase']
+                     and sample['name'] == 'Download canvas source']
+        require(layout['button']['nodeId'] == measured['nodeId']
+                and layout['button']['rect'] == measured['rect'] and layout['radii'] == measured['radii'],
+                'Layout does not describe the original measured control')
+        if row['phase'] == 'before':
+            require('feedback' not in row, 'Before-layout unexpectedly contains post-download feedback')
+            continue
+        feedback = row['feedback']
+        recorded, = [sample for sample in proof['geometry'] if sample['label'] == row['label'] + '-visible-feedback']
+        require(recorded == {'label': row['label'] + '-visible-feedback', **feedback}
+                and feedback['bar'] == layout['toolbar']['rect'] and feedback['contained'] is True
+                and feedback['lines'], 'Feedback not bound to the measured toolbar')
+        box, bar = feedback['rect'], feedback['bar']
+        require(box['width'] > 0 and box['height'] > 0 and box['left'] >= bar['left']
+                and box['right'] <= min(bar['right'], width) and box['top'] >= bar['top']
+                and box['bottom'] <= min(bar['bottom'], layout['viewport']['height'])
+                and all(line['width'] > 0 and line['height'] > 0 and line['left'] >= box['left'] - 1
+                        and line['right'] <= box['right'] + 1 and line['bottom'] <= box['bottom'] + 1
+                        for line in feedback['lines']), 'Download feedback clipped/empty')
+    gesture = qualification['gesture']
+    require(gesture['qualification'] is True and gesture['checkpoint'] == 'first-390-primary-download'
+            and gesture['label'] == 'touch-390-preview' and gesture['control'] == 'Download canvas source'
+            and gesture['browser'] == prior['browser'] == read(OUT / 'browser-readiness.json')['browser']
+            and gesture['options'] == prior['options'] and gesture['tapAttempts'] == 1
+            and gesture['checkpointObserved'] is True and gesture['originalOraclePassed'] is True
+            and gesture['outcome'] == 'qualified-gesture-download-and-preservation'
+            and gesture['originalListenerRemoved'] is True and gesture['handleDisposed'] is True
+            and gesture['captureErrors'] == gesture['cleanupErrors'] == []
+            and not gesture.get('failure'), 'Wrong/incomplete first-390 gesture or cleanup')
+    before, delivered = gesture['before'], gesture['delivered']
+    for sample in (before, delivered):
+        contour_sample(sample)
+        require(all(sample[key] == value for key, value in baseline['before'].items())
+                and sample['corner'] == 'bottom-right' and sample['name'] == 'Download canvas source',
+                'Button geometry or intended point changed from raw 8ac failure')
+    taps = [sample for sample in proof['geometry'] if sample['label'] == 'corner-tap-before']
+    deliveries = [sample for sample in proof['geometry'] if sample['label'] == 'corner-tap-delivered']
+    # The retained full journey has six card touches before this seventh tap.
+    for raw, sample in ((before, taps[6]), (delivered, deliveries[6])):
+        require(sample == {'label': sample['label'], **{key: value for key, value in raw.items() if key != 'corners'},
+                           'acceptance': {'basis': raw['basis'], 'corners': raw['corners']}},
+                'First-390 record does not match the seventh original journey touch')
+    layout = gesture['beforeLayout']
+    coarse_toolbar_layout(layout, coarse=True, width=390)
+    require(layout['button']['nodeId'] == before['nodeId'] and layout['button']['rect'] == before['rect']
+            and layout['radii'] == before['radii'] and layout['toolbar']['rect'] == baseline['toolbarRect']
+            and layout['body']['rect']['top'] == baseline['bodyTop'] + 14
+            and gesture['baselineCheck'] == {
+                'check': 'first-390 baseline geometry and contour point unchanged', 'passed': True,
+                'fields': ['rect', 'radii', 'borders', 'viewport', 'intended', 'position'],
+                'bodyGap': layout['body']['rect']['top'] - before['rect']['bottom']}
+            and gesture['baselineCheck']['bodyGap'] == 16.5, 'Before-layout/baseline discriminator differs')
+    capture, node = gesture['capture'], before['nodeId']
+    events = capture['events']
+    types = ['pointerover', 'pointerenter', 'pointerdown', 'pointermove', 'pointerup', 'pointercancel',
+             'pointerout', 'pointerleave', 'gotpointercapture', 'lostpointercapture',
+             'touchstart', 'touchmove', 'touchend', 'touchcancel', 'mouseover', 'mouseenter', 'mousemove',
+             'mousedown', 'mouseup', 'click', 'mouseout', 'mouseleave', 'auxclick', 'contextmenu']
+    require(capture['limits'] == {'windowMs': 2000, 'records': 64, 'stack': 16, 'path': 24,
+                                 'ancestors': 16, 'notices': 4, 'touches': 4, 'errors': 8}
+            and capture['types'] == types and 5 <= len(events) <= 64 and capture['errors'] == []
+            and capture['truncations'] == {key: 0 for key in
+                ('records', 'stack', 'path', 'ancestors', 'notices', 'touches', 'errors')}
+            and capture['deadline'] == capture['armedAt'] + 2000
+            and capture['finished']['listenersRemoved'] is True and capture['finished']['timerCleared'] is True
+            and capture['finished']['reason'] in ('deadline', 'deadline-observed')
+            and all(type(value) in (int, float) and math.isfinite(value) for value in
+                    (capture['armedAt'], capture['deadline'], capture['finished']['at']))
+            and capture['finished']['at'] >= capture['armedAt'], 'Incomplete/lossy passive capture')
+    def untruncated(value):
+        if isinstance(value, dict):
+            return all(not (key.endswith('Truncated') and item is not False) and untruncated(item)
+                       for key, item in value.items())
+        return not isinstance(value, list) or all(untruncated(item) for item in value)
+    require(untruncated(events), 'Truncated nested event descriptor/layout')
+    for index, event in enumerate(events):
+        require(event['index'] == index and event['type'] in types and not event.get('captureError')
+                and all(type(event[key]) in (int, float) and math.isfinite(event[key])
+                        for key in ('at', 'wallTime', 'timeStamp'))
+                and capture['armedAt'] <= event['at'] < capture['deadline']
+                and event['at'] <= capture['finished']['at']
+                and (index == 0 or event['at'] >= events[index - 1]['at'])
+                and event['intended'] == before['intended'] and event['intendedButton']['nodeId'] == node
+                and len(event['composedPath']) <= 24 and len(event['ancestors']) <= 16
+                and len(event['notices']) <= 4 and len(event['capture']['queried']) <= 26
+                and len(event.get('changedTouches') or []) <= 4
+                and event['atIntended']['point'] == before['intended']
+                and len(event['atIntended']['elements']) <= 16
+                and (event['actual'] is None or (event['atActual']['point'] == event['actual']
+                     and len(event['atActual']['elements']) <= 16)), 'Malformed synchronous event record')
+    sequence = [event['type'] for event in events]
+    kinds = ('pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click')
+    require(all(sequence.count(kind) == 1 for kind in kinds)
+            and not any(kind in sequence for kind in ('pointercancel', 'touchcancel')),
+            'Missing, repeated or cancelled gesture')
+    pair = [events[sequence.index(kind)] for kind in kinds]
+    require([event['index'] for event in pair] == sorted(event['index'] for event in pair)
+            and gesture['sequence'] == sequence and gesture['pairPresence'] ==
+                {'pointerdown': pair[0]['index'], 'firstMousedown': pair[2]['index']}
+            and pair[0]['pointerType'] == pair[1]['pointerType'] == 'touch'
+            and pair[2]['sourceCapabilities'] == {'firesTouchEvents': True},
+            'Wrong gesture order/type/summary')
+    for event in pair:
+        actual = event['actual']
+        require(event['isTrusted'] is True and event['sameNode'] is True
+                and event['target']['nodeId'] == node and event['target']['tag'] == 'BUTTON'
+                and event['target']['connected'] is True and event['target']['rect'] == before['rect']
+                and event['intendedButton']['tag'] == 'BUTTON' and event['intendedButton']['connected'] is True
+                and event['intendedButton']['rect'] == before['rect']
+                and {'nodeId': node, 'tag': 'BUTTON'} in event['composedPath']
+                and all(type(actual[axis]) in (int, float) and math.isfinite(actual[axis]) for axis in ('x', 'y'))
+                and before['rect']['left'] <= actual['x'] < before['rect']['right']
+                and before['rect']['top'] <= actual['y'] < before['rect']['bottom']
+                and event['capture']['phase'] in (1, 2)
+                and event['scroll'] == {'x': 0, 'y': 0}, 'Trusted event did not reach the original native button')
+        event_layout = event['toolbarLayout']
+        coarse_toolbar_layout(event_layout, coarse=True, width=390)
+        require(event_layout['button']['nodeId'] == node and event_layout['button']['rect'] == before['rect']
+                and event_layout['radii'] == before['radii'], 'Event-time button geometry changed')
+    pointer, mouse, click = pair[0], pair[2], pair[4]
+    require(pointer['actual'] == {axis: delivered['event'][axis] for axis in ('x', 'y')}
+            and delivered['event']['sameNode'] is True
+            and gesture['eventCheck'] == {
+                'check': 'first-390 trusted pointerdown and click on original button', 'passed': True,
+                'buttonNodeId': node, 'pointerdownIndex': pointer['index'], 'firstMousedownIndex': mouse['index'],
+                'clickIndex': click['index'], 'actual': {name: event['actual'] for name, event in
+                    (('pointerdown', pointer), ('mousedown', mouse), ('click', click))},
+                'mouseDelta': {axis: mouse['actual'][axis] - pointer['actual'][axis] for axis in ('x', 'y')}},
+            'Original pointer observation or independently computed event summary differs')
+    retained, post = gesture['retained'], gesture['postGesture']
+    setup, = [row for row in proof['checks'] if row['check'] ==
+              'deliberate saved-v1 preview setup, not a download' and row['label'] == 'touch']
+    journey, = [row for row in proof['checks'] if row['check'] ==
+                'right-rail paths/download and primary Download preserve running saved-v1 HTML'
+                and row['label'] == 'touch-390-preview']
+    html = proof['seed']['artifacts']['html']
+    require(all(html[key] == prior['html'][key] for key in ('body', 'byteLength', 'sha256', 'filename', 'version'))
+            and all(retained[key] == setup[key] == journey[key] for key in ('marker', 'state', 'documents'))
+            and journey['mode'] == 'touch' and retained['unfinished'] == journey['unfinished']
+            and re.fullmatch(r'Unsubmitted touch note — [a-f0-9-]{36}', retained['unfinished'])
+            and retained['marker']['count'] == 1 and retained['marker']['executed'] == '1'
+            and re.fullmatch(r'\d+-\d+-\d+-\d+', retained['marker']['token']),
+            'Fresh running HTML/input/token setup binding differs')
+    state = retained['state']
+    require(state['selected'] == proof['seed']['sessionId']
+            and state['draft'] == 'Keep touch draft — unsubmitted.'
+            and state['canvas'] == {'id': html['id'], 'version': 1, 'readOnly': True}
+            and len(state['views']) == len(state['iframeSightings']) == len(retained['documents']) == 1
+            and state['views'][0]['viewId'] == 'primary' and state['views'][0]['resourceId'] == html['id']
+            and state['views'][0]['selectedVersion'] == 1 and state['views'][0]['generation'] > 0
+            and re.fullmatch('[a-f0-9]{64}', state['views'][0]['resourceRevision'])
+            and retained['documents'] == [request for request in proof['requests']
+                                        if request['client'] == 'touch' and request['path'].endswith('/document')]
+            and state['iframeSightings'] == [retained['documents'][0]['path'] + retained['documents'][0]['query']],
+            'Selected saved-v1 lease/draft/document binding differs')
+    download, = [row for row in proof['downloads'] if row['label'] == 'touch-390-preview-primary-v1']
+    require(download == gesture['download'] == post['download']
+            == {'label': 'touch-390-preview-primary-v1', 'filename': html['filename'], **baseline['html']}
+            and post['check'] == 'first-390 exact saved HTML download and running preview preserved'
+            and post['passed'] is True and post['preservation'] == {
+                'iframeConnected': True, 'sameIframe': True, 'iframeCount': 1,
+                'marker': retained['marker'], 'unfinished': retained['unfinished'], 'state': state,
+                'documents': retained['documents'], 'prohibitedCommands': []},
+            'Exact saved download or running-preview preservation differs')
+    save(f'generated-{mode}/coarse-toolbar-validation.json', {
+        'baseline': baseline, 'layoutRecords': 6, 'gestureChecks': 3, 'tapAttempts': 1,
+        'eventIndices': {kind: event['index'] for kind, event in zip(kinds, pair)},
+        'bodyGap': gesture['baselineCheck']['bodyGap'], 'download': download,
+        'passed': True, 'visualJudgment': 'pending'})
 
 
 def candidate(frozen):
@@ -1000,11 +1403,13 @@ def contour_proof(proof, taps, padding_count):
             'Missing/changed per-touch padding conversion negatives')
 
 
-def generated_proof(mode):
+def generated_proof(mode, *, coarse_toolbar=False):
     reports = list((OUT / f'generated-{mode}/evidence').glob('generated-file-controls-*/observations.json'))
     require(len(reports) == 1, 'Require one generated-file journey report')
     proof = read(reports[0])
-    require(not any(key in proof for key in ('mode', 'diagnosticComplete', 'stoppedAfter', 'cornerDiagnostics'))
+    require((proof.get('mode') == 'coarse-toolbar-qualification' if coarse_toolbar else 'mode' not in proof)
+            and not any(key in proof for key in ('diagnosticComplete', 'stoppedAfter', 'cornerDiagnostics',
+                                               'touchEventDiagnostic'))
             and proof['passed'] is True and proof['errors'] == [] and proof['screenshotErrors'] == []
             and not proof.get('error') and not proof.get('failure') and proof['preCleanupSnapshots'] == [],
             'Generated-file journey did not pass')
@@ -1031,6 +1436,27 @@ def generated_proof(mode):
     else:
         require(read(OUT / 'source-fixture-payload-before.json') ==
                 read(OUT / 'source-fixture-payload-after.json'), 'Source payload/static changed')
+    if coarse_toolbar:
+        build_identity = read(OUT / 'frontend-build-identity.json')
+        require(build_identity['reusedBuild'] is False and expected['static'] == build_identity['static']
+                and read(Path(package) / 'static/build.json') == build_identity['build']
+                and tree(Path(package) / 'static') == static, 'Journey serving package is not the fresh build')
+        server_origins = {}
+        for when in ('before', 'after'):
+            process = read(OUT / f'{mode}-fixture-origins-{when}.json')
+            origin = process['modules']['amplifier_web.server']
+            require(origin == {'path': str(Path(package) / 'server.py'),
+                               'sha256': expected['files']['amplifier_web/server.py']},
+                    'Serving module is not from the verified source/installed package')
+            server_origins[when] = origin
+        # The frozen server's index/static routes resolve beside server.py.
+        # This proves the same fixture's serving package/assets, not a packet trace.
+        save(f'generated-{mode}/serving-assets.json', {
+            'fixturePid': proof['cleanup']['pid'], 'packageRoot': package,
+            'serverOrigins': server_origins, 'build': build_identity['build'],
+            'static': static, 'reusedBuild': False,
+            'basis': 'same-fixture server module origins and adjacent static bytes; not browser response capture'})
+        coarse_toolbar_proof(proof, mode)
     save(f'generated-{mode}/accepted-report.json', {
         'path': str(reports[0]), 'sha256': sha(reports[0]), 'visualJudgment': 'pending',
         'frameBindingCounts': dict(Counter(c['binding']['status'] for c in proof['fileFrameCaptures']))})
@@ -1421,21 +1847,26 @@ def main():
     evidence_deadline = hard_deadline - RECEIPT_RESERVE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest', required=True, type=Path,
-                        choices=[MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST])
+                        choices=[MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST,
+                                 COARSE_TOOLBAR_MANIFEST])
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--corner-diagnostic', action='store_true')
     modes.add_argument('--contour-qualification', action='store_true')
     modes.add_argument('--touch-event-diagnostic', action='store_true')
+    modes.add_argument('--coarse-toolbar-qualification', action='store_true')
     args = parser.parse_args()
     checkpoint_mode = args.corner_diagnostic or args.touch_event_diagnostic
     reuse_mode = args.contour_qualification or args.touch_event_diagnostic
+    reused_phases = COARSE_TOOLBAR_REUSED_PHASES if args.coarse_toolbar_qualification else REUSED_PHASES
     manifest_path = (CORNER_MANIFEST if args.corner_diagnostic
                      else TOUCH_EVENT_MANIFEST if args.touch_event_diagnostic
+                     else COARSE_TOOLBAR_MANIFEST if args.coarse_toolbar_qualification
                      else CONTOUR_MANIFEST if args.contour_qualification else MANIFEST)
     if args.manifest != manifest_path:
         parser.error('The manifest must match the selected qualification mode')
     select_output(CORNER_OUT if args.corner_diagnostic
                   else TOUCH_EVENT_OUT if args.touch_event_diagnostic
+                  else COARSE_TOOLBAR_OUT if args.coarse_toolbar_qualification
                   else CONTOUR_OUT if args.contour_qualification else QUALIFIED_OUT)
     OUT.mkdir(parents=True, exist_ok=False)  # No replay or overwrite of a prior cycle.
     report = {'schemaVersion': 1, 'passed': False, 'complete': False,
@@ -1480,6 +1911,17 @@ def main():
         report['limits'].append(
             'Only the earlier 70 Python tests, 19 Node tests and 311 built static files may be REUSED. '
             'The prior integrated run failed later; no prior full qualification pass is claimed.')
+    if args.coarse_toolbar_qualification:
+        report.update(mode='coarse-toolbar-qualification', priorChecksConsumed=15, prospectiveCheckOrdinal=16,
+                      priorIntegratedPassed=False, reusedBuild=False)
+        for name in ('reuse-proof', 'prior-build-context'):
+            report['phases'][name] = {'status': 'unrun', 'reason': 'not_started'}
+        for name in reused_phases:
+            report['phases'][name]['reason'] = 'reuse_pending_exact_evidence_and_inputs'
+        report['limits'].append(
+            'Only the exact earlier 70 Python and 19 Node tests may be REUSED. '
+            'The old build remains immutable before-context; fresh canonical frontend build is required. '
+            'One full source/installed qualification; no spacing sweep, repair or retry.')
     save('report.json', report)
     def expired(_signum, _frame):
         remaining = hard_deadline - time.monotonic()
@@ -1522,9 +1964,11 @@ def main():
                     and frozen['tree'] != frozen['baselineTree'] and frozen['reviewed'] is True,
                     'Require the committed, parent-reviewed candidate, not dirty baseline bytes')
             changed = frozen['changedPaths']
+            allowed_changes = (REVIEWED_CHANGES | {COARSE_TOOLBAR_CSS}
+                               if args.coarse_toolbar_qualification else REVIEWED_CHANGES)
             require(isinstance(changed, list) and len(changed) == len(set(changed))
-                    and DRIVER in changed and set(changed) <= REVIEWED_CHANGES
-                    and set(changed) <= frozen['files'].keys(), 'Candidate changes exceed fixed test-only scope')
+                    and DRIVER in changed and set(changed) <= allowed_changes
+                    and set(changed) <= frozen['files'].keys(), 'Candidate changes exceed selected fixed scope')
             save('parent-manifest.json', frozen)
             report['manifestSha256'] = sha(args.manifest)
             save('source-before.json', frozen_inputs(frozen))
@@ -1543,6 +1987,12 @@ def main():
             if args.touch_event_diagnostic:
                 require(frozen['files'][PRODUCER]['sha256'] == TOUCH_EVENT_PRODUCER_SHA,
                         'Touch event producer differs from the reviewed verifier interface')
+            if args.coarse_toolbar_qualification:
+                require(isinstance(COARSE_TOOLBAR_PRODUCER_SHA, str)
+                        and re.fullmatch('[a-f0-9]{64}', COARSE_TOOLBAR_PRODUCER_SHA)
+                        and frozen['files'][PRODUCER]['sha256'] == COARSE_TOOLBAR_PRODUCER_SHA,
+                        'Coarse-toolbar producer differs from the reviewed verifier interface')
+                coarse_toolbar_inputs(frozen)
             renderer_source = (ROOT / 'frontend/tests/canvas-renderers-browser.mjs').read_text()
             if not checkpoint_mode and ('CANVAS_RENDERER_STALLED_BODY' not in renderer_source
                     or 'expectedFailureVerified' not in renderer_source):
@@ -1609,6 +2059,8 @@ def main():
             env['FILES1318_TOUCH_EVENT_DIAGNOSTIC'] = '1'
         elif args.contour_qualification:
             env['FILES1318_CONTOUR_QUALIFICATION'] = '1'
+        elif args.coarse_toolbar_qualification:
+            env['FILES1318_COARSE_TOOLBAR_QUALIFICATION'] = '1'
         for key in ('HOME', 'TMPDIR', 'XDG_CACHE_HOME'):
             Path(env[key]).mkdir()
         os.environ.clear()
@@ -1622,6 +2074,8 @@ def main():
                 save('report.json', report)
                 remaining = work_deadline - CLEANUP_RESERVE - time.monotonic()
                 require(remaining > 0, 'Combined budget exhausted; cleanup/finalization reserved')
+                if args.coarse_toolbar_qualification:
+                    row['executed'] = True
                 code = run_scenarios(root, {'schemaVersion': 1, 'scenarios': [
                     {'id': name, 'command': row['command'], 'env': selected_env}]},
                     OUT / name, budget=min(cap, remaining), case_timeout=min(cap, remaining),
@@ -1665,13 +2119,17 @@ def main():
             BROWSER_READY.replace('/artifacts/files1318-qualified', str(OUT))], cap=45)
         if args.corner_diagnostic:
             step('static-reuse', lambda: diagnostic_static(frozen))
-        elif reuse_mode:
-            reused = step('reuse-proof', lambda: retained_proofs(frozen))
-            step('static-reuse', lambda: diagnostic_static(
-                frozen, binding='touchEventReuse' if args.touch_event_diagnostic else 'contourReuse'))
+        elif reuse_mode or args.coarse_toolbar_qualification:
+            reused = step('reuse-proof', lambda: retained_proofs(
+                frozen, unit_only=args.coarse_toolbar_qualification))
+            if args.coarse_toolbar_qualification:
+                step('prior-build-context', lambda: diagnostic_static(frozen, binding='coarseToolbarReuse'))
+            else:
+                step('static-reuse', lambda: diagnostic_static(
+                    frozen, binding='touchEventReuse' if args.touch_event_diagnostic else 'contourReuse'))
             # No status changes until every original proof, dependency identity,
             # tracked input and archived static byte has passed the reuse guard.
-            for name in REUSED_PHASES:
+            for name in reused_phases:
                 report['phases'][name].update(
                     status='REUSED', reason='exact_prior_pass_and_unchanged_inputs_verified',
                     executed=False, sourceRevision=REUSE_BINDING['sourceRevision'],
@@ -1682,7 +2140,7 @@ def main():
             save('reuse-evidence-validation.json', reused)
             report['reuseEvidence'] = reused
             save('report.json', report)
-        else:
+        if not checkpoint_mode and not reuse_mode:
             run('frontend-build', [NPM, 'run', 'build'], cap=240)
 
         def source_freeze():
@@ -1693,10 +2151,26 @@ def main():
             require(value['static'] and 'amplifier_web/static/index.html' in value['static'], 'No built static')
             if checkpoint_mode or reuse_mode:
                 require(value['static'] == read(OUT / 'reuse-metadata.json')['files'], 'Reused static changed')
+            if args.coarse_toolbar_qualification:
+                old_build = read(OUT / 'reuse-metadata.json')
+                build_identity = read(ROOT / 'amplifier_web/static/build.json')
+                require(set(build_identity) == {'id', 'version'}
+                        and re.fullmatch('[a-f0-9]{16}', build_identity['id'])
+                        and build_identity['id'] != old_build['build']['id']
+                        and build_identity['version'] ==
+                            tomllib.loads((ROOT / 'pyproject.toml').read_text())['project']['version']
+                        and value['static'] != old_build['files']
+                        and report['phases']['frontend-build']['status'] == 'passed'
+                        and report['phases']['frontend-build']['executed'] is True,
+                        'Coarse-toolbar qualification requires a fresh changed canonical build')
+                save('frontend-build-identity.json', {
+                    'build': build_identity, 'sourceRevision': frozen['revision'], 'sourceTree': frozen['tree'],
+                    'manifestSha256': report['manifestSha256'], 'css': frozen['files'][COARSE_TOOLBAR_CSS],
+                    'static': value['static'], 'reusedBuild': False})
             save('candidate.json', value)
             save('static.json', value['static'])
         step('source-freeze', source_freeze)
-        if not checkpoint_mode and not reuse_mode:
+        if not checkpoint_mode and not reuse_mode and not args.coarse_toolbar_qualification:
             run('python-tests', [PYTHON, '-I', '-B', ROOT / DRIVER, '--python-tests'], cap=180, verify=junit)
             run('frontend-units', [NODE, '--test', '--test-reporter=tap',
                                   *(ROOT / name for name in UNIT_FILES)], cap=60, verify=unit_proof)
@@ -1713,12 +2187,15 @@ def main():
             if args.touch_event_diagnostic:
                 require(mode == 'source', 'Touch event diagnostic cannot exercise installed mode')
                 extra['FILE_CONTROLS_TOUCH_EVENT_DIAGNOSTIC'] = '1'
+            if args.coarse_toolbar_qualification:
+                extra['FILE_CONTROLS_COARSE_TOOLBAR_QUALIFICATION'] = '1'
             run('topology-' + mode, [NODE, 'tests/file-controls-topology-preflight.mjs'], root=root,
                 extra={'FILE_CONTROLS_PREFLIGHT_EVIDENCE': str(OUT / f'topology-{mode}/evidence')},
                 cap=80, verify=lambda: topology_proof(mode))
             run('generated-' + mode, [NODE, 'tests/generated-file-controls-browser.mjs'],
                 root=root, extra=extra, cap=160,
-                verify=None if checkpoint_mode else lambda: generated_proof(mode))
+                verify=None if checkpoint_mode else lambda: generated_proof(
+                    mode, coarse_toolbar=args.coarse_toolbar_qualification))
 
         generated('source')
         if not checkpoint_mode:
@@ -1797,6 +2274,29 @@ def main():
                     require(all(report['phases'][name]['status'] == 'REUSED'
                                 and report['phases'][name]['executed'] is False for name in REUSED_PHASES),
                             'Reused phases were rerun or lost their evidence')
+                if args.coarse_toolbar_qualification:
+                    built_identity = read(OUT / 'frontend-build-identity.json')
+                    require(expected['static'] == built_identity['static']
+                            and built_identity['reusedBuild'] is False
+                            and read(ROOT / 'amplifier_web/static/build.json') == built_identity['build']
+                            and report['phases']['frontend-build']['status'] == 'passed'
+                            and report['phases']['frontend-build']['executed'] is True
+                            and {name for name, row in report['phases'].items() if row['status'] == 'REUSED'}
+                                == set(COARSE_TOOLBAR_REUSED_PHASES)
+                            and all(report['phases'][name]['executed'] is False
+                                    for name in COARSE_TOOLBAR_REUSED_PHASES),
+                            'Fresh-build identity or unit-only reuse boundary changed')
+                    require(all(sha(path) == digest for path, digest in (
+                                (REUSE_INPUT / 'reuse.json', REUSE_BINDING['metadataSha256']),
+                                (REUSE_INPUT / 'static.tar', REUSE_BINDING['archiveSha256']),
+                                (REUSE_MANIFEST, REUSE_MANIFEST_SHA)))
+                            and all(sha(folder / name) == digest
+                                    for folder in (REUSE_MANIFEST.parent, OUT / 'prior-evidence')
+                                    for name, digest in frozen['reuseEvidence'].items())
+                            and all(sha(folder / name) == digest
+                                    for folder in (COARSE_TOOLBAR_BEFORE_ROOT, OUT / 'before-evidence')
+                                    for name, digest in COARSE_TOOLBAR_BEFORE['files'].items()),
+                            'Immutable old build/proof/before context changed')
             step('final-integrity', final_integrity)
         checks_finished = True  # Not qualified until bounded evidence finalization also finishes.
     except BaseException as error:
@@ -1869,8 +2369,10 @@ if __name__ == '__main__':
     corner = os.environ.get('FILES1318_CORNER_DIAGNOSTIC') == '1'
     contour = os.environ.get('FILES1318_CONTOUR_QUALIFICATION') == '1'
     touch_event = os.environ.get('FILES1318_TOUCH_EVENT_DIAGNOSTIC') == '1'
-    require(sum((corner, contour, touch_event)) <= 1, 'Conflicting child qualification modes')
+    coarse_toolbar = os.environ.get('FILES1318_COARSE_TOOLBAR_QUALIFICATION') == '1'
+    require(sum((corner, contour, touch_event, coarse_toolbar)) <= 1, 'Conflicting child qualification modes')
     select_output(CORNER_OUT if corner else TOUCH_EVENT_OUT if touch_event
+                  else COARSE_TOOLBAR_OUT if coarse_toolbar
                   else CONTOUR_OUT if contour else QUALIFIED_OUT)
     if touch_event:
         require(os.environ.get('FILES1318_FIXTURE') != 'installed'
