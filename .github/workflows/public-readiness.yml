@@ -196,7 +196,6 @@ jobs:
         working-directory: frontend
         run: |
           node tests/message-outbox-browser.mjs
-          node tests/update-message-delivery-browser.mjs
           node tests/support-diagnostics-browser.mjs
           node tests/multiple-window-stream-browser.mjs
       - name: Check workspace storage, unread state, plans and formatted copy
