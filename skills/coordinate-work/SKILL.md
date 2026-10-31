@@ -305,6 +305,16 @@ controls by an authorized owner. `task.update` retains used turns and correction
 history. When the prior objective is complete, create a distinct authorized
 follow-up if a saved task is needed, preserving the completed task and its evidence.
 
+After independently accepting a bound member's exact saved contribution, use
+`assignment.task.read` and `assignment.task.complete` with its current task ID,
+revision, assignment revision and completion evidence. The worker does not need
+another model turn to acknowledge shipment. Close only that achieved objective;
+a passing diagnostic does not resolve the original incident. This leaves Stop,
+used turns, history, unresolved question/operation records and resource custody
+intact. Read the original command receipt after an uncertain response. Use
+`assignment.retire` separately if finished participation should end; do not create
+another approval or worker-wake cycle just to record acceptance.
+
 Use questions for missing user decisions or authority, not to approve your own
 routine implementation choices. An unresolved user choice, explicit Stop,
 permission refusal or uncertain prior effect still requires its actual resolution.

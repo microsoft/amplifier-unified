@@ -356,7 +356,7 @@ class Assignments:
                     self.service._task(self.interrupt(identity, stops))
 
     async def _dispatch(self, action, args, origin, command_id, caller):
-        if action in {'assignment.task.read', 'assignment.task.setLimit'}:
+        if action in {'assignment.task.read', 'assignment.task.setLimit', 'assignment.task.complete'}:
             from .assignment_task_limits import dispatch
             return await dispatch(self, action, args, origin, command_id, caller)
         if action == 'assignment.retire':
