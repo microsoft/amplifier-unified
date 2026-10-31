@@ -289,7 +289,12 @@ async def test_full_child_first_mount_preserves_assignment_across_provider_await
         outcomes.append(result.success)
         if result.success:
             assert (await finished(h.app, 'late-mount'))['phase'] == 'ready'
-            assert h.authorities[-1][1]['inputIds'] == ['assigned-input']
+            authority = h.authorities[-1][1]
+            assert authority['inputIds'] == ['assigned-input']
+            assert authority['runtimeSessionId'] == coordinator.session_id == 'child'
+            assert authority['sessionId'] == h.source['id'] and authority['origin'] == 'agent'
+            assert authority['generationId'] == 'generation-1' and authority['interruptionRevision'] == 0
+            assert saved_permissions(h)['overrides']['tool-filesystem']['config']['allowed_write_paths'] == ['/delegated-output']
         else:
             assert not h.authorities and saved_permissions(h) == {}
         return 'checked'
@@ -311,8 +316,21 @@ async def test_full_child_first_mount_preserves_assignment_across_provider_await
             await h.app.dispatch('conversation.stop', {'sessionId': h.source['id']})
             h.worker.stop_revision += 1
         release.set()
-        await asyncio.wait_for(task, 30)
-        assert outcomes == [advance == 'input']
+        cancelled = False
+        try:
+            await asyncio.wait_for(task, 30)
+        except (asyncio.CancelledError, RuntimeError) as exc:
+            assert advance == 'stop'
+            assert str(exc) in {
+                'The originating native child run is no longer current.',
+                'Execution failed: CancelledError: The originating native child run is no longer current.'}
+            cancelled = True
+        # A new root turn does not replace the child's admitted assignment.
+        # Stop can cancel in the producer before an action result is returned.
+        assert outcomes == ([] if cancelled else [advance != 'stop'])
+        if advance == 'stop':
+            assert not h.authorities and saved_permissions(h) == {}
+        h.approval_prompt.assert_not_awaited()
     finally:
         release.set()
         if not task.done():
