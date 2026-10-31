@@ -653,9 +653,14 @@ Creation preparation and initial input admission still require the exact capture
 task revision. Existing receipts without the epoch keep that stricter boundary;
 this change neither retries old refusals nor changes a blocked task to complete.
 
-Only correlated outcome observations and later reports about an already delivered
-request may use that continuing-objective boundary. Ordinary queued instructions
-and active steering retain their exact task revision. Notifications do not grant
+Ordinary automatic and idle-queued peer instructions also use their existing
+host-captured reply continuation epoch for intake. Routine progress, reference or
+constraint updates do not invalidate the same saved request; current constraints
+and budgets still apply. This reuses existing receipt provenance without rewriting
+it or retrying an accepted, uncertain or suppressed delivery. Legacy receipts
+without the epoch, explicit anchored steering, commissioned initial input,
+blocked-task intake and deliberate human resume retain their existing contracts.
+Exact task edits still require their current edit revision. Notifications do not grant
 authority: admission rechecks current task state, budgets, Stop/interruption,
 assignment membership, ownership, permissions and any operation-specific
 placement/cancellation boundary. Current constraints apply before model work.

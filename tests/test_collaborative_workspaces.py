@@ -1759,19 +1759,59 @@ async def test_retained_outcome_survives_progress_only_without_replaying_work(ap
         assert app.collaboration.receipt('result-request')['response']['qualified'] is True
 
 
-async def test_ordinary_peer_instruction_still_requires_exact_revision(app):
+@pytest.mark.parametrize('mode', ['auto', 'queue'])
+@pytest.mark.parametrize('change', ['progress', 'objective', 'new-task', 'pause-resume', 'stop', 'legacy', 'owner'])
+async def test_ordinary_peer_intake_keeps_only_the_same_objective(app, mode, change):
     source, target = app.state['sessions']
     target.update(status='working', task={'id': 'objective', 'revision': 1,
                                           'continuationEpoch': 1, 'status': 'active'})
-    await send(app)
+    app.runtime.unavailable_boundaries.add(target['id'])
+    await send(app, mode=mode)
+    if mode == 'auto':
+        await until(lambda: app.collaboration.receipt('request-1').get('admission', {}).get('waitingForBoundary'))
+    original = app.collaboration.receipt('request-1')
+    target['task'].update(revision=2, constraints=['Inspect only; do not publish.'])
+    if change == 'objective':
+        target['task']['continuationEpoch'] = 2
+    elif change == 'new-task':
+        target['task']['id'] = 'different-task'
+    elif change == 'pause-resume':
+        target['task'].update(revision=3, continuationEpoch=3)
+    elif change == 'stop':
+        target['interruptionRevision'] = 1
+    elif change == 'legacy':
+        legacy = app.collaboration.receipt('request-1')
+        legacy.pop('replyTaskContinuationEpoch')
+        app.collaboration.save('request-1', legacy)
+    elif change == 'owner':
+        target['ownership'] = {'status': 'yielded'}
+    target['status'] = 'idle'
+    await app.collaboration.drain(target['id'])
+    result = await settled(app, 'request-1', 'accepted' if change == 'progress' else 'suppressed')
+    assert all(result[k] == original[k] for k in ('requestId', 'inputId', 'taskId', 'taskRevision',
+                                                 'sourceInputIds', 'displayBinding'))
+    await app.collaboration.drain(target['id'])
+    assert [value[1] for value in app.runtime.inputs] == (['request-1'] if change == 'progress' else [])
+
+
+@pytest.mark.parametrize('mode', ['auto', 'queue'])
+@pytest.mark.parametrize('unknown', [False, True])
+async def test_routine_task_edits_never_replay_an_admitted_or_unknown_peer(app, mode, unknown):
+    source, target = app.state['sessions']
+    target['task'] = {'id': 'objective', 'revision': 1, 'continuationEpoch': 1, 'status': 'active'}
+    app.runtime.fail = unknown
+    await send(app, mode=mode)
+    saved = await settled(app, 'request-1', 'unknown' if unknown else 'accepted')
     target['task']['revision'] = 2
     target['status'] = 'idle'
     await app.collaboration.drain(target['id'])
-    assert (await settled(app, 'request-1', 'suppressed'))['detail'] == 'The recipient task changed.'
-    assert not app.runtime.inputs
+    retry = await send(app, mode=mode)
+    assert retry['duplicate'] and retry['delivery'] == saved['delivery']
+    assert app.collaboration.receipt('request-1') == saved
+    assert [value[1] for value in app.runtime.inputs] == ['request-1']
 
 
-async def test_caller_cannot_turn_an_instruction_into_an_outcome_observation(app):
+async def test_caller_cannot_change_an_instruction_continuation_identity(app):
     source, target = app.state['sessions']
     target['status'] = 'working'
     await send(app)
@@ -1779,7 +1819,7 @@ async def test_caller_cannot_turn_an_instruction_into_an_outcome_observation(app
     receipt['delivery'] = 'submitting'
     app.collaboration.save('request-1', receipt)
     result = app.collaboration.admission(target['id'], {'inputId': 'request-1',
-        'taskId': None, 'taskRevision': None, 'taskContinuationEpoch': None})
+        'taskId': None, 'taskRevision': None, 'taskContinuationEpoch': 999})
     assert result['admitted'] is False
     assert not app.runtime.inputs
 
