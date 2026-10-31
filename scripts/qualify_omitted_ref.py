@@ -99,6 +99,30 @@ def save_status(path, status):
         return False
 
 
+def verified_git_source(path, pin, ref='HEAD'):
+    """A named-ref transport mirror must supply complete history at the pin."""
+    git = lambda *args: subprocess.check_output(
+        ['git', '-C', str(path), *args], text=True).strip()
+    if git('rev-parse', '--is-shallow-repository') != 'false':
+        raise RuntimeError('Git source must have complete history')
+    if git('rev-parse', ref) != pin:
+        raise RuntimeError('Git source pin mismatch')
+    return {'shallow': False, 'commit': pin}
+
+
+def mirror_seed_environment(cache, mirror):
+    # uv 0.13.6's GitHub API fast path can bypass Git's insteadOf transport.
+    # Disable it only for this mirror-bound seed, not globally or in the fixture.
+    env = {**os.environ, 'UV_PYTHON_DOWNLOADS': 'never', 'GIT_TERMINAL_PROMPT': '0',
+           'UV_NO_GITHUB_FAST_PATH': '1',
+           'UV_CACHE_DIR': str(cache), 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_COUNT': '1',
+           'GIT_CONFIG_KEY_0': 'url.' + mirror.as_uri() + '.insteadOf',
+           'GIT_CONFIG_VALUE_0': 'https://github.com/microsoft/' + LOOP}
+    for key in ('PYTHONPATH', 'UV_PROJECT_ENVIRONMENT', 'UV_OFFLINE', 'UV_NO_INDEX'):
+        env.pop(key, None)
+    return env
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--work', required=True, type=Path)
@@ -154,7 +178,7 @@ def main():
         assert re.fullmatch('[a-f0-9]{40}', pin)
         assert canonical['tool']['uv']['sources'][LOOP]['git'] == 'https://github.com/microsoft/' + LOOP
         loop_git = lambda *a: subprocess.check_output(['git', '-C', str(loop), *a], text=True).strip()
-        assert loop_git('rev-parse', 'HEAD') == pin
+        checkout_identity = verified_git_source(loop, pin)
         assert not loop_git('status', '--porcelain', '--untracked-files=all')
         assert loop_git('remote', 'get-url', 'origin').removesuffix('.git') in {
             'git@github.com:microsoft/' + LOOP, 'https://github.com/microsoft/' + LOOP}
@@ -166,18 +190,13 @@ def main():
         mirror = work / 'loop-transport.git'
         run('loop-transport', ['git', 'clone', '--bare', '--no-hardlinks', str(loop), str(mirror)])
         run('loop-transport-main', ['git', '-C', str(mirror), 'update-ref', 'refs/heads/main', pin])
-        assert subprocess.check_output(['git', '-C', str(mirror), 'rev-parse', 'refs/heads/main'],
-                                       text=True).strip() == pin
+        mirror_identity = verified_git_source(mirror, pin, 'refs/heads/main')
+        save(output / 'mirror.json', {'checkout': checkout_identity, 'mirror': mirror_identity})
         text = raw.replace('requires-python = ">=3.13"', 'requires-python = ">=3.13,<3.14"')
         text = text.replace('[tool.uv]\n', '[tool.uv]\nenvironments = ["sys_platform == \'linux\'"]\n', 1)
         (seed / 'pyproject.toml').write_text(text + '\n')
         cache = work / 'uv-cache'
-        setup_env = {**os.environ, 'UV_PYTHON_DOWNLOADS': 'never', 'GIT_TERMINAL_PROMPT': '0',
-            'UV_CACHE_DIR': str(cache), 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_COUNT': '1',
-            'GIT_CONFIG_KEY_0': 'url.' + mirror.as_uri() + '.insteadOf',
-            'GIT_CONFIG_VALUE_0': 'https://github.com/microsoft/' + LOOP}
-        for key in ('PYTHONPATH', 'UV_PROJECT_ENVIRONMENT', 'UV_OFFLINE', 'UV_NO_INDEX'):
-            setup_env.pop(key, None)
+        setup_env = mirror_seed_environment(cache, mirror)
         run('runtime-resolve', ['uv', 'sync', '--project', str(seed), '--python', sys.executable], env=setup_env)
         lock = tomllib.loads((seed / 'uv.lock').read_text())
         resolved_loop, = [p for p in lock['package'] if p['name'] == LOOP]

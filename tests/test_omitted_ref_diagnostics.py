@@ -172,6 +172,8 @@ class SafeResolverFacts(unittest.TestCase):
                 def checked(command, **kwargs):
                     if command[0] == 'uv':
                         return 'uv fixture'
+                    if command[-2:] == ['rev-parse', '--is-shallow-repository']:
+                        return 'false'
                     if command[-2:] == ['rev-parse', 'HEAD']:
                         return loop_pin if '-C' in command else 'a' * 40
                     if command[-2:] == ['rev-parse', 'HEAD^{tree}']:

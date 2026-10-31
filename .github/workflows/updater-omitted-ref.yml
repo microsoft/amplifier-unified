@@ -44,6 +44,7 @@ jobs:
         with:
           repository: microsoft/amplifier-module-loop-live
           ref: ${{ steps.pin.outputs.revision }}
+          fetch-depth: 0
           path: .ci/omitted-ref-loop
           ssh-key: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
           persist-credentials: false
