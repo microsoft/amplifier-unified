@@ -55,6 +55,7 @@ on:
       - 'tests/test_task_continuity.py'
       - 'tests/test_blocked_peer_input.py'
       - 'tests/test_blocked_peer_native.py'
+      - 'tests/test_complete_input_native.py'
       - 'tests/test_creation_inheritance.py'
       - 'tests/test_inherited_module_sources.py'
       - 'tests/test_runtime_profile_inputs.py'
@@ -194,6 +195,15 @@ jobs:
           import xml.etree.ElementTree as ET
           rows = ET.parse('output/blocked-peer-native.xml').getroot().findall('.//testcase')
           assert len(rows) == 3
+          assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          PY
+      - name: Verify complete input native through the native boundary
+        run: |
+          uv run --no-sync pytest -q tests/test_complete_input_native.py --junitxml=output/complete-input-native.xml
+          uv run --no-sync python - <<'PY'
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/complete-input-native.xml').getroot().findall('.//testcase')
+          assert len(rows) == 1
           assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
           PY
       - name: Verify repeated peer returns through real Worker processes
