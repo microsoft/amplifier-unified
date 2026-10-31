@@ -19,8 +19,9 @@ import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const cornerDiagnosticMode=process.env.FILE_CONTROLS_CORNER_DIAGNOSTIC==='1';
 const touchEventDiagnosticMode=process.env.FILE_CONTROLS_TOUCH_EVENT_DIAGNOSTIC==='1';
+const nativeStateDiagnosticMode=process.env.FILE_CONTROLS_NATIVE_STATE_DIAGNOSTIC==='1';
 const coarseToolbarQualificationMode=process.env.FILE_CONTROLS_COARSE_TOOLBAR_QUALIFICATION==='1';
-assert.ok([cornerDiagnosticMode,touchEventDiagnosticMode,coarseToolbarQualificationMode].filter(Boolean).length<=1,
+assert.ok([cornerDiagnosticMode,touchEventDiagnosticMode,nativeStateDiagnosticMode,coarseToolbarQualificationMode].filter(Boolean).length<=1,
  'Conflicting file-controls diagnostic/qualification modes');
 // Fixed binding to the retained failed first-390 gesture, NOT a new measurement
 // chosen to fit this candidate. No predecessor report is modified or rerun.
@@ -318,7 +319,7 @@ async function copy(target,details,name,expected,trigger){
 async function saveAndVerify(target,details,row,label,trigger=control=>control.click()){
  return saveControlAndVerify(target,button(details,'Download saved file'),row,label,trigger);
 }
-async function saveControlAndVerify(target,control,row,label,trigger=control=>control.click()){
+async function saveControlAndVerify(target,control,row,label,trigger=control=>control.click(),deferObservation=false){
  assert.equal(await control.evaluate(node=>node.tagName),'BUTTON','Exercise the rendered native download control');
  const settlement={label,trigger:{state:'pending'},observation:{state:'pending'},settled:false};
  downloadSettlements.push(settlement);
@@ -338,10 +339,19 @@ async function saveControlAndVerify(target,control,row,label,trigger=control=>co
  };
  const onDownload=download=>finish({state:'received',download});
  const onClose=()=>finish({state:'closed',error:Error('Page closed before the download observation settled')});
- target.on('download',onDownload);target.on('close',onClose);
- eventTimer=setTimeout(()=>finish({state:'timed-out',error:Error('Download observation exceeded 5000ms')}),5000);
+ const arm=()=>{
+  assert.ok(!settlement.observation.armedAt&&settlement.observation.state==='pending','Download observer may only arm once');
+  settlement.observation.armedAt=Date.now();
+  target.on('download',onDownload);target.on('close',onClose);
+  eventTimer=setTimeout(()=>finish({state:'timed-out',error:Error('Download observation exceeded 5000ms')}),5000);
+ };
+ if(!deferObservation)arm();
  let triggerFailure;
- try{await trigger(control);settlement.trigger.state='fulfilled'}
+ try{
+  await trigger(control,arm);
+  assert.ok(settlement.observation.armedAt,'Gesture did not arm its download observation');
+  settlement.trigger.state='fulfilled';
+ }
  catch(error){
   triggerFailure=error;
   Object.assign(settlement.trigger,{state:'rejected',error:errorEvidence(error)});
@@ -1083,6 +1093,209 @@ function armTouchEventCapture(node,intended){
  }catch(error){stop('arm-error');throw error}
  return {wait:async()=>{await done;return read()},stop:()=>{stop('finally');return read()}};
 }
+// CDP exposes current DOM responsiveness/quads, not touch-adjustment candidates,
+// pruning or scores. Observe the synthetic fixture only; do not add target
+// listeners, DOM attributes, layout writes, input, launch flags or breakpoints.
+async function prepareNativeState(target,original,measured,diagnostic,tap){
+ const state={version:'native-state-v1',complete:false,errors:[],
+  limits:{snapshotBytes:4*1024*1024,snapshotNodes:12000,documents:8,candidateNodes:64,
+   descendantDepth:8,ancestorDepth:24,quadsPerNode:32,traceBytes:4*1024*1024,traceRecords:10000,
+   hitTests:128,traceWindowMs:3000},
+  styles:['display','visibility','pointer-events','touch-action','user-select','position',
+   'overflow-x','overflow-y','transform','border-radius','padding'],
+  limitations:[
+   'isClickable is WillRespondToMouseClickEvents, not membership in a touch candidate list.',
+   'Content quads are fresh AbsoluteQuads; display:contents wrappers may recurse into children, not retained decision geometry.',
+   'HitTest EndData deliberately omits nodes for listBased tests. Point node/coordinates/flags cannot establish pruning or scoring.',
+   'Clock correlation is a measured interval, not exact event identity. CDP reads and tracing may affect timing.']};
+ diagnostic.nativeState=state;
+ let session,traceStarted=false,endPromise,traceTimer,resolveComplete;
+ const trace={records:[],bytes:0,recordCount:0,overflow:false,windowExpired:false,hitTests:[],
+  config:{transferMode:'ReportEvents',traceConfig:{recordMode:'recordUntilFull',traceBufferSizeInKb:1024,
+   includedCategories:['devtools.timeline','input']}}};state.trace=trace;
+ const traceComplete=new Promise(resolve=>{resolveComplete=resolve});
+ const send=(method,params={})=>tapOperation(tap,method,()=>session.send(method,params),2000);
+ const data=({value})=>{
+  for(const event of value){
+   trace.recordCount++;
+   const bytes=Buffer.byteLength(JSON.stringify(event));
+   trace.bytes+=bytes;
+   if(trace.recordCount>state.limits.traceRecords||trace.bytes>state.limits.traceBytes){
+    trace.overflow=true;void end('capture-limit');continue; // Never call a truncated trace complete.
+   }
+   trace.records.push(event);
+  }
+ };
+ const completed=value=>{trace.completion=value;resolveComplete(value)};
+ const end=reason=>{
+  if(!endPromise){
+   clearTimeout(traceTimer);trace.endReason=reason;trace.endRequestedAt=Date.now();
+   // End is submitted once. A timeout never replays this protocol mutation.
+   endPromise=send('Tracing.end').then(()=>({}),error=>({error}));
+  }
+  return endPromise;
+ };
+ const saveJson=async(name,value,maxBytes)=>{
+  const bytes=Buffer.from(JSON.stringify(value));
+  assert.ok(bytes.length<=maxBytes,`${name} exceeds retained byte bound`);
+  await writeFile(join(evidence,name),bytes,{flag:'wx'});
+  return {file:name,bytes:bytes.length,sha256:digest(bytes)};
+ };
+ const finish=async()=>{
+  const failures=[];
+  if(traceStarted){
+   const ended=await end('gesture-finally');if(ended.error)failures.push(ended.error);
+   try{await tapOperation(tap,'trace-complete',()=>traceComplete,2000)}
+   catch(error){failures.push(error)}
+  }
+  clearTimeout(traceTimer);state.timerCleared=true;
+  if(!trace.completion){
+   trace.observerCancelled=true;
+   resolveComplete({cancelled:true}); // Settle the local observer, NOT a CDP completion receipt.
+  }
+  if(session){
+   session.off('Tracing.dataCollected',data);session.off('Tracing.tracingComplete',completed);
+   state.listenersRemoved=true;
+   try{await tapOperation(tap,'release-native-objects',()=>session.send('Runtime.releaseObjectGroup',
+    {objectGroup:'file-controls-native-state'}),1000);state.objectsReleased=true}
+   catch(error){failures.push(error)}
+   // Detach is attempted even after an owned-browser abort; rejection is evidence,
+   // not permission to substitute another session or retry the tap.
+   state.detachAttempted=true;
+   const detached=session.detach().then(()=>{state.detached=true;return {}},error=>{
+    state.detachError=errorEvidence(error);return {error};
+   });
+   tapPending.add(detached);detached.then(()=>tapPending.delete(detached));
+   try{const result=await bounded(detached,1000,'Native CDP detach did not settle');if(result.error)failures.push(result.error)}
+   catch(error){failures.push(error)}
+  }
+  try{
+   if(traceStarted){
+    trace.hitTests=trace.records.flatMap((event,index)=>event.name==='HitTest'?[{index,event}]:[]);
+    assert.ok(trace.hitTests.length<=state.limits.hitTests,'HitTest subset exceeds bound');
+    trace.artifact=await saveJson('native-gesture-trace.json',trace.records,state.limits.traceBytes);
+    delete trace.records;
+    assert.equal(trace.overflow,false,'Native trace records/bytes were lost');
+    assert.equal(trace.windowExpired,false,'Native trace window exceeded 3000ms');
+    assert.equal(trace.completion?.dataLossOccurred,false,'Native trace loss/missing completion');
+    assert.ok(trace.hitTests.length>0,'Native trace contains no HitTest evidence');
+   }
+  }catch(error){failures.push(error)}
+  state.errors.push(...failures.map(errorEvidence));
+  state.complete=!!(state.snapshot&&state.candidates&&trace.artifact&&trace.completion&&
+   state.detached&&state.objectsReleased&&!state.errors.length);
+  return failures;
+ };
+ try{
+  for(const field of Object.keys(coarseToolbarBaseline.before))
+   assert.deepEqual(measured[field],coarseToolbarBaseline.before[field],`Native diagnostic changed baseline ${field}`);
+  session=await tapOperation(tap,'native-cdp-session',()=>target.context().newCDPSession(target),2000);
+  session.on('Tracing.dataCollected',data);session.on('Tracing.tracingComplete',completed);
+  await send('DOM.enable');
+  const document=await send('DOM.getDocument',{depth:0});
+  const roots=[];state.roots=roots;
+  for(const [kind,selector] of [
+   ['download','#workspace-canvas .a-canvas-artifact-toolbar .a-saved-file-download>button'],
+   ['details','#workspace-canvas .a-canvas-artifact-toolbar>.a-canvas-details'],
+   ['notice','#workspace-canvas .a-canvas-body .a-renderer-notice'],
+   ['toolbar','#workspace-canvas .a-canvas-artifact-toolbar']]){
+   const {nodeIds}=await send('DOM.querySelectorAll',{nodeId:document.root.nodeId,selector});
+   assert.equal(nodeIds.length,1,`Require exactly one native ${kind}`);
+   const {node}=await send('DOM.describeNode',{nodeId:nodeIds[0],depth:0});
+   const {object}=await send('DOM.resolveNode',{backendNodeId:node.backendNodeId,objectGroup:'file-controls-native-state'});
+   const identity=await send('Runtime.callFunctionOn',{objectId:object.objectId,returnByValue:true,
+    functionDeclaration:'function(){return {nodeId:window.__fileControlsNodeId(this),connected:this.isConnected,rect:this.getBoundingClientRect().toJSON()}}'});
+   assert.ok(!identity.exceptionDetails&&identity.result.value?.connected,`Native ${kind} identity unavailable`);
+   roots.push({kind,backendNodeId:node.backendNodeId,...identity.result.value});
+  }
+  assert.equal(roots[0].nodeId,measured.nodeId,'CDP Download is not the retained native control');
+  assert.equal(await tapOperation(tap,'native-retained-identity',()=>original.evaluate(node=>window.__fileControlsNodeId(node))),roots[0].nodeId);
+  assert.deepEqual(roots[0].rect,measured.rect);
+  // Exactly ONE full snapshot; reject oversized capture rather than publish a
+  // partial DOM as complete. Only bounded structural subsets go in observations.
+  state.snapshotStartedAt=Date.now();
+  const snapshot=await send('DOMSnapshot.captureSnapshot',{computedStyles:state.styles,
+   includePaintOrder:true,includeDOMRects:true});
+  assert.ok(snapshot.documents.length<=state.limits.documents&&snapshot.documents.reduce(
+   (sum,doc)=>sum+doc.nodes.nodeName.length,0)<=state.limits.snapshotNodes,'DOM snapshot node/document bound exceeded');
+  state.snapshot=await saveJson('native-dom-snapshot.json',snapshot,state.limits.snapshotBytes);
+  state.snapshotFinishedAt=Date.now();
+  const docIndex=snapshot.documents.findIndex(doc=>doc.nodes.backendNodeId.includes(roots[0].backendNodeId));
+  assert.ok(docIndex>=0,'Native Download absent from snapshot');
+  const doc=snapshot.documents[docIndex],nodes=doc.nodes,layout=doc.layout,strings=snapshot.strings;
+  const rootIndexes=roots.map(root=>nodes.backendNodeId.indexOf(root.backendNodeId));
+  assert.ok(rootIndexes.every(index=>index>=0),'Native target absent from same-document snapshot');
+  const selected=[];
+  for(let index=0;index<nodes.nodeName.length;index++){
+   let parent=index,depth=0;
+   while(parent>=0&&!rootIndexes.includes(parent)&&depth<=state.limits.descendantDepth){
+    parent=nodes.parentIndex[parent];depth++;
+   }
+   if(parent>=0&&rootIndexes.includes(parent)){
+    assert.ok(depth<=state.limits.descendantDepth,'Native descendant depth exceeded');
+    selected.push(index);
+   }else{
+    // Detect a deeper descendant, not silently exclude it from the subset.
+    while(parent>=0&&!rootIndexes.includes(parent))parent=nodes.parentIndex[parent];
+    assert.ok(parent<0,'Native descendant omitted by depth bound');
+   }
+  }
+  assert.ok(selected.length<=state.limits.candidateNodes,'Native candidate subset exceeds bound');
+  const clickable=new Set(nodes.isClickable?.index||[]);
+  state.candidates=[];
+  for(const index of selected){
+   const ancestry=[];let parent=nodes.parentIndex[index];
+   while(parent>=0&&ancestry.length<state.limits.ancestorDepth){
+    ancestry.push({index:parent,backendNodeId:nodes.backendNodeId[parent],name:strings[nodes.nodeName[parent]]});
+    parent=nodes.parentIndex[parent];
+   }
+   assert.ok(parent<0,'Native ancestor depth exceeded');
+   const layoutIndexes=layout.nodeIndex.flatMap((nodeIndex,i)=>nodeIndex===index?[i]:[]);
+   const attributes=Object.fromEntries((nodes.attributes[index]||[]).reduce((pairs,key,i,list)=>
+    i%2===0?[...pairs,[strings[key],strings[list[i+1]]]]:pairs,[]));
+   const row={documentIndex:docIndex,index,backendNodeId:nodes.backendNodeId[index],
+    parentIndex:nodes.parentIndex[index],nodeType:nodes.nodeType[index],name:strings[nodes.nodeName[index]],
+    attributes:Object.fromEntries(['id','class','role','aria-label'].filter(key=>key in attributes).map(key=>[key,attributes[key]])),
+    isClickable:clickable.has(index),ancestry,layout:layoutIndexes.map(i=>({index:i,bounds:layout.bounds[i],
+     styles:Object.fromEntries(state.styles.map((name,j)=>[name,strings[layout.styles[i][j]]??null]))}))};
+   const wrapper=(attributes.class||'').split(/\s+/).some(name=>
+    ['a-canvas-primary-actions','a-canvas-common-actions','a-saved-file-download'].includes(name));
+   state.candidates.push(row);
+   if(row.nodeType===1&&(layoutIndexes.length||wrapper||rootIndexes.includes(index))){
+    // Chromium may recurse into wrapper children; cap our explicit requests and
+    // returned quads separately. An empty quad is data, not an invented box.
+    let result;
+    try{result=await send('DOM.getContentQuads',{backendNodeId:row.backendNodeId})}
+    catch(error){row.quadsError=errorEvidence(error);throw error}
+    assert.ok(result.quads.length<=state.limits.quadsPerNode,'Native quads exceed bound');
+    row.quads=result.quads;row.quadsAt=Date.now();
+   }else row.quadsNotRequested='non-element or no snapshot layout and not an action wrapper/root';
+  }
+  await send('Performance.enable');
+  const before=await send('Performance.getMetrics');
+  const clock=await send('Runtime.evaluate',{expression:'({now:performance.now(),timeOrigin:performance.timeOrigin})',returnByValue:true});
+  const after=await send('Performance.getMetrics');
+  assert.ok(!clock.exceptionDetails,'Native clock sample failed');
+  const metric=value=>value.metrics.find(row=>row.name==='Timestamp')?.value;
+  state.clock={before:metric(before),page:clock.result.value,after:metric(after),
+   basis:'CDP monotonic Timestamp seconds brackets page performance.now milliseconds; trace ts is microseconds.'};
+  assert.ok(Number.isFinite(state.clock.before)&&Number.isFinite(state.clock.after)&&
+   Number.isFinite(state.clock.page.now)&&state.clock.after>=state.clock.before,'Native clock mapping unavailable');
+  state.clock.offsetUs={min:state.clock.before*1e6-state.clock.page.now*1000,
+   max:state.clock.after*1e6-state.clock.page.now*1000};
+  state.prepared=true;
+ }catch(error){
+  state.errors.push(errorEvidence(error));const failures=await finish();
+  throw new AggregateError([error,...failures],'Native-state preparation failed; no gesture admitted');
+ }
+ return {state,async start(){
+  trace.startRequestedAt=Date.now();
+  traceStarted=true; // Even an unknown start response must attempt end + detach.
+  await send('Tracing.start',trace.config);
+  trace.startedAt=Date.now();
+  traceTimer=setTimeout(()=>{trace.windowExpired=true;void end('window-limit')},state.limits.traceWindowMs);
+ },end,finish};
+}
 // Only the native-tap lifecycle uses this boundary. A timer is not cancellation:
 // on an RPC deadline, close that tap's owned browser, then collect the ORIGINAL
 // operation's outcome. A failed close/drain remains explicit, never "settled".
@@ -1145,12 +1358,12 @@ async function collectTouchEvents(probe,diagnostic,tap){
  diagnostic.outcome=diagnostic.checkpointObserved?'checkpoint_observed_cause_unknown':'unknown';
  return failures;
 }
-async function cornerTap(control,corner,diagnostic=null){
+async function cornerTap(control,corner,diagnostic=null,beforeTap=null){
  const target=control.page(),record={corner,client:pageLabels.get(target),operations:[],settled:false,
   listenerCleanup:{state:'not-armed'},handleDisposed:false};
  tapSettlements.push(record);if(diagnostic)diagnostic.settlement=record;
  const tap={record,owner:browserOwners.find(owner=>owner.label===record.client),abort:null};
- let original,measured,originalFailure,listenerArmed=false;
+ let original,measured,originalFailure,listenerArmed=false,native;
  const diagnosticFailures=[];
  try{
  await tapOperation(tap,'scroll-control',()=>control.scrollIntoViewIfNeeded(),4500);
@@ -1222,15 +1435,28 @@ async function cornerTap(control,corner,diagnostic=null){
     diagnostic.beforeLayout=await tapOperation(tap,'baseline-layout',()=>original.evaluate(node=>window.__fileControlsToolbarSnapshot(node)));
     qualifyToolbarBaseline(diagnostic);
    }
+   if(diagnostic.nativeStateRequested)native=await prepareNativeState(target,original,measured,diagnostic,tap);
    probe=await tapOperation(tap,'arm-passive-capture',()=>original.evaluateHandle(armTouchEventCapture,measured.intended));
-   diagnostic.tapAttempts=1;
   }
-  try{await tapOperation(tap,'native-tap',()=>control.tap({position:measured.position}),4500)}
+  try{
+   if(native)await native.start();
+   if(beforeTap)beforeTap();
+   if(diagnostic)diagnostic.tapAttempts=1;
+   await tapOperation(tap,'native-tap',()=>control.tap({position:measured.position}),4500);
+  }
   catch(error){diagnosticFailures.push(error)}
   finally{
+   if(native){const ended=await native.end('tap-settled');if(ended.error)diagnosticFailures.push(ended.error)}
    // Wait only for passive observation, never repeat or reroute input. Capture
    // failures cannot suppress the original sameNode/geometry assertion below.
    if(probe)diagnosticFailures.push(...await collectTouchEvents(probe,diagnostic,tap));
+  }
+  if(native&&diagnostic.capture){
+   native.state.correlation=diagnostic.capture.events.filter(event=>
+    ['pointerdown','pointerup','mousedown','mouseup','click'].includes(event.type)).map(event=>({
+     eventIndex:event.index,type:event.type,at:event.at,timeStamp:event.timeStamp,wallTime:event.wallTime,
+     traceCallbackIntervalUs:{min:event.at*1000+native.state.clock.offsetUs.min,
+      max:event.at*1000+native.state.clock.offsetUs.max}}));
   }
   // Evaluate trusted raw event targets BEFORE any later geometry/cleanup error.
   // Retain both events even on failure; do not let an absent download mask them.
@@ -1277,10 +1503,23 @@ async function cornerTap(control,corner,diagnostic=null){
    diagnostic.originalOraclePassed=true;
    assert.equal(diagnostic.checkpointObserved,true,'Native touch event pair is UNKNOWN: missing event, truncation or capture loss; no retry');
    if(diagnostic.qualification)qualifyToolbarEvents(diagnostic);
+   if(diagnostic.nativeStateRequested){
+    const events=diagnostic.capture.events;
+    for(const type of ['pointerdown','pointerup','mousedown','mouseup','click']){
+     const matches=events.filter(event=>event.type===type);
+     assert.equal(matches.length,1,`Native-state diagnostic requires exactly one ${type}`);
+     assert.equal(matches[0].isTrusted,true);assert.equal(matches[0].sameNode,true,`${type} must reach the native control`);
+    }
+    diagnostic.strictEventsPassed=true;
+   }
   }
  }catch(error){
   originalFailure=error;if(diagnostic)diagnostic.failure=errorEvidence(error);
  }finally{
+  if(native){
+   diagnosticFailures.push(...await native.finish());
+   if(!native.state.complete)diagnosticFailures.push(Error('Native-state capture incomplete; no retry'));
+  }
   if(original&&listenerArmed)try{
    const removed=await tapOperation(tap,'remove-original-pointer-listener',()=>original.evaluate(()=>{
     const result=window.__fileControlsCancelTap?.();delete window.__fileControlsCancelTap;return result;
@@ -1438,6 +1677,22 @@ async function usePreviewControls(retained,label,mode){
  assert.equal(await primary.evaluate(node=>node.tagName),'BUTTON');
  await measureControls(target,[primary,toggle],label+'-primary-before');
  if(coarseToolbarQualificationMode)await qualifyToolbarLayout(primary,label,'before',mode==='touch');
+ if(nativeStateDiagnosticMode&&mode==='touch'){
+  assert.equal(label,'touch-390-preview','Native-state diagnostic may only observe the first 390px primary Download');
+  assert.equal(touchEventDiagnostic,null,'Only one native-state diagnostic tap is permitted');
+  touchEventDiagnostic={nativeStateRequested:true,checkpoint:'first-390-primary-download',label,control:'Download canvas source',
+   browser:browserOwners.find(owner=>owner.label==='touch').browser.version(),options:touchOptions,
+   retained:{marker:retained.marker,unfinished:retained.unfinished,state:retained.state,documents:retained.documents},
+   tapAttempts:0,checkpointObserved:false,originalOraclePassed:false,strictEventsPassed:false,
+   outcome:'unknown',cause:'unknown',productAcceptance:false};
+  // CDP preparation precedes arming the unchanged 5s download observer. Its
+  // timer covers the actual gesture, not the read-only native-state collection.
+  touchEventDiagnostic.download=await saveControlAndVerify(target,primary,row,label+'-primary-v1',
+   (control,arm)=>cornerTap(control,'bottom-right',touchEventDiagnostic,arm),true);
+  touchEventDiagnostic.preservation=await previewPreserved(retained);
+  touchEventDiagnosticComplete=true;
+  return; // No next control, gesture or viewport.
+ }
  if(touchEventDiagnosticMode&&mode==='touch'){
   assert.equal(label,'touch-390-preview','Diagnostic may only observe the first 390px primary Download');
   assert.equal(touchEventDiagnostic,null,'Only one diagnostic tap is permitted');
@@ -1780,7 +2035,7 @@ async function run(){
    assert.ok(await mobile.evaluate(()=>navigator.maxTouchPoints>0));
    await previewPreserved(touchPreview);
    await usePreviewControls(touchPreview,`touch-${width}-preview`,'touch');
-   if(touchEventDiagnosticMode)return; // No next gesture, control, width or full-journey verdict.
+   if(touchEventDiagnosticMode||nativeStateDiagnosticMode)return; // No next gesture, control, width or full-journey verdict.
   }
  }finally{await touchPreview.element.dispose()}
  const final=await fixtureRead(page);
@@ -1861,7 +2116,7 @@ try{
   writeFile(join(evidence,'observations.json'),JSON.stringify({passed:!failure,error:failure?.stack,failure:errorEvidence(failure),screenshotErrors,
   ...(cornerDiagnosticMode?{mode:'corner-diagnostic',diagnosticComplete:cornerDiagnosticComplete,
    stoppedAfter:cornerDiagnosticComplete?'first-desktop-measure':null,cornerDiagnostics}:{}),
-  ...(touchEventDiagnosticMode?{mode:'touch-event-diagnostic',diagnosticComplete:touchEventDiagnosticComplete,
+  ...(touchEventDiagnosticMode||nativeStateDiagnosticMode?{mode:nativeStateDiagnosticMode?'native-state-diagnostic':'touch-event-diagnostic',diagnosticComplete:touchEventDiagnosticComplete,
    productAcceptance:false,stoppedAfter:touchEventDiagnosticComplete?'first-390-primary-download':null,
    touchEventDiagnostic,diagnosticLimits:[
     'One unchanged locator.tap; passive document capture for at most 2000ms from arm, not a device or product pass.',
@@ -1895,6 +2150,6 @@ try{
  assert.ok(entries.every(entry=>entry.isFile()),'Export only ordinary evidence files, never fixture sockets/profile/state');
 }
 if(failure)throw failure;
-console.log(touchEventDiagnosticMode?`Generated file controls touch event checkpoint observed (cause unknown; not qualification); evidence: ${evidence}`:
+console.log(touchEventDiagnosticMode||nativeStateDiagnosticMode?`Generated file controls touch event checkpoint observed (cause unknown; not qualification); evidence: ${evidence}`:
  cornerDiagnosticMode?`Generated file controls corner diagnostic complete (not full qualification); evidence: ${evidence}`:
  `Generated file controls passed; evidence: ${evidence}`);

@@ -82,6 +82,17 @@ keeps children aligned; FILE_CONTROLS_COARSE_TOOLBAR_QUALIFICATION selects the
 producer's full journey. The pinned coarse-toolbar-v1 interface is checked
 independently against raw 8ac geometry, all six layout records, the single
 trusted event sequence, exact download and retained running preview.
+
+--native-state-diagnostic uses /workspace/output/files1318-native-state-manifest.json
+and /artifacts/files1318-native-state-diagnostic. Bind nativeStateReuse=REUSE_BINDING
+and the SAME 23 reuseEvidence files. This source-only checkpoint restores only
+the verified pre-gap 8ca 311-file build: every tracked input except DRIVER and
+PRODUCER must match that retained manifest, including the rolled-back CSS.
+It preserves all 16 prior outcomes. No CSS candidate, build, units, installed
+journey or retry. One bounded CDP DOM snapshot/current quads and gesture-window
+trace accompany the original first-390 tap and passive events. A successful
+gesture must pass the original byte/preservation checks, then stop. A wrong
+target remains exit 1. Captured evidence is not a product or root-cause verdict.
 """
 from __future__ import annotations
 
@@ -127,6 +138,7 @@ CORNER_MANIFEST = ROOT / 'output/files1318-corner-manifest.json'
 CONTOUR_MANIFEST = ROOT / 'output/files1318-computed-round-manifest.json'
 TOUCH_EVENT_MANIFEST = ROOT / 'output/files1318-touch-event-manifest.json'
 COARSE_TOOLBAR_MANIFEST = ROOT / 'output/files1318-coarse-toolbar-manifest.json'
+NATIVE_STATE_MANIFEST = ROOT / 'output/files1318-native-state-manifest.json'
 HARNESS = OUT / 'harness'
 VENV = OUT / 'installed'
 DRIVER = 'scripts/files1318_integrated_checks.py'
@@ -135,6 +147,9 @@ CORNER_OUT = Path('/artifacts/files1318-corner-diagnostic')
 CONTOUR_OUT = Path('/artifacts/files1318-computed-round-qualified')
 TOUCH_EVENT_OUT = Path('/artifacts/files1318-touch-event-diagnostic')
 COARSE_TOOLBAR_OUT = Path('/artifacts/files1318-coarse-toolbar-qualified')
+NATIVE_STATE_OUT = Path('/artifacts/files1318-native-state-diagnostic')
+NATIVE_STATE_PRODUCER_SHA = '447e829658c586a0c63bde131affe2dfff5858b6639e497ed3d64ca54cf14c21'
+NATIVE_STATE_CSS_SHA = '82010a69d3fb1e27f5b5e6d35c5c2be9191006d52e804963e21fb3e58685dbb0'
 COARSE_TOOLBAR_CSS = 'frontend/src/canvas-workspace.css'
 COARSE_TOOLBAR_CHANGES = frozenset((DRIVER, PRODUCER, COARSE_TOOLBAR_CSS))
 COARSE_TOOLBAR_REUSED_PHASES = ('python-tests', 'frontend-units')
@@ -280,7 +295,7 @@ def require(value, message):
 def select_output(folder):
     """Keep the main process and every private child on the same fixed paths."""
     global OUT, HARNESS, VENV
-    require(folder in (QUALIFIED_OUT, CORNER_OUT, CONTOUR_OUT, TOUCH_EVENT_OUT, COARSE_TOOLBAR_OUT),
+    require(folder in (QUALIFIED_OUT, CORNER_OUT, CONTOUR_OUT, TOUCH_EVENT_OUT, COARSE_TOOLBAR_OUT, NATIVE_STATE_OUT),
             'Unknown evidence destination')
     OUT = folder
     HARNESS, VENV = OUT / 'harness', OUT / 'installed'
@@ -323,7 +338,7 @@ def frozen_inputs(frozen, *, built=False):
         require(not Path(name).is_absolute() and '..' not in Path(name).parts
                 and str(Path(name)) == name
                 and path not in (MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST,
-                                 COARSE_TOOLBAR_MANIFEST), 'Unsafe frozen path')
+                                 COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST), 'Unsafe frozen path')
         require(path.parent.resolve().is_relative_to(ROOT), 'Frozen path escapes snapshot')
         require(expected['mode'] in ('100644', '100755', '120000')
                 and re.fullmatch('[a-f0-9]{64}', expected['sha256']), 'Invalid frozen identity')
@@ -341,7 +356,7 @@ def diagnostic_static(frozen, *, binding='diagnosticReuse'):
             'Static reuse is guest-only')
     unit_only = binding == 'coarseToolbarReuse'
     require(not unit_only or OUT == COARSE_TOOLBAR_OUT, 'Unit-only reuse is coarse-toolbar mode only')
-    require(binding in ('diagnosticReuse', 'contourReuse', 'touchEventReuse', 'coarseToolbarReuse')
+    require(binding in ('diagnosticReuse', 'contourReuse', 'touchEventReuse', 'coarseToolbarReuse', 'nativeStateReuse')
             and frozen.get(binding) == REUSE_BINDING, 'Missing exact static reuse binding')
     archive, metadata_path = REUSE_INPUT / 'static.tar', REUSE_INPUT / 'reuse.json'
     for path, digest in ((archive, REUSE_BINDING['archiveSha256']),
@@ -1541,7 +1556,7 @@ def corner_diagnostic_proof(exit_code):
     return result
 
 
-def touch_event_diagnostic_proof(exit_code):
+def touch_event_diagnostic_proof(exit_code, *, native_state=False):
     """Inspect raw exit-1 evidence before fail-stop; never bless a missing pair."""
     result = {'exitCode': exit_code, 'checkpointObserved': False, 'outcome': 'unknown',
               'productAcceptance': False, 'cause': 'unknown', 'visualJudgment': 'pending'}
@@ -1552,7 +1567,8 @@ def touch_event_diagnostic_proof(exit_code):
         result.update(path=str(path), sha256=sha(path))
         proof = read(path)
         require(type(exit_code) is int and exit_code in (0, 1)
-                and proof['mode'] == 'touch-event-diagnostic' and proof['passed'] is (exit_code == 0)
+                and proof['mode'] == ('native-state-diagnostic' if native_state else 'touch-event-diagnostic')
+                and proof['passed'] is (exit_code == 0)
                 and proof['productAcceptance'] is False, 'Wrong touch diagnostic mode/exit')
         diagnostic = proof['touchEventDiagnostic']
         require(isinstance(diagnostic, dict) and diagnostic['checkpoint'] == 'first-390-primary-download'
@@ -1612,7 +1628,8 @@ def touch_event_diagnostic_proof(exit_code):
                 and [d['label'] for d in proof['downloads']] == [
                     'desktop-race-v1', 'desktop-after-403', 'negative-wrong-bytes', 'reload-deleted-source-v1',
                     'adjacent-markdown', 'saved-only', 'touch-390-deleted-v1', 'touch-320-deleted-v1',
-                    'desktop-preview-primary-v1', 'desktop-preview-rail-v1']
+                    'desktop-preview-primary-v1', 'desktop-preview-rail-v1'] +
+                    (['touch-390-preview-primary-v1'] if native_state and diagnostic.get('download') else [])
                 and len([r for r in proof['requests'] if r['path'].endswith('/document')]) == 2
                 and [c['label'] for c in proof['fileFrameCaptures']] ==
                     [f'touch-320-{suffix}' for suffix in ('controls', 'paths', 'path-0', 'path-1', 'path-2', 'path-3')],
@@ -1692,6 +1709,11 @@ def touch_event_diagnostic_proof(exit_code):
                         for when in ('before', 'after'))
                 and read(OUT / 'source-fixture-payload-before.json') == read(OUT / 'source-fixture-payload-after.json'),
                 'Diagnostic fixture identity/payload differs')
+        if native_state:
+            native = diagnostic.get('nativeState', {})
+            result['nativeStateCapture'] = {key: native.get(key) for key in
+                                            ('version', 'complete', 'errors', 'snapshot', 'detached')}
+            result['nativeState'] = native_state_proof(proof, path.parent, exit_code)
         if exit_code == 0:
             require(observed and diagnostic['originalOraclePassed'] is True
                     and proof['diagnosticComplete'] is True and proof['stoppedAfter'] == 'first-390-primary-download'
@@ -1711,7 +1733,154 @@ def touch_event_diagnostic_proof(exit_code):
     finally:
         # Always retain the raw report reference and any partially read sequence,
         # even when exit 1, malformed capture or a missing mousedown prevents proof.
-        save('generated-source/touch-event-diagnostic-report.json', result)
+        save('generated-source/native-state-diagnostic-report.json' if native_state
+             else 'generated-source/touch-event-diagnostic-report.json', result)
+
+
+def native_state_proof(proof, folder, exit_code):
+    """Validate native observations, not candidate membership/pruning/scoring."""
+    diagnostic = proof['touchEventDiagnostic']
+    state = diagnostic['nativeState']
+    limits = {'snapshotBytes': 4 * 1024 * 1024, 'snapshotNodes': 12000, 'documents': 8,
+              'candidateNodes': 64, 'descendantDepth': 8, 'ancestorDepth': 24, 'quadsPerNode': 32,
+              'traceBytes': 4 * 1024 * 1024, 'traceRecords': 10000, 'hitTests': 128, 'traceWindowMs': 3000}
+    require(diagnostic['nativeStateRequested'] is True and state['version'] == 'native-state-v1'
+            and state['limits'] == limits and state['complete'] is True and state['prepared'] is True
+            and state['errors'] == [] and all(state.get(key) is True for key in
+                ('timerCleared', 'listenersRemoved', 'objectsReleased', 'detachAttempted', 'detached')),
+            'Native-state capture incomplete or cleanup unconfirmed')
+
+    def artifact(binding, name, cap):
+        path = folder / name
+        require(binding['file'] == name and path.resolve() == path and path.is_file()
+                and 0 < path.stat().st_size == binding['bytes'] <= cap and sha(path) == binding['sha256'],
+                'Native artifact identity/size mismatch')
+        return read(path)
+
+    snapshot = artifact(state['snapshot'], 'native-dom-snapshot.json', limits['snapshotBytes'])
+    documents, strings = snapshot['documents'], snapshot['strings']
+    require(0 < len(documents) <= limits['documents']
+            and sum(len(d['nodes']['nodeName']) for d in documents) <= limits['snapshotNodes'],
+            'Native snapshot bound differs')
+    roots, candidates = state['roots'], state['candidates']
+    require([r['kind'] for r in roots] == ['download', 'details', 'notice', 'toolbar']
+            and all(r['connected'] is True for r in roots)
+            and roots[0]['nodeId'] == diagnostic['before']['nodeId']
+            and roots[0]['rect'] == diagnostic['before']['rect']
+            and 0 < len(candidates) <= limits['candidateNodes'], 'Native roots/identity/subset mismatch')
+    doc_index = candidates[0]['documentIndex']
+    nodes, layout = documents[doc_index]['nodes'], documents[doc_index]['layout']
+    root_indexes = [nodes['backendNodeId'].index(r['backendNodeId']) for r in roots]
+    expected_indexes = []
+    for index in range(len(nodes['nodeName'])):
+        parent, depth = index, 0
+        while parent >= 0 and parent not in root_indexes:
+            parent, depth = nodes['parentIndex'][parent], depth + 1
+        if parent >= 0:
+            require(depth <= limits['descendantDepth'], 'Omitted native descendants')
+            expected_indexes.append(index)
+    require([r['index'] for r in candidates] == expected_indexes, 'Native candidate subset incomplete')
+    for row in candidates:
+        index = row['index']
+        require(row['documentIndex'] == doc_index and row['backendNodeId'] == nodes['backendNodeId'][index]
+                and row['parentIndex'] == nodes['parentIndex'][index] and row['nodeType'] == nodes['nodeType'][index]
+                and row['name'] == strings[nodes['nodeName'][index]]
+                and row['isClickable'] is (index in nodes.get('isClickable', {}).get('index', [])),
+                'Native snapshot-derived node differs')
+        parents, parent = [], nodes['parentIndex'][index]
+        while parent >= 0:
+            parents.append({'index': parent, 'backendNodeId': nodes['backendNodeId'][parent],
+                            'name': strings[nodes['nodeName'][parent]]})
+            parent = nodes['parentIndex'][parent]
+        require(row['ancestry'] == parents and len(parents) <= limits['ancestorDepth'], 'Native ancestry differs')
+        expected_layout = [{'index': i, 'bounds': layout['bounds'][i],
+                            'styles': {name: strings[layout['styles'][i][j]]
+                                       if j < len(layout['styles'][i]) and layout['styles'][i][j] >= 0 else None
+                                       for j, name in enumerate(state['styles'])}}
+                           for i, node_index in enumerate(layout['nodeIndex']) if node_index == index]
+        require(row['layout'] == expected_layout, 'Native snapshot layout/styles differ')
+        raw_attrs = nodes['attributes'][index]
+        attrs = {strings[raw_attrs[i]]: strings[raw_attrs[i + 1]] for i in range(0, len(raw_attrs), 2)}
+        require(row['attributes'] == {key: attrs[key] for key in ('id', 'class', 'role', 'aria-label') if key in attrs},
+                'Native structural attributes differ')
+        wrapper = bool(set(attrs.get('class', '').split()) &
+                       {'a-canvas-primary-actions', 'a-canvas-common-actions', 'a-saved-file-download'})
+        if 'quads' in row:
+            require(row['nodeType'] == 1 and len(row['quads']) <= limits['quadsPerNode']
+                    and all(len(q) == 8 and all(type(v) in (int, float) and math.isfinite(v) for v in q)
+                            for q in row['quads']), 'Invalid current native quads')
+        else:
+            require(row['quadsNotRequested'] == 'non-element or no snapshot layout and not an action wrapper/root'
+                    and (row['nodeType'] != 1 or (not row['layout'] and not wrapper and index not in root_indexes)),
+                    'Missing requested quads')
+    require(all('quads' in next(row for row in candidates if row['index'] == index)
+                for index in root_indexes), 'Native root quads missing')
+    trace = state['trace']
+    events = artifact(trace['artifact'], 'native-gesture-trace.json', limits['traceBytes'])
+    hits = [{'index': i, 'event': event} for i, event in enumerate(events) if event.get('name') == 'HitTest']
+    require(trace['recordCount'] == len(events) <= limits['traceRecords']
+            and trace['bytes'] <= limits['traceBytes'] and trace['overflow'] is False
+            and trace['config'] == {'transferMode': 'ReportEvents', 'traceConfig': {
+                'recordMode': 'recordUntilFull', 'traceBufferSizeInKb': 1024,
+                'includedCategories': ['devtools.timeline', 'input']}}
+            and trace['windowExpired'] is False and trace['completion']['dataLossOccurred'] is False
+            and trace['endReason'] == 'tap-settled' and trace['endRequestedAt'] >= trace['startedAt']
+            and trace['endRequestedAt'] - trace['startedAt'] <= limits['traceWindowMs']
+            and 0 < len(hits) <= limits['hitTests'] and trace['hitTests'] == hits,
+            'Native trace missing/truncated/lost/outside gesture window')
+    clock = state['clock']
+    require(all(math.isfinite(clock[k]) for k in ('before', 'after')) and clock['after'] >= clock['before']
+            and clock['offsetUs'] == {'min': clock['before'] * 1e6 - clock['page']['now'] * 1000,
+                                     'max': clock['after'] * 1e6 - clock['page']['now'] * 1000},
+            'Native clock interval differs')
+    passive = [e for e in diagnostic['capture']['events']
+               if e['type'] in ('pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click')]
+    require([e['type'] for e in passive] == ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click']
+            and all(e['isTrusted'] is True for e in passive)
+            and state['correlation'] == [{
+                'eventIndex': e['index'], 'type': e['type'], 'at': e['at'], 'timeStamp': e['timeStamp'],
+                'wallTime': e['wallTime'], 'traceCallbackIntervalUs': {
+                    k: e['at'] * 1000 + clock['offsetUs'][k] for k in ('min', 'max')}} for e in passive],
+            'Native passive sequence/correlation differs')
+    require(proof['tapDrain'].get('settled') is True and proof['tapDrain']['pendingAfter'] == 0
+            and len(proof['tapSettlements']) == 7 and all(
+                row['settled'] and row['listenerCleanup']['state'] == 'removed' and row['handleDisposed']
+                and not row['otherFailures'] and all(op['state'] == 'fulfilled' for op in row['operations'])
+                for row in proof['tapSettlements'])
+            and len(proof['downloadSettlements']) == 11 and all(
+                row['settled'] and row['observation']['listenerRemoved'] and row['observation']['timerCleared']
+                for row in proof['downloadSettlements']), 'Native gesture/download branches did not settle cleanly')
+    last = proof['tapSettlements'][-1]
+    require(last == diagnostic['settlement'] and last['retained']['connected'] is True
+            and last['retained']['nodeId'] == roots[0]['nodeId'], 'Retained native handle identity/connectedness differs')
+    if any(e['sameNode'] is False for e in passive):
+        wrong = next((e for e in passive if e['type'] in ('pointerdown', 'click') and e['sameNode'] is False),
+                     next(e for e in passive if e['sameNode'] is False))
+        expected_failure = ('Touch must reach the native control' if wrong['type'] == 'pointerdown'
+                            else 'Trusted click must reach the native control' if wrong['type'] == 'click'
+                            else wrong['type'] + ' must reach the native control')
+        require(exit_code == 1 and proof['downloadSettlements'][-1]['trigger']['state'] == 'rejected'
+                and last.get('primaryFailure')
+                and expected_failure in json.dumps(last['primaryFailure']),
+                'Wrong native target was not the primary failure')
+    if exit_code == 0:
+        download, preservation = diagnostic['download'], diagnostic['preservation']
+        html = proof['seed']['artifacts']['html']
+        saved = folder / (download['label'] + '-' + download['filename'])
+        require(diagnostic['strictEventsPassed'] is True and all(e['sameNode'] is True for e in passive)
+                and download['label'] == 'touch-390-preview-primary-v1' and download['bytes'] == html['byteLength'] == 426
+                and download['sha256'] == html['sha256'] == sha(saved)
+                and download['filename'] == html['filename'] and saved.read_bytes() == html['body'].encode()
+                and preservation['iframeConnected'] is True and preservation['sameIframe'] is True
+                and preservation['iframeCount'] == 1 and preservation['prohibitedCommands'] == []
+                and all(preservation[k] == diagnostic['retained'][k] for k in ('marker', 'unfinished', 'state', 'documents')),
+                'Successful native diagnostic skipped bytes/preview preservation')
+    return {'complete': True, 'snapshot': state['snapshot'], 'trace': trace['artifact'],
+            'candidateCount': len(candidates), 'hitTestCount': len(hits),
+            'rootResponsiveness': {r['kind']: next(c['isClickable'] for c in candidates
+                                    if c['backendNodeId'] == r['backendNodeId']) for r in roots},
+            'wrongTarget': any(e['sameNode'] is False for e in passive),
+            'cause': 'unknown', 'candidateMembership': 'not_exposed', 'productAcceptance': False}
 
 
 def renderer_proof(negative=False):
@@ -1848,23 +2017,27 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest', required=True, type=Path,
                         choices=[MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST,
-                                 COARSE_TOOLBAR_MANIFEST])
+                                 COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST])
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--corner-diagnostic', action='store_true')
     modes.add_argument('--contour-qualification', action='store_true')
     modes.add_argument('--touch-event-diagnostic', action='store_true')
+    modes.add_argument('--native-state-diagnostic', action='store_true')
     modes.add_argument('--coarse-toolbar-qualification', action='store_true')
     args = parser.parse_args()
-    checkpoint_mode = args.corner_diagnostic or args.touch_event_diagnostic
-    reuse_mode = args.contour_qualification or args.touch_event_diagnostic
+    touch_checkpoint = args.touch_event_diagnostic or args.native_state_diagnostic
+    checkpoint_mode = args.corner_diagnostic or touch_checkpoint
+    reuse_mode = args.contour_qualification or touch_checkpoint
     reused_phases = COARSE_TOOLBAR_REUSED_PHASES if args.coarse_toolbar_qualification else REUSED_PHASES
     manifest_path = (CORNER_MANIFEST if args.corner_diagnostic
+                     else NATIVE_STATE_MANIFEST if args.native_state_diagnostic
                      else TOUCH_EVENT_MANIFEST if args.touch_event_diagnostic
                      else COARSE_TOOLBAR_MANIFEST if args.coarse_toolbar_qualification
                      else CONTOUR_MANIFEST if args.contour_qualification else MANIFEST)
     if args.manifest != manifest_path:
         parser.error('The manifest must match the selected qualification mode')
     select_output(CORNER_OUT if args.corner_diagnostic
+                  else NATIVE_STATE_OUT if args.native_state_diagnostic
                   else TOUCH_EVENT_OUT if args.touch_event_diagnostic
                   else COARSE_TOOLBAR_OUT if args.coarse_toolbar_qualification
                   else CONTOUR_OUT if args.contour_qualification else QUALIFIED_OUT)
@@ -1889,17 +2062,23 @@ def main():
         report['limits'].append(
             'Checkpoint only: reused static; no build, unit suites, later journeys, wheel or install. '
             'Topology includes touch readiness, not a touch product journey. Prior integrated failure unchanged.')
-    if args.touch_event_diagnostic:
+    if touch_checkpoint:
         selected = {'snapshot', 'runtime-readiness', 'browser-readiness', 'source-freeze',
                     'topology-source', 'generated-source', 'final-integrity', *REUSED_PHASES}
         for name, row in report['phases'].items():
             if name not in selected:
                 row['reason'] = 'outside_touch_event_diagnostic_scope'
-        report.update(mode='touch-event-diagnostic', outcome='not_started', cause='unknown',
+        report.update(mode='native-state-diagnostic' if args.native_state_diagnostic else 'touch-event-diagnostic',
+                      outcome='not_started', cause='unknown',
                       productAcceptance=False, checkpointObserved=False)
         report['limits'].append(
             'First 390px primary Download event pair only; missing compatibility mousedown or capture loss '
             'is UNKNOWN. Original touch assertion remains binding. No later gesture, renderer or installed run.')
+        if args.native_state_diagnostic:
+            report.update(priorChecksConsumed=16)
+            report['limits'].append(
+                'Bounded current DOM responsiveness/quads and gesture-window HitTest trace only. '
+                'Candidate membership, pruning and scoring are not exposed. Native source/bytes checks are not a full pass.')
     if reuse_mode:
         if args.contour_qualification:
             report['mode'] = 'contour-qualification'
@@ -1987,6 +2166,11 @@ def main():
             if args.touch_event_diagnostic:
                 require(frozen['files'][PRODUCER]['sha256'] == TOUCH_EVENT_PRODUCER_SHA,
                         'Touch event producer differs from the reviewed verifier interface')
+            if args.native_state_diagnostic:
+                require(frozen.get('nativeStateReuse') == REUSE_BINDING
+                        and frozen['files'][PRODUCER]['sha256'] == NATIVE_STATE_PRODUCER_SHA
+                        and frozen['files'][COARSE_TOOLBAR_CSS]['sha256'] == NATIVE_STATE_CSS_SHA,
+                        'Native-state producer/reuse/rolled-back CSS differs from reviewed inputs')
             if args.coarse_toolbar_qualification:
                 require(isinstance(COARSE_TOOLBAR_PRODUCER_SHA, str)
                         and re.fullmatch('[a-f0-9]{64}', COARSE_TOOLBAR_PRODUCER_SHA)
@@ -2022,7 +2206,7 @@ def main():
                 require(read(ROOT / 'frontend/package.json')['scripts']['build'] == 'vite build',
                         'Canonical frontend build command changed')
                 executables = (PYTHON, BUILD_PYTHON, NODE, NPM, UV)
-            elif args.touch_event_diagnostic:
+            elif touch_checkpoint:
                 # Compare all old executable identities for retained_proofs;
                 # checking their bytes is NOT executing build/install readiness.
                 executables = (PYTHON, BUILD_PYTHON, NODE, NPM, UV)
@@ -2055,6 +2239,8 @@ def main():
         }
         if args.corner_diagnostic:
             env['FILES1318_CORNER_DIAGNOSTIC'] = '1'  # Fixed child evidence destination only.
+        elif args.native_state_diagnostic:
+            env['FILES1318_NATIVE_STATE_DIAGNOSTIC'] = '1'
         elif args.touch_event_diagnostic:
             env['FILES1318_TOUCH_EVENT_DIAGNOSTIC'] = '1'
         elif args.contour_qualification:
@@ -2092,8 +2278,8 @@ def main():
                     row['diagnostic'] = corner_diagnostic_proof(raw['exitCode'])
                     report['checkpointObserved'] = row['diagnostic']['checkpointObserved']
                     save('report.json', report)
-                if args.touch_event_diagnostic and name == 'generated-source':
-                    row['diagnostic'] = touch_event_diagnostic_proof(raw['exitCode'])
+                if touch_checkpoint and name == 'generated-source':
+                    row['diagnostic'] = touch_event_diagnostic_proof(raw['exitCode'], native_state=args.native_state_diagnostic)
                     report['checkpointObserved'] = row['diagnostic']['checkpointObserved']
                     report['observationOutcome'] = row['diagnostic']['outcome']
                     save('report.json', report)
@@ -2126,7 +2312,8 @@ def main():
                 step('prior-build-context', lambda: diagnostic_static(frozen, binding='coarseToolbarReuse'))
             else:
                 step('static-reuse', lambda: diagnostic_static(
-                    frozen, binding='touchEventReuse' if args.touch_event_diagnostic else 'contourReuse'))
+                    frozen, binding='nativeStateReuse' if args.native_state_diagnostic
+                    else 'touchEventReuse' if args.touch_event_diagnostic else 'contourReuse'))
             # No status changes until every original proof, dependency identity,
             # tracked input and archived static byte has passed the reuse guard.
             for name in reused_phases:
@@ -2187,6 +2374,9 @@ def main():
             if args.touch_event_diagnostic:
                 require(mode == 'source', 'Touch event diagnostic cannot exercise installed mode')
                 extra['FILE_CONTROLS_TOUCH_EVENT_DIAGNOSTIC'] = '1'
+            if args.native_state_diagnostic:
+                require(mode == 'source', 'Native-state diagnostic cannot exercise installed mode')
+                extra['FILE_CONTROLS_NATIVE_STATE_DIAGNOSTIC'] = '1'
             if args.coarse_toolbar_qualification:
                 extra['FILE_CONTROLS_COARSE_TOOLBAR_QUALIFICATION'] = '1'
             run('topology-' + mode, [NODE, 'tests/file-controls-topology-preflight.mjs'], root=root,
@@ -2326,7 +2516,7 @@ def main():
                             'Diagnostic static binding changed')
                     require(tree(OUT / 'static-before') == read(OUT / 'static-before.json'),
                             'Preserved original static changed')
-                    if args.touch_event_diagnostic:
+                    if touch_checkpoint:
                         require(all(sha(OUT / 'prior-evidence' / name) == digest
                                     for name, digest in frozen['reuseEvidence'].items()),
                                 'Copied prior raw evidence changed')
@@ -2355,7 +2545,7 @@ def main():
             signal.setitimer(signal.ITIMER_REAL, max(.001, hard_deadline - time.monotonic()))
             if checkpoint_mode:
                 report['outcome'] = 'checkpoint_observed_cause_unknown' if report['complete'] else 'failed'
-                if args.touch_event_diagnostic and not report['checkpointObserved']:
+                if touch_checkpoint and not report['checkpointObserved']:
                     report['outcome'] = 'unknown'
             report['durationSeconds'] = round(time.monotonic() - started, 3)
             save('report.json', report)
@@ -2369,12 +2559,13 @@ if __name__ == '__main__':
     corner = os.environ.get('FILES1318_CORNER_DIAGNOSTIC') == '1'
     contour = os.environ.get('FILES1318_CONTOUR_QUALIFICATION') == '1'
     touch_event = os.environ.get('FILES1318_TOUCH_EVENT_DIAGNOSTIC') == '1'
+    native_state = os.environ.get('FILES1318_NATIVE_STATE_DIAGNOSTIC') == '1'
     coarse_toolbar = os.environ.get('FILES1318_COARSE_TOOLBAR_QUALIFICATION') == '1'
-    require(sum((corner, contour, touch_event, coarse_toolbar)) <= 1, 'Conflicting child qualification modes')
-    select_output(CORNER_OUT if corner else TOUCH_EVENT_OUT if touch_event
+    require(sum((corner, contour, touch_event, native_state, coarse_toolbar)) <= 1, 'Conflicting child qualification modes')
+    select_output(CORNER_OUT if corner else NATIVE_STATE_OUT if native_state else TOUCH_EVENT_OUT if touch_event
                   else COARSE_TOOLBAR_OUT if coarse_toolbar
                   else CONTOUR_OUT if contour else QUALIFIED_OUT)
-    if touch_event:
+    if touch_event or native_state:
         require(os.environ.get('FILES1318_FIXTURE') != 'installed'
                 and sys.argv[1:] not in (['--python-tests'], ['--installed-ready']),
                 'Touch event diagnostic cannot run units or installed children')
