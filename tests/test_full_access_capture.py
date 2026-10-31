@@ -46,6 +46,8 @@ async def child(app, owner, tmp_path, monkeypatch, exercise):
     active = owner['collaborationGeneration']
     worker = Worker()
     worker.session = parent
+    worker.start_config = {key: owner.get(key, 0) for key in
+        ('interruptionRevision', 'executionRevision', 'configurationPendingRevision')}
     worker.runtime = SimpleNamespace(generation={'id': active['id'], 'input_ids': list(active['inputIds'])},
                                      closed=False, stop_requested=False)
     worker.activation_gate = SimpleNamespace(current_valid=True)
