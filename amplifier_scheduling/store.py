@@ -80,15 +80,23 @@ class ScheduleStore:
     def put(self, record):
         self.db.execute('INSERT OR REPLACE INTO schedules VALUES(?,?,?)', (record['id'], record['sessionId'], json.dumps(record)))
 
+    def receipt(self, command_id, signature):
+        """Inspect an exact completed command without preparing another effect."""
+        row = self.db.execute('SELECT fingerprint,result FROM schedule_commands WHERE id=?', (command_id,)).fetchone()
+        if row is None:
+            return None
+        if row[0] != signature:
+            raise ValueError('This command ID has different schedule contents')
+        return {**json.loads(row[1]), 'duplicate': True}
+
     def mutate(self, operation, args, command_id, build):
         """Pure builder runs inside a transaction; retries return original receipt."""
         if not isinstance(command_id, str) or not command_id: raise ValueError('A stable schedule command ID is required')
         signature = fingerprint([operation, args])
         with self.transaction():
-            receipt = self.db.execute('SELECT fingerprint,result FROM schedule_commands WHERE id=?', (command_id,)).fetchone()
-            if receipt:
-                if receipt[0] != signature: raise ValueError('This command ID has different schedule contents')
-                return {**json.loads(receipt[1]), 'duplicate': True}
+            receipt = self.receipt(command_id, signature)
+            if receipt is not None:
+                return receipt
             previous = self.get(args['sessionId'], args['id']) if args.get('id') else None
             revision = previous['revision'] if previous else 0
             if type(args.get('expectedRevision')) is not int or args['expectedRevision'] != revision: raise ValueError('The schedule revision changed; inspect it before editing')
@@ -158,6 +166,8 @@ class ScheduleStore:
             if due is None: return None
             run_id = f"schedule:{identity}:run:{int(due['dueAt'])}"
             run = {'id': run_id, 'scheduleId': identity, 'sessionId': session_id, 'taskId': schedule.get('taskId'), 'taskRevision': schedule.get('taskRevision'), 'scheduleRevision': schedule['revision'], 'dueAt': due['dueAt'], 'phase': 'skipped' if due['skip'] else 'claimed', 'revision': 1, 'owner': self.owner, 'inputId': run_id, 'createdAt': now, 'updatedAt': now, 'detail': 'Missed occurrence skipped by the saved policy.' if due['skip'] else 'Due occurrence claimed.'}
+            if authority_command := schedule.get('authorization', {}).get('commandId'):
+                run['authorizationCommandId'] = authority_command
             self.db.execute('INSERT INTO schedule_runs VALUES(?,?,?,?,?,?)', (run_id, identity, session_id, run['dueAt'], run['phase'], json.dumps(run)))
             schedule.update(nextDue=due['nextDue'])
             if due['skip'] and due['nextDue'] is None:
@@ -186,10 +196,9 @@ class ScheduleStore:
 
     def run_command(self, session_id, identity, revision, command_id, signature, edit):
         with self.transaction():
-            previous = self.db.execute('SELECT fingerprint,result FROM schedule_commands WHERE id=?', (command_id,)).fetchone()
-            if previous:
-                if previous[0] != signature: raise ValueError('This command ID has different run contents')
-                return {**json.loads(previous[1]), 'duplicate': True}
+            previous = self.receipt(command_id, signature)
+            if previous is not None:
+                return previous
             run = self.run(session_id, identity)
             if type(revision) is not int or revision != run['revision']: raise ValueError('The scheduled run revision changed')
             edit(run)

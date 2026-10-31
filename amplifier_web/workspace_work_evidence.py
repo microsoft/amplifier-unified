@@ -23,7 +23,7 @@ def definitions(schema, string):
             'resourceId': {**string(500), 'minLength': 1}, 'kind': {**string(100), 'minLength': 1},
             'reportedState': {'enum': ['active', 'unknown', 'reaped', 'observed_absent']},
             'evidenceReference': {**string(2000), 'minLength': 1}}, [*required, 'resourceId', 'kind', 'reportedState', 'evidenceReference'])),
-        'workspace.work.link': ('Owner links an existing same-workspace execution or reviewer without enrolling, starting or granting it authority. Links are not claims.', schema({**target,
+        'workspace.work.link': ('Owner links an existing same-workspace execution or reviewer without starting or granting it authority. An executor link sets the current candidate; before commissioning new Work, link the accountable owner as executor and use the returned candidate and revisions. Links are not claims.', schema({**target,
             'linkedSessionId': string(200), 'role': {'enum': ['executor', 'reviewer']},
             'candidate': candidate, 'taskId': string(200), 'claimId': string(200)}, [*required, 'linkedSessionId', 'role', 'candidate'])),
         'workspace.work.report': ('Append an attributed result for an exact promise/candidate. A report alone never means independent verification. Optional checkReceiptId must be this actor\'s exact retained integration collection.', schema({**target,

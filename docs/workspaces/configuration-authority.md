@@ -231,6 +231,13 @@ already supports it. The existing behavior and command-line entry points below
 are narrower: task lineage, system-origin action parity and action-specific human
 gates require incremental qualification before being described as complete.
 
+Global model-capacity waiting settings accept standing Full from an explicit
+calling conversation, including its current native descendants and trusted host
+systems. The existing policy owner checks authority at commit and retains exact
+source-bound receipts without a new approval. This adjusts waiting capacity, not
+spending limits; [the execution contract](contracts/execution.v2-candidate.md)
+defines its lifetime, cancellation and observation behavior.
+
 Initial feedback publication and direct text follow-ups have a Full path for
 current agents, assigned native children and trusted host systems with an explicit
 calling conversation. Initial files and prepared excerpts use conversation-owned
@@ -472,3 +479,22 @@ requests also return it in their canonical grant receipt. Notes on expired
 requests are retained only. They never revive an old waiter or start a turn.
 Choose Deny when the proposed operation itself needs to change; an Allow note
 is guidance for subsequent work, not a rewrite of the operation being approved.
+
+### Owner-local scheduled work
+
+Full roots, qualified native children and explicitly identified trusted system
+callers may create, update, normally resume and reconcile their own schedules
+without another human message. Schedules captures the shared Full source once,
+before preparation waits. Existing schedule/run receipts retain actual actor
+provenance and exact source access, Stop, native owner and placement witnesses;
+no new authority store is introduced. Accepted recurring work outlives its
+authorizing generation and process. Due conversation creation, task-control
+admission and scheduled input admission recheck the captured authority. Full
+off/on never renews it. Exact completed retries remain observational.
+
+Ask keeps its existing human-message authorization and evidence rules. Full
+reconciliation labels the current actor's finding, never a fabricated human
+source or verified outcome, and cannot resume or replay unknown work. This
+owner-local path does not widen cross-root repair handoffs or authorize stopped
+native work to rearm itself. Fresh future-schedule repair is governed separately
+by [automation recovery](../contracts/automation-overview.md).

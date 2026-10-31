@@ -18,18 +18,18 @@ def definitions(schema, string):
     authorization = {'previewHash': string(100), 'sourceMessageId': string(200)}
     return {
         'schedule.overview': ('Read a bounded page of chat-owned schedules without histories or worker starts.', schema({'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100}, 'status': {'enum': ['current', 'all']}}, [])),
-        'schedule.repairPreview': ('Human-only preview of future new-task recovery using saved configuration, without waking the owner.', schema({**identity, **revision})),
-        'schedule.repairResume': ('Human-only confirm of reviewed future new-task recovery. Never replays uncertain prior work or resumes the old owner generation.', schema({**identity, **revision, 'previewHash': string(100), 'acknowledgeStop': {'type': 'boolean'}}, [*identity, *revision, 'previewHash'])),
+        'schedule.repairPreview': ('Preview owner-local future new-task recovery from saved configuration without waking the owner. Full accepts current native work or a fresh explicitly identified trusted system caller; Ask uses the human Automation controls.', schema({**identity, **revision})),
+        'schedule.repairResume': ('Resume reviewed future new-task occurrences under current Full or human confirmation. Only a fresh trusted system request or human confirmation can cross owner Stop; old stopped native work cannot rearm itself. Never replays uncertain work or resumes the old generation.', schema({**identity, **revision, 'previewHash': string(100), 'acknowledgeStop': {'type': 'boolean'}}, [*identity, *revision, 'previewHash'])),
         'schedule.list': ('List saved schedules in any registered conversation in this user’s library, without starting work. Cross-conversation mutations remain unavailable.', schema(sid)),
         'schedule.read': ('Read a schedule and its bounded durable run history from any registered conversation in this user’s library. Unknown is never replayed.', schema(identity)),
-        'schedule.preview': ('Preview concrete timezone occurrences for an explicit user-requested schedule. destination defaults to same_task; new_task explicitly creates a fresh user-owned task for every run using the reviewed source configuration. Does not save or submit work.', schema({**sid, **fields, **destination}, [*sid, *fields])),
-        'schedule.create': ('Save and activate exactly the reviewed prompt/timing for an explicit user request. Agents must cite the actual user sourceMessageId. A pending question never authorizes a schedule. Tool permissions still apply at execution.', schema({**sid, **revision, **fields, **destination, **authorization}, [*sid, *revision, *fields, 'previewHash'])),
-        'schedule.update': ('Review and replace the saved prompt/timing against the latest task correction. Requires exact revision, concrete preview and renewed explicit user provenance.', schema({**identity, **revision, **fields, **destination, **authorization}, [*identity, *revision, *fields, 'previewHash'])),
+        'schedule.preview': ('Preview concrete timezone occurrences and exact configuration for authorized scheduled work. destination defaults to same_task; new_task explicitly creates a fresh user-owned task for every run using the reviewed source configuration. Does not save or submit work.', schema({**sid, **fields, **destination}, [*sid, *fields])),
+        'schedule.create': ('Save and activate exactly the reviewed prompt/timing. Full access needs no human message; Ask agents must cite the actual user sourceMessageId. A pending question never authorizes a schedule. Tool permissions still apply at execution.', schema({**sid, **revision, **fields, **destination, **authorization}, [*sid, *revision, *fields, 'previewHash'])),
+        'schedule.update': ('Review and replace the saved prompt/timing against the latest task correction. Requires exact revision and concrete preview; Full retains current caller authority, while Ask requires renewed explicit user provenance.', schema({**identity, **revision, **fields, **destination, **authorization}, [*identity, *revision, *fields, 'previewHash'])),
         'schedule.pause': ('Pause future due runs. Current admitted work can finish; no rollback is claimed.', schema({**identity, **revision})),
-        'schedule.resume': ('Deliberately resume after concrete review. Requires current preview and explicit user provenance. An admitted scheduleRepair handoff may supply handoffRequestId and the original human sourceMessageId for unchanged existing schedules. Never replays uncertain runs.', schema({**identity, **revision, **authorization, 'handoffRequestId': string(200)}, [*identity, *revision, 'previewHash'])),
+        'schedule.resume': ('Deliberately resume after concrete review. Requires current preview and current Full authority or explicit user provenance. An admitted scheduleRepair handoff may supply handoffRequestId and the original human sourceMessageId for unchanged existing schedules. Never replays uncertain runs.', schema({**identity, **revision, **authorization, 'handoffRequestId': string(200)}, [*identity, *revision, 'previewHash'])),
         'schedule.cancel': ('Cancel future due runs while preserving run evidence. Does not undo admitted work.', schema({**identity, **revision})),
         'schedule.report': ('Record attributable monitor evidence for this scheduled run. Compared values are retained; agent-reported unchanged is labelled as a claim, not proof. This does not complete the task or grant permission.', schema({**sid, 'runId': string(200), **revision, 'outcome': {'enum': ['changed', 'unchanged']}, 'detail': string(4000), 'values': {}}, [*sid, 'runId', *revision, 'outcome', 'detail'])),
-        'schedule.reconcile': ('Explicitly reconcile an uncertain run as completed or abandoned with user-provided evidence. Never resubmits the old input. Schedule resume remains separate.', schema({**sid, 'runId': string(200), **revision, 'resolution': {'enum': ['completed', 'abandoned']}, 'evidence': {**string(4000), 'minLength': 1}, 'sourceMessageId': string(200)}, [*sid, 'runId', *revision, 'resolution', 'evidence'])),
+        'schedule.reconcile': ('Record an attributable finding that an uncertain run completed or was abandoned. Full needs no human message; Ask retains user evidence provenance. Never resubmits the old input. Schedule resume remains separate.', schema({**sid, 'runId': string(200), **revision, 'resolution': {'enum': ['completed', 'abandoned']}, 'evidence': {**string(4000), 'minLength': 1}, 'sourceMessageId': string(200)}, [*sid, 'runId', *revision, 'resolution', 'evidence'])),
     }
 
 
@@ -125,7 +125,42 @@ class Schedules:
             binding['newTaskConfiguration'] = {key: value for key, value in template(self.app, owner)[1].items() if key != 'legacyConfigurationHash'}
         return {'previewHash': fingerprint(binding), 'binding': binding, 'occurrences': preview(config['spec'], self.clock(), 5), 'daylightSaving': 'Nonexistent local times are skipped; repeated local times run once at the first occurrence.', 'missedRunPolicy': config['missedRunPolicy'], 'notificationPolicy': config['notificationPolicy']}
 
-    def authorization(self, sid, args, origin, *, previous=None, action=None):
+    def full_authority(self, sid, origin, *, fresh_recovery=False):
+        if origin not in {'agent', 'system'}:
+            return None
+        session = self.app._session(sid, hydrate=False)
+        authority = self.app.access_mode.capture_full(session, origin)
+        if authority is not None:
+            from .collaboration import BINDING, PRINCIPAL
+            fresh_system = origin == 'system' and not (BINDING.get() or PRINCIPAL.get())
+            if session.get('status') in {'stopped', 'stopping'} and not (fresh_recovery and fresh_system):
+                raise ValueError('Stopped work cannot authorize its own future schedule. Review future recovery separately.')
+            authority.update(workspace=session.get('workspace'),
+                nativeSessionId=session.get('runtimeSessionId') or session.get('nativeIdentity') or sid,
+                executionRevision=session.get('executionRevision', 0),
+                interruptionRevision=session.get('interruptionRevision', 0))
+            if reason := self.authority_reason(session, authority):
+                raise ValueError(reason)
+        return authority
+
+    def authority_reason(self, session, authority):
+        # Accepted recurring work outlives its original root/child generation.
+        # A fresh mutation authenticates the actor; due effects check this saved
+        # source and policy witness, never a later capture or stale invocation.
+        if (not self.app.access_mode.full(session, authority['accessRevision'])
+                or session['id'] != authority['sessionId']
+                or session.get('workspace') != authority['workspace']
+                or (session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']) != authority['nativeSessionId']
+                or any(session.get(key, 0) != authority[key]
+                       for key in ('executionRevision', 'interruptionRevision'))):
+            return 'Full schedule authority changed or its work was stopped or moved. Review future work before continuing.'
+        return self.app.assignments.blocked(session)
+
+    def authorization(self, sid, args, origin, *, previous=None, action=None, authority=None):
+        if authority is not None:
+            if reason := self.authority_reason(self.app._session(sid, hydrate=False), authority):
+                raise ValueError(reason)
+            return {'origin': origin, 'authority': copy.deepcopy(authority), 'at': self.clock()}
         if origin == 'ui': return {'origin': 'ui', 'at': self.clock()}
         if origin not in {'agent', 'voice', 'user'}: raise ValueError('Only an explicit user request can authorize scheduled work')
         handoff = None
@@ -140,13 +175,13 @@ class Schedules:
             raise ValueError('Cite the new user request or correction that authorizes this schedule review')
         return {**({'handoff': handoff} if handoff else {}), 'origin': origin, 'messageId': source['id'], 'text': source.get('text', ''), 'inputOrigin': source['inputOrigin'], 'messageCreatedAt': source.get('createdAt', 0), 'textDigest': fingerprint(source.get('text', '')), 'voiceId': source.get('voiceId'), 'voiceItemId': source.get('voiceItemId'), 'at': self.clock()}
 
-    async def dispatch(self, action, args, origin, command_id):
+    async def dispatch(self, action, args, origin, command_id, caller=None):
         if action == 'schedule.overview':
             from .automation_overview import overview
             return overview(self, args)
         if action in {'schedule.repairPreview', 'schedule.repairResume'}:
             from .automation_overview import repair
-            return await repair(self, action, args, origin, command_id or str(uuid.uuid4()))
+            return await repair(self, action, args, origin, command_id or str(uuid.uuid4()), caller)
         sid = args['sessionId']
         self.app._session(sid)
         if action in {'schedule.list', 'schedule.read'}:
@@ -159,7 +194,21 @@ class Schedules:
                 changed = self.sync()
                 if changed: self.app._publish_changes(sessions=changed)
                 return result
-        if action in {'schedule.report', 'schedule.reconcile'}: return await self.run_command(action, args, origin, command_id or str(uuid.uuid4()))
+        if origin in {'agent', 'system'} and (not caller or caller != sid):
+            raise ValueError('Schedule mutations must identify the calling conversation.')
+        if action in {'schedule.report', 'schedule.reconcile'}:
+            return await self.run_command(action, args, origin, command_id or str(uuid.uuid4()))
+        command_id = command_id or str(uuid.uuid4())
+        # sessionId is the canonical caller/owner above; preserve the original
+        # command identity independently of changing generations/access modes.
+        intent = {**args, 'authorizationOrigin': origin}
+        async with self.app.lock:
+            if action != 'schedule.preview':
+                retained = self.store.receipt(command_id, fingerprint([action, intent]))
+                if retained is not None:
+                    return retained
+            authority = (self.full_authority(sid, origin)
+                if action in {'schedule.create', 'schedule.update', 'schedule.resume'} else None)
         config = self.configuration(args) if action in {'schedule.preview', 'schedule.create', 'schedule.update'} else None
         if action == 'schedule.resume': config = self.configuration(self.store.get(sid, args['id']))
         task = await self.task(sid, config, prepare=True) if action in {'schedule.preview', 'schedule.create', 'schedule.update', 'schedule.resume'} else None
@@ -185,7 +234,8 @@ class Schedules:
                     reviewed = self.reviewed(sid, effective, task)
                     if args['previewHash'] != reviewed['previewHash']: raise ValueError('The task, stop intent, or schedule preview changed; preview again')
                     if any(run['phase'] == 'unknown' for run in self.store.runs(sid, record['id'])): raise ValueError('Reconcile the uncertain prior run before resuming')
-                    authorization = self.authorization(sid, args, origin, previous=previous, action=action)
+                    authorization = self.authorization(sid, args, origin, previous=previous, action=action, authority=authority)
+                    authorization['commandId'] = command_id
                     next_due = next_after(effective['spec'], now)
                     if next_due is None: raise ValueError('Choose a future occurrence; past one-shot work is not replayed')
                     for key in ('newTaskConfiguration', 'newTaskTitle', 'newTaskMaxTurns'): record.pop(key, None)
@@ -195,7 +245,7 @@ class Schedules:
                 else: raise ValueError('Unknown schedule action')
                 record['updatedAt'] = now
                 return record
-            result = self.store.mutate(action, {**args, "authorizationOrigin": origin}, command_id or str(uuid.uuid4()), build)
+            result = self.store.mutate(action, intent, command_id, build)
             self.changed()
             return result
 
@@ -203,22 +253,27 @@ class Schedules:
         sid, identity, now = args['sessionId'], args['runId'], self.clock()
         async with self.app.lock:
             owner = self.store.execution_run(sid, identity)['sessionId'] if action == 'schedule.report' else sid
+            signature = fingerprint([action, args, origin])
+            retained = self.store.receipt(command_id, signature)
+            if retained is not None:
+                return retained
+            authority = self.full_authority(sid, origin, fresh_recovery=True) if action == 'schedule.reconcile' else None
             def edit(run):
                 if action == 'schedule.report':
                     if run['phase'] not in {'submitting', 'accepted', 'running'}: raise ValueError('Only an admitted current run can report monitor evidence')
                     values = args.get('values')
                     if len(json.dumps(values)) > 64000: raise ValueError('Keep compared monitor values below 64 KB')
-                    report = {'outcome': args['outcome'], 'detail': args['detail'], 'source': 'agent_report' if origin == 'agent' else 'user_report', 'at': now}
+                    report = {'outcome': args['outcome'], 'detail': args['detail'], 'source': {'agent': 'agent_report', 'system': 'system_report'}.get(origin, 'user_report'), 'at': now}
                     if 'values' in args: report.update(values=copy.deepcopy(values), valuesDigest=fingerprint(values))
                     run['report'] = report
                 else:
                     if run['phase'] != 'unknown': raise ValueError('Only an uncertain run requires reconciliation')
-                    provenance = self.authorization(sid, args, origin)
-                    if origin != 'ui' and provenance.get('messageCreatedAt', 0) < run['createdAt']:
+                    provenance = self.authorization(sid, args, origin, authority=authority)
+                    if origin != 'ui' and authority is None and provenance.get('messageCreatedAt', 0) < run['createdAt']:
                         raise ValueError('Reconciliation needs the user’s actual finding after this run, not an older request')
                     run.update(phase=args['resolution'], reconciliation={'evidence': args['evidence'], 'provenance': provenance, 'at': now}, detail='Explicitly reconciled without replaying its input.')
                 run['updatedAt'] = now
-            result = self.store.run_command(owner, identity, args['expectedRevision'], command_id, fingerprint([action, args, origin]), edit)
+            result = self.store.run_command(owner, identity, args['expectedRevision'], command_id, signature, edit)
             self.changed()
             return result
 
@@ -232,6 +287,9 @@ class Schedules:
         if session.get('interruptionRevision', 0) != schedule['interruptionRevision']:
             return 'The user stopped this conversation. Review the schedule before resuming.'
         authorization = schedule.get('authorization', {})
+        if authority := authorization.get('authority'):
+            if reason := self.authority_reason(session, authority):
+                return reason
         authority_session = session
         if handoff := authorization.get('handoff'):
             try:
@@ -341,9 +399,8 @@ class Schedules:
                     if not self.store.owns(self.clock()): return 'Scheduler ownership changed before admission.'
                     owner = self.app._session(sid)
                     if owner.get('configurationBusy') or owner.get('fileAccessPending') or owner.get('executionRevision', 0) != current.get('executionRevision', 0): return 'The task configuration changed or its execution folder is moving; this occurrence was skipped.'
-                    if current.get('destination') == 'new_task' or current.get('authorization', {}).get('handoff'):
-                        reason = self.dependency_reason(owner, task, current)
-                        if reason: return reason
+                    reason = self.dependency_reason(owner, task, current)
+                    if reason: return reason
                     destination = self.app._session(target)
                     if run.get('destinationConfigurationHash'):
                         from .session_creation import template, configuration_changes

@@ -12,7 +12,7 @@ from test_task_continuity import controls
 
 
 class ConfiguredRuntime(Runtime):
-    async def control(self, sid, operation, args):
+    async def control(self, sid, operation, args, *, guard=None):
         if sid not in self.workers:
             control = self.workers[sid] = controls(sid)
             path = control.state_path().with_name("configuration.json")
@@ -20,6 +20,7 @@ class ConfiguredRuntime(Runtime):
             original = control.coordinator.get
             control.coordinator.get = lambda name: {"synthetic": SimpleNamespace()} if name == "providers" else original(name)
             await control.restore()
+        if guard is not None: guard()
         return await self.workers[sid].perform(operation, args)
 
 
