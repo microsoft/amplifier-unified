@@ -261,7 +261,9 @@ async def test_http_authentication_and_cross_site_boundaries_are_unchanged(http)
         response = await client.post(URL, headers=headers, json=args)
         assert response.status == status
         assert (await response.json()).get('status') != 'accepted'
-    assert (await client.get(URL)).status == 405
+    # The existing root static GET route catches unknown GET paths. The passive
+    # Stop reader is POST-only; a GET must remain unavailable, not execute it.
+    assert (await client.get(URL)).status == 404
     assert service.runtime.stopped == service.runtime.started == service.runtime.sent == []
 
 
