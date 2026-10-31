@@ -505,7 +505,8 @@ def change_boundary(h, change):
     elif change == 'owner-generation':
         h.source['collaborationGeneration']['id'] = 'new-owner-generation'
     elif change == 'member-input':
-        h.app._message(h.target, 'user', 'A new user constraint supersedes the observed boundary')
+        h.app._message(h.target, 'user', 'A new user constraint supersedes the observed boundary',
+                       inputOrigin='ui', inputId='new-human-constraint')
     elif change == 'member-placement':
         h.target['executionRevision'] = h.target.get('executionRevision', 0) + 1
     elif change == 'safety-stop':
