@@ -1,12 +1,63 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {Check} from 'lucide-react';
 
+// Private bundled scheduling hint, not permission. Only this exact card path
+// leaves the document queue; grant administration keeps its existing ordering.
+export function isCapabilityCardAction(action,args,meta){
+ return meta?.capabilityCard===true&&typeof args?.sessionId==='string'&&!!args.sessionId
+  &&typeof args.id==='string'&&args.id.startsWith('capability:')
+  &&(action==='capability.read'||action==='approval.respond'||action==='capability.revoke'&&args.dismissRequest===true);
+}
+
+// Client-local ordering only. The host still owns interruption, request hashes
+// and permission decisions. A Stop invalidates reads even if its POST is queued.
+export function createCapabilityStopFence(){
+ const sessions=new Map(),reads=new WeakSet();
+ const state=sessionId=>{
+  if(!sessions.has(sessionId))sessions.set(sessionId,{epoch:0,stops:new Set()});
+  return sessions.get(sessionId);
+ };
+ return {
+  beginStop(sessionId,commandId){
+   const current=state(sessionId),stop={sessionId,commandId,current,outcome:'pending'};
+   current.epoch++;current.stops.add(stop);return stop;
+  },
+  settleStop(stop,outcome){
+   if(!stop?.current.stops.has(stop))return; // A late failure cannot undo acceptance.
+   stop.outcome=outcome;
+   if(outcome==='accepted'||outcome==='not-applied')stop.current.stops.delete(stop);
+   // Unknown stays fenced. A newer Stop cannot erase this unresolved command.
+  },
+  beginRead({sessionId,id}){
+   const current=state(sessionId);
+   return {sessionId,id,current,epoch:current.epoch,eligible:current.stops.size===0};
+  },
+  finishRead(start,requestHash){
+   const token=Object.freeze({...start,requestHash});reads.add(token);return token;
+  },
+  assertMutation(args,token){
+   const current=state(args.sessionId);
+   if(!token||!reads.has(token)||token.sessionId!==args.sessionId||token.id!==args.id||
+      !token.eligible||token.current!==current||token.epoch!==current.epoch||
+      current.stops.size||!token.requestHash||token.requestHash!==args.expectedRequestHash)
+    throw Object.assign(Error('Stop was requested or this permission review is no longer current. No decision was sent. Review again after the Stop outcome is confirmed; your note is kept.'),{code:'capability_stop_fenced'});
+  },
+ };
+}
+
+// Classify only the Stop action POST, never a subsequent state/recovery error.
+// session_busy is checked before the Stop branch (service.py ownership guard).
+// Generic accepted:false/4xx/5xx and transport/parse/abort errors prove no such thing.
+export const stopFailureOutcome=(error,postStarted)=>!postStarted||
+ (error?.code==='session_busy'&&error.status===409)?'not-applied':'unknown';
+
 function CapabilityApprovalCard({approval,sessionId,dispatch,freshnessKey}){
  const [snapshot,setSnapshot]=useState(null),[comment,setComment]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),[review,setReview]=useState(false);
  const sequence=useRef(0),locked=useRef(false),mounted=useRef(true);
+ const cardDispatch=(action,args,readToken)=>dispatch(action,args,{capabilityCard:true,...(readToken?{capabilityRead:readToken}:{})});
  const read=async()=>{
   const ticket=++sequence.current;
-  const receipt=await dispatch('capability.read',{sessionId,id:approval.id});
+  const receipt=await cardDispatch('capability.read',{sessionId,id:approval.id});
   if(!receipt?.accepted||!receipt.result?.request)throw Error('Current permission could not be checked. No decision was sent.');
   if(mounted.current&&ticket===sequence.current)setSnapshot(receipt.result);
   return receipt.result;
@@ -28,16 +79,16 @@ function CapabilityApprovalCard({approval,sessionId,dispatch,freshnessKey}){
   locked.current=true;setBusy(true);setError('');
   try{
    // A passive preflight never turns a click on old text into approval of new text.
-   const current=(await read()).request;
+   const preflight=await read(),current=preflight.request;
    if(!mounted.current)return;
    if(current.requestHash!==request.requestHash)throw Error('This request changed. Review its current state before deciding. Your note is kept.');
    if(decision==='dismiss'){
     if(!current.canDismiss)throw Error('This request cannot be dismissed as an old request.');
-    const receipt=await dispatch('capability.revoke',{sessionId,id:approval.id,dismissRequest:true,expectedRevision:current.revision,expectedRequestHash:current.requestHash,...(comment.trim()?{comment:comment.trim()}:{})});
+    const receipt=await cardDispatch('capability.revoke',{sessionId,id:approval.id,dismissRequest:true,expectedRevision:current.revision,expectedRequestHash:current.requestHash,...(comment.trim()?{comment:comment.trim()}:{})},preflight.capabilityRead);
     if(!receipt?.accepted)throw Error('Dismissal was not confirmed. Nothing was retried.');
    }else{
     if(!current.canDecide)throw Error('This request is no longer awaiting a decision. Your note is kept.');
-    const receipt=await dispatch('approval.respond',{sessionId,id:approval.id,decision,expectedRequestHash:current.requestHash,...(comment.trim()?{comment:comment.trim()}:{})});
+    const receipt=await cardDispatch('approval.respond',{sessionId,id:approval.id,decision,expectedRequestHash:current.requestHash,...(comment.trim()?{comment:comment.trim()}:{})},preflight.capabilityRead);
     if(!receipt?.accepted)throw Error('The decision was not confirmed. Your note is kept; nothing was retried.');
     if(receipt.decisionApplied===false)setError('No decision was applied. The current request state is shown below; your note is kept.');
    }

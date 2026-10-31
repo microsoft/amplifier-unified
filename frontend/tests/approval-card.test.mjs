@@ -5,9 +5,71 @@ import {create} from 'react-test-renderer';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {ApprovalCard,ApprovalPanel,PermissionHistory,approvalGroups}=await server.ssrLoadModule('/src/approval-card.jsx');
+const {ApprovalCard,ApprovalPanel,PermissionHistory,approvalGroups,isCapabilityCardAction,createCapabilityStopFence,stopFailureOutcome}=await server.ssrLoadModule('/src/approval-card.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
+test('only exact bundled capability-card operations leave document ordering',()=>{
+ const args={sessionId:'rendered-chat',id:'capability:request'},meta={capabilityCard:true};
+ for(const action of ['capability.read','approval.respond'])assert.equal(isCapabilityCardAction(action,args,meta),true);
+ assert.equal(isCapabilityCardAction('capability.revoke',{...args,dismissRequest:true},meta),true);
+ for(const [action,input,hint] of [
+  ['capability.read',args,{}],['capability.read',{id:args.id},meta],
+  ['capability.read',{sessionId:args.sessionId},meta],['approval.respond',{...args,id:'native'},meta],
+  ['capability.revoke',args,meta],['capability.request',args,meta],['canvas.select',args,meta]
+ ])assert.equal(!!isCapabilityCardAction(action,input,hint),false);
+});
+const reviewed=(fence,sessionId='chat-a',id='capability:pending',hash='hash')=>
+ fence.finishRead(fence.beginRead({sessionId,id}),hash);
+const mutation=(sessionId='chat-a',id='capability:pending',hash='hash')=>({sessionId,id,expectedRequestHash:hash});
+test('Stop fences later Allow immediately while history/Stop have not reached HTTP',()=>{
+ const fence=createCapabilityStopFence(),before=reviewed(fence),other=reviewed(fence,'chat-b');
+ fence.beginStop('chat-a','stop-queued-behind-history');
+ assert.throws(()=>fence.assertMutation(mutation(),before),/Stop was requested/);
+ assert.throws(()=>fence.assertMutation(mutation(),reviewed(fence)),/Stop was requested/);
+ assert.doesNotThrow(()=>fence.assertMutation(mutation('chat-b'),other),'Unrelated chat stays actionable');
+});
+for(const outcome of ['accepted','not-applied'])test(`Stop during preflight invalidates it after ${outcome}; no automatic replay`,()=>{
+ const fence=createCapabilityStopFence(),pendingRead=fence.beginRead({sessionId:'chat-a',id:'capability:pending'});
+ const stop=fence.beginStop('chat-a','stop-during-preflight'),during=reviewed(fence);
+ fence.settleStop(stop,outcome);
+ assert.throws(()=>fence.assertMutation(mutation(),fence.finishRead(pendingRead,'hash')),/Stop was requested/);
+ assert.throws(()=>fence.assertMutation(mutation(),during),/Stop was requested/);
+ assert.doesNotThrow(()=>fence.assertMutation(mutation(),reviewed(fence)),'Only a fresh guarded user attempt is eligible');
+ fence.settleStop(stop,'unknown');
+ assert.doesNotThrow(()=>fence.assertMutation(mutation(),reviewed(fence)),'Later state recovery failure cannot undo exact acceptance/refusal');
+});
+test('queued mutation rechecks Stop at execution; history without Stop remains independent',async()=>{
+ const fence=createCapabilityStopFence(),read=reviewed(fence);let release;
+ const pending=new Promise(resolve=>{release=resolve}),posts=[];
+ fence.assertMutation(mutation(),read); // Admission before Stop.
+ const queued=pending.then(()=>{fence.assertMutation(mutation(),read);posts.push('Allow')});
+ const rejected=assert.rejects(queued,/Stop was requested/);
+ fence.beginStop('chat-a','stop-before-mutation-post');release();await rejected;
+ assert.deepEqual(posts,[]);
+ const independent=createCapabilityStopFence();
+ for(const decision of ['Allow','Deny']){
+  independent.assertMutation(mutation(),reviewed(independent));posts.push(decision);
+ }
+ assert.deepEqual(posts,['Allow','Deny']);
+});
+test('unknown Stop is not cleared by reads or another Stop outcome',()=>{
+ const fence=createCapabilityStopFence(),old=fence.beginStop('chat-a','unknown');
+ fence.settleStop(old,'unknown');
+ const newer=fence.beginStop('chat-a','refused');
+ fence.settleStop(newer,'not-applied');
+ assert.throws(()=>fence.assertMutation(mutation(),reviewed(fence)),/Stop was requested/);
+ fence.settleStop(old,'accepted'); // Exact outcome may arrive later; no Stop replay.
+ assert.doesNotThrow(()=>fence.assertMutation(mutation(),reviewed(fence)));
+ assert.throws(()=>fence.assertMutation(mutation('chat-b'),reviewed(fence)),/Stop was requested/);
+ assert.throws(()=>fence.assertMutation(mutation('chat-a','capability:other'),reviewed(fence)),/Stop was requested/);
+ assert.throws(()=>fence.assertMutation(mutation('chat-a','capability:pending','other-hash'),reviewed(fence)),/Stop was requested/);
+});
+test('only known pre-POST failure or action ownership refusal is definitely unapplied',()=>{
+ assert.equal(stopFailureOutcome(Error('local before-hook rejected'),false),'not-applied');
+ assert.equal(stopFailureOutcome({code:'session_busy',status:409},true),'not-applied');
+ for(const error of [{status:400},{status:409},{status:500},{unconfirmed:true},{name:'AbortError'},Error('Malformed response')])
+  assert.equal(stopFailureOutcome(error,true),'unknown');
+});
 for(const decision of ['approve','deny'])test(`note accompanies ${decision}, targets the rendered chat and survives failure`,async()=>{
  let root;const calls=[];
  await act(async()=>{root=create(React.createElement(ApprovalCard,{approval:{id:'approval'},sessionId:'original-chat',act:async(...args)=>{calls.push(args);throw Error('Not confirmed')}}))});
