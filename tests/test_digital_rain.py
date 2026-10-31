@@ -83,6 +83,12 @@ def test_assistant_box_excludes_action_row_in_all_color_modes():
     assert ".a-message.a-assistant>.a-message-actions{background:transparent;border:0;box-shadow:none}" in css
 
 
+def test_digital_rain_inherits_shared_transcript_edges():
+    # Omission exposes the host fallback. A theme-level none/unset reset would
+    # suppress it, including the host's focus and forced-colors handling.
+    assert not re.search(r"(?:-webkit-)?mask(?:-[\w-]+)?\s*:", source())
+
+
 def luminance(color):
     channels = [int(color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
     linear = [value / 12.92 if value <= .04045 else ((value + .055) / 1.055) ** 2.4 for value in channels]

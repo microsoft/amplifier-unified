@@ -62,7 +62,7 @@
 #amp-one [data-part="conversation"]::before{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;border-radius:inherit;background-image:var(--digital-rain-art);background-repeat:repeat;background-size:512px 768px,704px 960px,896px 1152px;background-position:0 0,137px -320px,293px -576px;animation:none}
 #amp-one [data-part="conversation"]::after{content:none}
 
-#amp-one [data-part="messages"]{background:transparent;scrollbar-color:#355c44 #030906;-webkit-mask-image:linear-gradient(to bottom,#000 0,#000 calc(100% - 36px),transparent 100%);mask-image:linear-gradient(to bottom,#000 0,#000 calc(100% - 36px),transparent 100%)}
+#amp-one [data-part="messages"]{background:transparent;scrollbar-color:#355c44 #030906}
 #amp-one .a-message.a-assistant{background:transparent!important;border:0!important;border-radius:0;padding:0!important;box-shadow:none}
 #amp-one .a-message.a-assistant>.a-message-body{box-sizing:border-box;background:#041009ed;border:1px solid #173822;border-radius:4px;padding:14px 18px;color:#e0f4e5}
 #amp-one .a-message.a-assistant>.a-message-actions{background:transparent;border:0;box-shadow:none}
@@ -113,7 +113,6 @@
 @media(forced-colors:active){
 #amp-one [data-part="conversation"]::before{content:none;animation:none}
 #amp-one .a-brand img{filter:none}
-#amp-one [data-part="messages"]{-webkit-mask-image:none;mask-image:none}
 }
 
 /* Landing pages use their own background, not a positioned overlay. Native
