@@ -40,6 +40,8 @@ SELECTORS = [
     'tests/test_guarded_delivery_ack_timeout.py::test_delivery_without_message_requires_exact_saved_input_and_session',
     'tests/test_access_lineage.py::test_scheduled_root_inherits_after_host_restart_without_source_residency',
     'tests/test_access_lineage.py::test_scheduled_origin_requires_the_reserved_source_run_and_destination',
+    'tests/test_execution_events.py::ExecutionTests::test_compaction_calls_have_distinct_label_usage_and_no_public_stream',
+    'tests/test_execution_events.py::ExecutionTests::test_failed_compaction_restores_purpose_and_records_safe_failure',
 ]
 MODULES = ('amplifier_core', 'amplifier_foundation', 'amplifier_module_loop_live',
            'amplifier_module_loop_streaming', 'amplifier_module_context_simple',
@@ -146,8 +148,10 @@ def main():
         for selector in SELECTORS:
             path, *node = selector.split('::')
             tree = ast.parse((ROOT / path).read_text())
-            if node:
-                assert any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == node[0] for n in tree.body), selector
+            for part in node:
+                matches = [n for n in tree.body if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == part]
+                assert len(matches) == 1, selector
+                tree = matches[0]
         (OUTPUT / 'python-evidence').mkdir()
         package = None
         for name, cap, command, env, root in plans:
