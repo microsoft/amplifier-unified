@@ -414,16 +414,10 @@ async def test_native_child_reads_actual_completed_test_receipt(journey, tmp_pat
         return 'Recorded the actual owner responses; no command replayed.'
     await child(builder, 'result-observer-child', observe)
     assert len(j.checks.jobs) == 1
-    # Validate every successful response before classifying any known refusal:
-    # a partial owner fix must not hide a stale or malformed successful result.
-    if observations[0].success:
-        assert observations[0].output['result'] == {'items': [completed['check']], 'nextOffset': None}
-    if observations[1].success:
-        assert observations[1].output['result'] == completed
-    refusals = [response for response in observations if not response.success]
-    if refusals:
-        assert all('A child cannot borrow' in str(response.error) for response in refusals), refusals
-        pytest.xfail('Verified baseline gap: actual Full child cannot read saved workspace.tests.read/result; multi-worker owns the pending fix. This is not full unattended acceptance.')
+    for response in observations:
+        assert response.success, response.error
+    assert observations[0].output['result'] == {'items': [completed['check']], 'nextOffset': None}
+    assert observations[1].output['result'] == completed
 
 
 async def test_native_root_cancels_real_active_check_and_observes_without_replay(journey, tmp_path, monkeypatch):

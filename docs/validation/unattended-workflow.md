@@ -41,14 +41,10 @@ Routine managed checks already use ordinary task authority in Ask; changing Full
 alone is intentionally not treated as cancellation of those checks.
 
 One separate case sends `workspace.tests.read` and `workspace.tests.result`
-through an actual Full child after a real test completes. On the initial baseline
-the owner refuses both with the root-collaboration-authority error. That exact
-known refusal is reported as an expected failure, not a successful unattended
-journey. Each successful list or result response is compared with the completed
-canonical check before any known refusal is classified, so a partial fix cannot
-hide a bad successful response. Other failures remain failures. When the passive observation owner is
-fixed, the same case must read the actual saved output without relaying it through
-the parent. Full unattended acceptance remains incomplete until this case passes.
+through an actual Full child after a real test completes. Both responses must
+succeed and match the completed canonical check and saved output, without relaying
+them through the parent. A refusal, stale result or malformed response fails the
+case. This observation never runs another command.
 
 Set `UNATTENDED_ACCEPTANCE_EVIDENCE` to an owned temporary output directory to
 retain concise native actor traces, canonical receipts and actual result archive
