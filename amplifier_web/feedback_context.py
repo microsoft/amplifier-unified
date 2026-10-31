@@ -1,5 +1,4 @@
 """Existing Full authority retained by feedback, independent of a browser draft."""
-from .collaboration import PRINCIPAL
 
 
 def enabled(service, origin, caller):
@@ -8,25 +7,18 @@ def enabled(service, origin, caller):
 
 
 def capture(service, origin, caller):
-    if not enabled(service, origin, caller):
+    if origin not in {'agent', 'system'} or not caller:
         return None
     source = service._session(caller, hydrate=False)
-    authority = {
-        'origin': origin, 'sessionId': source['id'],
-        'accessRevision': service.access_mode.snapshot(source)['revision'],
+    authority = service.access_mode.capture_full(source, origin)
+    if authority is None:
+        return None
+    return {**authority,
         'workspace': source['workspace'],
         'nativeSessionId': source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id'],
         'executionRevision': source.get('executionRevision', 0),
         'interruptionRevision': source.get('interruptionRevision', 0),
     }
-    if origin == 'agent':
-        binding, active = service.collaboration.active_binding(source, allow_descendant=True)
-        # The trusted bridge retains the child's assignment, not the root's
-        # later inputs. Missing/overflowed transport is not a proven empty set.
-        inputs = [row['inputId'] for row in binding.get('_inputBindings', []) if row.get('inputId')]
-        authority.update(runtimeSessionId=PRINCIPAL.get(), generationId=active['id'],
-                         inputIds=inputs, inputCoverage='complete' if inputs else 'unavailable')
-    return authority
 
 
 def check(service, authority):

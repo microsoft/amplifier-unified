@@ -113,19 +113,10 @@ class Observations:
 
     def full_authorization(self, sid, origin):
         session = self.app._session(sid)
-        if origin in {'agent', 'system', 'voice', 'user'} and self.app.access_mode.full(session):
-            authority = {'origin': origin, 'sessionId': sid,
-                'accessRevision': self.app.access_mode.snapshot(session)['revision']}
-            if origin == 'agent':
-                from .collaboration import PRINCIPAL
-                binding, active = self.app.collaboration.active_binding(session, allow_descendant=True)
-                inputs = binding.get('_inputBindings')
-                if (not isinstance(inputs, list) or not inputs
-                        or any(not isinstance(row, dict) or not isinstance(row.get('inputId'), str)
-                            or row['inputId'] not in active.get('inputIds', []) for row in inputs)):
-                    raise ValueError('Observation authority requires current admitted input bindings')
-                authority.update(runtimeSessionId=PRINCIPAL.get(), generationId=active['id'],
-                    inputIds=sorted({row['inputId'] for row in inputs}))
+        if origin in {'agent', 'system', 'voice', 'user'}:
+            authority = self.app.access_mode.capture_full(session, origin)
+            if authority and 'inputIds' in authority:
+                authority['inputIds'] = sorted(set(authority['inputIds']))
             return authority
         return None
 

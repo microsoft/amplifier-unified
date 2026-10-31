@@ -71,6 +71,9 @@ New Full receipts retain the actual origin, source conversation, access revision
 native/execution identity and Stop boundary, plus the assigned generation and
 actual runtime principal for an agent. Each child invocation keeps its assigned inputs captured before preparation,
 including nested and resumed execution; later root inputs are not substituted. Missing or overflowed input transport records unavailable coverage.
+Fresh Full capture shares the access-mode owner with observations. A system call
+without native transport invents no native actor; supplied native transport must
+be current, and malformed or foreign input identities refuse.
 Every upload/issue write checks that retained authority. Revocation
 or Stop prevents later writes; once a write may have happened, its outcome stays
 unknown and is never replayed. An accepted background send can outlive its turn.
