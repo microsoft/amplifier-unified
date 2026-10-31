@@ -1,6 +1,6 @@
 """Same-receipt boundary delivery; explicit queue intent remains idle-only."""
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -77,7 +77,9 @@ async def test_native_auto_selects_supported_exact_boundary(boundary, input_type
     elif change == 'host-lag': b.permission['currentGenerationId'] = 'old-generation'
     elif change == 'stop': b.runtime.stop_requested = True
     elif change == 'task': b.task['revision'] += 1
-    elif change == 'completed': b.permission['completedTaskInput'] = True
+    elif change == 'completed':
+        b.permission['completedTaskInput'] = True
+        b.controls.tasks.peer_input_allowed = AsyncMock(return_value=True)
     elif change == 'blocked':
         b.permission['blockedTaskInput'] = True
         b.controls.tasks.peer_input_allowed = AsyncMock(return_value=True)
@@ -90,16 +92,27 @@ async def test_native_auto_selects_supported_exact_boundary(boundary, input_type
         assert result['waitingForBoundary'] is (change not in {'stop', 'task'})
 
 
-async def test_idle_auto_uses_same_id_and_saved_envelope(boundary, input_type):
+@pytest.mark.parametrize('task_state', ['active', 'blocked', 'completed'])
+async def test_idle_auto_uses_same_id_and_saved_envelope(boundary, input_type, task_state):
     b = boundary
     b.runtime.generation = None
     b.runtime.stop_requested = b.runtime.steering_closed = False
     b.controls.require_idle.side_effect = None
+    b.controls.tasks.reserve_peer_input = Mock()
+    if task_state != 'active':
+        b.permission[task_state + 'TaskInput'] = True
+        b.controls.tasks.peer_input_allowed = AsyncMock(return_value=True)
     result = await deliver(b.controls, b.runtime, b.args, b.activation, b.authorize)
     assert result['accepted'] and result['mode'] == 'queue'
     native = b.runtime.submit.call_args.args[0]
     assert native.id == 'peer-input' and 'Host-saved correction' in native.text
     b.capability['submit'].assert_not_awaited()
+    if task_state == 'completed':
+        b.controls.tasks.reserve_peer_input.assert_called_once_with('peer-input', completed=True)
+    elif task_state == 'blocked':
+        b.controls.tasks.reserve_peer_input.assert_called_once_with('peer-input')
+    else:
+        b.controls.tasks.reserve_peer_input.assert_not_called()
 
 
 async def test_only_unadmitted_canonical_host_returns_upgrade(app):

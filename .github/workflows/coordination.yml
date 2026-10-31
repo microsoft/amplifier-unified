@@ -52,6 +52,10 @@ on:
       - 'amplifier_web/task_binding.py'
       - 'amplifier_web/task_continuity.py'
       - 'tests/test_task_continuity.py'
+      - 'amplifier_web/completed_followup.py'
+      - 'amplifier_web/runtime_controls.py'
+      - 'tests/test_completed_peer_followup.py'
+      - 'tests/test_completed_peer_native.py'
       - 'tests/test_blocked_peer_input.py'
       - 'tests/test_blocked_peer_native.py'
       - 'tests/test_creation_inheritance.py'
@@ -172,6 +176,7 @@ jobs:
           tests/test_background_reservation_recovery.py
           tests/test_collaborative_workspaces.py tests/test_collaboration_input.py
           tests/test_task_continuity.py tests/test_blocked_peer_input.py
+          tests/test_completed_peer_followup.py
           tests/test_creation_inheritance.py tests/test_inherited_module_sources.py
           tests/test_runtime_profile_inputs.py tests/test_runtime_source_declarations.py
           tests/test_state_write_scopes.py tests/test_host_storage.py
@@ -195,6 +200,15 @@ jobs:
           assert len(rows) == 3
           assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
           PY
+      - name: Verify completed-worker followups through the native boundary
+        run: |
+          uv run --no-sync pytest -q tests/test_completed_peer_native.py --junitxml=output/completed-peer-native.xml
+          uv run --no-sync python - <<'PYCODE'
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/completed-peer-native.xml').getroot().findall('.//testcase')
+          assert len(rows) == 5
+          assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          PYCODE
       - name: Verify repeated peer returns through real Worker processes
         run: |
           uv run --no-sync pytest -q tests/test_peer_return_workflow.py \
