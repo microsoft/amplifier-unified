@@ -430,8 +430,6 @@ for _access, _actions in {
         "conversation.send", "conversation.stop", "conversation.retry", "conversation.configure", "worker.spawn",
         "worker.message", "worker.steer", "worker.stop", "runtime.control", "message.edit",
         "session.warm", "session.takeover", "session.fork", "configuration.apply",
-        *configuration_recovery_definitions(schema, string),
-        *patch_placement_definitions(schema, string),
         "configuration.cancel", "bundle.switch", "bundle.fork", "bundle.save", "bundle.export",
         "call.start", "permissions.save", "permissions.reset", "providers.save", "providers.finishSetup", "providers.configureImages",
         "providers.remove", "providers.move", "providers.reorder", "providers.login",
@@ -459,6 +457,8 @@ for _access, _actions in {
         "coordination.awareness", "coordination.intent.read",
     },
     "domain_authoritative": {
+        *configuration_recovery_definitions(schema, string),
+        *patch_placement_definitions(schema, string),
         "worktree.create", "worktree.attach", "worktree.handoff",
         "coordination.review",
         *integration_definitions(schema, string),

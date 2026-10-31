@@ -299,10 +299,39 @@ effect checks; the finite child finishing does not itself revoke accepted work.
 Ask-mode discrete grants remain root-owned, and children cannot grant/request/revoke
 those root grants or change access mode. Other collaboration consumers keep their
 strict root default. Existing child file-policy composition is unchanged.
-This shared configuration consumer does not yet remove the separate native-child
-gates in managed test-host setup, patch placement or configuration operation
-recovery. Those are remaining implementation gaps toward Full parity, not intended
-recurring approval requirements. Work and provider admission use their respective
+The configuration operation and patch-placement owners accept qualified Full
+descendants through this same source check. They validate the calling conversation
+themselves. A Full patch bind retains the explicit `bind-to-execution` choice,
+exact observed placement/configuration revisions and original effect authority;
+it requires no human `sourceMessageId`. Ask retains its existing human-choice and
+discrete-grant behavior. Passive root observations and exact retained binding
+receipts remain readable without admitting another effect.
+
+Fresh trusted system configuration requests may use an explicit calling owner and
+current Full without inventing a native principal, generation or human input.
+They retain system attribution and unavailable input coverage. A system request
+that carries a native binding still has to validate that binding. Saved mode,
+Stop and target checks remain effective at the delayed configuration owner.
+
+Managed test-host setup, its retained reconciliation and interrupted-setup cleanup
+also accept qualified Full descendants and trusted system callers. Their existing
+conversation/workspace intent owns the result; the original actor and authority
+remain recorded. Accepted background work can outlive a turn, with current Full,
+Stop, placement and resource checks before effects and final publication. Routine
+environment start, execution, stopping, reconciliation, artifact export and owned
+cleanup likewise accept current Full native descendants and explicit trusted
+system callers. Accepted operations retain the captured Full/Stop boundary while
+the conversation's canonical execution identity continues to own the resource and
+request fingerprint. New Full request receipts record the actual caller
+separately; exact retries preserve original attribution and never repeat an
+uncertain effect. Passive removal inspection keeps its bounded cold-owner read
+path. See [test environments](test-environments.md) for this domain's exact scope;
+this does not expand generic task-resource or queued-check admission.
+Recovery of an operation originally authorized by UI or internal code also remains
+unavailable to agents/systems in this batch. That original-operation gate is a
+remaining Full parity gap, not an intended recurring approval requirement; future
+recovery must preserve the original request and use the existing current recovery
+authority and attempt evidence. Work and provider admission use their respective
 canonical owners; this consumer adds no exception or duplicate permission policy.
 
 Full access preauthorizes configuration effects at all scopes and ordinary
@@ -326,7 +355,10 @@ access. The agent can reconcile native evidence and explicitly resume proven
 no-effect work without another permission request. Recovery checks the original
 mode revision, Stop boundary, target and exact payload again; re-enabling Full
 access does not renew an older operation. Unknown or saved effects cannot resume.
-The original request, hash and history remain intact.
+The original request, hash and existing history remain intact. Explicit recovery
+transitions append their actual caller origin, conversation owner and observed
+native principal/generation/input coverage to the existing private history; they
+do not relabel the original actor or replace the retained effect authority.
 
 File, patch, image and search mounts (including child definitions and restored
 plans) use all accessible local filesystem roots under Full access. Original
@@ -368,8 +400,10 @@ checks. Agents cannot enable Full access.
 
 Routine managed test snapshot, preparation, execution, export and owned cleanup
 are task-authorized workspace work, including in Ask when needed mode. They retain
-owner, generation, Stop, assignment, placement and backend identity checks. Host
-setup and broader configuration administration keep their separate grants.
+owner, generation admission, Stop, assignment, placement and backend identity
+checks. Full accepted work can outlive its originating turn while its captured
+authority remains valid. Ask-mode host setup and broader configuration
+administration keep their separate grants.
 
 Pending capability cards are retired after Stop, workspace change or expiry, and
 native waits expire after host replacement. Legacy test-only cards also retire.
