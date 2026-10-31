@@ -277,8 +277,16 @@ try{
    await expect.poll(async()=>(await view()).latestVersion).toBe(3);
    assert.equal((await sample()).executed,second.executed);
    assert.equal((await sample()).input,'Keep v2 until explicit next Load');
-   const next=panel.getByRole('button',{name:'Load v3 — resets preview and runs its code',exact:true});
+   assert.equal((await view()).selectedVersion,details?2:null);
+   if(details){
+    await panel.getByRole('button',{name:'Choose artifact version',exact:true}).tap();
+    await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('3');
+   }
+   const next=details
+    ?page.getByRole('group',{name:'Confirm saved preview version'}).getByRole('button',{name:'Load v3 — resets preview and runs its code',exact:true})
+    :panel.getByRole('button',{name:'Load v3 — resets preview and runs its code',exact:true});
    await next.tap();await frame().getByRole('heading',{name:'Executable version 3'}).waitFor();
+   assert.equal((await view()).selectedVersion,details?3:null);
    assert.deepEqual((await view()).versions.map(v=>v.version),[1,2,3]);
    row.observed.adjacent=await sample();
   }
