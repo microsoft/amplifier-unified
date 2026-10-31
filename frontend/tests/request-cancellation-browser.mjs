@@ -85,6 +85,7 @@ try{
   // Both reports use the same text. Wait for this response, not a matching
   // render left behind by the preceding report.
   await expect.poll(()=>reportDelivered).toBe(true);
+  await expect(page.getByRole('region',{name:'Workspace work overview'})).not.toHaveAttribute('inert');
   await expect(active.locator('[data-part="request-cancellation"]')).toContainText('completion could not be confirmed');
   await expect(active.locator('[data-part="request-cancellation"]')).not.toContainText('waiting');
   await page.unroute('**/api/actions',unconfirmed);
