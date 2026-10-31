@@ -76,7 +76,7 @@ try{
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await expect(composer).toHaveDraft('Keep my unsent manager draft');
  await page.reload();await showFixtureConversation(page);await open();
- await expect(page.getByRole('status').filter({hasText:'2 members'})).toBeVisible();
+ await expect(page.getByRole('status').filter({hasText:'2 current members · 2 retained members'})).toBeVisible();
  const dialog=page.locator('[data-part="dialog"]:visible');
  await page.getByText('Add an existing chat',{exact:true}).scrollIntoViewIfNeeded();
  await page.screenshot({path:join(outputDir,'assignment-desktop.png'),animations:'disabled'});
