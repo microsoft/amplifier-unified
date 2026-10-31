@@ -231,6 +231,13 @@ already supports it. The existing behavior and command-line entry points below
 are narrower: task lineage, system-origin action parity and action-specific human
 gates require incremental qualification before being described as complete.
 
+Global model-capacity waiting settings accept standing Full from an explicit
+calling conversation, including its current native descendants and trusted host
+systems. The existing policy owner checks authority at commit and retains exact
+source-bound receipts without a new approval. This adjusts waiting capacity, not
+spending limits; [the execution contract](contracts/execution.v2-candidate.md)
+defines its lifetime, cancellation and observation behavior.
+
 Initial feedback publication and direct text follow-ups have a Full path for
 current agents, assigned native children and trusted host systems with an explicit
 calling conversation. Initial files and prepared excerpts use conversation-owned
