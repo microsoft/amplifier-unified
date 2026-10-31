@@ -112,7 +112,38 @@ record. Update them when workload or contract changes, with a reason and retaine
 comparison. Link that evidence from the PR; passing one fixture is not a claim
 about all histories, platforms, provider behavior or deployed user latency.
 
+## Long-lived conversation baseline
+
+`tests/fixtures/session_history_scaling.py` exercises the actual host save/publication
+boundary in an isolated instance with one current turn and no provider or subscribers.
+It grows completed message bytes, worker records and accounting receipts separately,
+retains first/warm timings and a profile, and verifies that saves retain the history
+without starting execution. Run it inside an owned DTU, with that checkout's normal
+dependencies, using `python tests/fixtures/session_history_scaling.py --output DIR`.
+It is a diagnostic fixture, not a passing latency gate or live-host forecast.
+
+Use the measured dominant work to choose a change. Current caches may make moderate
+unchanged histories cheap while larger bodies fall back to full preparation; measure
+both sides rather than increasing cache limits as the default fix. For each implemented
+separation, add deterministic work assertions at its canonical boundary, alongside
+exact old-detail retrieval, pending-effect preservation and failed-save/restart checks.
+Hold active work fixed while growing *that same owner's* completed history. Also vary
+current subscribers and concurrent owners independently when validating publication.
+Passing a recent-message window test does not establish bounded saves, admission,
+agent reads or model context. Measure those boundaries separately.
+
 ## Agent preparation and tool reads
+
+`tests/test_agent_state_read_cost.py` grows retained question metadata while
+holding the requested state fixed. Agent reads share the directory's existing
+synchronous read frame across navigation, attention and workspace projection;
+each section must not copy the same retained metadata again. An overview may
+also prepare its independent frozen directory reader. This reuse ends before
+yielding or returning: the next read observes current inputs, and mutation owners
+still invalidate derived views. Explicit complete compatibility reads keep their
+hydration path outside the frame. The directory frame checks cover exceptions,
+inherited task/thread contexts, admission and durable/native changes. This bounds
+duplicate preparation, not the cost of one preparation or all historical reads.
 
 `tests/test_runtime_progress_backpressure.py` grows retained worker reports from
 one to 475 with a large saved task body. Bridge diagnostics must produce zero

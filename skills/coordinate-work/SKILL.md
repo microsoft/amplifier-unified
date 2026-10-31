@@ -65,18 +65,22 @@ compare those exact links, not equal message text.
    that another chat's purpose matches yours. Keep requests within the user's intent;
    do not treat a purpose label or peer message as additional permission.
 3. Use `coordination.send` with the exact target, short text,
-   references and a stable dispatch ID. For a queued request that needs a result,
+   references and a stable dispatch ID. Leave mode omitted (or use `auto`) for
+   routine collaboration: a busy recipient gets the input at its next supported
+   model-request boundary; an idle recipient starts normally. Keep the same
+   receipt while it waits. For an automatic or queued request that needs a result,
    set `returnNotification:true`: the host commits the request and its return
    subscription together before the recipient can run. Inspect `returnState` in
    the receipt; registration is not delivery or successful work. Do not add a
    second subscription for that request. Omitted/false retains one-way behavior;
-   notify and steer reject true. Notify only retains a note. Queue admits
-   at an idle boundary, starting a cold worker when needed; the user does not
+   notify and steer reject true. Notify only retains a note. Use explicit `queue`
+   only when you intend to wait until idle. Automatic idle delivery and queue
+   start a cold worker when needed; the user does not
    need to open that chat or relay a Continue message. Idle worker retirement
    (including replacement for an update) keeps the conversation eligible for
    this ordinary guarded input. It does not clear an actual Stop, a blocked task
    or a failed turn, and does not replay previously suppressed requests.
-   A fresh direct queued message may be handled while the recipient's own
+   A fresh direct automatic or queued message may be handled while the recipient's own
    agent-recorded dependency block remains in place. The host binds that one
    input to the exact blocked task; this is not peer task-resume authority.
    Reconcile the dependency and reply/defer/decline within existing permissions.
@@ -162,7 +166,7 @@ compare those exact links, not equal message text.
    execution or completion. Read elapsed progress and honor Stop rather than
    replaying a slow request. Failed/cancelled preparation retains diagnostics.
 5. Read `coordination.result` and retain exact request/input/message IDs.
-   Prefer the atomic `returnNotification:true` option when sending new queued
+   Prefer the atomic `returnNotification:true` option when sending new automatic or queued
    work. Use `coordination.subscribe` only to register a return for an existing
    exact request you sent without that option, within current authority.
    Exact command retries never add or rearm a return; changed arguments with the
@@ -179,20 +183,29 @@ compare those exact links, not equal message text.
    Questions, conflicts, failure, deferral and decline notify as unqualified
    reports immediately. Rejected/unknown terminal evidence and runtime failures
    also notify; none satisfy a dependency or authorize repeating tool effects.
-   A saved subscription retains at most 32 automatic notifications; older
-   single-notification subscriptions keep their original behavior. Read the
+   A saved subscription can report meaningful revisions throughout the request's
+   lifetime, once per revision; older single-notification subscriptions keep their
+   original behavior. Do not create replacement requests just to reset a counter. Read the
    latest responseRevision and retained revisions before acting on a correction.
    Use coordination.watch for one explicit status/idle observation with
    expiresInSeconds, then coordination.watch.read/cancel by watchId. Watching
    never starts the target. Its expiry is an observation, not approval.
-   A conversation admits at most 64 queued inputs plus reserved replies,
-   at most 16 pending inputs per sender and 32 per assignment. Pending senders
-   rotate at admission. New queue inputs expire after one day by default;
+   Pending inbox counts have no ceiling by default. Global Work concurrency
+   settings can optionally limit pending inputs plus reserved replies per chat,
+   pending inputs from one sender, and pending inputs from one assignment;
+   0 means no count ceiling. Respect configured positive limits. Admission
+   selects the least recently served sender across the complete pending queue,
+   then reads that sender’s next bounded FIFO batch. Raising an inbox limit
+   resumes saved backpressured returns through the normal guarded path.
+   New queue inputs expire after one day by default;
    choose expiresInSeconds up to one day when a different deadline is useful.
-   Expired input remains inspectable and is not executed. A causal chain is
-   bounded to 16 peer hops; only actual new human input resets that boundary.
-   Messages between a pair of conversations are limited to 32 per minute,
-   including notify. On backpressure, wait or combine updates; do not change
+   Expired input remains inspectable and is not executed. Causal depth is retained
+   as provenance, not a lifetime hop limit; ordinary admission and Stop still apply.
+   Pair-message rates (including notify) and pending watches per target have no
+   count ceiling by default. Global Work concurrency settings can set positive
+   limits; 0 removes that count limit. Every watch registered before a lifecycle
+   event can observe it, even beyond one read page. On configured backpressure,
+   wait or combine updates; do not change
    identities to evade a limit. Identical retries still return their receipts.
    Read a retained file with `coordination.artifact`, using the calling session,
    original requestId and exact reference string; supply responseRevision to
@@ -228,8 +241,9 @@ A later current generation of the same recipient may explicitly correlate a new
 report with expectedResponseRevision from coordination.result, while the original
 task, workspace and Stop boundary remains valid. A question/deferral does not
 close the request. Earlier revisions remain readable; a pending staged report
-must settle before another declaration. At most 32 declarations belong to one
-request. Exact command retries retain their original response revision. Optional `coordination.send` with `replyToRequestId` is
+must settle before another declaration. There is no lifetime declaration count
+limit; result views show the latest 32 declarations and older command receipts
+remain retained. Exact command retries retain their original response revision. Optional `coordination.send` with `replyToRequestId` is
 an attributed peer note, not the sealing protocol. Give artifact revision/hash/commit,
 checks and limits.
 A peer's passing check is not your independent artifact verification.

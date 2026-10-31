@@ -8,6 +8,9 @@ The origin may run on macOS, Windows, WSL or Linux with Git and an existing trus
 
 A machine's CPU, memory, free-space and dependency-build budgets are shared by cooperating native clients using the same OS account. Registered controllers also share mutable running/retained/disk admission limits by exact Incus daemon/project/account. Different accounts, older clients, unrelated container workloads, remote Docker daemons and Docker Desktop are not collectively governed by this authority. Current physical observations still include outside CPU/memory/disk pressure.
 
+Running and retained instance counts default to 0 (no count ceiling) on local
+and registered targets. Saved positive limits remain enforced; a default change
+does not rewrite them. CPU, memory and disk admission still apply where supported.
 Automatic machine budgets and configured backend limits remain visible separately. Advanced overrides use revision checks; an empty field uses its default, zero disables that individual ceiling. Lowering a budget never kills active work. Saving limits wakes waiting checks on the current origin; other installations reconsider on their normal bounded retry.
 
 ## Identity and recovery
