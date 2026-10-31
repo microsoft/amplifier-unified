@@ -45,14 +45,16 @@ def worker_scope(count=12):
     return worker, c, caps, bridge
 
 
-def test_origin_uses_all_runtime_inputs_and_reports_overflow_not_tail():
+@pytest.mark.parametrize("count", [17, 257])
+def test_origin_uses_all_runtime_inputs_without_count_or_display_truncation(count):
     worker, _, caps, _ = worker_scope()
     scope = caps['web.work_origin_scope']()
     assert len(scope['inputIds']) == 12 and scope['inputIds'][0] == 'input-0'
     assert scope['inputCoverage'] == 'complete'
-    worker.runtime.generation['input_ids'] = [f'input-{i}' for i in range(17)]
+    worker.runtime.generation['input_ids'] = [f'input-{i}' for i in range(count)]
     scope = caps['web.work_origin_scope']()
-    assert scope['inputCoverage'] == 'overflow' and scope['inputIds'] == []
+    assert scope['inputCoverage'] == 'complete'
+    assert scope['inputIds'] == worker.runtime.generation['input_ids']
     worker.runtime.stop_requested = True
     assert caps['web.work_origin_scope']() is None
 
@@ -87,7 +89,7 @@ async def test_bridge_strips_forged_origin_and_stamps_exact_execution():
     assert worker.bridge.call_args.args[1]['_workOrigin']['complete'] is False
     worker.runtime.generation['input_ids'] = [f'input-{i}' for i in range(17)]
     await bridge('dispatch', original)
-    assert worker.bridge.call_args.args[1]['_inputBindings'] == []
+    assert [v['inputId'] for v in worker.bridge.call_args.args[1]['_inputBindings']] == worker.runtime.generation['input_ids']
 
 
 def test_child_assignment_retains_full_inputs_and_expires_with_parent_generation():
@@ -221,17 +223,19 @@ async def test_real_rust_coordinator_mount_wraps_late_tools():
     assert result.success and checks == [('late', {'ordinary': True})]
 
 
-async def test_effect_scope_matches_required_input_membership_not_order():
+@pytest.mark.parametrize("count", [2, 17, 257])
+async def test_effect_scope_matches_required_input_membership_not_order(count):
     from amplifier_web.coordination_delivery import CoordinationDelivery
     from amplifier_web.execution_events import ExecutionEvents
     from amplifier_web.surface_delivery import SurfaceProvider
     from test_coordination_delivery import Previous, request, available_requirements, empty_discovery
     required = available_requirements()
-    required.update(inputIds=['z', 'a'], associationRequestIds=['z-ref', 'a-ref'],
-                    inputCount=2, workCount=0, requirementCount=0,
-                    coverage={'complete': True, 'supportedInputIds': ['z', 'a'], 'unsupportedInputs': []})
+    ids = [f'input-{i:04}-' + 'x' * 100 for i in reversed(range(count))]
+    required.update(inputIds=ids, associationRequestIds=[f'ref-{i}' for i in range(count)],
+                    inputCount=count, workCount=0, requirementCount=0,
+                    coverage={'complete': True, 'supportedInputIds': ids, 'unsupportedInputs': []})
     scope = {'rootSessionId': required['rootSessionId'], 'runtimeSessionId': required['rootSessionId'],
-             'generationId': required['generationId'], 'inputIds': ['z', 'a'], 'inputCoverage': 'complete'}
+             'generationId': required['generationId'], 'inputIds': ids, 'inputCoverage': 'complete'}
     async def bridge(operation, args):
         if operation == 'coordination.current':
             return {'work': {'available': True, 'discovery': empty_discovery(), 'required': required}}
@@ -260,3 +264,5 @@ async def test_effect_scope_matches_required_input_membership_not_order():
     await wrapped.complete(request(*messages))
     proof = await delivery.recheck_effect_coverage({'tool_call_id': 'ordered', 'tool_name': 'probe', 'tool_input': {}})
     assert proof['complete'] is True, proof
+    assert set(proof['origin']['inputIds']) == set(ids)
+    assert delivery.reads[0]['bytes'] == len(json.dumps(receipt, ensure_ascii=False).encode())

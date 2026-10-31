@@ -12,6 +12,8 @@ import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass
 
+from .work_projection import input_identity_bytes
+
 WORK_BYTES = 12 * 1024
 STUB_FIELDS = frozenset({
     'id', 'revision', 'promiseRevision', 'title', 'originSessionId', 'candidate',
@@ -92,8 +94,9 @@ def _integer(value, minimum=0, maximum=None):
     return type(value) is int and value >= minimum and (maximum is None or value <= maximum)
 
 
-def _texts(value, maximum):
-    return isinstance(value, list) and len(value) <= maximum and all(_text(v) for v in value)
+def _texts(value, maximum=None):
+    return (isinstance(value, list) and (maximum is None or len(value) <= maximum)
+            and all(_text(v) for v in value))
 
 
 def _digest(value):
@@ -111,7 +114,7 @@ def _valid_required(required):
         if required.get(field) is not None and not _text(required[field], empty=True):
             return False
     for field in ('inputIds', 'associationRequestIds'):
-        if field in required and not _texts(required[field], 16):
+        if field in required and not _texts(required[field]):
             return False
     if 'inputCount' in required and not _integer(required['inputCount']):
         return False
@@ -120,7 +123,7 @@ def _valid_required(required):
             or set(coverage) - {'complete', 'supportedInputIds', 'unsupportedInputs', 'reason', 'detail',
                                'missingInputIds', 'deliveredInputCount', 'projectedInputCount'}
             or type(coverage.get('complete')) is not bool
-            or not _texts(coverage.get('supportedInputIds', []), 16)
+            or not _texts(coverage.get('supportedInputIds', []))
             or any(not _text(coverage[k]) for k in ('reason', 'detail') if k in coverage)):
         return False
     extra = {'missingInputIds', 'deliveredInputCount', 'projectedInputCount'} & set(coverage)
@@ -133,8 +136,8 @@ def _valid_required(required):
             missing = coverage.get('missingInputIds')
             inputs = required.get('inputIds')
             if (extra != {'missingInputIds', 'deliveredInputCount', 'projectedInputCount'}
-                    or not _texts(missing, 16) or not missing or len(set(missing)) != len(missing)
-                    or not _texts(inputs, 16) or delivered != len(inputs)
+                    or not _texts(missing) or not missing or len(set(missing)) != len(missing)
+                    or not _texts(inputs) or delivered != len(inputs)
                     or not set(missing) <= set(inputs) or len(missing) != delivered - projected):
                 return False
         elif coverage.get('reason') == 'input_coverage_overflow':
@@ -145,7 +148,7 @@ def _valid_required(required):
         else:
             return False
     unsupported = coverage.get('unsupportedInputs', [])
-    if (not isinstance(unsupported, list) or len(unsupported) > 16
+    if (not isinstance(unsupported, list)
             or any(not isinstance(row, dict) or set(row) != {'inputId', 'reason'}
                    or not _text(row['inputId']) or not _text(row['reason'], empty=True)
                    for row in unsupported)):
@@ -159,7 +162,7 @@ def _valid_required(required):
     return (REQUIRED_FIELDS - {'inputCount'} <= set(required)
             and _digest(required['version']) and required['reason'] is None
             and _text(required['rootSessionId']) and _text(required['generationId'])
-            and _texts(inputs, 16) and bool(inputs) and len(set(inputs)) == len(inputs)
+            and _texts(inputs) and bool(inputs) and len(set(inputs)) == len(inputs)
             and len(required['associationRequestIds']) == len(inputs)
             and required.get('inputCount', len(inputs)) == len(inputs)
             and _integer(required['workCount'], 0, 8)
@@ -194,11 +197,11 @@ def _work_reference(value):
     if not isinstance(value, dict) or set(value) != {'available', 'discovery', 'required'}:
         return _unavailable_work()
     try:
-        if len(json.dumps(value, ensure_ascii=False).encode('utf-8')) > WORK_BYTES:
-            return _unavailable_work()
         discovery, required = value['discovery'], value['required']
         if (value['available'] is not True or not isinstance(discovery, dict)
                 or set(discovery) != DISCOVERY_FIELDS or not _valid_required(required)):
+            return _unavailable_work()
+        if len(json.dumps(value, ensure_ascii=False).encode('utf-8')) - input_identity_bytes(required) > WORK_BYTES:
             return _unavailable_work()
         items = discovery.get('items')
         if (not isinstance(items, list) or len(items) > 20
@@ -257,7 +260,10 @@ class CoordinationDelivery:
         if args['action'] == 'workspace.work.source' and type(source.get('capturedAt')) is float:
             source['capturedAt'] = repr(source['capturedAt'])
         size = len(json.dumps(receipt, ensure_ascii=False).encode())
-        if size > WORK_BYTES or not _text(execution_id):
+        header = {k: result[k] for k in REQUIRED_FIELDS if k in result}
+        identity_size = (input_identity_bytes(header) if args['action'] == 'workspace.work.invocation'
+                         and _valid_required(header) else 0)
+        if size - identity_size > WORK_BYTES or not _text(execution_id):
             return receipt  # Unbounded/raw output cannot establish delivery.
         self.reads.append({'receipt': copy.deepcopy(receipt), 'input': copy.deepcopy(tool_input),
                            'execution_id': execution_id, 'tool_call_id': None, 'bytes': size})
@@ -299,7 +305,7 @@ class CoordinationDelivery:
         value = self.origin_scope() if callable(self.origin_scope) else None
         if (not isinstance(value, dict) or value.get('inputCoverage') != 'complete'
                 or not all(_text(value.get(k)) for k in ('rootSessionId', 'runtimeSessionId', 'generationId'))
-                or not _texts(value.get('inputIds'), 16) or not value['inputIds']
+                or not _texts(value.get('inputIds')) or not value['inputIds']
                 or len(set(value['inputIds'])) != len(value['inputIds'])):
             return None
         # Membership is a set. Preserve every ID, with the same canonical order

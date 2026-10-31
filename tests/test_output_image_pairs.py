@@ -247,11 +247,11 @@ async def test_cached_pair_is_atomic_and_revalidated_before_transport(runtime, m
     r = runtime;await r.read();request = r.request()
     assert pixels(await r.provider.request_budget(request)) == r.pair.data
     if change == 'unavailable':
-        original = r.pair.app.outputs.content
-        def content(row):
+        original = r.pair.app.outputs.content_async
+        async def content(row):
             if row['id'] == r.pair.rows[1]['id']:raise ValueError('Unavailable')
-            return original(row)
-        monkeypatch.setattr(r.pair.app.outputs, 'content', content)
+            return await original(row)
+        monkeypatch.setattr(r.pair.app.outputs, 'content_async', content)
     elif change == 'epoch':r.epoch[:] = ['new-input']
     else:await r.read(r.pair.rows[::-1])
     sent = await r.provider.complete(request)

@@ -155,6 +155,25 @@ def resolve(collaboration, sid, request_id, reference, response_revision=None, *
                 'detail': 'The retained version is unavailable or failed its content hash. No mutable source was substituted.'}, None, response
 
 
+def image_record(collaboration, sid, record):
+    """Resolve one output through its exact retained reply, never a peer library."""
+    provenance = record.get('collaborationResult') or {}
+    if not all(provenance.get(key) for key in ('requestId', 'commandId', 'reference')):
+        raise ValueError('This output belongs to another conversation.')
+    reply = collaboration.receipt(provenance['commandId'])
+    response = reply.get('result') or {}
+    if (reply.get('commandAction') != 'coordination.reply'
+            or response.get('requestId') != provenance['requestId']
+            or not isinstance(response.get('responseRevision'), int)):
+        raise ValueError('This exact retained image response is unavailable.')
+    item, retained, _ = resolve(collaboration, sid, provenance['requestId'],
+        provenance['reference'], response['responseRevision'])
+    if (retained != record or item.get('outputId') != record['id']
+            or item.get('sha256') != record.get('sha256')):
+        raise ValueError('This exact retained image response is unavailable.')
+    return retained
+
+
 async def load(collaboration, sid, request_id, reference, response_revision=None, *, scope='workspace'):
     """Detach immutable reads; recheck request authority after worker I/O."""
     app = collaboration.service

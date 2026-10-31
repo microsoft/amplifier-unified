@@ -135,7 +135,8 @@ async def test_selected_provider_keeps_typed_images_and_selection_on_every_bound
     coordinator=SimpleNamespace(get=lambda kind: tools if kind == 'tools' else None,
         get_capability=capabilities.get,register_capability=capabilities.__setitem__,mount=mount,hooks=hooks)
     async def bridge(operation,args):
-        if operation=='context.manifest':return {'surfaces':[],'inputIds':['one']}
+        if operation.startswith('context.'):
+            args={**args,'_contextInputs':['one'],'_contextBindings':[]}
         result=await app.app_bridge(operation,args,sid)
         if operation=='dispatch':
             # The real Rust hook registry changes this incidental timestamp by

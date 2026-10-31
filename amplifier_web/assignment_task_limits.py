@@ -1,7 +1,7 @@
-"""A manager's explicit limit correction, using the member's existing task owner.
+"""Manager task controls, using the member's existing native task controller.
 
-This is control-plane work, not a message the exhausted member must spend another
-turn interpreting. It neither sends input nor changes Stop, task status or usage.
+Corrections and accepted contribution closeout require no member model turn.
+They never send input, clear Stop or reset usage.
 """
 import copy
 
@@ -11,8 +11,15 @@ from amplifier_operations.coordination import fingerprint
 def definitions(schema, string):
     target = {'sessionId': string(200), 'targetSessionId': string(200)}
     return {
-        'assignment.task.read': ('Read one current assignment member’s saved task limit and used turns, or an exact limit-change receipt. Passive: does not start its worker.',
+        'assignment.task.read': ('Read one current assignment member’s saved objective, status, limit and used turns, or an exact manager task-control receipt. Passive: does not start its worker.',
             schema({**target, 'commandId': string(200)}, ['sessionId', 'targetSessionId'])),
+        'assignment.task.complete': ('Owner records acceptance of a settled member’s exact saved contribution using existing task completion. Requires evidence covering that objective, not just a passing diagnostic. No member model turn or input; preserves Stop, used turns, history, resources and unresolved operation/question records. Does not retire membership or declare unrelated incidents resolved. Inspect the original command receipt after an uncertain response.',
+            schema({**target, 'expectedAssignmentRevision': {'type': 'integer', 'minimum': 1},
+                'taskId': string(200), 'expectedRevision': {'type': 'integer', 'minimum': 1},
+                'evidence': {'type': 'array', 'minItems': 1, 'maxItems': 100,
+                    'items': {**string(4000), 'minLength': 1}}},
+                ['sessionId', 'targetSessionId', 'expectedAssignmentRevision', 'taskId',
+                 'expectedRevision', 'evidence'])),
         'assignment.task.setLimit': ('Owner explicitly revises only a current member’s saved task turn limit, even when exhausted. Null removes that limit. Preserve deliberate user limits unless the user authorized their revision. Increasing/removing an existing limit requires saved Full access or the actual user message/answered question already authorizing it; do not ask again for an answer already saved. Preserve used turns, task identity, evidence, Stop/pause and all other budgets. Sends no input; continue separately. Read the saved receipt after an uncertain response instead of submitting a new operation.',
             schema({**target, 'expectedAssignmentRevision': {'type': 'integer', 'minimum': 1},
                 'taskId': string(200), 'expectedRevision': {'type': 'integer', 'minimum': 1},
@@ -36,7 +43,7 @@ def scope(owner, args, origin, caller):
             or source['id'] == target['id']
             or value['members'].get(target['id'], {}).get('status') != 'bound'
             or (owner.current(target) or {}).get('id') != value['id']):
-        collaboration.error('Only the current assignment owner can manage this bound member’s task limit.', 409)
+        collaboration.error('Only the current assignment owner can manage this bound member’s saved task.', 409)
     return source, target, value
 
 
@@ -53,7 +60,7 @@ def readback(source, target, value, state, receipt=None):
     goal = state.get('goal') or task.get('goalState') or {}
     return {'assignmentId': value['id'], 'assignmentRevision': value['revision'],
         'targetSessionId': target['id'], 'task': {key: task.get(key) for key in
-            ('id', 'revision', 'status', 'maxTurns')}, 'turnsUsed': goal.get('turns_used', 0),
+            ('id', 'revision', 'status', 'objective', 'maxTurns')}, 'turnsUsed': goal.get('turns_used', 0),
         'receipt': copy.deepcopy(receipt), 'inputSent': False,
         'readRef': {'action': 'assignment.task.read', 'args': {
             'sessionId': source['id'], 'targetSessionId': target['id']}}}
@@ -104,7 +111,8 @@ def mutation_state(source, target, value):
 
 def receipt_for(state, identity, source, target):
     receipt = (state.get('taskReceipts', {}).get(identity) or {}).get('receipt')
-    proof = (receipt or {}).get('managerLimit') or {}
+    proof = ((receipt or {}).get('managerLimit')
+             or (receipt or {}).get('managerCompletion') or {})
     if receipt and (proof.get('ownerSessionId') != source['id']
                     or proof.get('targetSessionId') != target['id']):
         raise ValueError('This command ID belongs to a different task operation.')
@@ -129,19 +137,21 @@ async def dispatch(owner, action, args, origin, command_id, caller):
                 result['receiptStatus'] = 'not_observed'
             return {'accepted': True, 'result': result}
         if not isinstance(identity, str) or not identity or len(identity) > 200:
-            app.collaboration.error('Limit changes require a stable command ID.', 400)
+            app.collaboration.error('Manager task controls require a stable command ID.', 400)
         request_digest = fingerprint([action, args, origin, source['id']])
         if receipt:
-            if receipt['managerLimit'].get('requestFingerprint') != request_digest:
+            proof = receipt.get('managerLimit') or receipt.get('managerCompletion') or {}
+            if proof.get('requestFingerprint') != request_digest:
                 app.collaboration.error('This command ID was already used with different contents.', 409)
             return {'accepted': True, 'duplicate': True,
                     'result': readback(source, target, value, state, receipt)}
         task = state.get('task') or {}
         if (value['revision'] != args['expectedAssignmentRevision']
                 or task.get('id') != args['taskId'] or task.get('revision') != args['expectedRevision']):
-            app.collaboration.error('The assignment or saved task changed. Read the current limit before revising it.', 409)
-        old, new = task.get('maxTurns'), args['maxTurns']
-        relaxed = old is not None and (new is None or new > old)
+            app.collaboration.error('The assignment or saved task changed. Read its current state before changing it.', 409)
+        completing = action == 'assignment.task.complete'
+        old, new = task.get('maxTurns'), args.get('maxTurns')
+        relaxed = not completing and old is not None and (new is None or new > old)
         authority = authorization(app, source, args, origin) if relaxed else {'kind': 'not-increased'}
         captured = mutation_state(source, target, value)
 
@@ -150,23 +160,27 @@ async def dispatch(owner, action, args, origin, command_id, caller):
             if origin not in {'ui', 'user'}:
                 app.collaboration.active_binding(current_source)
             if mutation_state(current_source, current_target, current) != captured:
-                app.collaboration.error('The assignment, Stop or execution location changed before the limit correction.', 409)
+                app.collaboration.error('The assignment, Stop or execution location changed before the task control.', 409)
             if (current_target.get('configurationBusy')
                     or Management.unresolved_configuration(current_target)):
-                app.collaboration.error('The member’s settings change is unresolved; its task limit was not changed.', 409)
+                app.collaboration.error('The member’s settings change is unresolved; its saved task was not changed.', 409)
             if relaxed and authorization(app, current_source, args, origin) != authority:
-                app.collaboration.error('The saved authorization changed before the limit correction.', 409)
+                app.collaboration.error('The saved authorization changed before the task control.', 409)
 
         guard()
         proof = {'ownerSessionId': source['id'], 'targetSessionId': target['id'],
             'assignmentId': value['id'], 'assignmentRevision': value['revision'],
-            'requestFingerprint': request_digest, 'authorization': authority}
+            'requestFingerprint': request_digest}
+        if not completing:
+            proof['authorization'] = authority
+        forwarded = ({'condition': task['objective'], 'evidence': args['evidence'],
+                      '_managerCompletion': proof} if completing else
+                     {'maxTurns': new, 'correction': args['correction'], '_managerLimit': proof})
     # Native task CAS owns the write and its receipt. No provider request or
     # input is needed; a lost response is inspected through assignment.task.read.
-    result = await task_dispatch(app, 'task.update', {
+    result = await task_dispatch(app, 'task.complete' if completing else 'task.update', {
         'sessionId': target['id'], 'expectedTaskId': args['taskId'],
-        'expectedRevision': args['expectedRevision'], 'maxTurns': new,
-        'correction': args['correction'], '_managerLimit': proof,
+        'expectedRevision': args['expectedRevision'], **forwarded,
     }, origin, identity, False, guard=guard)
     result['result']['currentRef'] = {'action': 'assignment.task.read', 'args': {
         'sessionId': source['id'], 'targetSessionId': target['id'], 'commandId': identity}}

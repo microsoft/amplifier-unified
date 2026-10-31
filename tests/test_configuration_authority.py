@@ -85,6 +85,30 @@ async def test_explicit_authority_is_reusable_scoped_and_does_not_grant_other_ef
         await agent(app, source, 'permissions.save', args, 'after-revoke')
 
 
+async def test_user_grant_keeps_every_current_input_without_authorizing_later_peers(app):
+    source, peer = app.state['sessions']
+    peer['collaborationGeneration'] = {'id': 'peer-origin', 'inputIds': ['peer-human'], 'terminal': False}
+    ids = []
+    for index in range(65):
+        result = await agent(app, peer, 'coordination.send', {
+            'sessionId': source['id'], 'text': 'Inspect a setup change', 'mode': 'notify'}, f'grant-input-{index}')
+        ids.append(result['requestId'])
+    source['collaborationGeneration'] = {'id': 'current-approved-inputs', 'inputIds': list(ids), 'terminal': False}
+    approved = await grant(app, ['file_access'], ['local'], 'approve-complete-inputs')
+    assert approved['authorizedInputIds'] == ids
+    args = {'scope': 'local', 'allowed': [], 'denied': []}
+    await agent(app, source, 'permissions.save', args, 'complete-approved-change')
+    assert (await finished(app, 'complete-approved-change'))['phase'] == 'ready'
+    later = await agent(app, peer, 'coordination.send', {
+        'sessionId': source['id'], 'text': 'A new setup request', 'mode': 'notify'}, 'later-unapproved')
+    source['collaborationGeneration']['inputIds'].append(later['requestId'])
+    with pytest.raises(AppError, match='cannot borrow'):
+        await agent(app, source, 'permissions.save', args, 'later-unapproved-change')
+    assert app.configuration_authority.record(approved['id'])['authorizedInputIds'] == ids
+    source['interruptionRevision'] = source.get('interruptionRevision', 0) + 1
+    assert not app.configuration_authority.valid(approved, source)
+
+
 async def test_standard_approval_is_durable_user_only_and_exact_retry(app):
     source = app.state['sessions'][0]
     args = {'sessionId': source['id'], 'effects': ['modules'], 'scopes': ['project'], 'reason': 'Add the requested tool'}
