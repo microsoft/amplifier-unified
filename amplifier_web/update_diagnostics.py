@@ -27,6 +27,14 @@ RECOVERY_REASONS = {'smart-tool-startup-failed', 'smart-tool-update-failed', 'mi
 RESOLUTION_FIELDS = {'source', 'repository', 'ref', 'subdirectory', 'revision'}
 PROBE_STAGES = {'imports','package','assets','login','terminal','complete','prepare','prepared','capabilities','cleanup','worker-imports'}
 
+def sanitized_application_extras(value):
+    """Public optional-feature scope; missing or malformed is unknown, not base."""
+    from .app_updates import validated_extras
+    try:
+        return validated_extras(value)
+    except (TypeError, ValueError):
+        return None
+
 
 def exception_type(error):
     name=type(error).__name__
@@ -197,6 +205,9 @@ class UpdateDiagnostics:
             cause['probe'] = {key: value for key, value in cause['probe'].items()
                               if key not in {'elapsedMs', 'profileIndex'}}
         cause['tier'] = self.state.get('batch', {}).get('tier')
+        if kind == 'application':
+            cause['revision'] = event.get('revision')
+            cause['applicationExtras'] = sanitized_application_extras(event.get('applicationExtras'))
         if not (event.get('component') or event.get('package') or event.get('probe', {}).get('package')):
             batch = self.state.get('batch', {})
             cause['scope'] = [batch.get('components', []), batch.get('componentCount', 0)]
@@ -249,7 +260,7 @@ class UpdateDiagnostics:
                     and (event.get('kind') == 'rollback') == rollback):
                 recovery[key] = event.get('id')
 
-    def begin(self,kind,revision=None,attempt_id=None,*,tier=None,components=()):
+    def begin(self,kind,revision=None,attempt_id=None,*,tier=None,components=(),application_extras=None):
         self._pending_failure = None
         identity=attempt_id if isinstance(attempt_id,str) and re.fullmatch(r'[a-f0-9]{32}',attempt_id) else uuid.uuid4().hex
         self.state.update(attemptId=identity,kind=kind)
@@ -262,11 +273,16 @@ class UpdateDiagnostics:
         previous_batch = self.state.get('batch', {})
         self.state['batch']={'attemptId':identity,'kind':kind,'tier':tier if tier in {'included','other'} else kind,
                              'startedAt':time.time(),'components':names[:5],'componentCount':len(names)}
+        extras = sanitized_application_extras(application_extras) if kind == 'application' else None
+        if extras is not None:
+            self.state['batch']['applicationExtras'] = extras
         recovering = {}
         for key, group in self.state.get('activeFailures', {}).items():
             failure = group['latest']
             if group['kind'] == kind == 'application':
-                matches = bool(revision and failure.get('revision') == revision)
+                scope = sanitized_application_extras(failure.get('applicationExtras'))
+                matches = bool(revision and failure.get('revision') == revision
+                               and scope is not None and extras is not None and scope == extras)
             elif group['kind'] == kind == 'ecosystem':
                 component = failure.get('component') or failure.get('package') or failure.get('probe', {}).get('package')
                 scope = set(group.get('components', []))
@@ -289,6 +305,10 @@ class UpdateDiagnostics:
         event={'id':uuid.uuid4().hex,'at':time.time(),'attemptId':self.state.get('attemptId'),
                'kind':self.state.get('kind'),'phase':phase,'status':status}
         if self.state.get('revision'):event['revision']=self.state['revision']
+        if event['kind'] == 'application':
+            extras = sanitized_application_extras(self.state.get('batch', {}).get('applicationExtras'))
+            if extras is not None:
+                event['applicationExtras'] = extras
         if isinstance(facts.get('reason'),str) and facts['reason'] in RECOVERY_REASONS:event['reason']=facts['reason']
         if isinstance(facts.get('resolutionMismatches'), list):
             fields = sorted({value for value in facts['resolutionMismatches']

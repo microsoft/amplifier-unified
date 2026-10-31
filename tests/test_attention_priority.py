@@ -16,7 +16,7 @@ def fixture(tmp_path, updates=None):
 
 
 def fail(diagnostics, *, component='amplifier-module-loop-live', kind='ecosystem'):
-    diagnostics.begin(kind, 'c' * 40, components=[component])
+    diagnostics.begin(kind, 'c' * 40, components=[component], application_extras=[] if kind == 'application' else None)
     return diagnostics.record(kind + '-validation', 'failed', component=component,
                               reason='runtime-resolution-mismatch', errorType='ValueError',
                               expectedRevision='a' * 40, observedRevision='b' * 40)
@@ -90,7 +90,7 @@ def test_application_success_does_not_resolve_ecosystem_failure(tmp_path, phase)
     fail(diagnostics)
     fail(diagnostics, kind='application')
     assert len(active(state)) == 2
-    diagnostics.begin('application', 'c' * 40)
+    diagnostics.begin('application', 'c' * 40, application_extras=[])
     diagnostics.clear_failure()
     diagnostics.record(phase, 'succeeded')
     assert len(active(state)) == 1
@@ -235,10 +235,10 @@ def test_unknown_or_truncated_scope_cannot_claim_recovery(tmp_path, components):
 def test_wrong_application_target_cannot_claim_recovery(tmp_path):
     state, diagnostics = fixture(tmp_path)
     fail(diagnostics, kind='application')
-    diagnostics.begin('application', 'd' * 40)
+    diagnostics.begin('application', 'd' * 40, application_extras=[])
     diagnostics.record('restart-ack', 'succeeded')
     assert len(active(state)) == 1
-    diagnostics.begin('application', 'c' * 40)
+    diagnostics.begin('application', 'c' * 40, application_extras=[])
     diagnostics.record('restart-ack', 'succeeded')
     assert active(state) == []
 
@@ -269,6 +269,37 @@ def test_distinct_code_location_and_bounded_unresolved_overflow(tmp_path):
     diagnostics.record('ecosystem-activation', 'succeeded')
     assert len(active(state)) == 1  # Unknown overflow is not silently evicted or resolved.
     assert active(state)[0]['id'] == 'updates:failure-overflow'
+
+@pytest.mark.parametrize('unknown', [None, 'tui', ['tui', 'tui'], ['tui', '/private/secret'], ['unknown']])
+def test_unknown_application_feature_scope_never_matches_known_base(tmp_path, unknown):
+    import json
+    from amplifier_web.update_report import event as public_event
+    state, diagnostics = fixture(tmp_path)
+    diagnostics.begin('application', 'a'*40, application_extras=unknown)
+    event = diagnostics.record('candidate-install', 'failed', errorType='ValueError')
+    assert 'applicationExtras' not in event
+    diagnostics.begin('application', 'a'*40, application_extras=[])
+    diagnostics.record('restart-ack', 'succeeded')
+    assert len(active(state)) == 1
+    assert 'applicationExtras' not in public_event({**event, 'applicationExtras': unknown})
+    assert '/private/secret' not in json.dumps(diagnostics.state)
+
+
+def test_application_groups_keep_revision_and_exact_feature_scope(tmp_path):
+    state, diagnostics = fixture(tmp_path)
+    for revision, extras in [('a'*40, []), ('a'*40, ['tui']), ('b'*40, ['tui']),
+                             ('a'*40, ['native-desktop', 'tui'])]:
+        diagnostics.begin('application', revision, application_extras=extras)
+        diagnostics.record('candidate-install', 'failed', errorType='ValueError')
+    assert len(active(state)) == 4
+    read_all(state)
+    diagnostics.begin('application', 'a'*40, application_extras=['tui', 'native-desktop'])
+    repeat = diagnostics.record('candidate-install', 'failed', errorType='ValueError')
+    assert repeat['applicationExtras'] == ['native-desktop', 'tui']
+    assert len(active(state)) == 4 and active(state)[0]['occurrences'] == 2 and active(state)[0]['read']
+    diagnostics.begin('application', 'a'*40, application_extras=['tui'])
+    diagnostics.record('restart-ack', 'succeeded')
+    assert len(active(state)) == 3
 
 
 async def test_real_attention_read_and_restart_preserve_unresolved_failure(tmp_path):

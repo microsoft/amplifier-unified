@@ -231,7 +231,8 @@ async def confirm_readiness(manager, health, expected=None, command_id=None, *, 
                         return False
                 except (AttributeError, ValueError, OSError, metadata.PackageNotFoundError):
                     return False
-            manager.diagnostics.begin('application', target['revision'], target['attemptId'])
+            manager.diagnostics.begin('application', target['revision'], target['attemptId'],
+                application_extras=(target.get('qualification') or {}).get('extras'))
             if successor:
                 state['reconciliation'] = {'attemptId': target['attemptId'],
                     **{key: identity[key] for key in ('version', 'revision')}}
@@ -322,7 +323,8 @@ async def wait_for_readiness(manager, token, *, timeout=60, interval=.25):
     # This task starts during aiohttp startup, but acknowledges only after an
     # actual request succeeds. on_startup itself precedes listener readiness.
     diagnostics = manager.diagnostics
-    diagnostics.begin('application', target['revision'], target['attemptId'])
+    diagnostics.begin('application', target['revision'], target['attemptId'],
+        application_extras=(target.get('qualification') or {}).get('extras'))
     historical_failure = diagnostics.state.get('lastFailure') if target.get('legacy') else None
     command_id = uuid.uuid4().hex
     diagnostics.record('restart-readiness', 'started', commandId=command_id,
