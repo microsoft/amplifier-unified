@@ -13,6 +13,20 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{},{lo
  // This owner preserves message anchors; browser anchoring can otherwise move
  // the reader independently when incoming transcript rows replace the tail.
  const previousOverflowAnchor=pane.style.overflowAnchor;pane.style.overflowAnchor='none';
+ const gutterProperties=['--_a-transcript-gutter-left','--_a-transcript-gutter-right'];
+ const previousGutterProperties=new Map(gutterProperties.map(name=>[name,{value:pane.style.getPropertyValue(name),priority:pane.style.getPropertyPriority(name)}]));
+ let measuredGutterBox=null;
+ const updateGutterInsets=()=>{
+  const box=`${pane.offsetWidth}:${pane.clientWidth}:${pane.clientLeft}`;
+  if(box===measuredGutterBox)return;
+  measuredGutterBox=box;
+  // clientLeft includes an RTL left scrollbar; subtract borders to keep only the gutter.
+  const style=view.getComputedStyle(pane),borderLeft=parseFloat(style.borderLeftWidth)||0,borderRight=parseFloat(style.borderRightWidth)||0;
+  const left=Math.max(0,pane.clientLeft-borderLeft),right=Math.max(0,pane.offsetWidth-pane.clientLeft-pane.clientWidth-borderRight);
+  const set=(name,value)=>{const cssValue=`${Math.ceil(value*1000)/1000}px`;if(pane.style.getPropertyValue(name)!==cssValue||pane.style.getPropertyPriority(name))pane.style.setProperty(name,cssValue)};
+  set(gutterProperties[0],left);set(gutterProperties[1],right);
+ };
+ const restoreGutterInsets=()=>{for(const [name,{value,priority}] of previousGutterProperties){if(value)pane.style.setProperty(name,value,priority);else pane.style.removeProperty(name)}};
  let storage;try{storage=view.sessionStorage}catch{}
  const positions=readingPositions(storage);
  let frame=0,disposed=false,sessionId=null,ready=false,restore=null,submitted=null,snapshot=null,saveTimer=0,initial=false,resuming=false;
@@ -23,6 +37,7 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{},{lo
  // This is geometry rounding, not a proximity threshold for reading intent.
  const atBottom=()=>Math.abs(pane.scrollHeight-pane.clientHeight-pane.scrollTop)<=1;
  const messages=()=>[...pane.querySelectorAll('[data-message-id]')];
+ const clearOverflow=()=>{delete pane.dataset.overflowAbove;delete pane.dataset.overflowBelow};
  const capture=()=>{
   const top=pane.getBoundingClientRect().top,rows=messages();
   const anchor=rows.find(node=>node.getBoundingClientRect().bottom>top)||rows.at(-1);
@@ -33,7 +48,7 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{},{lo
  // A reply anchor is different from deliberate scrollback. Preserve that intent
  // across chat switches, even when the reply had not arrived before leaving.
  const persist=()=>{view.clearTimeout(saveTimer);if(ready&&(unresolvedPosition||snapshot))positions.set(sessionId,unresolvedPosition||{...snapshot,submittedId:following.current?submitted:null})};
- const report=()=>{pane.dataset.overflowAbove=String(pane.scrollTop>8);onAway(pane.scrollHeight-pane.scrollTop-pane.clientHeight>80);if(ready){capture();view.clearTimeout(saveTimer);saveTimer=view.setTimeout(persist,200)}};
+ const report=()=>{const remaining=pane.scrollHeight-pane.scrollTop-pane.clientHeight;if(ready){pane.dataset.overflowAbove=String(pane.scrollTop>8);pane.dataset.overflowBelow=String(remaining>1);updateGutterInsets()}else clearOverflow();onAway(remaining>80);if(ready){capture();view.clearTimeout(saveTimer);saveTimer=view.setTimeout(persist,200)}};
  const restorePosition=position=>{
   const anchor=messages().find(node=>node.dataset.messageId===position.messageId);
   if(anchor)pane.scrollTop+=anchor.getBoundingClientRect().top-pane.getBoundingClientRect().top-position.offset;
@@ -108,7 +123,7 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{},{lo
   },
   select(id,isReady=true){
    if(id!==sessionId){
-    persist();const sendingNewChat=sessionId===null&&submitted;
+    persist();clearOverflow();const sendingNewChat=sessionId===null&&submitted;
     sessionId=id;snapshot=null;restore=positions.get(id)||null;anchorLoad=null;attemptedAnchor=null;unresolvedPosition=null;
     submitted=sendingNewChat||(typeof restore?.submittedId==='string'?restore.submittedId:null);
     resuming=!!submitted&&!sendingNewChat;
@@ -116,11 +131,11 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{},{lo
     if(submitted)restore=null;
     initial=!restore&&!submitted;onAway(false);
    }
-   ready=isReady;update();
+   ready=isReady;if(!ready)clearOverflow();update();
   },
   submitted(id){if(callId&&callSessionId===sessionId)callPaused=false;anchorLoad=null;unresolvedPosition=null;submitted=id;resuming=false;restore=null;initial=false;following.current=true;update()},
   jump(id){stop();const node=messages().find(row=>row.dataset.messageId===id);if(node){node.tabIndex=-1;pane.scrollTop+=node.getBoundingClientRect().top-pane.getBoundingClientRect().top-16;node.focus({preventScroll:true});report()}},
   reveal(){stop();if(callId&&callSessionId===sessionId)callPaused=false;pane.scrollTop=pane.scrollHeight;report()},
-  dispose(){persist();disposed=true;pane.style.overflowAnchor=previousOverflowAnchor;view.cancelAnimationFrame(frame);view.clearTimeout(saveTimer);resize.disconnect();mutations.disconnect();pane.removeEventListener('scroll',scroll);pane.removeEventListener('wheel',wheel);pane.removeEventListener('touchmove',stop);pane.removeEventListener('keydown',keyDown);view.removeEventListener('pagehide',persist)},
+  dispose(){persist();disposed=true;clearOverflow();restoreGutterInsets();pane.style.overflowAnchor=previousOverflowAnchor;view.cancelAnimationFrame(frame);view.clearTimeout(saveTimer);resize.disconnect();mutations.disconnect();pane.removeEventListener('scroll',scroll);pane.removeEventListener('wheel',wheel);pane.removeEventListener('touchmove',stop);pane.removeEventListener('keydown',keyDown);view.removeEventListener('pagehide',persist)},
  };
 }

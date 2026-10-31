@@ -151,6 +151,21 @@ normal/reduced motion, forced colors and narrow layouts. Check readable status,
 visible focus, accessible names and live announcements. Verify actual busy
 states; static theme thumbnails and screenshots alone are insufficient.
 
+### Transcript overflow cues
+
+The shared scroll owner reports content above and below the transcript viewport.
+An edge fade is a static overflow cue, not background artwork or work status.
+Use it only where content continues beyond that edge. At the end, the bottom
+edge must be fully opaque so final text and message actions remain readable.
+Short content must not fade. Preserve the existing reading anchor, follow,
+Latest-button and chat-return behavior.
+
+Mask only the transcript, not its composer, navigator or Latest control. Preserve
+the measured scrollbar gutter; suppress the mask while the transcript contains
+focus and in forced colors. Decorations-off does not remove this functional cue.
+Appearances may tune documented fade lengths, but should not replace the mask,
+add scroll listeners or reposition content to simulate overflow.
+
 ### Appearance editing operations
 
 Styling packages use an ordinary ZIP with a root `appearance.json` declaring

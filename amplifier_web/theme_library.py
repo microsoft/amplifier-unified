@@ -28,6 +28,13 @@ RESOURCE_PRESETS = {
         'background': 'none',
         'radius': '8px', 'heading': '"SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace', 'tag': 'Animated',
     },
+    'lightline': {
+        'name': 'Lightline',
+        'description': 'Luminous ivory and platinum by day; obsidian and cyan by night. Fine architectural light paths, warm personal messages and readable monospace conversation. Static and self-contained.',
+        'palette': {'bg': '#efefec', 'surface': '#fffffc', 'ink': '#242a2e', 'accent': '#315d6b', 'line': '#a0a8aa'},
+        'background': 'none',
+        'radius': '8px', 'heading': 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif', 'tag': 'Architectural',
+    },
 }
 PRESETS = {
     'aurora': {
