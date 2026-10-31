@@ -137,6 +137,86 @@ async def test_unknown_owner_blocks_after_restart_until_confirmed_cleanup(app, q
     assert [a for a, _ in backend].count('execute') == 2
 
 
+async def retain_stopped_check(app, queue, backend, monkeypatch):
+    invoke = environments.invoke
+    command = queue.identity(scope(app)['sessionId'], 'first') + ':start:0'
+    def failed_export(config, home, row, action, args):
+        if row['commandId'] == command and action in {'remove', 'finishCleanup'}:
+            backend.append((action, dict(args)))
+            return {'ok': False, 'status': 'stopped', 'effectAdmitted': False,
+                    'phase': 'verifying', 'code': 'archive_verification_failed'}
+        return invoke(config, home, row, action, args)
+    monkeypatch.setattr(environments, 'invoke', failed_export)
+    await submit(app, 'first')
+    await drive(queue)
+    receipt = record(queue, app, 'first')
+    assert receipt['job']['status'] == 'unknown'
+    assert receipt['job']['cleanup']['state'] == 'completed'
+    assert receipt['job']['removal']['state'] == 'failed'
+    row = environments.get(app.data_dir, scope(app)['sessionId'], receipt['job']['resourceId'])
+    assert row['environmentState'] == 'stopped' and row['status'] != 'retired'
+    assert not row.get('pendingRequest') and not row.get('preparationPending')
+    return row
+
+
+@pytest.mark.parametrize('remote', [False, True])
+@pytest.mark.parametrize('restart', [False, True])
+@pytest.mark.parametrize('independent', [False, True])
+async def test_stopped_retention_failure_does_not_block_new_check(app, queue, backend, monkeypatch, remote, restart, independent):
+    if remote:
+        remote_backend(app, monkeypatch)
+    held = await retain_stopped_check(app, queue, backend, monkeypatch)
+    original = record(queue, app, 'first')
+    operations = app.operations.requests.list(scope(app)['sessionId'])
+    if restart:
+        queue = app.test_queue = TestQueue(app)
+        queue.start = lambda: None
+    await submit(app, 'second', independent=independent)
+    await drive(queue)
+    assert record(queue, app, 'second')['job']['status'] == 'passed'
+    assert record(queue, app, 'first') == original
+    assert environments.get(app.data_dir, scope(app)['sessionId'], held['id']) == held
+    for operation in operations:
+        assert app.operations.requests.read(scope(app)['sessionId'], operation['requestId']) == operation
+    assert [a for a, _ in backend].count('execute') == 2
+    assert [a for a, _ in backend].count('finishCleanup') == 1
+
+
+@pytest.mark.parametrize('limit', ['maxEnvironmentsPerChat', 'maxOwnedResources', 'maxOwnedResourcesPerChat'])
+async def test_stopped_retention_still_counts_against_explicit_limits(app, queue, backend, monkeypatch, limit):
+    await retain_stopped_check(app, queue, backend, monkeypatch)
+    settings = (await app.dispatch('testing.execution.read', {}))['result']
+    await app.dispatch('testing.execution.save', {'expectedRevision': settings['revision'],
+        'queue': {}, 'profiles': {}, 'concurrency': {limit: 1}})
+    await submit(app, 'second')
+    await drive(queue)
+    assert record(queue, app, 'second')['job']['status'] == 'queued'
+    assert [a for a, _ in backend].count('execute') == 1
+
+
+@pytest.mark.parametrize('change', [
+    {'pendingRequest': 'unresolved-operation'}, {'preparationPending': True},
+    {'environmentState': 'unknown'}, {'environmentState': 'running'},
+])
+async def test_unsettled_retained_owner_still_blocks_ordered_check(app, queue, backend, monkeypatch, change):
+    held = await retain_stopped_check(app, queue, backend, monkeypatch)
+    environments.save(app.data_dir, held, **change)
+    await submit(app, 'second')
+    await drive(queue)
+    assert record(queue, app, 'second')['job']['status'] == 'queued'
+    assert [a for a, _ in backend].count('execute') == 1
+
+
+async def test_stopped_retention_does_not_bypass_physical_capacity(app, queue, backend, monkeypatch):
+    await retain_stopped_check(app, queue, backend, monkeypatch)
+    monkeypatch.setattr(environments, 'capacity', lambda *args: {'available': False,
+        'blockers': [{'code': 'disk_pressure'}]})
+    await submit(app, 'second')
+    await drive(queue)
+    assert record(queue, app, 'second')['job']['status'] == 'queued'
+    assert [a for a, _ in backend].count('execute') == 1
+
+
 async def test_restart_preserves_fifo_when_scanning_later_page(app, queue, backend):
     await configure(app, 70)
     for index in range(70):
@@ -251,7 +331,9 @@ async def test_restart_cancel_or_expiry_only_retires_proven_initial_allocation(a
     assert not [a for a, _ in backend] if advanced != 'none' or end == 'stop' else True
 
 
-async def test_default_uncapped_per_chat_pending_keeps_global_bound_and_original_expiry(app,queue,backend):
+async def test_uncapped_per_chat_pending_keeps_explicit_global_bound_and_original_expiry(app,queue,backend):
+    # Count defaults are unlimited; this scenario exercises an operator ceiling.
+    await save(app, {'maxPending': 64, 'maxPendingPerChat': 0, 'defaultWaitSeconds': 0})
     await submit(app,'finite-wait',waitSeconds=20)
     original=record(queue,app,'finite-wait')['job'].copy()
     for index in range(63):
