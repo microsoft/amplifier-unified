@@ -32,7 +32,8 @@ CONTEXT_REQUIREMENT = ('amplifier-module-context-managed @ git+https://github.co
 SELECTORS = [
     *('tests/test_' + name + '.py' for name in ('questions', 'question_handoffs',
       'question_presentation', 'schedule_new_tasks', 'schedule_prepared_admission',
-      'session_health', 'context_continuity', 'failure_projection_identity', 'retained_failure_recovery')),
+      'session_health', 'context_continuity', 'failure_projection_identity', 'retained_failure_recovery',
+      'collaboration_generation_authority')),
     'tests/test_message_delivery.py::test_check_is_passive_and_explains_uncertainty',
     'tests/test_message_delivery.py::test_late_acceptance_during_check_is_never_downgraded',
     'tests/test_delivery_ack_timeout.py::test_late_ack_reconciles_exact_input_without_restarting_turn',
