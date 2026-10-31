@@ -114,18 +114,129 @@ async def test_stopped_requester_late_reply_is_retained_but_cannot_restart_it(ap
     assert source['status'] == 'idle' and source['interruptionRevision'] == 1
 
 
-async def test_new_reply_revision_bound_is_explicit_and_preserves_prior_evidence(app):
-    _, target = app.state['sessions']
+async def test_more_than_32_replies_notify_once_with_provenance_and_bounded_result_view(app):
+    from amplifier_operations.coordination import fingerprint
+    from amplifier_web.automatic_history import display_identity
+    from amplifier_web.peer_attribution import PeerAttribution
+
+    source, target = app.state['sessions']
+    await declared_result(app, kind='question', outcome='question')
+    await subscribe(app)
+    identities = []
+    for revision in range(1, 35):
+        current = 'recipient-result-request' if revision == 1 else f'report-{revision}'
+        inputs = ['result-request'] if revision == 1 else [f'followup-{revision}']
+        if revision > 1:
+            await generation(app, target, current, inputs)
+            reply = await revised(app, 'result-request', revision - 1,
+                kind='question', outcome='question', command=f'reply-{revision}')
+            assert reply['result']['responseRevision'] == revision
+        text = f'Report {revision}'
+        anchor = {'messageId': display_identity(target, revision, 'assistant', text),
+            'nativeIndex': revision, 'nativeText': text, 'textDigest': fingerprint(text),
+            'rootSessionId': target['id'], 'generationId': current}
+        await finish(app, target, 'result-request', generation_id=current,
+            input_ids=inputs, text=text, nativeTerminal=anchor)
+        request = app.collaboration.receipt('result-request')
+        identity = app.collaboration.continuation_identity(request['subscription'], revision)
+        identities.append(identity)
+        source['status'] = 'idle'
+        await app.collaboration.drain(source['id'])
+        notice = await settled(app, identity, 'accepted')
+        assert notice['dependencyOutcomeRevision'] == revision
+        assert notice['dependencySatisfied'] is False
+        row = next(row for row in source['messages'] if row.get('inputId') == identity)
+        projected = PeerAttribution(app.db).resolve(source, [row])[0]
+        assert projected['attribution']['caption'] == 'Amplifier update'
+        app.collaboration.enqueue_continuation(request)
+    assert [row[1] for row in app.runtime.inputs] == ['result-request', *identities]
+    result = (await app.dispatch('coordination.result', {'requestId': 'result-request'}))['result']
+    assert result['responseRevision'] == 34
+    assert [row['responseRevision'] for row in result['revisions']] == list(range(34, 2, -1))
+    assert app.collaboration.receipt('declare-result-request')['result']['status'] == 'sealed'
+    await generation(app, target, 'later', ['later-input'])
+    duplicate = await revised(app, 'result-request', 33, kind='question',
+        outcome='question', command='reply-34')
+    assert duplicate['duplicate'] and duplicate['result']['responseRevision'] == 34
+    with pytest.raises(AppError, match='different contents'):
+        await revised(app, 'result-request', 34, command='reply-34')
+    with pytest.raises(AppError, match='revision changed'):
+        await revised(app, 'result-request', 33, command='stale-after-32')
+    assert [row[1] for row in app.runtime.inputs] == ['result-request', *identities]
+
+
+@pytest.mark.parametrize('change', [
+    'none', 'stop', 'cancelled', 'expired', 'nonmatching-limit', 'counter',
+    'protocol', 'legacy-subscription', 'already-claimed', 'unknown-delivery',
+])
+async def test_restart_recovers_only_verified_retired_notification_limit(app, monkeypatch, change):
+    source, target = app.state['sessions']
     await declared_result(app)
+    await subscribe(app)
+    enqueue = app.collaboration.enqueue_continuation
+    monkeypatch.setattr(app.collaboration, 'enqueue_continuation', lambda request: None)
     await finish(app, target, 'result-request')
     request = app.collaboration.receipt('result-request')
-    request['responseRevision'] = 32
+    request['outcomeRevision'] = request['response']['outcomeRevision'] = 33
+    wait = request['subscription']
+    wait.update(status='limit_reached', open=False, lastClaimedRevision=32,
+        detail='Automatic outcome notification limit reached; inspect the retained result.')
+    identity = app.collaboration.continuation_identity(wait, 33)
+    if change == 'stop':
+        source['interruptionRevision'] = 1
+    elif change in {'cancelled', 'expired'}:
+        wait['status'] = change
+    elif change == 'nonmatching-limit':
+        wait['detail'] = 'A different deliberate limit was reached.'
+    elif change == 'counter':
+        request['outcomeRevision'] = request['response']['outcomeRevision'] = 32
+    elif change == 'protocol':
+        request['protocol'] = 1
+    elif change == 'legacy-subscription':
+        wait['notificationVersion'] = 1
+    elif change == 'already-claimed':
+        wait['lastClaimedRevision'] = 33
+    elif change == 'unknown-delivery':
+        # An existing delivery with an uncertain acknowledgement remains exact;
+        # recovery must neither replay it nor invent a replacement identity.
+        app.collaboration.insert(identity, 'retained-unknown', {
+            'accepted': True, 'requestId': identity, 'inputId': identity,
+            'commandAction': 'coordination.send', 'delivery': 'unknown',
+            'dependencyRequestId': 'result-request', 'dependencyOutcomeRevision': 33,
+            'target': {'sessionId': source['id']}})
     app.collaboration.save('result-request', request)
-    await generation(app, target, 'later', ['followup'])
-    with pytest.raises(AppError, match='32 reply revisions') as error:
-        await revised(app, 'result-request', 32)
-    assert error.value.status == 429
-    assert app.collaboration.receipt('declare-result-request')['result']['status'] == 'sealed'
+    app._publish()
+    monkeypatch.setattr(app.collaboration, 'enqueue_continuation', enqueue)
+    await app.close()
+    reopened = AppService(app.data_dir, Runtime(), workspace=app.default_workspace)
+    reopened.runtime.app = reopened
+    try:
+        reopened._session(source['id'])['status'] = 'idle'
+        reopened.collaboration.start()
+        if change == 'none':
+            returned = await settled(reopened, identity, 'accepted')
+            assert returned['dependencyOutcomeRevision'] == 33
+            assert returned['dependencySatisfied'] is True
+            saved = reopened.collaboration.receipt('result-request')['subscription']
+            assert saved['continuationId'] == wait['continuationId']
+            assert saved['lastClaimedRevision'] == 33 and 'detail' not in saved
+            reopened.collaboration.start()
+            await reopened.collaboration.drain(source['id'])
+            assert [row[1] for row in reopened.runtime.inputs] == [identity]
+        else:
+            await reopened.collaboration.drain(source['id'])
+            assert not reopened.runtime.inputs
+            saved = reopened.collaboration.receipt('result-request')['subscription']
+            assert saved['lastClaimedRevision'] == wait['lastClaimedRevision']
+            assert saved['status'] == ('suppressed' if change == 'stop' else wait['status'])
+            row = reopened.db.execute('SELECT receipt FROM commands WHERE id=?', (identity,)).fetchone()
+            if change == 'unknown-delivery':
+                assert json.loads(row[0])['delivery'] == 'unknown'
+            else:
+                assert row is None
+        assert reopened.collaboration.receipt('declare-result-request')['result']['status'] == 'sealed'
+    finally:
+        await reopened.close()
 
 
 async def watch(app, identity='watch', condition='status_changed', expires=60):

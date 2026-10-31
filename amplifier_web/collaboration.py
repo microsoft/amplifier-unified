@@ -23,7 +23,8 @@ CREATION = ContextVar("collaboration_creation", default=None)
 BUSY = {"working", "starting", "running", "busy", "stopping", "ready"}
 PROTOCOL = 2
 MAX_PAIR_MESSAGES_PER_MINUTE = 32
-MAX_RESPONSE_REVISIONS = 32
+RETIRED_HOP_LIMIT = 'The causal peer-input chain reached 16 hops; its report remains inspectable.'
+RETIRED_NOTIFICATION_LIMIT = 'Automatic outcome notification limit reached; inspect the retained result.'
 DEFAULT_QUEUE_SECONDS = 86400
 REPORT_OUTCOMES = {'failed', 'deferred', 'declined', 'question', 'conflict', 'cancelled'}
 
@@ -108,9 +109,9 @@ def definitions(schema, string):
         "coordination.artifact": ("Read an exact retained file as an original request participant or Full-access observer, even after its source disappears. Observers use workspace/all read scope. Bounded text and download identity; no peer output-library access or work admission. Retained bytes are not proof of correctness.", schema({**sid,
             "requestId": string(200), "reference": string(2000), "scope": {"enum": ["workspace", "all"]}, "responseRevision": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0},
             "limit": {"type": "integer", "minimum": 1, "maximum": 4000}}, ["sessionId", "requestId", "reference"])),
-        "coordination.reply": ("Record a typed reply to your exact delivered request. Optional messageIds name your current-generation assistant output, never the incoming request messageId; omit them when unknown. Retain files using path@sha256:<64 lowercase hex digits> in references. Before ending the turn, check artifactVerification and each artifacts[].status: bytes are saved before this reply is acknowledged; later terminal sealing only qualifies the report. Later current generations may reply with expectedResponseRevision from coordination.result. Questions/deferrals stay open; reports are unqualified until separately proven terminal. Exact command IDs deduplicate retries. At most 32 revisions per request.", schema({
+        "coordination.reply": ("Record a typed reply to your exact delivered request. Optional messageIds name your current-generation assistant output, never the incoming request messageId; omit them when unknown. Retain files using path@sha256:<64 lowercase hex digits> in references. Before ending the turn, check artifactVerification and each artifacts[].status: bytes are saved before this reply is acknowledged; later terminal sealing only qualifies the report. Later current generations may reply with expectedResponseRevision from coordination.result. Questions/deferrals stay open; reports are unqualified until separately proven terminal. Exact command IDs deduplicate retries. Meaningful revisions retain the original request identity without a lifetime count limit.", schema({
             "requestId": string(200), "kind": {"enum": ["result", "ack", "defer", "decline", "question", "conflict"]},
-            "expectedResponseRevision": {"type": "integer", "minimum": 0, "maximum": MAX_RESPONSE_REVISIONS},
+            "expectedResponseRevision": {"type": "integer", "minimum": 0},
             "outcome": {"enum": ["success", "failed", "deferred", "declined", "question", "conflict", "cancelled"]},
             "text": {**string(4000), "minLength": 1}, "references": {**references,
                 "description": REFERENCE_HELP,
@@ -118,7 +119,7 @@ def definitions(schema, string):
             "messageIds": {"type": "array", "maxItems": 16, "items": string(200),
                            "description": "Optional exact assistant output IDs from your current generation. Never use the incoming request's messageId, a user/peer input ID, another conversation's output, or an earlier generation. Omit messageIds if no current assistant output ID is known; requestId already correlates the request. Supply evidence in references. Invalid IDs are refused before a reply revision is recorded."},
         }, ["requestId", "kind", "outcome", "text"])),
-        "coordination.subscribe": ("Subscribe to meaningful revisions of one exact request, at most 32 automatic notifications. Questions, deferrals and negative outcomes never satisfy a dependency; only qualified success does. Every continuation rechecks the saved task/Stop boundary. Cursor reads confer no authority.", schema({
+        "coordination.subscribe": ("Subscribe to meaningful revisions of one exact request, once per outcome revision without a lifetime count limit. Questions, deferrals and negative outcomes never satisfy a dependency; only qualified success does. Every continuation rechecks the saved task/Stop boundary. Cursor reads confer no authority.", schema({
             **sid, "requestId": string(200), "grantId": string(200),
         }, ["sessionId", "requestId"])),
     }
@@ -507,8 +508,6 @@ class Collaboration:
         revision = request.get('responseRevision', 1 if request.get('response') else 0)
         if args.get('expectedResponseRevision', 0) != revision:
             self.error('The response revision changed. Read the retained result and use its expectedResponseRevision.', 409)
-        if revision >= MAX_RESPONSE_REVISIONS:
-            self.error('This request reached its 32 reply revisions. Start a new intentional request; retained reports were not replaced.', 429)
         if request.get('response', {}).get('status') == 'staged':
             self.error('The previous report is awaiting terminal evidence. Inspect it before submitting another revision.', 409)
         if args['requestId'] not in delivered:
@@ -1317,11 +1316,14 @@ class Collaboration:
         """Commit at most one guarded input for a meaningful outcome revision."""
         wait = request['subscription']
         versioned = wait.get('notificationVersion') == 2
-        # Only this retired implementation limit is recoverable. The separate
-        # outcome-revision limit, explicit cancellation and Stop stay unchanged.
-        hop_limited = (versioned and wait.get('status') == 'limit_reached'
-            and wait.get('detail') == 'The causal peer-input chain reached 16 hops; its report remains inspectable.')
-        if request.get('protocol') != PROTOCOL or (not hop_limited and wait.get('status') not in (
+        # Recover only receipts identifiable as these retired implementation
+        # limits, not arbitrary limits, cancellation or uncertain delivery.
+        retired_limit = (versioned and wait.get('status') == 'limit_reached' and (
+            wait.get('detail') == RETIRED_HOP_LIMIT or (
+                wait.get('detail') == RETIRED_NOTIFICATION_LIMIT
+                and type(request.get('outcomeRevision')) is int
+                and request['outcomeRevision'] > 32)))
+        if request.get('protocol') != PROTOCOL or (not retired_limit and wait.get('status') not in (
                 {'waiting', 'claimed', 'backpressured'} if versioned else {'waiting'})):
             return
         response = continuation_outcome(request)
@@ -1332,10 +1334,6 @@ class Collaboration:
         if versioned and acknowledged(request, response):
             return
         if versioned and revision <= wait.get('lastClaimedRevision', 0):
-            return
-        if revision > MAX_RESPONSE_REVISIONS:
-            wait.update(status='limit_reached', open=False, detail='Automatic outcome notification limit reached; inspect the retained result.')
-            self.save(request['requestId'], request)
             return
         identity = self.continuation_identity(wait, revision) if versioned else wait['continuationId']
         if self.service.db.execute('SELECT 1 FROM commands WHERE id=?', (identity,)).fetchone():
@@ -1452,15 +1450,15 @@ class Collaboration:
     def start(self):
         """One recovery pass over known unsubmitted queues, not a scheduler."""
         self.watches.start()
-        # Reconsider only saved waits stopped by the removed hop count. Normal
-        # outcome idempotency and current task/Stop admission guards still apply.
+        # Reconsider only saved waits stopped by retired implementation limits.
+        # Normal outcome idempotency and task/Stop admission guards still apply.
         for (encoded,) in self.service.db.execute('''SELECT receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction') IN
                     ('coordination.send','coordination.watch','worktree.handoff','workspace.tests.submit')
                 AND json_extract(receipt,'$.subscription.status')='limit_reached'
                 AND json_extract(receipt,'$.subscription.notificationVersion')=2
-                AND json_extract(receipt,'$.subscription.detail')=?''',
-                ('The causal peer-input chain reached 16 hops; its report remains inspectable.',)).fetchall():
+                AND json_extract(receipt,'$.subscription.detail') IN (?,?)''',
+                (RETIRED_HOP_LIMIT, RETIRED_NOTIFICATION_LIMIT)).fetchall():
             self.enqueue_continuation(json.loads(encoded))
         for (encoded,) in self.service.db.execute('''SELECT receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='coordination.send'

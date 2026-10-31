@@ -594,9 +594,18 @@ boundary. Later declarations require the observed response revision. Every
 accepted declaration has a monotonic revision and a stable operation identity;
 exact retries return the same receipt and conflicting payloads are rejected.
 Earlier declarations remain in existing command receipts. A question or deferral
-is a report, not request completion. At most 32 declarations and 32 automatic
-outcome notifications belong to one request; reaching the bound is visible and
-requires a new intentional request rather than silent replay or unbounded loops.
+is a report, not request completion. Meaningful declarations and automatic outcome
+notifications have no lifetime count ceiling: continued work retains the original
+request and operation identities. Each payload and result view remains bounded;
+`coordination.result` returns the latest 32 declarations without discarding older
+command receipts. This does not relax queue pressure, Stop or task budgets.
+
+Existing current-protocol version-two waits stopped solely by the former automatic
+notification ceiling may recover through ordinary admission. Recovery requires the
+exact legacy diagnostic and a saved outcome revision greater than 32; it preserves
+the continuation identity and last claimed revision. Generic limits, cancelled or
+expired waits are not reopened, and existing unknown notification receipts are not
+replayed. Restart recovery does not itself grant execution authority.
 
 Typed negative reports and questions can notify the requester immediately as
 unqualified agent claims. Exact successful root terminal evidence can qualify a
