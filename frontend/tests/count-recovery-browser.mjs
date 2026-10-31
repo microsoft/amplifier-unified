@@ -26,9 +26,32 @@ if os.environ.get('AMPLIFIER_TEST_PACKAGE_ROOT'):
 sys.path.insert(0, ${JSON.stringify(fileURLToPath(new URL('../../tests/fixtures',import.meta.url)))})
 import chat_ui_server as fixture
 class CountingRuntime(fixture.ChatRuntime):
+ def __init__(self):
+  super().__init__()
+  self._closing=False
+  self._pending_sends=set()
  async def send(self, session, text, input_id, emit):
-  await emit('runtime.status', {'sessionId':session['id'], 'status':'working'})
-  await asyncio.Event().wait()
+  if self._closing:
+   raise asyncio.CancelledError()
+  task=asyncio.current_task()
+  self._pending_sends.add(task)
+  try:
+   await emit('runtime.status', {'sessionId':session['id'], 'status':'working'})
+   await asyncio.Event().wait()
+  finally:
+   self._pending_sends.discard(task)
+ def begin_shutdown(self):
+  self._closing=True
+  for task in tuple(self._pending_sends):
+   task.cancel()
+ async def close(self):
+  pending=tuple(self._pending_sends)
+  self.begin_shutdown()
+  results=await asyncio.gather(*pending,return_exceptions=True)
+  for result in results:
+   if isinstance(result,BaseException) and not isinstance(result,asyncio.CancelledError):
+    raise result
+  await super().close()
 fixture.fixture.Runtime=CountingRuntime
 async def main():
  with tempfile.TemporaryDirectory(prefix='amplifier-count-ui-') as home:
@@ -133,7 +156,6 @@ try{
  assert.equal(sends[0].args.preserveDraft,true);
  assert.match(sends[0].args.text,/Check what has already completed before repeating any actions/);
  assert.deepEqual(errors,[]);
- console.log(nonReduction?'Non-reduction browser passed: specific diagnosis, same-history warning, desktop keyboard and narrow touch details, single explicit continuation.':'Counting failure browser passed: accurate banner, guidance, request ID/status/attempt details, single explicit continuation.');
 }catch(error){failure=error;throw error}
 finally{
  await finishFixture({label:'Count recovery fixture',originalError:failure,
@@ -141,3 +163,4 @@ finally{
   stop:async()=>{const receipt=await stopFixture();console.log(JSON.stringify({fixtureCleanup:receipt}));if(proof)proof.cleanup=receipt}});
 }
 await writeFile(join(artifacts,'count-recovery-result.json'),JSON.stringify({...proof,passed:true},null,2));
+console.log(nonReduction?'Non-reduction browser passed: specific diagnosis, same-history warning, desktop keyboard and narrow touch details, single explicit continuation.':'Counting failure browser passed: accurate banner, guidance, request ID/status/attempt details, single explicit continuation.');
