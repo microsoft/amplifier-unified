@@ -2,6 +2,10 @@ name: Omitted-ref worker qualification
 # Fixed manual repair check, not a pull-request or publication gate.
 on:
   workflow_call:
+    inputs:
+      offline_lock_preflight:
+        type: boolean
+        default: false
     secrets:
       LOOP_LIVE_CI_READ_KEY:
         required: true
@@ -40,6 +44,11 @@ jobs:
         with:
           python-version: '3.13'
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        if: ${{ !inputs.offline_lock_preflight }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        if: ${{ inputs.offline_lock_preflight }}
+        with:
+          version: '0.13.6'
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: microsoft/amplifier-module-loop-live
@@ -49,6 +58,7 @@ jobs:
           ssh-key: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
           persist-credentials: false
       - name: Prepare locked host dependencies using only the approved private checkout
+        if: ${{ !inputs.offline_lock_preflight }}
         run: |
           set -euo pipefail
           export GIT_CONFIG_COUNT=1
@@ -67,9 +77,19 @@ jobs:
           raise SystemExit(result.returncode)
           PY
       - name: Prepare the independent worker graph and run the fixed no-account fixture
+        if: ${{ !inputs.offline_lock_preflight }}
         run: |
           set -euo pipefail
           python scripts/qualify_omitted_ref.py \
+            --loop-source "$GITHUB_WORKSPACE/.ci/omitted-ref-loop" \
+            --work "$RUNNER_TEMP/omitted-ref-work" \
+            --output "$RUNNER_TEMP/omitted-ref-evidence" \
+            2>&1 | tee "$RUNNER_TEMP/omitted-ref-evidence/adapter.log"
+      - name: Resolve the expanded graph with the fixed offline lock preflight
+        if: ${{ inputs.offline_lock_preflight }}
+        run: |
+          set -euo pipefail
+          python scripts/qualify_omitted_ref.py --offline-lock-preflight \
             --loop-source "$GITHUB_WORKSPACE/.ci/omitted-ref-loop" \
             --work "$RUNNER_TEMP/omitted-ref-work" \
             --output "$RUNNER_TEMP/omitted-ref-evidence" \

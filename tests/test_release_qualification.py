@@ -408,12 +408,12 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     selection = workflow['on']['workflow_dispatch']['inputs']['suite']
     assert selection['type'] == 'choice' and selection['default'] == 'full'
-    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'updater-omitted-ref', 'updater-synthetic-acquisition']
+    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'updater-omitted-ref', 'updater-synthetic-acquisition', 'updater-expanded-lock']
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['on']['workflow_call']['secrets'] == {'LOOP_LIVE_CI_READ_KEY': {'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
     jobs = workflow['jobs']
-    assert jobs['python']['if'] == "${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'updater-omitted-ref' && inputs.suite != 'updater-synthetic-acquisition' }}"
+    assert jobs['python']['if'] == "${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'updater-omitted-ref' && inputs.suite != 'updater-synthetic-acquisition' && inputs.suite != 'updater-expanded-lock' }}"
     assert jobs['python']['env']['CHECK_SUITE'] == "${{ inputs.suite || 'full' }}"
     assert jobs['core-wheels']['if'] == "${{ inputs.core_wheels && (!inputs.suite || inputs.suite == 'full') }}"
     remote = jobs['remote-test-origins']
@@ -423,9 +423,16 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     assert updater['if'] == "${{ !inputs.core_wheels && inputs.suite == 'updater-omitted-ref' }}"
     assert updater['uses'] == './.github/workflows/updater-omitted-ref.yml'
     assert updater['secrets'] == {'LOOP_LIVE_CI_READ_KEY': '${{ secrets.LOOP_LIVE_CI_READ_KEY }}'}
+    assert 'with' not in updater
     assert jobs['updater-synthetic-acquisition'] == {
         'if': "${{ !inputs.core_wheels && inputs.suite == 'updater-synthetic-acquisition' }}",
         'uses': './.github/workflows/updater-synthetic-acquisition.yml',
+    }
+    assert jobs['updater-expanded-lock'] == {
+        'if': "${{ !inputs.core_wheels && inputs.suite == 'updater-expanded-lock' }}",
+        'uses': './.github/workflows/updater-omitted-ref.yml',
+        'with': {'offline_lock_preflight': 'true'},
+        'secrets': {'LOOP_LIVE_CI_READ_KEY': '${{ secrets.LOOP_LIVE_CI_READ_KEY }}'},
     }
     rejected = jobs['incompatible-selection']
     assert rejected['if'] == "${{ inputs.core_wheels && inputs.suite && inputs.suite != 'full' }}"
@@ -467,6 +474,87 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     assert 'if [ "$CHECK_SUITE" = manager-exception-boundary ]; then' in focused['run']
 
 
+def test_expanded_lock_preflight_reuses_private_checkout_without_running_worker():
+    workflow = yaml.load(
+        (ROOT / '.github/workflows/updater-omitted-ref.yml').read_text(),
+        Loader=yaml.BaseLoader,
+    )
+    assert workflow['on'] == {'workflow_call': {
+        'inputs': {'offline_lock_preflight': {'type': 'boolean', 'default': 'false'}},
+        'secrets': {'LOOP_LIVE_CI_READ_KEY': {'required': 'true'}},
+    }}
+    assert workflow['permissions'] == {'contents': 'read'}
+    assert set(workflow['jobs']) == {'qualify'}
+    job = workflow['jobs']['qualify']
+    assert set(job) == {'runs-on', 'timeout-minutes', 'steps'}
+    assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '30'
+    steps = job['steps']
+    assert len(steps) == 10
+    checkouts = [s for s in steps if s.get('uses', '').startswith('actions/checkout@')]
+    assert checkouts == [
+        {
+            'uses': 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+            'with': {'persist-credentials': 'false'},
+        },
+        {
+            'uses': 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+            'with': {
+                'repository': 'microsoft/amplifier-module-loop-live',
+                'ref': '${{ steps.pin.outputs.revision }}', 'fetch-depth': '0',
+                'path': '.ci/omitted-ref-loop',
+                'ssh-key': '${{ secrets.LOOP_LIVE_CI_READ_KEY }}',
+                'persist-credentials': 'false',
+            },
+        },
+    ]
+    pin = next(s for s in steps if s.get('id') == 'pin')
+    assert 'if' not in pin and "Path('uv.lock').read_text()" in pin['run']
+    assert "pin = source.rsplit('#', 1)[1]" in pin['run']
+    uv_steps = [s for s in steps if s.get('uses', '').startswith('astral-sh/setup-uv@')]
+    assert uv_steps == [
+        {
+            'uses': 'astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e',
+            'if': '${{ !inputs.offline_lock_preflight }}',
+        },
+        {
+            'uses': 'astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e',
+            'if': '${{ inputs.offline_lock_preflight }}', 'with': {'version': '0.13.6'},
+        },
+    ]
+    host = next(s for s in steps if s.get('name') == 'Prepare locked host dependencies using only the approved private checkout')
+    worker = next(s for s in steps if s.get('name') == 'Prepare the independent worker graph and run the fixed no-account fixture')
+    preflight = next(s for s in steps if s.get('name') == 'Resolve the expanded graph with the fixed offline lock preflight')
+    assert host['if'] == worker['if'] == '${{ !inputs.offline_lock_preflight }}'
+    assert preflight['if'] == '${{ inputs.offline_lock_preflight }}'
+    assert "['uv', 'sync', '--locked', '--group', 'dev', '--group', 'artifacts']" in host['run']
+    assert worker['run'].splitlines() == [
+        'set -euo pipefail',
+        'python scripts/qualify_omitted_ref.py \\',
+        '  --loop-source "$GITHUB_WORKSPACE/.ci/omitted-ref-loop" \\',
+        '  --work "$RUNNER_TEMP/omitted-ref-work" \\',
+        '  --output "$RUNNER_TEMP/omitted-ref-evidence" \\',
+        '  2>&1 | tee "$RUNNER_TEMP/omitted-ref-evidence/adapter.log"',
+    ]
+    assert preflight['run'] == worker['run'].replace(
+        'python scripts/qualify_omitted_ref.py ',
+        'python scripts/qualify_omitted_ref.py --offline-lock-preflight ', 1,
+    )
+    assert [s for s in steps if 'run' in s] == [pin, host, worker, preflight]
+    assert all('${{' not in s['run'] for s in (host, worker, preflight))
+    assert all('continue-on-error' not in s for s in steps)
+    assert steps.index(checkouts[1]) < steps.index(host) < steps.index(worker) < steps.index(preflight)
+    assert steps[-1] == {
+        'name': 'Retain bounded proof even after setup or qualification failure',
+        'if': 'always()',
+        'uses': 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+        'with': {
+            'name': 'omitted-ref-${{ github.run_id }}-${{ github.run_attempt }}',
+            'path': '${{ runner.temp }}/omitted-ref-evidence/',
+            'if-no-files-found': 'error',
+        },
+    }
+
+
 def test_synthetic_acquisition_workflow_has_only_fixed_public_steps():
     workflow = yaml.load(
         (ROOT / '.github/workflows/updater-synthetic-acquisition.yml').read_text(),
@@ -506,6 +594,26 @@ def test_synthetic_acquisition_workflow_has_only_fixed_public_steps():
             },
         },
     ]
+
+
+def test_offline_preflight_does_not_run_import_or_independent_install_probes():
+    import ast
+    tree = ast.parse((ROOT / 'scripts/qualify_omitted_ref.py').read_text())
+    guarded_labels = set()
+    all_labels = set()
+    excluded = {'worker-readiness', 'independent-offline-install', 'independent-offline-readiness'}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'run':
+            if node.args and isinstance(node.args[0], ast.Constant):
+                all_labels.add(node.args[0].value)
+        if isinstance(node, ast.If) and ast.unparse(node.test) == 'not args.offline_lock_preflight':
+            for statement in node.body:
+                for child in ast.walk(statement):
+                    if (isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+                            and child.func.id == 'run' and child.args and isinstance(child.args[0], ast.Constant)):
+                        guarded_labels.add(child.args[0].value)
+    assert excluded <= all_labels
+    assert excluded <= guarded_labels
 
 
 @pytest.mark.parametrize(('suite', 'targets'), [
