@@ -1,17 +1,23 @@
 // Uses the real chat UI and isolated runtime. No model or existing user data.
-// Vite serves source directly, so this regression does not rebuild static assets.
+// Vite is the default. Qualification can require the installed wheel's static UI.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {once} from 'node:events';
-import {createServer} from 'vite';
+import {mkdir,readFile,writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {resolve,join} from 'node:path';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 
 const nonReduction=process.env.TEST_NATIVE_NO_REDUCTION==='1';
+const installedStatic=process.env.AMPLIFIER_TEST_INSTALLED_STATIC==='1';
+const packageRoot=process.env.AMPLIFIER_TEST_PACKAGE_ROOT;
+if(installedStatic)assert.ok(packageRoot,'Installed-static mode requires an exact package root');
 const artifacts=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp';
+await mkdir(artifacts,{recursive:true});
 const root=fileURLToPath(new URL('../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u','-c',`
-import asyncio, json, os, sys, tempfile
+import asyncio, json, os, signal, sys, tempfile
 from pathlib import Path
 from aiohttp import web
 if os.environ.get('AMPLIFIER_TEST_PACKAGE_ROOT'):
@@ -43,26 +49,43 @@ async def main():
   site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
   port=site._server.sockets[0].getsockname()[1]
   app['allowed_origins']=app['allowed_origins']|{f'http://127.0.0.1:{port}'}
-  print(json.dumps({'port':port,'sessionId':session['id']}),flush=True)
-  try:await asyncio.Event().wait()
+  import amplifier_web
+  stop=asyncio.Event()
+  asyncio.get_running_loop().add_signal_handler(signal.SIGTERM,stop.set)
+  print(json.dumps({'port':port,'sessionId':session['id'],'packageRoot':str(Path(amplifier_web.__file__).resolve().parent)}),flush=True)
+  try:await stop.wait()
   finally:await runner.cleanup()
 asyncio.run(main())
 `],{stdio:['ignore','pipe','pipe']});
-let fixtureLog='';fixture.stderr.on('data',chunk=>{fixtureLog+=chunk});
+const stopFixture=ownFixture(fixture,{label:'Count recovery fixture'});
+let fixtureLog='';fixture.stderr.on('data',chunk=>{fixtureLog=(fixtureLog+chunk).slice(-8000);process.stderr.write(chunk)});
 const fixtureReady=new Promise((resolve,reject)=>{
  let text='';fixture.stdout.on('data',chunk=>{text+=chunk;const line=text.split('\n').find(row=>row.startsWith('{"port":'));if(line)resolve(JSON.parse(line))});
  fixture.once('exit',code=>reject(new Error(`Counting fixture exited ${code}: ${fixtureLog}`)));
+ fixture.once('error',reject);
 });
-let vite,browser,page;
+let vite,browser,page,failure,proof;
 try{
- const {port,sessionId}=await Promise.race([fixtureReady,new Promise((_,reject)=>setTimeout(()=>reject(new Error('Counting fixture did not start')),15000).unref())]);
+ const {port,sessionId,packageRoot:actualPackage}=await Promise.race([fixtureReady,new Promise((_,reject)=>setTimeout(()=>reject(new Error('Counting fixture did not start')),15000).unref())]);
  const target=`http://127.0.0.1:${port}`;
- vite=await createServer({configFile:false,root,server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});
- await vite.listen();
+ let url=target;
+ if(installedStatic)assert.equal(resolve(actualPackage),resolve(packageRoot));
+ else{
+  const {createServer}=await import('vite');
+  vite=await createServer({configFile:false,root,server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});
+  await vite.listen();url=vite.resolvedUrls.local[0];
+ }
  browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});const errors=[];
  page.on('pageerror',error=>errors.push(error.message));
- await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
+ const response=await page.goto(url);await page.waitForSelector('#amp-one');
+ proof={mode:installedStatic?'installed-static':'vite',packageRoot:actualPackage,nonReduction};
+ if(installedStatic){
+  const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
+  proof.indexSha256=hash(await response.body());
+  assert.equal(proof.indexSha256,hash(await readFile(join(packageRoot,'static/index.html'))));
+  assert.equal(await page.locator('script[src*="/src/"],script[src*="@vite"]').count(),0);
+ }
  const openFixtureChat=async (targetPage,{touch=false}={})=>{
   const card=targetPage.locator(`article[data-session-id="${sessionId}"]`);
   await expect(card).toContainText('Settings test');
@@ -95,7 +118,7 @@ try{
  if(nonReduction){
   const narrow=await browser.newPage({viewport:{width:402,height:700},hasTouch:true,
     extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
-  await narrow.goto(vite.resolvedUrls.local[0]); await narrow.waitForSelector('#amp-one');
+  await narrow.goto(url); await narrow.waitForSelector('#amp-one');
   await openFixtureChat(narrow,{touch:true});
   await narrow.locator('.a-alert').filter({hasText:'Native compaction'}).getByRole('button',{name:'View error details'}).tap();
   await expect(narrow.getByText('Copy the chat diagnostics',{exact:false})).toBeVisible();
@@ -111,6 +134,10 @@ try{
  assert.match(sends[0].args.text,/Check what has already completed before repeating any actions/);
  assert.deepEqual(errors,[]);
  console.log(nonReduction?'Non-reduction browser passed: specific diagnosis, same-history warning, desktop keyboard and narrow touch details, single explicit continuation.':'Counting failure browser passed: accurate banner, guidance, request ID/status/attempt details, single explicit continuation.');
-}finally{
- await page?.unrouteAll({behavior:'ignoreErrors'});await browser?.close();await vite?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}
+}catch(error){failure=error;throw error}
+finally{
+ await finishFixture({label:'Count recovery fixture',originalError:failure,
+  close:[['page routes',()=>page?.unrouteAll({behavior:'ignoreErrors'})],['browser',()=>browser?.close()],['Vite',()=>vite?.close()]],
+  stop:async()=>{const receipt=await stopFixture();console.log(JSON.stringify({fixtureCleanup:receipt}));if(proof)proof.cleanup=receipt}});
 }
+await writeFile(join(artifacts,'count-recovery-result.json'),JSON.stringify({...proof,passed:true},null,2));

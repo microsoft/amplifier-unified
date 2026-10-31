@@ -3,6 +3,10 @@ name: Extended browser checks
 on:
   workflow_dispatch:
     inputs:
+      readiness_trio:
+        description: Only fixed question delivery, scheduler and compaction diagnostics qualification
+        type: boolean
+        default: false
       attachment_experience:
         description: Fixed attachment modal/drop and consumption checks, source and installed wheel
         type: boolean
@@ -52,7 +56,7 @@ permissions:
   contents: read
 jobs:
   browser:
-    if: ${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}
+    if: ${{ !inputs.readiness_trio && !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}
     runs-on: ubuntu-latest
     # Leave setup and evidence-upload time around the unchanged 25-minute runner budget.
     timeout-minutes: 45
@@ -172,7 +176,7 @@ jobs:
             output/multi-quote/
           if-no-files-found: warn
   attachment-experience:
-    if: ${{ inputs.attachment_experience }}
+    if: ${{ !inputs.readiness_trio && inputs.attachment_experience }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -304,7 +308,7 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
   mcp-boundary:
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}
+    if: ${{ !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -447,7 +451,7 @@ jobs:
           assert record['retained'] and not record['rejected'], 'MCP proof evidence incomplete'
           PY
   canvas-qualification:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.canvas_qualification }}
+    if: ${{ !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && inputs.canvas_qualification }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -489,7 +493,7 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
   compact-composer:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.compact_composer }}
+    if: ${{ !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && inputs.compact_composer }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -546,7 +550,7 @@ jobs:
           path: output/compact-composer/
           if-no-files-found: error
   destination-history:
-    if: ${{ !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}
+    if: ${{ !inputs.readiness_trio && !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -764,7 +768,7 @@ jobs:
             output/browser-checks/
           if-no-files-found: error
   peer-messages:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.peer_messages }}
+    if: ${{ !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && inputs.peer_messages }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -800,3 +804,69 @@ jobs:
           name: peer-messages-${{ github.sha }}-${{ github.run_attempt }}
           path: output/peer-messages/
           if-no-files-found: error
+  readiness-trio:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.readiness_trio == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15 # Includes tool setup and evidence upload; checks themselves cap at 600s.
+    steps:
+      - name: Reject mixed readiness trio selections before setup
+        if: ${{ inputs.attachment_experience || inputs.peer_messages || inputs.destination_history || inputs.settings_close_diagnostic || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.canvas_qualification || inputs.multi_quote || inputs.compact_composer }}
+        run: |
+          echo 'Readiness trio requires its own explicit manual selection; no qualification was run.'
+          exit 1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Retain intended checks before dependency preparation
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          printf '/output/readiness-trio/\n/output/readiness-trio-inputs/\n/output/readiness-trio-run.log\n/test-results/\n' >> "$(git rev-parse --git-path info/exclude)"
+          mkdir -p output/readiness-trio-inputs
+          cp scripts/readiness_trio_checks.py output/readiness-trio-inputs/
+          cp .github/workflows/browser-checks.yml output/readiness-trio-inputs/
+          printf '%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > output/readiness-trio-inputs/dispatch.txt
+          sha256sum scripts/readiness_trio_checks.py .github/workflows/browser-checks.yml uv.lock frontend/package-lock.json > output/readiness-trio-inputs/sha256.txt
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: Resolve the exact locked private runtime source
+        id: runtime
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import re, tomllib
+          lock = tomllib.load(open('uv.lock', 'rb'))
+          row, = [p for p in lock['package'] if p['name'] == 'amplifier-module-loop-live']
+          source, revision = row['source']['git'].rsplit('#', 1)
+          assert source.startswith('https://github.com/microsoft/amplifier-module-loop-live?')
+          assert re.fullmatch('[0-9a-f]{40}', revision)
+          print('revision=' + revision)
+          PY
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: microsoft/amplifier-module-loop-live
+          ref: ${{ steps.runtime.outputs.revision }}
+          path: .ci/loop-live
+          ssh-key: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
+          persist-credentials: false
+      - name: Qualify once with fail-stop cleanup and a ten-minute overall budget
+        timeout-minutes: 11
+        run: |
+          set -o pipefail
+          python -u scripts/readiness_trio_checks.py 2>&1 | tee output/readiness-trio-run.log
+      - name: Make all evidence downloadable, including failed and unrun phases
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: readiness-trio-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            output/readiness-trio-inputs/
+            output/readiness-trio-run.log
+            output/readiness-trio/
+            test-results/
+          if-no-files-found: error
+          retention-days: 14
