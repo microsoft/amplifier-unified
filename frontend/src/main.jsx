@@ -510,7 +510,7 @@ function App(){
  // conversation must not refresh a workspace's complete provider inventory.
  useConnectionSetup(state,session,act);
  const availableAttachments=(session?.draftAttachments||state?.draftAttachments||[]).filter(file=>!outbox.entries.some(row=>row.sessionId===session?.id&&row.attachmentIds.includes(file.id)));
- useEffect(()=>{for(const entry of outbox.entries){const saved=state?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.find(row=>row.inputId===entry.commandId);if(saved?.delivery?.status==='accepted')outbox.update(entry.id,null)}},[state]);
+ useEffect(()=>{for(const entry of outbox.entries){const saved=state?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.find(row=>row.inputId===entry.commandId);if(['accepted','queued_for_update','held'].includes(saved?.delivery?.status))outbox.update(entry.id,null)}},[state]);
  const turnEnds=useMemo(()=>completedTurnEnds(session),[session?.messages,session?.sharedHistoryUserTurnOffset,session?.execution?.turns,session?.status]);
  const workPlacement=useMemo(()=>turnPlacements(messages,execution),[messages,execution]),newest=useMemo(()=>newestMessageIds(messages),[messages]);
  const voiceStream=useMemo(()=>voiceWorkStream(session),[session?.streaming,session?.streamingId,session?.streamingInputId]);
@@ -687,7 +687,7 @@ function App(){
    const result=await dispatch('conversation.send',{sessionId:entry.sessionId,text:entry.text,...(entry.document?{document:entry.document}:{}),...(entry.allowNextTurn?{allowNextTurn:true}:{}),...(entry.expectedGenerationId?{expectedGenerationId:entry.expectedGenerationId}:{}),...(entry.replyTo?.id?{replyId:entry.replyTo.id}:{}),attachmentIds:entry.attachmentIds,via:entry.via,preserveDraft:true},{id:entry.commandId,feedback:false});
    outbox.update(entry.id,['sending','unknown'].includes(result.delivery)?{status:'unknown',error:'Delivery has not been confirmed. Checking again will not run it twice.'}:null);
   }catch(error){
-   const received=latest.current?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.some(row=>row.inputId===entry.commandId&&row.delivery?.status==='accepted');
+   const received=latest.current?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.some(row=>row.inputId===entry.commandId&&['accepted','queued_for_update','held'].includes(row.delivery?.status));
    if(received&&error.code!=='session_busy')outbox.update(entry.id,null);
    else outbox.update(entry.id,{status:error.receipt?.delivery==='failed'||error.status>=400&&error.status<500&&error.status!==408?'failed':'unknown',error:actionErrorMessage(error)});
   }finally{deliveries.current.delete(entry.id)}

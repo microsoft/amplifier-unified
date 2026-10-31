@@ -78,6 +78,7 @@
     {"id": "workspace-shortcuts", "command": ["node", "tests/workspace-shortcuts-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT": "{root}/output/browser-checks/workspace-shortcuts"}},
     {"id": "chat-title", "command": ["node", "tests/chat-title-browser.mjs"]},
     {"id": "message-outbox", "command": ["node", "tests/message-outbox-browser.mjs"]},
+    {"id": "update-message-delivery", "command": ["node", "tests/update-message-delivery-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/update-message-delivery"}},
     {"id": "attachment-consumption", "command": ["node", "tests/attachment-consumption-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/attachment-consumption"}},
     {"id": "attachment-experience", "command": ["node", "tests/attachment-experience-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/attachment-experience"}},
     {"id": "message-delivery", "command": ["node", "tests/message-delivery-browser.mjs"]},

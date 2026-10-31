@@ -36,7 +36,7 @@ find **Force restart…**. Its confirmation explains that running chats, workers
 tools and calls will be interrupted, saved history and drafts are retained, and
 interrupted work is not replayed automatically. An unresolved checkout handoff
 is labeled separately: restarting does not reconcile it or clear its chat fence.
-Ordinary automatic updates still wait for their existing idle checks.
+Ordinary automatic updates save current work at a supported native turn boundary, then retain their existing idle and checkpoint checks.
 
 `updates.forceRestart` requires `confirm: true` and the exact
 `hostInstanceId`, staged `revision`, `generation`, and `attemptId` from
@@ -388,3 +388,32 @@ both the resolved registry version and the post-preparation installed package.
 Other update tiers retain the current Core version. Frozen generation receipts
 remain exact for rollback and revalidation; they do not become standing version
 pins for future update checks. The Core source-build prohibition remains enabled.
+
+### Saving work before an application update
+
+A validated pending application release may ask its current workers to finish
+their admitted work and yield automatic goal continuation at the native turn
+boundary. Settings shows **Saving current work before updating**. Existing
+tools, child workers, approval answers and Stop remain available; new delegated
+work waits. An already claimed scheduled occurrence settles through its existing
+receipt, while unclaimed occurrences wait. Long-running children, tools, calls,
+unsupported native boundaries and unresolved operations remain visible blockers;
+this is not a forced cancellation or a task pause.
+
+Ordinary new human messages are saved under their original input IDs, acknowledged
+as saved, and sent in order after the exact restarted installation is healthy.
+Only messages positively held before transport enter this queue. Native-accepted
+inputs continue settling in their original worker; sending/unknown inputs are
+never automatically replayed. Generation-only steering retains its original
+window. Peer messages stay in their existing durable queues. The update gate
+remains active while saved messages are released, including messages arriving
+during release; Stop after a message was saved holds it without starting work.
+
+Only a continuing objective actually yielded by this update receives one retained
+continuation after healthy activation (or a known pre-replacement withdrawal).
+It keeps its task identity, continuation epoch, used allowance, saved work and
+current constraints. A changed objective, Stop, pause, completion or exhausted
+allowance cannot acquire a new turn. Newly saved input takes precedence. Idle
+active tasks that were already waiting are not woken. Continuation uses the
+existing request/outcome receipt and first-admission rules, not a new scheduler.
+An uncertain replacement remains fenced; its failure is not treated as withdrawal.

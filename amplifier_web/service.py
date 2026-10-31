@@ -556,6 +556,8 @@ class AppService:
             runtime.home = self.data_dir
         from .next_message_configuration import bind
         bind(self, runtime)
+        from .update_drain import bind as bind_update
+        bind_update(self, runtime)
         self.voice_service = None
         self.voice_visual = VoiceVisual(self)
         self.computer_visual = ComputerVisuals(self)
@@ -1802,6 +1804,8 @@ class AppService:
             runtime.home = self.data_dir
         from .next_message_configuration import bind
         bind(self, runtime)
+        from .update_drain import bind as bind_update
+        bind_update(self, runtime)
         self.worktrees.bind_runtime()
         from .conversation_models import bind_runtime
         bind_runtime(self)
@@ -2610,8 +2614,12 @@ class AppService:
                         raise AppError('Restore this project folder before continuing its chat.', 409)
             if expected_revision is not None and expected_revision != self.state["revision"]:
                 raise AppError("The app changed. Refresh its state and retry.", 409)
-            if work_paused(self.state) and (action in {"question.answer","conversation.send","conversation.retry","session.takeover","worker.spawn","worker.steer","worker.message","call.start","feedback.submit","feedback.comment","feedback.get","feedback.reconcile","feedback.update","feedback.close","feedback.reopen","feedback.attachments.review","feedback.attachments.add","feedback.attachments.reconcile"} or (action == 'session.naming' and args.get('regenerate')) or action == 'session.naming.backfill' or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
+            from .update_drain import held as update_held, new_work as update_new_work
+            update_message = action == 'conversation.send' and update_held(self) and (args.get('allowNextTurn') is True or not args.get('expectedGenerationId'))
+            if work_paused(self.state) and not update_message and update_new_work(action, args):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
+            if update_held(self) and update_new_work(action, args) and action not in {'question.answer', 'conversation.send', 'worker.steer'}:
+                raise AppError('The app is finishing existing work for an update. Start new work after it finishes.', 409)
             if action in {"question.answer","conversation.send","conversation.retry","worker.spawn","worker.steer","worker.message","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
                 if action != 'question.answer' and current and self.assignments.blocked(current):
@@ -3304,7 +3312,7 @@ class AppService:
                 # A run ending before delivery must not turn this correction
                 # into new work under a policy that is awaiting replacement.
                 allow_next_turn = args.get('allowNextTurn') is True and not session.get('fileAccessPending')
-                target_generation = steering_target(session, args.get('expectedGenerationId'), allow_next_turn)
+                target_generation = None if update_message else steering_target(session, args.get('expectedGenerationId'), allow_next_turn)
                 # Whitespace can carry Markdown meaning; validate blank input
                 # separately without changing the saved or delivered message.
                 text = args["text"]
@@ -3343,7 +3351,11 @@ class AppService:
                     session["title"] = fallback_title(text) or text[:64]
                 from .naming import persist
                 persist(self.data_dir,session)
-                if not target_generation:
+                if update_message:
+                    from .update_drain import hold_message
+                    hold_message(self, session, message)
+                    self._clear_sent_draft(session, message, text, args.get("preserveDraft", False))
+                elif not target_generation:
                     preparing = session.get('preparation', {}).get('status') == 'preparing'
                     self._activity(session, "runtime-setup" if preparing else "queued",
                         (session['preparation'].get('detail') or 'Preparing this chat…') if preparing else "Your message is queued for Amplifier.",
@@ -3351,7 +3363,8 @@ class AppService:
                     session["status"] = "working"
                     session.pop("error", None)
                     ensure_turn(session,input_id,text)
-                pending.append((self._send, (copy.deepcopy(session), text, input_id, previous_activity, args.get('preserveDraft', False))))
+                if not update_message:
+                    pending.append((self._send, (copy.deepcopy(session), text, input_id, previous_activity, args.get('preserveDraft', False))))
             elif action == "conversation.delivery":
                 session = self._session(args['sessionId'])
                 pending.append((self._check_delivery, (session['id'], args['inputId'])))
@@ -3814,7 +3827,7 @@ class AppService:
                 receipt.update(delivery="requested", commandAction=action, target={"sessionId": args["sessionId"], "workerId": args["id"]}, completed=False, effectsState="not_rolled_back")
             if action == 'session.create':receipt['sessionId']=session['id']
             if action == 'conversation.send':
-                receipt.update(delivery='sending', sessionId=session['id'], inputId=input_id)
+                receipt.update(delivery=message['delivery']['status'], sessionId=session['id'], inputId=input_id)
                 if message.get('navigationPost'):
                     receipt['navigationPost'] = copy.deepcopy(message['navigationPost'])
             if action == 'conversation.retry':receipt['result']={'delivery':'sending', 'message':'The saved message is being checked and sent. No additional resend was started.'}
@@ -3844,6 +3857,8 @@ class AppService:
                 self._publish_smart_tool_update(defer_publish=True)
             else:
                 session_ids, global_keys = write_scope
+                if action == 'conversation.send' and update_message:
+                    global_keys = set(global_keys) | {'updates'}
                 self._publish_changes(sessions=session_ids, globals=global_keys)
             result = {**receipt, **({'state': self.browser_state()} if include_state else {})}
         for fn, values in pending:
@@ -3889,7 +3904,7 @@ class AppService:
                             self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(receipt), command_id))
                             self.db.commit()
                     raise
-                if action == 'conversation.send' and isinstance(acknowledged, dict) and acknowledged.get('steering'):
+                if action == 'conversation.send' and isinstance(acknowledged, dict) and (acknowledged.get('steering') or acknowledged.get('delivery') == 'queued_for_update'):
                     result.update(acknowledged)
                 if action in {'conversation.delivery', 'conversation.retry'}:
                     result['result'] = acknowledged
@@ -3918,7 +3933,7 @@ class AppService:
                     self.smart_tool_requests[command_id] = task
                     task.add_done_callback(lambda finished, identity=command_id: self.smart_tool_requests.pop(identity, None))
         if action == 'conversation.send':
-            if not result.get('steering'):
+            if not result.get('steering') and result.get('delivery') != 'queued_for_update':
                 result['delivery'] = 'accepted'
             if result.get('delivery') == 'accepted':
                 saved = self.db.execute('SELECT receipt FROM commands WHERE id=?', (result['inputId'],)).fetchone()
@@ -4103,6 +4118,8 @@ class AppService:
             return {'delivery': message['delivery']['status'], 'steering': copy.deepcopy(message['steering']),
                     'message': 'Steering status: ' + message['steering']['disposition'] + '. This correction is bound to its original run and was not sent again.'}
         status = message.get('delivery', {}).get('status', 'unknown')
+        if status in {'queued_for_update', 'held'}:
+            return {'delivery': status, 'message': message['delivery'].get('reason') or 'Saved for delivery after the app update. Nothing has been sent yet.'}
         if status != 'accepted' and self.runtime and hasattr(self.runtime, 'delivery'):
             try:
                 evidence = await self.runtime.delivery(session, input_id)
@@ -4203,7 +4220,15 @@ class AppService:
         if not self.runtime:
             raise AppError("The Amplifier runtime is unavailable.")
         from .message_delivery import find_message
-        if (find_message(session, input_id) or {}).get('steering'):
+        from .update_drain import UpdateDeferred, held, defer_send
+        original = find_message(session, input_id) or {}
+        if not retry and held(self) and (not original.get('steering') or original['steering'].get('allowNextTurn')):
+            from .update_drain import input_gate
+            try:
+                input_gate(self, session['id'], input_id)
+            except UpdateDeferred:
+                return await defer_send(self, session['id'], input_id, preserve_draft)
+        if original.get('steering'):
             from .conversation_steering import send
             return await send(self, session, text, input_id, preserve_draft)
         previous_error_at = session.get('errorAt')
@@ -4212,6 +4237,8 @@ class AppService:
             session.setdefault('surfaceInputs', {}).setdefault(input_id, self.surface_context.bind_input(session['id']))
             sender = self.runtime.retry if retry else self.runtime.send
             send_result = await sender(session, text, input_id, self.on_runtime_event)
+        except UpdateDeferred:
+            return await defer_send(self, session['id'], input_id, preserve_draft)
         except RuntimeHostClosingError:
             async with self.lock:
                 current = self._session(session['id'])
@@ -4912,6 +4939,9 @@ class AppService:
                                kind == 'runtime.generation' and payload.get('event') == 'generation.started')
                 self._publish_changes(sessions={session['id']} | changed | collaboration_changed,
                                       detail_only=detail_only and not changed and not collaboration_changed)
+            if (self.update_manager and (kind == 'runtime.warmth' and payload.get('status') in {'warm', 'cold'}
+                    or kind == 'runtime.status' and payload.get('status') == 'stopped' and not payload.get('activityOnly'))):
+                self.update_manager.notify_idle(settled_session_id=session['id'])
 
 
     def _unmounted_legacy_refresh(self, session):

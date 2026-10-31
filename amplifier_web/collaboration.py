@@ -218,7 +218,7 @@ class Collaboration:
                 OR json_extract(receipt,'$.subscription.status')='waiting')""")
         service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_backpressured_sender ON commands(
             json_extract(receipt,'$.senderSessionId'))
-            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','worktree.handoff')
+            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','worktree.handoff','updates.app')
             AND json_extract(receipt,'$.subscription.status')='backpressured'""")
         service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_replies ON commands(
             json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.result.requestId'))""")
@@ -876,6 +876,10 @@ class Collaboration:
                     return reason
                 if dependency.get('cancellation'):
                     return 'The requester cancelled the originating request; no new automatic return is admitted.'
+                if dependency.get('commandAction') == 'updates.app':
+                    from .update_drain import continuation_guard
+                    if reason := continuation_guard(self.service, dependency):
+                        return reason
                 if dependency.get('commandAction') == 'workspace.tests.submit':
                     if reason := self.service.test_queue.continuation_guard(dependency):
                         return reason
@@ -1021,7 +1025,7 @@ class Collaboration:
             FROM commands WHERE json_extract(receipt,'$.commandAction')='coordination.send'
             AND json_extract(receipt,'$.delivery')='queued'
             UNION SELECT json_extract(receipt,'$.senderSessionId') FROM commands
-            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','worktree.handoff')
+            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','worktree.handoff','updates.app')
             AND json_extract(receipt,'$.subscription.status')='backpressured'""").fetchall()
         for (sid,) in recipients:
             if sid:
@@ -1029,7 +1033,7 @@ class Collaboration:
 
     def resume_outcomes(self, sid):
         for (encoded,) in self.service.db.execute("""SELECT receipt FROM commands
-            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','worktree.handoff')
+            WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','worktree.handoff','updates.app')
             AND json_extract(receipt,'$.senderSessionId')=?
             AND json_extract(receipt,'$.subscription.status')='backpressured' LIMIT 64""", (sid,)).fetchall():
             self.enqueue_continuation(json.loads(encoded))
@@ -1050,6 +1054,9 @@ class Collaboration:
                         self.cancel_expiry(identity)
                         continue
                     target = self.service._session(sid)
+                    from .update_drain import held
+                    if held(self.service):
+                        break
                     if target.get('fileAccessPending'):
                         break  # Keep queued input until the existing refresh owner retires the old mount.
                     reason = self.guard(receipt)
@@ -1084,8 +1091,8 @@ class Collaboration:
                     result = await self.service.runtime.collaboration_input(
                         snapshot, arguments, lambda: self.guard(self.receipt(identity)), self.service.on_runtime_event)
                     phase = "accepted" if result.get("accepted") else (
-                        "queued" if automatic_delivery(receipt) and result.get('effect') == 'none'
-                        and result.get('waitingForBoundary') is True else
+                        "queued" if result.get('effect') == 'none' and (result.get('waitingForUpdate') is True
+                        or automatic_delivery(receipt) and result.get('waitingForBoundary') is True) else
                         "not_sent" if result.get("delivery") == "not_sent" else "suppressed")
                 except BaseException as exc:
                     result, phase = {"reason": "Admission outcome unknown; no replay."}, "unknown"
@@ -1152,6 +1159,9 @@ class Collaboration:
             return {"admitted": False, "reason": "The saved input delivery policy changed."}
         if receipt.get("mode") == "steer" and args.get("targetGenerationId") != receipt.get("targetGenerationId"):
             return {"admitted": False, "reason": "The steering generation anchor changed."}
+        from .update_drain import held
+        if held(self.service) and receipt.get('mode') != 'steer':
+            return {'admitted': False, 'waitingForUpdate': True, 'reason': 'Waiting for the app update.'}
         reason = self.guard(receipt)
         message = next((row for row in self.service._session(sid).get("messages", [])
                         if row.get("inputId") == args["inputId"] and row.get("inputOrigin") == "peer"), None)
@@ -1593,7 +1603,7 @@ class Collaboration:
                 (RETIRED_HOP_LIMIT, RETIRED_NOTIFICATION_LIMIT)).fetchall():
             self.enqueue_continuation(json.loads(encoded))
         for (encoded,) in self.service.db.execute('''SELECT receipt FROM commands
-                WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+                WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','updates.app')
                 AND json_extract(receipt,'$.subscription.status') IN ('waiting','claimed','backpressured')
                 AND (coalesce(json_extract(receipt,'$.outcomeRevision'),0)>coalesce(json_extract(receipt,'$.subscription.lastClaimedRevision'),0)
                     OR json_extract(receipt,'$.subscription.status')='waiting') ''').fetchall():

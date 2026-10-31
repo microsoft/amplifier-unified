@@ -1140,7 +1140,15 @@ class RuntimeManager:
             await self._request(session["id"], "park")
 
     async def send(self, session, text, input_id, emit):
-        guard = await self._start_for_input(session, emit)
+        update_gate = getattr(self, 'update_input_gate', lambda *args: None)
+        update_gate(session['id'], input_id)
+        configuration_guard = await self._start_for_input(session, emit)
+        def guard():
+            update_gate(session['id'], input_id)
+            message = next((m for m in session.get('messages', []) if m.get('inputId') == input_id), {})
+            getattr(self, 'update_message_guard', lambda sid, message: None)(session['id'], message)
+            if configuration_guard:
+                configuration_guard()
         return await self._request(session["id"], "send", guard=guard, text=text, input_id=input_id,
             reply_context=next((m.get("replyTo") for m in session.get("messages",[]) if m.get("inputId")==input_id),None),
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
@@ -1158,6 +1166,9 @@ class RuntimeManager:
             'reply_context': message.get('replyTo'), 'attachments': message.get('attachments', []),
             'context_binding': session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []})}}
         async with self._admission(sid):
+            if message['steering'].get('allowNextTurn') is True:
+                getattr(self, 'update_input_gate', lambda *args: None)(sid, input_id)
+                getattr(self, 'update_message_guard', lambda *args: None)(sid, message)
             row = self.workers.get(sid)
             if self._closed or not row or row['process'].returncode is not None or row.get('closing'):
                 return {'accepted': False, 'reason': 'The run is no longer available for steering.'}
@@ -1167,6 +1178,12 @@ class RuntimeManager:
 
     async def collaboration_input(self, session, arguments, guard, emit):
         """Explicit idle start plus guarded ordinary native admission."""
+        update_gate = getattr(self, 'update_input_gate', lambda: None)
+        from .update_drain import UpdateDeferred
+        try:
+            update_gate()
+        except UpdateDeferred:
+            return {"accepted": False, "effect": "none", "waitingForUpdate": True}
         reason = guard()
         if reason:
             return {"accepted": False, "reason": reason}
@@ -1180,6 +1197,10 @@ class RuntimeManager:
             return {"accepted": False, "delivery": "not_sent",
                     "reason": str(exc) or "Preparation cancelled before input admission."}
         async with self._admission(session["id"]):
+            try:
+                update_gate()
+            except UpdateDeferred:
+                return {"accepted": False, "effect": "none", "waitingForUpdate": True}
             reason = guard()
             if reason:
                 return {"accepted": False, "reason": reason}
@@ -1289,14 +1310,14 @@ class RuntimeManager:
                 current.args = (f'Takeover did not complete ({result.status}). {result.message} {current}',)
                 raise current from None
 
-    async def handoff_boundary(self, session_id, request_id, *, cancel=False, receipt=None):
+    async def handoff_boundary(self, session_id, request_id, *, cancel=False, receipt=None, update=False):
         """Inspect only this existing worker; never warm or acquire a writer."""
         row = self.workers.get(session_id)
         if row is None:
             return {'ready': True, 'waitingFor': [], 'continuationAllowed': False}
         if row['process'].returncode is not None:
             raise RuntimeError('The old worker exited before confirming its saved boundary.')
-        return await self._request(session_id, 'handoff.boundary', request_id=request_id, cancel=cancel, receipt=receipt)
+        return await self._request(session_id, 'handoff.boundary', request_id=request_id, cancel=cancel, receipt=receipt, **({'update': True} if update else {}))
 
     @contextmanager
     def stopped_boundary(self, session):

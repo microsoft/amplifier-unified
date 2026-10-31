@@ -34,6 +34,8 @@ export function MessageDelivery({message,session,delivery,localDelivery,dispatch
   </span>;
  }
  if(!delivery)return null;
+ if(delivery.status==='queued_for_update')return <span className="a-message-delivery" role="status">Saved · waiting for the app update. You do not need to send it again.</span>;
+ if(delivery.status==='held')return <span className="a-message-delivery" role="status">{delivery.reason||'Message retained without sending.'}</span>;
  const sending=delivery.status==='sending';
  const preparing=session.status==='starting'||session.activity?.phase==='runtime-setup';
  return <>
