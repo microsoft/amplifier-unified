@@ -1,8 +1,9 @@
+import {fixturePython} from './fixture-python.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
-const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/chat_ui_server.py',import.meta.url))],{stdio:'ignore'});
+const fixture=spawn(fixturePython(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url))),[fileURLToPath(new URL('../../tests/fixtures/chat_ui_server.py',import.meta.url))],{stdio:'ignore'});
 for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8958/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
 const browser=await chromium.launch({headless:true});
 const page=await browser.newPage({viewport:{width:1600,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];

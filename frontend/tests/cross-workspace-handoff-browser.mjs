@@ -158,7 +158,7 @@ try{
  assert.equal(delivered[0].text,direct.text);assert.equal(delivered[0].workspace,info.target);
  assert.deepEqual(delivered[0].selection,{instance:'one',model:'fixture-model'});assert.equal(delivered[0].bundle,'anchors');
  const directTarget=observations.directAccepted.sessions.find(value=>value.id===directReceipt.targetSessionId);
- assert.equal(directTarget.title,direct.title);assert.equal(directTarget.parentId,null);assert.equal(directTarget.sessionKind,null);
+ assert.equal(directTarget.title,direct.title);assert.equal(directTarget.parentId,null);assert.equal(directTarget.sessionKind,'root');
  assert.equal((await state(page)).selectedSessionId,info.sourceId);await expect(composer).toHaveDraft(draft);
  assert.equal((await state(other)).selectedSessionId,info.otherSourceId);await expect(otherComposer).toHaveDraft('Other browser private draft');
  assert.equal(actions.filter(value=>value.action==='session.handoff.confirm'&&value.args.requestId===direct.requestId).length,0,'explicit start never dispatches confirmation');

@@ -17,6 +17,70 @@ const text=node=>typeof node==='string'?node:(node?.children||[]).map(text).join
 const button=(root,label)=>root.root.findAllByType('button').find(node=>text(node)===label);
 const read={action:'workspace.environments.read',args:{workspaceId:'w',sessionId:'a',offset:0}};
 
+for(const savedAction of ['workspace.environments.start','workspace.tests.submit'])for(const lost of [false,true])test(`cancel targets the queued check with a pending ${savedAction} and ${lost?'a lost response':'an acknowledgment'}`,async()=>{
+ let root,settle;const calls=[];
+ const pending={action:savedAction,args:{workspaceId:'w',sessionId:'a',profileId:'linux-python',command:'python -m unittest',requestId:'older-request'},id:'older-command'};
+ const saved=JSON.stringify({profileId:'linux-python',command:'python -m unittest',pending});storage.set(key,saved);
+ let check={id:'queued-check',status:'queued'};
+ const cancel={action:'workspace.tests.cancel',args:{workspaceId:'w',sessionId:'a',requestId:check.id}};
+ const dispatch=(action,args,meta)=>{
+  calls.push({action,args,...(meta?{meta}:{})});
+  if(action===read.action)return Promise.resolve(accepted({...page,checks:[check]}));
+  if(action===cancel.action)return new Promise((resolve,reject)=>{settle=()=>{check={...check,status:'cancelled',cancelRequested:true};lost?reject(Error('Lost cancellation response')):resolve(accepted(check))}});
+  return Promise.resolve(accepted({request:{state:'completed'}}));
+ };
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',act:dispatch,active:true}))});
+  const cancelButton=button(root,'Cancel check');assert.equal(cancelButton.props.disabled,false);
+  await act(async()=>{cancelButton.props.onClick();cancelButton.props.onClick()});
+  assert.deepEqual(calls,[read,cancel],'Cancel uses its target once and does not replay the saved request');
+  assert.equal(storage.get(key),saved,'Cancel does not overwrite the recovery receipt');
+  assert.equal(button(root,'Check the same environment request').props.disabled,true);
+  await act(async()=>settle());
+  assert.deepEqual(calls,[read,cancel,read],'even a lost acknowledgment refreshes canonical check state');
+  assert.equal(storage.get(key),saved,'settling cancellation preserves the unresolved request');
+  assert.match(text(root.toJSON()),/Check: cancelled/);assert.equal(button(root,'Cancel check'),undefined);
+  assert.equal(Boolean(button(root,'Check the same environment request').props.disabled),false);
+  assert.equal(button(root,'Start test environment').props.disabled,true);
+  if(lost)assert.match(text(root.toJSON()),/Lost cancellation response/);
+  await act(async()=>button(root,'Check the same environment request').props.onClick());
+  assert.deepEqual(calls[3],{action:pending.action,args:pending.args,meta:{id:pending.id}},'only explicit recovery sends the original request identity');
+  assert.deepEqual(calls[4],read);assert.equal(JSON.parse(storage.get(key)).pending,null);
+ }finally{await act(async()=>root?.unmount())}
+});
+
+test('cancellation refresh reports an admitted check still stopping without declaring it finished',async()=>{
+ let root;const calls=[];let check={id:'running-check',status:'checking'};
+ const dispatch=async(action,args)=>{calls.push({action,args});if(action==='workspace.tests.cancel')check={...check,cancelRequested:true};return accepted(action===read.action?{...page,checks:[check]}:check)};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',act:dispatch,active:true}))});
+  await act(async()=>button(root,'Cancel check').props.onClick());
+  assert.deepEqual(calls,[read,{action:'workspace.tests.cancel',args:{workspaceId:'w',sessionId:'a',requestId:'running-check'}},read]);
+  assert.match(text(root.toJSON()),/Check: checking/);assert.match(text(root.toJSON()),/Cancellation requested/);
+  assert.equal(button(root,'Cancel check'),undefined);assert.equal(storage.has(key),false,'cancellation needs no new browser recovery receipt');
+ }finally{await act(async()=>root?.unmount())}
+});
+
+for(const lost of [false,true])test(`a late cancellation ${lost?'failure':'acknowledgment'} after unmount leaves a newer recovery receipt and view untouched`,async()=>{
+ let root,settle;const calls=[];
+ const saved=JSON.stringify({profileId:'linux-python',command:'',pending:{action:'workspace.environments.start',args:{workspaceId:'w',sessionId:'a',requestId:'old-request'},id:'old-command'}});storage.set(key,saved);
+ const check={id:'queued-check',status:'queued'};
+ const dispatch=(action,args)=>{calls.push({action,args});return action===read.action?Promise.resolve(accepted({...page,checks:[check]})):new Promise((resolve,reject)=>{settle=()=>lost?reject(Error('Late cancellation response')):resolve(accepted({...check,status:'cancelled',cancelRequested:true}))})};
+ const props={workspaceId:'w',sessionId:'a',act:dispatch,active:true};
+ try{
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,props))});
+  await act(async()=>{button(root,'Cancel check').props.onClick()});
+  assert.deepEqual(calls[1],{action:'workspace.tests.cancel',args:{workspaceId:'w',sessionId:'a',requestId:check.id}});
+  await act(async()=>root.unmount());
+  const newer=JSON.stringify({profileId:'linux-python',command:'',pending:{action:'workspace.tests.submit',args:{workspaceId:'w',sessionId:'a',requestId:'new-request'},id:'new-command'}});storage.set(key,newer);
+  await act(async()=>{root=create(React.createElement(TaskEnvironments,props))});
+  await act(async()=>settle());
+  assert.deepEqual(calls,[read,{action:'workspace.tests.cancel',args:{workspaceId:'w',sessionId:'a',requestId:check.id}},read],'the old mount neither refreshes nor replays after settling');
+  assert.equal(storage.get(key),newer);assert.match(text(root.toJSON()),/Check: queued/);assert.doesNotMatch(text(root.toJSON()),/Late cancellation response/);
+  assert.equal(Boolean(button(root,'Check the same environment request').props.disabled),false);
+ }finally{await act(async()=>root?.unmount())}
+});
+
 for(const outcome of ['passed','failed','unknown','cancelled'])test(`later cleanup preserves the ${outcome} check outcome`,async()=>{
  let root;const calls=[];
  const check={id:'q',status:'unknown',detail:'Old cleanup was not confirmed.',
@@ -259,10 +323,61 @@ const removalDiscovery=(overrides={})=>({version:1,sessionId:'a',id:'env',revisi
 const removalHeld=(overrides={})=>({version:1,sessionId:'a',id:'env',revision:8,
  original:{requestId:'original-remove',state:'outcome_unknown'},status:'held',
  code:'original_binding_unverified',executor:'unobserved',physical:'not_observed',
- continuationAvailable:false,riskDecisionAvailable:false,...overrides});
+ continuationAvailable:false,riskDecisionAvailable:false,verification:{status:'not_retained'},...overrides});
 const inspectArgs={workspaceId:'w',sessionId:'a',id:'env',expectedRevision:8};
 const originalArgs={...inspectArgs,originalRequestId:'original-remove'};
 const requireButton=(root,label)=>{const found=button(root,label);assert.ok(found,`Missing actual component control: ${label}`);return found};
+
+const recordedVerification={status:'recorded',version:1,reasonCode:'unsupported_type',memberType:'fifo',relativePath:'artifacts/fixture-pipe'};
+for(const [label,verification,valid] of [
+ ['not retained',{status:'not_retained'},true],
+ ['unverified',{status:'unverified'},true],
+ ['recorded minimal',{status:'recorded',version:1,reasonCode:'archive_format'},true],
+ ['recorded full',recordedVerification,true],
+ ['recorded type only',{status:'recorded',version:1,reasonCode:'symbolic_cycle',memberType:'symbolic'},true],
+ ['recorded path only',{status:'recorded',version:1,reasonCode:'missing_root',relativePath:'workspace'},true],
+ ['missing',undefined,false],['null',null,false],['array',[],false],
+ ['unknown status',{status:'success'},false],
+ ['extra absent detail',{status:'not_retained',reasonCode:'unsupported_type'},false],
+ ['unknown reason',{...recordedVerification,reasonCode:'SYNTHETIC_PRIVATE_VALUE'},false],
+ ['wrong version',{...recordedVerification,version:'1'},false],
+ ['missing reason',{status:'recorded',version:1},false],
+ ['unknown type',{...recordedVerification,memberType:'socket'},false],
+ ['null type',{...recordedVerification,memberType:null},false],
+ ['extra content',{...recordedVerification,content:'SYNTHETIC_PRIVATE_VALUE'},false],
+ ['link target',{...recordedVerification,linkTarget:'/SYNTHETIC_PRIVATE_VALUE'},false],
+ ['absolute path',{...recordedVerification,relativePath:'/SYNTHETIC_PRIVATE_VALUE'},false],
+ ['parent path',{...recordedVerification,relativePath:'workspace/../SYNTHETIC_PRIVATE_VALUE'},false],
+ ['dot path',{...recordedVerification,relativePath:'workspace/.'},false],
+ ['newline path',{...recordedVerification,relativePath:'workspace/file\n'},false],
+ ['other root',{...recordedVerification,relativePath:'other/file'},false],
+ ['long path',{...recordedVerification,relativePath:'workspace/'+'x'.repeat(247)},false],
+ ['empty path',{...recordedVerification,relativePath:''},false],
+ ['null path',{...recordedVerification,relativePath:null},false],
+]){
+ test(`passive verification ${label} is ${valid?'accepted without effects':'rejected without rendering details'}`,async()=>{
+  let root;const calls=[];
+  storage.set(key,JSON.stringify({command:'retained draft',pending:null}));const saved=storage.get(key);
+  const dispatch=async(action,args)=>{
+   calls.push({action,args});
+   if(action==='workspace.environments.read')return accepted({items:[removalResource]});
+   if(action===removalList)return accepted(removalDiscovery());
+   if(action===removalRead){const value=removalHeld({verification});if(label==='missing')delete value.verification;return accepted(value)}
+   throw Error('Unexpected effect: '+action);
+  };
+  try{
+   await act(async()=>{root=create(React.createElement(TaskEnvironments,{workspaceId:'w',sessionId:'a',act:dispatch,active:true,readOnly:true}))});
+   await act(async()=>requireButton(root,'Inspect original removal').props.onClick());
+   await act(async()=>requireButton(root,'Read original removal original-remove').props.onClick());
+   if(valid){assert.match(text(root.toJSON()),/Removal remains held/);assert.doesNotMatch(text(root.toJSON()),/does not match/)}
+   else{assert.match(text(root.toJSON()),/does not match/);assert.doesNotMatch(text(root.toJSON()),/Removal remains held/)}
+   assert.doesNotMatch(text(root.toJSON()),/SYNTHETIC_PRIVATE_VALUE/);
+   assert.equal(button(root,'Continue removal'),undefined);assert.equal(button(root,'Replace removal'),undefined);
+   assert.equal(storage.get(key),saved);
+   assert.deepEqual(calls,[read,{action:removalList,args:inspectArgs},{action:removalRead,args:originalArgs}]);
+  }finally{await act(async()=>root?.unmount())}
+ });
+}
 
 for(const readOnly of [false,true])test(`original removal inspection is passive with readOnly=${readOnly} and a later stop`,async()=>{
  let root;const calls=[],pending={action:'workspace.environments.remove',args:{requestId:'browser-pending-not-original'},id:'saved-command'};

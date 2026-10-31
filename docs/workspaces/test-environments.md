@@ -50,11 +50,34 @@ action retains its bounded synchronous semantics. See the
 Routine testing in an already configured managed runner is authorized workspace
 work. Snapshot, locked preparation, execution, evidence export and owned cleanup
 do not require a separate `test_environments` approval, including in Ask when
-needed mode. Agents still need their current root execution binding and an
-unblocked task assignment. The adapter rechecks Stop, placement, owner and backend
-identity before effects. Host setup remains a separate `test_host_setup` grant.
+needed mode. Ask-mode agents retain their current root execution binding. Full
+mode also admits mounted native children, including nested, resumed and persistent
+children, through their actual current assigned generation. Trusted system calls
+name an explicit owning conversation; they do not invent a native actor or human
+input. A system call carrying a native binding must validate it. Task assignment,
+placement, owner and backend checks still apply. In Ask mode host setup uses a separate
+`test_host_setup` grant. Operator-selected Full access already authorizes setup,
+including native descendants and trusted system callers for an explicit owning
+conversation. No browser, human input or new approval is needed.
 Old test-only capability requests no longer create approval cards; stale cards
 are retired without running their operations.
+
+An admitted Full routine operation can outlive its originating turn. Before each
+backend effect, it rechecks the captured Full revision, Stop boundary, placement
+and canonical execution owner. Turning Full off and back on does not renew that
+operation. The conversation and its canonical execution identity continue to own
+the environment and request fingerprint. New Full requests separately retain the
+actual origin, native principal when present, and assigned generation. A later
+authorized child, root agent, system or UI caller can retrieve the exact original
+receipt without changing that attribution or replaying the effect. Legacy request
+fingerprints and receipts remain unchanged. Different arguments still require a
+different request identity.
+
+Passive removal inspection keeps its bounded, read-only ledger and cold-owner
+metadata path. A current Full descendant may inspect its owning conversation's
+resource; a trusted system may name that Full owner directly. These reads neither
+hydrate cold history nor create requests or invoke the backend. Existing passive
+root and UI reads remain available without admitting fresh work.
 
 The action interface and durable ownership are independent of the DTU library.
 The initial backend boundary is a host-owned `prepare/start/read/execute/stop/remove`
@@ -120,8 +143,27 @@ The supported setup action writes a private `test-environments.json` file in the
 It identifies the exact managed core installation, qualified commit and local
 Docker Unix endpoint. The reviewed image digest is fixed by the app. The app
 reports disabled or unavailable when this setup is missing or does not match.
-Setup downloads approved dependencies only after an explicit user action or a
-scoped `test_host_setup` agent grant; ordinary inspection does not prompt.
+Setup downloads approved dependencies after an explicit user action, a scoped
+`test_host_setup` agent grant, or standing Full access; ordinary inspection does
+not prompt. Agent setup admission checks its real native binding, including a
+delegated child's assigned generation. A trusted system can act for an explicit
+Full conversation without inventing a native principal or human input.
+
+Accepted Full setup and cleanup continue after the originating turn finishes.
+They retain the existing captured access revision and Stop/placement boundary,
+rechecking before effects and after final validation before saving the runner.
+Revocation, including turning Full off and back on, does not renew accepted work.
+An interrupted effect remains uncertain; it is not replayed.
+
+The setup intent's conversation and workspace own its retained result. The
+original actor and captured authority remain separate attribution. A later
+authorized actor in that same Full conversation can inspect or clean up the
+original setup, or explicitly publish its already verified candidate, without
+impersonating the original child. The existing exact intent, backend identity,
+resource ownership and readiness checks still apply. Reconciliation and cleanup
+retain their own current actor; they do not replace the original setup actor.
+Ask-mode setup actor checks are unchanged. Routine environment operations use the
+shared resource and request ownership described above.
 
 Keep the exact managed core installation and configuration until all of its
 owned environments have been removed. Managed uninstall and replacement refuse
@@ -171,12 +213,17 @@ when guest removal and any dependency preparation cleanup are confirmed. A
 missing or changed backend, foreign owner, running guest, insufficient storage or
 incomplete export retains ownership and reports the phase that needs attention.
 
-Recovery preserves symbolic link text as inert archive metadata, including the
-absolute links produced by pytest. It never follows guest links or extracts guest
-files on the host. These archives are marked `archiveOnly`; restoring them requires
-an isolated environment and an explicit safe extraction policy. Member paths,
-entry types, hard-link targets, member count, tar termination, hashes and sizes
-remain verified. Nothing is silently omitted from the selected filesystems.
+Archive-only retention preserves symbolic-link text and zero-length FIFO entries
+as inert archive metadata, including those produced by test fixtures. It never
+follows guest links, opens a FIFO, creates a special file, or extracts guest files
+on the host. A FIFO entry with a nonzero declared size is rejected. Character and
+block devices, sockets, unknown entry types and sparse entries remain unsupported.
+Ordinary files-mode and artifact-only validation continue to reject FIFO entries.
+These archives are marked `archiveOnly`; restoring them requires an isolated
+environment and an explicit safe extraction policy. Member paths, duplicate and
+ancestor conflicts, regular-file-only hard-link targets, member count, tar
+termination, hashes and size limits remain verified. Nothing is silently omitted
+from the selected filesystems.
 Docker recovery bounds each selected archive to 4 GiB and reserves space for both
 plus 1 GiB; Incus retains its 8 GiB input limit and a 4 GiB selected-content bound.
 Files outside `/workspace` and `/artifacts` require the existing full Incus export.

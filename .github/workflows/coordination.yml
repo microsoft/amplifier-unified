@@ -49,11 +49,18 @@ on:
       - 'tests/test_coordination_bridge_returns.py'
       - 'tests/test_collaborative_workspaces.py'
       - 'tests/test_collaboration_input.py'
+      - 'tests/test_peer_auto_delivery.py'
       - 'amplifier_web/task_binding.py'
       - 'amplifier_web/task_continuity.py'
       - 'tests/test_task_continuity.py'
+      - 'amplifier_web/completed_followup.py'
+      - 'amplifier_web/runtime_controls.py'
+      - 'tests/test_completed_peer_followup.py'
+      - 'tests/test_completed_peer_native.py'
       - 'tests/test_blocked_peer_input.py'
       - 'tests/test_blocked_peer_native.py'
+      - 'tests/test_complete_input_native.py'
+      - 'tests/test_peer_intake_native.py'
       - 'tests/test_creation_inheritance.py'
       - 'tests/test_inherited_module_sources.py'
       - 'tests/test_runtime_profile_inputs.py'
@@ -70,6 +77,9 @@ on:
       - 'amplifier_web/worktrees.py'
       - 'amplifier_web/handoff_admission.py'
       - 'amplifier_web/handoff_boundary.py'
+      - 'amplifier_web/update_drain.py'
+      - 'tests/test_update_boundary_native.py'
+      - 'tests/test_update_drain.py'
       - 'amplifier_web/capacity.py'
       - 'amplifier_web/capacity_wait.py'
       - 'tests/test_handoff_model_admission.py'
@@ -170,8 +180,9 @@ jobs:
           tests/test_coordination_bridge_returns.py
           tests/test_assignment_brief.py
           tests/test_background_reservation_recovery.py
-          tests/test_collaborative_workspaces.py tests/test_collaboration_input.py
+          tests/test_collaborative_workspaces.py tests/test_collaboration_input.py tests/test_peer_auto_delivery.py
           tests/test_task_continuity.py tests/test_blocked_peer_input.py
+          tests/test_completed_peer_followup.py
           tests/test_creation_inheritance.py tests/test_inherited_module_sources.py
           tests/test_runtime_profile_inputs.py tests/test_runtime_source_declarations.py
           tests/test_state_write_scopes.py tests/test_host_storage.py
@@ -193,6 +204,42 @@ jobs:
           import xml.etree.ElementTree as ET
           rows = ET.parse('output/blocked-peer-native.xml').getroot().findall('.//testcase')
           assert len(rows) == 3
+          assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          PY
+      - name: Verify completed-worker followups through the native boundary
+        run: |
+          uv run --no-sync pytest -q tests/test_completed_peer_native.py --junitxml=output/completed-peer-native.xml
+          uv run --no-sync python - <<'PYCODE'
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/completed-peer-native.xml').getroot().findall('.//testcase')
+          assert len(rows) == 5
+          assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          PYCODE
+      - name: Verify cooperative update yield through the native boundary
+        run: |
+          uv run --no-sync pytest -q tests/test_update_boundary_native.py --junitxml=output/update-boundary-native.xml
+          uv run --no-sync python - <<'PYTHON'
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/update-boundary-native.xml').getroot().findall('.//testcase')
+          assert len(rows) == 4
+          assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          PYTHON
+      - name: Verify complete input native through the native boundary
+        run: |
+          uv run --no-sync pytest -q tests/test_complete_input_native.py --junitxml=output/complete-input-native.xml
+          uv run --no-sync python - <<'PY'
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/complete-input-native.xml').getroot().findall('.//testcase')
+          assert len(rows) == 1
+          assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          PY
+      - name: Verify peer intake native through the native boundary
+        run: |
+          uv run --no-sync pytest -q tests/test_peer_intake_native.py --junitxml=output/peer-intake-native.xml
+          uv run --no-sync python - <<'PY'
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/peer-intake-native.xml').getroot().findall('.//testcase')
+          assert len(rows) == 8
           assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
           PY
       - name: Verify repeated peer returns through real Worker processes

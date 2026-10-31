@@ -277,7 +277,8 @@ class Schedules:
                     self.decide_notification(self.app._session(run['sessionId']), run)
                 self.changed()
         from .updates import work_paused
-        if work_paused(self.app.state): return
+        from .update_drain import held
+        if work_paused(self.app.state) or held(self.app): return
         for schedule in self.store.list():
             if schedule['status'] != 'active' or schedule.get('nextDue') is None or schedule['nextDue'] > now: continue
             sid = schedule['sessionId']
@@ -298,6 +299,8 @@ class Schedules:
                     self.changed()
                 continue
             async with self.app.lock:
+                if held(self.app):
+                    continue  # The occurrence has not been claimed or submitted.
                 # Refresh authoritative schedule after asynchronous runtime reads.
                 current = self.store.get(sid, schedule['id'])
                 if current['revision'] != schedule['revision'] or current['status'] != 'active': continue
@@ -332,6 +335,7 @@ class Schedules:
             try:
                 # Exact task revision and idle admission are rechecked inside the
                 # worker command lock, immediately before its nonblocking queue.
+                configuration_comparison = {}
                 def guard():
                     latest = self.store.get(sid, current['id'])
                     if not self.store.owns(self.clock()): return 'Scheduler ownership changed before admission.'
@@ -342,8 +346,20 @@ class Schedules:
                         if reason: return reason
                     destination = self.app._session(target)
                     if run.get('destinationConfigurationHash'):
-                        from .session_creation import template
-                        if template(self.app, destination)[1]['configurationHash'] != run['destinationConfigurationHash']: return 'The new task configuration changed before admission.'
+                        from .session_creation import template, configuration_changes
+                        observed = template(self.app, destination)[1]
+                        if observed['configurationHash'] != run['destinationConfigurationHash']:
+                            previous = {'configurationHash': run['destinationConfigurationHash'],
+                                        'configurationParts': run.get('destinationConfigurationParts', {})}
+                            fields = configuration_changes(previous, observed)
+                            configuration_comparison.update(
+                                before={'stage': 'destination_created', **previous},
+                                after={'stage': 'input_admission', 'configurationHash': observed['configurationHash'],
+                                       'configurationParts': observed['configurationParts']},
+                                changedCategories=fields)
+                            return ('The new task configuration changed before admission'
+                                    + (': ' + ', '.join(fields) if fields else '')
+                                    + ' (destination creation compared with input admission).')
                     if destination.get('configurationBusy') or destination.get('fileAccessPending') or destination.get('executionRevision', 0) != run['destinationExecutionRevision'] or destination.get('interruptionRevision', 0) != run['destinationInterruptionRevision']: return 'The destination task changed or stopped before input admission.'
                     if latest['status'] != 'active' or latest['revision'] != current['revision']: return 'The schedule changed before admission.'
                     if self.app._session(sid).get('interruptionRevision', 0) != current['interruptionRevision']: return 'The user stop won input admission; this occurrence was skipped.'
@@ -356,7 +372,9 @@ class Schedules:
                 cancelled = isinstance(exc, asyncio.CancelledError)
             else: cancelled = False
             async with self.app.lock:
-                saved = self.store.transition(sid, run['id'], ['submitting'], phase, self.clock(), detail=detail, observedInterruptionRevision=self.app._session(sid).get('interruptionRevision', 0))
+                saved = self.store.transition(sid, run['id'], ['submitting'], phase, self.clock(), detail=detail,
+                    **({'destinationConfigurationComparison': configuration_comparison} if configuration_comparison else {}),
+                    observedInterruptionRevision=self.app._session(sid).get('interruptionRevision', 0))
                 self.app._delivery(self.app._session(target), run['inputId'], 'accepted' if phase == 'accepted' else 'unknown' if phase == 'unknown' else 'rejected')
                 if saved['phase'] in {'unknown', 'skipped'}:
                     self.store.review(sid, current['id'], detail, self.clock())

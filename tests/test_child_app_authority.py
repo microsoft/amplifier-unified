@@ -38,7 +38,9 @@ async def test_mounted_child_app_access_has_own_principal(tmp_path, monkeypatch,
     parent.coordinator.register_capability('session.working_dir', str(tmp_path))
     worker = Worker()
     worker.session = parent
-    worker.runtime = SimpleNamespace(generation={'id': 'root-generation', 'input_ids': ['original-input']})
+    worker.runtime = SimpleNamespace(generation={'id': 'root-generation', 'input_ids': ['original-input']},
+                                     closed=False, stop_requested=False)
+    worker.activation_gate = SimpleNamespace(current_valid=True)
     worker.context_inputs = ['original-input']
     worker.context_bindings = {'original-input': {'clientId': 'original-client', 'targets': []}}
     worker.bridge = AsyncMock(return_value={'accepted': True})
@@ -57,7 +59,7 @@ async def test_mounted_child_app_access_has_own_principal(tmp_path, monkeypatch,
         assert result.success, result.error
         _, envelope = worker.bridge.call_args.args
         assert envelope['_runtimeSessionId'] == coordinator.session_id
-        assert '_generationId' not in envelope
+        assert envelope['_generationId'] == 'root-generation'
         assert envelope['_inputBindings'] == [{'inputId': 'original-input', 'clientId': 'original-client'}]
         if mode in {'nested', 'nested-reprepare'} and coordinator.session_id == 'child':
             worker.context_inputs = ['unrelated-later-input']
@@ -131,11 +133,30 @@ async def test_mounted_child_cannot_borrow_configuration_grant(tmp_path, monkeyp
         monkeypatch.setattr(app, 'runtime', SimpleNamespace(resource_access=policy, close=AsyncMock()))
     worker = Worker()
     worker.session = parent
-    worker.runtime = SimpleNamespace(generation={'id':'generation'})
+    worker.runtime = SimpleNamespace(generation={'id':'generation', 'input_ids':['input']},
+                                     closed=False, stop_requested=False)
+    worker.activation_gate = SimpleNamespace(current_valid=True)
     worker.context_inputs = ['input']
     worker.context_bindings = {'input': {'clientId':None, 'targets':[]}}
+    # Use the real host bridge to stamp the current worker owner, as production
+    # does before validating the child's private execution scope.
+    from amplifier_web.runtime import RuntimeManager
+    transport = RuntimeManager()
+    transport.app_bridge = app.app_bridge
+    owner = {'process': SimpleNamespace(returncode=None), 'runtimeOwnerId': 'fixture-owner'}
+    transport.workers[root['id']] = owner
+    prior_runtime = app.runtime
+    if app.runtime is None:
+        app.runtime = SimpleNamespace(close=AsyncMock())
+    host_runtime = app.runtime
+    host_runtime.workers = dict(transport.workers)
     async def bridge(operation, args):
-        return await app.app_bridge(operation, args, root['id'])
+        replies = []
+        async def write(row, reply): replies.append(reply)
+        transport._write = write
+        await transport._bridge(root['id'], owner, {'id':'fixture-bridge', 'operation':operation, 'args':args})
+        if replies[0].get('error'): raise RuntimeError(replies[0]['error'])
+        return replies[0]['result']
     worker.bridge = bridge
     await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
     registry = await install_children(parent, prepared, Runtime('root'), SessionStore(tmp_path/'children'), approvals)
@@ -162,6 +183,8 @@ async def test_mounted_child_cannot_borrow_configuration_grant(tmp_path, monkeyp
         assert len(observed) == (2 if mode in {'resumed','nested'} else 1)
         policy.assert_not_awaited()
         assert app.configuration_authority.snapshot(root)['grants'][0]['usable']
+        host_runtime.workers.clear()
+        app.runtime = prior_runtime
         result = await parent.coordinator.get('tools')['app_control'].execute({'operation':'dispatch','args':{
             'action':action,'id':'native-root-admin','args':action_args}})
         assert result.success, result.error
@@ -177,6 +200,9 @@ async def test_mounted_child_cannot_borrow_configuration_grant(tmp_path, monkeyp
             assert policy.await_count == 2  # Admission and returned access observation.
     finally:
         _PERSISTENT.reset(token)
+        host_runtime.workers.clear()
+        app.runtime = prior_runtime
+        transport.workers.clear()
         await parent.cleanup()
         await app.close()
 

@@ -26,8 +26,8 @@ def definitions(schema,string):
     return {
         'outputs.list':('List exact saved output relationships without opening or sending anything.',schema({**common,'includeUnlinked':{'type':'boolean'},'offset':{'type':'integer','minimum':0},'limit':{'type':'integer','minimum':1,'maximum':50}},['sessionId'])),
         'outputs.read':('Read bounded immutable content, provenance, lineage and local review comments. External links are references only unless version evidence is supplied.',schema({**identity,'offset':{'type':'integer','minimum':0},'limit':{'type':'integer','minimum':1,'maximum':4000},'commentOffset':{'type':'integer','minimum':0},'commentLimit':{'type':'integer','minimum':1,'maximum':10}},['sessionId','id'])),
-        'outputs.image':('Inspect an exact saved RGB/RGBA PNG snapshot up to8MB and4096px per side. UI previews it; a direct app_control call (not nested inside tool_exec) requests typed pixels for its next vision-capable model request. The receipt alone is not visual evidence. Does not read changing source files or start work.',schema({**identity,'sha256':{'type':'string','pattern':'^[a-f0-9]{64}$'}},['sessionId','id','sha256'])),
-        'outputs.images':('Inspect two saved PNGs together, in the supplied order, for visual comparison. Choose distinct images with exact id and sha256, up to8MB combined and4096px per side. Call directly through app_control to replace the current image selection for this input. Both images must be available; the receipt alone is not pixels. Does not generate or start work.',schema({**common,'images':{'type':'array','minItems':2,'maxItems':2,'items':image_identity}},['sessionId','images'])),
+        'outputs.image':('Inspect an exact saved RGB/RGBA PNG snapshot up to8MB and4096px per side. UI previews it; a direct app_control call (not nested inside tool_exec) requests typed pixels for its next vision-capable model request. Own snapshots and exact retained results shared through an authorized conversation request are supported. The receipt alone is not visual evidence. Does not read changing source files or start work.',schema({**identity,'sha256':{'type':'string','pattern':'^[a-f0-9]{64}$'}},['sessionId','id','sha256'])),
+        'outputs.images':('Inspect two saved PNGs together, in the supplied order, for visual comparison. Choose distinct images with exact id and sha256, up to8MB combined and4096px per side. Call directly through app_control to replace the current image selection for this input. Both images must be available and owned here or retained for an authorized conversation request; the receipt alone is not pixels. Does not generate or start work.',schema({**common,'images':{'type':'array','minItems':2,'maxItems':2,'items':image_identity}},['sessionId','images'])),
         'outputs.attach':('Attach a file/dataset snapshot, exact saved canvas body, PR or external document reference. Does not publish, fetch remote contents or change selection. File snapshots stay within this conversation workspace.',schema({**common,**origin,'kind':{'enum':['file','dataset','canvas','pull_request','external_document']},'title':string(200),'path':string(4000),'url':string(4000),'canvasId':string(100),'version':string(500),'expectedSha256':{'type':'string','pattern':'^[a-f0-9]{64}$'}},['sessionId','kind','title'])),
         'outputs.attachImage':('Save an exact generated PNG from a completed image-tool receipt in this workspace. Verifies bytes and SHA-256. Edits require parentId matching the target input hash. Shares the saved image with Canvas; messageId publishes it inline at that original turn, otherwise library-only. Preserves originals and producer-reported provenance; does not generate, spend, fetch or publish externally.',schema({**common,**origin,'title':string(200),'receiptPath':string(4000)},['sessionId','title','receiptPath'])),
         'outputs.attachMedia':('Save exact GIF bytes up to64MiB or MP4 up to32MiB at an existing assistant message. Supply its saved messageId and inspected SHA-256; saving is not browser playback proof.',schema({**common,'messageId':string(200),'title':string(200),'path':string(4000),'expectedSha256':{'type':'string','pattern':'^[a-f0-9]{64}$'}},['sessionId','messageId','title','path','expectedSha256'])),
@@ -111,34 +111,75 @@ class Outputs:
             return self.decode_content(record,value)
         return await asyncio.to_thread(materialize)
 
-    def image(self,sid,identity,expected_hash):
-        self.app._session(sid)
-        record=self.record(sid,identity)
+    def image_record(self,sid,identity,expected_hash):
+        self.app._session(sid, hydrate=False)
+        record=self.store.read(identity)
+        if record['sessionId']!=sid:
+            from .result_artifacts import image_record
+            record=image_record(self.app.collaboration,sid,record)
         if record.get('sha256')!=expected_hash or record.get('kind') not in {'file','dataset'}:
             raise ValueError('Choose the exact saved file snapshot and content hash.')
-        data=self.content(record)
+        return record
+
+    @staticmethod
+    def image_value(record,data):
         if data is None:raise ValueError('This output has no saved image bytes.')
         from .voice_visual_image import validate_png
         width,height=validate_png(data,max_bytes=MAX_FILE,max_dimension=4096)
-        return {'id':identity,'sha256':expected_hash,'title':record['title'],'width':width,'height':height,
+        return {'id':record['id'],'sha256':record['sha256'],'title':record['title'],'width':width,'height':height,
             'mimeType':'image/png','bytes':len(data),'evidence':'immutable-output-snapshot','untrustedData':True,
-            'imageUrl':'/api/outputs/'+identity+'/image','_image':base64.b64encode(data).decode()}
+            'imageUrl':'/api/outputs/'+record['id']+'/image','_image':base64.b64encode(data).decode()}
 
-    def images(self,sid,identities):
+    def image(self,sid,identity,expected_hash):
+        # The synchronous browser route reads its own authenticated output.
+        self.app._session(sid, hydrate=False)
+        record=self.record(sid,identity)
+        if record.get('sha256')!=expected_hash or record.get('kind') not in {'file','dataset'}:
+            raise ValueError('Choose the exact saved file snapshot and content hash.')
+        return self.image_value(record,self.content(record))
+
+    @staticmethod
+    def validate_pair(identities):
         if (not isinstance(identities,list) or len(identities)!=2 or
                 any(not isinstance(item,dict) or set(item)!={'id','sha256'} or
                     any(not isinstance(item[key],str) for key in ('id','sha256')) for item in identities)):
             raise ValueError('Choose exactly two saved image IDs and hashes.')
         if len({item['id'] for item in identities})!=2 or len({item['sha256'] for item in identities})!=2:
             raise ValueError('Choose two different saved images; duplicate IDs or hashes cannot form a comparison.')
-        # The caller holds the app lock. Validate the whole ordered set before
-        # returning any pixels or changing the worker's inspection selection.
-        images=[self.image(sid,item['id'],item['sha256']) for item in identities]
+
+    @staticmethod
+    def image_pair(images):
         total=sum(image['bytes'] for image in images)
         if total>MAX_FILE:
             raise ValueError('The two saved images exceed the combined8MB limit.')
         return {'images':images,'bytes':total,'limits':{'images':2,'maxBytes':MAX_FILE,'maxSide':4096},
                 'imageDelivery':'Both saved images are available. A direct agent inspection requests pixels together; this receipt is not pixels.'}
+
+    def images(self,sid,identities):
+        self.validate_pair(identities)
+        return self.image_pair([self.image(sid,item['id'],item['sha256']) for item in identities])
+
+    async def image_async(self,sid,identity,expected_hash):
+        return (await self._read_images(sid,[{'id':identity,'sha256':expected_hash}]))[0]
+
+    async def images_async(self,sid,identities):
+        self.validate_pair(identities)
+        return self.image_pair(await self._read_images(sid,identities))
+
+    async def _read_images(self,sid,identities):
+        # Detach exact bodies, decode/hash/validate off-lock, then recheck every
+        # request relationship before returning any part of the ordered set.
+        async with self.app.lock:
+            records=[self.image_record(sid,item['id'],item['sha256']) for item in identities]
+        images=[]
+        for record in records:
+            data=await self.content_async(record)
+            images.append(await asyncio.to_thread(self.image_value,record,data))
+        async with self.app.lock:
+            current=[self.image_record(sid,item['id'],item['sha256']) for item in identities]
+            if current!=records:
+                raise ValueError('The saved image relationship changed while reading; inspect again.')
+        return images
 
     def fork(self,source_id,target,canvas_mapping=None,*,media_origins=None):
         kept={row['id'] for row in target.get('messages',[]) if row.get('id')}
@@ -191,18 +232,22 @@ class Outputs:
                 return await self.media.attach(args, origin, command_id)
             if action == 'outputs.mediaReport':
                 return await self.media.observe(args, origin)
+            if action=='outputs.image':
+                result=await self.image_async(args['sessionId'],args['id'],args['sha256']);result.pop('_image')
+                result['imageDelivery']='Agent requests receive typed pixels at the next supported model boundary; this receipt is not pixels.'
+                return {'accepted':True,'result':result}
+            if action=='outputs.images':
+                result=await self.images_async(args['sessionId'],args['images'])
+                for image in result['images']:image.pop('_image')
+                return {'accepted':True,'result':result}
             async with self.app.lock:
-                session=copy.deepcopy(self.app._session(args['sessionId']))
+                source = self.app._session(args['sessionId'], hydrate=bool(args.get('messageId')))
+                # Output records own their bodies. Retain only the execution
+                # fence and location across the file/Git read below.
+                session = {key: source[key] for key in
+                           ('id', 'workspace', 'workingDirectory', 'executionRevision') if key in source}
                 if action=='outputs.list':
                     return {'accepted':True,'result':self.store.list(session['id'],include_unlinked=args.get('includeUnlinked',False),offset=args.get('offset',0),limit=args.get('limit',20))}
-                if action=='outputs.image':
-                    result=self.image(session['id'],args['id'],args['sha256']);result.pop('_image')
-                    result['imageDelivery']='Agent requests receive typed pixels at the next supported model boundary; this receipt is not pixels.'
-                    return {'accepted':True,'result':result}
-                if action=='outputs.images':
-                    result=self.images(session['id'],args['images'])
-                    for image in result['images']:image.pop('_image')
-                    return {'accepted':True,'result':result}
                 if action=='outputs.read':
                     record=self.record(session['id'],args['id'])
                     if record.get('kind') == 'chat_reference':
@@ -232,7 +277,7 @@ class Outputs:
                 if previous:return {'accepted':True,'result':previous}
                 for reference in args.get('evidenceIds',[]):self.record(session['id'],reference)
                 if args.get('parentId'):self.record(session['id'],args['parentId'])
-                if args.get('messageId') and not any(row.get('id')==args['messageId'] for row in session.get('messages',[])):
+                if args.get('messageId') and not any(row.get('id')==args['messageId'] for row in source.get('messages',[])):
                     raise ValueError('Choose an original message visible in this conversation; no turn was inferred.')
             data=None
             value={'kind':args.get('kind','writing' if action=='outputs.write' else 'file' if action=='outputs.attachImage' else 'git_review'),
@@ -295,7 +340,7 @@ class Outputs:
                 review=await git_snapshot(workspace,args['mode'],args.get('base'),path)
                 data=review.pop('text').encode();value.update(review=review,filename='review.diff',versionEvidence='snapshot')
             async with self.app.lock:
-                current = self.app._session(session['id'])
+                current = self.app._session(session['id'], hydrate=bool(args.get('messageId')))
                 # File/Git reads above can outlive a task transfer. Recheck
                 # authority under the same lock that commits its source fence.
                 if portability and portability.write_context(session['id']) != transfer_context:

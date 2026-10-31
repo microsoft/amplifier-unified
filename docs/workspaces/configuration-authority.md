@@ -194,6 +194,57 @@ recipe integration, release publication, installed-host adoption or OS isolation
 
 ## Persistent Full access
 
+### Unattended Full access direction
+
+Accepted direction, October 30, 2026: **Full access** is standing operator
+authorization for all supported agent capabilities, with no recurring human
+approval gates. It covers files, tools, configuration, delegation, collaboration,
+task and resource control, schedules, recovery, cleanup and outbound work such as
+issues, reviews, merges, releases and publication. Trusted authenticated systems
+can initiate or delegate work without a human conversation or connected client.
+Ask when needed remains available.
+
+The operator opts in through trusted UI, CLI or authenticated API controls.
+Retrieved content, repository settings and an agent's assertion of permission
+cannot enable Full access. App, workspace and chat scopes select which work
+receives standing authority; they are not per-effect approval checkpoints. Native
+descendants, commissioned tasks and scheduled continuations inherit through
+their existing trusted source relationships, rather than copied permission flags.
+Explicit narrower preferences and revocation remain effective. Source-derived
+authority is rechecked at existing effect boundaries.
+
+Full work must not require a fresh human message, original participant or manager
+approval, attached browser, or fabricated human answer. Autonomous choices retain
+agent/system attribution. Missing factual inputs can be reported without turning
+them into permission requests. Actual Stop fences the stopped work chain; that
+chain cannot resume itself. A fresh trusted operator or system request may start
+new work. The saved access preference persists until explicitly changed.
+
+Native execution identity, target ownership, cancellation, idempotence and truthful
+unknown-effect recovery remain correctness requirements. Full access does not
+manufacture OS privileges, account credentials, unavailable tools, independent
+review or success. Reuse existing access records, work relationships and command
+receipts; do not create a second grant service or approval process.
+
+This is the implementation destination, not a claim that every current action
+already supports it. The existing behavior and command-line entry points below
+are narrower: task lineage, system-origin action parity and action-specific human
+gates require incremental qualification before being described as complete.
+
+Initial feedback publication and direct text follow-ups have a Full path for
+current agents, assigned native children and trusted host systems with an explicit
+calling conversation. Initial files and prepared excerpts use conversation-owned
+staging without a browser or renewed human confirmation. Existing receipts retain
+actual caller/source authority, verified recipient facts and immutable content;
+every external write rechecks the captured Full revision and Stop boundary.
+Read-only reconciliation never renews effect authority or repeats uncertain work.
+Later-file additions use the same conversation-owned Full path and exact file
+manifest with optional review; Ask retains browser review and confirmation.
+Optional text comparison reviews retain their separate client workflow. The precise behavior and limits live in
+[the feedback contract](../feedback-excerpts.md#initial-publication-under-full-access).
+
+### Implemented standing preference
+
 Chat info > **Access & approvals** offers **Ask when needed** and **Full access**.
 The user chooses this chat, workspace default, or app default; chat overrides
 workspace, which overrides app. Inherit removes that layer's choice. Defaults
@@ -201,15 +252,128 @@ remain Ask when needed. Full access persists across turns, Stop and host restart
 Only authenticated user controls can call `access.set`; agents can inspect their
 own mode with `access.get` but cannot enable it. Repository settings cannot opt in.
 Records live in the existing host command database with revision-checked,
-idempotent saves. New native workers read only the three exact policy records.
+idempotent saves. New native workers read exact policy and task-source records.
+
+Commissioned and new-task scheduled roots inherit through their retained creator
+or scheduled-origin relationship. The scheduler's validated source/run relationship
+is saved with the new root, before its first native preparation. The receiving
+chat's explicit choice wins.
+Otherwise a source chat's specific choice follows the task ahead of workspace
+and app defaults. At a cross-workspace relationship, an explicit destination
+workspace choice wins before source inheritance. Removing a chat override restores
+this inheritance; it does not copy Full access into the receiving chat.
+Missing, cyclic or ambiguous source relationships, including unavailable or
+invalid committed source payloads, fall back to the receiving
+chat's independently applicable workspace/app preference, or Ask by default.
+They cannot supply inherited Full or erase an operator's existing broad Full
+choice. The unavailable relationship remains in the revision and source diagnostic.
+
+Host checks and native file preparation use one resolver. It reads only the
+requested owners and their source chain, following each committed manifest's
+exact immutable view payload and immediately projecting its identity/source
+fields. It never follows cold message/execution references or trusts mutable
+`view.json` presentation. Read cost grows with source depth and those owner
+payload bytes, not unrelated history. Directory rows locate aliases but never
+supply authority. A worker's host-owner ID is transported separately from its
+native ID, so older aliases do not change its policy. The effective revision binds
+consulted choices, relationships and source Stop revisions. Source revocation or
+Stop fences an already captured derived effect; an explicit receiving-chat choice
+is independent of source permission changes. The saved preference persists after
+Stop, while execution admission still owns cancellation and resume.
+
+This source resolver covers independent task roots. Qualified native children can
+use their owning chat's Full mode for the existing shared configuration effects
+and inspect that chat's `access.get` and `capability.read`. Configuration routing
+uses the existing effect requirement; it does not maintain another action list.
+The source check explicitly opts into the native child's current assigned
+generation and captured Stop boundary. Finite, nested, resumed and persistent
+mounts keep their actual principal and original assigned inputs. They do not
+impersonate the root or borrow an unrelated later input. New Full configuration
+receipts retain actor, owner, origin, generation and all available assigned-input
+IDs separately. A missing or empty native input envelope records unavailable input
+coverage, not a verified empty assignment; its cause and count are not inferred
+from the root's later inputs. This observation adds no permission gate under Full.
+Accepted delayed work keeps its captured Full revision and the existing final
+effect checks; the finite child finishing does not itself revoke accepted work.
+
+Ask-mode discrete grants remain root-owned, and children cannot grant/request/revoke
+those root grants or change access mode. Other collaboration consumers keep their
+strict root default. Existing child file-policy composition is unchanged.
+The configuration operation and patch-placement owners accept qualified Full
+descendants through this same source check. They validate the calling conversation
+themselves. A Full patch bind retains the explicit `bind-to-execution` choice,
+exact observed placement/configuration revisions and original effect authority;
+it requires no human `sourceMessageId`. Ask retains its existing human-choice and
+discrete-grant behavior. Passive root observations and exact retained binding
+receipts remain readable without admitting another effect.
+
+Fresh trusted system configuration requests may use an explicit calling owner and
+current Full without inventing a native principal, generation or human input.
+They retain system attribution and unavailable input coverage. A system request
+that carries a native binding still has to validate that binding. Saved mode,
+Stop and target checks remain effective at the delayed configuration owner.
+
+Managed test-host setup, its retained reconciliation and interrupted-setup cleanup
+also accept qualified Full descendants and trusted system callers. Their existing
+conversation/workspace intent owns the result; the original actor and authority
+remain recorded. Accepted background work can outlive a turn, with current Full,
+Stop, placement and resource checks before effects and final publication. Routine
+environment start, execution, stopping, reconciliation, artifact export and owned
+cleanup likewise accept current Full native descendants and explicit trusted
+system callers. Accepted operations retain the captured Full/Stop boundary while
+the conversation's canonical execution identity continues to own the resource and
+request fingerprint. New Full request receipts record the actual caller
+separately; exact retries preserve original attribution and never repeat an
+uncertain effect. Passive removal inspection keeps its bounded cold-owner read
+path. See [test environments](test-environments.md) for this domain's exact scope;
+this does not expand generic task-resource or queued-check admission.
+Work and provider admission use their respective canonical owners; this consumer
+adds no duplicate permission policy.
 
 Full access preauthorizes configuration effects at all scopes and ordinary
 allow/deny tool permissions. Pending valid permission requests are answered once;
 questions, expired requests, lost workers and old tool effects are never replayed.
-Existing root ownership, execution identity, Stop, resource ownership, capacity,
+For Work-associated execution it also accepts partial or inferred Work context:
+missing fitted-content proof does not add a permission gate or restrict the set
+of supported actions. The shared Work policy reuses current native generation and
+Stop checks for roots and trusted descendants, preserving their actual identities.
+Coverage remains explicitly unknown or partial when not established; it is not
+verification or success. Action owners still enforce their own factual inputs,
+revisions, receipts and recovery. This does not establish descendant support or
+complete deferred-effect cancellation in every individual action owner.
+Existing conversation ownership, execution identity, Stop, resource ownership, capacity,
 retention and recovery checks remain in force. A trusted root remains responsible
 for evaluating peer messages. Configuration commits recheck the captured mode
 revision; turning the mode off fences delayed changes and grants derived from it.
+
+A failed configuration operation retains its original authority, including Full
+access. The agent can reconcile native evidence and explicitly resume proven
+no-effect work without another permission request. Recovery checks the original
+mode revision, Stop boundary, target and exact payload again; re-enabling Full
+access does not renew an older operation. Unknown or saved effects cannot resume.
+For UI, user or internal originals, a current Full agent, qualified child or
+trusted system can reconcile and resume through the same recovery owner. Ask
+cannot substitute a new grant for that operator-origin authority. Resume retains
+the current Full authority in the operation's existing resumptions, checked at
+queued application and native write admission. Revoked original agent authority,
+revoked resumptions, Stop and changed targets cannot be renewed by another resume.
+The original request, hash and existing history remain intact. Explicit recovery
+transitions append their actual caller origin, conversation owner and observed
+native principal/generation/input coverage to the existing private history; they
+also record the Full revision used for operator-origin recovery. Public operation
+views omit this attribution. Recovery does not relabel the original actor or
+replace the retained effect authority.
+
+For an already executing Full native child, the exact operation read, reconcile
+and resume calls can reach the recovery owner even when that same settled pending
+operation blocks ordinary child execution. This route authenticates the current
+process and assigned run, Stop and execution/configuration revisions, task and
+assignment controls, current Full and the operation's own fence. The recovery
+owner still checks the original authority, target, revision and sealed attempt;
+unknown effects never become permission to replay. Ordinary child tools remain
+blocked. This qualifies native tool routing, not a fresh model turn: provider and
+capacity admission remain unchanged, and scripted native tests do not establish
+that a blocked child can obtain model capacity to decide to recover.
 
 File, patch, image and search mounts (including child definitions and restored
 plans) use all accessible local filesystem roots under Full access. Original
@@ -220,6 +384,24 @@ work and persistent children. Approvals use the saved preference immediately; th
 UI separately identifies file mounts pending retirement. No provider turn starts.
 Operating system permissions, unavailable tools, external account authentication
 and explicit user questions are not replaced by this preference.
+
+### Command-line access
+
+`amplifier-unified access full` accepts the risks of Full access and saves the app
+default without asking again or starting a task. `amplifier-unified access` shows
+the saved/effective mode; `amplifier-unified access ask` changes the app default
+back. Explicit chat/workspace choices continue to override that default. Use
+`access status --scope session --session ID` to inspect a particular chat, or
+`access inherit --scope session --session ID` to remove its override. Workspace
+scope likewise names a chat in that workspace. `--json` returns the shared action
+result for automation. No browser or human message is needed.
+
+`amplifier-unified run --yolo "Do the work"` saves Full access for that task before
+provider/tool setup and execution. `--access full` is equivalent; `--access ask`
+and `--access inherit` change or remove that task's saved choice. These options
+also apply to `continue` and `tool`, including an explicit `--resume ID`. The
+choice persists for the target task; it is not silently reverted when the command
+exits. All paths use the existing authenticated, revision-checked access actions.
 
 
 ### Global access and routine testing
@@ -233,8 +415,10 @@ checks. Agents cannot enable Full access.
 
 Routine managed test snapshot, preparation, execution, export and owned cleanup
 are task-authorized workspace work, including in Ask when needed mode. They retain
-owner, generation, Stop, assignment, placement and backend identity checks. Host
-setup and broader configuration administration keep their separate grants.
+owner, generation admission, Stop, assignment, placement and backend identity
+checks. Full accepted work can outlive its originating turn while its captured
+authority remains valid. Ask-mode host setup and broader configuration
+administration keep their separate grants.
 
 Pending capability cards are retired after Stop, workspace change or expiry, and
 native waits expire after host replacement. Legacy test-only cards also retire.
@@ -244,18 +428,31 @@ false` instead of trapping the user in an error. Raw API configuration requests
 without a native waiter may still survive a host restart when otherwise valid.
 
 Retired cards show the observed reason and **Dismiss old request**, rather than
-unusable decision buttons. Dismissal preserves the exact request in collapsed
-permission history. Pending counts still derive from current pending records;
+unusable decision buttons. Dismissal preserves the exact request in
+**Permissions history**, opened on demand from chat in the Canvas overview.
+Pending decisions and undismissed old requests remain in chat. History is read-only;
+opening or closing it does not change permissions or restart work.
+Pending counts still derive from current pending records;
 an old request is not an outstanding approval. An already-allowed grant is never
 revoked merely because a lagging card still looks pending after restart.
 
-**Review current scope** calls only `capability.read` with the exact request ID.
+**Review current scope** reads `capability.read` with the exact request ID.
 It shows applicable saved authority and Full access separately from request
 expiry. It neither opens runtime settings nor sends an input. The optional `id`
 read returns a request projection with `requestHash`, revision and the available
 decisions. Bundled decision controls check that hash before submitting and the
 server rechecks it under its commit lock. A failed decision refreshes display
 without repeating the mutation or changing the proposed scope silently.
+
+Bundled cards fence decisions as soon as this page requests Stop, before its
+command can wait behind Canvas work. A lost Stop acknowledgement stays unknown.
+The page may passively read that exact command from the host's existing command
+ledger, bound to its session and originating client. Confirmed acceptance releases
+only that command's local fence; it does not prove runtime termination, replay
+Stop, or send a decision. Missing or mismatched evidence keeps the fence.
+A preflight begun while fenced stays invalid after reconciliation: the person must
+review and decide again, with their note retained. This ordering fence is local
+to the mounted page, not a durable unresolved-Stop journal across reload.
 
 Dismissal reuses `capability.revoke` with `dismissRequest:true`, the observed
 `expectedRevision` and `expectedRequestHash`. It refuses active/current requests.

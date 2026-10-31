@@ -82,7 +82,7 @@ async def boundaries(request, handler):
 
 
 async def create_app(data_dir, workspace=None, runtime=None, voice=True, background_updates=True,
-                     preload_providers=True, server_config=None):
+                     preload_providers=True, server_config=None, background_work=True):
     data_dir = Path(data_dir).expanduser().resolve()
     config = validate_server(server_config) if server_config is not None else load_server_config(data_dir)
     app = web.Application(middlewares=[request_timing, boundaries, auth_required, client_context], client_max_size=MAX_REQUEST_BYTES)
@@ -133,14 +133,15 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     from .smart_canvas import SmartCanvas
     service.smart_tools = SmartToolsManager(service)
     service.smart_canvas = SmartCanvas(service)
-    service.diagnostics.start()
     service._publish_full(reason='Startup attaches and reconciles application controllers')
     from .management import Management
     service.management = Management(service)
-    service.schedules.start()
-    service.collaboration.start()
-    service.worktrees.start()
-    service.test_queue.start()
+    if background_work:
+        service.diagnostics.start()
+        service.schedules.start()
+        service.collaboration.start()
+        service.worktrees.start()
+        service.test_queue.start()
     service.history.start()
     service.event_log_view.start()
     service.performance_diagnostics.start()
@@ -678,6 +679,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/api/state/detail", state_detail)
     from .message_interactions import install_routes as install_message_annotation_routes
     install_message_annotation_routes(app)
+    from .conversation_stop import install_routes as install_conversation_stop_routes
+    install_conversation_stop_routes(app)
     async def peer_preview(request):
         return web.json_response(await service.peer_preview.read(dict(request.query)))
 

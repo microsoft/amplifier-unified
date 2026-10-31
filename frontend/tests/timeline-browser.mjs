@@ -1,9 +1,10 @@
+import {fixturePython} from './fixture-python.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium} from '@playwright/test';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import assert from 'node:assert/strict';
-const fixture=spawn(process.env.UNIFIED_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/timeline_ui_server.py',import.meta.url))],{stdio:'inherit'});
+const fixture=spawn(fixturePython(process.env.UNIFIED_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url))),[fileURLToPath(new URL('../../tests/fixtures/timeline_ui_server.py',import.meta.url))],{stdio:'inherit'});
 for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8958/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
 const browser=await chromium.launch({headless:true}),page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
 page.on('pageerror',e=>errors.push(e.message));

@@ -1,3 +1,4 @@
+import {fixturePython} from './fixture-python.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -5,11 +6,29 @@ import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 import {mkdirSync} from 'node:fs';
 import {openSettingsPage} from './browser-settings.mjs';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
-const fixture=spawn(root+'.venv/bin/python',['-u',root+'tests/fixtures/browser_detail_server.py',root],{stdio:['ignore','pipe','inherit']});
-let browser;
+const fixture=spawn(fixturePython(root+'.venv/bin/python'),['-u',root+'tests/fixtures/browser_detail_server.py',root],{stdio:['ignore','pipe','inherit']});
+const stopFixture=ownFixture(fixture,{label:'Delegate activity fixture'});
+let browser,failure;
 try{
- const ready=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const row=JSON.parse(line);if(row.port){clearTimeout(timer);resolve(row)}}catch{}})});
+ const ready=await new Promise((resolve,reject)=>{
+  let pending='';
+  const cleanup=()=>{clearTimeout(timer);fixture.stdout.off('data',data);fixture.off('exit',exited);fixture.off('error',failed)};
+  const failed=error=>{cleanup();reject(error)};
+  const exited=(code,signal)=>failed(Error(`Delegate activity fixture exited before readiness (${code??signal})`));
+  const data=chunk=>{
+   pending+=chunk;
+   for(let end;(end=pending.indexOf('\n'))>=0;){
+    const line=pending.slice(0,end);pending=pending.slice(end+1);
+    let value;try{value=JSON.parse(line)}catch{continue}
+    if(value.port){cleanup();resolve(value);return}
+   }
+   if(pending.length>8000)failed(Error('Delegate activity fixture readiness output exceeded its bound'));
+  };
+  const timer=setTimeout(()=>failed(Error('Delegate activity fixture timeout')),20000);
+  fixture.stdout.on('data',data);fixture.once('exit',exited);fixture.once('error',failed);
+ });
  const url=`http://127.0.0.1:${ready.port}`,headers={Authorization:'Bearer fixture-detail-token','content-type':'application/json'};
  const control=async body=>{const r=await fetch(url+'/api/fixture/control',{method:'POST',headers,body:JSON.stringify(body)});assert.equal(r.status,200);return r.json()};
  const {alpha}=await control({op:'heavy',messages:2,otherMessages:2,chars:50,nodes:0});
@@ -64,11 +83,48 @@ try{
  await expect(exchange.getByRole('region',{name:'Reply',exact:true})).toContainText('Review complete');
  await expect(delegate.getByRole('region',{name:'Reply',exact:true})).toHaveCount(0);
  await expect(delegate.locator('[data-node-id="review-call"] > button')).toHaveAttribute('aria-expanded','false');
- await exchange.getByRole('button',{name:'Show full response',exact:true}).click();
- await expect(exchange.locator('pre')).toContainText('const verified = true;');
- await page.evaluate(()=>{window.copied='';Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{window.copied=text}}})});
- await exchange.getByRole('button',{name:'Copy reply',exact:true}).click();
- assert.equal(await page.evaluate(()=>window.copied),response);
+ // Both expansion and Copy can read the same detail concurrently. Hold every
+ // matching request, not just the first one; the preview is not the full reply.
+ const reply=exchange.getByRole('region',{name:'Reply',exact:true});
+ const copyReply=exchange.getByRole('button',{name:'Copy reply',exact:true});
+ const detailPattern='**/api/conversation/detail?*',heldReads=[],activeReads=new Set(),routeErrors=[];
+ let releaseReads,gateExpired=false,copyFailure;
+ const detailGate=new Promise(resolve=>{releaseReads=resolve});
+ const holdTimer=setTimeout(()=>{gateExpired=true;releaseReads()},15000);
+ const holdDetail=async route=>{
+  const params=new URL(route.request().url()).searchParams;
+  if(params.get('field')!=='delegateResponse'||params.get('sessionId')!==alpha)return route.continue();
+  heldReads.push(route.request().url());
+  const pending=(async()=>{await detailGate;await route.continue()})().catch(error=>{routeErrors.push(error)});
+  activeReads.add(pending);
+  try{await pending}finally{activeReads.delete(pending)}
+ };
+ try{
+  await page.route(detailPattern,holdDetail);
+  await page.evaluate(()=>{window.copied='';Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{window.copied=text}}})});
+  await exchange.getByRole('button',{name:'Show full response',exact:true}).click();
+  await expect.poll(()=>heldReads.length,{timeout:5000}).toBeGreaterThanOrEqual(1);
+  await expect(exchange.locator('pre')).toContainText('const verified = true;');
+  await copyReply.click();
+  await expect.poll(()=>heldReads.length,{timeout:5000}).toBeGreaterThanOrEqual(2);
+  await expect(copyReply).toBeDisabled();
+  await expect(copyReply).toHaveText('Copying…');
+  assert.equal(await page.evaluate(()=>window.copied),'','Copy cannot write the preview while full-detail reads are held');
+  await expect(reply.getByRole('status').filter({hasText:/^Copied$/})).toHaveCount(0);
+  assert.equal(gateExpired,false,'The pending-copy assertions must finish before the bounded gate expires');
+  clearTimeout(holdTimer);releaseReads();
+  await expect.poll(()=>page.evaluate(()=>window.copied),{timeout:10000}).toBe(response);
+  await expect(reply.getByRole('status').filter({hasText:/^Copied$/})).toHaveText('Copied');
+  await expect(copyReply).toBeEnabled();
+ }catch(error){copyFailure=error;throw error}
+ finally{
+  clearTimeout(holdTimer);releaseReads();
+  try{
+   await page.unroute(detailPattern,holdDetail);
+   await expect.poll(()=>activeReads.size,{timeout:5000}).toBe(0);
+   assert.deepEqual(routeErrors,[],'Every owned detail route must drain without errors');
+  }catch(error){if(copyFailure)console.error('Delegate copy gate cleanup failed:',error);else throw error}
+ }
  await originalToggle.click();
  await expect(exchange.getByRole('region',{name:'Reply',exact:true})).toBeHidden();
  await originalToggle.click();
@@ -152,5 +208,10 @@ try{
  await expect(page.getByText('Saved recording setting: On',{exact:true})).toBeVisible();
  await page.screenshot({path:root+'test-results/delegate-recording-settings.png'});
  assert.deepEqual(errors,[]);
- console.log('PASS: delegate stream and delivered exchange, bounded historical root record with explicit partial accounting, current header and saved recording setting. Historical nested delegate reconstruction is not qualified.');
-}finally{await browser?.close();fixture.kill()}
+}catch(error){failure=error;throw error}
+finally{
+ await finishFixture({label:'Delegate activity fixture',originalError:failure,
+  close:[['Delegate activity browser',()=>browser?.close()]],
+  stop:async()=>{const exit=await stopFixture();console.log('Delegate activity fixture normal exit: '+JSON.stringify(exit))}});
+}
+console.log('PASS: delegate stream and delivered exchange, bounded historical root record with explicit partial accounting, current header and saved recording setting. Historical nested delegate reconstruction is not qualified.');

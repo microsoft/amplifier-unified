@@ -16,14 +16,14 @@ MAX_BYTES = 64_000
 def definitions(schema, string):
     return {
         'feedback.excerpt.review': (
-            'Prepare an editable local feedback excerpt from a minimal Markdown session.export snapshot. Supply the exact reviewed edited text on a later call to freeze edits. Returns exact text, redactions/warnings, hash and verified GitHub repository visibility. This read-only GitHub check never publishes. User review and explicit disclosure consent are required before staging.',
+            'Prepare an editable local feedback excerpt from a minimal Markdown session.export snapshot. Supply the exact reviewed edited text on a later call to freeze edits. Returns exact text, redactions/warnings, hash and verified GitHub repository visibility. This read-only GitHub check never publishes. Outside Full autonomous work, user review and disclosure consent are required before staging. Preparation is not independent or human verification.',
             schema({'id': string(200), 'snapshotId': string(200), 'text': string(MAX_BYTES)}, ['id', 'snapshotId'])),
         'feedback.excerpt.stage': (
-            'Stage exactly the local feedback excerpt the user reviewed and approved for the stated GitHub visibility. Nothing uploads yet; feedback.submit separately requires confirmExcerpts and the exact confirmedExcerpts IDs/hashes. Never infer consent from ordinary feedback or transcript-export requests. Exact requestId retries never add twice.',
+            'Stage the exact prepared same-conversation excerpt for its frozen GitHub destination. A current Full agent, assigned native child or trusted system with an explicit calling conversation needs no browser, acknowledgeDisclosure or acknowledgeWarnings; selection retains actual agent/system authority. Other callers require disclosure/warning acknowledgement and the selected connected browser for agents; feedback.submit then requires exact user-confirmed excerpt hashes. Preparation never implies human review. Nothing uploads yet. Exact requestId retries never add twice.',
             schema({'id': string(200), 'clientId': string(200), 'reviewId': string(64),
                     'requestId': {'type':'string','pattern':'^[A-Za-z0-9_-]{8,100}$'},
                     'acknowledgeDisclosure': {'const': True}, 'acknowledgeWarnings': {'type': 'boolean'}},
-                   ['id','reviewId','requestId','acknowledgeDisclosure'])),
+                   ['id','reviewId','requestId'])),
     }
 
 
@@ -99,6 +99,8 @@ class Excerpts:
                  'filename': 'conversation-excerpt-' + sha[:12] + '.md', 'bytes': len(text.encode()),
                  'repository': feedback.REPOSITORY, 'visibility': visibility, 'redactions': redactions,
                  'warnings': warnings, 'requiresExtraReview': heightened, 'summary': summary}
+        if type(target.get('id')) is int:
+            value['repositoryId'] = target['id']
         identity = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
         value.update(reviewId=identity, checkedAt=time.time())
         async with self.service.lock:
@@ -107,27 +109,36 @@ class Excerpts:
             self.service.db.commit()
         return value
 
-    def stage(self, args):
+    def stage(self, args, origin=None, caller=None):
         from .service import AppError
+        from . import feedback_context
+        authority = feedback_context.capture(self.service, origin, caller)
         row = self.service.db.execute('SELECT session_id,payload FROM feedback_excerpts WHERE id=?', (args['reviewId'],)).fetchone()
         if not row or row[0] != args['id']:
             raise AppError('This reviewed excerpt belongs to a different conversation or is unavailable.', 409)
-        if self.service.state.get('selectedSessionId') != args['id']:
+        if authority and authority['sessionId'] != args['id']:
+            raise AppError('Full feedback excerpts must belong to the calling conversation.', 409)
+        if not authority and self.service.state.get('selectedSessionId') != args['id']:
             raise AppError('The selected conversation changed. Open the reviewed conversation before attaching its excerpt.', 409)
         review = json.loads(row[1])
-        if args.get('acknowledgeDisclosure') is not True or review['requiresExtraReview'] and args.get('acknowledgeWarnings') is not True:
+        if not authority and (args.get('acknowledgeDisclosure') is not True or review['requiresExtraReview'] and args.get('acknowledgeWarnings') is not True):
             raise AppError('Review the excerpt and acknowledge its disclosure and warnings before attaching it.')
         previous = self.service.db.execute('SELECT metadata FROM feedback_attachments WHERE request_id=?', (args['requestId'],)).fetchone()
         if previous and json.loads(previous[0]).get('excerpt', {}).get('reviewId') != args['reviewId']:
             raise AppError('This staging request ID belongs to a different review.', 409)
         payload = {'requestId': args['requestId'], 'name': review['filename'],
                    'base64': base64.b64encode(review['text'].encode()).decode()}
-        self.feedback.attachment_command('feedback.attachment.add', payload)
+        self.feedback.attachment_command('feedback.attachment.add', payload, origin, caller, authority=authority)
         stored = self.service.db.execute('SELECT metadata FROM feedback_attachments WHERE request_id=?', (args['requestId'],)).fetchone()
         item = json.loads(stored[0])
+        if item.get('_sessionId') != (authority['sessionId'] if authority else None):
+            raise AppError('This staging request belongs to a different feedback owner.', 409)
         item['excerpt'] = {key: review[key] for key in ('reviewId','sha256','repository','visibility','bytes')}
+        if 'repositoryId' in review:
+            item['excerpt']['repositoryId'] = review['repositoryId']
         self.service.db.execute('UPDATE feedback_attachments SET metadata=? WHERE request_id=?', (json.dumps(item), args['requestId']))
-        for selected in self.service.state['view']['feedbackDraft']['attachments']:
-            if selected['id'] == item['id']:
-                selected['excerpt'] = item['excerpt']
-        return {key: value for key, value in item.items() if key != 'sha256'}
+        if not authority:
+            for selected in self.service.state['view']['feedbackDraft']['attachments']:
+                if selected['id'] == item['id']:
+                    selected['excerpt'] = item['excerpt']
+        return feedback_context.public_file(item)

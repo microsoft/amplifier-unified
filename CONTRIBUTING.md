@@ -1,5 +1,9 @@
 # Contributing
 
+Use the [source and ownership map](docs/source-context.md) to select relevant
+authored code, contracts and tests, and distinguish generated output and retained
+evidence. The path selector does not change packaging or release validation.
+
 Keep repository content useful without exposing a contributor's environment.
 This applies to code, fixtures, documentation, screenshots, logs, issues and
 pull-request descriptions.

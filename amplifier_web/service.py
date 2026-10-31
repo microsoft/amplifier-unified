@@ -17,11 +17,13 @@ from weakref import WeakValueDictionary
 
 from jsonschema import validate, ValidationError
 import tinycss2
+from .errors import AppError
 from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background, interrupt_unfinished, restore_voice_usage
 from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, work_paused
 from .managed_chats import LOCATION
 from .attachments import MAX_ENCODED_BYTES
 from .performance_diagnostics import PerformanceDiagnostics, measured, TimedLock
+from .action_schema import schema, string
 
 
 def settle_stream(session):
@@ -38,18 +40,18 @@ def settle_stream(session):
         })
 
 
-def string(limit=16000):
-    return {"type": "string", "maxLength": limit}
-
-
-def schema(properties=None, required=None):
-    properties = properties or {}
-    return {"type": "object", "properties": properties, "required": list(properties) if required is None else required, "additionalProperties": False}
-
-
-def command_fingerprint(action, args, origin, client_id):
+def command_fingerprint(action, args, origin, client_id, *, caller_session_id=None):
     # One ledger identity for admission and passive receipt retrieval.
-    return hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None and action not in {'conversation.send', 'worker.message'} and not action.startswith('question.') and not (action=='session.create' and args.get('fromDraft')) else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
+    values = [action, args, origin]
+    if client_id is not None and action not in {'conversation.send', 'worker.message'} and not action.startswith('question.') and not (action=='session.create' and args.get('fromDraft')):
+        values.append(client_id)
+    # Later-file receipts belong to their conversation even when no browser is
+    # attached. This is a stable replay identity, not a fresh permission check.
+    if (origin in {'agent', 'system'} and caller_session_id and
+            (action.startswith('feedback.attachments.') or
+             action in {'feedback.attachment.add', 'feedback.attachment.remove'} and args.get('feedbackId'))):
+        values.append({'sourceSessionId': caller_session_id})
+    return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
 
 ACTION_DEFINITIONS = {
@@ -264,14 +266,6 @@ from .access_mode import definitions as access_mode_definitions
 ACTION_DEFINITIONS.update(access_mode_definitions(schema, string))
 
 
-class AppError(Exception):
-    def __init__(self, message, status=400, *, code=None, receipt=None):
-        super().__init__(message)
-        self.status = status
-        self.code = code
-        self.receipt = receipt
-
-
 def validate_theme(css):
     """Reject network-bearing or malformed skins; assets must travel with the file."""
     if not css.strip():
@@ -288,16 +282,18 @@ def validate_theme(css):
             if node.type == "url":
                 check_url(node.value)
             if node.type == "function" and node.lower_name == "url":
-                value = tinycss2.serialize(node.arguments).strip().strip('\"\'')
-                check_url(value)
+                arguments = [argument for argument in node.arguments if argument.type not in ('comment', 'whitespace')]
+                if len(arguments) != 1 or arguments[0].type != 'string':
+                    raise AppError('Use one literal asset reference in url(), not substitutions.')
+                check_url(arguments[0].value)
             if node.type == 'function' and node.lower_name in {'image-set', '-webkit-image-set', 'image', 'src'}:
                 # These CSS image forms also accept bare strings as URLs.
-                # Dynamic string substitution cannot be verified as embedded.
+                # Fail closed for nested/unknown substitutions, not just var().
+                from .appearance_packages import literal_image_functions
+                literal_image_functions(node)
                 for argument in node.arguments:
                     if argument.type == 'string':
                         check_url(argument.value)
-                    if argument.type == 'function' and argument.lower_name in {'var', 'attr', 'env'}:
-                        raise AppError('Use explicit embedded assets in image functions, not dynamic URLs.')
             for attr in ("prelude", "content", "arguments"):
                 child = getattr(node, attr, None)
                 if child:
@@ -358,7 +354,7 @@ from .workspace_work import definitions as workspace_work_definitions
 ACTION_DEFINITIONS.update(workspace_work_definitions(schema, string))
 for _peer_action in ("conversation.send", "coordination.followup"):
     ACTION_DEFINITIONS[_peer_action][1]["properties"].update({
-        "grantId": string(200), "mode": {"enum": ["notify", "queue", "steer"]},
+        "grantId": string(200), "mode": {"enum": ["auto", "notify", "queue", "steer"]},
         "senderSessionId": string(200),
         "replyToRequestId": string(200),
         "expiresInSeconds": {"type": "integer", "minimum": 1, "maximum": 86400},
@@ -374,18 +370,26 @@ from .computer_visual import ComputerVisuals, definitions as computer_visual_def
 ACTION_DEFINITIONS.update(computer_visual_definitions(schema, string))
 from .worktrees import definitions as worktree_definitions
 ACTION_DEFINITIONS.update(worktree_definitions(schema, string))
+
+
+def _register_actions(definitions):
+    """Register schemas once and retain their exact names for routing."""
+    ACTION_DEFINITIONS.update(definitions)
+    return frozenset(definitions)
+
+
 from .workspace_resources import definitions as resource_reservation_definitions
-ACTION_DEFINITIONS.update(resource_reservation_definitions(schema, string))
+RESOURCE_RESERVATION_ACTIONS = _register_actions(resource_reservation_definitions(schema, string))
 from .task_environments import definitions as environment_definitions
-ACTION_DEFINITIONS.update(environment_definitions(schema, string))
+ENVIRONMENT_ACTIONS = _register_actions(environment_definitions(schema, string))
 from .test_capacity_settings import definitions as test_capacity_definitions
-ACTION_DEFINITIONS.update(test_capacity_definitions(schema, string))
+TEST_CAPACITY_ACTIONS = _register_actions(test_capacity_definitions(schema, string))
 from .registered_test_runners import definitions as test_runner_definitions
-ACTION_DEFINITIONS.update(test_runner_definitions(schema, string))
+TEST_RUNNER_ACTIONS = _register_actions(test_runner_definitions(schema, string))
 from .test_execution_settings import definitions as test_execution_definitions
-ACTION_DEFINITIONS.update(test_execution_definitions(schema, string))
+TEST_EXECUTION_ACTIONS = _register_actions(test_execution_definitions(schema, string))
 from .test_queue import definitions as test_queue_definitions
-ACTION_DEFINITIONS.update(test_queue_definitions(schema, string))
+TEST_QUEUE_ACTIONS = _register_actions(test_queue_definitions(schema, string))
 from .portability import definitions as portability_definitions
 ACTION_DEFINITIONS.update(portability_definitions(schema, string))
 ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
@@ -426,8 +430,6 @@ for _access, _actions in {
         "conversation.send", "conversation.stop", "conversation.retry", "conversation.configure", "worker.spawn",
         "worker.message", "worker.steer", "worker.stop", "runtime.control", "message.edit",
         "session.warm", "session.takeover", "session.fork", "configuration.apply",
-        *configuration_recovery_definitions(schema, string),
-        *patch_placement_definitions(schema, string),
         "configuration.cancel", "bundle.switch", "bundle.fork", "bundle.save", "bundle.export",
         "call.start", "permissions.save", "permissions.reset", "providers.save", "providers.finishSetup", "providers.configureImages",
         "providers.remove", "providers.move", "providers.reorder", "providers.login",
@@ -455,6 +457,8 @@ for _access, _actions in {
         "coordination.awareness", "coordination.intent.read",
     },
     "domain_authoritative": {
+        *configuration_recovery_definitions(schema, string),
+        *patch_placement_definitions(schema, string),
         "worktree.create", "worktree.attach", "worktree.handoff",
         "coordination.review",
         *integration_definitions(schema, string),
@@ -466,11 +470,11 @@ for _access, _actions in {
         *canvas_view_definitions(schema, string), *canvas_app_definitions(schema, string),
         *canvas_version_definitions(schema, string),
         *publishing_definitions(schema, string),
-        *resource_reservation_definitions(schema, string),
-        *environment_definitions(schema, string),
-        *test_queue_definitions(schema, string),
-        *test_capacity_definitions(schema, string),
-        *test_runner_definitions(schema, string),
+        *RESOURCE_RESERVATION_ACTIONS,
+        *ENVIRONMENT_ACTIONS,
+        *TEST_QUEUE_ACTIONS,
+        *TEST_CAPACITY_ACTIONS,
+        *TEST_RUNNER_ACTIONS,
         *assignment_definitions(schema, string),
         *workspace_work_definitions(schema, string),
         *handoff_definitions(schema, string),
@@ -552,6 +556,8 @@ class AppService:
             runtime.home = self.data_dir
         from .next_message_configuration import bind
         bind(self, runtime)
+        from .update_drain import bind as bind_update
+        bind_update(self, runtime)
         self.voice_service = None
         self.voice_visual = VoiceVisual(self)
         self.computer_visual = ComputerVisuals(self)
@@ -887,6 +893,14 @@ class AppService:
 
     def state_context(self, *, complete=False):
         """Read-only active context; complete legacy snapshots are explicit."""
+        if not complete:
+            # Navigation, attention and workspace projections consume the same
+            # admitted metadata. Prepare it once within this synchronous read,
+            # as the bundled browser does, rather than per derived section.
+            return self.directory.read_frame(self._state_context)
+        return self._state_context(complete=True)
+
+    def _state_context(self, *, complete=False):
         from .attention import snapshot
         from .workspace_navigation import snapshot as workspace_snapshot
         from .browser_state import navigation
@@ -1664,7 +1678,7 @@ class AppService:
         if not setup.get('scaffolded'):
             raise AppError('This workspace starter is still preparing. Wait for its readiness result before starting a chat.', 409)
 
-    def _new_session(self, args):
+    def _new_session(self, args, *, new_root=False):
         from .shared_settings import read_settings
         workspace = self._session_destination(args)
         try:
@@ -1682,7 +1696,12 @@ class AppService:
         except ValueError as exc:
             raise AppError(str(exc)) from None
         now = time.time()
-        return self.cold_display.record({**({'selection': chosen} if chosen else {}), **({'location': {'kind': 'managed'}} if args.get('location', {}).get('kind') == 'managed' else {}), "id": str(uuid.uuid4()), "title": args.get("title") or "New chat", "titleSource":"manual" if args.get("title") and args["title"] not in {"New chat","New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": [], '_collaborationHostInstanceId': self.instance_id, **({'sessionKind': 'internal', 'sessionPurpose': args['purpose']} if args.get('purpose') else {})})
+        # Only ordinary public creation establishes placement proof. This
+        # constructor also builds historical import views under existing IDs.
+        placement = ({'sessionKind': 'internal', 'sessionPurpose': args['purpose']} if args.get('purpose')
+                     else {'sessionKind': 'root', 'workingDirectory': workspace,
+                           'executionRevision': 0, 'interruptionRevision': 0} if new_root else {})
+        return self.cold_display.record({**({'selection': chosen} if chosen else {}), **({'location': {'kind': 'managed'}} if args.get('location', {}).get('kind') == 'managed' else {}), "id": str(uuid.uuid4()), "title": args.get("title") or "New chat", "titleSource":"manual" if args.get("title") and args["title"] not in {"New chat","New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": [], '_collaborationHostInstanceId': self.instance_id, **placement})
 
     def _reusable_internal(self, candidate):
         """An idle internal session for the same purpose, folder and bundle."""
@@ -1785,6 +1804,8 @@ class AppService:
             runtime.home = self.data_dir
         from .next_message_configuration import bind
         bind(self, runtime)
+        from .update_drain import bind as bind_update
+        bind_update(self, runtime)
         self.worktrees.bind_runtime()
         from .conversation_models import bind_runtime
         bind_runtime(self)
@@ -2040,21 +2061,21 @@ class AppService:
             if retained is not None:
                 return retained
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
-        if action in test_runner_definitions(schema, string):
+        if action in TEST_RUNNER_ACTIONS:
             from .registered_test_runners import dispatch as test_runner_dispatch
             return await test_runner_dispatch(self, action, args, configuration_authority)
-        if action in test_capacity_definitions(schema, string):
+        if action in TEST_CAPACITY_ACTIONS:
             from .test_capacity_settings import dispatch as test_capacity_dispatch
             return await test_capacity_dispatch(self, action, args, configuration_authority)
-        if action in test_execution_definitions(schema, string):
+        if action in TEST_EXECUTION_ACTIONS:
             from .test_execution_settings import dispatch as test_execution_dispatch
             return await test_execution_dispatch(self, action, args, configuration_authority)
-        if action in test_queue_definitions(schema, string):
+        if action in TEST_QUEUE_ACTIONS:
             return await self.test_queue.dispatch(action, args, origin, caller_session_id, configuration_authority)
-        if action in environment_definitions(schema, string):
+        if action in ENVIRONMENT_ACTIONS:
             from .task_environments import dispatch as environment_dispatch
             return await environment_dispatch(self, action, args, origin, caller_session_id, configuration_authority)
-        if action in resource_reservation_definitions(schema, string):
+        if action in RESOURCE_RESERVATION_ACTIONS:
             from .workspace_resources import dispatch_reservation
             return await dispatch_reservation(self, action, args, origin, command_id, caller_session_id)
         if action.startswith("profiling."):
@@ -2095,7 +2116,9 @@ class AppService:
             return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': result}
         if action == 'feedback.destination':
             from . import feedback as feedback_module
+            from . import feedback_context
             from .attachments import file_path as feedback_file_path
+            full_owner = caller_session_id if feedback_context.enabled(self, origin, caller_session_id) else None
             try:
                 repo = await feedback_module.github_api('repos/' + feedback_module.REPOSITORY, None)
                 if repo.get('full_name') != feedback_module.REPOSITORY or type(repo.get('id')) is not int or type(repo.get('private')) is not bool:
@@ -2106,7 +2129,8 @@ class AppService:
             # were exposed in the UI. This is a review, never upload consent.
             async with self.lock:
                 reviewed_files = []
-                for row in self.state.get('view', {}).get('feedbackDraft', {}).get('attachments', []):
+                staged = feedback_context.rows(self, full_owner) if full_owner else self.state.get('view', {}).get('feedbackDraft', {}).get('attachments', [])
+                for row in staged:
                     if row.get('excerpt'):
                         continue
                     try:
@@ -2166,7 +2190,7 @@ class AppService:
             return {'accepted':True,'result':result,'effects':[]}
         if action in storage_cleanup_definitions(schema, string):
             from .storage_cleanup import dispatch as cleanup_dispatch
-            return await cleanup_dispatch(self, action, args, origin, command_id)
+            return await cleanup_dispatch(self, action, args, origin, command_id, caller_session_id)
         if action in {'storage.historyDeletePreview', 'storage.historyDelete'}:
             from .managed_deletion import dispatch as delete_history
             selection = {key: args[key] for key in ('project', 'nativeId') if args.get(key)}
@@ -2241,7 +2265,7 @@ class AppService:
             except ValueError as exc:
                 raise AppError(str(exc)) from None
         if action.startswith(('recall.', 'memory.')):
-            return await self.recall.dispatch(action,args,origin,command_id)
+            return await self.recall.dispatch(action,args,origin,command_id,caller_session_id)
         if action in MESSAGE_INTERACTIONS and origin == 'agent' and (not caller_session_id or args['sessionId'] != caller_session_id):
             raise AppError('Message actions must target the calling conversation.', 403)
         reveal_message = None
@@ -2334,7 +2358,7 @@ class AppService:
                     current=self._session(sid)
                     if current.get('configurationPending') and current.get('configurationRefresh',{}).get('phase')=='error':
                         raise AppError(current['configurationRefresh']['error'],409)
-        fingerprint = command_fingerprint(action, args, origin, client_id)
+        fingerprint = command_fingerprint(action, args, origin, client_id, caller_session_id=caller_session_id)
         prepared_workspace = None
         prepared_identity = None
         prepared_draft_id = None
@@ -2397,6 +2421,9 @@ class AppService:
                 snapshot = copy.deepcopy(self._session(args['id']))
                 captured_at = time.time()
             prepared_health = await asyncio.to_thread(inspect_session, self.data_dir, snapshot)
+            bridge_events = await asyncio.to_thread(self.diagnostics.bridge_events, snapshot)
+            prepared_health['timeline'] = [row for row in prepared_health['timeline']
+                                          if row.get('type') != 'runtime.bridge'] + bridge_events
             prepared_health['capturedAt'] = captured_at
             prepared_health['host'] = {**getattr(self.update_manager, 'running_identity', {}), 'hostInstanceId': self.instance_id}
             prepared_health['recentRequests'] = list(getattr(self, 'request_timings', []))[-30:]
@@ -2587,8 +2614,12 @@ class AppService:
                         raise AppError('Restore this project folder before continuing its chat.', 409)
             if expected_revision is not None and expected_revision != self.state["revision"]:
                 raise AppError("The app changed. Refresh its state and retry.", 409)
-            if work_paused(self.state) and (action in {"question.answer","conversation.send","conversation.retry","session.takeover","worker.spawn","worker.steer","worker.message","call.start","feedback.submit","feedback.comment","feedback.get","feedback.reconcile","feedback.update","feedback.close","feedback.reopen","feedback.attachments.review","feedback.attachments.add","feedback.attachments.reconcile"} or (action == 'session.naming' and args.get('regenerate')) or action == 'session.naming.backfill' or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
+            from .update_drain import held as update_held, new_work as update_new_work
+            update_message = action == 'conversation.send' and update_held(self) and (args.get('allowNextTurn') is True or not args.get('expectedGenerationId'))
+            if work_paused(self.state) and not update_message and update_new_work(action, args):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
+            if update_held(self) and update_new_work(action, args) and action not in {'question.answer', 'conversation.send', 'worker.steer'}:
+                raise AppError('The app is finishing existing work for an update. Start new work after it finishes.', 409)
             if action in {"question.answer","conversation.send","conversation.retry","worker.spawn","worker.steer","worker.message","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
                 if action != 'question.answer' and current and self.assignments.blocked(current):
@@ -2879,7 +2910,9 @@ class AppService:
                         from .settings_navigation import open_canvas
                         open_canvas(scoped, self.db)
                     else:
-                        canvas_command(scoped,action,args,origin)
+                        owner = self._session(sid) if sid else None
+                        file_root = (owner.get('workingDirectory') or owner.get('workspace')) if owner else None
+                        canvas_command(scoped,action,args,origin,file_root=file_root)
                     from .canvas_versions import assert_clean, reference, message_id
                     publication_message = message_id(scoped, sid)
                     if destination == 'inline':
@@ -2934,10 +2967,15 @@ class AppService:
                 from .session_creation import prepare, apply
                 try:
                     inherited = prepare(self, args, origin, caller_session_id)
-                    session = self._new_session({**args, 'workspace': prepared_workspace} if prepared_workspace else args)
+                    session = self._new_session({**args, 'workspace': prepared_workspace} if prepared_workspace else args,
+                                                new_root=True)
                     if args.get('id') or prepared_identity: session['id'] = args.get('id') or prepared_identity
                     if origin == 'scheduler' and args.get('inheritConfiguration', {}).get('scheduledRunId'):
                         source = self._session(args['inheritConfiguration']['sessionId'])
+                        run = self.schedules.store.run(source['id'], args['inheritConfiguration']['scheduledRunId'])
+                        # prepare qualified this exact source/run/destination under
+                        # the app lock. Persist its lineage before the first mount.
+                        session['scheduledOrigin'] = {'sessionId': source['id'], 'scheduleId': run['scheduleId'], 'runId': run['id']}
                         if self.assignments.current(source):
                             session['assignmentId'] = self.assignments.reserve_member(source, session['id'], command_id)
                             assignment = self.assignments.load(session['assignmentId'])
@@ -3238,11 +3276,15 @@ class AppService:
                     raise AppError('Choose Markdown to copy a conversation or create a readable snapshot.')
                 if action == 'theme.export':
                     from .theme_library import export
-                    diagnostic_result = export(self, args.get('id'))
-                content = self.state if action == "state.export" else self._session(args["id"]) if action == "session.export" else diagnostic_result['css']
-                mime = "text/css" if action == "theme.export" else "application/json"
-                filename = (diagnostic_result['filename'] if args.get('id') else 'amplifier-skin.css') if action == 'theme.export' else 'amplifier-export.json'
-                effects.append({"type": "download", "filename": filename, "mime": mime, "mimeType": mime, "content": content if isinstance(content, str) else json.dumps(content, indent=2)})
+                    diagnostic_result = export(self, args.get('id'), args.get('format', 'css'))
+                    zipped = diagnostic_result.get('format') == 'zip'
+                    content = {'base64': diagnostic_result['base64']} if zipped else diagnostic_result['css']
+                    mime = 'application/zip' if zipped else 'text/css'
+                    filename = diagnostic_result['filename'] if zipped or args.get('id') else 'amplifier-skin.css'
+                else:
+                    content = json.dumps(self.state if action == 'state.export' else self._session(args['id']), indent=2)
+                    mime, filename = 'application/json', 'amplifier-export.json'
+                effects.append({"type": "download", "filename": filename, "mime": mime, "mimeType": mime, "content": content})
             elif action == "attachment.add":
                 from .attachments import save,MAX_FILES
                 target = args.get('sessionId', self.state.get('selectedSessionId'))
@@ -3270,7 +3312,7 @@ class AppService:
                 # A run ending before delivery must not turn this correction
                 # into new work under a policy that is awaiting replacement.
                 allow_next_turn = args.get('allowNextTurn') is True and not session.get('fileAccessPending')
-                target_generation = steering_target(session, args.get('expectedGenerationId'), allow_next_turn)
+                target_generation = None if update_message else steering_target(session, args.get('expectedGenerationId'), allow_next_turn)
                 # Whitespace can carry Markdown meaning; validate blank input
                 # separately without changing the saved or delivered message.
                 text = args["text"]
@@ -3309,7 +3351,11 @@ class AppService:
                     session["title"] = fallback_title(text) or text[:64]
                 from .naming import persist
                 persist(self.data_dir,session)
-                if not target_generation:
+                if update_message:
+                    from .update_drain import hold_message
+                    hold_message(self, session, message)
+                    self._clear_sent_draft(session, message, text, args.get("preserveDraft", False))
+                elif not target_generation:
                     preparing = session.get('preparation', {}).get('status') == 'preparing'
                     self._activity(session, "runtime-setup" if preparing else "queued",
                         (session['preparation'].get('detail') or 'Preparing this chat…') if preparing else "Your message is queued for Amplifier.",
@@ -3317,7 +3363,8 @@ class AppService:
                     session["status"] = "working"
                     session.pop("error", None)
                     ensure_turn(session,input_id,text)
-                pending.append((self._send, (copy.deepcopy(session), text, input_id, previous_activity, args.get('preserveDraft', False))))
+                if not update_message:
+                    pending.append((self._send, (copy.deepcopy(session), text, input_id, previous_activity, args.get('preserveDraft', False))))
             elif action == "conversation.delivery":
                 session = self._session(args['sessionId'])
                 pending.append((self._check_delivery, (session['id'], args['inputId'])))
@@ -3515,24 +3562,27 @@ class AppService:
                     patch['canvasDraft'] = {**patch.get('canvasDraft', self.state['view'].get('canvasDraft', {})), 'library': False}
                 elif patch.get('settingsCanvas') is False and self.state.get('canvas', {}).get('kind') == 'settings':
                     patch['canvasDraft'] = {**patch.get('canvasDraft', self.state['view'].get('canvasDraft', {})), 'library': True}
-                if patch.get('canvasDraft', {}).get('delivery') in {'outputs','publishing'}:
+                if patch.get('canvasDraft', {}).get('delivery') in {'outputs','publishing','permissions'}:
                     self.state.setdefault('canvas', {})['open'] = True
                 self.state["view"].update(patch)
             elif action == 'feedback.excerpt.stage':
-                diagnostic_result = self.feedback.excerpts.stage(args)
+                diagnostic_result = self.feedback.excerpts.stage(args, origin, caller_session_id)
             elif action in {"feedback.attachment.add","feedback.attachment.remove"}:
-                self.feedback.attachment_command(action,args)
+                diagnostic_result = self.feedback.attachment_command(action, args, origin, caller_session_id)
             elif action == "feedback.submit":
-                if self.feedback.accept(args):
+                if self.feedback.accept(args, origin, caller_session_id):
                     pending.append((self.feedback.send, (args['requestId'],)))
                 # Close only the submitting draft, atomically with durable acceptance.
                 view=self.state['view']
-                if view.get('panel')=='feedback' and view.get('feedbackDraft',{}).get('pending',{}).get('requestId')==args['requestId']:
+                accepted_payload = json.loads(self.db.execute('SELECT payload FROM feedback_requests WHERE id=?', (args['requestId'],)).fetchone()[0])
+                if not accepted_payload.get('_authority') and view.get('panel')=='feedback' and view.get('feedbackDraft',{}).get('pending',{}).get('requestId')==args['requestId']:
                     view['panel']=None
             elif action in {"feedback.edits.review", "feedback.get", "feedback.comment", "feedback.reconcile", "feedback.update", "feedback.close", "feedback.reopen",
                             "feedback.attachments.review", "feedback.attachments.add", "feedback.attachments.reconcile"}:
-                if self.feedback.followups.accept(action, args, origin):
+                if self.feedback.followups.accept(action, args, origin, caller_session_id):
                     pending.append((self.feedback.followups.run, (args['requestId'],)))
+                if action.startswith('feedback.attachments.') and origin in {'agent', 'system'}:
+                    diagnostic_result = self.feedback.additions.result(args['requestId'], caller_session_id)
             elif action.startswith("smartTools."):
                 if not self.smart_tools: raise AppError("Smart Tools service is unavailable.")
                 if action == 'smartTools.context':
@@ -3669,7 +3719,9 @@ class AppService:
                 self._refresh_shared_preferences()
             elif action in {'theme.save', 'theme.import', 'theme.update', 'theme.delete'}:
                 from . import theme_library
-                if action in {'theme.save', 'theme.import'}:
+                if action == 'theme.import':
+                    diagnostic_result = theme_library.import_appearance(self, args)
+                elif action == 'theme.save':
                     diagnostic_result = theme_library.save(self, args)
                 else:
                     diagnostic_result = theme_library.mutate(self, args, deleting=action == 'theme.delete')
@@ -3775,7 +3827,7 @@ class AppService:
                 receipt.update(delivery="requested", commandAction=action, target={"sessionId": args["sessionId"], "workerId": args["id"]}, completed=False, effectsState="not_rolled_back")
             if action == 'session.create':receipt['sessionId']=session['id']
             if action == 'conversation.send':
-                receipt.update(delivery='sending', sessionId=session['id'], inputId=input_id)
+                receipt.update(delivery=message['delivery']['status'], sessionId=session['id'], inputId=input_id)
                 if message.get('navigationPost'):
                     receipt['navigationPost'] = copy.deepcopy(message['navigationPost'])
             if action == 'conversation.retry':receipt['result']={'delivery':'sending', 'message':'The saved message is being checked and sent. No additional resend was started.'}
@@ -3805,6 +3857,8 @@ class AppService:
                 self._publish_smart_tool_update(defer_publish=True)
             else:
                 session_ids, global_keys = write_scope
+                if action == 'conversation.send' and update_message:
+                    global_keys = set(global_keys) | {'updates'}
                 self._publish_changes(sessions=session_ids, globals=global_keys)
             result = {**receipt, **({'state': self.browser_state()} if include_state else {})}
         for fn, values in pending:
@@ -3850,7 +3904,7 @@ class AppService:
                             self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(receipt), command_id))
                             self.db.commit()
                     raise
-                if action == 'conversation.send' and isinstance(acknowledged, dict) and acknowledged.get('steering'):
+                if action == 'conversation.send' and isinstance(acknowledged, dict) and (acknowledged.get('steering') or acknowledged.get('delivery') == 'queued_for_update'):
                     result.update(acknowledged)
                 if action in {'conversation.delivery', 'conversation.retry'}:
                     result['result'] = acknowledged
@@ -3879,7 +3933,7 @@ class AppService:
                     self.smart_tool_requests[command_id] = task
                     task.add_done_callback(lambda finished, identity=command_id: self.smart_tool_requests.pop(identity, None))
         if action == 'conversation.send':
-            if not result.get('steering'):
+            if not result.get('steering') and result.get('delivery') != 'queued_for_update':
                 result['delivery'] = 'accepted'
             if result.get('delivery') == 'accepted':
                 saved = self.db.execute('SELECT receipt FROM commands WHERE id=?', (result['inputId'],)).fetchone()
@@ -4050,7 +4104,12 @@ class AppService:
         from .message_delivery import find_message
         async with self.lock:
             session = copy.deepcopy(self._session(sid))
+            question = self.questions.for_input(sid, input_id)
         message = find_message(session, input_id)
+        if message is None and question is not None:
+            # The answer record survives a cold/pruned message projection.
+            # Its exact input binding permits a passive evidence probe, not send.
+            message = {'delivery': question['delivery']}
         if message is None:
             return {'delivery': 'not_saved', 'message': 'This app has no saved copy. You can try sending the original message again with the same delivery identity.'}
         if message.get('steering'):
@@ -4059,6 +4118,8 @@ class AppService:
             return {'delivery': message['delivery']['status'], 'steering': copy.deepcopy(message['steering']),
                     'message': 'Steering status: ' + message['steering']['disposition'] + '. This correction is bound to its original run and was not sent again.'}
         status = message.get('delivery', {}).get('status', 'unknown')
+        if status in {'queued_for_update', 'held'}:
+            return {'delivery': status, 'message': message['delivery'].get('reason') or 'Saved for delivery after the app update. Nothing has been sent yet.'}
         if status != 'accepted' and self.runtime and hasattr(self.runtime, 'delivery'):
             try:
                 evidence = await self.runtime.delivery(session, input_id)
@@ -4069,7 +4130,9 @@ class AppService:
         async with self.lock:
             current = self._session(sid)
             current_message = find_message(current, input_id)
-            if current_message and current_message.get('delivery', {}).get('status') == 'accepted':
+            current_question = self.questions.for_input(sid, input_id)
+            if ((current_message and current_message.get('delivery', {}).get('status') == 'accepted') or
+                    (current_question and current_question['delivery']['status'] == 'accepted')):
                 status = 'accepted'
             if status == 'accepted':
                 self._delivery(current, input_id, status)
@@ -4098,6 +4161,10 @@ class AppService:
         return {'delivery': 'accepted', 'resent': not bool(isinstance(result, dict) and result.get('duplicate'))}
 
     def _delivery(self, session, input_id, status):
+        # Question command IDs differ from their immutable answer input IDs.
+        # Reconcile their canonical record even after its message left the view.
+        if status == 'accepted' and (questions := getattr(self, 'questions', None)):
+            questions.accept_delivery(session['id'], input_id)
         message = next((row for row in session['messages'] if row.get('inputId') == input_id and row.get('role') == 'user'), None)
         row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
         receipt = json.loads(row[0]) if row else {}
@@ -4153,7 +4220,15 @@ class AppService:
         if not self.runtime:
             raise AppError("The Amplifier runtime is unavailable.")
         from .message_delivery import find_message
-        if (find_message(session, input_id) or {}).get('steering'):
+        from .update_drain import UpdateDeferred, held, defer_send
+        original = find_message(session, input_id) or {}
+        if not retry and held(self) and (not original.get('steering') or original['steering'].get('allowNextTurn')):
+            from .update_drain import input_gate
+            try:
+                input_gate(self, session['id'], input_id)
+            except UpdateDeferred:
+                return await defer_send(self, session['id'], input_id, preserve_draft)
+        if original.get('steering'):
             from .conversation_steering import send
             return await send(self, session, text, input_id, preserve_draft)
         previous_error_at = session.get('errorAt')
@@ -4162,6 +4237,8 @@ class AppService:
             session.setdefault('surfaceInputs', {}).setdefault(input_id, self.surface_context.bind_input(session['id']))
             sender = self.runtime.retry if retry else self.runtime.send
             send_result = await sender(session, text, input_id, self.on_runtime_event)
+        except UpdateDeferred:
+            return await defer_send(self, session['id'], input_id, preserve_draft)
         except RuntimeHostClosingError:
             async with self.lock:
                 current = self._session(session['id'])
@@ -4414,6 +4491,11 @@ class AppService:
         if kind == 'runtime.timing':
             self.performance_diagnostics.record_runtime_timing(payload.get('sessionId'), payload.get('timing'))
             return set()
+        if kind == 'runtime.bridge':
+            # Observation, not conversation state. Its existing diagnostic
+            # owner retains the facts without a session save or publication.
+            self.diagnostics.runtime_event(kind, payload, session)
+            return set()
         self.event_log_view.invalidate({session['id']}, notify=False)
         self.diagnostics.runtime_event(kind, payload, session)
         from .chat_navigation import runtime_activity
@@ -4430,9 +4512,6 @@ class AppService:
             if activity['activeTools'] and not payload.get('detail'):
                 activity.update({'phase': 'tools', 'label': 'Running tools'})
             session['progress'] = {key: payload[key] for key in ('phase', 'detail', 'elapsedSeconds') if key in payload}
-        else:  # normalized runtime.bridge diagnostic; never execute its operation
-            session.setdefault('runtimeEvents', []).append({'type': kind, **payload, 'at': time.time()})
-            session['runtimeEvents'] = session['runtimeEvents'][-100:]
         changed = self.collaboration.observe(session, kind, payload)
         from .conversation_steering import observe as observe_steering
         observe_steering(self, session, kind, payload)
@@ -4459,7 +4538,7 @@ class AppService:
                     observed = self._apply_runtime_receipt(session, kind, payload)
                     if observed is not None:
                         changed.update(observed)
-                        detail_only &= kind in {'execution.event', 'runtime.timing'}
+                        detail_only &= kind in {'execution.event', 'runtime.timing', 'runtime.bridge'}
             except Exception:
                 # Preserve the applied prefix and unknown partial observer
                 # effects before stopping. Neither prefix nor tail is replayed.
@@ -4472,6 +4551,13 @@ class AppService:
             # Disposable diagnostics must not hydrate a session, acquire its
             # state lock, dirty progress or trigger another durable publication.
             self.performance_diagnostics.record_runtime_timing(payload.get('sessionId'), payload.get('timing'))
+            return
+        if kind == 'runtime.bridge':
+            try:
+                session = self._session(payload.get('rootSessionId') or payload.get('sessionId'), hydrate=False)
+            except AppError:
+                return
+            self.diagnostics.runtime_event(kind, payload, session)
             return
         if kind == 'image.generated':
             from .image_results import attach_completed
@@ -4811,7 +4897,7 @@ class AppService:
                     session.get('status') in {'idle', 'stopped', 'interrupted'}):
                 from .chat_navigation import settle_activity
                 settle_activity(session)
-            progress = kind in {'assistant.delta', 'runtime.tool', 'runtime.bridge'} or (
+            progress = kind in {'assistant.delta', 'runtime.tool'} or (
                 kind == 'worker.updated' and payload.get('activityOnly')) or (
                 kind == 'runtime.status' and (payload.get('activityOnly') or
                     payload.get('preparationProgress') and payload.get('status') == 'starting')) or (
@@ -4853,6 +4939,9 @@ class AppService:
                                kind == 'runtime.generation' and payload.get('event') == 'generation.started')
                 self._publish_changes(sessions={session['id']} | changed | collaboration_changed,
                                       detail_only=detail_only and not changed and not collaboration_changed)
+            if (self.update_manager and (kind == 'runtime.warmth' and payload.get('status') in {'warm', 'cold'}
+                    or kind == 'runtime.status' and payload.get('status') == 'stopped' and not payload.get('activityOnly'))):
+                self.update_manager.notify_idle(settled_session_id=session['id'])
 
 
     def _unmounted_legacy_refresh(self, session):
@@ -4976,6 +5065,17 @@ class AppService:
         binding_token = BINDING.set(args)
         try:
             return await self._bound_app_bridge(operation, args, session_id)
+        except Exception as exc:
+            if args.get('_handoffSnapshot') is not None:
+                from .handoff_drain import failed_disposition
+                try:
+                    async with self.lock:
+                        disposition = failed_disposition(self, session_id, operation, args)
+                    if disposition is not None:
+                        exc._handoff_disposition = disposition
+                except Exception:
+                    pass  # An unreadable receipt remains unknown, never absent.
+            raise
         finally:
             PRINCIPAL.reset(token)
             BINDING.reset(binding_token)
@@ -4987,7 +5087,9 @@ class AppService:
         transport = args
         args = {key: value for key, value in args.items()
                 if key not in {'_generationId', '_runtimeSessionId', '_inputBindings', '_inputClients',
-                               '_workOrigin', '_workDispatchGuarded', '_responseMode'}}
+                               '_workOrigin', '_workDispatchGuarded', '_responseMode', '_childOrigin', '_runtimeOwnerId',
+                               '_handoffSnapshot'}
+                and (operation == 'capacity.admit' or key not in {'_handoffDrain', '_nativeChild'})}
         from .workspace_work_effects import APP_EFFECT, app_request
         token = APP_EFFECT.set(app_request(operation, args, session_id))
         try:
@@ -5008,6 +5110,19 @@ class AppService:
             return await self._app_bridge(operation, args, session_id, input_origin=origin)
 
     async def _app_bridge(self, operation, args, session_id, *, input_origin=None):
+        if operation == 'context.prepare':
+            from .preparation_context import OPERATIONS, SECTION_TIMEOUT
+            async def read(name):
+                try:
+                    value = await asyncio.wait_for(self._app_bridge(
+                        name, args if name == 'context.manifest' else {},
+                        session_id, input_origin=input_origin), SECTION_TIMEOUT)
+                    return name, {'available': True, 'value': value}
+                except Exception:
+                    # Partial coverage remains explicit; one unavailable source
+                    # must not turn other current sections into empty context.
+                    return name, {'available': False}
+            return dict(await asyncio.gather(*(read(name) for name in OPERATIONS)))
         if operation == 'work.effect.check':
             from .workspace_work_effects import check
             from .performance_diagnostics import active_bridge, mark
@@ -5106,11 +5221,9 @@ class AppService:
         if operation == "voice.visual.read":
             return self.voice_visual.read(session_id, args.get("captureId"))
         if operation == "outputs.image.read":
-            async with self.lock:
-                return self.outputs.image(session_id, args.get('id'), args.get('sha256'))
+            return await self.outputs.image_async(session_id, args.get('id'), args.get('sha256'))
         if operation == "outputs.images.read":
-            async with self.lock:
-                return self.outputs.images(session_id, args.get('images'))
+            return await self.outputs.images_async(session_id, args.get('images'))
         if operation in {'context.manifest', 'context.read'}:
             bindings = args.get('_contextBindings', [])
             async with self.lock:
@@ -5243,9 +5356,10 @@ class AppService:
                     result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
-            compact_domain_receipt = args['action'] in SETTINGS_ACTIONS or args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.', 'outputs.')) or args['action'] == 'runtime.provenance' or args['action'] in resource_reservation_definitions(schema, string)
+            compact_domain_receipt = args['action'] in SETTINGS_ACTIONS or args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.', 'outputs.')) or args['action'] == 'runtime.provenance' or args['action'] in RESOURCE_RESERVATION_ACTIONS
             task_action = action_args.get('operation') if args['action'] == 'runtime.control' else args['action']
-            compact_task_receipt = isinstance(task_action, str) and task_action in task_definitions(schema, string)
+            compact_task_receipt = (isinstance(task_action, str) and task_action in task_definitions(schema, string)
+                                    or args['action'].startswith('assignment.task.'))
             compact_domain_receipt = compact_domain_receipt or compact_task_receipt
             if args['action'].startswith('profiling.'):
                 # Profiling must not flush progress or build an unrelated
@@ -5274,12 +5388,16 @@ class AppService:
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id, include_state=not receipt_mode)
             elif args['action'] in {'session.exportDeliver', 'feedback.excerpt.stage'}:
                 from .agent_canvas import target
+                from . import feedback_context
                 requested = action_args.pop('clientId', input_origin['clientId'] if input_origin is not None else None)
-                canvas_client = target(self, session_id, requested, required=True, connected_only=True)[0]
-                if canvas_client is None:
-                    raise AppError('Open the calling conversation in a connected browser before delivering an export.', 409)
-                with self.clients.bind(canvas_client):
+                if args['action'] == 'feedback.excerpt.stage' and feedback_context.enabled(self, 'agent', session_id):
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), caller_session_id=session_id, include_state=not receipt_mode)
+                else:
+                    canvas_client = target(self, session_id, requested, required=True, connected_only=True)[0]
+                    if canvas_client is None:
+                        raise AppError('Open the calling conversation in a connected browser before delivering an export.', 409)
+                    with self.clients.bind(canvas_client):
+                        result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), caller_session_id=session_id, include_state=not receipt_mode)
             elif args['action'] in {'canvas.openFile', 'canvas.openAttachment', 'canvas.reference', 'message.reply', 'message.replyClear', 'message.reveal'}:
                 from .agent_canvas import target
                 canvas_client = target(self, session_id, action_args.get('clientId'), required=True, connected_only=args['action'] in MESSAGE_INTERACTIONS)[0]

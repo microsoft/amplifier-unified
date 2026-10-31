@@ -234,6 +234,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
     additions = {
+        "state-stream": {},
         "client-traffic": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/client-traffic"},
         "assignment-adoption": {},
         "delegate-work-stream": {'AMPLIFIER_TEST_OUTPUT_DIR': '{root}/output/browser-checks/delegate-work-stream'},
@@ -296,6 +297,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
         'semantic-settings': {},
         'history-refresh': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/history-refresh'},
         'voice-work-message': {'EVIDENCE_DIR': '{root}/output/browser-checks/voice-work-message'},
+        'update-message-delivery': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/update-message-delivery'},
     }
     added = [row for row in rows if row['id'] in additions]
     assert len(added) == len(additions)
@@ -312,7 +314,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 128
+    assert len(original) == 65 and len(rows) == 130
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -484,10 +486,11 @@ def test_workflow_keeps_independent_artifacts_and_readiness_unique_python_covera
     readiness = yaml.load((workflows / 'public-readiness.yml').read_text(), Loader=yaml.BaseLoader)
     # Ordered normal critical run blocks from reviewed a99ab643, before the
     # independent diagnostic job was merged, plus host helper recovery coverage.
-    # Eight pytest calls / 99 targets; all previous targets and ordering retained.
+    # Eight pytest calls / 102 targets; cooperative update drain, event-driven
+    # readiness and retention coverage are additive; previous ordering retained.
     assert_readiness_python_coverage(
-        readiness, targets=99,
-        run_blocks_sha256='a965ab7dd574127e46823a19e23a97932416aa5114a6558c60ec042588edbdf5',
+        readiness, targets=102,
+        run_blocks_sha256='a7b446de95533301605ab383391efd8c7c03a3c860c1f35dc8919cdbb2b5443b',
     )
 
 
@@ -612,9 +615,18 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert sum('node tests/composer-options-browser.mjs' in line for _, line in commands) == 1
     assert all(sum(row['command'] == ['node', name] for row in plan['scenarios']) == 1
                for name in feature_additions)
-    assert len((readiness_scripts | extended_scripts) - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience, pin_reorder, approval, dormant, shared_work} - feature_additions - voice_additions) == 146
-    assert len((readiness_scripts | extended_scripts) - {shared_work, 'tests/delegate-work-stream-browser.mjs', 'tests/client-traffic-browser.mjs'} - voice_additions) == 164
-    assert len(readiness_scripts | extended_scripts) == 171
+    # The stream recovery regression adds one background owner. Keep all
+    # preceding coverage counts frozen rather than relabeling their baseline.
+    state_stream = 'tests/state-stream-browser.mjs'
+    assert state_stream in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', state_stream] for row in plan['scenarios']) == 1
+    update_delivery = 'tests/update-message-delivery-browser.mjs'
+    assert update_delivery in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', update_delivery] for row in plan['scenarios']) == 1
+    previous_scripts = (readiness_scripts | extended_scripts) - {state_stream, update_delivery}
+    assert len(previous_scripts - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience, pin_reorder, approval, dormant, shared_work} - feature_additions - voice_additions) == 146
+    assert len(previous_scripts - {shared_work, 'tests/delegate-work-stream-browser.mjs', 'tests/client-traffic-browser.mjs'} - voice_additions) == 164
+    assert len(previous_scripts) == 171
     assert 'tests/update-effects-browser.mjs' in extended_scripts - readiness_scripts
     assert 'tests/adaptive-work-browser.mjs' in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', 'tests/adaptive-work-browser.mjs']
@@ -683,7 +695,7 @@ def test_attachment_focus_workflow_retains_failures_and_default_coverage():
     assert workflow['on']['workflow_dispatch']['inputs']['attachment_consumption']['default'] == 'false'
     assert 'attachment_consumption' not in workflow['on']['workflow_call']['inputs']
     job = workflow['jobs']['browser']
-    assert job['if'] == '${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
+    assert job['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
     runs = [step for step in job['steps'] if 'scripts/browser_check_runner.py' in step.get('run', '')]
     assert len(runs) == 2
     flag = "${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}"
@@ -737,9 +749,9 @@ def test_destination_history_manual_route_is_fixed_and_preserves_default_coverag
     option = workflow['on']['workflow_dispatch']['inputs']['destination_history']
     assert option['type'] == 'boolean' and option['default'] == 'false'
     assert workflow['permissions'] == {'contents': 'read'}
-    assert workflow['jobs']['browser']['if'] == '${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
+    assert workflow['jobs']['browser']['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
     focused = workflow['jobs']['destination-history']
-    assert focused['if'] == '${{ !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}'
+    assert focused['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}'
     assert workflow['on']['workflow_dispatch']['inputs']['settings_close_diagnostic']['default'] == 'false'
     assert focused['runs-on'] == 'ubuntu-latest' and focused['timeout-minutes'] == '30'
     steps = focused['steps']
@@ -773,7 +785,7 @@ def test_attachment_experience_route_is_fixed_and_installs_the_exact_wheel():
     assert option == {'description': 'Fixed attachment modal/drop and consumption checks, source and installed wheel',
                       'type': 'boolean', 'default': 'false'}
     job = workflow['jobs']['attachment-experience']
-    assert job['if'] == '${{ inputs.attachment_experience }}'
+    assert job['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && inputs.attachment_experience }}'
     assert job['timeout-minutes'] == '30'
     runs = '\n'.join(step.get('run', '') for step in job['steps'])
     assert "wanted = ('attachment-experience', 'attachment-consumption')" in runs

@@ -187,7 +187,7 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         identity = event.get("sessionId") or event.get("session_id") or session_id
         root = event.get("rootSessionId") or event.get("root_session_id") or session_id
         return "runtime.generation", {**base, "sessionId": identity, "rootSessionId": root, "event": kind,
-            **{key: event[key] for key in ("generation_id", "input_ids", "initial_input_id",
+            **{key: event[key] for key in ("generation_id", "input_ids", "initial_input_id", "interruptionRevision",
                 "text", "nativeTerminal", "finalMessageRefs", "active_job_ids", "disposition", "error_type", "error_category", "error_code", "error_stage", "count_failure", "retryable", "accepted_input_ids", "scheduled_monitor_input_id", "scheduled_monitor_only", "observation_input_id", "observation_id") if key in event}}
     if kind == "collaboration.checkpoint":
         return "runtime.collaboration_checkpoint", {**base,
@@ -280,6 +280,7 @@ class RuntimeManager:
             or (session.get('workingDirectory') or session.get('workspace')) != current['directory']
         ):
             raise ValueError('The task execution folder changed before runtime admission. Retry from the current task state; no input was replayed.')
+        return current
 
     def pending_session_ids(self):
         return sorted({sid for sid, lock in self._locks.items() if lock.locked()} | {
@@ -407,7 +408,7 @@ class RuntimeManager:
             if not preserve_emit:
                 current["emit"] = emit
             current['start_session'] = {key: session[key] for key in (
-                'id', 'workspace', 'workingDirectory', 'executionRevision', 'bundle', 'selection',
+                'id', 'workspace', 'workingDirectory', 'executionRevision', 'interruptionRevision', 'bundle', 'selection',
                 'runtimeSessionId', 'nativeIdentity', 'forkContext') if key in session}
             await asyncio.wait_for(asyncio.shield(current["ready"]), self.startup_timeout)
             return
@@ -547,8 +548,10 @@ class RuntimeManager:
         row["heartbeat"] = asyncio.create_task(self._progress(sid, row))
         # The worker restores normal history from its checkpoint. Sending the
         # browser's execution logs, catalogs and attachment history is redundant.
-        config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','bundle','selection','forkContext','replaceSavedSelection','bundleReplacement') if key in session}
+        config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','interruptionRevision','bundle','selection','forkContext','replaceSavedSelection','bundleReplacement') if key in session}
         config['id'] = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
+        config['configurationPendingRevision'] = session.get('configurationPendingRevision', 0)
+        config['ownerSessionId'] = sid  # Identity only; workers read current standing policy themselves.
         if preserve_configuration:
             config['_preserveConfiguration'] = True
         row['runtime_id'] = config['id']
@@ -650,7 +653,8 @@ class RuntimeManager:
                     else:
                         if not self.app_bridge:
                             raise RuntimeError("App controls are not connected")
-                        result = await self.app_bridge(data["operation"], data.get("args", {}), sid)
+                        result = await self.app_bridge(data["operation"], {**data.get("args", {}),
+                            "_runtimeOwnerId": row["runtimeOwnerId"]}, sid)
                 finally:
                     if timing:
                         timing.mark('handler.end')
@@ -658,6 +662,8 @@ class RuntimeManager:
             except Exception as exc:
                 outcome = 'failed'
                 reply = {"op": "bridge.result", "id": data["id"], "error": str(exc)}
+                if isinstance(getattr(exc, '_handoff_disposition', None), dict):
+                    reply['_handoffDisposition'] = exc._handoff_disposition
             if row["process"].returncode is None:
                 if timing:
                     timing.mark('reply.start')
@@ -1059,7 +1065,7 @@ class RuntimeManager:
                 'task.pause', 'task.block', 'task.complete',
             }
         )
-        self._check_execution(sid, allow_fenced=safe)
+        execution = self._check_execution(sid, allow_fenced=safe)
         row = self.workers.get(sid)
         if not row or row["process"].returncode is not None:
             raise RuntimeError("Session is not running")
@@ -1079,7 +1085,11 @@ class RuntimeManager:
         if op not in {"park", "retire", "dependencies", "desktop.readiness", "delivery", "approval", "coordination.approval", "handoff.boundary"}:
             row["parked"] = False
         try:
-            await self._write(row, {"op": op, "id": identity, **args})
+            # Capture host authority at admission, before execution can emit a
+            # generation. Event arrival must never recapture a later Stop epoch.
+            interruption = (execution or row.get('start_session', {})).get('interruptionRevision', 0)
+            await self._write(row, {"op": op, "id": identity, **args,
+                                   "interruptionRevision": interruption})
         except (ValueError, TypeError):
             row["inflight"].discard(identity)
             row["pending"].pop(identity, None)
@@ -1130,7 +1140,15 @@ class RuntimeManager:
             await self._request(session["id"], "park")
 
     async def send(self, session, text, input_id, emit):
-        guard = await self._start_for_input(session, emit)
+        update_gate = getattr(self, 'update_input_gate', lambda *args: None)
+        update_gate(session['id'], input_id)
+        configuration_guard = await self._start_for_input(session, emit)
+        def guard():
+            update_gate(session['id'], input_id)
+            message = next((m for m in session.get('messages', []) if m.get('inputId') == input_id), {})
+            getattr(self, 'update_message_guard', lambda sid, message: None)(session['id'], message)
+            if configuration_guard:
+                configuration_guard()
         return await self._request(session["id"], "send", guard=guard, text=text, input_id=input_id,
             reply_context=next((m.get("replyTo") for m in session.get("messages",[]) if m.get("inputId")==input_id),None),
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
@@ -1148,6 +1166,9 @@ class RuntimeManager:
             'reply_context': message.get('replyTo'), 'attachments': message.get('attachments', []),
             'context_binding': session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []})}}
         async with self._admission(sid):
+            if message['steering'].get('allowNextTurn') is True:
+                getattr(self, 'update_input_gate', lambda *args: None)(sid, input_id)
+                getattr(self, 'update_message_guard', lambda *args: None)(sid, message)
             row = self.workers.get(sid)
             if self._closed or not row or row['process'].returncode is not None or row.get('closing'):
                 return {'accepted': False, 'reason': 'The run is no longer available for steering.'}
@@ -1157,6 +1178,12 @@ class RuntimeManager:
 
     async def collaboration_input(self, session, arguments, guard, emit):
         """Explicit idle start plus guarded ordinary native admission."""
+        update_gate = getattr(self, 'update_input_gate', lambda: None)
+        from .update_drain import UpdateDeferred
+        try:
+            update_gate()
+        except UpdateDeferred:
+            return {"accepted": False, "effect": "none", "waitingForUpdate": True}
         reason = guard()
         if reason:
             return {"accepted": False, "reason": reason}
@@ -1170,12 +1197,17 @@ class RuntimeManager:
             return {"accepted": False, "delivery": "not_sent",
                     "reason": str(exc) or "Preparation cancelled before input admission."}
         async with self._admission(session["id"]):
+            try:
+                update_gate()
+            except UpdateDeferred:
+                return {"accepted": False, "effect": "none", "waitingForUpdate": True}
             reason = guard()
             if reason:
                 return {"accepted": False, "reason": reason}
             if configuration_guard:
                 configuration_guard()
-            args = {"operation": "coordination.submit", "arguments": arguments}
+            operation = "coordination.deliver" if arguments.get("automaticDelivery") is True else "coordination.submit"
+            args = {"operation": operation, "arguments": arguments}
             pending = await self._admit(session["id"], "control", args)
         return await self._reply(*pending, op="control", args=args)
 
@@ -1278,14 +1310,14 @@ class RuntimeManager:
                 current.args = (f'Takeover did not complete ({result.status}). {result.message} {current}',)
                 raise current from None
 
-    async def handoff_boundary(self, session_id, request_id, *, cancel=False):
+    async def handoff_boundary(self, session_id, request_id, *, cancel=False, receipt=None, update=False):
         """Inspect only this existing worker; never warm or acquire a writer."""
         row = self.workers.get(session_id)
         if row is None:
             return {'ready': True, 'waitingFor': [], 'continuationAllowed': False}
         if row['process'].returncode is not None:
             raise RuntimeError('The old worker exited before confirming its saved boundary.')
-        return await self._request(session_id, 'handoff.boundary', request_id=request_id, cancel=cancel)
+        return await self._request(session_id, 'handoff.boundary', request_id=request_id, cancel=cancel, receipt=receipt, **({'update': True} if update else {}))
 
     @contextmanager
     def stopped_boundary(self, session):

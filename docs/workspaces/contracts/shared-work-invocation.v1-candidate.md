@@ -117,8 +117,21 @@ observations, following their exact canonical creation/input associations. Queue
 unknown, merely accepted-but-not-delivered or terminal input cannot stand in for it.
 
 Limit this first producer to retained commissioned initial inputs. Direct human
-turns, independent roots, untyped follow-ups, steering, scheduled input and descendant
-worker inheritance are explicitly unqualified here. A mixed set with unsupported
+turns, independent roots, untyped follow-ups, steering and scheduled input are
+explicitly unqualified here. An already admitted native child inherits the exact
+original generation and delivered input set captured before its preparation
+starts. The live native child run and current worker process authenticate that
+read/effect-check scope; a normal parent turn finish or newer parent turn does not
+cancel it. Stop, execution/configuration changes, worker release, child termination
+and current task/assignment controls still invalidate the child. An agent waiting
+on a dependency does not itself revoke the child doing that dependency. For
+commissioned Work, this requires contiguous canonical agent-only change rows from
+the sealed active task, changing only its dependency-block fields; missing history,
+new tasks, changed instructions, human blocks and pause/resume invalidate that
+exception. The original sealed task binding remains the coverage binding. Children
+retain the original required-content version and coverage checks, and cannot use
+this scope as a root principal for Work mutations or peer control. Unsupported
+input lineage remains unsupported in the child. A mixed set with unsupported
 input lineage returns unavailable with coverage; it is not a manufactured empty set
 or permission to execute. This proposal does not silently block or exempt all ordinary
 unrelated work: the existing policy remains authoritative, and no claim of Work-aware
@@ -129,15 +142,14 @@ follow-up), and set `complete:false`, `status:unavailable`, `version:null`.
 Never drop the unsupported subset and qualify the remaining association alone.
 The transport projection must equal that host-observed set, not merely be its
 subset. A shortened projection is unavailable with `input_projection_incomplete`
-and the missing input IDs. More than sixteen host-observed inputs is explicitly
-`input_coverage_overflow`, with delivered/projected counts, no qualified version
-and no implied complete last-N window. Overflow exposes `inputCount` and an empty
-bounded `inputIds` list, not an empty relevant set. These observations authorize no
-effect. The bundled worker must supply the complete set up to that bound and retain
-overflow explicitly; its earlier last-eight projection cannot qualify nine inputs.
-Delivery must preserve these bounded unavailable diagnostics without erasing
-independent discovery. The worker and delivery changes remain separately owned
-runtime integration prerequisites until their exact checks pass.
+and the missing input IDs. The bundled worker supplies the complete canonical
+native input set regardless of count; neither the display tail nor content-page
+budgets may truncate it or replace it with an empty set. Per-input identifiers
+and diagnostics remain strictly typed and bounded in individual length. Input
+identity metadata is accounted separately from discovery and detail-page content;
+retained read-cache memory still accounts for every actual byte. These observations
+authorize no effect. Unsupported lineage stays unavailable with its complete
+identity and reason, and does not erase independent discovery.
 
 The fingerprint binds the actual root/generation/input association, current Work
 record and promise revisions, source identities/digests, owner/link/Stop revisions,
@@ -162,18 +174,21 @@ Any later supported explicit incorporation policy needs its own retained evidenc
 Manifest paging and source paging are both required when present; a complete metadata
 page is not a complete-content observation.
 
-Both new projections are capped at 12 KiB UTF-8 and make progress through explicit
+Discovery and detail content pages are capped at 12 KiB UTF-8, apart from the
+complete validated input-identity metadata, and make progress through explicit
 continuations. Required source bodies remain on-demand, not automatically injected
 into every provider request. A stale current revision refuses rather than mixing
-old and new pages. Immutable source pages remain readable, but final currentness
-must still be checked before a dependent effect.
+old and new pages. Immutable source pages remain readable. Strict Ask assurance
+rechecks currentness before a dependent effect; the Full policy below permits
+ordinary owner admission without claiming that assurance.
 
-This first resolver inspects at most 16 delivered input identities, eight distinct
-Work items and 4096 source metadata rows per item. Overflow is explicit unavailable
+This first resolver inspects the complete delivered input set, at most eight
+distinct Work items and 4096 source metadata rows per item. Overflow is explicit unavailable
 coverage, never a silently shortened relevant set or permission to act. It reads
 source metadata only; bodies stay in the existing source reader. Missing earlier
 promise revisions also make coverage unavailable. The limits do not erase Work or
-change the existing independent list/history/source readers.
+change the existing independent list/history/source readers, and do not revoke
+independently valid Full authority.
 
 Exact proposed result fields, inside the ordinary `{accepted:true,result:...}`
 shared-action envelope:
@@ -213,6 +228,48 @@ first new-child producer does not accept or invent claimRef as caller input.
 
 ## 3. Service facts versus runtime enforcement
 
+### Standing Full authority and Work assurance
+
+Operator-selected Full access accepts the risk of acting with partial or inferred
+Work context. Missing, compacted or unavailable fitted-content proof, unsupported
+follow-up associations, and coverage limits do not withdraw independently valid
+Full authority. The shared Work policy checks the current saved mode and the
+existing authenticated native generation and Stop boundary, including trusted
+descendants without changing their actual principal. It then leaves every
+supported action to its ordinary owner, without a Work-specific action allowlist.
+For a current native child, that generation and input set come from the existing
+live child-execution owner; normal parent completion or a newer parent generation
+does not renew or revoke the child's original assignment. Invalid supplied child
+provenance cannot fall back to the parent's binding. Root-only consumers remain strict.
+No fresh human input, additional grant or copied permission flag is required.
+
+Coverage observations remain honest: allowing Full work neither marks required
+content consumed nor supplies a required-version proof. `effectAuthorized:false`
+remains mandatory. Work mutations and claims about a particular promise, candidate,
+independent check or publication retain their own revision and provenance checks.
+Actual Stop/revocation, execution and resource ownership, required factual inputs,
+exact retries and unknown-effect recovery remain with their existing owners.
+Provider preparation applies the same current Full policy through the worker's
+existing local policy reader, without another host request. It preserves fitted
+bytes and the captured native generation/input/Stop scope while allowing stale
+or unavailable Work-version assurance. Skipping that assurance leaves coverage
+unavailable, never complete. Native send admission rechecks current Full when
+preparation relied on it.
+An actual native call already present in the adapter's consumed-call set cannot
+execute again, independently of coverage completeness. A new native call may
+inspect or exactly retry an app command through that command's canonical receipt.
+Consumed IDs survive Work observation recovery and proof-retention overflow.
+They are retained for the actual native generation and cleared when that native
+generation or Stop epoch changes; their count does not impose a tool permission
+ceiling. Bounded request/proof observations remain separate from this execution
+evidence. A very long generation therefore retains one ID per consumed call.
+This policy does not qualify every consumer for descendants or establish that
+every delayed external effect already has complete cancellation coverage.
+
+Ask when needed retains the strict Work preconditions described below. Work
+readers and continuity observations use the same truthful coverage contract in
+both modes; unavailable is not an empty or complete required set.
+
 Proposed private bridge `work.invocation.revalidate {version}` compares the current
 association and required content identities. It returns `current`, the current
 required header and **`effectAuthorized:false`**. It performs no effect and accepts
@@ -224,16 +281,18 @@ The private worker bridge `work.effect.check` accepts exactly `toolName`,
 `toolInput` and the actual executing `toolCallId`. The authenticated transport
 supplies `_workOrigin`; a public/model witness is not accepted. It returns
 `applicable`, `allowed`, `reason`, `requiredVersion` and `effectAuthorized:false`.
-`allowed` means only that the current Work precondition is satisfied, or the
-operation is an explicit exact-read/safe-reporting case. It does not replace
+`allowed` means that current Full authority permits ordinary owner admission,
+the strict Ask Work precondition is satisfied, or the operation is an explicit
+exact-read/safe-reporting case. It does not replace
 ordinary permission, Stop, budget or effect-owner admission, and is not a lease
-that survives another await. Unknown commissioned lineage is not an exemption.
+that survives another await. Unknown commissioned lineage is not an Ask exemption
+and does not erase independently valid Full authority.
 The runtime final-invoke wrapper and each shared-action mutation owner must
 consume this contract at their actual boundary; the endpoint alone does not
 establish production enforcement. Tests of its trusted-transport fixture are
 service checks, not native origin or effect-execution proof.
 
-The bounded host integration currently rechecks covered Work mutations, chat
+In Ask, the bounded host integration rechecks covered Work mutations, chat
 pinning and peer-only `notify` at their synchronous commit boundary under the
 service lock. Other Work-dependent shared-action mutations explicitly refuse
 with `work_effect_owner_unavailable`; a queued job or action with later effects
@@ -249,8 +308,9 @@ its private flag. Generic streaming and unmeasured native steering remain
 unqualified. Native controlled-wire and nested-dispatch checks are not live-provider
 or arbitrary tools' internal-await qualification.
 
-The continuity adapter must independently establish all of the following at the
-actual runtime boundary:
+To certify complete Work coverage, the continuity adapter must independently
+establish all of the following at the actual runtime boundary. Ask requires that
+assurance before dependent effects; Full does not:
 
 - Every required page was genuinely delivered, contiguous, exact and available in
   the fitted current request. Tool success or a raw pre-truncation object is not
@@ -333,7 +393,7 @@ raw identities, exact-input reuse and review dispositions accompany that packet.
 These are checkpoint-specific facts, not qualification of the later frozen
 `4351124b443f62cad2d3034d784727852022f10f` integration.
 
-`effectAuthorized:false` remains mandatory. Only the audited synchronous Work
+`effectAuthorized:false` remains mandatory. In Ask, only the audited synchronous Work
 mutation, pin and peer-notify owners have the stated final-boundary qualification.
 Other applicable shared mutation owners refuse. Generic streaming, unmeasured
 steering, arbitrary tool-internal awaits and later effect owners remain unqualified.

@@ -261,9 +261,13 @@ async def test_library_links_and_special_files_are_rejected(app, tmp_path):
             await dispatch(app, action, args)
     assert outside.read_text().endswith('#amp-one{color:red}') and path.is_symlink()
     if hasattr(os, 'mkfifo'):
-        os.mkfifo(path.parent / 'pipe.css')
-        listing = (await dispatch(app, 'theme.list', {}))['result']
-        assert {row['name'] for row in listing['errors']} == {path.name, 'pipe.css'}
+        pipe = path.parent / 'pipe.css'
+        os.mkfifo(pipe)
+        try:
+            listing = (await dispatch(app, 'theme.list', {}))['result']
+            assert {row['name'] for row in listing['errors']} == {path.name, 'pipe.css'}
+        finally:
+            pipe.unlink(missing_ok=True)
 
 
 async def test_symlink_library_directory_cannot_be_read_or_written(app, tmp_path):

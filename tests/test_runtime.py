@@ -23,7 +23,7 @@ for line in sys.stdin:
         if data['session']['id']=='slow':
             print(json.dumps({'type':'runtime.progress','phase':'bundle-preparation','detail':'Loading configured modules.'}),flush=True)
         else:
-            print(json.dumps({'type':'runtime.ready','report':{'resumed':True,'session_id':root}}),flush=True)
+            print(json.dumps({'type':'runtime.ready','report':{'resumed':True,'session_id':root,'owner_session_id':data['session'].get('ownerSessionId')}}),flush=True)
             if root=='native-root':
                 print(json.dumps({'type':'generation.started','session_id':'child','root_session_id':root}),flush=True)
     elif op=='send':
@@ -622,20 +622,21 @@ class ProcessContractTests(unittest.IsolatedAsyncioTestCase):
         result=await self.manager.send(self.session,'hello','input-1',self.emit)
         self.assertTrue(result['accepted'])
         await asyncio.wait_for(self.received.wait(),3)
-        self.assertEqual(self.bridges,[('get_state',{},'fixture-session')])
+        self.assertEqual(self.bridges, [('get_state', {'_runtimeOwnerId': self.manager.workers['fixture-session']['runtimeOwnerId']}, 'fixture-session')])
         message=next(p for k,p in self.events if k=='assistant.message')
         self.assertEqual(message['text'],'7')
         self.assertEqual(message['inputId'],'input-1')
 
     async def test_native_identity_restores_worker_but_ui_bridge_and_root_events_use_app_alias(self):
-        self.session.update(runtimeSessionId='native-root', nativeIdentity='older-native-alias')
+        self.session.update(runtimeSessionId='native-root', nativeIdentity='older-native-alias', ownerSessionId='foreign')
         await self.manager.send(self.session, 'continue native history', 'input-1', self.emit)
         await asyncio.wait_for(self.received.wait(), 3)
         self.assertEqual(list(self.manager.workers), ['fixture-session'])
         ready = next(p for k,p in self.events if k == 'runtime.status' and p['status'] == 'ready')
         self.assertEqual(ready['report']['session_id'], 'native-root')
+        self.assertEqual(ready['report']['owner_session_id'], 'fixture-session')
         self.assertEqual(ready['sessionId'], 'fixture-session')
-        self.assertEqual(self.bridges, [('get_state', {}, 'fixture-session')])
+        self.assertEqual(self.bridges, [('get_state', {'_runtimeOwnerId': self.manager.workers['fixture-session']['runtimeOwnerId']}, 'fixture-session')])
         root, child = [p for k,p in self.events if k == 'execution.event']
         self.assertEqual((root['sessionId'], root['rootSessionId']), ('fixture-session', 'fixture-session'))
         self.assertEqual((child['sessionId'], child['rootSessionId']), ('native-root-child', 'fixture-session'))
@@ -654,6 +655,7 @@ class ProcessContractTests(unittest.IsolatedAsyncioTestCase):
         await self.manager.start(self.session, self.emit)
         ready = next(p for k,p in self.events if k == 'runtime.status' and p['status'] == 'ready')
         self.assertEqual(ready['report']['session_id'], 'native-root')
+        self.assertEqual(ready['report']['owner_session_id'], 'fixture-session')
 
     async def test_parallel_start_reuses_single_worker(self):
         await asyncio.gather(*(self.manager.start(self.session,self.emit) for _ in range(4)))

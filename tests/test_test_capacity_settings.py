@@ -9,6 +9,7 @@ import pytest
 
 from amplifier_web import task_environments as environments
 from amplifier_web import test_capacity_settings as policy
+from amplifier_web import private_policy_file
 from amplifier_web.service import AppError
 from test_configuration_authority import app, grant
 from test_coordination_generation import agent, until
@@ -30,6 +31,7 @@ async def test_passive_defaults_disabled_and_private_global_save(app, monkeypatc
     monkeypatch.setattr(environments, 'capacity', lambda *a: pytest.fail('settings must not probe'))
     before = await read(app)
     assert before['runner']['status'] == 'disabled'
+    assert before['effective'] == {'maxRunning': 0, 'maxInstances': 0, 'minFreeBytes': 10*1024**3}
     after = await save(app, {'maxRunning': 7, 'minFreeBytes': 0})
     assert after['effective']['maxRunning'] == 7 and after['effective']['minFreeBytes'] == 0
     assert (app.data_dir / 'test-capacity.json').stat().st_mode & 0o777 == 0o600
@@ -202,6 +204,7 @@ def test_settings_store_without_unix_filesystem_capabilities(tmp_path, monkeypat
     portable = SimpleNamespace(**{name: getattr(native, name) for name in dir(native)
         if name not in {'O_NOFOLLOW', 'O_DIRECTORY', 'O_NONBLOCK', 'getuid', 'name'}}, name='nt')
     monkeypatch.setattr(policy, 'os', portable)
+    monkeypatch.setattr(private_policy_file, 'os', portable)
     app = SimpleNamespace(data_dir=tmp_path)
     assert policy.load(app) == {'version': 1, 'defaults': {}, 'runners': {}}
     value = {'version': 1, 'defaults': {'maxRunning': 0}, 'runners': {}}
@@ -215,3 +218,19 @@ def test_settings_store_without_unix_filesystem_capabilities(tmp_path, monkeypat
     path.symlink_to(other)
     with pytest.raises(ValueError, match='link'):
         policy.load(app)
+
+
+@pytest.mark.parametrize('backend', ['docker', 'incus'])
+def test_default_counts_reach_backend_without_rewriting_config(tmp_path, backend):
+    from amplifier_web import incus_environment_worker
+    app = SimpleNamespace(data_dir=tmp_path)
+    incus = {'incusExecutable': '/bin/incus', 'configDir': '/private/config',
+             'project': 'tests', 'admissionDir': '/private/admission'}
+    original = {'backend': backend, **({'incus': incus} if backend == 'incus' else {})}
+    applied = policy.apply(app, original)
+    target = applied['incus'] if backend == 'incus' else applied
+    assert target['maxRunning'] == target['maxInstances'] == 0
+    assert 'maxRunning' not in (original.get('incus') or original)
+    if backend == 'incus':
+        env = incus_environment_worker.environment(target, tmp_path)
+        assert env['AMPLIFIER_DTU_MAX_RUNNING'] == env['AMPLIFIER_DTU_MAX_INSTANCES'] == '0'

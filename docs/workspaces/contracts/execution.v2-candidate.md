@@ -257,8 +257,8 @@ claim with evidence and does not claim physical teardown.
 Stable command IDs retain their exact results across restart, including release
 and later reacquisition. Retries cannot resurrect an old reservation. Updates
 require the observed revision. Admission uses global Advanced execution limits,
-defaulting to 64 held reservations per root (including its children) and 1024 per app data home. Lowering those limits
-only gates new acquisitions; existing held or uncertain claims remain
+defaulting to 0 (no count ceiling) both per root (including its children) and
+per app data home. Explicit positive limits gate new acquisitions; existing held or uncertain claims remain
 readable and releasable at the limit. Reads are paginated, passive and do not
 load or resume conversations. Shared actions serve both clients and agents.
 
@@ -323,6 +323,22 @@ remain unverified. Older replies keep their checked-source fallback and are not
 retroactively labeled retained. Request-scoped artifact reads expose only the
 declared artifact to the request participants in the recorded workspace; they do
 not grant general access to the producing conversation's output library.
+
+`outputs.image` and `outputs.images` use that same request-reader authority for
+an exact retained PNG from another conversation. The output's saved reply
+command selects the original response revision; later replies cannot substitute
+new bytes. The caller still supplies the exact output ID and SHA-256. Image reads
+and validation happen outside the app lock, then every selected relationship is
+rechecked before any pixels are returned. Ordinary output-library reads remain
+conversation-owned; this path does not copy files or grant new permissions.
+
+Image observations describe only the prepared model request, not an acknowledgement
+from the provider or a revision to earlier visual evidence. The existing inspection
+receipt/tool-call identity remains the correlation key; request preparation and
+pre-transport omissions name timeout, changed input/selection, missing receipt,
+unavailable vision or unreadable saved bytes separately. A failed later read does
+not establish that the saved image hash changed or that an earlier request lacked
+pixels. No new observation store or retry loop is introduced.
 
 The discovered reply schema and shipped coordination skill describe the exact
 syntax, an executable example and the acknowledgement's retention status. A
@@ -523,18 +539,27 @@ Membership, limits and Stop are retained in existing command receipts; model
 usage stays in existing execution receipts and is attributed at admission.
 
 Assignment limits cover aggregate supported model calls and open commissioned
-roots. New assignments have no execution count ceiling: `maxOpenTasks` and
-`maxConcurrentCalls` default to `null`. Each accepts a positive integer for an
+roots. New assignments have no execution count ceiling: `maxOpenTasks`,
+`maxMembers` and `maxConcurrentCalls` default to `null`. Each accepts a positive integer for an
 explicit ceiling or `null` for no count limit (blank in the UI). Existing saved
 finite values are preserved until their owner explicitly changes them. The
-retained member roster remains structurally bounded by `maxMembers` (1–64,
-default 64); removing execution ceilings never discards members or unknown
+retained member roster has no arbitrary maximum; `maxMembers` counts current
+bound and reserved members when explicitly set. Removing execution ceilings never discards members or unknown
 receipts, changes Stop/ownership, or bypasses token/cost budgets, the installation's
 separate per-source task-chat policy, or host resource admission. Optional
 token/cost reservations are declared allowances per call, not
 provider-enforced maxima. Settled receipts replace their allowances; missing
 outcomes remain unknown. Limits cannot promise an exact spend cap. Already
 running effects may finish. Admission is serialized before provider effects.
+
+The host-wide model waiting policy defaults to no queue-count or wait-time
+ceiling (`maxWaitingCalls=0`, `waitTimeoutSeconds=0`). Positive values are optional
+operator limits. Waiting uses the existing admission queue and resumes on capacity
+changes; removing the count ceiling does not admit calls beyond a selected
+assignment allowance or bypass provider admission. Existing saved finite settings
+remain in force until changed, including after restart. The global settings UI
+offers a single action to select unlimited waiting without resetting spend,
+already admitted calls, or Stop.
 
 The commissioning owner may manage the assignment; members may inspect it.
 Membership does not confer control over existing independent peers. Assignment
@@ -585,9 +610,18 @@ boundary. Later declarations require the observed response revision. Every
 accepted declaration has a monotonic revision and a stable operation identity;
 exact retries return the same receipt and conflicting payloads are rejected.
 Earlier declarations remain in existing command receipts. A question or deferral
-is a report, not request completion. At most 32 declarations and 32 automatic
-outcome notifications belong to one request; reaching the bound is visible and
-requires a new intentional request rather than silent replay or unbounded loops.
+is a report, not request completion. Meaningful declarations and automatic outcome
+notifications have no lifetime count ceiling: continued work retains the original
+request and operation identities. Each payload and result view remains bounded;
+`coordination.result` returns the latest 32 declarations without discarding older
+command receipts. This does not relax queue pressure, Stop or task budgets.
+
+Existing current-protocol version-two waits stopped solely by the former automatic
+notification ceiling may recover through ordinary admission. Recovery requires the
+exact legacy diagnostic and a saved outcome revision greater than 32; it preserves
+the continuation identity and last claimed revision. Generic limits, cancelled or
+expired waits are not reopened, and existing unknown notification receipts are not
+replayed. Restart recovery does not itself grant execution authority.
 
 Typed negative reports and questions can notify the requester immediately as
 unqualified agent claims. Exact successful root terminal evidence can qualify a
@@ -599,6 +633,24 @@ saved task and Stop boundary. A newer meaningful report supersedes an
 unsubmitted earlier success notification, preserving both receipts and preventing
 stale dependency success. Requests made under older single-notification
 subscriptions keep that behavior until explicitly replaced by a new request.
+
+### Optional message rates and complete one-shot observations — 2026-10-30
+
+Global Work concurrency settings also expose `maxPeerMessagesPerMinute` (per
+sender/recipient pair, including notify) and `maxPendingWatchesPerTarget`. Both
+have default 0, meaning no count limit. Explicit positive values gate only new
+requests atomically, before message/watch effects. Exact retries return their
+receipts. Changing these limits neither retries rejected requests nor restarts
+work. Automatic retained returns use their existing guarded inbox, not the
+new-message rate check.
+
+A root lifecycle event captures its status, workspace, time, and retained command
+row high-water once. Every pending watch registered by then is considered using
+64-row keyset pages; later registrations cannot consume that older event. Expiry
+uses that captured time throughout. Each matching watch records one observation
+and at most one guarded notification. Restart also reads watch receipts in bounded
+pages. This preserves Stop, ownership, cancellation and unknown-input handling;
+observation still neither starts the target nor proves successful task completion.
 
 ### Continuing-objective result delivery — 2026-10-19
 
@@ -617,9 +669,14 @@ Creation preparation and initial input admission still require the exact capture
 task revision. Existing receipts without the epoch keep that stricter boundary;
 this change neither retries old refusals nor changes a blocked task to complete.
 
-Only correlated outcome observations and later reports about an already delivered
-request may use that continuing-objective boundary. Ordinary queued instructions
-and active steering retain their exact task revision. Notifications do not grant
+Ordinary automatic and idle-queued peer instructions also use their existing
+host-captured reply continuation epoch for intake. Routine progress, reference or
+constraint updates do not invalidate the same saved request; current constraints
+and budgets still apply. This reuses existing receipt provenance without rewriting
+it or retrying an accepted, uncertain or suppressed delivery. Legacy receipts
+without the epoch, explicit anchored steering, commissioned initial input,
+blocked-task intake and deliberate human resume retain their existing contracts.
+Exact task edits still require their current edit revision. Notifications do not grant
 authority: admission rechecks current task state, budgets, Stop/interruption,
 assignment membership, ownership, permissions and any operation-specific
 placement/cancellation boundary. Current constraints apply before model work.
@@ -636,17 +693,50 @@ outcome, not approval or denial. Restart preserves pending watch receipts and
 never replays a claimed notification. Idle means a root status boundary, not proof
 that external effects or all background work have finished.
 
-A destination retains at most 64 queued inputs and reserved reply slots, with
-16 queued inputs from one sender and 32 from one assignment. Admission rotates
-between pending senders using retained admission order. New queued instructions
+Peer inbox counts have no ceiling by default. Global Work concurrency settings
+can optionally bound a destination’s pending inputs plus reserved reply slots,
+pending inputs from one sender, and pending inputs from one assignment; 0 means
+no count ceiling. Positive limits remain atomic admission checks, including
+reserved returns, and never discard existing work. Admission gives the least
+recently admitted pending sender the next turn using durable admission order,
+with oldest pending input breaking ties. Sender selection considers the complete
+pending set; only a bounded FIFO batch of that sender’s receipts is loaded.
+Raising a limit resumes saved backpressured returns through the same guarded
+inbox without replaying accepted or unknown operations. New queued instructions
 expire after a caller-selected duration (default and maximum one day);
 expiration remains an inspectable failed dependency without executing the input.
 Accepted substantive inputs are never silently coalesced or dropped. Informational
 notices still do not start execution; unsupported safe-boundary delivery remains
 an adapter limitation rather than cancellation and resend. Host-retained causal
-input lineage bounds a peer-driven chain to 16 hops regardless of new command IDs
-or wording. A new actual human input resets that bound; observations, peer text
-and model assertions of approval do not.
+input lineage records the depth of peer-driven work for provenance and diagnosis;
+its age does not impose a fixed-hop requirement for human intervention. A new
+actual human input resets the recorded depth; observations, peer text and model
+assertions of approval do not. Per-pair message rates, inbox capacity, assignment
+and task limits, Stop, and exact input idempotency still govern admission. A
+long-running delegated task can continue and return results within those limits.
+
+### Busy recipient delivery — 2026-10-31
+
+New ordinary peer messages default to `auto`. Host-created result notifications
+also use automatic delivery. The same durable receipt is admitted at the next
+supported native model-request boundary while the recipient is active, or as
+ordinary input when idle. The native adapter checks the current host and native
+generation immediately before admission. Explicit `queue` retains idle-only
+intent; `notify` remains non-executing; explicit `steer` retains its exact saved
+generation. Human-resume and dependency-block handling still wait for idle.
+
+Only positive pre-submission no-effect refusals may return to queued, under the
+same input ID. Existing lifecycle events reconsider them; there is no per-token
+queue scan or retry timer. An admission, held input, or unknown effect is never
+retargeted to a later generation. Native events may settle a receipt before the
+transport acknowledgement. Stop, task, owner, configuration and budget checks
+remain authoritative. Busy routing selects only eligible automatic receipts
+before bounded payload reads, so deliberate idle-only messages cannot hide them.
+
+On upgrade, only host-origin outcome notifications that are still queued, have
+no submission evidence and match their canonical saved continuation claim become
+automatic. Their original ID, payload and display attribution remain intact;
+authored queue requests and uncertain or previously admitted notices do not change.
 
 ### Managed resource observations — 2026-10-14
 
@@ -705,31 +795,35 @@ worktree owner's verified move records. Other path changes are unavailable, not
 permission to recreate or relocate storage. Existing app-owned allocations keep
 their original locations. Retries preserve the original placement even after a
 chat moves. No files or pending permissions are migrated automatically.
-The caller does not supply a destination. At most 32 nonretired
-allocations belong to one root and 512 to one app home; these are allocation-count
-limits, not disk quotas. A stopped allocation owner is reconciled to unknown only
+The caller does not supply a destination. Nonretired allocation counts default
+to 0 (no count ceiling), both per root and per app home. Optional positive limits
+in global Advanced execution settings remain allocation-count limits, not disk
+quotas. A stopped allocation owner is reconciled to unknown only
 after its physical owner lock is free. Retirement releases a count slot but never
 reclaims bytes. No automatic garbage collection or deletion action is supplied.
 Read pages contain at most 32 records and do not hydrate conversation history.
 The ready-worker policy check observes supported reference filesystem and patch
 tools only; it does not certify custom tools, shell, browser or database access.
 
-### Optional per-chat execution counts — 2026-10-21
+### Optional work and test execution counts — 2026-10-30
 
-Global execution settings accept explicit zero for outstanding task chats per
-source, owned test environments per chat and pending checks per chat; each
-then has no count ceiling. These optional counts and queue wait default to zero.
+Global execution settings accept zero for all work counts: outstanding task chats
+per source, environments per chat, pending checks per chat and installation,
+retained resources and cooperative reservations per chat and installation. Each
+defaults to zero (no count ceiling), as do local and registered target backend
+running/retained instance counts. Queue wait also defaults to zero.
 Saved positive operator values are preserved. Wait zero means until Stop or
 cancellation; accepted checks retain their original deadline and resource budget.
 
 These choices do not change same-request idempotency, causal depth, assignment
-membership, authorization, Stop, retained-owner bounds or physical resource
+membership, authorization, Stop, retained ownership or physical resource
 admission. Ordered checks retain their earlier-check/cleanup barrier; overlap
 requires both checks to be explicitly independent. Unknown results remain unknown
 and retain exact owners. Disabling a count cannot retire, replay or overwrite them.
 Manual and queued environment allocations share the same atomic admission owner.
-The global pending queue and retained resource/reservation record limits remain
-positive; bounded display pages are not concurrency ceilings.
+CPU, memory and disk budgets remain enforced by their existing machine/backend
+owners where supported. Bounded display pages and record sizes are not
+concurrency ceilings. A default change never rewrites explicit saved limits.
 
 ### Notification display provenance — 2026-10-14
 
@@ -854,3 +948,39 @@ comes only from already resident fields or bounded scalar projections of existin
 retained runtime/session records; absent projections stay unknown. It does not
 open native control files or decode saved view/history bodies to fill a preview.
 The agent bridge also avoids unrelated pending-progress publication for this read.
+
+
+### Fresh corrections to completed assignment members
+
+A new direct queued (including automatic idle delivery) request from the current
+active assignment owner to a bound completed member is ordinary commissioned
+work within existing authority. It needs no fresh target human message or resume
+proof. Stop, paused/cancelled tasks, nonowner peers, membership changes, native
+ownership, current task identity and explicit budget refusals still apply. Host
+receipts bind the completed task and new input; old requests are never replayed.
+
+The native owner reserves that input's turn durably without reopening the
+completed objective. It may correct/report directly or create correction objectives
+through `task.create`. Successor attribution comes from the actual native input
+and generation, not model-supplied predecessor IDs. Its initial allowance and used
+turns are inherited; the prior completed record and evidence remain in canonical
+history. Exact request reporting follows those objectives within the same admitted input;
+additional task creation retains the original correction attribution and allowance.
+A genuinely fresh input retains normal task creation. No old input is admitted
+again and unrelated later objectives cannot report against the earlier request. Assignment cost/token usage
+continues to come from existing execution receipts, not task-history counters.
+
+A reserved successor requires producer `goal.reserved_turn_accounting = 1`.
+The synchronous `goal.turn_already_charged` witness verifies current task, native
+input/generation, reserved count and continuation ordinal idempotently. The
+producer counts later automatic turns normally; errors do not refund or recount
+a reservation. An unsupported producer still permits direct correction/reporting
+but refuses successor creation before mutation. No new continuation loop exists.
+The current task retains the exact bound goal progress, including after terminal
+goal removal. Checkpoint/restore therefore preserves spent turns and selected
+caps; replaced goals and failed mutations retain exact task identity/revision.
+
+The existing authorized `assignment.task.setLimit` action may also revise a
+completed member's limit/correction while preserving its completed status,
+evidence, history and used turns. Ordinary completed task edits remain refused;
+this control sends no input and does not restart work.

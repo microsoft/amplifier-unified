@@ -52,6 +52,23 @@ async def test_check_runs_once_exports_and_releases_ownership(app, queue, backen
     assert len(backend) == 10
 
 
+async def test_deep_delegated_work_can_submit_a_check_without_human_continue(app, queue, backend):
+    source = app.state['sessions'][0]
+    app.collaboration.insert('ancestor', 'retained-peer-input', {
+        'commandAction': 'coordination.send', 'target': {'sessionId': source['id']},
+        'causalDepth': 40, 'delivery': 'accepted'})
+    source['collaborationGeneration']['inputIds'] = ['ancestor']
+    args = {**scope(app), 'requestId': 'deep-check', 'profileId': environments.PROFILE,
+            'command': 'python -V', 'notify': False}
+    result = await agent(app, source, 'workspace.tests.submit', args, 'deep-submit')
+    assert result['accepted']
+    receipt = record(queue, app, 'deep-check')
+    assert receipt['causalDepth'] == 41 and receipt['sourceInputIds'] == ['ancestor']
+    await drive(queue)
+    assert record(queue, app, 'deep-check')['job']['status'] == 'passed'
+    assert [action for action, _ in backend] == ['prepare', 'start', 'execute', 'stop', 'remove']
+
+
 async def test_full_capacity_waits_without_model_polling_then_runs(app, queue, backend, monkeypatch):
     available = False
     monkeypatch.setattr(environments, 'capacity', lambda *args: {'available': available, 'blockers': [{'code': 'execution_capacity'}]})

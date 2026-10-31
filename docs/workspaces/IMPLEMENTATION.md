@@ -22,7 +22,7 @@ worktree, resource and usage records remain authoritative.
 | --- | --- | --- |
 | A Authority | Actual root/child identity, intersected file policy, reusable scoped configuration grants, per-chat write settings and inherited-default reset, native approval continuation, delayed revocation and common registered-history scope | Supported native consumers and effect families only; no OS, tenant or arbitrary executable-code confinement |
 | B Requests and continuations | Coherent peer creation, retained retry identities, later-generation replies, revision notifications and expiring one-shot watches | Notifications report outcomes; only qualified terminal evidence satisfies a dependency |
-| C Bounded messaging | Destination/sender/assignment limits, fair admission, queue expiry, causal-hop bounds and authenticated peer lineage | Safe tool-boundary informational delivery is adapter-specific; unsupported steering does not become cancel-and-resend |
+| C Bounded messaging | Destination/sender/assignment limits, fair admission, queue expiry, message rates and authenticated peer lineage | Safe tool-boundary informational delivery is adapter-specific; unsupported steering does not become cancel-and-resend |
 | D Placement and resources | Explicit per-repository copies, phase-aware handoff, cooperative reservations, owner observations and retained task-owned scratch folders, browser-profile directories and SQLite files | Explicit dependency mappings; no automatic environment inference, running browser confinement, database servers or arbitrary preview discovery |
 | E Awareness and cooperation | Bounded active-work packets, advisory file intent, supported file-tool source checks, replacement of volatile guidance and optional shared assignment tasks with atomic exclusive claims | Task claims assign responsibility, not file access; no universal external-writer detection or filesystem fence |
 | F Results and integration | Retained exact reported bytes, scoped artifact reads, loaded-origin observations, explicit integration responsibility, recorded candidates and native validation/collection per repository | Qualification covers the chosen commands and observed versions; semantic correctness, complete subprocess imports and publication are not inferred |
@@ -437,6 +437,15 @@ and agent actions use the same authority. Only the user can detach a settled
 conversation, retaining all previously attributed usage and late corrections.
 Stop never deletes files, cleans resources or claims to undo external effects.
 
+Finished member participation can now be closed by the assignment owner through
+`assignment.retire`. The current-member ceiling excludes retired, detached and
+never-created entries while their cumulative usage and membership evidence stay
+retained. Retirement requires settled work and completed local/shared tasks,
+with native ownership held through the commit. It does not archive or stop a
+chat. Existing adoption can readmit the same retired chat after a fresh review,
+capacity check and human instruction; the new membership boundary fences old
+requests and automatic returns. See [member closeout and reuse](assignment-adoption.md#finishing-and-reusing-a-member-chat).
+
 Qualification includes failure injection before commit and after acknowledgment
 loss, preparation/Stop races, concurrent cross-root reservations, restart,
 late-result suppression and native finite/resumed/persistent/nested child mounts.
@@ -786,7 +795,7 @@ review probes reproduced the reported defects without touching live services.
 | Worker and native children | Each mounted child receives its own app adapter and transport principal, including finite/custom loops, persistent children, resumes and nested delegation. Nested children retain the assigning input context. Root-only controls reject a child principal. | Real Core/Foundation mounting with a deterministic orchestrator; no provider call |
 | Host file policy | Filesystem/patch child allow lists intersect across parent, spawn, overlay and retained plans; denies accumulate. Explicit read-only declarations stay read-only. Repository paths follow the execution folder; unrelated external paths remain. Image boundaries remain covered. | Composition and host-policy regressions; no claim of shell or OS sandbox enforcement |
 | Shared dispatch | Agent permission writes require an explicit existing scope. Root agents can still perform scoped configuration actions; settings are not made categorically human-only. | Direct-dispatch and app-bridge rejection tests; this is not a general capability-grant system |
-| Collaboration | Sealed negative reports and host-observed failed generations notify the exact waiter once without satisfying dependencies. Queue admission reserves space for saved replies. A destination has 64 pending/reserved slots; each ordered sender/recipient pair admits 32 messages per minute. Retries retain their identities. | Deterministic admission, failure, duplicate, reservation and Stop tests |
+| Collaboration | Sealed negative reports and host-observed failed generations notify the exact waiter once without satisfying dependencies. Queue admission reserves space for saved replies. At this historical baseline, a destination had 64 pending/reserved slots and an ordered sender/recipient pair admitted 32 messages per minute; the optional policies recorded below supersede those defaults. Retries retain their identities. | Deterministic admission, failure, duplicate, reservation and Stop tests |
 | Creation and worktrees | A commissioned peer uses the creator's actual execution folder and keeps canonical history grouping. A failed read-only handoff preflight or initial foreign-writer refusal is rejected without fencing the source; uncertainty after release still fences it. Previously unknown receipts retain their fence until explicit reconciliation. | Temporary Git repositories, real shared-writer ownership and restart/failure injection; no shared host changes |
 | Canvas and related work | Referenced bytes are hashed before presentation in the recorded producer execution folder. A changed or unavailable source is explicit. A verified preview retains its bytes independently of the source. User-created peers are visible alongside commissioned peers. | Actual service/Chromium journey with scripted runtime; no real-provider evidence |
 
@@ -845,7 +854,13 @@ generation, delivered input and digest. Unrelated background jobs no longer
 invalidate a proven manager result. Missing anchors, unrelated inputs and
 background-only dispositions never qualify. Rejected/unknown terminal evidence
 notifies without becoming success. A later meaningful report suppresses an
-unsubmitted earlier success notification; both receipts remain inspectable.
+unsubmitted earlier notification, including a question, deferral or failure;
+both reports and their notification receipts remain inspectable. A merely staged
+success does not replace an earlier notification until its terminal evidence
+arrives. Already accepted or uncertain inputs are never rewritten or replayed. Retiring
+a queued return releases its inbox slot for a newer backpressured outcome without
+waiting for an unrelated event. Reading a result remains passive; it does not
+mean that the model reviewed it or retire a same-revision notification.
 New subscriptions claim at most one continuation per meaningful revision, capped
 at 32 notifications. Old single-notification waits retain their original policy.
 
@@ -860,9 +875,15 @@ Inbox admission retains the existing 64-slot destination bound, including saved
 reply/watch slots, and adds 16 pending inputs per sender and 32 per assignment.
 Pending senders rotate using durable admission order. Accepted substantive input
 remains retained when a caller-selected deadline expires. The default and maximum
-queue duration is one day; callers can choose a shorter deadline. A causal chain
-is bounded to 16 peer-input hops using host-retained input provenance, independently
-of command IDs or wording. Only actual new human input resets that bound.
+queue duration is one day; callers can choose a shorter deadline. Causal depth
+remains recorded from host-retained input provenance, independently of command
+IDs or wording, but does not stop authorized work after an arbitrary number of
+handoffs. Only actual new human input resets the recorded depth. Existing pair
+message rates, inbox capacity, assignment/task limits and Stop still apply. On
+restart, current-protocol versioned waits bearing the exact retired hop-limit
+diagnostic are reconsidered through normal outcome and admission checks. Stops,
+changed objectives, already admitted or uncertain inputs and the separate
+32-revision limit are not reopened or replayed.
 Publication failure tests distinguish a rolled-back notification from a committed
 claim with a lost acknowledgement. Neither loses the underlying report or creates
 an extra model turn on retry.
@@ -1304,6 +1325,24 @@ command lock. It yields saved goals at their completed-turn boundary and require
 the existing checkpoint/park path before cooperative writer release. It does not
 cancel a tool to make a move possible or acquire a foreign conversation writer.
 
+The originating worker records the already admitted native jobs and exact child
+runs before publishing its move request. New delegation is briefly fenced even
+when that attempted move is later rejected; known rejection releases the fence.
+Preparation admitted before the fence, including nested preparation without a UI
+row yet, keeps its existing run identity and may settle. Ordinary tools continue.
+The host preserves queued and in-transit child model requests only when their
+private run identity matches that receipt. Root observations may include only
+completion inputs tied to those captured native jobs. Unknown input provenance,
+Stop, changed source/configuration/task authority and model budgets remain gates.
+
+A bridge error carries the exact receipt disposition only after the host handler
+finishes: positively absent releases the provisional marker; a committed receipt
+retains its actual state; unreadable or lost acknowledgement stays uncertain.
+Existing native boundary inspection can bind that same receipt after reply loss.
+No second action is issued and no input or operation is replayed. Native result
+identity depends on loop-live preserving the existing `Input.call_id` field;
+older producers without it cannot qualify late completion observations.
+
 `worktrees.py` persists positive release evidence separately from placement and
 recovers that confirmed boundary after host replacement. Earlier preflight/wait
 interruptions reject safely; unconfirmed release stays unknown. Active work gets
@@ -1435,14 +1474,18 @@ mutation bridges retain their existing completion behavior.
 
 Some older workers saved a generic unknown failure without its generation ID.
 Guarded peer recovery may retain separate terminal evidence instead of changing
-that failure: the latest root event must be a failed generation, its input IDs
-must exactly match the host-observed delivered inputs, and every input must have
-its accepted peer receipt for that member. The generic failure must follow that
-terminal. A fresh owner human request and native stopped-owner proof are still
-required. Later input, terminal, Stop or configuration changes invalidate the
-prepared recovery. A retained explicit safety terminal blocks recovery even if
-an older projection hid it. This admits one new reconciliation request; no old
-input, operation or provider call is replayed and no failure cause is inferred.
+that failure: the latest root event must be a failed or detached generation,
+its input IDs must exactly match the current host-observed terminal generation,
+and the generic failure must follow that terminal. This witnesses the stopped
+turn, not delivery, success or authority of its old inputs. Native service inputs
+need no peer receipt; missing or unknown old receipts stay unchanged. A fresh
+owner human request and native stopped-owner proof are still required. Later
+input, terminal, Stop or configuration changes invalidate the prepared recovery.
+Warming retains the same failure until a new generation actually starts. A saved
+explicit safety halt in the current root generation still blocks recovery even
+if a later detach or older generic projection hid it. This uses bounded retained
+lifecycle records, not transcript scans. It admits one new reconciliation request;
+no old input, operation or provider call is replayed and no failure cause is inferred.
 
 ## Explicit responsibility for existing chats
 
@@ -1455,3 +1498,34 @@ manager continuation and placement controls then use that responsibility. Earlie
 history and usage stay attributed as before; adding itself never starts a turn.
 The workspace/canvas assignment controls expose the same operation. Independent
 chats in a shared folder remain independent unless explicitly added.
+
+
+## Optional peer inbox counts — 2026-10-30
+
+The earlier 64-slot destination, 16-per-sender and 32-per-assignment bounds above
+record historical behavior. They are superseded by optional global Work
+concurrency settings, all defaulting to 0 (no count ceiling). Positive configured
+limits still reserve return capacity atomically. Sender selection considers the
+complete pending set using indexed admission order, then loads one bounded FIFO
+batch. Relaxing a limit resumes saved backpressured returns through existing
+guards without replaying unknown operations or clearing Stop.
+
+Qualification: 223 focused Python checks passed, both selected new regressions
+failed on the unchanged base, and the built settings browser passed finite/zero,
+lost-acknowledgment, concurrent-writer, narrow-layout and cold-reopen checks. See
+[scope and limitations](../validation/peer-inbox-policy-qualification.md). This
+source evidence does not establish release or live-worker adoption.
+
+## Optional message rate and complete watch delivery — 2026-10-30
+
+The earlier fixed pair-message rate and 64-watch target limit are superseded by
+optional global Work concurrency settings, both defaulting to 0 (no count limit).
+Positive values still reject new requests atomically and preserve exact retries.
+Changing a limit does not retry rejected work. Existing saved returns retain their
+inbox admission path.
+
+Lifecycle observation visits the complete pre-event watch set using 64-row keyset
+pages, with one captured status/time and a row high-water. Later registrations do
+not consume an earlier event. Restart reads are also bounded. Stop, cancellation,
+unknown delivery and once-only notifications retain their existing guards.
+See [qualification and limits](../validation/peer-watch-policy-qualification.md).

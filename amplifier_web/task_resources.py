@@ -229,7 +229,7 @@ def prepare(home, workspace, sid, actor, args, command_id, execution_root=None):
         total, owned = db.execute("SELECT count(*),coalesce(sum(root=?),0) FROM allocations WHERE status!='retired'", (sid,)).fetchone()
         from .test_execution_settings import concurrency
         limits = concurrency(home)
-        if total >= limits['maxOwnedResources'] or owned >= limits['maxOwnedResourcesPerChat']:
+        if (limits['maxOwnedResources'] and total >= limits['maxOwnedResources']) or (limits['maxOwnedResourcesPerChat'] and owned >= limits['maxOwnedResourcesPerChat']):
             raise ValueError('Task resource capacity is full. Inspect and retire unused allocations or adjust Advanced execution limits in Settings.')
         row = dict(id=str(uuid.uuid4()), workspaceId=workspace, sessionId=sid, owner=actor,
                    kind=args['kind'], label=args.get('label', '').strip(), status='prepared', revision=1,

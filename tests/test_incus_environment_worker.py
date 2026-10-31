@@ -89,6 +89,137 @@ def test_artifact_recovery_keeps_stopped_instance_and_exports_only_artifacts(tmp
     assert state['instance'] == 'Stopped' and state['launch'] == 'stopped'
 
 
+@pytest.mark.parametrize('action', ['remove', 'finishCleanup'])
+@pytest.mark.parametrize('boundary', ['filter', 'verify'])
+@pytest.mark.parametrize('diagnostic_write_fails', [False, True])
+def test_retention_validation_reason_keeps_stopped_owner(tmp_path, backend, monkeypatch, action, boundary, diagnostic_write_fails):
+    import tarfile
+    calls, state = backend
+    state.update(instance='Stopped', launch='stopped')
+    value = payload(tmp_path, action)
+    item = tarfile.TarInfo('artifacts/fixture-pipe')
+    # Keep ordinary FIFO rejection; archive-only diagnostic failures use a device.
+    item.type = tarfile.FIFOTYPE if action == 'remove' else tarfile.CHRTYPE
+    original_export = worker.export_selected
+    def export(config, env, name, destination, **kwargs):
+        if boundary == 'filter':
+            # Use the real streaming verifier with synthetic headers only.
+            from test_environment_retention import backup, ROOTS
+            return worker.common.retention.filter_incus_stream(
+                backup(ROOTS + [(item.name, item.type, '')]), destination, name,
+                archive_only=kwargs.get('archive_only', False))
+        archives = original_export(config, env, name, destination, **kwargs)
+        with tarfile.open(destination / 'artifacts.tar', 'a') as archive:
+            archive.addfile(item)
+        return archives
+    monkeypatch.setattr(worker, 'export_selected', export)
+    original_write = Path.write_text
+    def write(path, *args, **kwargs):
+        if diagnostic_write_fails and path.name == 'incomplete.json':
+            raise OSError('private diagnostic storage')
+        return original_write(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'write_text', write)
+    result = worker.execute_call(value)
+    assert result['verification'] == {'version': 1, 'reasonCode': 'unsupported_type',
+        'memberType': 'fifo' if action == 'remove' else 'character', 'relativePath': 'artifacts/fixture-pipe'}
+    assert result['phase'] == ('preserving' if boundary == 'filter' else 'verifying')
+    assert result['code'] == ('preservation_failed' if boundary == 'filter' else 'archive_verification_failed')
+    assert result['status'] == 'stopped' and result['effectAdmitted'] is False
+    assert not any(args[0] in {'exec', 'stop', 'destroy', 'launch'} for _, args in calls)
+    assert state['instance'] == 'Stopped' and state['launch'] == 'stopped'
+    assert not list(tmp_path.glob('retained-*/retention.json'))
+    saved = list(tmp_path.glob('retained-*/incomplete.json'))
+    assert bool(saved) is not diagnostic_write_fails
+    if saved:
+        assert json.loads(saved[0].read_text())['verification'] == result['verification']
+    assert str(tmp_path) not in json.dumps(result) and 'private diagnostic' not in json.dumps(result)
+
+
+@pytest.mark.parametrize('action', ['finishCleanup', 'remove'])
+@pytest.mark.parametrize('fault,reason', [
+    (None, None), ('nonzero', 'invalid_size'), ('device', 'unsupported_type'), ('header', 'invalid_header'),
+])
+def test_fifo_archive_custody_precedes_incus_destroy(tmp_path, backend, monkeypatch, action, fault, reason):
+    import io
+    import tarfile
+    from test_environment_retention import fifo_selection, guard_fifo_io
+    from test_test_environment_worker import retain_prepared_archive_contract
+    guard_fifo_io(monkeypatch)
+    calls, state = backend
+    state.update(instance='Stopped', launch='stopped')
+    value = payload(tmp_path, action)
+    if action == 'remove':
+        retain_prepared_archive_contract(value)
+    order, retained_files = [], {}
+    original_observe, original_cli = worker.observe, worker.cli
+    def verify_complete():
+        directory, = tmp_path.glob('retained-*')
+        retained = json.loads((directory / 'retention.json').read_text())
+        assert retained['verified'] and retained['archiveOnly']
+        manifest = json.loads((directory / 'manifest.json').read_text())
+        assert {row['source'] for row in manifest} == {'/workspace', '/artifacts'}
+        for row in manifest:
+            raw = Path(row['destination']).read_bytes()
+            assert raw == retained_files[row['source']]
+            assert row['verified'] and row['bytes'] == len(raw)
+            assert row['sha256'] == hashlib.sha256(raw).hexdigest()
+        with tarfile.open(directory / 'artifacts.tar') as archive:
+            assert archive.getnames() == ['artifacts', 'artifacts/pipe', 'artifacts/after']
+            item = archive.getmember('artifacts/pipe')
+            assert (item.type, item.size, item.mode, item.uid, item.gid, item.uname, item.gname, item.mtime) == (
+                tarfile.FIFOTYPE, 0, 0o640, 123, 456, 'fixture-user', 'fixture-group', 123456789)
+            assert archive.extractfile('artifacts/after').read() == b'kept'
+    def observe(*args, **kwargs):
+        if order:
+            assert order == ['stopped', 'export']
+            verify_complete()  # Real verification and manifest precede owner recheck.
+        result = original_observe(*args, **kwargs)
+        order.append('rechecked' if order else 'stopped')
+        return result
+    def export(config, env, name, destination, **kwargs):
+        assert kwargs == {'archive_only': True}
+        calls.append(('export', [name]))
+        raw = (fifo_selection('workspace', prefix=worker.common.retention.PREFIX)
+               + fifo_selection('artifacts', prefix=worker.common.retention.PREFIX, fault=fault) + bytes(1024))
+        order.append('export')
+        archives = worker.common.retention.filter_incus_stream(
+            io.BytesIO(raw), destination, name, archive_only=True)
+        retained_files.update({row['source']: Path(row['destination']).read_bytes() for row in archives})
+        return archives
+    def cli(config, env, args, timeout=30):
+        if args[0] == 'destroy':
+            assert order[-1] == 'rechecked'
+            verify_complete()
+            order.append('destroy')
+        result = original_cli(config, env, args, timeout)
+        if args[0] == 'launch-status' and state['launch'] == 'removed':
+            assert order[-1] == 'destroy'
+            order.append('removed')
+        return result
+    def reconcile(*args):
+        assert order[-1] == 'removed'
+        order.append('absent')
+        return {'status': 'absent'}
+    monkeypatch.setattr(worker, 'observe', observe)
+    monkeypatch.setattr(worker, 'export_selected', export)
+    monkeypatch.setattr(worker, 'cli', cli)
+    monkeypatch.setattr(worker, 'reconcile', reconcile)
+    result = worker.execute_call(value)
+    destroys = [args for kind, args in calls if kind == 'cli' and args[0] == 'destroy']
+    if fault:
+        assert result['verification']['reasonCode'] == reason
+        assert result['phase'] == 'preserving' and result['effectAdmitted'] is False
+        assert result['status'] == 'stopped' and not destroys
+        assert not list(tmp_path.glob('retained-*/retention.json'))
+        assert state['launch'] == 'stopped' and order == ['stopped', 'export']
+    else:
+        assert result['ok'] and result['status'] == 'removed' and result['retention']['archiveOnly']
+        assert len(destroys) == 1
+        assert order == ['stopped', 'export', 'rechecked', 'destroy', 'removed'] + (
+            ['absent'] if action == 'finishCleanup' else [])
+    assert not any(args[0] in {'exec', 'stop', 'launch'} for kind, args in calls if kind in {'cli', 'incus'})
+
+
 @pytest.mark.parametrize('change', ['running', 'foreign', 'failed-export'])
 def test_artifact_recovery_never_runs_or_removes_instance_on_failure(tmp_path, backend, change):
     calls, state = backend

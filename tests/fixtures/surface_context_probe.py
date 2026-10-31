@@ -24,6 +24,8 @@ async def run():
     session.coordinator.register_capability('live.runtime', runtime)
     reads, requests = [], []
     async def bridge(op, args):
+        if op == 'context.prepare':
+            return {'context.manifest': {'available': True, 'value': await bridge('context.manifest', args)}}
         if op == 'context.manifest':
             return {'inputIds': ['ask'], 'surfaces': [{'surfaceId': 'sketch', 'revision': '3:22', 'facts': {'strokes': {'count': 7}},
                 'image': {'available': True, 'digest': 'fixture'}, 'editVersion': 9, 'pendingLocalEdits': False}]}

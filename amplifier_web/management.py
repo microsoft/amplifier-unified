@@ -485,7 +485,7 @@ class Management:
             raise ValueError('The original configuration request binding changed.')
         return record
 
-    def configuration_transition(self, session, operation, **changes):
+    def configuration_transition(self, session, operation, *, recovery_source=None, **changes):
         """Called under service.lock (or during startup); never replace request/history."""
         from .host.config import write_private
         if session.get('pendingConfiguration', {}).get('operationId') != operation:
@@ -493,7 +493,8 @@ class Management:
         record = self.configuration_record(session['id'], operation)
         record['state'].update(changes)
         record['revision'] += 1
-        record['history'].append({'revision': record['revision'], 'at': time.time(), **copy.deepcopy(record['state'])})
+        record['history'].append({'revision': record['revision'], 'at': time.time(), **copy.deepcopy(record['state']),
+            **({'recoverySource': copy.deepcopy(recovery_source)} if recovery_source is not None else {})})
         write_private(self.configuration_record_path(session['id'], operation), json.dumps(record))
         # Private payload and full provenance stay in the operation record,
         # never the shared state or command acceptance receipt.
@@ -581,10 +582,10 @@ class Management:
             if not request.get('authority'):
                 raise ValueError('The original configuration authority is missing.')
             self.service.configuration_authority.check(request['authority'])
-            for retained in record.get('resumptions', []):
-                self.service.configuration_authority.check(retained)
         elif request['authorization'] not in {'ui', 'user', 'internal'} or request.get('authority') is not None:
             raise ValueError('The original configuration authority cannot be verified.')
+        for retained in record.get('resumptions', []):
+            self.service.configuration_authority.check(retained)
         if (fingerprint(request['config']) != request['payloadHash']
                 or fingerprint(json.loads(self.queued_path(session['id']).read_text())) != request['payloadHash']):
             raise ValueError('The original configuration payload changed. It was not applied.')

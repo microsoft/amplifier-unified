@@ -477,6 +477,7 @@ async def test_worker_steering_bridge_runs_under_command_and_activation_ownershi
     worker = Worker()
     worker.session, worker.execution, worker.shared_handle = object(), object(), object()
     worker.controls, worker.runtime, worker.activation = boundary.controls, boundary.runtime, boundary.activation
+    worker.runtime.accepted = {}  # Native Runtime tracks admitted input identities.
     worker.acquire_for_mutation = AsyncMock()
     worker.bind_activation = Mock(return_value="bound-token")
     worker.activation_gate = SimpleNamespace(reset=Mock())
@@ -497,6 +498,7 @@ async def test_worker_steering_bridge_runs_under_command_and_activation_ownershi
                           "arguments": boundary.args})
     worker.acquire_for_mutation.assert_awaited_once()
     worker.bridge.assert_awaited_once_with("coordination.admit", boundary.args)
+    assert worker.context_bindings[boundary.args['inputId']]['interruptionRevision'] == 0
     worker.activation_gate.reset.assert_called_once_with("bound-token")
     assert records == [{"op": "reply", "id": "operation",
                         "result": {"accepted": True, "mode": "steer", "disposition": "queued"}}]

@@ -108,8 +108,10 @@ class Runtime:
             get=lambda kind: self.tools if kind == 'tools' else None,
             register_capability=self.capabilities.__setitem__, mount=mount, hooks=self.hooks)
         async def bridge(operation, args):
-            if operation == 'context.manifest':return {'surfaces': [], 'inputIds': list(self.epoch)}
-            if operation == 'memory.context':return {'items': []}
+            # Mirror the worker envelope for both preparation and revalidation;
+            # let the real host own the manifest instead of replacing one read.
+            if operation.startswith('context.'):
+                args = {**args, '_contextInputs': list(self.epoch), '_contextBindings': []}
             return await pair.app.app_bridge(operation, args, pair.sid)
         await install_app_access(coordinator, bridge)
         self.delivery = self.capabilities['web.surface_delivery']
@@ -245,11 +247,11 @@ async def test_cached_pair_is_atomic_and_revalidated_before_transport(runtime, m
     r = runtime;await r.read();request = r.request()
     assert pixels(await r.provider.request_budget(request)) == r.pair.data
     if change == 'unavailable':
-        original = r.pair.app.outputs.content
-        def content(row):
+        original = r.pair.app.outputs.content_async
+        async def content(row):
             if row['id'] == r.pair.rows[1]['id']:raise ValueError('Unavailable')
-            return original(row)
-        monkeypatch.setattr(r.pair.app.outputs, 'content', content)
+            return await original(row)
+        monkeypatch.setattr(r.pair.app.outputs, 'content_async', content)
     elif change == 'epoch':r.epoch[:] = ['new-input']
     else:await r.read(r.pair.rows[::-1])
     sent = await r.provider.complete(request)

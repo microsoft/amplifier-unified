@@ -17,7 +17,7 @@ from amplifier_web.session_store import fork_session
 BAD_IMAGE = "Invalid 'input[86].output.image_url'. Expected a base64-encoded data URL, but got an invalid base64-encoded value."
 
 
-@pytest.mark.parametrize('code', ['native_input_oversized', 'native_checkpoint_invalid', 'secret payload'])
+@pytest.mark.parametrize('code', ['native_input_oversized', 'native_checkpoint_invalid', 'native_no_reduction', 'secret payload'])
 def test_compaction_failure_has_actionable_safe_projection(code):
     from amplifier_web.session_health import generation_failure
     detail = generation_failure({'error_category': 'context_compaction',
@@ -31,6 +31,13 @@ def test_compaction_failure_has_actionable_safe_projection(code):
     if code == 'native_input_oversized':
         assert 'too large' in detail['summary']
         assert 'Retrying' in detail['guidance']
+    if code == 'native_no_reduction':
+        assert 'could not confirm a smaller continuation request' in detail['summary']
+        assert 'not accepted' in detail['guidance']
+        assert 'measurement was unavailable or did not show a reduction' in detail['guidance']
+        assert 'same limit' in detail['guidance']
+        assert 'Copy the chat diagnostics' in detail['guidance']
+        assert detail['replayed'] is False and detail['retryable'] is False
 
 
 def test_typed_context_error_is_recognized_without_sdk_message_wording():

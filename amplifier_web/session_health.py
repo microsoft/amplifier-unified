@@ -17,7 +17,7 @@ def current_terminal_failure(session):
         if row.get('sessionId', session['id']) == session['id']
         and row.get('rootSessionId', session['id']) == session['id']), {})
     if (not failure or not active.get('id') or not active.get('terminal')
-            or active.get('completed') or terminal.get('event') != 'generation.failed'
+            or active.get('completed') or terminal.get('event') not in {'generation.failed', 'generation.detached'}
             or terminal.get('generation_id') != active['id']
             or set(terminal.get('input_ids') or []) != set(active.get('inputIds') or [])):
         return False
@@ -25,7 +25,8 @@ def current_terminal_failure(session):
         return (failure['generationId'] == active['id']
             and set(failure.get('inputIds') or []) == set(terminal.get('input_ids') or []))
     # A legacy generic exit has no binding to improve. Keep its saved diagnosis
-    # while warming; peer recovery still requires its separate exact receipts.
+    # while warming; fresh peer recovery still requires human authority and
+    # the native stopped-owner boundary, not replay of these historical inputs.
     return (failure.get('category') == 'unknown'
         and isinstance(failure.get('recordedAt'), (int, float))
         and isinstance(terminal.get('at'), (int, float))
@@ -72,6 +73,9 @@ def generation_failure(event):
         elif code == 'native_checkpoint_invalid':
             summary = 'The saved native checkpoint cannot be used by the selected provider or model.'
             guidance = 'Restore a compatible checkpoint or explicitly recover the history. Original history is preserved; no automatic summary fallback was used.'
+        elif code == 'native_no_reduction':
+            summary = 'Native compaction could not confirm a smaller continuation request.'
+            guidance = 'Original history is preserved; the candidate checkpoint was not accepted because its measurement was unavailable or did not show a reduction. A completed compaction call is not proof that the full continuation fits. Copy the chat diagnostics and report native_no_reduction before retrying; an unchanged retry is not a repair. A recovery copy with the same history can hit the same limit; do not replay completed actions or paste the entire history into a new chat.'
         elif code in {'native_measurement_unavailable', 'authoritative_measurement_unavailable'}:
             summary = 'Could not check conversation size.'
             guidance = 'Original history and the saved checkpoint are preserved. The counting service returned no usable measurement; the underlying cause was not recorded. Try Continue conversation once. If it fails again, share diagnostics; resetting the chat is not required.'

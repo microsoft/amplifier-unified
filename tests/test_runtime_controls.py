@@ -7,6 +7,59 @@ import pytest
 from amplifier_web.runtime_controls import public_config, restore_redactions, validate_plan
 
 
+@pytest.mark.parametrize('preserve', [False, True])
+async def test_cancelled_restore_retains_controls_and_releases_persistence_guard(
+        tmp_path, monkeypatch, preserve):
+    import asyncio
+    import json
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+    from test_task_continuity import controls, create
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    original, restored = controls('cold-task'), controls('cold-task')
+    started, release = asyncio.Event(), asyncio.Event()
+    original.coordinator.session_state['mode_discovery'] = SimpleNamespace(
+        find=lambda name: SimpleNamespace(name=name), list_modes=lambda: [])
+    original.coordinator.hooks = SimpleNamespace(emit=AsyncMock())
+    await create(original, maxTurns=8)
+    await original.perform('mode.set', {'name': 'review-only'})
+    before = original.state_path().read_bytes()
+    restored.preserve_configuration = preserve
+    restored.coordinator.session_state['mode_discovery'] = original.coordinator.session_state['mode_discovery']
+    async def activation(*args):
+        started.set()
+        await release.wait()
+    restored.coordinator.hooks = SimpleNamespace(emit=activation)
+    pending = asyncio.create_task(restored.restore())
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        assert restored.state_path().read_bytes() == before
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        assert restored.state_path().read_bytes() == before
+        assert restored.preserve_configuration is preserve
+        assert not restored._restoring
+        # A later successful preparation uses the same saved values. No replay
+        # of the cancelled task input or automatic limit change is implied.
+        release.set()
+        await restored.restore()
+        assert json.loads(restored.state_path().read_text())['mode'] == 'review-only'
+        assert restored.preserve_configuration is preserve
+        if preserve:
+            assert restored.state_path().read_bytes() == before
+        else:
+            await restored.perform('task.update', {
+                'commandId': 'ordinary-after-restore', 'expectedRevision': 1, 'maxTurns': 12})
+            assert json.loads(restored.state_path().read_text())['task']['maxTurns'] == 12
+    finally:
+        if not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        await original.close()
+        await restored.close()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('case', ['unique', 'ambiguous', 'different-model', 'different-family', 'existing'])
 async def test_saved_selection_requires_exact_connection_id(tmp_path, monkeypatch, case):

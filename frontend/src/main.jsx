@@ -1,4 +1,4 @@
-import {ApprovalPanel} from './approval-card';
+import {ApprovalPanel,isCapabilityCardAction,createCapabilityStopFence,stopFailureOutcome} from './approval-card';
 import {AutomationHub} from './automation-hub';
 import {createArchiveAction} from './archive-action.js';
 import {quoteNotice as makeQuoteNotice,quoteNoticeAfterRemoval,quoteNoticeAfterSend,visibleQuoteNotice} from './quote-notice.js';
@@ -42,7 +42,7 @@ import {checkpointSurfaces} from './surface-checkpoint';
 import {useConversationDetail} from './conversation-detail';
 import {readDetail} from './detail-read.js';
 import {trackAction,setFeedbackEventStream} from './feedback-diagnostics';
-import {ConversationError,ConversationSelect} from './conversation-controls';
+import {ConversationError} from './conversation-controls';
 import {useShell,ShellContext,ShellSlot} from './shell/runtime';
 import {useThemeScheme,useAppearanceCache,useWindowChrome} from './theme-presentation';
 import {ownershipState,actionErrorMessage} from './ownership.js';
@@ -54,21 +54,20 @@ import {PeerPresentation,PeerRun} from './peer-message';
 import {chatArtifacts} from './canvas-library';
 import {peerRuns} from './peer-groups.js';
 import {usePeerPreview,PeerPreviewCanvas} from './peer-preview';
-import {WorkspaceRail,AgentCanvas,CanvasToggle,SessionHistoryControls} from './shell-panels';
-import {FeedbackAction,MoreAppActions} from './app-toolbar';
-import {MobileChatTitle,useNarrowScreen} from './responsive-navigation';
+import {WorkspaceRail,AgentCanvas,SessionHistoryControls} from './shell-panels';
+import './app-toolbar.css';
+import {useNarrowScreen} from './responsive-navigation';
 import {NewChatSetup,newChatSetup} from './new-chat';
 import {WorkspaceLayout} from './panel-layout';
 import {AttachmentStrip,readAttachment} from './chat-controls';
 import {useChatFileDrop} from './chat-file-drop.js';
 import {ComposerOptions} from './composer-options';
 import {CoordinationPanel,selectWorkspaceChat} from './coordination';
-import {AttentionBadge,ActivityPanel,useReadCompletion} from './attention';
-import {FileDrop,PathField,BundlePicker} from './settings-ui';
+import {ActivityPanel,useReadCompletion} from './attention';
 import {ChatDelete} from './chat-delete';
 import React,{useState,useEffect,useLayoutEffect,useRef,useCallback,useMemo} from 'react';
 import {createRoot} from 'react-dom/client';
-import {Phone,MessageCircle,Bell,ArrowUp,Plus,Settings,X,GitBranch,Check,Download,FileText,ChevronRight,Loader,Volume2,Mic,MicOff,RefreshCw,Paperclip,Info,AudioLines,SlidersHorizontal,PanelLeft} from 'lucide-react';
+import {Phone,MessageCircle,Bell,ArrowUp,X,GitBranch,Download,ChevronRight,AudioLines} from 'lucide-react';
 import {request,download,visibleView} from './api';
 import {createPendingView} from './pending-view';
 import {createSettingsActionQueue,settingsDraftKey,isProviderCatalogRead,isDraftDefaultsRead,isConversationChoiceRead} from './settings-action-queue';
@@ -83,7 +82,6 @@ import {VoiceClient} from './voice';
 import {VoiceVisualClient,ComputerVisualClient} from './voice-visual';
 import {VoiceVisualControls,SharingIndicator} from './voice-visual.jsx';
 import {sessionStatus} from './session-status';
-import {Markdown} from './markdown';
 import './markdown-content.css';
 import {FeedbackPanel,FeedbackNotice} from './feedback';
 import {notificationBody,desktopNotificationsEnabled,notificationMessages} from './notifications';
@@ -115,6 +113,15 @@ const pretty=v=>JSON.stringify(v,null,2);
 const nowLabel=value=>{try{return new Date(typeof value==='number'&&value<1e12?value*1000:value).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}catch{return ''}};
 function App(){
  const archiveRevision=useRef(0),archiveAction=useRef(null),[archiveFeedback,setArchiveFeedback]=useState({notice:null,pending:[]});
+ const canvasInputRevision=useRef(0),permissionHistoryFocus=useRef(null);
+ const capabilityCardQueue=useRef(Promise.resolve());
+ const capabilityStopFence=useRef(null);
+ if(!capabilityStopFence.current)capabilityStopFence.current=createCapabilityStopFence({request,clientId});
+ useEffect(()=>{
+  const supersede=()=>{canvasInputRevision.current++};
+  for(const name of ['pointerdown','keydown','input'])document.addEventListener(name,supersede,true);
+  return()=>{for(const name of ['pointerdown','keydown','input'])document.removeEventListener(name,supersede,true)};
+ },[]);
  const narrow=useNarrowScreen();
  const [creatingWorkspace,setCreatingWorkspace]=useState(false);
  const actionFeedback=useRef(createActionFeedback()),outsidePointer=useRef(false),panelReturnFocus=useRef(null),settingsNavigation=useRef(null),workspaceSettingsNavigation=useRef(null);
@@ -211,6 +218,21 @@ function App(){
   });
  },[acceptState]);
  const dispatch=useCallback((action,args={},meta={})=>{
+  const capabilityCard=isCapabilityCardAction(action,args,meta);
+  const capabilityRead=capabilityCard&&action==='capability.read'?capabilityStopFence.current.beginRead(args):null;
+  // Capture eligibility BEFORE passive recovery: this preflight cannot become
+  // permission to send a decision merely because it reconciled an unknown Stop.
+  const capabilityRecovery=action==='capability.read'?capabilityStopFence.current.reconcile(args.sessionId??latest.current?.selectedSessionId):null;
+  const capabilityMutation=capabilityCard&&action!=='capability.read';
+  if(capabilityMutation){
+   try{capabilityStopFence.current.assertMutation(args,meta.capabilityRead)}catch(error){return Promise.reject(error)}
+  }
+  const permissionHistory=action==='view.update'&&args.patch?.canvasDraft?.delivery==='permissions';
+  if(permissionHistory){
+   const key=crypto.randomUUID();
+   permissionHistoryFocus.current={key,sessionId:args.sessionId??latest.current?.selectedSessionId,revision:canvasInputRevision.current};
+   args={...args,patch:{...args.patch,canvasDraft:{...args.patch.canvasDraft,permissionHistoryKey:key}}};
+  }else if(action==='canvas.select'||action==='canvas.visibility'||isNavigationAction(action,args))canvasInputRevision.current++;
   const chatReference=action==='session.select'&&(args.chatReference||args.peerPreview);
   if(chatReference&&meta.chatReferenceIntent!==undefined&&meta.chatReferenceIntent!==archiveRevision.current)
    return Promise.resolve({accepted:false,superseded:true,error:'A newer navigation kept this chat reference from opening.'});
@@ -273,14 +295,21 @@ function App(){
    })().finally(()=>{referenceDraftLock.current=false;setReferencingDraft(false)});
   }
   if(['conversation.send','conversation.stop','worker.spawn','worker.stop','worker.steer','approval.respond','attachment.add','attachment.remove'].includes(action))args={sessionId:latest.current?.selectedSessionId,...args};
+  // This is synchronous request intent, before the command can wait on Canvas.
+  // Reads may still reconcile display; later mutations cannot overtake this Stop.
+  const stop=action==='conversation.stop'&&args.sessionId
+   ?capabilityStopFence.current.beginStop(args.sessionId,meta.id||crypto.randomUUID()):null;
+  if(stop)meta={...meta,id:stop.commandId};
+  let stopPostStarted=false;
   if(action==='conversation.send'&&args.expectedConfigurationRevision===undefined){const target=latest.current?.sessions?.find(row=>row.id===args.sessionId);args={...args,expectedConfigurationRevision:target?.nextMessageRevision||0}}
   if(action==='conversation.send'&&!meta.checkpointed)return checkpointSurfaces(args.sessionId).then(()=>dispatch(action,args,{...meta,checkpointed:true}));
   if(action==='view.update'&&Object.keys(args.patch||{}).some(key=>key==='draft'||key.startsWith('canvas')))args={sessionId:latest.current?.selectedSessionId,...args};
   const selectedId=action==='session.select'?args.id:action==='shell.command'&&args.action==='session.select'?args.args?.id:null;
+  const openingDraft=action==='session.draft'||action==='shell.command'&&args.action==='session.draft';
   // References, like external links, keep source controls/editors mounted until
   // acceptance. The same navigation queue and Settings/Canvas guards still own
   // the transition; rejection must not destroy the control that shows it.
-  const navigationToken=selectedId&&!meta.chatLink&&!chatReference&&!canvasDirtyBarrier.current?conversationNavigation.current.begin(pendingView.current.apply(latest.current),selectedId,meta.navigationSession):null;
+  const navigationToken=openingDraft?conversationNavigation.current.beginDraft():selectedId&&!meta.chatLink&&!chatReference&&!canvasDirtyBarrier.current?conversationNavigation.current.begin(pendingView.current.apply(latest.current),selectedId,meta.navigationSession):null;
   if(navigationToken&&serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}
   if(action==='canvas.visibility')args={sessionId:latest.current?.selectedSessionId??null,canvasId:latest.current?.canvas?.id??null,...args};
   const pending=action==='canvas.visibility'?pendingView.current.addCanvas(latest.current,args.open):action==='view.update'?(meta.pendingViewToken??pendingView.current.add(args.patch||{},args.sessionId)):null;
@@ -291,9 +320,19 @@ function App(){
   const dirtyBarrier=canvasDirtyBarrier.current;
   const execute=async()=>{
    if(meta.before)await meta.before;
+   if(capabilityRecovery)await capabilityRecovery;
+   if(meta.consumePermissionHistory){
+    // This is bundled presentation housekeeping, never a saved stale draft.
+    // Resolve after queued document changes; an older effect cannot restore Overview.
+    const current=serverState.current,draft=current?.view?.canvasDraft;
+    if(current?.selectedSessionId!==args.sessionId||!draft?.library||draft.delivery!=='permissions'||draft.permissionHistoryKey!==meta.consumePermissionHistory)
+     return {accepted:false,superseded:true};
+    args={sessionId:args.sessionId,patch:{canvasDraft:{...draft,delivery:null}}};
+   }
    // Navigation and answers have separate queues; neither may overtake an
    // already declared renderer edit when its transition can remove the view.
    if((navigation||['question.answer','question.cancel','question.supersede'].includes(action))&&dirtyBarrier)await dirtyBarrier;
+   if(capabilityMutation)capabilityStopFence.current.assertMutation(args,meta.capabilityRead);
    if(meta.chatLink&&!meta.chatLinkIsCurrent())return {accepted:false};
    if(meta.archiveIsCurrent&&!meta.archiveIsCurrent())return {accepted:false};
    if(chatReference&&(meta.chatReferenceIntent!==archiveRevision.current||
@@ -304,7 +343,21 @@ function App(){
    const historyVisit=meta.historyVisit?destinationHistory.current.begin(meta.historyVisit):meta.recentPlace?destinationHistory.current.beginRecent(destinationKey(meta.recentPlace.entry),meta.recentPlace.entry,meta.recentPlace.scope):null;
    if((meta.historyVisit||meta.recentPlace)&&!historyVisit)return {accepted:false};
    try{
-    const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
+    let result;
+    try{
+     if(stop)stopPostStarted=true;
+     result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
+    }catch(error){
+     if(stop){
+      capabilityStopFence.current.settleStop(stop,stopFailureOutcome(error,stopPostStarted));
+      void capabilityStopFence.current.reconcile(stop.sessionId);
+     }
+     throw error;
+    }
+    if(stop){
+     capabilityStopFence.current.settleStop(stop,result?.accepted===true?'accepted':'unknown');
+     void capabilityStopFence.current.reconcile(stop.sessionId);
+    }
     if(historyVisit)destinationHistory.current.finish(result);
     if(result.state)acceptState(result.state);
     // Exact annotation and read-only preview receipts settle locally. Navigation
@@ -317,7 +370,9 @@ function App(){
      const confirmed=await historyVisit.confirmed;
      if(!confirmed)throw Error('Navigation was not confirmed. History was kept; no action was retried.');
     }
-    return result;
+    return capabilityRead&&result.result?.request
+     ?{...result,result:{...result.result,capabilityRead:capabilityStopFence.current.finishRead(capabilityRead,result.result.request.requestHash)}}
+     :result;
    }catch(error){if(historyVisit)destinationHistory.current.finish(null);throw error}
   };
   // Browse and chat selections share intent order. A later optimistic browse
@@ -329,10 +384,15 @@ function App(){
   // Optional plan summaries have their own exact read result; they must not
   // hold up browsing or ordered mutations while canonical files are read.
   const planRead=action==='session.plans';
-  const queue=usesNavigationQueue(action,args)?navigationQueue:action==='call.mute'?voiceControlQueue:localVoiceControl||action.startsWith('coordination.')||meta.presentation||defaultsRead||choiceRead||planRead?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
+  // Reveal joins document ordering AND visibility ordering without merging their
+  // queues globally. Capture the prior visibility tail before publishing this one.
+  const after=permissionHistory?canvasVisibilityQueue.current:catalogRead&&!choiceRead?commandQueue.current:null;
+  // A read-only Canvas reveal must not hold a pending card's guarded read or
+  // decision. Keep those individual calls ordered, independent of Canvas work.
+  const queue=capabilityCard?capabilityCardQueue:usesNavigationQueue(action,args)?navigationQueue:action==='call.mute'?voiceControlQueue:localVoiceControl||action.startsWith('coordination.')||meta.presentation||defaultsRead||choiceRead||planRead?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
   const queuedAt=performance.now();
   const timedExecute=()=>{const startedAt=performance.now();return Promise.resolve().then(execute).finally(()=>recordActionTiming(action,queuedAt,startedAt))};
-  const promise=enqueueSettings.current(queue,timedExecute,settingsDraftKey(action,args,meta),catalogRead&&!choiceRead?commandQueue.current:null).then(result=>{
+  const promise=enqueueSettings.current(queue,timedExecute,settingsDraftKey(action,args,meta),after).then(result=>{
    // Each caller owns an optimistic token even when several waiting editor
    // snapshots share the final request. Settle all callers after its receipt.
    if(pending)pendingView.current.settle(pending);
@@ -353,8 +413,9 @@ function App(){
    });
    if(!handledActionResults.current.has(result)){handledActionResults.current.add(result);handleEffects(result.effects)}
    return result;
-  }).catch(error=>{if(navigationToken){conversationNavigation.current.settle(navigationToken);if(serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}}if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}if(chatReference&&meta.chatReferenceIntent!==archiveRevision.current)error.navigationSuperseded=true;throw error}).finally(()=>{settleTracking();settleFeedback()});
+  }).catch(error=>{if(stop&&!stopPostStarted)capabilityStopFence.current.settleStop(stop,'not-applied');if(navigationToken){conversationNavigation.current.settle(navigationToken);if(serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}}if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}if(chatReference&&meta.chatReferenceIntent!==archiveRevision.current)error.navigationSuperseded=true;throw error}).finally(()=>{settleTracking();settleFeedback()});
   queue.current=promise.catch(()=>{});
+  if(permissionHistory)canvasVisibilityQueue.current=queue.current;
   if(action==='canvas.views.dirty'){
    canvasDirtyBarrier.current=promise;
    const settled=()=>{if(canvasDirtyBarrier.current===promise)canvasDirtyBarrier.current=null};
@@ -407,10 +468,10 @@ function App(){
    // duplicate it and race it; explicit recovery still uses /api/state.
    request('/api/actions',{signal:controller.signal}).then(actions=>{if(alive)setCatalog(Array.isArray(actions)?actions:actions.actions||[])}).catch(()=>{});
    let streamState,historyBaseline=true;
-   setFeedbackEventStream('connecting');source=createStateStream(clientUrl('/api/events?transport=delta-v1'),attachment.transports);source.addEventListener('state',e=>{if(!alive)return;try{const initial=!latest.current;streamState=JSON.parse(e.data);acceptState(streamState,{baseline:historyBaseline});historyBaseline=false;setStreamClient(streamState.client?.id===clientId?streamState.client:null);streamRecovery.current.delay=2000;reconnected();if(initial)setError('');clearTimeout(timer)}catch{}});
-   source.addEventListener('state-delta',e=>{if(!alive)return;try{streamState=applyStateDelta(streamState,JSON.parse(e.data));acceptState(streamState);setStreamClient(streamState.client?.id===clientId?streamState.client:null);reconnected()}catch{source.close();setFeedbackEventStream('closed');setConnected(false);setStreamClient(null);setBootAttempt(value=>value+1)}});
-   source.addEventListener('shell',e=>{try{window.dispatchEvent(new CustomEvent('amplifier-shell',{detail:JSON.parse(e.data)}))}catch{}});
-   source.onopen=()=>{historyBaseline=true;setFeedbackEventStream('open');reconnected();viewReporter.current.invalidate();publishView();window.dispatchEvent(new Event('amplifier-reconnected'))};source.onerror=()=>{
+   setFeedbackEventStream('connecting');source=createStateStream(clientUrl('/api/events?transport=delta-v1'),attachment.transports);source.addEventListener('state',e=>{if(!alive)return;try{if(e.decodeError)throw e.decodeError;const initial=!latest.current;streamState=e.data;acceptState(streamState,{baseline:historyBaseline});historyBaseline=false;setStreamClient(streamState.client?.id===clientId?streamState.client:null);streamRecovery.current.delay=2000;reconnected();if(initial)setError('');clearTimeout(timer)}catch{}});
+   source.addEventListener('state-delta',e=>{if(!alive)return;try{if(e.decodeError)throw e.decodeError;streamState=applyStateDelta(streamState,e.data);acceptState(streamState);setStreamClient(streamState.client?.id===clientId?streamState.client:null);reconnected()}catch{source.close();setFeedbackEventStream('closed');setConnected(false);setStreamClient(null);setBootAttempt(value=>value+1)}});
+   source.addEventListener('shell',e=>{try{if(e.decodeError)throw e.decodeError;window.dispatchEvent(new CustomEvent('amplifier-shell',{detail:e.data}))}catch{}});
+   source.onopen=()=>{historyBaseline=true;setFeedbackEventStream('open');reconnected();void capabilityStopFence.current.reconcile();viewReporter.current.invalidate();publishView();window.dispatchEvent(new Event('amplifier-reconnected'))};source.onerror=()=>{
     if(!alive||restarting)return;
     setFeedbackEventStream(source.readyState===2?'closed':'reconnecting');setConnected(false);setStreamClient(null);
     // CONNECTING is owned by EventSource's native retry. CLOSED cannot recover
@@ -433,6 +494,8 @@ function App(){
  const session=detail.session,view=state?.view||{},mode=view.mode||'chat',activity=sessionStatus(session),working=activity.busy;
  const messages=useMemo(()=>outboxMessages(session?.messages||[],outbox.entries,session?.id),[session?.messages,outbox.entries,session?.id]);
  const historyPending=conversationHistoryPending(session,state?.navigationPending,messages),ownership=ownershipState(session),executionUnavailable=session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||ownership.blocked;
+ // Pending New chat fences input without replacing the current transcript.
+ const historyDisplayPending=conversationHistoryPending(session,!!state?.navigationPending&&!state?.draftNavigationPending,messages);
  const settingsSession=useGuardedSettingsSession(session,settingsNavigation,id=>dispatch(id?'session.select':'session.draft',id?{id}:{},{settingsConfirmed:true}));
  const settingsRoute=useGuardedSettingsPanel(state?.canvas?.kind==='settings'&&state.canvas.open&&!view.canvasDraft?.library&&!view.panel?'settings-canvas':view.panel,settingsNavigation,route=>act('view.update',{patch:{panel:route==='settings-canvas'?null:route,settingsCanvas:route==='settings-canvas'}}));
  const canvasSettingsVisible=settingsRoute==='settings-canvas',panel=canvasSettingsVisible?null:settingsRoute;
@@ -447,7 +510,7 @@ function App(){
  // conversation must not refresh a workspace's complete provider inventory.
  useConnectionSetup(state,session,act);
  const availableAttachments=(session?.draftAttachments||state?.draftAttachments||[]).filter(file=>!outbox.entries.some(row=>row.sessionId===session?.id&&row.attachmentIds.includes(file.id)));
- useEffect(()=>{for(const entry of outbox.entries){const saved=state?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.find(row=>row.inputId===entry.commandId);if(saved?.delivery?.status==='accepted')outbox.update(entry.id,null)}},[state]);
+ useEffect(()=>{for(const entry of outbox.entries){const saved=state?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.find(row=>row.inputId===entry.commandId);if(['accepted','queued_for_update','held'].includes(saved?.delivery?.status))outbox.update(entry.id,null)}},[state]);
  const turnEnds=useMemo(()=>completedTurnEnds(session),[session?.messages,session?.sharedHistoryUserTurnOffset,session?.execution?.turns,session?.status]);
  const workPlacement=useMemo(()=>turnPlacements(messages,execution),[messages,execution]),newest=useMemo(()=>newestMessageIds(messages),[messages]);
  const voiceStream=useMemo(()=>voiceWorkStream(session),[session?.streaming,session?.streamingId,session?.streamingInputId]);
@@ -580,7 +643,7 @@ function App(){
   draftSaves.current.set(payload,save);save.catch(()=>draftSaves.current.delete(payload));return save;
  }
  function editDraft(value,documentValue){
-  if(referenceDraftLock.current)return;
+  if(referenceDraftLock.current||latest.current?.draftNavigationPending)return;
   if(documentValue===undefined&&value&&quoteApi.current?.document()){
    if(value.startsWith(lastDraft.current)){try{quoteApi.current.append(value.slice(lastDraft.current.length));}catch(error){reportError(error)}return;}
    setError('Quoted content was kept. Edit its commentary in the composer.');return;
@@ -624,7 +687,7 @@ function App(){
    const result=await dispatch('conversation.send',{sessionId:entry.sessionId,text:entry.text,...(entry.document?{document:entry.document}:{}),...(entry.allowNextTurn?{allowNextTurn:true}:{}),...(entry.expectedGenerationId?{expectedGenerationId:entry.expectedGenerationId}:{}),...(entry.replyTo?.id?{replyId:entry.replyTo.id}:{}),attachmentIds:entry.attachmentIds,via:entry.via,preserveDraft:true},{id:entry.commandId,feedback:false});
    outbox.update(entry.id,['sending','unknown'].includes(result.delivery)?{status:'unknown',error:'Delivery has not been confirmed. Checking again will not run it twice.'}:null);
   }catch(error){
-   const received=latest.current?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.some(row=>row.inputId===entry.commandId&&row.delivery?.status==='accepted');
+   const received=latest.current?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.some(row=>row.inputId===entry.commandId&&['accepted','queued_for_update','held'].includes(row.delivery?.status));
    if(received&&error.code!=='session_busy')outbox.update(entry.id,null);
    else outbox.update(entry.id,{status:error.receipt?.delivery==='failed'||error.status>=400&&error.status<500&&error.status!==408?'failed':'unknown',error:actionErrorMessage(error)});
   }finally{deliveries.current.delete(entry.id)}
@@ -710,7 +773,7 @@ function App(){
   // Before a first state arrives there is no mounted editor to checkpoint.
   // The existing local draft journal remains intact across this recovery reload.
   if(!latest.current)return;
-  await Promise.all([navigationQueue.current,commandQueue.current,sendQueue.current,uploadQueue.current]);
+  await Promise.all([navigationQueue.current,commandQueue.current,capabilityCardQueue.current,sendQueue.current,uploadQueue.current]);
   await checkpointSurfaces(latest.current?.selectedSessionId);
   // Flush the composer before navigating away, including a just-typed debounce.
   clearTimeout(draftTimer.current);
@@ -777,13 +840,13 @@ function App(){
   {error&&<div className="a-alert" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={()=>{setError('');act('view.update',{patch:{notice:null}})}} data-action="view.update"><X/></button></div>}
   {!browsing&&<><ConversationStatus session={session} act={act}/><ConversationError state={state} session={session} act={act}/></>}{!state.runtime?.available&&<div className="a-alert a-runtime"><span><strong>Connect Amplifier to get started.</strong> {state.runtime?.error||'The Amplifier runtime is not installed. Install this app with its runtime dependencies, then relaunch.'}</span><button className="a-link" onClick={()=>open('settings')} data-action="view.update">Setup details <ChevronRight/></button></div>}
   <LiveChatActivity voice={voice} callSession={state.sessions.find(row=>row.id===state.voice?.sessionId)} callActive={callActive} act={act}><SharingIndicator sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={reportError}/></LiveChatActivity>
-  <WorkspaceLayout appearanceScheme={themeScheme} appearanceCss={activeCss} state={layoutState} act={act} presentation={presentation}><WorkspaceRail footer={<AppFooter state={state} act={act} connected={connected} open={open}/>} shell={shell} state={state} session={session} act={act} selectSession={id=>act('session.select',{id})} newSession={newChat}/><section className={`a-conversation ${messages.length||historyPending||session?.historyError||executionUnavailable?'has-messages':'is-empty'}`} data-part="conversation" aria-label="Shared conversation" {...chatDrop.handlers}>{chatDrop.active&&<div className="a-chat-file-overlay" data-part="chat-file-drop" role="status"><div><strong>Drop to attach to {session?.title||'this draft'}</strong><p>Files join this draft. Nothing is sent.</p></div></div>}<WorkSurface shell={shell} state={state} act={act} dispatch={dispatch} navigationRef={workspaceSettingsNavigation}/>
-   <MessageFocus session={session} focus={state.view?.messageFocus} detail={detail} ensureVisible={interim.ensureVisible}/><div className="a-messages" ref={messagesPane} data-part="messages" data-view-source={session?"conversation":undefined} data-session-id={session?.id??undefined} data-host-instance-id={state.client?.hostInstanceId} data-work-projection={workProjectionReceipt(session,state.client?.hostInstanceId)} role="log" aria-label="Conversation messages" aria-live="polite" aria-busy={historyPending||!!detail.busy}>{historyPending?<SessionHistoryControls session={{...session,historyLoading:!session?.historyError, messages:[],sharedHistoryOffset:0,historyActivity:null}} act={act}/>:<><div className="a-session-history">{detail.controls}</div><WorkProjectionStatus session={session} messages={messages}/><SessionHistoryControls session={session?.messageWindow?.offset>0?{...session,sharedHistoryOffset:0}:session} messages={messages} act={act} hideEarlier/>{session?.parentId&&<div className="a-chat-origin"><GitBranch/><span>{!isTopLevelChat(session)?'Subagent conversation':session.editOrigin?'Continued from an edited message':'Forked conversation'}</span><button type="button" className="a-link" data-action="session.select" disabled={!state.sessions.some(s=>s.id===session.parentId)} onClick={()=>act('session.select',{id:session.parentId})}>{!isTopLevelChat(session)?'Open parent chat':'Open original chat'}</button></div>}{!session&&conversationRows.length===0&&<NewChatSetup draft={draft} onChoose={value=>{if(lastDraft.current.trim())return;editDraft(value);composerRef.current?.focus()}}/>} {conversationRows.length===0&&!historyPending&&!session?.historyError&&!executionUnavailable?session&&<div className="a-empty"><img src={logo} alt=""/><h2>What shall we work on?</h2><p>Bring an idea, a question, or a file.</p></div>:conversationRows.map(renderRow)}{!voiceStream&&<StreamingMessage session={session} state={state}/>}{presentation.planPlacement==='inline'&&<ChatPlan session={session} state={state} act={act} placement="inline"/>}<Questions key={`questions:${session?.id}`} session={session} state={state} dispatch={dispatch} reviewState={questionReviewState}/><NewChatHandoffs key={`handoffs:${session?.id}`} state={state} dispatch={dispatch}/></>}<div ref={messagesEnd}/></div>
-   {session&&!historyPending&&<ConversationRail paneRef={messagesPane} sessionId={session.id} messages={messages} onJump={id=>messages.some(row=>row.id===id)?chatScroll.current?.jump(id):detail.around(id)}/>}
+  <WorkspaceLayout appearanceScheme={themeScheme} appearanceCss={activeCss} state={layoutState} act={act} presentation={presentation}><WorkspaceRail footer={<AppFooter state={state} act={act} connected={connected} open={open}/>} shell={shell} state={state} session={session} act={act} selectSession={id=>act('session.select',{id})} newSession={newChat}/><section className={`a-conversation ${messages.length||historyDisplayPending||session?.historyError||executionUnavailable?'has-messages':'is-empty'}`} data-part="conversation" aria-label="Shared conversation" {...chatDrop.handlers}>{chatDrop.active&&<div className="a-chat-file-overlay" data-part="chat-file-drop" role="status"><div><strong>Drop to attach to {session?.title||'this draft'}</strong><p>Files join this draft. Nothing is sent.</p></div></div>}<WorkSurface shell={shell} state={state} act={act} dispatch={dispatch} navigationRef={workspaceSettingsNavigation}/>
+   <MessageFocus session={session} focus={state.view?.messageFocus} detail={detail} ensureVisible={interim.ensureVisible}/><div className="a-messages" ref={messagesPane} data-part="messages" data-view-source={session?"conversation":undefined} data-session-id={session?.id??undefined} data-host-instance-id={state.client?.hostInstanceId} data-work-projection={workProjectionReceipt(session,state.client?.hostInstanceId)} role="log" aria-label="Conversation messages" aria-live="polite" aria-busy={historyDisplayPending||!!detail.busy}>{historyDisplayPending?<SessionHistoryControls session={{...session,historyLoading:!session?.historyError, messages:[],sharedHistoryOffset:0,historyActivity:null}} act={act}/>:<><div className="a-session-history">{detail.controls}</div><WorkProjectionStatus session={session} messages={messages}/><SessionHistoryControls session={session?.messageWindow?.offset>0?{...session,sharedHistoryOffset:0}:session} messages={messages} act={act} hideEarlier/>{session?.parentId&&<div className="a-chat-origin"><GitBranch/><span>{!isTopLevelChat(session)?'Subagent conversation':session.editOrigin?'Continued from an edited message':'Forked conversation'}</span><button type="button" className="a-link" data-action="session.select" disabled={!state.sessions.some(s=>s.id===session.parentId)} onClick={()=>act('session.select',{id:session.parentId})}>{!isTopLevelChat(session)?'Open parent chat':'Open original chat'}</button></div>}{!session&&conversationRows.length===0&&<NewChatSetup draft={draft} onChoose={value=>{if(lastDraft.current.trim())return;editDraft(value);composerRef.current?.focus()}}/>} {conversationRows.length===0&&!historyDisplayPending&&!session?.historyError&&!executionUnavailable?session&&<div className="a-empty"><img src={logo} alt=""/><h2>What shall we work on?</h2><p>Bring an idea, a question, or a file.</p></div>:conversationRows.map(renderRow)}{!voiceStream&&<StreamingMessage session={session} state={state}/>}{presentation.planPlacement==='inline'&&<ChatPlan session={session} state={state} act={act} placement="inline"/>}<Questions key={`questions:${session?.id}`} session={session} state={state} dispatch={dispatch} reviewState={questionReviewState}/><NewChatHandoffs key={`handoffs:${session?.id}`} state={state} dispatch={dispatch}/></>}<div ref={messagesEnd}/></div>
+   {session&&!historyDisplayPending&&<ConversationRail paneRef={messagesPane} sessionId={session.id} messages={messages} onJump={id=>messages.some(row=>row.id===id)?chatScroll.current?.jump(id):detail.around(id)}/>}
    {(awayFromBottom||detail.focused)&&<div className="a-chat-jump"><button type="button" className="a-soft" aria-label="Jump to latest messages" onClick={()=>detail.focused?detail.latest():chatScroll.current?.reveal()}>↓ Latest messages</button></div>}
    <LiveActivity session={state.sessions.find(row=>row.id===session?.id)||session}/>
-   <ApprovalPanel session={session} act={act} dispatch={dispatch} freshnessKey={`${connected}:${session?.interruptionRevision}:${session?.executionRevision}`}/>
-   {(!presentation.planPlacement||presentation.planPlacement==='composer'||presentation.planPlacement==='active'&&responseActive)&&!historyPending&&<ChatPlan session={session} state={state} act={act}/> }
+   <ApprovalPanel key={session?.id} session={session} act={act} dispatch={dispatch} canvasDraft={state.view?.canvasDraft} freshnessKey={`${connected}:${session?.interruptionRevision}:${session?.executionRevision}`}/>
+   {(!presentation.planPlacement||presentation.planPlacement==='composer'||presentation.planPlacement==='active'&&responseActive)&&!historyDisplayPending&&<ChatPlan session={session} state={state} act={act}/> }
    <QuestionNotice session={session} paneRef={messagesPane}/>
    <form className="a-composer a-compact-composer" data-part="composer" data-action="conversation.send" onSubmit={send}>
     {draftStorageError&&<p role="alert" className="a-upload-status">This browser could not keep a recovery copy of your draft. Keep this tab open until it is saved.</p>}
@@ -808,7 +871,7 @@ function App(){
      const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(source.text||''));
      const digest=[...new Uint8Array(bytes)].map(n=>n.toString(16).padStart(2,'0')).join('');
      return digest===quote.sourceDigest?'Original revealed. Saved quotation is unchanged.':'Source changed since quoting. The earlier snapshot is retained.';
-    }} onFiles={addFiles} disabled={executionUnavailable} readOnly={referencingDraft} pasteDisabled={historyPending}/>
+    }} onFiles={addFiles} disabled={executionUnavailable} readOnly={referencingDraft||!!state?.draftNavigationPending} pasteDisabled={historyPending}/>
     {visibleQuoteNotice(quoteNotice,session?.id)&&<small role="status">{visibleQuoteNotice(quoteNotice,session?.id)}</small>}
     {quoteReturn&&quoteReturn.sid===session?.id&&<button type="button" className="a-link" onClick={()=>{if(messagesPane.current)messagesPane.current.scrollTop=quoteReturn.top;const button=quoteReturn.button;setQuoteReturn(null);if(button?.isConnected&&button.getClientRects().length)button.focus({preventScroll:true});else composerRef.current?.focus({preventScroll:true});}}>Return to reading position</button>}
     </div>
@@ -822,7 +885,10 @@ function App(){
     </div>
     </ComposerOwnership>
    </form>
-  </section><McpAppThemeProvider scheme={requestedScheme}><AgentCanvas suppressed={browsing||previewVisible} state={settingsState} act={act} dispatch={dispatch} settingsSurface={settingsSurface}/></McpAppThemeProvider>
+  </section><McpAppThemeProvider scheme={requestedScheme}><AgentCanvas suppressed={browsing||previewVisible} state={settingsState} act={act} dispatch={dispatch} settingsSurface={settingsSurface} permissionHistoryCurrent={key=>{
+   const intent=permissionHistoryFocus.current,current=latest.current;
+   return intent?.key===key&&intent.revision===canvasInputRevision.current&&intent.sessionId===current?.selectedSessionId&&current?.canvas?.open&&current?.view?.canvasDraft?.library&&!current?.view?.settingsCanvas;
+  }}/></McpAppThemeProvider>
   {previewVisible&&<PeerPreviewCanvas key={peerPreview.active.source.sourceId} active={peerPreview.active} onClose={peerPreview.close} state={layoutState} dispatch={dispatch}/>}</WorkspaceLayout>
   {creatingWorkspace&&<WorkspaceCreation state={state} act={act} onClose={()=>setCreatingWorkspace(false)}/>}
   <FeedbackNotice state={state} act={act}/>

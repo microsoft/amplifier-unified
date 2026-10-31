@@ -57,3 +57,18 @@ test('capacity waiting is visible without a misleading turn-duration estimate',(
   turnDurationHint:{version:1,basis:'recent_similar_turns',scope:'turn',sampleCount:5,startedAt:1,lowerSeconds:2,upperSeconds:8}};
  assert.match(liveActivity(session).label,/continue automatically/);assert.equal(durationHint(session),null);
 });
+
+test('unlimited waiting clears both optional limits only after saving',async()=>{
+ let root;const writes=[];
+ const act=async(action,args)=>{if(action.endsWith('read'))return {accepted:true,result:{...initial,waitTimeoutSeconds:60}};writes.push(args);return {accepted:true,result:{...args,revision:1}}};
+ await renderAct(async()=>{root=create(React.createElement(ModelCapacitySettings,{act}))});
+ await renderAct(async()=>button(root,'Use unlimited waiting').props.onClick());
+ assert.equal(writes.length,0);
+ assert.equal(root.root.findByProps({id:'model-capacity-max-waiting'}).props.value,0);
+ assert.equal(root.root.findByProps({id:'model-capacity-timeout'}).props.value,0);
+ assert.equal(button(root,'Save model-capacity settings').props.disabled,false);
+ await renderAct(async()=>button(root,'Save model-capacity settings').props.onClick());
+ assert.deepEqual(writes,[{expectedRevision:0,maxWaitingCalls:0,waitTimeoutSeconds:0}]);
+ assert.match(JSON.stringify(root.toJSON()),/no waiting-call count limit/);
+ await renderAct(async()=>root.unmount());
+});

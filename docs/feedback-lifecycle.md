@@ -2,6 +2,29 @@
 
 The browser and agent use the same feedback actions. A feedback ID is the original submission request ID, never a guessed repository issue number. The host verifies the current GitHub owner, canonical issue URL and original feedback marker before a follow-up. Saved receipts and audit versions survive restarts; repository text is untrusted data.
 
+The [Full initial-publication path](feedback-excerpts.md#initial-publication-under-full-access)
+uses conversation-owned initial files/excerpts and retained standing authority.
+Later ordinary files also support conversation-owned Full staging and delivery,
+with the existing browser review path retained in Ask mode. Direct text comments/corrections already work without a browser;
+the optional comparison UI is not a new prerequisite for those callers.
+
+Under saved Full, root agents, assigned native children and trusted systems with
+an explicit calling conversation can publish text comments, correction versions
+and issue-state changes without a fresh human request or connected browser.
+Accepted writes retain their actual source conversation, runtime principal,
+origin and captured Full/Stop authority separately from the remote GitHub account.
+Each remote mutation rechecks that authority after preflight awaits. Revocation,
+Stop or an off/on policy change prevents a delayed write; an accepted background
+operation may outlive its originating turn. Exact retries only read the original
+result and do not recapture authority or repeat a possible effect.
+
+Read-only report loading and unknown-original reconciliation do not renew the
+original effect's authority. They remain available after Stop or revocation and
+retain the current check's caller separately. Local feedback identity, remote
+owner/marker checks, revisions and append-only corrections keep their existing
+meaning. This does not add submitting-chat ownership to host feedback or change
+Ask-mode direct follow-ups. Optional browser comparison remains a separate workflow.
+
 - `feedback.get` reads the original report and bounded comment pages. Use a new request ID to refresh; exact retries return the same snapshot.
 - `feedback.reconcile` reads GitHub for an unknown original submission. Only a unique fresh owner/marker match binds the original receipt. No match or incomplete/ambiguous search leaves delivery unknown and never resends it.
 - `feedback.comment` appends the explicitly requested text. `feedback.update` adds a correction version as a comment, preserving the original report and maintainer changes. It does not replace the issue title or body. GitHub does not provide atomic conditional issue edits.
@@ -92,7 +115,9 @@ relabelled as an original edit. The candidate qualification limits below remain
 historical evidence, not claims of additional testing from that scope decision.
 
 Optional `feedbackId` on `feedback.attachment.add/remove` chooses a separate
-per-client, per-original-feedback ordinary-file draft. Initial drafts, selection
+per-owner, per-original-feedback ordinary-file draft. Full agent/system callers
+use the existing conversation owner; other callers use the attached browser
+owner. Those namespaces remain separate, even if their text IDs match. Initial drafts, selection
 and excerpt consent retain their existing flow. SHA256 is visible for every
 follow-up file; no chat attachment or source path is implicitly included.
 `feedback.attachments.review` reads the original submitted (or positively
@@ -101,14 +126,32 @@ original marker and current account. It freezes the complete manifest, private
 destination, account/issue/repository IDs and retention disclosure. Review
 alone is not consent and uploads nothing.
 
-Explicit `feedback.attachments.add` requires the review request ID and the
-complete exact confirmed `{id,sha256}` set. The host rechecks scope, bytes,
+Explicit `feedback.attachments.add` requires the complete exact selected
+`confirmedFiles: [{id,sha256}]` set. In Ask mode it also requires the completed
+browser review request ID and user confirmation. Under Full, review is optional;
+an explicitly supplied review remains a one-use exact destination and manifest
+precondition. Without one, the existing upload journal freezes freshly verified
+repository, issue, current account and complete file facts before its first write.
+These observations do not claim that a human reviewed the files. The host rechecks scope, bytes,
 account, issue and private repository before any upload. It creates only
 isolated Git Data blobs/tree/root commit/ref and an append-only marked comment
 on the same issue. There is no issue title/body/state PATCH, new issue,
 main-branch write, comment replacement or asset deletion. The initial upload
 transport is not changed. Limits remain 8 files, 8 MiB each, 24 MiB total.
 Excerpts are refused in this increment.
+
+Full admission retains the actual calling conversation, native actor (including
+a mounted child), origin and existing Full/Stop authority. Accepted background
+uploads may finish after the turn completes. Every external write rechecks the
+captured revision, Stop and placement after awaits. Turning Full off and back on
+does not renew an old upload. Exact action retries return the caller-owned
+receipt directly, without rereading or reposting an effect. Browser drafts and
+receipts remain isolated from conversation staging.
+
+The same conversation may request read-only reconciliation after Stop or
+revocation. It keeps the original upload actor and authority, records its own
+caller, and never starts an unattempted phase. This adds no generic GitHub
+management or cross-account/issue ownership capability.
 
 Every remote POST persists a sending fence, exact endpoint, input fingerprint
 and known prerequisites in the existing private follow-up SQLite audit before

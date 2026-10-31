@@ -179,8 +179,9 @@ async def test_environment_pages_and_cleanup_do_not_select_another_owner(app,que
 
 
 @pytest.mark.parametrize('limit', [0, 6])
-async def test_environment_zero_count_keeps_atomic_retained_owner_bound(app, queue, limit):
-    await configure(app, maxEnvironmentsPerChat=limit, maxOwnedResourcesPerChat=3)
+@pytest.mark.parametrize('owner_limit', ['maxOwnedResources', 'maxOwnedResourcesPerChat'])
+async def test_environment_zero_count_keeps_atomic_retained_owner_bound(app, queue, limit, owner_limit):
+    await configure(app, maxEnvironmentsPerChat=limit, **{owner_limit:3})
     home=app.data_dir;sid=scope(app)['sessionId'];workspace=scope(app)['workspaceId']
     barrier=threading.Barrier(6)
     def reserve(index):
@@ -214,7 +215,6 @@ async def test_default_source_count_accepts_above_eight_without_rewriting_saved_
     assert (app.data_dir/'test-execution.json').read_bytes()==saved
     assert all(child['status']=='working' for child in children)
 
-@pytest.mark.parametrize('key', sorted(settings.CONCURRENCY_DEFAULTS.keys()-settings.OPTIONAL_CONCURRENCY_COUNTS))
-def test_retained_owner_and_reservation_bounds_cannot_be_disabled(key):
-    with pytest.raises(ValueError):
-        settings.validate({'version':1,'queue':{},'profiles':{},'concurrency':{key:0}})
+@pytest.mark.parametrize('key', sorted(settings.CONCURRENCY_DEFAULTS))
+def test_all_work_counts_allow_zero(key):
+    assert settings.validate({'version':1,'queue':{},'profiles':{},'concurrency':{key:0}})['concurrency'][key]==0

@@ -2,13 +2,14 @@
 
 `workspace.tests.submit` queues bounded checks per root conversation. The global
 **Settings → Testing & resources → Advanced execution limits** controls both the
-total pending queue (default 64) and **Maximum pending checks per chat** (default
-0: no per-chat count ceiling). **Owned test environments per chat** also defaults
-to 0. Positive saved values remain operator ceilings and count all waiting/active
-checks or retained environments, including those beyond the first displayed page.
+total pending queue and **Maximum pending checks per chat**. All work count limits
+default to 0: no count ceiling, including environments, retained resources and
+cooperative reservations. Positive saved values remain operator ceilings and count
+all waiting/active checks or retained owners, including those beyond the first
+displayed page. Existing saved limits are never rewritten by a default change.
 A request with `independent: true` may overlap other independent checks in distinct
-owned environments, subject to physical resource admission and retained-owner
-bounds; default requests preserve ordered work. Queue wait defaults to 0 (until
+owned environments, subject to physical resource admission and any configured count
+limits; default requests preserve ordered work. Queue wait defaults to 0 (until
 Stop or cancellation). An explicit wait limit and already-accepted deadlines keep
 their original meaning; changing defaults never rewrites a queued receipt. The
 host saves the request in the existing command journal, waits for physical
@@ -94,8 +95,13 @@ The result does not satisfy a shared-task dependency or prove product acceptance
   requests may overlap within any positive per-chat environment ceiling. Each
   request keeps its own source snapshot, resource ID, result and cleanup journal.
   An unknown outcome never discards its retained owner, even after restart.
-  Independent work may use available capacity without retrying or resolving that
-  unknown; an earlier ordered check remains a barrier until its cleanup settles.
+  A confirmed stopped environment with no pending operation or dependency
+  preparation does not block later checks merely because its files remain
+  retained after an export/removal failure. Its original result, ownership and
+  evidence stay unchanged; no failed operation is replayed or declared resolved.
+  Active cleanup, running or unknown environments still preserve ordering.
+  Retained stopped environments still count against explicit owner/environment
+  ceilings and physical storage admission.
   Manual environments count against the same per-chat ceiling. Waiting reasons
   remain visible in the existing check list.
 - A host admits FIFO among its eligible roots. One physical capacity observation
@@ -108,10 +114,11 @@ The result does not satisfy a shared-task dependency or prove product acceptance
 The optional per-source **Outstanding task chats per manager** count also defaults
 to 0. Explicit zero disables only that count gate, not assignment, causal-depth,
 notification or ownership checks. Saved positive settings remain unchanged.
-The global pending queue, retained resource-owner and reservation bounds remain
-positive protections for bounded journals and ownership records; zero does not
-disable them. Removing a chat count ceiling does not itself provide machine
-resource admission for ordinary model workers. Test environments continue to use
+The global pending queue, retained resource-owner and reservation count ceilings
+also default to zero; explicitly saved positive values remain effective.
+Bounded reads and ownership records remain intact. Removing a chat count ceiling
+does not itself provide machine resource admission for ordinary model workers.
+Test environments continue to use
 their separate physical resource authority described below.
 
 New managed setups with a verified native machine authority use CPU/memory
@@ -161,8 +168,8 @@ users, or container systems. The machine resource authority and queue settings
 remain separate owners; their current controls are shown separately in Settings.
 Registered machines use their own verified target authority.
 
-The Docker configuration may set `maxRunning` (default 15), `maxInstances`
-(default 256 retained plus active), and `minFreeBytes` (default 10 GiB). Zero
+The Docker configuration may set `maxRunning` and `maxInstances`
+(both default to 0: no count ceiling), and `minFreeBytes` (default 10 GiB). Zero
 explicitly disables that individual limit. Stopped environments consume storage
 but not running slots. Unknown/paused/starting physical instances remain active.
 Docker admission is serialized for cooperating processes of one host user,

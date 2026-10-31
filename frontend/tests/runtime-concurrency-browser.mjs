@@ -1,3 +1,4 @@
+import {fixturePython} from './fixture-python.mjs';
 // Owned-DTU real-worker benchmark. External provider latency and runtime
 // qualification/install are explicitly excluded, never mocked as accepted.
 import {spawn} from 'node:child_process';
@@ -16,7 +17,7 @@ const result={schemaVersion:1,startedAt:new Date().toISOString(),source:options.
  fixtureSha256:hash('tests/fixtures/runtime_concurrency_server.py'),providerSha256:hash('tests/fixtures/amplifier_module_provider_concurrency/__init__.py'),harnessSha256:hash('frontend/tests/runtime-concurrency-browser.mjs'),
  scope:{abruptStopFaultInjection:options['abrupt-stop']==='1',realRuntimeManager:true,realSubprocessWorkers:true,realLoopLive:true,provider:'local deterministic 250ms deltas',runtimeQualification:'bypassed explicit qualified interpreter',externalProvider:false,history:'14 synthetic top-level chats; scale replica acceptance is separate',timingContext:options.context||'functional calibration; shared host load'},
  desired:{healthP95Ms:100,selectionP95Ms:500,sendAckWarmMs:500,sendAckColdMs:3000,firstVisibleDeltaWarmMs:1000,firstVisibleDeltaColdMs:3000,streamLagP95Ms:250,stopIdleMs:1000},stages:[],failures:[]};
-const fixture=spawn(root+'.venv/bin/python',['-u',root+'tests/fixtures/runtime_concurrency_server.py','--home',options.home,'--worker-python',options['worker-python'],...(options['abrupt-stop']==='1'?['--abrupt-stop']:[]),...(options.trace==='1'?['--trace']:[])],{cwd:root,stdio:['ignore','pipe','pipe']});
+const fixture=spawn(fixturePython(root+'.venv/bin/python'),['-u',root+'tests/fixtures/runtime_concurrency_server.py','--home',options.home,'--worker-python',options['worker-python'],...(options['abrupt-stop']==='1'?['--abrupt-stop']:[]),...(options.trace==='1'?['--trace']:[])],{cwd:root,stdio:['ignore','pipe','pipe']});
 let stderr='',stdout='',browser,page,ready;
 fixture.stderr.on('data',chunk=>{stderr+=chunk;});fixture.stdout.on('data',chunk=>{stdout+=chunk;});
 const fixtureExited=new Promise(resolve=>fixture.once('exit',(code,signal)=>resolve({code,signal})));

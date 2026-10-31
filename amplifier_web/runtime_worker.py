@@ -118,7 +118,28 @@ class Worker:
             # Only valid bounded waits earn margin; host validation still applies.
             if type(wait_ms) is int and 0 <= wait_ms <= 60000:
                 timeout = max(timeout, wait_ms / 1000 + 5)
+        # These fields are host-produced, never accepted from tool arguments.
+        args = {key: value for key, value in args.items()
+                if key not in {'_handoffSnapshot', '_handoffDrain', '_nativeChild'}}
+        if operation == 'capacity.admit':
+            from amplifier_web.handoff_drain import witness, native_child
+            args.update(_handoffDrain=witness(self, args.get('call') or {}),
+                        _nativeChild=native_child(self, args.get('call') or {}))
+        elif isinstance(args.get('_childOrigin'), dict):
+            from amplifier_web.handoff_drain import native_child
+            args['_nativeChild'] = native_child(self, {'sessionId': args['_childOrigin']['runtimeSessionId']})
+        handoff_marker = None
+        from amplifier_web.handoff_drain import own_target
+        if (operation in {'dispatch', 'action.dispatch'} and args.get('action') == 'worktree.handoff'
+                and own_target(self, args)):
+            from amplifier_web.handoff_drain import begin
+            snapshot = await begin(self, args.get('id'))
+            if snapshot is not None:
+                args['_handoffSnapshot'] = snapshot
+                handoff_marker = self._handoff_boundary['id']
         identity = str(uuid.uuid4())
+        if handoff_marker:
+            self._handoff_boundary['drain'].setdefault('bridgeId', identity)
         future = asyncio.get_running_loop().create_future()
         self.bridges[identity] = future
         cancelled = False
@@ -151,11 +172,29 @@ class Worker:
             diagnostic('requested')
             if timing:
                 timing.mark('write.start')
-            publish({"op": "bridge", "id": identity, "operation": operation, "args": args,
-                     **({'_timing': timing.snapshot()} if timing else {})})
+            message = {"op": "bridge", "id": identity, "operation": operation, "args": args,
+                       **({'_timing': timing.snapshot()} if timing else {})}
+            if handoff_marker:
+                try:
+                    encode_message(message)  # Definite local rejection before any action bytes.
+                except Exception:
+                    from amplifier_web.handoff_boundary import inspect
+                    await inspect(self, handoff_marker, cancel=True)
+                    raise
+            publish(message)
             if timing:
                 timing.mark('write.end')
             result = await asyncio.wait_for(future, timeout)
+            if handoff_marker:
+                try:
+                    if isinstance(result, dict) and result.get('accepted') is True:
+                        await self._finish_handoff_ack(result.get('result'), future)
+                    elif isinstance(result, dict) and result.get('accepted') is False:
+                        await self._finish_handoff_ack({'id': handoff_marker, 'phase': 'absent'}, future)
+                except Exception as exc:
+                    # Keep a known pending receipt; local setup failure does not
+                    # turn it into a failed action or authorize a retry.
+                    diagnostic('handoff-drain-unavailable', errorType=type(exc).__name__)
             if timing:
                 timing.mark('resumed')
             diagnostic('completed', elapsedSeconds=round(time.monotonic() - started, 3))
@@ -176,6 +215,11 @@ class Worker:
             diagnostic('cancelled', elapsedSeconds=round(time.monotonic() - started, 3))
             raise
         except Exception as exc:
+            if handoff_marker and isinstance(getattr(exc, '_handoff_disposition', None), dict):
+                try:
+                    await self._finish_handoff_ack(exc._handoff_disposition, future)
+                except Exception as disposition_error:
+                    diagnostic('handoff-drain-unavailable', errorType=type(disposition_error).__name__)
             outcome = 'failed'
             diagnostic('failed', errorType=type(exc).__name__,
                        elapsedSeconds=round(time.monotonic() - started, 3))
@@ -193,11 +237,58 @@ class Worker:
                 timing.mark('end')
                 self.emit_timing(timing.snapshot(outcome))
 
+    def _own_handoff_ack(self, receipt):
+        """Retain the exact acknowledgement before its caller can be resumed."""
+        from amplifier_web.handoff_drain import finish
+        task = asyncio.create_task(finish(self, receipt))
+        self.tasks.add(task)
+        def settled(done):
+            self.tasks.discard(done)
+            if not done.cancelled() and (error := done.exception()) is not None:
+                # A cancelled waiter cannot report this failure itself. Retain
+                # the uncertain marker and a bounded diagnostic, never replay.
+                try:
+                    publish({'type': 'runtime.bridge', 'phase': 'handoff-drain-unavailable',
+                             'errorType': type(error).__name__})
+                except Exception:
+                    pass
+        task.add_done_callback(settled)
+        return task
+
+    async def _finish_handoff_ack(self, receipt, future):
+        task = getattr(future, '_handoff_ack', None) or self._own_handoff_ack(receipt)
+        return await asyncio.shield(task)
+
     def emit_timing(self, value):
         try:
             publish({'type': 'runtime.timing', 'timing': value})
         except Exception:
             pass
+
+    async def admit_model(self, row):
+        registry = self.session.coordinator.get_capability('live.children')
+        child = registry.sessions.get(row.get('sessionId')) if registry else None
+        lookup = child.coordinator.get_capability('web.child_execution') if child else None
+        scope = lookup() if lookup else None
+        if row.get('sessionId') != self.session.session_id and (scope is None or row.get('runId') != scope['runId']):
+            return {'allowed': False, 'state': 'cancelled',
+                    'reasons': ['The originating native child run is no longer current.']}
+        result = await self.bridge('capacity.admit', {
+            'call': row, 'waitForCapacity': True, '_runtimeSessionId': self.session.session_id,
+            '_generationId': scope['generationId'] if scope else (self.runtime.generation or {}).get('id'),
+            **({'_childOrigin': scope} if scope else {})})
+        if scope is not None and lookup() != scope:
+            if result.get('allowed'):
+                # This exact call was reserved, but has not reached its provider.
+                # Settle only that known admission; unknown bridge outcomes are
+                # still retained by the host and never replayed here.
+                self.telemetry.publish({**row, 'budgetRevision': result['budgetRevision'],
+                    'admittedAt': result.get('admittedAt'), 'phase': 'cancelled', 'endedAt': time.time(),
+                    'usage': {'inputTokens': 0, 'outputTokens': 0, 'totalTokens': 0,
+                              'costUsd': 0, 'costSource': 'host: provider not invoked'}})
+            return {'allowed': False, 'state': 'cancelled',
+                    'reasons': ['The native child execution changed before provider invocation.']}
+        return result
 
     def app_access_bridge(self, coordinator, *, assignment=None):
         lookup = getattr(coordinator, 'get_capability', None)
@@ -212,50 +303,97 @@ class Worker:
         canonical_inputs = (getattr(getattr(self, 'runtime', None), 'generation', None) or {}).get('input_ids')
         assigned = None if coordinator is self.session.coordinator else list(
             assignment[0] if assignment is not None else canonical_inputs or [])
-        assigned_generation = (getattr(getattr(self, 'runtime', None), 'generation', None) or {}).get('id')
+        assigned_generation = (assignment[2] if assignment is not None else
+            (getattr(getattr(self, 'runtime', None), 'generation', None) or {}).get('id'))
+        assigned_stop = assignment[3] if assignment is not None else getattr(self, 'stop_revision', 0)
         assigned_context = None if assigned is None else copy.deepcopy(
             assignment[1] if assignment is not None else {i: self.context_bindings[i] for i in assigned if i in self.context_bindings})
         assigned_bindings = None if assigned is None else [{'inputId': i, 'clientId': assigned_context.get(i, {}).get('clientId')} for i in assigned]
         assigned_clients = None if assigned_bindings is None else [b['clientId'] for b in assigned_bindings]
+        assigned_execution = (assignment[4] if assignment is not None and len(assignment) > 4 else
+            {key: (self.start_config or {}).get(key, 0) for key in
+             ('interruptionRevision', 'executionRevision', 'configurationPendingRevision')})
+        assigned_runtime, assigned_gate = self.runtime, self.activation_gate
+        assigned_run = coordinator.get_capability('web.worker_run') if callable(lookup) else None
+        def child_origin():
+            if assigned is None or not assigned_generation or not assigned_run:
+                return None
+            registry = self.session.coordinator.get_capability('live.children')
+            row = registry.rows.get(coordinator.session_id) if registry else None
+            child = registry.sessions.get(coordinator.session_id) if registry else None
+            if (not row or row.get('runId') != assigned_run or not child or child.coordinator is not coordinator
+                    or row.get('status') not in {'starting', 'running', 'working', 'idle'}
+                    or self.runtime is not assigned_runtime or self.activation_gate is not assigned_gate
+                    or not assigned_gate or not assigned_gate.current_valid
+                    or self.stop_revision != assigned_stop or self.runtime.closed or self.runtime.stop_requested
+                    or coordinator.cancellation.is_cancelled or self.parked or self.remounting
+                    or self.ownership.yielding):
+                return None
+            return {'rootSessionId': self.session.coordinator.session_id,
+                    'runtimeSessionId': coordinator.session_id, 'generationId': assigned_generation,
+                    'inputIds': list(assigned), 'runId': assigned_run, **assigned_execution}
+        coordinator.register_capability('web.child_execution', child_origin)
         def origin_scope():
             runtime = getattr(self, 'runtime', None)
             generation = getattr(runtime, 'generation', None) or {}
             gate = getattr(self, 'activation_gate', None)
             # The canonical generation holds every delivered input. Never turn
             # the bounded visual-context tail into complete Work membership.
+            child = child_origin()
             ids = generation.get('input_ids') if assigned is None else assigned
-            if (not runtime or not generation.get('id') or not gate or not gate.current_valid
+            if (not runtime or assigned_run and not child
+                    or not (child or generation.get('id')) or not gate or not gate.current_valid
                     or runtime.closed or runtime.stop_requested
                     or coordinator.cancellation.is_cancelled or not isinstance(ids, list)
-                    or assigned is not None and generation.get('id') != assigned_generation):
+                    or assigned is not None and not child and (generation.get('id') != assigned_generation
+                                                or self.stop_revision != assigned_stop)):
                 return None
             return {'rootSessionId': self.session.coordinator.session_id,
-                    'runtimeSessionId': coordinator.session_id, 'generationId': generation['id'],
-                    'inputIds': list(ids) if len(ids) <= 16 else [],
-                    'inputCoverage': 'complete' if len(ids) <= 16 else 'overflow',
+                    'runtimeSessionId': coordinator.session_id, 'generationId': child['generationId'] if child else generation['id'],
+                    'inputIds': list(ids), 'inputCoverage': 'complete',
                     'stopRevision': self.stop_revision}
         coordinator.register_capability('web.work_origin_scope', origin_scope)
+        def current_full_access():
+            # Read the same current policy as the host, never a startup copy.
+            # Descendants retain their own live assignment while the root owns
+            # the policy identity. No content-coverage proof is required.
+            if origin_scope() is None or self.home is None or self.workspace is None:
+                return False
+            from amplifier_web.access_mode import read_mode
+            import sqlite3
+            try:
+                return read_mode(self.home, self.workspace, self.session.coordinator.session_id,
+                    owner_session_id=(self.start_config or {}).get('ownerSessionId')) == 'full'
+            except (OSError, ValueError, sqlite3.Error):
+                return False
+        coordinator.register_capability('web.work_full_access', current_full_access)
         coordinator.register_capability('web.performance.emit', self.emit_timing)
         coordinator.register_capability('web.performance.scope', lambda: {
             'runtimeSessionId': coordinator.session_id,
             'generationId': (getattr(self.runtime, 'generation', None) or {}).get('id')})
         watched = set()
         async def bridge(operation, args):
+            if assigned_run and child_origin() is None:
+                raise asyncio.CancelledError('The originating native child run is no longer current.')
             ids = self.context_inputs if assigned is None else assigned
             # Neither approval nor generation identity is model-supplied.
             args = {key: value for key, value in args.items()
                     if key not in {"_coordinationApproval", "_generationId", "_configurationWait", "_workOrigin",
-                                   "_workDispatchGuarded", "_responseMode"}}
+                                   "_workDispatchGuarded", "_responseMode", "_childOrigin", "_runtimeOwnerId"}}
             if assigned is None:
                 runtime = getattr(self, "runtime", None)
                 generation = getattr(runtime, "generation", None) or {}
                 args["_generationId"] = generation.get("id")
+            elif origin_scope() is not None:
+                args['_generationId'] = assigned_generation
+            if child := child_origin():
+                args['_childOrigin'] = child
             all_inputs = ((getattr(getattr(self, 'runtime', None), 'generation', None) or {}).get('input_ids', [])
                           if assigned is None else assigned)
-            # Transport the full bounded set, not the visual-context tail.
-            # The host independently compares its complete generation and
-            # reports overflow; an empty envelope is never evidence of none.
-            bound_ids = all_inputs if isinstance(all_inputs, list) and len(all_inputs) <= 16 else []
+            # Transport the complete native set, not the visual-context tail.
+            # The host independently compares its canonical generation. Content
+            # budgets must not truncate the identity used by that comparison.
+            bound_ids = all_inputs if isinstance(all_inputs, list) else []
             bound_context = self.context_bindings if assigned is None else assigned_context
             args = {**args, '_runtimeSessionId': coordinator.session_id,
                     '_inputBindings': [{'inputId': i, 'clientId': bound_context.get(i, {}).get('clientId')} for i in bound_ids],
@@ -331,6 +469,9 @@ class Worker:
                 generation = getattr(runtime, 'generation', None)
                 epoch, before = self.stop_revision, copy.deepcopy(arguments)
                 inputs = copy.deepcopy((generation or {}).get('input_ids'))
+                child_scope = child_origin()
+                if assigned_run and child_scope is None:
+                    return {'allowed': False, 'effectAuthorized': False}
                 def current_control():
                     return (control is not None and control['valid']()
                         and self.control_invocations.get(asyncio.current_task()) is control
@@ -343,7 +484,7 @@ class Worker:
                     if not current_control():
                         return {'allowed': False, 'effectAuthorized': False}
                     identity = control['callId']
-                elif dispatch and generation:
+                elif dispatch and (generation or child_scope):
                     identity = dispatch.get('tool_call_id')
                 else:
                     return {'allowed': False, 'effectAuthorized': False}
@@ -356,8 +497,9 @@ class Worker:
                     return {'allowed': False, 'effectAuthorized': False, 'checkFailure': 'timeout'}
                 except ConnectionError:
                     return {'allowed': False, 'effectAuthorized': False, 'checkFailure': 'connection'}
-                if (self.runtime is not runtime or runtime.generation is not generation
-                        or (generation or {}).get('input_ids') != inputs
+                if (self.runtime is not runtime
+                        or (child_origin() != child_scope if child_scope else
+                            runtime.generation is not generation or (generation or {}).get('input_ids') != inputs)
                         or not gate.current_valid or self.stop_revision != epoch
                         or runtime.closed or runtime.stop_requested or coordinator.cancellation.is_cancelled
                         or (not current_control() if control is not None else
@@ -367,11 +509,25 @@ class Worker:
                     return {'allowed': False, 'effectAuthorized': False}
                 return result
             register('web.work_effect_check', effect_check)
-            async def install_child_access(child_coordinator):
-                from amplifier_web.app_guidance import install_app_access
-                await install_app_access(child_coordinator, self.app_access_bridge(child_coordinator,
-                    assignment=None if assigned is None else (assigned, assigned_context)))
-            register("web.app_access.install", install_child_access)
+            def capture_child_access():
+                # Called at child invocation, before provider preparation can
+                # await a later root generation or Stop. Descendants keep the
+                # assignment they already received from their own parent.
+                if assigned is None:
+                    generation = getattr(self.runtime, 'generation', None) or {}
+                    inputs = list(generation.get('input_ids', []))
+                    context = {i: copy.deepcopy(self.context_bindings[i]) for i in inputs if i in self.context_bindings}
+                    assignment = (inputs, context, generation.get('id'), self.stop_revision,
+                        {key: generation.get(key, (self.start_config or {}).get(key, 0)) for key in
+                         ('interruptionRevision', 'executionRevision', 'configurationPendingRevision')})
+                else:
+                    assignment = (assigned, assigned_context, assigned_generation, assigned_stop, assigned_execution)
+                async def install_child_access(child_coordinator):
+                    from amplifier_web.app_guidance import install_app_access
+                    await install_app_access(child_coordinator, self.app_access_bridge(child_coordinator,
+                                                                                      assignment=assignment))
+                return install_child_access
+            register("web.app_access.install", capture_child_access)
         if assigned is None and callable(register):
             async def peer_continuation_ready():
                 runtime, gate = self.runtime, self.activation_gate
@@ -403,6 +559,16 @@ class Worker:
             event['rootSessionId'] = event_root_id
         root_generation = event_session_id == root_session_id and event_root_id == root_session_id
         if root_generation and event.get('type') == 'generation.started':
+            # Explicit inputs carry the host epoch captured at transport
+            # admission. Native child/job follow-ups inherit this process's
+            # original startup epoch: Stop closes the worker, never renews it.
+            binding = self.context_bindings.get(event.get('initial_input_id'), {})
+            interruption = binding.get('interruptionRevision', (self.start_config or {}).get('interruptionRevision', 0))
+            event['interruptionRevision'] = interruption
+            generation = self.runtime.generation
+            if generation and generation.get('id') == event.get('generation_id'):
+                generation.setdefault('interruptionRevision', interruption)
+                event['interruptionRevision'] = generation['interruptionRevision']
             self.root_generation_outcome = None
             self.failed_generation = None
             self.response_blocks.reset()
@@ -428,6 +594,8 @@ class Worker:
         if root_generation and event.get('type') in {'input.delivered', 'steering.applied'} and event.get('input_id'):
             if event['input_id'] not in self.context_inputs:
                 self.context_inputs = (self.context_inputs + [event['input_id']])[-8:]
+        from amplifier_web.handoff_drain import observe as observe_handoff_drain
+        observe_handoff_drain(self, event)
         if self.naming:self.naming.observe(event)
         if self.telemetry:
             self.telemetry.lifecycle(event)
@@ -495,7 +663,8 @@ class Worker:
             if self.telemetry:
                 providers = coordinator.get("providers") or {}
                 for name, provider in list(providers.items()):
-                    providers[name] = self.telemetry.instrument_provider(coordinator.session_id, provider)
+                    providers[name] = self.telemetry.instrument_provider(coordinator.session_id, provider,
+                        run_id=coordinator.get_capability("web.worker_run"))
             return
         coordinator.register_capability("web.activity", True)
         if self.session is not None and coordinator is self.session.coordinator:
@@ -548,14 +717,15 @@ class Worker:
             return not CALL_PURPOSE.get()
         coordinator.register_capability("live.public_stream", public_stream)
         if self.telemetry:
-            coordinator.register_capability('web.provider_observe', lambda provider: self.telemetry.instrument_provider(coordinator.session_id,provider))
-            coordinator.register_capability('web.provider_call', lambda provider, request, invoke, **kwargs: self.telemetry.provider_call(coordinator.session_id, provider, request, invoke, **kwargs))
+            coordinator.register_capability('web.provider_observe', lambda provider: self.telemetry.instrument_provider(coordinator.session_id, provider, run_id=activity_run_id))
+            coordinator.register_capability('web.provider_call', lambda provider, request, invoke, **kwargs: self.telemetry.provider_call(coordinator.session_id, provider, request, invoke, run_id=activity_run_id, **kwargs))
             registry = coordinator.get_capability("live.children")
             if registry and coordinator.session_id in registry.rows:
                 self.telemetry.lifecycle({"type":"child.updated", **registry.rows[coordinator.session_id]})
             providers = coordinator.get("providers") or {}
             for name, provider in list(providers.items()):
-                providers[name] = self.telemetry.instrument_provider(coordinator.session_id, provider)
+                providers[name] = self.telemetry.instrument_provider(coordinator.session_id, provider,
+                        run_id=coordinator.get_capability("web.worker_run"))
         async def activity(event, data):
             identity = coordinator.session_id
             if data.get("session_id", identity) != identity:
@@ -719,6 +889,7 @@ class Worker:
                     shared_handle_getter=lambda: self.shared_handle,
                     write_guard=self.activation_gate.check_current, resolved_root=resolved_root,
                     execution_workspace=config.get("workingDirectory"), install_overrides=install_overrides,
+                    owner_session_id=config.get("ownerSessionId"),
                     startup_timing=startup_timing)
             if qualified_overrides is not None:
                 active_install_overrides(self.home, str(qualified_overrides))
@@ -729,9 +900,7 @@ class Worker:
                 self.controls = RuntimeControls(self.session, self.runtime, self.telemetry,
                     preserve_configuration=config.get('_preserveConfiguration') is True,
                     tool_invocation=self.tool_invocation)
-                self.controls.capacity.admit = lambda row: self.bridge("capacity.admit", {
-                    "call": row, "waitForCapacity": True, "_runtimeSessionId": self.session.session_id,
-                    "_generationId": (getattr(self.runtime, 'generation', None) or {}).get('id')})
+                self.controls.capacity.admit = self.admit_model
                 self.telemetry.admission_guard = self.controls.capacity.guard
                 # Preserve app controls on native mounts. A legacy common snapshot
                 # retains its previous restoration policy during one-time recovery.
@@ -1314,20 +1483,44 @@ class Worker:
         future.add_done_callback(retired)
         return await asyncio.shield(task)
 
+    def bind_input_context(self, identity, data, binding=None):
+        """Keep original host admission metadata beside the input's context."""
+        if identity in self.runtime.accepted:
+            return
+        self.context_bindings[identity] = {
+            **(binding or {'clientId': None, 'targets': []}),
+            'interruptionRevision': data.get('interruptionRevision', 0)}
+        self.context_bindings = dict(list(self.context_bindings.items())[-64:])
+
     async def _command_serial(self, data):
         identity = data.get("id")
         try:
             op = data.get("op")
             if op == "bridge.result":
+                from amplifier_web.handoff_drain import acknowledged_receipt
+                receipt = acknowledged_receipt(self, data)
+                # Ownership precedes set_result/set_exception: the caller can
+                # be cancelled before it resumes to process this exact reply.
+                acknowledgement = self._own_handoff_ack(receipt) if receipt is not None else None
                 future = self.bridges.get(identity)
                 if future and not future.done():
+                    if acknowledgement is not None:
+                        future._handoff_ack = acknowledgement
                     timing = getattr(self, 'bridge_timings', {}).get(identity)
                     if timing:
                         timing.mark('received')
                     if data.get("error"):
-                        future.set_exception(RuntimeError(data["error"]))
+                        error = RuntimeError(data["error"])
+                        if isinstance(data.get('_handoffDisposition'), dict):
+                            error._handoff_disposition = data['_handoffDisposition']
+                        future.set_exception(error)
                     else:
                         future.set_result(data.get("result"))
+                elif acknowledgement is not None:
+                    try:
+                        await asyncio.shield(acknowledgement)
+                    except Exception:
+                        pass  # The retained owner reports failure and keeps uncertainty.
                 return
             if op == "resume":
                 if not self.session or not self.execution or self.execution.done():
@@ -1389,7 +1582,10 @@ class Worker:
                     result = await discover('worker', **({'verify': True} if data.get('verifyImports') is True else {}))
             elif op == 'handoff.boundary':
                 from amplifier_web.handoff_boundary import inspect
-                result = await inspect(self, data['request_id'], data.get('cancel', False))
+                from amplifier_web.handoff_drain import finish
+                if not data.get('cancel'):
+                    await finish(self, data.get('receipt'))
+                result = await inspect(self, data['request_id'], data.get('cancel', False), update=data.get('update') is True)
             elif op == "desktop.readiness":
                 if not self.controls:
                     result = {"status": "unavailable", "reason": "Conversation tools are not mounted."}
@@ -1410,8 +1606,7 @@ class Worker:
                 from amplifier_module_loop_live.runtime import Input
                 from amplifier_web.message_interactions import prepare_input
                 text = await prepare_input(self.session.coordinator, data['text'], data.get('reply_context'), max_chars=self.runtime.max_input_chars)
-                self.context_bindings[data['input_id']] = data.get('context_binding', {'clientId': None, 'targets': []})
-                self.context_bindings = dict(list(self.context_bindings.items())[-64:])
+                self.bind_input_context(data['input_id'], data, data.get('context_binding'))
                 input_id = await self.runtime.submit(Input(
                     "user", text, id=data["input_id"],
                     attachments=tuple(data.get("attachments", [])),
@@ -1419,6 +1614,10 @@ class Worker:
                 result = {"accepted": True, "inputId": input_id}
             elif op == "control":
                 arguments = data.get("arguments", {})
+                if data['operation'] in {'conversation.steer', 'schedule.submit', 'observation.submit',
+                                         'coordination.submit', 'coordination.steer', 'coordination.deliver', 'history.edit'}:
+                    input_id = arguments['operationId'] if data['operation'] == 'history.edit' else arguments['inputId']
+                    self.bind_input_context(input_id, data, arguments.get('context_binding'))
                 if data['operation'] in {'configuration.apply', 'configuration.patchPlacement.bind'}:
                     from amplifier_web.configuration_recovery import native_apply
                     # This envelope is supplied only by the host's retained
@@ -1432,8 +1631,6 @@ class Worker:
                             lambda: self.stop_revision, operation=data['operation'])
                 elif data['operation'] == 'conversation.steer':
                     from amplifier_web.conversation_steering import submit
-                    self.context_bindings[arguments['inputId']] = arguments.get('context_binding', {'clientId': None, 'targets': []})
-                    self.context_bindings = dict(list(self.context_bindings.items())[-64:])
                     result = await submit(self.controls, self.runtime, arguments, self.activation,
                                           stop_epoch=lambda: self.stop_revision)
                 elif data["operation"] == "schedule.submit":
@@ -1446,6 +1643,11 @@ class Worker:
                 elif data["operation"] == "coordination.submit":
                     from amplifier_web.collaboration_input import admit
                     result = await admit(self.controls, self.runtime, arguments, self.activation,
+                        authorize=lambda value: self.bridge("coordination.admit", value),
+                        stop_epoch=lambda: self.stop_revision)
+                elif data["operation"] == "coordination.deliver":
+                    from amplifier_web.collaboration_input import deliver
+                    result = await deliver(self.controls, self.runtime, arguments, self.activation,
                         authorize=lambda value: self.bridge("coordination.admit", value),
                         stop_epoch=lambda: self.stop_revision)
                 elif data["operation"] == "coordination.steer":

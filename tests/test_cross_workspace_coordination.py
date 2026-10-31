@@ -14,7 +14,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -134,7 +134,7 @@ async def test_discovery_defaults_to_workspace_and_all_exposes_message_not_contr
     # Root follow-up is an existing alias for attributed peer messaging, not
     # direct runtime control. Worker follow-up/interrupt authority stays narrow.
     assert peer["canFollowup"] is True and peer["canInterrupt"] is False
-    assert {mode for action in peer["peerActions"] for mode in action["modes"]} == {"notify", "queue"}
+    assert {mode for action in peer["peerActions"] for mode in action["modes"]} == {"auto", "notify", "queue"}
     app.history.ensure_loaded.assert_not_awaited()
     assert app.runtime.inputs == []
 
@@ -253,6 +253,7 @@ async def test_typed_result_retained_file_exact_read_and_adjacent_request(cross_
 
     app = cross_app
     source, target = app.state["sessions"]
+    app.runtime.unavailable_boundaries.add(source["id"])
     file, reference = exact_file(target)
     declaration = await begin_reply(app, references=[reference])
     assert declaration["artifactVerification"] == "verified"
@@ -472,6 +473,7 @@ async def test_cross_workspace_retained_file_canvas_and_authenticated_http_downl
 async def test_cross_workspace_exact_outcome_acknowledgement_preserves_result(cross_app):
     app = cross_app
     source, target = app.state["sessions"]
+    app.runtime.unavailable_boundaries.add(source["id"])
     file, reference = exact_file(target)
     await begin_reply(app, references=[reference])
     wait = await agent_action(app, source, "coordination.subscribe", {
@@ -739,22 +741,32 @@ async def test_result_and_retained_file_refuse_changed_participant_location(cros
 
 
 @pytest.mark.parametrize("moved", ["sender", "recipient"])
-async def test_result_rechecks_locations_after_history_hydration(cross_app, moved, monkeypatch):
+async def test_result_rechecks_locations_after_receipt_read(cross_app, moved, monkeypatch):
     app = cross_app
     source, target = app.state["sessions"]
     await request(app, mode="notify")
+    read_receipt = app.collaboration.receipt
+    before = copy.deepcopy(read_receipt("cross-request"))
 
-    async def relocate(_):
+    def relocate(identity):
+        receipt = read_receipt(identity)
+        # Result reads authorize current endpoints after reading the retained
+        # receipt; they no longer load the target's conversation history.
         session = source if moved == "sender" else target
         session["workspace"] += "/moved-during-read"
         target["activity"] = {"detail": "Private activity in the new location"}
+        return receipt
 
-    hydration = AsyncMock(side_effect=relocate)
+    receipt_read = Mock(side_effect=relocate)
+    hydration = AsyncMock(side_effect=AssertionError("Result reads must not load target history"))
+    monkeypatch.setattr(app.collaboration, "receipt", receipt_read)
     monkeypatch.setattr(app.history, "ensure_loaded", hydration)
     with pytest.raises(AppError) as denied:
         await result(app, source, scope="all")
     assert denied.value.status == 403
-    hydration.assert_awaited_once()
+    receipt_read.assert_called_once_with("cross-request")
+    hydration.assert_not_called()
+    assert read_receipt("cross-request") == before
     assert not app.runtime.inputs
 
 
