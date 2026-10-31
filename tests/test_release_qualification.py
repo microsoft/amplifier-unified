@@ -564,7 +564,7 @@ def test_browser_runner_matcher_excludes_test_names_without_hiding_extra_invocat
 def test_canvas_qualification_is_fixed_manual_and_installed_not_a_release_gate():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     job = workflow['jobs']['canvas-qualification']
-    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.canvas_qualification }}"
+    assert job['if'] == "${{ !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && inputs.canvas_qualification }}"
     assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '20'
     assert workflow['permissions'] == {'contents': 'read'}
     assert 'secrets.' not in str(job)
@@ -594,7 +594,8 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     inputs = workflow['on']['workflow_dispatch']['inputs']
     assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption',
                            'canvas_qualification', 'destination_history', 'settings_close_diagnostic',
-                           'multi_quote', 'attachment_experience', 'compact_composer', 'peer_messages'}
+                           'multi_quote', 'attachment_experience', 'compact_composer', 'peer_messages',
+                           'readiness_trio'}
     assert inputs['canvas_qualification']['type'] == 'boolean'
     assert inputs['canvas_qualification']['default'] == 'false'
     assert inputs['multi_quote']['type'] == 'boolean'
@@ -619,12 +620,12 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert workflow['on']['workflow_call'] == {
         'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
     job = workflow['jobs']['browser']
-    assert job['if'] == '${{ !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
+    assert job['if'] == '${{ !inputs.readiness_trio && !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
     assert job['timeout-minutes'] == '45'
     mcp = workflow['jobs']['mcp-boundary']
-    assert mcp['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
+    assert mcp['if'] == "${{ !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
     history = workflow['jobs']['destination-history']
-    assert history['if'] == '${{ !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}'
+    assert history['if'] == '${{ !inputs.readiness_trio && !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}'
     assert history['steps'][0] == {
         'name': 'Require the fixed navigation selection for diagnostic mode',
         'if': '${{ inputs.settings_close_diagnostic && !inputs.destination_history }}',
@@ -710,12 +711,88 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert 'output/browser-checks/' in diagnostics['with']['path']
 
 
+def test_readiness_trio_is_exclusive_manual_fixed_and_not_a_default_gate():
+    workflows = ROOT / '.github/workflows'
+    workflow = yaml.load((workflows / 'browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
+    inputs = workflow['on']['workflow_dispatch']['inputs']
+    assert inputs['readiness_trio'] == {
+        'description': 'Only fixed question delivery, scheduler and compaction diagnostics qualification',
+        'type': 'boolean', 'default': 'false',
+    }
+    assert workflow['on']['workflow_call'] == {
+        'inputs': {'revision': {'type': 'string', 'required': 'true'}}}
+    assert workflow['permissions'] == {'contents': 'read'}
+    # Exact old predicates remain intact behind one additional conjunct.
+    previous_conditions = {
+        'browser': '!inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience',
+        'attachment-experience': 'inputs.attachment_experience',
+        'mcp-boundary': "github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic",
+        'canvas-qualification': "github.event_name == 'workflow_dispatch' && inputs.canvas_qualification",
+        'compact-composer': "github.event_name == 'workflow_dispatch' && inputs.compact_composer",
+        'destination-history': '!inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic)',
+        'peer-messages': "github.event_name == 'workflow_dispatch' && inputs.peer_messages",
+    }
+    jobs = workflow['jobs']
+    assert set(jobs) == {*previous_conditions, 'readiness-trio'}
+    for name, condition in previous_conditions.items():
+        assert jobs[name]['if'] == '${{ !inputs.readiness_trio && ' + condition + ' }}'
+        assert 'needs' not in jobs[name], 'Manual qualification cannot gate existing jobs'
+    job = jobs['readiness-trio']
+    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.readiness_trio == true }}"
+    assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '15'
+    assert 'needs' not in job and 'continue-on-error' not in job
+    steps = job['steps']
+    mixed = ('attachment_experience', 'peer_messages', 'destination_history', 'settings_close_diagnostic',
+             'mcp_boundary', 'app004_qualification', 'attachment_consumption', 'canvas_qualification',
+             'multi_quote', 'compact_composer')
+    assert set(inputs) == {'readiness_trio', *mixed}
+    assert steps[0] == {
+        'name': 'Reject mixed readiness trio selections before setup',
+        'if': '${{ ' + ' || '.join('inputs.' + name for name in mixed) + ' }}',
+        'run': "echo 'Readiness trio requires its own explicit manual selection; no qualification was run.'\nexit 1\n",
+    }
+    assert steps[1] == {
+        'uses': 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+        'with': {'ref': '${{ github.sha }}', 'persist-credentials': 'false'},
+    }
+    assert steps[2]['name'] == 'Retain intended checks before dependency preparation'
+    assert steps[2]['run'].splitlines()[0] == 'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'
+    assert 'cp .github/workflows/browser-checks.yml output/readiness-trio-inputs/' in steps[2]['run']
+    execute = {
+        'name': 'Qualify once with fail-stop cleanup and a ten-minute overall budget',
+        'timeout-minutes': '11',
+        'run': 'set -o pipefail\npython -u scripts/readiness_trio_checks.py 2>&1 | tee output/readiness-trio-run.log\n',
+    }
+    assert steps[-2] == execute
+    assert sum('python -u scripts/readiness_trio_checks.py' in step.get('run', '') for step in steps) == 1
+    assert all('continue-on-error' not in step for step in steps)
+    assert 'signal.alarm(600)' in (ROOT / 'scripts/readiness_trio_checks.py').read_text()
+    uploads = [step for step in steps if step.get('uses', '').startswith('actions/upload-artifact@')]
+    assert uploads == [steps[-1]]
+    assert uploads[0] == {
+        'name': 'Make all evidence downloadable, including failed and unrun phases',
+        'if': 'always()',
+        'uses': 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+        'with': {
+            'name': 'readiness-trio-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
+            'path': 'output/readiness-trio-inputs/\noutput/readiness-trio-run.log\noutput/readiness-trio/\ntest-results/\n',
+            'if-no-files-found': 'error', 'retention-days': '14',
+        },
+    }
+    # No PR/push trigger, reusable opt-in, external caller or publication gate.
+    for path in workflows.glob('*.yml'):
+        if path.name != 'browser-checks.yml':
+            assert 'readiness_trio' not in path.read_text()
+            assert 'readiness-trio' not in path.read_text()
+
+
 def test_compact_composer_is_fixed_manual_only_with_independent_failure_evidence():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert workflow['permissions'] == {'contents': 'read'}
     assert 'compact_composer' not in workflow['on']['workflow_call']['inputs']
     job = workflow['jobs']['compact-composer']
-    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && inputs.compact_composer }}"
+    assert job['if'] == "${{ !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && inputs.compact_composer }}"
     assert job['timeout-minutes'] == '30'
     steps = job['steps']
     assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
