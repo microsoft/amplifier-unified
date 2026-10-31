@@ -2240,7 +2240,7 @@ class AppService:
             return {'accepted': True, 'result': result}
         if action.startswith('schedule.'):
             try:
-                result = await self.schedules.dispatch(action, args, origin, command_id)
+                result = await self.schedules.dispatch(action, args, origin, command_id, caller_session_id)
             except ValueError as exc:
                 raise AppError(str(exc), 409) from None
             return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
@@ -2254,7 +2254,7 @@ class AppService:
             return await capacity_dispatch(self, action, args, origin, command_id, include_state)
         if action.startswith('task.'):
             from .task_continuity import dispatch as task_dispatch
-            return await task_dispatch(self, action, args, origin, command_id, include_state)
+            return await task_dispatch(self, action, args, origin, command_id, include_state, guard=admission_check)
         if action in {'question.list', 'question.read'}:
             async with self.lock:
                 return {'accepted': True, 'result': self.questions.read(action, args),
