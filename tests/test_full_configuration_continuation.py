@@ -188,6 +188,9 @@ async def test_full_actor_recovers_only_original_proven_no_effect(process_bounda
     original_binding = b.app.collaboration.active_binding
     def observed_binding(source, **options):
         actors.append(PRINCIPAL.get())
+        if (BINDING.get() or {}).get('_childOrigin') and source.get('pendingConfiguration', {}).get('effect') == 'unknown':
+            from amplifier_web.child_execution import current
+            assert current(b.app, source) is None  # Recovery does not reopen ordinary execution.
         return original_binding(source, **options)
     monkeypatch.setattr(b.app.collaboration, 'active_binding', observed_binding)
     async def exercise(invoke, principal):
@@ -240,6 +243,67 @@ async def test_full_actor_recovers_only_original_proven_no_effect(process_bounda
         assert final['attempts'][0] == saved['attempts'][0] and len(final['attempts']) == 2
         assert json.loads(override_path(b.owner['runtimeSessionId']).read_text()) == plan(2)
     assert not b.owner['approvals'] and b.app.configuration_authority.rows(b.owner['id']) == []
+
+
+@pytest.mark.parametrize('process_boundary', ['full'], indirect=True)
+@pytest.mark.parametrize('blocked', [
+    'ordinary-effect', 'other-operation', 'other-owner', 'foreign-fence', 'unsettled-writer',
+    'revoke', 'off-on', 'stop', 'execution', 'configuration', 'replaced-process', 'terminal-run',
+])
+async def test_full_child_recovery_route_retains_execution_boundaries(process_boundary, tmp_path, monkeypatch, blocked):
+    b = process_boundary
+    saved = await refused_operation(b)
+    observed = []
+    original_binding = b.app.collaboration.active_binding
+    def observe_binding(source, **options):
+        result = original_binding(source, **options)
+        observed.append(deepcopy((BINDING.get() or {})['_childOrigin']))
+        return result
+    monkeypatch.setattr(b.app.collaboration, 'active_binding', observe_binding)
+    async def exercise(invoke, principal):
+        args = {'sessionId': b.owner['id'], 'operationId': saved['id']}
+        initial = (await invoke('configuration.operation.read', {**args, 'includeRecovery': True}, 'recover-before-change'))['result']
+        assert initial['recovery']['canReconcile'] and observed
+        action = 'configuration.operation.reconcile'
+        args['expectedRevision'] = saved['revision']
+        process = b.runtime.workers[b.owner['id']]
+        if blocked == 'ordinary-effect':
+            action = 'permissions.save'
+            args = {'sessionId': b.owner['id'], 'scope': 'local', 'allowed': ['/not-admitted'], 'denied': []}
+        elif blocked == 'other-operation':
+            args['operationId'] = '00000000-0000-0000-0000-000000000000'
+        elif blocked == 'other-owner':
+            peer = b.app._new_session({'title': 'Other recovery owner'})
+            b.app.state['sessions'].append(peer)
+            args['sessionId'] = peer['id']
+        elif blocked == 'foreign-fence':
+            b.owner['configurationOperationFence'] = 'another-operation'
+        elif blocked == 'unsettled-writer':
+            await b.app.management.lock.acquire()
+        elif blocked in {'revoke', 'off-on'}:
+            await save(b.app, b.owner, mode='ask')
+            if blocked == 'off-on':
+                await save(b.app, b.owner)
+        elif blocked in {'stop', 'execution', 'configuration'}:
+            key = {'stop': 'interruptionRevision', 'execution': 'executionRevision',
+                   'configuration': 'configurationPendingRevision'}[blocked]
+            b.owner[key] = b.owner.get(key, 0) + 1
+        elif blocked == 'replaced-process':
+            b.runtime.workers[b.owner['id']] = {**process, 'runtimeOwnerId': 'replacement-owner'}
+        elif blocked == 'terminal-run':
+            b.owner.setdefault('execution', {}).setdefault('nodes', []).append({
+                'kind': 'worker', 'sessionId': principal, 'runId': observed[-1]['runId'], 'phase': 'completed'})
+        try:
+            with pytest.raises((AssertionError, AppError, RuntimeError)):
+                await invoke(action, args, 'blocked-child-recovery')
+        finally:
+            if blocked == 'unsettled-writer':
+                b.app.management.lock.release()
+            b.runtime.workers[b.owner['id']] = process
+        assert operation(b) == saved
+        assert not override_path(b.owner['runtimeSessionId']).exists()
+        assert SettingsStore(b.app.data_dir).read(b.owner['workspace'], 'local') == {}
+    await child(b.app, b.owner, tmp_path, monkeypatch, exercise)
 
 
 @pytest.mark.parametrize('change', ['revoke', 'off-on', 'stop'])
