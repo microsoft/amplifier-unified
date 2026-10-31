@@ -408,12 +408,12 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     selection = workflow['on']['workflow_dispatch']['inputs']['suite']
     assert selection['type'] == 'choice' and selection['default'] == 'full'
-    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'cold-control-restore']
+    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'cold-control-restore', 'goal-peer-publisher-0410']
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['on']['workflow_call']['secrets'] == {'LOOP_LIVE_CI_READ_KEY': {'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
     jobs = workflow['jobs']
-    assert jobs['python']['if'] == "${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' }}"
+    assert jobs['python']['if'] == "${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' }}"
     assert jobs['python']['env']['CHECK_SUITE'] == "${{ inputs.suite || 'full' }}"
     assert jobs['core-wheels']['if'] == "${{ inputs.core_wheels && (!inputs.suite || inputs.suite == 'full') }}"
     remote = jobs['remote-test-origins']
@@ -459,6 +459,141 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     assert 'if [ "$CHECK_SUITE" = manager-exception-boundary ]; then' in focused['run']
 
 
+def test_goal_peer_publisher_is_exclusive_fixed_manual_and_preserves_failure_evidence():
+    workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['goal-peer-publisher-0410']
+    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && inputs.suite == 'goal-peer-publisher-0410' }}"
+    assert job['runs-on'] == 'ubuntu-24.04' and job['timeout-minutes'] == '30'
+    assert job['permissions'] == {'contents': 'read', 'actions': 'read'} and 'needs' not in job
+    steps = job['steps']
+    assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
+    assert steps[1]['run'] == 'python scripts/goal_peer_publisher_checks.py --initialize'
+    assert steps[2]['with'] == {'python-version': '3.13.17'}
+    assert steps[3]['with'] == {'version': '0.13.6', 'enable-cache': 'false'}
+    fetch = steps[4]
+    assert fetch['timeout-minutes'] == '2' and fetch['env'] == {'GH_TOKEN': '${{ github.token }}'}
+    assert 'actions/runs/41179992422/attempts/1' in fetch['run']
+    assert 'actions/artifacts/13033939559/zip' in fetch['run']
+    assert fetch['run'].endswith('python scripts/goal_peer_publisher_checks.py --inputs\n')
+    assert steps[5]['with'] == {
+        'repository': 'microsoft/amplifier-module-loop-live', 'ref': 'ccc4aa8a0bb0efdbc9e4023c2feab47d19c4bcaf',
+        'path': '.ci/loop-live', 'ssh-key': '${{ secrets.LOOP_LIVE_CI_READ_KEY }}', 'persist-credentials': 'false'}
+    assert steps[6]['with'] == {
+        'repository': 'microsoft/amplifier-bundle-recipes', 'ref': '7afaba7455743fb26b8d8a11cd1394eb7a01628a',
+        'path': '.ci/recipes', 'persist-credentials': 'false'}
+    assert str(job).count('secrets.LOOP_LIVE_CI_READ_KEY') == 1
+    assert 'set -o pipefail' in steps[7]['run'] and ' --run ' in steps[7]['run']
+    assert steps[-2]['if'] == 'always()' and steps[-2]['run'].endswith(' --finalize')
+    assert steps[-1]['if'] == 'always()'
+    assert steps[-1]['with']['path'] == 'output/goal-peer-publisher0410/'
+    assert steps[-1]['with']['if-no-files-found'] == 'error'
+    assert all('continue-on-error' not in step for step in steps)
+    for path in (ROOT / '.github/workflows').glob('*.yml'):
+        if path.name != 'python-checks.yml':
+            assert 'goal-peer-publisher-0410' not in path.read_text()
+
+
+@pytest.fixture
+def publisher_checks(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / 'scripts'))
+    spec = importlib.util.spec_from_file_location('publisher_checks', ROOT / 'scripts/goal_peer_publisher_checks.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize('mutation', [None, 'attempt', 'head', 'digest', 'artifact', 'expired', 'run'])
+def test_goal_peer_publisher_rejects_wrong_api_identity(publisher_checks, mutation):
+    module = publisher_checks
+    run = {'id': 41179992422, 'run_attempt': 1, 'head_sha': module.PUBLISHER,
+           'status': 'completed', 'conclusion': 'failure', 'event': 'push', 'head_branch': 'main',
+           'repository': {'full_name': 'microsoft/amplifier-unified'}, 'path': '.github/workflows/release.yml'}
+    artifact = {'id': 13033939559, 'name': 'runtime-source-resolution', 'expired': False,
+                'digest': 'sha256:' + module.ARCHIVE_SHA,
+                'workflow_run': {'id': run['id'], 'head_sha': module.PUBLISHER}}
+    if mutation == 'attempt': run['run_attempt'] = 2
+    elif mutation == 'head': run['head_sha'] = '0' * 40
+    elif mutation == 'digest': artifact['digest'] = 'sha256:' + '0' * 64
+    elif mutation == 'artifact': artifact['id'] += 1
+    elif mutation == 'expired': artifact['expired'] = True
+    elif mutation == 'run': artifact['workflow_run']['id'] += 1
+    if mutation:
+        with pytest.raises(AssertionError):
+            module.verify_api(run, artifact)
+    else:
+        module.verify_api(run, artifact)
+
+
+def test_goal_peer_publisher_fixed_cases_environment_and_no_resolve(publisher_checks):
+    import ast
+    module = publisher_checks
+    assert module.SELECTORS == {
+        'native': ['tests/test_goal_peer_continuation.py', 'tests/test_task_goal_runtime.py'],
+        'auto': ['tests/test_peer_auto_delivery.py']}
+    assert sum(map(len, module.EXPECTED.values())) == 43
+    # Expand only this file's literal single-axis parameterizations, without
+    # importing the product or running collection to define our expected oracle.
+    names = set()
+    for node in ast.parse((ROOT / 'tests/test_peer_auto_delivery.py').read_text()).body:
+        if not isinstance(node, ast.AsyncFunctionDef) or not node.name.startswith('test_'):
+            continue
+        params = [d for d in node.decorator_list if isinstance(d, ast.Call)
+                  and isinstance(d.func, ast.Attribute) and d.func.attr == 'parametrize']
+        assert len(params) <= 1
+        names.update({f'{node.name}[{value}]' for value in ast.literal_eval(params[0].args[1])}
+                     if params else {node.name})
+    assert names == module.AUTO_NAMES and len(names) == 18
+    permitted = {'PATH': '/tools/bin', 'LANG': 'C.UTF-8', 'RUNNER_TEMP': '/owned'}
+    refused = dict.fromkeys(('OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GH_TOKEN', 'GITHUB_TOKEN',
+                            'LOOP_LIVE_CI_READ_KEY', 'SSH_AUTH_SOCK', 'PYTHONPATH', 'PYTHONOPTIMIZE',
+                            'PYTEST_ADDOPTS', 'UV_PROJECT_ENVIRONMENT', 'UV_INDEX_URL',
+                            'GIT_CONFIG_COUNT', 'HOME'), 'do-not-inherit')
+    assert module.clean_environment({**permitted, **refused}) == permitted
+    source = (ROOT / 'scripts/goal_peer_publisher_checks.py').read_text()
+    assert "['uv', 'sync', '--project', str(runtime), '--locked', '--python', sys.executable]" in source
+    assert "['uv', 'export', '--project', str(runtime), '--frozen'" in source
+    assert all(value not in source for value in ("['uv', 'add'", "['uv', 'lock'", '--upgrade', '--refresh'))
+    assert 'time.monotonic() + 900' in source and 'time.monotonic() + 300' in source
+    assert 'run_scenarios(ROOT' in source and "row['cleanup'] == {'remaining': [], 'terminated': 0}" in source
+    assert "assert check_native(OUTPUT / 'native.xml') == 43" in source
+    assert "restored-input-hashes.json" in source and 'candidate-source.tar' in source
+    assert "for key in ('graph', 'files', 'coreWheel')" in source
+    assert 'source(ROOT)' in source and "git(root, 'ls-files', '--stage', '-z')" in source
+
+
+@pytest.mark.parametrize('mutation', [None, 'missing', 'extra', 'version', 'commit', 'url'])
+def test_goal_peer_publisher_installed_graph_must_match_locked_export(publisher_checks, tmp_path, monkeypatch, mutation):
+    module = publisher_checks
+    monkeypatch.setattr(module, 'OUTPUT', tmp_path)
+    (tmp_path / 'original').mkdir()
+    commit = 'a' * 40
+    (tmp_path / 'original/uv.lock').write_text(
+        '[[package]]\nname="amplifier-core"\nversion="2.0.2"\nsource={registry="https://pypi.org/simple"}\n'
+        '[[package]]\nname="amplifier-foundation"\nversion="1.0.0"\n'
+        f'source={{git="https://github.com/microsoft/amplifier-foundation?rev=main#{commit}"}}\n')
+    (tmp_path / 'resolved-requirements.txt').write_text(
+        'amplifier-core==2.0.2\n'
+        f'amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@{commit}\n')
+    (tmp_path / 'candidate.json').write_text('{"files": {}}')
+    (tmp_path / 'dependency-sources.json').write_text('{}')
+    value = {'graph': [
+        {'name': 'amplifier-core', 'version': '2.0.2', 'direct': None},
+        {'name': 'amplifier-foundation', 'version': '1.0.0', 'direct': {
+            'url': 'https://github.com/microsoft/amplifier-foundation',
+            'vcs_info': {'vcs': 'git', 'commit_id': commit}}}],
+        'files': {}, 'origins': {}, 'coreWheel': {'version': '2.0.2'}}
+    if mutation == 'missing': value['graph'].pop()
+    elif mutation == 'extra': value['graph'].append({'name': 'unexpected'})
+    elif mutation == 'version': value['graph'][0]['version'] = '9.0'
+    elif mutation == 'commit': value['graph'][1]['direct']['vcs_info']['commit_id'] = 'b' * 40
+    elif mutation == 'url': value['graph'][1]['direct']['url'] = 'https://example.com/other'
+    if mutation:
+        with pytest.raises(AssertionError):
+            module.verify_inventory(value)
+    else:
+        module.verify_inventory(value)
+
+
 def test_cold_control_restore_is_exclusive_manual_locked_and_bounded():
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
@@ -467,7 +602,7 @@ def test_cold_control_restore_is_exclusive_manual_locked_and_bounded():
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
     jobs = workflow['jobs']
-    assert set(jobs) == {'python', 'core-wheels', 'remote-test-origins', 'incompatible-selection', 'cold-control-restore'}
+    assert set(jobs) == {'python', 'core-wheels', 'remote-test-origins', 'incompatible-selection', 'cold-control-restore', 'goal-peer-publisher-0410'}
     job = jobs['cold-control-restore']
     assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && inputs.suite == 'cold-control-restore' }}"
     assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '15'

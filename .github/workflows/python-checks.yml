@@ -20,6 +20,7 @@ on:
           - remote-test-origins
           - shared-work-native
           - cold-control-restore
+          - goal-peer-publisher-0410
       core_wheels:
         description: Qualify published Core wheels and real runtime on both Linux architectures
         type: boolean
@@ -36,7 +37,7 @@ permissions:
   contents: read
 jobs:
   python:
-    if: ${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' }}
+    if: ${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -346,6 +347,82 @@ jobs:
   remote-test-origins:
     if: ${{ !inputs.core_wheels && inputs.suite == 'remote-test-origins' }}
     uses: ./.github/workflows/remote-test-origins.yml
+
+  goal-peer-publisher-0410:
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && inputs.suite == 'goal-peer-publisher-0410' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30 # Setup/upload allowance; locked preparation 900s, tests together 300s.
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Retain candidate and unrun fixed phases
+        id: initialize
+        run: python scripts/goal_peer_publisher_checks.py --initialize
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        id: python
+        with:
+          python-version: '3.13.17'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        id: uv
+        with:
+          version: '0.13.6'
+          enable-cache: false
+      - name: Fetch only the immutable failed publisher evidence
+        id: inputs
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api repos/microsoft/amplifier-unified/actions/runs/41179992422/attempts/1 > output/goal-peer-publisher0410/run.json
+          gh api repos/microsoft/amplifier-unified/actions/artifacts/13033939559 > output/goal-peer-publisher0410/artifact.json
+          gh api repos/microsoft/amplifier-unified/actions/artifacts/13033939559/zip > output/goal-peer-publisher0410/runtime-source-resolution.zip
+          python scripts/goal_peer_publisher_checks.py --inputs
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        id: loop
+        with:
+          repository: microsoft/amplifier-module-loop-live
+          ref: ccc4aa8a0bb0efdbc9e4023c2feab47d19c4bcaf
+          path: .ci/loop-live
+          ssh-key: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        id: recipes
+        with:
+          repository: microsoft/amplifier-bundle-recipes
+          ref: 7afaba7455743fb26b8d8a11cd1394eb7a01628a
+          path: .ci/recipes
+          persist-credentials: false
+      - name: Restore the unchanged lock and run only the fixed cases
+        id: qualification
+        timeout-minutes: 22
+        run: |
+          set -o pipefail
+          python -u scripts/goal_peer_publisher_checks.py --run 2>&1 | tee output/goal-peer-publisher0410/driver.log
+      - name: Retain workflow outcome without promoting incomplete checks
+        if: always()
+        env:
+          QUALIFICATION_JOB_STATUS: ${{ job.status }}
+          # Only action outcomes, never arbitrary step outputs or credential state.
+          QUALIFICATION_STEP_OUTCOMES: >-
+            {"initialize":"${{ steps.initialize.outcome }}","python":"${{ steps.python.outcome }}",
+            "uv":"${{ steps.uv.outcome }}","inputs":"${{ steps.inputs.outcome }}",
+            "loop":"${{ steps.loop.outcome }}","recipes":"${{ steps.recipes.outcome }}",
+            "qualification":"${{ steps.qualification.outcome }}"}
+        run: python scripts/goal_peer_publisher_checks.py --finalize
+      - name: Retain exact inputs and all partial qualification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: goal-peer-publisher0410-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/goal-peer-publisher0410/
+          if-no-files-found: error
+          retention-days: 14
 
   cold-control-restore:
     if: ${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && inputs.suite == 'cold-control-restore' }}
