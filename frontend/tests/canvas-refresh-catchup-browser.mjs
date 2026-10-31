@@ -169,7 +169,7 @@ try{
   await capture(kind+'-pinned-retained');return row.observed;
  });
  for(const mode of ['accepted-toolbar','accepted-details','unknown','refused'])await check('Load feedback: '+mode,async row=>{
-  held=false;await page.setViewportSize({width:mode==='accepted-toolbar'?390:1500,height:950});
+  held=false;await page.setViewportSize({width:mode.startsWith('accepted')?390:1500,height:950});
   const id=(await action('canvas.show',{kind:'html',title:'Load feedback '+mode,content:html(1)})).result.id;
   await frame().getByRole('heading',{name:'Executable version 1'}).waitFor();
   await frame().getByLabel('Local unfinished input').fill('Keep unless explicit Load is accepted');
@@ -209,7 +209,13 @@ try{
     if(mode.startsWith('accepted')){
      assert.equal(receipt.state,undefined,'Exercise actual delta receipt followed by a failed read, not a fabricated receipt');
      await expect.poll(()=>reads).toBeGreaterThan(0);
-     await expect(panel.getByRole('alert')).toContainText('Load v2 was accepted');
+     const feedback=mode==='accepted-details'?page.locator('#canvas-options').getByRole('alert'):panel.getByRole('alert');
+     await expect(feedback).toContainText('Load v2 was accepted');
+     if(mode==='accepted-details'){
+      await expect(feedback).toContainText('Close Canvas details to use Refresh');
+      await expect(page.getByRole('combobox',{name:'Artifact version',exact:true})).toBeDisabled();
+      assert.equal(await feedback.evaluate(el=>!!el.closest('[inert],[aria-hidden="true"]')),false,'Details feedback is accessible in the active narrow sheet');
+     }
     }else await expect(panel.getByRole('alert')).toContainText('completion is unconfirmed');
     await expect(panel.getByRole('alert')).not.toContainText('current preview is retained');
     await expect(panel.locator('.a-canvas-freshness')).not.toContainText('preview retained');
@@ -224,6 +230,7 @@ try{
   }finally{
    await page.unroute('**/api/actions',intercept);await page.unroute('**/api/state',failRead);held=false;
    await reconnect();await action('canvas.views.inspect');
+   if(mode==='accepted-details')await page.getByRole('button',{name:'Close canvas details',exact:true}).click();
   }
   if(mode==='refused')await action('canvas.views.dirty',{...target(await view()),dirty:false});
   else{
