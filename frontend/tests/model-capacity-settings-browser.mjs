@@ -49,10 +49,10 @@ try{
  const before=await observe();
  await openSettingsPage(page,'model-capacity');
  const section=page.getByRole('region',{name:'Model capacity',exact:true});
- const waiting=section.getByLabel('Maximum waiting model calls',{exact:true});
+ const waiting=section.getByLabel('Maximum waiting model calls (0 means no count limit)',{exact:true});
  const timeout=section.getByLabel('Maximum wait in seconds (0 means no time limit)',{exact:true});
  const save=section.getByRole('button',{name:'Save model-capacity settings',exact:true});
- await expect(waiting).toHaveValue('256');await expect(timeout).toHaveValue('0');
+ await expect(waiting).toHaveValue('0');await expect(timeout).toHaveValue('0');
  await waiting.fill('300');await timeout.fill('120');await save.click();
  await expect(section.getByRole('status').filter({hasText:'Saved for all chats'})).toBeVisible();
  assert.deepEqual((await observe()).policy,{revision:1,maxWaitingCalls:300,waitTimeoutSeconds:120});
@@ -99,6 +99,11 @@ try{
  assert.deepEqual(after.runtimeCalls,before.runtimeCalls);
  assert.equal(after.selectedSessionId,before.selectedSessionId);
  assert.equal(after.waiters,0);
+ await section.getByRole('button',{name:'Use unlimited waiting',exact:true}).click();
+ await expect(waiting).toHaveValue('0');await expect(timeout).toHaveValue('0');
+ await save.click();
+ await expect(section.getByRole('status').filter({hasText:'no waiting-call count limit'})).toBeVisible();
+ assert.deepEqual((await observe()).policy,{revision:4,maxWaitingCalls:0,waitTimeoutSeconds:0});
  await expect(section.getByRole('status').filter({hasText:'wait until capacity is available or you stop work'})).toBeVisible();
  await page.screenshot({path:join(outputDir,'model-capacity-desktop.png'),animations:'disabled'});
 
@@ -112,9 +117,9 @@ try{
  await page.getByRole('button',{name:'Keep settings open',exact:true}).click();
  await expect(waiting).toHaveValue('500');
  await section.getByRole('button',{name:'Discard edits and use saved settings',exact:true}).click();
- await expect(waiting).toHaveValue('450');
+ await expect(waiting).toHaveValue('0');
  await page.reload();await page.waitForSelector('#amp-one');await openSettingsPage(page,'model-capacity');
- await expect(waiting).toHaveValue('450');await expect(timeout).toHaveValue('0');
+ await expect(waiting).toHaveValue('0');await expect(timeout).toHaveValue('0');
  await waiting.scrollIntoViewIfNeeded();
  assert.equal(await section.evaluate(element=>element.scrollWidth<=element.clientWidth),true);
  await page.screenshot({path:join(outputDir,'model-capacity-mobile.png'),animations:'disabled'});
