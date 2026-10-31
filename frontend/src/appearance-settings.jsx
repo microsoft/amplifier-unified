@@ -5,7 +5,7 @@ import {FileDrop} from './settings-ui';
 import {WorkingLabel} from './working-label';
 import {ThemeDecorationControl} from './theme-presentation';
 import {clearAppearancePreview,previewAppearance} from './appearance-preview';
-import {appearanceImportArgs,appearanceMutationTarget} from './appearance-library';
+import {appearanceImportFileArgs,appearanceMutationTarget} from './appearance-library';
 import './appearance-settings.css';
 import {ObservabilityPreferences} from './execution-observability.jsx';
 
@@ -88,9 +88,14 @@ export function AppearanceSettings({state,shell,act,editor:editorState,preview,p
  },'delete')}
  function edit(){if(editor.current)editor.current.open=true;editor.current?.querySelector('input')?.focus()}
  async function upload(file){
-  if(!file)return;return run(async()=>{if(file.size>990000)throw Error('Choose a CSS appearance smaller than 1 MB.');
-  const imported=await file.text();
-  const {result}=await api.current('theme.import',appearanceImportArgs(file.name,imported));await refresh();setNotice(result.name+' added to your library. Select it to preview.');return result},'import');
+  if(!file)return;return run(async isCurrent=>{
+   const receipt=await api.current('theme.import',await appearanceImportFileArgs(file));
+   if(receipt?.accepted!==true||!receipt.result?.id||typeof receipt.result.name!=='string')throw Error(receipt?.error||'Importing this appearance was not confirmed. Check the library before trying again.');
+   if(!isCurrent())return receipt.result;
+   await refresh();
+   if(isCurrent())setNotice(receipt.result.name+' added to your library. Select it to preview.');
+   return receipt.result;
+  },'import');
  }
  const chosenId=selected||editing?.id||(state.theme?.name==='Amplifier Unified'?'builtin:default':library.items.find(item=>item.name===state.theme?.name)?.id);
  const setPresentation=patch=>run(()=>shell.setPresentation(patch));
@@ -107,6 +112,7 @@ export function AppearanceSettings({state,shell,act,editor:editorState,preview,p
   {!simple&&editing&&<div className="a-dialog-actions" aria-label="Selected appearance actions">
    <button type="button" className="a-soft" disabled={busy} onClick={edit}>Edit {editing.name}</button>
    <button type="button" className="a-soft" disabled={busy} data-action="theme.export" onClick={()=>run(()=>api.current('theme.export',{id:editing.id}),'export')}><Download/>Export {editing.name}</button>
+   <button type="button" className="a-soft" disabled={busy} data-action="theme.export" onClick={()=>run(()=>api.current('theme.export',{id:editing.id,format:'zip'}),'export')}><Download/>Export {editing.name} as ZIP</button>
    {editing.source==='saved'&&<button type="button" className="a-soft" disabled={busy} onClick={()=>setDeleteTarget(editing)}>Delete {editing.name}</button>}
   </div>}
   {!simple&&deleteTarget&&<div role="group" aria-label="Delete appearance confirmation"><p>Delete “{deleteTarget.name}” from the shared library? This cannot be undone. The applied appearance stays unchanged. Export it first to keep a copy.</p><div className="a-dialog-actions"><button type="button" className="a-soft" disabled={busy} onClick={()=>setDeleteTarget(null)}>Cancel deletion</button><button type="button" className="a-primary" disabled={busy} data-action="theme.delete" onClick={remove}><WorkingLabel active={operation==='delete'} working="Deleting…">Confirm delete</WorkingLabel></button></div></div>}
@@ -125,10 +131,10 @@ export function AppearanceSettings({state,shell,act,editor:editorState,preview,p
 
    </div></details>
   </section>
-  {!simple&&<section className="a-appearance-import"><div><h3><Upload/>Your appearance library</h3><p>Upload a CSS appearance once. It will stay here across restarts and be available to every connected device. Imports do not apply or replace other appearances.</p></div><FileDrop id="theme-import" disabled={busy} accept=".css,text/css" action="theme.import" label="Upload appearance" workingLabel="Uploading appearance…" hint="Drop a CSS file here · up to 1 MB" onFile={upload}/>{library.errors.map(row=><p className="a-danger" key={row.name}>{row.name}: {row.message}</p>)}<details className="a-appearance-folder"><summary><FolderOpen/>Theme folder</summary><p>CSS files placed here appear in the library automatically.</p><code>{library.directory}</code></details></section>}
+  {!simple&&<section className="a-appearance-import"><div><h3><Upload/>Your appearance library</h3><p>Upload a CSS appearance or ZIP package once. It will stay here across restarts and be available to every connected device. Imports do not apply or replace other appearances.</p></div><FileDrop id="theme-import" disabled={busy} accept=".css,.zip,text/css,application/zip" action="theme.import" label="Upload appearance" workingLabel="Uploading appearance…" hint="Drop a CSS or ZIP file here · CSS up to 1 MB · ZIP up to 4 MB" onFile={upload}/>{library.errors.map(row=><p className="a-danger" key={row.name}>{row.name}: {row.message}</p>)}<details className="a-appearance-folder"><summary><FolderOpen/>Theme folder</summary><p>CSS files and ZIP packages placed here appear in the library automatically.</p><code>{library.directory}</code></details></section>}
   {!simple&&<details ref={editor} className="a-appearance-advanced">
    <summary>Advanced customization</summary>
-   <p>Edit CSS, preview locally, then save a copy or update the selected library entry. Saving never applies your edits. Export selected appearances with their library controls above; Export current appearance uses committed CSS, not this draft.</p>
+   <p>Edit CSS, preview locally, then save a copy or update the selected library entry. Saving never applies your edits. Exports use the selected library entry or committed current appearance, not this draft.</p>
    {editing&&<p>Editing: <strong>{editing.name}</strong>. {editing.source==='saved'?'Update keeps this library entry’s identity.':'Included appearances are read-only. Save your changes as a copy.'}</p>}
    <label htmlFor="theme-name">Appearance name</label><input id="theme-name" maxLength={100} disabled={busy} value={name} data-action="view.update" onChange={e=>changeDraft({name:e.target.value}).catch(e=>setError(e.message))}/>
    <label htmlFor="theme-description">Description</label><input id="theme-description" maxLength={240} disabled={busy} value={description} onChange={e=>changeDraft({description:e.target.value}).catch(e=>setError(e.message))}/>
@@ -140,6 +146,7 @@ export function AppearanceSettings({state,shell,act,editor:editorState,preview,p
     <button type="button" className="a-soft" disabled={busy} data-action="theme.apply" aria-busy={operation==='apply'||undefined} data-operation-pending={operation==='apply'||undefined} onClick={apply}><WorkingLabel active={operation==='apply'} working="Applying…">Apply appearance</WorkingLabel></button>
     <button type="button" className="a-soft" disabled={busy} aria-busy={operation==='revert'||undefined} data-operation-pending={operation==='revert'||undefined} onClick={revert}><WorkingLabel active={operation==='revert'} working="Reverting…">Revert edits</WorkingLabel></button>
     <button type="button" className="a-soft" disabled={busy} data-action="theme.export" aria-busy={operation==='export'||undefined} data-operation-pending={operation==='export'||undefined} onClick={()=>run(()=>api.current('theme.export',{}),'export')}><Download/>Export current appearance</button>
+    <button type="button" className="a-soft" disabled={busy} data-action="theme.export" aria-busy={operation==='export'||undefined} data-operation-pending={operation==='export'||undefined} onClick={()=>run(()=>api.current('theme.export',{format:'zip'}),'export')}><Download/>Export current appearance as ZIP</button>
    </div>
   </details>}
   {simple&&<div className="a-everyday-footer"><button className="a-link" data-action="view.update" onClick={onAdvanced}>Save, import & export themes</button></div>}

@@ -55,6 +55,11 @@ Use neutral, IP-independent names and only authorized, self-contained assets.
 Prefer system font stacks. Backgrounds may use accepted gradients or embedded
 PNG/JPEG/WebP data URLs, never external URLs, imports or SVG data URLs. Do not
 copy a brand's name, logo or proprietary artwork into a portable appearance.
+For multiple assets, use the versioned ZIP contract in the linked theme guide:
+root `appearance.json`, local CSS, declared images/WOFF fonts and license notices.
+The ZIP extension is not proof of type or safety. Retain author metadata and
+original notices on export. Compare realistic rendered specimens before adding
+a font family; avoid several similar families without a useful distinct role.
 
 Do not change scheme, decorations, Reveal, reduced motion, contrast or permissions
 as a side effect of a theme. Busy regions must not pulse, tint or lock as a whole;
@@ -62,8 +67,9 @@ preserve local status, errors, decisions, cancel and recovery. Components retain
 their host-owned pending/disabled semantics.
 
 For supported composition changes, use `amplifier-shell` and the discovered
-prepare/preview/apply/revert protocol; preserve unaffected instance IDs. There
-is no atomic portable Appearance package or arbitrary composer replacement API.
+prepare/preview/apply/revert protocol; preserve unaffected instance IDs. The
+styling ZIP does not bundle composition, executable components or arbitrary
+composer replacement.
 
 **Success criteria:** Complete requested treatment with independent preferences
 and operational feedback preserved.
@@ -88,7 +94,7 @@ schema acceptance, thumbnails and pending browser receipts are not visual proof.
 
 ## 4. Save, share and retain recovery
 
-`theme.save` creates a copy; `theme.import` retains portable CSS metadata without
+`theme.save` creates a copy; `theme.import` retains portable CSS or styling-ZIP metadata without
 applying or silently replacing an entry. `theme.update` and `theme.delete` use
 a saved id and fresh `expectedFingerprint` from `theme.read`; included appearances
 are read-only, so save a custom copy. Confirm destructive deletion with the user.

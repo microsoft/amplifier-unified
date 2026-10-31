@@ -146,3 +146,12 @@ def test_lowering_limits_changes_only_policy_files(target):
     current = policy.snapshot(*target)
     policy.save(*target, current['revision'], {'maxRunning': 1, 'maxInstances': 1})
     assert evidence.read_bytes() == before
+
+
+def test_unconfigured_target_defaults_to_resource_admission_not_instance_counts(target):
+    root, identity, _ = target
+    config = {'project': 'tests'}
+    default = policy.snapshot(root, identity, config)
+    assert default['effective'] == {'maxRunning': 0, 'maxInstances': 0, 'minFreeBytes': 10*1024**3}
+    assert policy.apply(root, identity, config)['maxRunning'] == 0
+    assert policy.apply(root, identity, config)['maxInstances'] == 0

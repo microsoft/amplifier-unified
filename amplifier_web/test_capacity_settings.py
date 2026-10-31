@@ -11,7 +11,7 @@ import stat
 from . import test_host_resources as host_resources
 from .private_policy_file import write as write_policy_file
 
-LIMITS = {'maxRunning': 15, 'maxInstances': 256, 'minFreeBytes': 10 * 1024**3}
+LIMITS = {'maxRunning': 0, 'maxInstances': 0, 'minFreeBytes': 10 * 1024**3}
 MAXIMUM = 2**53 - 1
 
 
