@@ -278,7 +278,7 @@ try{
  });
  await check('all populated top-level sections collapse, reopen and retain choices',async()=>{
   const sectionIds=await overview.locator('details[data-overview-section]').evaluateAll(nodes=>nodes.map(el=>el.dataset.overviewSection));
-  assert.deepEqual(sectionIds,['plan','outputs','sources','agents','workspace','activity','review','publishing']);
+  assert.deepEqual(sectionIds,['plan','outputs','sources','agents','workspace','activity','permissions','review','publishing']);
   for(const id of sectionIds){
    await revealByWheel(summary(id));
    if(!await section(id).evaluate(el=>el.open)){await summary(id).click();await expect(section(id)).toHaveAttribute('open','')}
