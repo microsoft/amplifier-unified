@@ -264,8 +264,8 @@ class AccessMode:
                            or row['inputId'] not in active.get('inputIds', []) for row in inputs)):
                 from .errors import AppError
                 raise AppError('Full access requires current admitted input bindings when supplied.', 403)
-            # The worker bounds this observation. Missing/overflow transport
-            # cannot prove an empty assignment or borrow the root's later IDs.
+            # The native worker supplies every assigned input ID. Missing/empty
+            # transport cannot prove an empty assignment or borrow later IDs.
             ids = [row['inputId'] for row in inputs]
             authority.update(runtimeSessionId=PRINCIPAL.get(), generationId=active['id'],
                              inputIds=ids, inputCoverage='complete' if ids else 'unavailable')

@@ -142,15 +142,14 @@ follow-up), and set `complete:false`, `status:unavailable`, `version:null`.
 Never drop the unsupported subset and qualify the remaining association alone.
 The transport projection must equal that host-observed set, not merely be its
 subset. A shortened projection is unavailable with `input_projection_incomplete`
-and the missing input IDs. More than sixteen host-observed inputs is explicitly
-`input_coverage_overflow`, with delivered/projected counts, no qualified version
-and no implied complete last-N window. Overflow exposes `inputCount` and an empty
-bounded `inputIds` list, not an empty relevant set. These observations authorize no
-effect. The bundled worker must supply the complete set up to that bound and retain
-overflow explicitly; its earlier last-eight projection cannot qualify nine inputs.
-Delivery must preserve these bounded unavailable diagnostics without erasing
-independent discovery. The worker and delivery changes remain separately owned
-runtime integration prerequisites until their exact checks pass.
+and the missing input IDs. The bundled worker supplies the complete canonical
+native input set regardless of count; neither the display tail nor content-page
+budgets may truncate it or replace it with an empty set. Per-input identifiers
+and diagnostics remain strictly typed and bounded in individual length. Input
+identity metadata is accounted separately from discovery and detail-page content;
+retained read-cache memory still accounts for every actual byte. These observations
+authorize no effect. Unsupported lineage stays unavailable with its complete
+identity and reason, and does not erase independent discovery.
 
 The fingerprint binds the actual root/generation/input association, current Work
 record and promise revisions, source identities/digests, owner/link/Stop revisions,
@@ -175,15 +174,16 @@ Any later supported explicit incorporation policy needs its own retained evidenc
 Manifest paging and source paging are both required when present; a complete metadata
 page is not a complete-content observation.
 
-Both new projections are capped at 12 KiB UTF-8 and make progress through explicit
+Discovery and detail content pages are capped at 12 KiB UTF-8, apart from the
+complete validated input-identity metadata, and make progress through explicit
 continuations. Required source bodies remain on-demand, not automatically injected
 into every provider request. A stale current revision refuses rather than mixing
 old and new pages. Immutable source pages remain readable. Strict Ask assurance
 rechecks currentness before a dependent effect; the Full policy below permits
 ordinary owner admission without claiming that assurance.
 
-This first resolver inspects at most 16 delivered input identities, eight distinct
-Work items and 4096 source metadata rows per item. Overflow is explicit unavailable
+This first resolver inspects the complete delivered input set, at most eight
+distinct Work items and 4096 source metadata rows per item. Overflow is explicit unavailable
 coverage, never a silently shortened relevant set or permission to act. It reads
 source metadata only; bodies stay in the existing source reader. Missing earlier
 promise revisions also make coverage unavailable. The limits do not erase Work or

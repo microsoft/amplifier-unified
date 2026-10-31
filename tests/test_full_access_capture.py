@@ -107,7 +107,7 @@ async def child(app, owner, tmp_path, monkeypatch, exercise):
 
 
 @pytest.mark.parametrize('input_count', [1, 17])
-async def test_native_child_observation_keeps_actual_bounded_assignment(tmp_path, monkeypatch, input_count):
+async def test_native_child_observation_keeps_complete_assigned_inputs(tmp_path, monkeypatch, input_count):
     app, runtime, _, sid, config, _, _, descriptor = await full_fixture(tmp_path, monkeypatch)
     try:
         source = app._session(sid)
@@ -128,8 +128,8 @@ async def test_native_child_observation_keeps_actual_bounded_assignment(tmp_path
             assert authority['origin'] == 'agent' and authority['sessionId'] == sid
             assert authority['runtimeSessionId'] == principal == 'native-observer-child'
             assert authority['generationId'] == 'system-work'
-            assert authority['inputIds'] == (assigned if input_count == 1 else [])
-            assert authority['inputCoverage'] == ('complete' if input_count == 1 else 'unavailable')
+            assert authority['inputIds'] == assigned
+            assert authority['inputCoverage'] == 'complete'
             assert 'inputCount' not in authority and 'messageId' not in authority
             captured.append(copy.deepcopy(watch))
         await child(app, source, tmp_path, monkeypatch, exercise)

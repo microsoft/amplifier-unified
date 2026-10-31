@@ -56,8 +56,8 @@ async def test_mounted_full_child_publishes_files_and_excerpt_with_original_acto
         assert authority['origin'] == 'agent' and authority['sessionId'] == h.source['id']
         assert authority['runtimeSessionId'] == actor != 'native-root'
         assert authority['generationId'] == 'generation-1' and authority['interruptionRevision'] == 0
-        assert authority['inputIds'] == (assigned if input_count <= 16 else [])
-        assert authority['inputCoverage'] == ('complete' if input_count <= 16 else 'unavailable')
+        assert authority['inputIds'] == assigned
+        assert authority['inputCoverage'] == 'complete'
         assert {item['id'] for item in payload['_attachments']} == {row['id'], excerpt['id']}
         if kind == 'nested' and actor == 'child':
             h.worker.runtime.generation['input_ids'].append('later-root-input')

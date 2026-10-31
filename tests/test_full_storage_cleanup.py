@@ -88,8 +88,8 @@ async def test_mounted_full_child_saves_and_removes_only_qualified_code(mounted,
     assert authority == saved(h.app, 'child-save')['_authority']
     assert authority['sessionId'] == h.source['id']
     assert authority['runtimeSessionId'] == completed[0] and authority['origin'] == 'agent'
-    assert authority['inputIds'] == (assigned if input_count == 1 else [])
-    assert authority['inputCoverage'] == ('complete' if input_count == 1 else 'unavailable')
+    assert authority['inputIds'] == assigned
+    assert authority['inputCoverage'] == 'complete'
     assert retained['status'] == 'completed' and retained['removedFileBytes'] > 0
     assert not storage.target.exists() and storage.project.exists()
     assert all((h.app.update_manager.directory / 'releases' / name).exists() for name in storage.names[:3])

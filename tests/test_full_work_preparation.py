@@ -179,13 +179,15 @@ async def test_consumed_ids_reset_only_for_actual_native_generation(app):
     assert not delivery.call_consumed('retained')
 
 
-async def test_full_preparation_does_not_require_bounded_input_coverage(app):
+async def test_full_preparation_keeps_all_input_ids_without_requiring_work_assurance(app):
     adapter, child, required, worker = await joined(app)
     await save(app, child)
     inputs = [*worker.runtime.generation['input_ids'], *('extra-' + str(i) for i in range(17))]
     worker.runtime.generation['input_ids'] = inputs
     child['collaborationGeneration']['inputIds'] = inputs
-    assert adapter.coordinator.get_capability('web.work_origin_scope')()['inputCoverage'] == 'overflow'
+    origin_scope = adapter.coordinator.get_capability('web.work_origin_scope')()
+    assert origin_scope['inputIds'] == inputs
+    assert origin_scope['inputCoverage'] == 'complete'
     sent = []
     class Provider:
         async def complete(self, value, **kwargs):

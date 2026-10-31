@@ -36,7 +36,7 @@ checks its required delivered-input membership and ordinary authority. Root repl
 and provenance consumers keep the strict default.
 
 `AccessMode.capture_full` shares fresh Full capture for feedback and observations.
-It uses that native check and records the actual bounded input observation;
+It uses that native check and records all available assigned input IDs;
 missing or empty transport is unavailable coverage, never a verified empty
 assignment or a reason to deny Full. Supplied malformed or foreign inputs refuse.
 Fresh trusted system work needs no native principal; a supplied native envelope

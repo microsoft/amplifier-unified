@@ -28,8 +28,8 @@ Agent entry also uses the shared [current native generation authority](native-ge
 Qualification, preview and fresh create/resume require the actual caller's current
 generation at its original Stop revision. Full capture uses the existing access
 owner and retains `runtimeSessionId`, `generationId`, `inputIds` and `inputCoverage`
-separately from the owning `sessionId`. Missing or empty bounded input observation,
-including native transport overflow, records unavailable coverage without denying
+separately from the owning `sessionId`. The native worker supplies every assigned
+input ID. Missing or empty input observation records unavailable coverage without denying
 Full. Supplied malformed or foreign input identities still refuse. A stopped worker cannot choose a new request
 ID to regain authority, even before its terminal event arrives or after a duplicate
 start/status event. Reading the original idempotent receipt still does not replay

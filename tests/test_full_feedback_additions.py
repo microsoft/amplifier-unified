@@ -125,8 +125,8 @@ async def test_mounted_full_child_files_keep_actual_actor_and_outlive_turn(mount
     assert receipt['status'] == 'submitted'
     assert actors == (['grandchild'] if kind == 'nested' else ['child'])
     assert receipt['runtimeSessionId'] == receipt['authority']['runtimeSessionId'] == actors[0]
-    assert receipt['authority']['inputIds'] == (assigned if input_count == 1 else [])
-    assert receipt['authority']['inputCoverage'] == ('complete' if input_count == 1 else 'unavailable')
+    assert receipt['authority']['inputIds'] == assigned
+    assert receipt['authority']['inputCoverage'] == 'complete'
     assert receipt['authority']['generationId'] == 'generation-1'
     assert receipt['sourceSessionId'] == h.source['id'] and 'clientId' not in receipt
     assert not h.app.clients.records and not h.source['approvals']

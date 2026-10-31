@@ -28,6 +28,25 @@ DEFAULT_QUEUE_SECONDS = 86400
 REPORT_OUTCOMES = {'failed', 'deferred', 'declined', 'question', 'conflict', 'cancelled'}
 
 
+def intake_task_binding(receipt):
+    """Use the already captured objective identity for ordinary peer intake.
+
+    The receipt and its original edit revision stay immutable. Special resume,
+    commissioning and blocked-input paths retain their own exact contracts.
+    """
+    binding = {key: receipt.get(key) for key in ('taskId', 'taskRevision')}
+    if 'taskContinuationEpoch' in receipt:
+        binding['taskContinuationEpoch'] = receipt['taskContinuationEpoch']
+    elif (receipt.get('commandAction') == 'coordination.send' and receipt.get('taskId')
+            and receipt.get('mode') in {'auto', 'queue'}
+            and receipt.get('origin') in {'agent', 'ui', 'user'}
+            and 'replyTaskContinuationEpoch' in receipt
+            and not any(receipt.get(key) for key in ('dependencyRequestId', 'creationOperationId',
+                'humanResume', 'scheduleRepair', 'blockedTaskInput', 'completedFollowup'))):
+        binding['taskContinuationEpoch'] = receipt['replyTaskContinuationEpoch']
+    return binding
+
+
 def response_ready(response):
     """A verified negative report can wake a waiter without satisfying its work."""
     return (response.get("kind") != "ack" and (
@@ -891,7 +910,7 @@ class Collaboration:
             if (task.get("status") in {"paused", "blocked", "completed", "cancelled"}
                     and not resuming and not self.blocked_input(receipt, task)):
                 return "The recipient task is not active."
-            task_binding = receipt
+            task_binding = intake_task_binding(receipt)
             if for_reply and 'replyTaskContinuationEpoch' in receipt:
                 task_binding = {**receipt, 'taskContinuationEpoch': receipt['replyTaskContinuationEpoch']}
             if not task_matches(task, task_binding):
@@ -1056,12 +1075,9 @@ class Collaboration:
                     self.service.db.commit()
                     self.cancel_expiry(identity)
                     snapshot = copy.deepcopy(target)
-                arguments = {"inputId": identity,
-                             "taskId": receipt.get("taskId"), "taskRevision": receipt.get("taskRevision")}
+                arguments = {"inputId": identity, **intake_task_binding(receipt)}
                 if automatic_delivery(receipt):
                     arguments['automaticDelivery'] = True
-                if 'taskContinuationEpoch' in receipt:
-                    arguments['taskContinuationEpoch'] = receipt['taskContinuationEpoch']
                 try:
                     result = await self.service.runtime.collaboration_input(
                         snapshot, arguments, lambda: self.guard(self.receipt(identity)), self.service.on_runtime_event)
@@ -1123,11 +1139,12 @@ class Collaboration:
 
     def admission(self, sid, args):
         receipt = self.receipt(args["inputId"])
+        binding = intake_task_binding(receipt)
         if (receipt.get("commandAction") != "coordination.send" or receipt.get("delivery") != "submitting"
                 or receipt.get("protocol") != PROTOCOL or receipt["target"]["sessionId"] != sid
-                or args.get("taskId") != receipt.get("taskId") or args.get("taskRevision") != receipt.get("taskRevision")
-                or ('taskContinuationEpoch' in args) != ('taskContinuationEpoch' in receipt)
-                or args.get('taskContinuationEpoch') != receipt.get('taskContinuationEpoch')):
+                or args.get("taskId") != binding.get("taskId") or args.get("taskRevision") != binding.get("taskRevision")
+                or ('taskContinuationEpoch' in args) != ('taskContinuationEpoch' in binding)
+                or args.get('taskContinuationEpoch') != binding.get('taskContinuationEpoch')):
             return {"admitted": False, "reason": "The exact host request is no longer submitting."}
         if (args.get('automaticDelivery') is True) != automatic_delivery(receipt):
             return {"admitted": False, "reason": "The saved input delivery policy changed."}
@@ -1215,7 +1232,10 @@ class Collaboration:
         if kind == "runtime.status" and payload.get("event") == "input.delivered":
             active = session.get("collaborationGeneration") or {}
             if active and not active.get("terminal") and payload.get("inputId"):
-                active["inputIds"] = list(dict.fromkeys([*active.get("inputIds", []), payload["inputId"]]))[-128:]
+                # Native membership is authority, not a display-history window.
+                inputs = active.setdefault("inputIds", [])
+                if payload["inputId"] not in inputs:
+                    inputs.append(payload["inputId"])
         if kind == "runtime.steering" and payload.get("input_id"):
             try:
                 receipt = self.receipt(payload["input_id"])

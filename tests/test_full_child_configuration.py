@@ -226,7 +226,7 @@ async def test_mounted_full_configuration_and_own_reads_keep_actual_actor(mounte
     assert (h.authorities, writes) == before
 
 
-async def test_mounted_full_child_input_overflow_stays_unavailable_without_blocking_write(mounted, monkeypatch):
+async def test_mounted_full_child_retains_all_17_inputs_in_write_and_queued_operation(mounted, monkeypatch):
     h = mounted
     await save(h.app)
     assigned = ['assigned-' + str(i) for i in range(17)]
@@ -247,21 +247,21 @@ async def test_mounted_full_child_input_overflow_stays_unavailable_without_block
 
     async def execute(self, prompt, context, providers, tools, hooks, coordinator):
         control = tools['app_control']
-        result = await dispatch(control, 'permissions.save', permissions(h.source), 'overflow-write')
+        result = await dispatch(control, 'permissions.save', permissions(h.source), 'many-input-write')
         assert result.success, result.error
-        await until(lambda: any(key == 'overflow-write' for key, _ in h.authorities))
-        authority = next(value for key, value in h.authorities if key == 'overflow-write')
+        await until(lambda: any(key == 'many-input-write' for key, _ in h.authorities))
+        authority = next(value for key, value in h.authorities if key == 'many-input-write')
         assert authority['runtimeSessionId'] == coordinator.session_id == 'child'
         assert authority['sessionId'] == h.source['id'] and authority['origin'] == 'agent'
         assert authority['generationId'] == 'generation-1' and authority['interruptionRevision'] == 0
-        assert authority['inputIds'] == [] and authority['inputCoverage'] == 'unavailable'
-        assert h.envelopes[-1]['_inputBindings'] == []
-        # The same bounded observation must survive in the durable operation,
-        # without borrowing the root's complete input list to fill it in.
+        assert authority['inputIds'] == assigned and authority['inputCoverage'] == 'complete'
+        assert h.envelopes[-1]['_inputBindings'] == [{'inputId': identity, 'clientId': None} for identity in assigned]
+        # The complete captured assignment must survive in the durable operation
+        # without substituting a later root input set.
         plan = {'providers': [{'module': 'provider-fixture'}],
                 'session': {'orchestrator': {'module': 'loop-live'}, 'context': {'module': 'context-simple'}}}
         queued = await dispatch(control, 'configuration.apply', {
-            'id': h.source['id'], 'config': plan, 'whenIdle': True}, 'overflow-queued')
+            'id': h.source['id'], 'config': plan, 'whenIdle': True}, 'many-input-queued')
         assert queued.success, queued.error
         assert saved_permissions(h) == {}
         completed.append(True)
@@ -275,18 +275,18 @@ async def test_mounted_full_child_input_overflow_stays_unavailable_without_block
         finally:
             h.app.management.lock.release()
         assert completed == [True]
-        assert (await finished(h.app, 'overflow-write'))['phase'] == 'ready'
+        assert (await finished(h.app, 'many-input-write'))['phase'] == 'ready'
         assert saved_permissions(h)['overrides']['tool-filesystem']['config']['allowed_write_paths'] == ['/delegated-output']
         await asyncio.wait_for(retiring.wait(), 10)
         # Both requests were admitted before the first effect changed settings.
         # The plan now waits on real configuration retirement, not a fabricated
         # working status or a refreshed old-child assignment.
-        assert (await finished(h.app, 'overflow-queued'))['phase'] == 'ready'
+        assert (await finished(h.app, 'many-input-queued'))['phase'] == 'ready'
         record = h.app.management.configuration_record(h.source['id'], h.source['pendingConfiguration']['operationId'])
         assert record['state']['phase'] == 'queued' and h.source['configurationBusy']
         retained = record['request']['authority']
         assert retained['runtimeSessionId'] == 'child' and retained['generationId'] == 'generation-1'
-        assert retained['inputIds'] == [] and retained['inputCoverage'] == 'unavailable'
+        assert retained['inputIds'] == assigned and retained['inputCoverage'] == 'complete'
         assert not h.source['approvals'] and h.app.configuration_authority.rows(h.source['id']) == []
         h.approval_prompt.assert_not_awaited()
     finally:

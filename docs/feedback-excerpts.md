@@ -70,7 +70,9 @@ an exact precondition. Accepted payloads and request fingerprints stay unchanged
 New Full receipts retain the actual origin, source conversation, access revision,
 native/execution identity and Stop boundary, plus the assigned generation and
 actual runtime principal for an agent. Each child invocation keeps its assigned inputs captured before preparation,
-including nested and resumed execution; later root inputs are not substituted. Missing or overflowed input transport records unavailable coverage.
+including nested and resumed execution; later root inputs are not substituted.
+The native worker supplies every assigned input ID. Missing or empty input
+transport records unavailable coverage.
 Fresh Full capture shares the access-mode owner with observations. A system call
 without native transport invents no native actor; supplied native transport must
 be current, and malformed or foreign input identities refuse.

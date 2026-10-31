@@ -350,8 +350,7 @@ class Worker:
                 return None
             return {'rootSessionId': self.session.coordinator.session_id,
                     'runtimeSessionId': coordinator.session_id, 'generationId': child['generationId'] if child else generation['id'],
-                    'inputIds': list(ids) if len(ids) <= 16 else [],
-                    'inputCoverage': 'complete' if len(ids) <= 16 else 'overflow',
+                    'inputIds': list(ids), 'inputCoverage': 'complete',
                     'stopRevision': self.stop_revision}
         coordinator.register_capability('web.work_origin_scope', origin_scope)
         def current_full_access():
@@ -391,10 +390,10 @@ class Worker:
                 args['_childOrigin'] = child
             all_inputs = ((getattr(getattr(self, 'runtime', None), 'generation', None) or {}).get('input_ids', [])
                           if assigned is None else assigned)
-            # Transport the full bounded set, not the visual-context tail.
-            # The host independently compares its complete generation and
-            # reports overflow; an empty envelope is never evidence of none.
-            bound_ids = all_inputs if isinstance(all_inputs, list) and len(all_inputs) <= 16 else []
+            # Transport the complete native set, not the visual-context tail.
+            # The host independently compares its canonical generation. Content
+            # budgets must not truncate the identity used by that comparison.
+            bound_ids = all_inputs if isinstance(all_inputs, list) else []
             bound_context = self.context_bindings if assigned is None else assigned_context
             args = {**args, '_runtimeSessionId': coordinator.session_id,
                     '_inputBindings': [{'inputId': i, 'clientId': bound_context.get(i, {}).get('clientId')} for i in bound_ids],

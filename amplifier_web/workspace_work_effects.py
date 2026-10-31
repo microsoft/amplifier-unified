@@ -142,7 +142,7 @@ def applicability(invocation, target):
                         or creation.get('sessionId') != target['id']):
         return True, 'Commissioning receipt is unavailable; Work applicability is unknown.'
     if creation and creation.get('workReferences') and (
-            creation.get('initialInputId') in inputs or len(inputs) > 16 or not active.get('id')):
+            creation.get('initialInputId') in inputs or not active.get('id')):
         return True, None
     for identity in inputs:
         row = _receipt(invocation, identity)
