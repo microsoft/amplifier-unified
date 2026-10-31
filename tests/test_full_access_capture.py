@@ -1,5 +1,10 @@
 """Shared Full capture through real domain actions and a mounted native child."""
 import copy
+import importlib.util
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -10,9 +15,76 @@ from test_full_access_observations import full_fixture, mode
 from test_full_feedback import github, saved, settle
 
 
+async def child(app, owner, tmp_path, monkeypatch, exercise):
+    """Mount a real finite child against the observation fixture's owner."""
+    from amplifier_foundation.bundle import Bundle, BundleModuleResolver
+    from amplifier_module_loop_live.runtime import Runtime
+    from amplifier_web.app_guidance import install_app_access
+    from amplifier_web.host.approvals import Approvals
+    from amplifier_web.host.children import install_children
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web.runtime_worker import Worker
+    from test_full_child_configuration import dispatch
+
+    spec = importlib.util.spec_from_file_location('full_capture_child_fixture',
+        Path(__file__).parent / 'fixtures/standalone_children_probe.py')
+    fixture = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, fixture)
+    spec.loader.exec_module(fixture)
+    config = {'session': {'orchestrator': {'module': 'loop-live'}, 'context': {'module': 'context-simple'}},
+              'agents': {'worker': {'instruction': 'Observe the delegated task'}}}
+    paths = {name: Path(importlib.util.find_spec('amplifier_module_' + name.replace('-', '_')).origin).parent
+             for name in ('loop-live', 'context-simple')}
+    prepared = fixture.ProbePrepared(config, BundleModuleResolver(paths),
+        Bundle(name='fixture', session=config['session'], agents=config['agents']))
+    ask = AsyncMock(return_value='deny')
+    approvals = Approvals(None, ask)
+    native = owner.get('runtimeSessionId') or owner['id']
+    parent = await prepared.create_session(session_id=native, approval_system=approvals)
+    parent.coordinator.register_capability('session.working_dir', owner['workspace'])
+    active = owner['collaborationGeneration']
+    worker = Worker()
+    worker.session = parent
+    worker.runtime = SimpleNamespace(generation={'id': active['id'], 'input_ids': list(active['inputIds'])},
+                                     closed=False, stop_requested=False)
+    worker.activation_gate = SimpleNamespace(current_valid=True)
+    worker.context_inputs = list(active['inputIds'])
+    worker.context_bindings = {identity: {'clientId': None, 'targets': []} for identity in active['inputIds']}
+
+    async def transport(method, arguments):
+        return await app.app_bridge(method, arguments, owner['id'])
+
+    worker.bridge = transport
+    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
+    registry = await install_children(parent, prepared, Runtime(native), SessionStore(tmp_path / 'children'), approvals)
+    failures, completed = [], []
+
+    async def execute(self, prompt, context, providers, tools, hooks, coordinator):
+        async def invoke(action, arguments, identity):
+            result = await dispatch(tools['app_control'], action, arguments, identity)
+            assert result.success, result.error
+            return result.output
+        try:
+            await exercise(invoke, coordinator.session_id)
+            completed.append(True)
+        except Exception as exc:
+            failures.append(exc)
+            raise
+        return 'observing'
+
+    monkeypatch.setattr(fixture.FiniteOrchestrator, 'execute', execute)
+    try:
+        await registry.spawn('worker', 'observe', parent, sub_session_id='native-observer-child')
+        if failures:
+            raise failures[0]
+        assert completed == [True]
+        ask.assert_not_awaited()
+    finally:
+        await parent.cleanup()
+
+
 @pytest.mark.parametrize('input_count', [1, 17])
 async def test_native_child_observation_keeps_actual_bounded_assignment(tmp_path, monkeypatch, input_count):
-    from test_full_configuration_continuation import child
     app, runtime, _, sid, config, _, _, descriptor = await full_fixture(tmp_path, monkeypatch)
     try:
         source = app._session(sid)
@@ -31,7 +103,7 @@ async def test_native_child_observation_keeps_actual_bounded_assignment(tmp_path
             authority = watch['authorization']
             assert authority == qualified['authorization']
             assert authority['origin'] == 'agent' and authority['sessionId'] == sid
-            assert authority['runtimeSessionId'] == principal == 'native-continuation-child'
+            assert authority['runtimeSessionId'] == principal == 'native-observer-child'
             assert authority['generationId'] == 'system-work'
             assert authority['inputIds'] == (assigned if input_count == 1 else [])
             assert authority['inputCoverage'] == ('complete' if input_count == 1 else 'unavailable')

@@ -262,7 +262,7 @@ class AccessMode:
             if (not isinstance(inputs, list)
                     or any(not isinstance(row, dict) or not isinstance(row.get('inputId'), str)
                            or row['inputId'] not in active.get('inputIds', []) for row in inputs)):
-                from .service import AppError
+                from .errors import AppError
                 raise AppError('Full access requires current admitted input bindings when supplied.', 403)
             # The worker bounds this observation. Missing/overflow transport
             # cannot prove an empty assignment or borrow the root's later IDs.
