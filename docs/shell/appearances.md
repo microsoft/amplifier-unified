@@ -52,8 +52,13 @@ See [themes](themes.md), [components](components.md), and the [shell API](README
 The [authoring skill](../../skills/amplifier-shell/SKILL.md) explains how agents use
 them. Internal `theme.*`, `shell.*` and `canvas.views.*` names remain API names.
 
-A single portable Appearance package that atomically bundles all of these,
-a unified experience gallery, cross-device preference synchronization, arbitrary
+The version-1 ZIP package described in [themes](themes.md#zip-appearance-packages)
+bundles styling and supported assets only. It does not install components, layouts,
+permissions, automation, or user preferences. A root `appearance.json` identifies
+the type and version; a `.zip` suffix alone does not identify a valid appearance.
+
+A single portable Appearance package that atomically bundles all of these broader
+surfaces, a unified experience gallery, cross-device preference synchronization, arbitrary
 replacement of the transcript/composer, and universal conformance tooling are
 future work. Do not describe them as installed features. Each new customization
 surface needs explicit ownership, capabilities, persistence, accessibility,

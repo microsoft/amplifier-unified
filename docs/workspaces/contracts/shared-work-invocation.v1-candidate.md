@@ -117,8 +117,21 @@ observations, following their exact canonical creation/input associations. Queue
 unknown, merely accepted-but-not-delivered or terminal input cannot stand in for it.
 
 Limit this first producer to retained commissioned initial inputs. Direct human
-turns, independent roots, untyped follow-ups, steering, scheduled input and descendant
-worker inheritance are explicitly unqualified here. A mixed set with unsupported
+turns, independent roots, untyped follow-ups, steering and scheduled input are
+explicitly unqualified here. An already admitted native child inherits the exact
+original generation and delivered input set captured before its preparation
+starts. The live native child run and current worker process authenticate that
+read/effect-check scope; a normal parent turn finish or newer parent turn does not
+cancel it. Stop, execution/configuration changes, worker release, child termination
+and current task/assignment controls still invalidate the child. An agent waiting
+on a dependency does not itself revoke the child doing that dependency. For
+commissioned Work, this requires contiguous canonical agent-only change rows from
+the sealed active task, changing only its dependency-block fields; missing history,
+new tasks, changed instructions, human blocks and pause/resume invalidate that
+exception. The original sealed task binding remains the coverage binding. Children
+retain the original required-content version and coverage checks, and cannot use
+this scope as a root principal for Work mutations or peer control. Unsupported
+input lineage remains unsupported in the child. A mixed set with unsupported
 input lineage returns unavailable with coverage; it is not a manufactured empty set
 or permission to execute. This proposal does not silently block or exempt all ordinary
 unrelated work: the existing policy remains authoritative, and no claim of Work-aware
