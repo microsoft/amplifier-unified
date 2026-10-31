@@ -2,7 +2,7 @@
 
 Interface (no path, revision or command overrides): --initialize retains the
 candidate before setup; --inputs verifies the workflow's fixed GitHub downloads;
---run restores that lock and executes 43 native + 18 auto cases; --finalize records
+--run restores that lock and executes 43 native + 20 auto cases; --finalize records
 workflow status without executing work. --native/--auto are internal child modes.
 
 output/goal-peer-publisher0410/ contains report.json (phase/action status and limits),
@@ -59,11 +59,12 @@ SELECTORS = {'native': ['tests/test_goal_peer_continuation.py', 'tests/test_task
 AUTO_NAMES = {
     'test_default_auto_skips_idle_only_rows_while_manager_busy',
     'test_terminal_event_before_no_effect_ack_reconsiders_same_receipt',
-    'test_idle_auto_uses_same_id_and_saved_envelope',
     'test_only_unadmitted_canonical_host_returns_upgrade',
     'test_no_effect_wait_is_not_a_polling_loop',
     'test_busy_selection_work_does_not_grow_with_receipt_history',
-} | {f'test_native_disposition_beats_lost_ack_and_never_retargets[{v}]'
+} | {f'test_idle_auto_uses_same_id_and_saved_envelope[{v}]'
+     for v in ('active', 'blocked', 'completed')} | {
+    f'test_native_disposition_beats_lost_ack_and_never_retargets[{v}]'
      for v in ('accepted', 'applied', 'held', 'unknown')} | {
     f'test_native_auto_selects_supported_exact_boundary[{v}]'
     for v in ('none', 'closed-boundary', 'unsupported', 'host-lag', 'stop', 'task', 'completed', 'blocked')}
@@ -203,7 +204,7 @@ def test_phase(name):
     expected = Counter((module.replace('.', '/') + '.py::' + case)
                        for module, names in (EXPECTED if name == 'native' else {'tests.test_peer_auto_delivery': AUTO_NAMES}).items()
                        for case in names)
-    assert sum(expected.values()) == (43 if name == 'native' else 18)
+    assert sum(expected.values()) == (43 if name == 'native' else 20)
     class Collection:
         def pytest_collection_finish(self, session):
             nodes = [item.nodeid for item in session.items]
