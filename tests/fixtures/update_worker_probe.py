@@ -13,7 +13,7 @@ import sys
 SOURCE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SOURCE))
 
-PROVIDER = r'''import asyncio,json,os
+PROVIDER = r'''import asyncio,hashlib,json,os,sys
 from pathlib import Path
 from amplifier_core import ProviderInfo,ToolResult
 from amplifier_core.message_models import ChatResponse,TextBlock,ToolCall
@@ -26,7 +26,8 @@ class FixtureProvider:
     async def complete(self,request,**kwargs):
         v=json.loads(Path(SCENARIO).read_text())
         child=bool(self.coordinator.get_capability('live.child'))
-        with Path(v['calls']).open('a') as f:f.write(json.dumps({'pid':os.getpid(),'child':child,'goal':self.coordinator.session_state.get('goal')})+'\n')
+        modules={name:{'path':str(Path(module.__file__).resolve()),'sha256':hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest()} for name in ('amplifier_module_loop_live','amplifier_module_loop_streaming') if (module:=sys.modules.get(name)) is not None}
+        with Path(v['calls']).open('a') as f:f.write(json.dumps({'pid':os.getpid(),'child':child,'goal':self.coordinator.session_state.get('goal'),'modules':modules})+'\n')
         if child:
             Path(v['started']).write_text('ready')
             while not Path(v['release']).exists():await asyncio.sleep(.02)
@@ -137,6 +138,7 @@ providers:
         assert resumed['goal']['turns_used']==2 and resumed['goal']['cap']==3,resumed
         continuations=app.db.execute("SELECT receipt FROM commands WHERE json_extract(receipt,'$.dependencyRequestId') LIKE 'update-wait:%'").fetchall()
         assert len(continuations)==1 and json.loads(continuations[0][0])['delivery']=='accepted'
+        (root/'runtime-provenance.json').write_text(json.dumps({str(pid):next(row['modules'] for row in calls if row['pid']==pid) for pid in pids},indent=2))
         (root/'drain-receipt.json').write_text(json.dumps(saved,indent=2))
         print(json.dumps({'workerProcesses':2,'originalInputCount':1,'continuations':1,
             'childResultRetained':True,'parkedBeforeRestart':True,'resumedUsedTurns':2,'cap':3,
