@@ -23,6 +23,7 @@ async def child(app, owner, tmp_path, monkeypatch, exercise):
     from amplifier_web.host.approvals import Approvals
     from amplifier_web.host.children import install_children
     from amplifier_web.host.storage import SessionStore
+    from amplifier_web.runtime import RuntimeManager
     from amplifier_web.runtime_worker import Worker
     from test_full_child_configuration import dispatch
 
@@ -50,9 +51,29 @@ async def child(app, owner, tmp_path, monkeypatch, exercise):
     worker.activation_gate = SimpleNamespace(current_valid=True)
     worker.context_inputs = list(active['inputIds'])
     worker.context_bindings = {identity: {'clientId': None, 'targets': []} for identity in active['inputIds']}
+    manager = RuntimeManager()
+    manager.app_bridge = app.app_bridge
+    runtime_owner = {'process': SimpleNamespace(returncode=None), 'runtimeOwnerId': 'fixture-owner'}
+    manager.workers[owner['id']] = runtime_owner
+    monkeypatch.setattr(app.runtime, 'workers', manager.workers)
+    replies, bridge_id = {}, 0
+
+    async def write(row, reply):
+        assert row is runtime_owner
+        replies[reply['id']] = reply
+
+    manager._write = write
 
     async def transport(method, arguments):
-        return await app.app_bridge(method, arguments, owner['id'])
+        nonlocal bridge_id
+        bridge_id += 1
+        identity = 'bridge-' + str(bridge_id)
+        await manager._bridge(owner['id'], runtime_owner, {
+            'id': identity, 'operation': method, 'args': arguments})
+        reply = replies.pop(identity)
+        if reply.get('error'):
+            raise RuntimeError(reply['error'])
+        return reply['result']
 
     worker.bridge = transport
     await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
