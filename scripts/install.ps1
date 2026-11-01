@@ -98,6 +98,12 @@ namespace UnifiedBootstrap {
             public uint attributes; public System.Runtime.InteropServices.ComTypes.FILETIME creation, access, write;
             public uint volume, sizeHigh, sizeLow, links, high, low;
         }
+        [StructLayout(LayoutKind.Sequential)] struct RenameInfo {
+            public byte replace; public IntPtr root; public uint length; public ushort name;
+        }
+        [StructLayout(LayoutKind.Sequential)] struct IoStatus {
+            public IntPtr status; public UIntPtr information;
+        }
         [DllImport("advapi32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
         static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(
             string sddl, uint revision, out IntPtr descriptor, out uint size);
@@ -123,6 +129,11 @@ namespace UnifiedBootstrap {
             out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
         [DllImport("advapi32.dll")] static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
         [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr value);
+        [DllImport("ntdll.dll", ExactSpelling=true)]
+        static extern int NtSetInformationFile(SafeFileHandle handle, out IoStatus status,
+            IntPtr information, uint length, int informationClass);
+        [DllImport("ntdll.dll", ExactSpelling=true)]
+        static extern uint RtlNtStatusToDosError(int status);
         static void Need(bool ok) { if (!ok) throw new Win32Exception(Marshal.GetLastWin32Error()); }
         static string Address(string path) {
             // Validate BEFORE GetFullPath can remove dots or normalize aliases.
@@ -326,6 +337,52 @@ namespace UnifiedBootstrap {
                 catch { stream.Dispose(); throw; }
             } catch { handle.Dispose(); throw; }
         }
+        public void PublishFile(string source, string destination) {
+            source = Address(source); destination = Address(destination);
+            AssertOwnedPath(source); AssertOwnedPath(destination);
+            if (!String.Equals(Path.GetDirectoryName(source), Path.GetDirectoryName(destination),
+                    StringComparison.OrdinalIgnoreCase) ||
+                String.Equals(source, destination, StringComparison.OrdinalIgnoreCase))
+                throw new IOException("Bootstrap publication requires distinct names in the same directory.");
+            if (pins.ContainsKey(source))
+                throw new IOException("Cannot publish an already pinned bootstrap file.");
+            // File.Move's absolute target opens its directory for FILE_WRITE_DATA,
+            // conflicting with our no-WRITE-sharing directory pin. A native
+            // FileRenameInformation with RootDirectory=NULL and a SIMPLE name
+            // renames within the source directory without that target open.
+            // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information
+            // Keep ALL pins/share masks unchanged; never replace or copy/delete.
+            using (SafeFileHandle handle = CreateFileW(source, 0x80030080u, 1u,
+                    IntPtr.Zero, 3, 0x00200000, IntPtr.Zero)) {
+                if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+                Info before = Inspect(new Pin {path=source, handle=handle, privateAcl=true});
+                byte[] name = Encoding.Unicode.GetBytes(Path.GetFileName(destination));
+                int size = Marshal.SizeOf(typeof(RenameInfo)) + name.Length;
+                IntPtr buffer = Marshal.AllocHGlobal(size);
+                try {
+                    // Zero replace and root, including native alignment padding.
+                    Marshal.Copy(new byte[size], 0, buffer, size);
+                    Marshal.WriteInt32(buffer, (int)Marshal.OffsetOf(typeof(RenameInfo), "length"), name.Length);
+                    Marshal.Copy(name, 0, IntPtr.Add(buffer,
+                        (int)Marshal.OffsetOf(typeof(RenameInfo), "name")), name.Length);
+                    IoStatus io;
+                    int status = NtSetInformationFile(handle, out io, buffer, (uint)size, 10);
+                    if (status < 0) {
+                        int error = (int)RtlNtStatusToDosError(status);
+                        if (error == 80 || error == 183)
+                            throw new IOException("Bootstrap publication destination already exists; never replaced.");
+                        throw new Win32Exception(error);
+                    }
+                    try {
+                        Info after = Inspect(new Pin {path=destination, handle=handle, privateAcl=true});
+                        if (before.volume != after.volume || before.high != after.high || before.low != after.low)
+                            throw new IOException("Bootstrap publication identity changed.");
+                    } catch (Exception error) {
+                        throw new IOException("Bootstrap publication completed but validation failed.", error);
+                    }
+                } finally { Marshal.FreeHGlobal(buffer); }
+            }
+        }
         public void HoldFile(string path, bool mutable) {
             path = Address(path); AssertOwnedPath(path); Hold(path, false, true, mutable);
         }
@@ -368,6 +425,10 @@ function Write-InstallReceipt([string] $Path, $Value) {
     Write-PrivateInstallText $Path $json
 }
 
+function New-InstallDownloadRequest([Uri] $Uri) {
+    return [Net.HttpWebRequest]::Create($Uri)
+}
+
 function Get-BoundedDownload([string] $Url, [string] $Destination, [long] $MaxBytes) {
     # No credentials, HTTP downgrade, ambient auth, or unbounded redirect chain.
     # IWR performs the API preflight; .NET streams bodies because PS5 IWR
@@ -398,7 +459,7 @@ function Get-BoundedDownload([string] $Url, [string] $Destination, [long] $MaxBy
                     $current.Port -ne 443 -or $allowedHosts -notcontains $current.DnsSafeHost) {
                     throw 'Download refused an untrusted destination.'
                 }
-                $request = [Net.HttpWebRequest]::Create($current)
+                $request = New-InstallDownloadRequest $current
                 $request.AllowAutoRedirect = $false
                 $request.Timeout = 30000
                 $request.ReadWriteTimeout = 30000
@@ -439,14 +500,14 @@ function Get-BoundedDownload([string] $Url, [string] $Destination, [long] $MaxBy
                     $inputStream.Dispose()
                 }
             } finally { $response.Dispose() }
-            [IO.File]::Move($part, $Destination)
+            $script:InstallStorage.PublishFile($part, $Destination)
             $partCreated = $false
             $script:InstallStorage.HoldFile($Destination, $false)
             return
         } catch {
             if ($null -eq $firstFailure) { $firstFailure = $_ }
             # A CREATE_NEW collision never authorizes deleting somebody else's file.
-            if ($partCreated) { [IO.File]::Delete($part) }
+            if ($partCreated -and [IO.File]::Exists($part)) { [IO.File]::Delete($part) }
             # Retry downloads only. No installation or lifecycle mutation retry.
         }
     }

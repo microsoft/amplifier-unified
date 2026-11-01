@@ -184,7 +184,7 @@ class WindowsInstallerSourceTests(unittest.TestCase):
         private = self.function("Initialize-InstallStorage")
         self.assertIn("public FileStream OpenAppend(string path) {", private)
         append = private.split("public FileStream OpenAppend(string path) {", 1)[1].split(
-            "public void HoldFile", 1,
+            "public void PublishFile", 1,
         )[0]
         for required in (
             "pins.TryGetValue(path, out pin)", "!pin.mutable", "Verify(pin)",
@@ -195,6 +195,95 @@ class WindowsInstallerSourceTests(unittest.TestCase):
             self.assertIn(required, append)
         self.assertLess(append.index("Verify(pin)"), append.index("CreateFileW"))
         self.assertLess(append.index("info.volume != pin.volume"), append.index("new FileStream"))
+
+    def test_publication_uses_native_same_directory_leaf_without_weakening_pins(self):
+        private = self.function("Initialize-InstallStorage")
+        self.assertIn("public void PublishFile(string source, string destination) {", private)
+        publish = private.split("public void PublishFile(string source, string destination) {", 1)[1].split(
+            "public void HoldFile", 1,
+        )[0]
+        for required in (
+            "AssertOwnedPath(source); AssertOwnedPath(destination)",
+            "Path.GetDirectoryName(source), Path.GetDirectoryName(destination)",
+            "String.Equals(source, destination", "pins.ContainsKey(source)",
+            "CreateFileW(source, 0x80030080u, 1u",  # DELETE, no WRITE/DELETE sharing
+            "IntPtr.Zero, 3, 0x00200000",  # OPEN_EXISTING + OPEN_REPARSE_POINT
+            "Inspect(new Pin {path=source", "Inspect(new Pin {path=destination",
+            "Encoding.Unicode.GetBytes(Path.GetFileName(destination))",
+            "Marshal.Copy(new byte[size], 0, buffer, size)",  # replace=false, root=NULL
+            'Marshal.OffsetOf(typeof(RenameInfo), "length")',
+            'Marshal.OffsetOf(typeof(RenameInfo), "name")',
+            "NtSetInformationFile(handle, out io, buffer, (uint)size, 10)",
+            "if (status < 0)", "RtlNtStatusToDosError(status)",
+            "before.volume != after.volume", "before.high != after.high", "before.low != after.low",
+            "publication completed but validation failed", "Marshal.FreeHGlobal(buffer)",
+        ):
+            self.assertIn(required, publish)
+        self.assertLess(publish.index("Inspect(new Pin {path=source"), publish.index("NtSetInformationFile("))
+        self.assertLess(publish.index("NtSetInformationFile("), publish.index("Inspect(new Pin {path=destination"))
+        self.assertNotIn("SetFileInformationByHandle(", publish)  # Win32 expands relative names
+        self.assertNotIn("Dispose()", publish)  # never release the parent pins
+        self.assertNotIn("MoveFile", publish)
+        self.assertNotIn("Thread.Sleep", private)
+        self.assertNotIn("GC.Collect", self.source)
+
+    def test_native_fixture_distinguishes_handle_closure_from_directory_sharing(self):
+        fixture = FIXTURE.read_text(encoding="utf-8")
+        for required in (
+            "$createdHandle = $stream.SafeFileHandle",
+            "Assert-Equal $createdHandle.IsClosed $false",
+            "Assert-Equal $createdHandle.IsClosed $true",
+            "Assert-Equal $stream.CanWrite $false",
+            "Assert-SharingRefused 'absolute-file-move-parent-pin'",
+            "$fixtureStorage.PublishFile($part, $published)",
+            "$fixtureStorage.PublishFile($candidate, $winner)",
+            "'collision.part'", "'collision.bin'",
+            "$fixtureStorage.PublishFile($published, $candidate)",
+            "\n    [IO.File]::Move($part, $published)",
+            "\n    [IO.File]::Move($published, $part)",
+        ):
+            self.assertIn(required, fixture)
+        close = fixture.index("Assert-Equal $createdHandle.IsClosed $true")
+        pin_conflict = fixture.index("Assert-SharingRefused 'absolute-file-move-parent-pin'")
+        publish = fixture.index("$fixtureStorage.PublishFile($part, $published)")
+        release = fixture.index("$fixtureStorage.Dispose()")
+        forward = fixture.index("\n    [IO.File]::Move($part, $published)")
+        reverse = fixture.index("\n    [IO.File]::Move($published, $part)")
+        self.assertLess(close, pin_conflict)
+        self.assertLess(pin_conflict, publish)
+        self.assertLess(publish, release)
+        self.assertLess(release, reverse)
+        self.assertLess(reverse, forward)
+        self.assertLess(forward, fixture.index("Write-Output 'OFFLINE FIXTURE PASS"))
+        self.assertNotIn("GC]::Collect", fixture)
+        self.assertNotIn("Start-Sleep", fixture)
+
+    def test_actual_downloader_is_exercised_offline_before_orchestration_stubs(self):
+        factory = self.function("New-InstallDownloadRequest")
+        self.assertIn("return [Net.HttpWebRequest]::Create($Uri)", factory)
+        download = self.function("Get-BoundedDownload")
+        self.assertIn("$request = New-InstallDownloadRequest $current", download)
+        fixture = FIXTURE.read_text(encoding="utf-8")
+        offline = fixture.index("$requestFactory = ${function:New-InstallDownloadRequest}")
+        stub = fixture.index("function Get-BoundedDownload(")
+        real_checks = fixture[offline:stub]
+        for required in (
+            "function New-InstallDownloadRequest([Uri] $Uri)",
+            "Add-Member ScriptMethod GetResponseStream",
+            "Add-Member ScriptMethod GetResponse",
+            "Get-BoundedDownload 'https://github.com/offline-fixture' $download 1000000",
+            "('stream' * 12000)", "'oversize'", "'incomplete'",
+            "'part-collision'", "'destination-collision'",
+            "Assert-Equal $script:OfflineRequests 1",
+            "Assert-Equal $script:OfflineRequests 2",
+            "'part winner unchanged'", "'destination winner unchanged'",
+            "Assert-Equal $inputStream.CanRead $false",
+            "Assert-Equal $response.Disposed $true",
+            "finally { ${function:New-InstallDownloadRequest} = $requestFactory }",
+        ):
+            self.assertIn(required, real_checks)
+        self.assertNotIn("[Net.HttpWebRequest]", real_checks)
+        self.assertNotIn("TcpListener", fixture)
 
     def test_native_fixture_checks_empty_file_security_and_valid_state_routes(self):
         fixture = FIXTURE.read_text(encoding="utf-8")
@@ -293,10 +382,13 @@ class WindowsInstallerSourceTests(unittest.TestCase):
         download = self.function("Get-BoundedDownload")
         self.assertIn("$script:InstallStorage.Validate()", download)
         self.assertIn("HoldFile($Destination, $false)", download)
+        self.assertIn(".PublishFile($part, $Destination)", download)
         self.assertLess(download.index(".CreateFile($part)"), download.index("$output.Write"))
-        self.assertIn("if ($partCreated) { [IO.File]::Delete($part) }", download)
+        self.assertIn("if ($partCreated -and [IO.File]::Exists($part)) { [IO.File]::Delete($part) }", download)
         self.assertLess(download.index(".CreateFile($part)"), download.index("$partCreated = $true"))
-        self.assertLess(download.index("$output.Dispose()"), download.index("[IO.File]::Move"))
+        self.assertLess(download.index("$output.Dispose()"), download.index(".PublishFile($part, $Destination)"))
+        self.assertLess(download.index(".PublishFile($part, $Destination)"), download.index("$partCreated = $false", download.index(".PublishFile(")))
+        self.assertNotIn("[IO.File]::Move", download)
         checksum = self.function("Assert-FileChecksum")
         self.assertLess(checksum.index("HoldFile"), checksum.index("Get-FileHash"))
         child = self.function("Invoke-InstallChild")

@@ -121,22 +121,50 @@ try {
     # payload byte. Inherited DACLs do not guarantee the TokenUser owner.
     $part = Join-Path $root 'stream.part'
     $stream = $fixtureStorage.CreateFile($part)
+    $createdHandle = $stream.SafeFileHandle
     try {
         Assert-Equal $stream.Length 0
+        Assert-Equal $createdHandle.IsClosed $false
         Assert-PrivateFileAcl $part
         $bytes = [Text.Encoding]::UTF8.GetBytes('private stream')
         $payload = New-Object IO.MemoryStream(,$bytes)
         try { $payload.CopyTo($stream) } finally { $payload.Dispose() }
         $stream.Flush($true)
     } finally { $stream.Dispose() }
-    # Exercise the download's same-volume publication without any network.
+    # Distinguish stream ownership from directory sharing: the stream owns its
+    # SafeFileHandle on BOTH .NET editions. Inspect/Verify do not retain this
+    # newly created file as a pin; only its parent remains pinned at this point.
+    Assert-Equal $createdHandle.IsClosed $true
+    Assert-Equal $stream.CanWrite $false
+    Assert-Equal ([IO.File]::ReadAllText($part)) 'private stream'
     $published = Join-Path $root 'stream.bin'
-    [IO.File]::Move($part, $published)
+    Assert-SharingRefused 'absolute-file-move-parent-pin' { [IO.File]::Move($part, $published) }
+    # Exercise the actual same-directory publication while every directory pin
+    # remains held. No retry, release/reacquire, broader sharing or GC workaround.
+    $fixtureStorage.PublishFile($part, $published)
+    Assert-Equal ([IO.File]::Exists($part)) $false
     $fixtureStorage.HoldFile($published, $false)
+    $fixtureStorage.Validate()
     Assert-PrivateFileAcl $published
     Assert-Equal ([IO.File]::ReadAllText($published)) 'private stream'
     Assert-Refused { $unexpected = $fixtureStorage.CreateFile($published) } 'already exists'
     Assert-Equal ([IO.File]::ReadAllText($published)) 'private stream'
+    # No-replace is tested against an UNPINNED private destination too: failure
+    # must come from the rename, not a pre-existing target's no-DELETE sharing.
+    $candidate = Join-Path $root 'collision.part'
+    $winner = Join-Path $root 'collision.bin'
+    foreach ($path in @($candidate, $winner)) {
+        $stream = $fixtureStorage.CreateFile($path)
+        try {
+            $bytes = [Text.Encoding]::UTF8.GetBytes([IO.Path]::GetFileName($path))
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush($true)
+        } finally { $stream.Dispose() }
+    }
+    Assert-Refused { $fixtureStorage.PublishFile($candidate, $winner) } 'already exists'
+    Assert-Equal ([IO.File]::ReadAllText($candidate)) 'collision.part'
+    Assert-Equal ([IO.File]::ReadAllText($winner)) 'collision.bin'
+    Assert-Refused { $fixtureStorage.PublishFile($published, $candidate) } 'already pinned'
     $missingLog = Join-Path $root 'missing.log'
     Assert-Refused { Write-PrivateInstallText $missingLog 'must not create' -Append } 'pinned mutable'
     Assert-Equal ([IO.File]::Exists($missingLog)) $false
@@ -310,6 +338,81 @@ try {
         Remove-Item -LiteralPath $private -Recurse -Force
     }
 
+    # Execute the REAL bounded downloader with only its request factory replaced.
+    # Synthetic responses have no socket, listener, proxy, credentials or helper.
+    # Keep this before the orchestration-specific Get-BoundedDownload stubs below.
+    $requestFactory = ${function:New-InstallDownloadRequest}
+    $script:OfflineBytes = [Text.Encoding]::UTF8.GetBytes(('stream' * 12000) + [char]0x03B2)
+    $script:OfflineLength = $script:OfflineBytes.Length
+    $script:OfflineRequests = 0
+    $script:OfflineStreams = New-Object 'Collections.Generic.List[IO.MemoryStream]'
+    $script:OfflineResponses = New-Object 'Collections.Generic.List[object]'
+    function New-InstallDownloadRequest([Uri] $Uri) {
+        Assert-Equal $Uri.AbsoluteUri 'https://github.com/offline-fixture'
+        $script:OfflineRequests++
+        $response = [pscustomobject]@{
+            StatusCode = 200; ContentLength = $script:OfflineLength
+            Bytes = $script:OfflineBytes; Disposed = $false
+        }
+        $response | Add-Member ScriptMethod GetResponseStream {
+            $bytes = $this.Bytes
+            $stream = New-Object IO.MemoryStream(,$bytes)
+            $script:OfflineStreams.Add($stream)
+            return $stream
+        }
+        $response | Add-Member ScriptMethod Dispose { $this.Disposed = $true }
+        $script:OfflineResponses.Add($response)
+        $request = [pscustomobject]@{
+            Response = $response; AllowAutoRedirect = $true
+            Timeout = 0; ReadWriteTimeout = 0; UserAgent = ''; UseDefaultCredentials = $true
+        }
+        $request | Add-Member ScriptMethod GetResponse { return $this.Response }
+        return $request
+    }
+    try {
+        $download = Join-Path $root 'offline.bin'
+        Get-BoundedDownload 'https://github.com/offline-fixture' $download 1000000
+        Assert-Equal $script:OfflineRequests 1
+        Assert-PrivateFileAcl $download
+        Assert-Equal ([IO.File]::ReadAllText($download)) (('stream' * 12000) + [char]0x03B2)
+        Assert-Equal ([IO.File]::Exists($download + '.part')) $false
+        foreach ($failure in @('oversize', 'incomplete', 'part-collision', 'destination-collision')) {
+            $destination = Join-Path $root ($failure + '.bin')
+            $temporary = $destination + '.part'
+            $script:OfflineLength = $script:OfflineBytes.Length
+            $limit = 1000000
+            if ($failure -eq 'oversize') {
+                # One complete 65536-byte write precedes the bound violation.
+                $script:OfflineLength = -1
+                $limit = 65536
+            } elseif ($failure -eq 'incomplete') {
+                $script:OfflineLength++
+            } elseif ($failure -eq 'part-collision') {
+                Write-PrivateInstallText $temporary 'part winner unchanged'
+            } else {
+                Write-PrivateInstallText $destination 'destination winner unchanged'
+            }
+            $script:OfflineRequests = 0
+            Assert-Refused {
+                Get-BoundedDownload 'https://github.com/offline-fixture' $destination $limit
+            } 'Download failed twice'
+            Assert-Equal $script:OfflineRequests 2
+            if ($failure -eq 'part-collision') {
+                Assert-Equal ([IO.File]::ReadAllText($temporary)) 'part winner unchanged'
+            } else {
+                Assert-Equal ([IO.File]::Exists($temporary)) $false
+            }
+            if ($failure -eq 'destination-collision') {
+                Assert-Equal ([IO.File]::ReadAllText($destination)) 'destination winner unchanged'
+            } else {
+                Assert-Equal ([IO.File]::Exists($destination)) $false
+            }
+        }
+        foreach ($inputStream in $script:OfflineStreams) { Assert-Equal $inputStream.CanRead $false }
+        foreach ($response in $script:OfflineResponses) { Assert-Equal $response.Disposed $true }
+        $fixtureStorage.Validate()
+    } finally { ${function:New-InstallDownloadRequest} = $requestFactory }
+
     # Execute actual orchestration with fixture downloads, WITHOUT helpers,
     # app installation, service registration, browser access or network.
     function Assert-NativePlatform {}
@@ -374,6 +477,12 @@ try {
     # not just $pinned: the outer fixture owns traversal/descendant pins too.
     # Keep both renames mandatory; a failure is not retried or treated as a pass.
     $fixtureStorage.Dispose()
+    # Retain the original File.Move positive control, now with ALL pins closed.
+    # This must succeed immediately on the exact privately created payload.
+    [IO.File]::Move($published, $part)
+    [IO.File]::Move($part, $published)
+    Assert-PrivateFileAcl $published
+    Assert-Equal ([IO.File]::ReadAllText($published)) 'private stream'
     [IO.Directory]::Move($ancestor, ($ancestor + '-replacement'))
     [IO.Directory]::Move(($ancestor + '-replacement'), $ancestor)
     Assert-Equal ([IO.File]::ReadAllText($canary)) 'outside remains unchanged'
