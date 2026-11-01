@@ -97,7 +97,7 @@ const boundedPush=(array,value,limit=report.limits.retainedEntriesPerArray)=>{
  if(array.length<limit)array.push(value);
  else report.evidenceDropped++;
 };
-let fixture,stopFixture,browser,page,failure,stderr='',stderrCharacters=0;
+let fixture,stopFixture,browser,page,pane,failure,stderr='',stderrCharacters=0;
 let failureScreenshotAttempted=false;
 
 const inspect=async(pane,questionId)=>pane.evaluate((el,id)=>{
@@ -108,12 +108,41 @@ const inspect=async(pane,questionId)=>pane.evaluate((el,id)=>{
  };
  const section=el.querySelector('[data-part="questions"]');
  const question=id?el.querySelector(`[data-question-id="${CSS.escape(id)}"]`):null;
+ const conversation=el.closest('[data-part="conversation"]');
+ const state=window.amplifier?.getState();
+ const session=state?.sessions?.find(row=>row.id===el.dataset.sessionId);
+ const layout=selector=>{
+  const node=conversation?.querySelector(selector);
+  if(!node)return null;
+  const style=getComputedStyle(node);
+  return {box:box(node),display:style.display,visibility:style.visibility,
+   marginTop:style.marginTop,marginBottom:style.marginBottom};
+ };
+ const composer=conversation?.querySelector('[data-part="composer"]');
+ const editor=composer?.querySelector('[role="textbox"][aria-label="Message Amplifier"]');
+ const primary=composer?.querySelector('[data-part="composer-primary-action"]');
+ const anchor=el.querySelector('.a-message.a-user'),anchorBox=box(anchor);
  const active=document.activeElement;
  const style=getComputedStyle(el);
  const paneBox=box(el),activeName=active?.getAttribute('aria-label')||active?.textContent?.trim()||'';
  return {
+  runtime:{
+   sessionId:session?.id??null,selectedSessionId:state?.selectedSessionId??null,
+   status:session?.status??null,streaming:!!session?.streaming,
+   activityPhase:session?.activity?.phase??null,
+   activeToolCount:session?.activity?.activeTools?.length??0,workerCount:session?.workers?.length??0,
+  },
   geometry:{
    pane:paneBox,
+   anchor:anchorBox?{id:anchor.dataset.messageId,offset:anchorBox.top-paneBox.top,
+    paneTop:paneBox.top,scrollTop:el.scrollTop}:null,
+   surroundings:{
+    activityCount:conversation?.querySelectorAll('[data-part="activity"]').length??0,
+    activity:layout('[data-part="activity"]'),composer:layout('[data-part="composer"]'),
+    editor:editor?{box:box(editor),textLength:(editor.value??editor.textContent??'').length}:null,
+    primaryAction:primary?{action:primary.dataset.action,label:primary.getAttribute('aria-label'),disabled:primary.disabled}:null,
+    notice:layout('.a-question-notice'),latest:layout('.a-chat-jump'),
+   },
    scrollTop:el.scrollTop,
    scrollHeight:el.scrollHeight,
    clientHeight:el.clientHeight,
@@ -152,7 +181,7 @@ const maskActive=state=>[state.mask.standard,state.mask.webkit].some(value=>Bool
 const record=async(label,pane,questionId=null)=>{
  const state=await inspect(pane,questionId);
  boundedPush(report.focus,{label,...state.focus});
- boundedPush(report.geometry,{label,...state.geometry,overflow:state.overflow,mask:state.mask});
+ boundedPush(report.geometry,{label,...state.geometry,runtime:state.runtime,overflow:state.overflow,mask:state.mask});
  return state;
 };
 const settled=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
@@ -249,7 +278,7 @@ try{
  await page.goto(ready.url);
  await showFixtureConversation(page);
  await expect(page.locator('#amp-one')).toBeVisible();
- const pane=page.locator('[data-part="messages"]');
+ pane=page.locator('[data-part="messages"]');
  await expect(pane).toBeVisible();
  const support=await page.evaluate(()=>({
   hasFocusVisible:CSS.supports('selector(:focus-visible)'),
@@ -280,6 +309,21 @@ try{
 
  const fixtureCheck=async()=>await (await page.request.get(ready.url+'/fixture/check')).json();
  const readState=(questionId=null)=>inspect(pane,questionId);
+ const waitForIdleLayout=async label=>{
+  let previous=null;
+  // sent[] is recorded before the fixture emits idle. Require the browser's
+  // terminal state AND unmounted activity, then compare frame-separated layout
+  // samples (including composer, question notice and Latest) within the existing
+  // expect.poll budget. Do not substitute a delay or relax the insertion checks.
+  await expect.poll(async()=>{
+   await settled();
+   const state=await readState();
+   const signature=JSON.stringify({runtime:state.runtime,geometry:state.geometry,overflow:state.overflow});
+   const stable=signature===previous;previous=signature;
+   return state.runtime.sessionId===ready.sessionId&&state.runtime.selectedSessionId===ready.sessionId
+    &&state.runtime.status==='idle'&&state.geometry.surroundings.activityCount===0&&stable;
+  },{message:`${label}: idle runtime, absent activity and settled surrounding layout`}).toBe(true);
+ };
  const wheelAtPane=async delta=>{
   const box=await pane.boundingBox();assert.ok(box,'Transcript pane has a rendered box');
   await page.mouse.move(box.x+box.width/2,box.y+box.height/2);
@@ -315,22 +359,25 @@ try{
  await page.getByRole('button',{name:'Send message',exact:true}).click();
  await expect(pane.locator('.a-message.a-user')).toContainText('Synthetic ordinary chat paragraph 1');
  await expect.poll(async()=>(await fixtureCheck()).sent.length).toBe(1);
+ await record('ordinary-chat-send-observed',pane);
+ await waitForIdleLayout('Ordinary chat completed');
  const ordinaryTop=await wheelToEdge('top');
  assert.ok(ordinaryTop.geometry.remaining>1,'Ordinary chat has content below the viewport');
  assert.equal(ordinaryTop.overflow.below,'true');
  assertMasked(ordinaryTop,'Ordinary chat at the top edge');
- const ordinary=await record('ordinary-chat-top',pane);
+ await record('ordinary-chat-top',pane);
  await successShot('ordinary-chat-top');
 
- const anchor= pane.locator('.a-message.a-user').first();
- const anchorBefore=await anchor.evaluate(element=>{
-  const pane=element.closest('[data-part="messages"]'),rect=element.getBoundingClientRect(),box=pane.getBoundingClientRect();
-  return {id:element.dataset.messageId,offset:rect.top-box.top,paneTop:box.top,scrollTop:pane.scrollTop};
- });
  const questionMarker='Synthetic transcript fade decision';
  const questionPrompt=Array.from({length:32},(_,index)=>
   `${questionMarker}, paragraph ${index+1}. ${'Keep this pending question readable in the shared conversation. '.repeat(3)}`
  ).join('\n\n');
+ await waitForIdleLayout('Before question insertion');
+ // Capture pane and reading anchor in ONE DOM evaluation immediately before
+ // insertion, not on opposite sides of screenshot capture or layout changes.
+ const ordinary=await record('before-question-insertion',pane);
+ const anchorBefore=ordinary.geometry.anchor;
+ assert.ok(anchorBefore,'Question insertion has an existing message anchor');
  const created=await page.evaluate(async({sessionId,prompt})=>{
   const receipt=await window.amplifier.dispatch('question.create',{
    sessionId,prompt,required:false,dependency:'Inspect this synthetic question layout',
@@ -345,11 +392,9 @@ try{
  await expect(question).toBeVisible();
  await expect(question.locator('.a-question-prompt')).toContainText(`${questionMarker}, paragraph 32`);
  await settled();
- const anchorAfter=await anchor.evaluate(element=>{
-  const pane=element.closest('[data-part="messages"]'),rect=element.getBoundingClientRect(),box=pane.getBoundingClientRect();
-  return {id:element.dataset.messageId,offset:rect.top-box.top,paneTop:box.top,scrollTop:pane.scrollTop};
- });
  const afterQuestion=await record('ordinary-chat-plus-question-same-pane',pane,created.id);
+ const anchorAfter=afterQuestion.geometry.anchor;
+ assert.ok(anchorAfter,'Question insertion retains a rendered message anchor');
  assertPaneFrameUnchanged(ordinary,afterQuestion,'Question insertion');
  assert.equal(anchorAfter.id,anchorBefore.id,'Question insertion retains the existing message anchor');
  assert.ok(Math.abs(anchorAfter.offset-anchorBefore.offset)<=1,'Question insertion does not move the existing reading anchor');
@@ -543,6 +588,10 @@ try{
 }catch(error){
  failure=error;
  report.failure={name:error?.name||'Error',message:String(error?.message||error),stack:String(error?.stack||error).slice(0,8000)};
+ if(pane&&page&&!page.isClosed()){
+  try{if(await pane.count()===1)await record('failure-context',pane,report.question.id)}
+  catch(contextError){report.failureContextError=String(contextError?.stack||contextError).slice(0,2000)}
+ }
  await failureShot();
 }finally{
  report.question.answerSubmitted=report.question.answerRequests.length>0;
