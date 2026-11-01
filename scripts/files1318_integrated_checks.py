@@ -52,6 +52,14 @@ Current readiness and exact environment comparison precede reuse of its build,
 70/19 tests, topology-source and full generated-source proof. Remaining renderer,
 negative, adjacent, wheel and installed phases run normally; no source replay.
 
+files1318-compact24-tail-manifest.json uses that same check-23 reuse and remaining
+full path after check 24. Bind compact24Before=COMPACT24_BEFORE as well. Preserve
+its normal renderer pass and stalled-negative cleanup failure from
+output/files1318-compact24-result. Both renderer paths run again because their
+shared cleanup implementation changed; no reuse claim is made for check 24's
+positive under these changed inputs. All 24 outcomes and two prelaunch non-runs
+remain retained. No product/source-journey/build/unit changes are admitted.
+
 --corner-diagnostic is a separate, source-only checkpoint, NOT qualification.
 It uses /artifacts/files1318-corner-diagnostic and the fixed retained inputs in
 output/files1318-corner-inputs/{reuse.json,static.tar}. The schema-2 manifest must
@@ -218,6 +226,22 @@ COMPACT23_BEFORE = {
     },
 }
 COMPACT23_REUSED_PHASES = ('frontend-build', 'python-tests', 'frontend-units', 'topology-source', 'generated-source')
+COMPACT24_MANIFEST = ROOT / 'output/files1318-compact24-tail-manifest.json'
+COMPACT24_ROOT = ROOT / 'output/files1318-compact24-result'
+COMPACT24_RENDERER_SHA = 'b203df1c7b6cccc156386f9fcd830533fff8679ab4cdc96828bdb34ab9f58949'
+COMPACT24_BEFORE = {
+    'revision': 'eca0fd303b319d15f2853d317b83e1db869a5df5',
+    'tree': 'c6567edc419b820ce0410e0daec845dadcb9b93d',
+    'files': {
+        'report.json': '5daea6cc537f03bb821296d1e1882fa1e90c599f4a9e8177ed10853b6355632c',
+        'evidence-manifest.json': 'cbc2d59f719455c656896e5fcc1ebfc9c68f025c07a6a754a4b9f07c5af29e5c',
+        'parent-manifest.json': '4485dbb1d358601716cf374988ad1d523fdf0fcb6060e6cef6a11139ae6eb8f9',
+        'canvas-renderers/evidence/canvas-renderers-normal.json':
+            'ef19de14404f75953949c946b5b3711f95d7d4142ff724e114b4514789930a7b',
+        'renderer-stalled-response/evidence/canvas-renderers-stalled-body.json':
+            'b50db75cf484fa99acc9422848ee916ae46c5a1933adaf8af9ab9b4e89c2600b',
+    },
+}
 HARNESS = OUT / 'harness'
 VENV = OUT / 'installed'
 DRIVER = 'scripts/files1318_integrated_checks.py'
@@ -454,7 +478,8 @@ def frozen_inputs(frozen, *, built=False):
                 and path not in (MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST,
                                  COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST, PORTAL_HOST_MANIFEST,
                                  STATE_REDUCTION_MANIFEST, FOCUS_CONTRAST_MANIFEST,
-                                 FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST), 'Unsafe frozen path')
+                                 FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST,
+                                 COMPACT23_MANIFEST, COMPACT24_MANIFEST), 'Unsafe frozen path')
         require(path.parent.resolve().is_relative_to(ROOT), 'Frozen path escapes snapshot')
         require(expected['mode'] in ('100644', '100755', '120000')
                 and re.fullmatch('[a-f0-9]{64}', expected['sha256']), 'Invalid frozen identity')
@@ -744,6 +769,44 @@ def compact23_reuse(frozen):
               'validation': 'exact-closure-environment-receipts-and-current-source-oracles'}
     save('compact23-reuse.json', result)
     return result
+
+
+def compact24_history(frozen):
+    """Retain, not reuse, the exact normal pass and failed cleanup under old inputs."""
+    require(frozen.get('compact24Before') == COMPACT24_BEFORE, 'Missing check-24 history binding')
+    prior = OUT / 'prior-compact24'
+    for name, digest in COMPACT24_BEFORE['files'].items():
+        source, destination = COMPACT24_ROOT / name, prior / name
+        require(source.resolve() == source and stat.S_ISREG(source.lstat().st_mode) and sha(source) == digest,
+                f'Changed check-24 history: {name}')
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        require(sha(destination) == digest, 'Check-24 history copy changed')
+    old, previous = read(prior / 'report.json'), read(prior / 'parent-manifest.json')
+    evidence = read(prior / 'evidence-manifest.json')
+    require(previous['revision'] == COMPACT24_BEFORE['revision'] and previous['tree'] == COMPACT24_BEFORE['tree']
+            and previous['files'].keys() == frozen['files'].keys()
+            and {n for n in frozen['files'] if previous['files'][n] != frozen['files'][n]} == {DRIVER, COMPACT23_RENDERER}
+            and old['passed'] is False and old['complete'] is False and old['finalization'] == {'status': 'passed'}
+            and old['manifestSha256'] == COMPACT24_BEFORE['files']['parent-manifest.json']
+            and old['evidenceManifestSha256'] == COMPACT24_BEFORE['files']['evidence-manifest.json']
+            and all(evidence[n] == digest for n, digest in COMPACT24_BEFORE['files'].items()
+                    if n not in ('report.json', 'evidence-manifest.json'))
+            and old['phases']['canvas-renderers']['status'] == 'passed'
+            and old['phases']['renderer-stalled-response']['status'] == 'failed'
+            and all(old['phases'][name]['status'] == 'REUSED' for name in COMPACT23_REUSED_PHASES),
+            'Check-24 source/pass/failure history differs')
+    normal = read(prior / 'canvas-renderers/evidence/canvas-renderers-normal.json')
+    negative = read(prior / 'renderer-stalled-response/evidence/canvas-renderers-stalled-body.json')
+    require(normal['outcome'] == 'passed' and normal['failure'] is None
+            and negative['outcome'] == 'failed' and negative['expectedFailureVerified'] is False
+            and negative['timeoutCause']['code'] == 'CANVAS_DETAILS_LIFECYCLE_TIMEOUT'
+            and negative['cleanup']['pageClosed'] is True
+            and negative['cleanup']['failures'] == [{
+                'name': 'Error', 'message': 'page.unroute: Target page, context or browser has been closed'}],
+            'Check-24 is not the retained post-close unroute failure')
+    save('compact24-history.json', {'binding': COMPACT24_BEFORE, 'rendererPositiveRetained': True,
+        'rendererPositiveReused': False, 'reason': 'Both renderer paths share the changed cleanup implementation'})
 
 
 def retained_environment(prior):
@@ -3146,7 +3209,7 @@ def native_state_proof(proof, folder, exit_code):
             'cause': 'unknown', 'candidateMembership': 'not_exposed', 'productAcceptance': False}
 
 
-def renderer_proof(negative=False, *, startup=False):
+def renderer_proof(negative=False, *, startup=False, live_route_cleanup=False):
     phase = 'renderer-stalled-response' if negative else 'canvas-renderers'
     mode = 'stalled-body' if negative else 'normal'
     proof = read(OUT / phase / 'evidence' / f'canvas-renderers-{mode}.json')
@@ -3169,6 +3232,27 @@ def renderer_proof(negative=False, *, startup=False):
             and not proof.get('negativeVerificationFailure')
             and not proof.get('finalCleanupFailure') and proof['cleanup']['failures'] == []
             and proof['cleanup']['drained'] is True, 'Renderer cleanup/errors')
+    if live_route_cleanup:
+        cleanup, disposal = proof['cleanup'], proof['cleanup']['routeDisposal']
+        require(disposal['pageOpenBefore'] is True and disposal['pageOpenAfter'] is True
+                and disposal['completed'] is True and not disposal.get('error')
+                and all(type(disposal[k]) is int for k in ('startedAt', 'completedAt'))
+                and disposal['startedAt'] <= disposal['completedAt']
+                and type(cleanup['pendingCount']) is int and cleanup['pendingCount'] >= 2
+                and cleanup['pageStopJoined'] is negative
+                and len(cleanup['settlements']) == cleanup['pendingCount'] + (2 if negative else 1)
+                and all(s['status'] in ('fulfilled', 'rejected') for s in cleanup['settlements'])
+                and all((s.get('error') is not None) == (s['status'] == 'rejected') for s in cleanup['settlements']),
+                'Renderer route removal or original-promise settlement evidence incomplete')
+        if negative:
+            require(disposal['completedAt'] <= cleanup['pageStopStartedAt'] <= cleanup['pageStopCompletedAt']
+                    and any(s['status'] == 'rejected' for s in cleanup['settlements'])
+                    and cleanup['settlements'][-1]['status'] == 'fulfilled',
+                    'Stalled I/O must be cancelled only after live route disposal, then joined')
+        else:
+            require(all(s['status'] == 'fulfilled' for s in cleanup['settlements'])
+                    and cleanup['pageStopRequested'] is False and cleanup['pageClosed'] is False,
+                    'Normal renderer cleanup must keep its page live and settle without errors')
     if not negative:
         require(proof['outcome'] == 'passed' and proof['failure'] is None
                 and proof['expectedFailureVerified'] is False and proof['watchdog']['fired'] is False
@@ -3291,7 +3375,8 @@ def main():
                         choices=[MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST,
                                  COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST, PORTAL_HOST_MANIFEST,
                                  STATE_REDUCTION_MANIFEST, FOCUS_CONTRAST_MANIFEST,
-                                 FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST])
+                                 FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST,
+                                 COMPACT23_MANIFEST, COMPACT24_MANIFEST])
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--corner-diagnostic', action='store_true')
     modes.add_argument('--contour-qualification', action='store_true')
@@ -3318,12 +3403,13 @@ def main():
                      else COARSE_TOOLBAR_MANIFEST if args.coarse_toolbar_qualification
                      else CONTOUR_MANIFEST if args.contour_qualification else MANIFEST)
     manifest_paths = ((FOCUS_CONTRAST_MANIFEST, FOCUS_CONTRAST_SETTLED_MANIFEST)
-                      if args.focus_contrast else (MANIFEST, COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST)
+                      if args.focus_contrast else (MANIFEST, COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST, COMPACT24_MANIFEST)
                       if manifest_path == MANIFEST else (manifest_path,))
     if args.manifest not in manifest_paths:
         parser.error('The manifest must match the selected qualification mode')
-    compact23 = args.manifest == COMPACT23_MANIFEST
-    compact_button = args.manifest in (COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST)
+    compact24 = args.manifest == COMPACT24_MANIFEST
+    compact23 = args.manifest in (COMPACT23_MANIFEST, COMPACT24_MANIFEST)
+    compact_button = args.manifest in (COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST, COMPACT24_MANIFEST)
     select_output(CORNER_OUT if args.corner_diagnostic
                   else FOCUS_CONTRAST_OUT if args.focus_contrast
                   else STATE_REDUCTION_OUT if args.state_reduction
@@ -3342,7 +3428,7 @@ def main():
                          'Locked prepared test dependencies reused, not a minimal dependency install.',
                          'No publication, full suite, provider, OS reveal or independent pixel acceptance.']}
     if compact_button:
-        report.update(qualification='compact-button', priorChecksConsumed=23 if compact23 else 22, reusedBuild=compact23)
+        report.update(qualification='compact-button', priorChecksConsumed=24 if compact24 else 23 if compact23 else 22, reusedBuild=compact23)
         report['limits'].append(
             'Full source and installed qualification, not a checkpoint. Exact canonical assets required; '
             'first-390 wrong target stops the journey and remains a failure, without retry or waiver.')
@@ -3353,6 +3439,10 @@ def main():
             report['phases'][name]['reason'] = 'reuse_pending_exact_check23_proof'
         report['limits'].append('Check 23 remains failed at renderer startup. No new build, Python/Node unit tests '
                                 'or source journey; reuse is conditional on exact input, environment and retained bytes.')
+    if compact24:
+        report['retainedCheck24'] = COMPACT24_BEFORE
+        report['limits'].append('Check 24 normal renderer pass is retained, not reused: both affected renderer paths '
+                                'run with live-page route disposal. Its original cleanup failure remains failed.')
     if args.corner_diagnostic:
         selected = {'snapshot', 'runtime-readiness', 'browser-readiness', 'static-reuse',
                     'source-freeze', 'topology-source', 'generated-source', 'final-integrity'}
@@ -3478,8 +3568,11 @@ def main():
                         'Compact full qualification requires exact product/producer identities and full scope')
             if compact23:
                 require(frozen.get('compact23Before') == COMPACT23_BEFORE
-                        and frozen['files'][COMPACT23_RENDERER]['sha256'] == COMPACT23_RENDERER_SHA,
+                        and frozen['files'][COMPACT23_RENDERER]['sha256'] ==
+                            (COMPACT24_RENDERER_SHA if compact24 else COMPACT23_RENDERER_SHA),
                         'Continuation must bind the reviewed renderer correction and exact check-23 evidence')
+            if compact24:
+                compact24_history(frozen)
             save('parent-manifest.json', frozen)
             report['manifestSha256'] = sha(args.manifest)
             save('source-before.json', frozen_inputs(frozen))
@@ -3817,11 +3910,11 @@ def main():
             generated('source')
         if not checkpoint_mode:
             run('canvas-renderers', [NPM, 'run', 'test:canvas-renderers-browser'],
-                verify=lambda: renderer_proof(startup=compact23))
+                verify=lambda: renderer_proof(startup=compact23, live_route_cleanup=compact24))
             # Raw nonzero is retained; only the exact correlated negative qualifies.
             run('renderer-stalled-response', [NPM, 'run', 'test:canvas-renderers-browser'],
                 extra={'CANVAS_RENDERER_STALLED_BODY': '1'}, cap=120,
-                verify=lambda: renderer_proof(True, startup=compact23), negative=True)
+                verify=lambda: renderer_proof(True, startup=compact23, live_route_cleanup=compact24), negative=True)
             run('canvas-usability', [NODE, 'tests/canvas-usability-browser.mjs'], verify=usability_proof)
             run('standard-ux-canvas-files', [NODE, 'tests/standard-ux-canvas-files-browser.mjs'],
                 verify=standard_files_proof)
@@ -3901,6 +3994,11 @@ def main():
                                 for name, digest in reused['proofFiles'].items())
                             and all(report['phases'][name]['executed'] is False for name in COMPACT23_REUSED_PHASES),
                             'Check-23 proofs changed or a passing phase was replayed')
+                if compact24:
+                    require(all(sha(folder / name) == digest
+                                for folder in (COMPACT24_ROOT, OUT / 'prior-compact24')
+                                for name, digest in COMPACT24_BEFORE['files'].items()),
+                            'Check-24 original pass/failure history changed')
                 if args.contour_qualification:
                     require(expected['static'] == read(OUT / 'reuse-metadata.json')['files']
                             and tree(OUT / 'static-before') == read(OUT / 'static-before.json'),

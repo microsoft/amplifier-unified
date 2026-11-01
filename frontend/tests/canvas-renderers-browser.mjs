@@ -25,7 +25,7 @@ fixture.stdout.on('data',chunk=>{
  }
 });
 const errorRecord=error=>({name:error?.name||'Error',message:String(error?.message||error),...(error?.code?{code:error.code}:{}),...(error instanceof AggregateError?{errors:error.errors.map(errorRecord)}:{})});
-let browser,page,failure;
+let browser,page,failure,detailsDrain,finalDetailsEvidence=()=>{};
 proof.startup={phase:'fixture',complete:false};
 const startupState=()=>page.evaluate(()=>{
  const s=window.amplifier?.getState?.(),textbox=document.querySelector('[aria-label="Message Amplifier"]');
@@ -236,22 +236,40 @@ try{
   // close another page/context or wait indefinitely for a response body.
   const stopDetailsIO=()=>pageStop??=(async()=>{
    proof.cleanup.pageStopRequested=true;
-   try{await page.close({runBeforeUnload:false});proof.cleanup.pageClosed=page.isClosed()}catch(error){cleanupFailures.push(error)}
+   proof.cleanup.pageStopStartedAt=Date.now();
+   try{await page.close({runBeforeUnload:false});proof.cleanup.pageClosed=page.isClosed();
+    proof.cleanup.pageStopCompletedAt=Date.now()}catch(error){cleanupFailures.push(error)}
   })();
-  const drainDetails=(async()=>{
+  const drainDetails=detailsDrain=(async()=>{
+   // Remove the interceptor while its owner is still live. Closing the page
+   // first cancels response I/O but also makes page.unroute itself fail.
+   const disposal=proof.cleanup.routeDisposal={startedAt:Date.now(),pageOpenBefore:!page.isClosed(),completed:false};
+   try{
+    assert.equal(disposal.pageOpenBefore,true,'Owned page closed before route disposal');
+    await page.unroute(actionsURL,holdDetails);
+    disposal.completed=true;disposal.completedAt=Date.now();disposal.pageOpenAfter=!page.isClosed();
+   }catch(error){disposal.error=errorRecord(error);cleanupFailures.push(error)}
    if(detailsFailure||detailsFailures.length)await stopDetailsIO();
-   try{await page.unroute(actionsURL,holdDetails)}catch(error){cleanupFailures.push(error);await stopDetailsIO()}
-   const settled=await Promise.allSettled([detailsLifecycle,...pendingDetails]);
+   else if(cleanupFailures.length)await stopDetailsIO();
+   let settled,count,stop;
+   do{
+    count=pendingDetails.length;stop=pageStop;
+    settled=await Promise.allSettled([detailsLifecycle,...pendingDetails,...(stop?[stop]:[])]);
+   }while(count!==pendingDetails.length||stop!==pageStop);
    for(const result of settled)if(result.status==='rejected')detailsFailures.push(result.reason);
+   proof.cleanup.settlements=settled.map(result=>({status:result.status,
+    ...(result.status==='rejected'?{error:errorRecord(result.reason)}:{})}));
+   proof.cleanup.pendingCount=count;proof.cleanup.pageStopJoined=!!stop;
    proof.cleanup.drained=true;
   })();
+  finalDetailsEvidence=()=>{proof.cleanup.failures=cleanupFailures.map(errorRecord)};
   try{
    await Promise.race([drainDetails,new Promise((_,reject)=>{
     drainTimer=setTimeout(()=>{stopDetailsIO();reject(Error('Details reload cleanup exceeded 5 seconds; owned page stop requested'))},5000);
    })]);
   }catch(error){cleanupFailures.push(error)}finally{
    clearTimeout(drainTimer);proof.cleanup.elapsedMs=performance.now()-drainStarted;
-   proof.cleanup.failures=cleanupFailures.map(errorRecord);
+   finalDetailsEvidence();
    page.off('request',observeReload);
   }
  }
@@ -310,13 +328,17 @@ try{
 }
 finally{
  try{
-  await finishFixture({label:'Canvas renderer fixture',close:[['Canvas renderer browser',()=>browser?.close()]],stop:async()=>{
+  await finishFixture({label:'Canvas renderer fixture',close:[
+   ['Canvas renderer browser',()=>browser?.close()],
+   ['Canvas renderer Details drain',()=>detailsDrain]
+  ],stop:async()=>{
    await stopFixture();proof.fixtureStopSucceeded=true;
   }});
  }catch(error){
   proof.finalCleanupFailure=errorRecord(error);
   failure=failure?new AggregateError([failure,error],'Canvas renderer scenario and cleanup failed'):error;
  }
+ finalDetailsEvidence(); // Include late cleanup results after owned-browser cancellation/join.
  proof.noReload=!proof.reloadStarted&&proof.reloadNavigationCount===0;
  proof.unhandledRejectionCount=unhandledRejections.length;proof.unhandledRejections=unhandledRejections;
  if(unhandledRejections.length){
@@ -336,6 +358,11 @@ finally{
    assert.equal(proof.optimisticPanel,true);assert.equal(proof.bodyWaitStarted,true);assert.equal(proof.bodyWaitCompleted,false);
    assert.equal(proof.acceptedCompleteResponse,false);assert.equal(proof.noReload,true);
    assert.equal(proof.cleanup.pageStopRequested,true);assert.equal(proof.cleanup.pageClosed,true);assert.equal(proof.cleanup.drained,true);
+   assert.equal(proof.cleanup.routeDisposal?.completed,true);
+   assert.equal(proof.cleanup.routeDisposal.pageOpenBefore,true);assert.equal(proof.cleanup.routeDisposal.pageOpenAfter,true);
+   assert.ok(proof.cleanup.routeDisposal.completedAt<=proof.cleanup.pageStopStartedAt);
+   assert.equal(proof.cleanup.pageStopJoined,true);
+   assert.equal(proof.cleanup.settlements.length,proof.cleanup.pendingCount+2);
    assert.deepEqual(proof.cleanup.failures,[]);assert.equal(proof.finalCleanupFailure,undefined);
    assert.equal(proof.unhandledRejectionCount,0);
    assert.deepEqual(proof.browserErrors,[]);
