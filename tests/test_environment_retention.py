@@ -1,6 +1,8 @@
 import io
 import copy
+import hashlib
 import json
+import os
 import tarfile
 
 import pytest
@@ -128,9 +130,147 @@ def raw_header(name, kind=tarfile.DIRTYPE, size=0):
     return item.tobuf()
 
 
+def fifo_selection(root, *, prefix='', fault=None):
+    """Synthetic headers only, with regular bytes after the FIFO to catch loss."""
+    item = tarfile.TarInfo(prefix + root + '/pipe')
+    item.type, item.size = tarfile.FIFOTYPE, 1 if fault == 'nonzero' else 0
+    item.mode, item.uid, item.gid = 0o640, 123, 456
+    item.uname, item.gname, item.mtime = 'fixture-user', 'fixture-group', 123456789
+    if fault == 'device':
+        item.type = tarfile.CHRTYPE
+    header = item.tobuf()
+    # Do not let a writer normalize the malformed FIFO into a valid fixture.
+    assert tarfile.TarInfo.frombuf(header, 'utf-8', 'strict').size == item.size
+    after = (b'invalid'.ljust(512, b'x') if fault == 'header' else
+             raw_header(prefix + root + '/after', tarfile.REGTYPE, 4) + b'kept'.ljust(512, b'\0'))
+    return raw_header(prefix + root) + header + after
+
+
+def guard_fifo_io(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail('Archive-only retention must not create or extract special files')
+    monkeypatch.setattr(os, 'mkfifo', forbidden, raising=False)
+    monkeypatch.setattr(os, 'mknod', forbidden, raising=False)
+    monkeypatch.setattr(tarfile.TarFile, 'extract', forbidden)
+    monkeypatch.setattr(tarfile.TarFile, 'extractall', forbidden)
+    original = tarfile.TarFile.extractfile
+    def regular_only(archive, member):
+        item = archive.getmember(member) if isinstance(member, str) else member
+        assert item.isfile(), 'No FIFO or other nonregular member body may be opened'
+        return original(archive, member)
+    monkeypatch.setattr(tarfile.TarFile, 'extractfile', regular_only)
+
+
+@pytest.mark.parametrize('transport', ['selected', 'incus'])
+def test_archive_only_fifo_preserves_metadata_and_following_bytes(tmp_path, monkeypatch, transport):
+    guard_fifo_io(monkeypatch)
+    (tmp_path / 'source.tar').write_bytes(b'source')
+    if transport == 'incus':
+        raw = b''.join(fifo_selection(root, prefix=retention.PREFIX) for root in retention.SELECTION) + bytes(1024)
+        archives = retention.filter_incus_stream(io.BytesIO(raw), tmp_path, 'owned', archive_only=True)
+    else:
+        archives = []
+        for root in retention.SELECTION:
+            path = tmp_path / (root + '.tar')
+            path.write_bytes(fifo_selection(root) + bytes(1024))
+            archives.append({'source': '/' + root, 'destination': str(path)})
+    before = {root: (tmp_path / (root + '.tar')).read_bytes() for root in retention.SELECTION}
+    result = retention.verify_retention(tmp_path, archives, 'archive-only')
+    assert result['verified'] and result['archiveOnly'] and result['selection'] == ['/workspace', '/artifacts']
+    for row in archives:
+        root = row['source'].strip('/')
+        assert row['bytes'] == len(before[root]) and row['sha256'] == hashlib.sha256(before[root]).hexdigest()
+        assert row['logicalBytes'] == retention.inspect_archive(row['destination'], root, archive_only=True) == 4
+        assert (tmp_path / (root + '.tar')).read_bytes() == before[root]
+        with tarfile.open(row['destination']) as archive:
+            assert archive.getnames() == [root, root + '/pipe', root + '/after']
+            item = archive.getmember(root + '/pipe')
+            assert (item.type, item.size, item.mode, item.uid, item.gid, item.uname, item.gname, item.mtime) == (
+                tarfile.FIFOTYPE, 0, 0o640, 123, 456, 'fixture-user', 'fixture-group', 123456789)
+            assert archive.extractfile(root + '/after').read() == b'kept'
+        with pytest.raises(retention.ValidationFailure) as caught:
+            retention.inspect_archive(row['destination'], root)
+        assert caught.value.diagnostic['reasonCode'] == 'unsupported_type'
+        assert not (tmp_path / root).exists()
+    with pytest.raises(retention.ValidationFailure) as caught:
+        retention.verify_artifacts([archives[1]])
+    assert caught.value.diagnostic['reasonCode'] == 'unsupported_type'
+    assert caught.value.diagnostic['memberType'] == 'fifo'
+    assert not (tmp_path / 'artifacts-retention.json').exists()
+
+
+@pytest.mark.parametrize('case,reason', [
+    ('nonzero', 'invalid_size'), ('negative', 'invalid_size'), ('pax-size', 'invalid_size'),
+    ('sparse', 'sparse_entry'), ('duplicate', 'duplicate_entry'),
+    ('parent-first', 'ancestor_traversal'), ('child-first', 'ancestor_replaced'),
+    ('traversal', 'unsafe_path'), ('absolute', 'unsafe_path'), ('root', 'missing_root'),
+    ('hard-fifo', 'hard_target'), ('hard-forward', 'hard_target'), ('hard-symbolic', 'hard_target'),
+])
+@pytest.mark.parametrize('transport', ['selected', 'incus'])
+def test_archive_only_fifo_rejects_malformed_members(tmp_path, case, reason, transport):
+    prefix = retention.PREFIX if transport == 'incus' else ''
+    name = prefix + 'workspace/pipe'
+    item = tarfile.TarInfo(name); item.type = tarfile.FIFOTYPE
+    roots = raw_header(prefix + 'workspace')
+    tail = b''
+    if case in {'nonzero', 'negative'}:
+        item.size = 1 if case == 'nonzero' else -1
+    elif case == 'pax-size':
+        item.pax_headers['size'] = '1'
+    elif case == 'sparse':
+        item.pax_headers['GNU.sparse.map'] = '0,1'
+    elif case == 'duplicate':
+        tail = item.tobuf()
+    elif case == 'parent-first':
+        tail = raw_header(name + '/child', tarfile.REGTYPE)
+    elif case == 'child-first':
+        roots += raw_header(name + '/child', tarfile.REGTYPE)
+    elif case in {'traversal', 'absolute'}:
+        item.name = prefix + 'workspace/../escape' if case == 'traversal' else '/' + name
+    elif case == 'root':
+        roots, item.name = b'', prefix + 'workspace'
+    elif case.startswith('hard-'):
+        link = tarfile.TarInfo(prefix + 'workspace/hard')
+        link.type, link.linkname = tarfile.LNKTYPE, name
+        if case == 'hard-forward':
+            roots += link.tobuf()
+        else:
+            tail = link.tobuf()
+        if case == 'hard-symbolic':
+            item.type, item.linkname = tarfile.SYMTYPE, '/inert/target'
+    raw = roots + item.tobuf() + tail
+    if transport == 'incus':
+        raw += raw_header(prefix + 'artifacts')
+    raw += bytes(1024)
+    if case in {'nonzero', 'negative', 'pax-size'}:
+        with tarfile.open(fileobj=io.BytesIO(raw), mode='r:') as archive:
+            assert archive.getmember(name).size == (-1 if case == 'negative' else 1)
+    with pytest.raises(retention.ValidationFailure) as caught:
+        if transport == 'incus':
+            retention.filter_incus_stream(io.BytesIO(raw), tmp_path, 'owned', archive_only=True)
+        else:
+            path = tmp_path / 'workspace.tar'; path.write_bytes(raw)
+            retention.inspect_archive(path, 'workspace', archive_only=True)
+    assert caught.value.diagnostic['reasonCode'] == reason
+    assert not (tmp_path / 'retention.json').exists()
+
+
+def test_fifo_does_not_change_earlier_regular_hardlink_rule(tmp_path):
+    entries = ROOTS + [('workspace/pipe', tarfile.FIFOTYPE, ''),
+                      ('workspace/file', tarfile.REGTYPE, b'kept'),
+                      ('workspace/hard', tarfile.LNKTYPE, retention.PREFIX + 'workspace/file')]
+    archives = retention.filter_incus_stream(backup(entries), tmp_path, 'owned', archive_only=True)
+    assert retention.inspect_archive(archives[0]['destination'], 'workspace', archive_only=True) == 4
+    with tarfile.open(archives[0]['destination']) as archive:
+        assert archive.getmember('workspace/hard').linkname == 'workspace/file'
+
+
+@pytest.mark.parametrize('archive_only', [False, True])
 @pytest.mark.parametrize('corruption', ['middle', 'after-footer', 'missing-footer', 'short-footer', 'truncated-header'])
-def test_strict_input_never_turns_corruption_into_successful_retention(tmp_path,corruption):
+def test_strict_input_never_turns_corruption_into_successful_retention(tmp_path,corruption,archive_only):
     roots=raw_header(retention.PREFIX+'workspace')+raw_header(retention.PREFIX+'artifacts')
+    if archive_only:
+        roots += raw_header(retention.PREFIX+'workspace/pipe',tarfile.FIFOTYPE)
     lost=raw_header(retention.PREFIX+'workspace/lost.txt',tarfile.REGTYPE,4)+b'lost'.ljust(512,b'\0')
     raw={
         'middle':roots+b'not-a-tar-header'.ljust(512,b'x')+lost+bytes(1024),
@@ -140,7 +280,7 @@ def test_strict_input_never_turns_corruption_into_successful_retention(tmp_path,
         'truncated-header':roots+b'not-complete',
     }[corruption]
     with pytest.raises((ValueError,tarfile.TarError)):
-        retention.filter_incus_stream(io.BytesIO(raw),tmp_path,'owned')
+        retention.filter_incus_stream(io.BytesIO(raw),tmp_path,'owned',archive_only=archive_only)
     assert not (tmp_path/'retention.json').exists()
 
 
@@ -194,11 +334,13 @@ def test_artifacts_only_ignores_oversized_workspace_without_qualifying_removal(t
         retention.verify_retention(tmp_path, archives)
 
 
-@pytest.mark.parametrize('change', ['missing', 'duplicate', 'wrong-root', 'escape', 'truncated', 'too-large'])
+@pytest.mark.parametrize('change', ['missing', 'duplicate', 'wrong-root', 'escape', 'truncated', 'too-large', 'fifo'])
 def test_artifact_recovery_requires_complete_safe_bounded_selection(tmp_path, change, monkeypatch):
     entries = [('artifacts', tarfile.DIRTYPE, '')]
     if change == 'escape':
         entries += [('artifacts/out', tarfile.SYMTYPE, '../workspace')]
+    elif change == 'fifo':
+        entries += [('artifacts/pipe', tarfile.FIFOTYPE, '')]
     else:
         entries += [('artifacts/result', tarfile.REGTYPE, b'evidence')]
     if change == 'missing':
@@ -275,7 +417,8 @@ def test_recovery_archives_preserve_pytest_absolute_links_without_following_them
 
 @pytest.mark.parametrize('entry', [
     ('workspace/../escape', tarfile.REGTYPE, b'bad'),
-    ('workspace/socket', tarfile.FIFOTYPE, ''),
+    # Zero-size FIFOs are now covered by the positive archive-only test above.
+    ('workspace/device', tarfile.CHRTYPE, ''),
     ('workspace/file', tarfile.REGTYPE, b'x' * 21),
 ])
 def test_recovery_archive_keeps_path_type_and_size_bounds(tmp_path, monkeypatch, entry):
@@ -283,3 +426,126 @@ def test_recovery_archive_keeps_path_type_and_size_bounds(tmp_path, monkeypatch,
     with pytest.raises(ValueError):
         retention.filter_incus_stream(backup(ROOTS + [entry]), tmp_path, 'owned', archive_only=True)
     assert not (tmp_path / 'retention.json').exists()
+
+
+@pytest.mark.parametrize('archive_only,kind,size,reason,member_type', [
+    (False, tarfile.FIFOTYPE, 0, 'unsupported_type', 'fifo'),
+    (True, tarfile.FIFOTYPE, 1, 'invalid_size', 'fifo'),
+    (False, tarfile.CHRTYPE, 0, 'unsupported_type', 'character'),
+    (True, tarfile.CHRTYPE, 0, 'unsupported_type', 'character'),
+    (False, tarfile.BLKTYPE, 0, 'unsupported_type', 'block'),
+    (True, tarfile.BLKTYPE, 0, 'unsupported_type', 'block'),
+    # Tar has no standard socket type; neither a vendor flag nor any unknown is accepted.
+    (False, b's', 0, 'unsupported_type', 'other'),
+    (True, b's', 0, 'unsupported_type', 'other'),
+    (True, b'Z', 0, 'unsupported_type', 'other'),
+])
+def test_validation_diagnostic_preserves_special_entry_rejection(tmp_path, archive_only, kind, size, reason, member_type):
+    # Only archive headers, never a real FIFO/device in the test filesystem.
+    path = tmp_path / 'workspace.tar'
+    raw = raw_header('workspace') + raw_header('workspace/special', kind, size) + bytes(1024)
+    path.write_bytes(raw)
+    with pytest.raises(retention.ValidationFailure) as caught:
+        retention.inspect_archive(path, 'workspace', archive_only=archive_only)
+    assert caught.value.diagnostic == {'version': 1, 'reasonCode': reason,
+        'memberType': member_type, 'relativePath': 'workspace/special'}
+    assert path.read_bytes() == raw and not (tmp_path / 'special').exists()
+
+
+@pytest.mark.parametrize('case,reason', [
+    ('duplicate', 'duplicate_entry'), ('traversal', 'unsafe_path'),
+    ('header', 'invalid_header'), ('footer', 'incomplete_footer'),
+    ('trailing', 'trailing_data'), ('members', 'member_limit'),
+    ('size', 'selected_size_limit'), ('root', 'missing_root'),
+])
+def test_validation_diagnostic_names_exact_bounded_failure(tmp_path, monkeypatch, case, reason):
+    root = raw_header('workspace') + raw_header('workspace/pipe', tarfile.FIFOTYPE)
+    raw = root + bytes(1024)
+    if case == 'duplicate':
+        raw = root + root + bytes(1024)
+    elif case == 'traversal':
+        raw = root + raw_header('workspace/../private-secret') + bytes(1024)
+    elif case == 'header':
+        raw = root + b'invalid'.ljust(512, b'x') + bytes(1024)
+    elif case == 'footer':
+        raw = root + bytes(512)
+    elif case == 'trailing':
+        raw = root + bytes(1024) + b'private-secret'.ljust(512, b'x')
+    elif case == 'members':
+        monkeypatch.setattr(retention, 'MEMBER_LIMIT', 1)
+    elif case == 'size':
+        monkeypatch.setattr(retention, 'RECOVERY_LIMIT', 0)
+        raw = root + raw_header('workspace/large', tarfile.REGTYPE, 1) + b'x'.ljust(512, b'\0') + bytes(1024)
+    elif case == 'root':
+        raw = raw_header('workspace/pipe', tarfile.FIFOTYPE) + raw_header('workspace/nested') + bytes(1024)
+    path = tmp_path / 'workspace.tar'
+    path.write_bytes(raw)
+    with pytest.raises(retention.ValidationFailure) as caught:
+        retention.inspect_archive(path, 'workspace', archive_only=True)
+    diagnostic = retention.validation_failure_diagnostic(caught.value)
+    assert diagnostic['reasonCode'] == reason
+    assert len(json.dumps(diagnostic).encode()) < 1024
+    assert str(tmp_path) not in json.dumps(diagnostic) and 'private-secret' not in json.dumps(diagnostic)
+    assert path.read_bytes() == raw
+
+
+@pytest.mark.parametrize('case,reason', [
+    ('metadata', 'metadata_limit'), ('name', 'name_limit'), ('input', 'archive_limit'), ('hash', 'receipt_mismatch'),
+])
+def test_fifo_keeps_metadata_input_and_receipt_bounds(tmp_path, monkeypatch, case, reason):
+    raw = fifo_selection('workspace')
+    if case in {'metadata', 'name'}:
+        kind, size = (tarfile.XHDTYPE, 1024 * 1024 + 1) if case == 'metadata' else (tarfile.GNUTYPE_LONGNAME, 4097)
+        raw += raw_header('workspace/metadata', kind, size)
+    raw += bytes(1024)
+    path = tmp_path / 'workspace.tar'; path.write_bytes(raw)
+    if case == 'input':
+        monkeypatch.setattr(retention, 'INPUT_LIMIT', len(raw) - 1)
+    with pytest.raises(retention.ValidationFailure) as caught:
+        if case == 'input':
+            retention.digest(path)
+        elif case == 'hash':
+            other = tmp_path / 'artifacts.tar'
+            other.write_bytes(raw_header('artifacts') + bytes(1024))
+            retention.verify_retention(tmp_path, [
+                {'source': '/workspace', 'destination': str(path), 'sha256': '0' * 64},
+                {'source': '/artifacts', 'destination': str(other)}], 'archive-only')
+        else:
+            retention.inspect_archive(path, 'workspace', archive_only=True)
+    assert caught.value.diagnostic['reasonCode'] == reason
+    assert path.read_bytes() == raw and not (tmp_path / 'retention.json').exists()
+
+
+@pytest.mark.parametrize('change,reason', [('negative', 'invalid_size'), ('sparse', 'sparse_entry')])
+def test_validation_diagnostic_does_not_accept_sparse_or_negative_members(change, reason):
+    item = tarfile.TarInfo('workspace/member')
+    if change == 'negative':
+        item.size = -1
+    else:
+        item.pax_headers['GNU.sparse.map'] = '0,1'
+    with pytest.raises(retention.ValidationFailure) as caught:
+        retention.validate_member(item, item.name, {}, {}, set(), archive_only=True)
+    assert caught.value.diagnostic['reasonCode'] == reason
+
+
+@pytest.mark.parametrize('path', ['/host/private', 'workspace/../private', 'workspace/a\nsecret',
+                                  'workspace/' + 'x' * 300, 'workspace/token=secret', 'elsewhere/file'])
+def test_validation_diagnostic_omits_unsafe_names_and_arbitrary_details(path):
+    item = tarfile.TarInfo(path)
+    item.type, item.linkname = tarfile.FIFOTYPE, '/host/private-target'
+    failure = retention.ValidationFailure('unsupported_type', 'private exception text', item=item, name=path)
+    assert failure.diagnostic == {'version': 1, 'reasonCode': 'unsupported_type', 'memberType': 'fifo'}
+    assert retention.validation_failure_diagnostic(ValueError('private exception')) is None
+    assert retention.validation_failure_diagnostic(tarfile.ReadError('private exception')) == {
+        'version': 1, 'reasonCode': 'archive_format'}
+    assert retention.validation_diagnostic({'version': 1, 'reasonCode': 'private arbitrary'}) is None
+    assert retention.validation_diagnostic({**failure.diagnostic, 'linkTarget': item.linkname}) is None
+
+
+def test_validation_diagnostic_never_includes_symbolic_target():
+    item = tarfile.TarInfo('workspace/link')
+    item.type, item.linkname = tarfile.SYMTYPE, '/private/token'
+    with pytest.raises(retention.ValidationFailure) as caught:
+        retention.validate_member(item, item.name, {}, {}, set())
+    assert caught.value.diagnostic == {'version': 1, 'reasonCode': 'symbolic_target',
+        'memberType': 'symbolic', 'relativePath': 'workspace/link'}

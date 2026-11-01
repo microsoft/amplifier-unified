@@ -2,6 +2,7 @@ import {conversationHistoryPending} from './history-window.js';
 import {OutputSettings} from './outputs';
 import {PublishingSettings} from './publishing';
 import {ChatOverview} from './work-overview';
+import {PermissionHistory,approvalGroups} from './approval-card';
 import {NavigationOpen,useModalFocus,navigationExpanded} from './responsive-navigation';
 import {CanvasControlsHost,CanvasPrimaryActionsHost,CanvasDocumentRefresh,CanvasVersionLoadProvider} from './canvas-controls';
 import {CanvasOverviewSection,useCanvasReading,useCanvasOverviewState} from './canvas-overview-state';
@@ -70,7 +71,7 @@ export function SessionHistoryControls({session,messages=session?.messages,act,o
 }
 
 export {A2UISurface} from './a2ui';
-export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSurface}){
+export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSurface,permissionHistoryCurrent=()=>false}){
  const settings=!!state.view?.settingsCanvas;
  const canvas=state.canvas||{},view=state.view||{},draft=view.canvasDraft||{},layout=usePanelLayout(state,act),panel=useRef(null),actRef=useRef(act);
  actRef.current=act;
@@ -144,14 +145,31 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSur
  useModalFocus(panel,focused,()=>controls?closeControls():patch(actRef.current,{canvasFocused:false}),'#canvas-toggle');
  useEffect(()=>{if(focused)panel.current?.querySelector('[aria-label="Exit canvas focus"]')?.focus({preventScroll:true})},[focused]);
  useEffect(()=>{
-  if(!canvas.open||!draft.library||!['outputs','publishing'].includes(draft.delivery))return;
-  const id=draft.delivery==='outputs'?'review':'publishing';
+  if(!visible||!overview||!draft.library||!['outputs','publishing'].includes(draft.delivery))return;
+  const id=draft.delivery==='outputs'?'review':draft.delivery;
   setOverviewDraft({sections:{...overviewDraft.sections,[id]:true}});
   // Consume the existing navigation target only after its visible destination
   // has been reached. Clearing it earlier cancels this frame via optimistic state.
   const timer=requestAnimationFrame(()=>{const section=panel.current?.querySelector(`[data-overview-section="${id}"]`);section?.scrollIntoView({block:'nearest',behavior:'instant'});section?.querySelector('summary')?.focus({preventScroll:true});patch(actRef.current,{canvasDraft:{...draft,delivery:null}})});
   return()=>cancelAnimationFrame(timer);
- },[canvas.open,draft.library,draft.delivery]);
+ },[visible,overview,state.selectedSessionId,draft.library,draft.delivery]);
+ useEffect(()=>{
+  if(!visible||!overview||draft.delivery!=='permissions')return;
+  const key=draft.permissionHistoryKey;
+  setOverviewDraft({sections:{...overviewDraft.sections,permissions:true}});
+  // Clear only the still-current target after document commands settle. The
+  // dispatch owner derives its draft then; never send this render's stale copy.
+  dispatch('view.update',{sessionId:state.selectedSessionId,patch:{}},{consumePermissionHistory:key}).then(receipt=>{
+   if(!receipt.accepted)return;
+   requestAnimationFrame(()=>{
+    if(!permissionHistoryCurrent(key))return;
+    const section=panel.current?.querySelector('[data-overview-section="permissions"]');
+    if(!section||section.closest('[hidden],[inert]'))return;
+    section.scrollIntoView({block:'nearest',behavior:'instant'});
+    section.querySelector('summary')?.focus({preventScroll:true});
+   });
+  }).catch(()=>{});
+ },[visible,overview,state.selectedSessionId,draft.delivery,draft.permissionHistoryKey]);
  if(!mounted.current)return null;
  const latestEvent=canvas.events?.at(-1);
  return <CanvasVersionLoadProvider view={resourceView}><CanvasPrimaryActionsHost.Provider value={actionsHost}><CanvasControlsHost.Provider value={controlsHost}><aside ref={panel} id="workspace-canvas" className="a-canvas-panel" hidden={suppressed||!canvas.open||!state.selectedSessionId} inert={suppressed||!canvas.open||!state.selectedSessionId} aria-hidden={suppressed||!canvas.open||!state.selectedSessionId||undefined} data-part="canvas" data-mode={overview?'overview':'artifact'} data-focused={focused} data-controls={controls} data-pinned={!!view.canvasControlsPinned} aria-label="Canvas" role={focused?'dialog':undefined} aria-modal={focused||undefined} aria-owns={focused?'canvas-toggle':undefined} onKeyDown={event=>{
@@ -162,6 +180,7 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSur
   <div className="a-canvas-chrome">
    <header className="a-canvas-head"><CanvasTabs state={state} act={act} dispatch={dispatch} overview={overview} onOverview={()=>patch(act,{settingsCanvas:false,canvasControlsExpanded:false,canvasDraft:{...draft,library:true,open:false,browser:false}})}/>
     <button type="button" className="a-icon" aria-label={focused?'Exit canvas focus':'Focus canvas'} aria-pressed={focused} data-action="view.update" onClick={()=>patch(act,{canvasFocused:!focused})}>{focused?<Minimize2/>:<Maximize2/>}</button>
+    <button type="button" className="a-soft a-canvas-dismiss" aria-label="Close canvas panel" title="Return to chat — keeps open documents and edits" data-action="canvas.visibility" onClick={()=>act('canvas.visibility',{open:false})}><X aria-hidden="true"/><span>Close Canvas</span></button>
    </header>
   </div>
   <div ref={contentRef} className="a-canvas-content" data-details-overlay={detailsOverlay}>
@@ -179,6 +198,7 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSur
    {canvas.kind!=='settings'&&!!state.canvasWorkspace?.views?.length&&<McpAppVisibilityProvider visible={!suppressed&&!!canvas.open&&!draft.library&&!settings}><CanvasWorkspace state={state} dispatch={dispatch} hidden={!!draft.library}/></McpAppVisibilityProvider>}
    <div ref={overviewRef} className="a-canvas-overview-page" role="region" aria-label="Chat overview" tabIndex={0} hidden={!overview} inert={!overview}>
     <ChatOverview state={overviewState} act={act} changeDraft={changeDraft} onSectionChange={sectionChange} onFilter={filter=>setOverviewDraft({filter})}/>
+    <div className="a-chat-overview"><CanvasOverviewSection id="permissions" title="Permissions history" summary={approvalGroups(state.sessions?.find(row=>row.id===state.selectedSessionId)).history.length} draft={overviewDraft} onChange={sectionChange} defaultOpen={false} lazy><PermissionHistory session={state.sessions?.find(row=>row.id===state.selectedSessionId)}/></CanvasOverviewSection></div>
     <section className="a-canvas-delivery" aria-label="Output actions">
      <CanvasOverviewSection id="review" title="Outputs & review" draft={overviewDraft} onChange={sectionChange} defaultOpen={draft.delivery==='outputs'} lazy><OutputSettings session={state.sessions?.find(row=>row.id===state.selectedSessionId)} state={state} act={act}/></CanvasOverviewSection>
      <CanvasOverviewSection id="publishing" title="Publishing" draft={overviewDraft} onChange={sectionChange} defaultOpen={draft.delivery==='publishing'} lazy><PublishingSettings session={state.sessions?.find(row=>row.id===state.selectedSessionId)} state={state} act={dispatch}/></CanvasOverviewSection>

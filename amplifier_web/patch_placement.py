@@ -1,4 +1,4 @@
-"""Narrow, explicit root-local patch placement; never infer a legacy pin's origin.
+"""Narrow, explicit conversation-owned patch placement; never infer a legacy pin's origin.
 
 Configuration operations own authority, dispatch, receipts and recovery. This
 module supplies only the field-specific comparison, preparation and projection.
@@ -24,8 +24,8 @@ BIND = 'configuration.patchPlacement.bind'
 def definitions(schema, string):
     target = {'sessionId': string(200), 'moduleId': string(200)}
     return {
-        READ: ('Read only this root patch instance and its recorded, saved and observed placement. No worker start or full configuration projection.', schema(target)),
-        BIND: ('Explicitly pin one patch instance to this root\'s recorded execution folder at the observed revision. Requires runtime_configuration/session authority; not automatic unpinning or replay.', schema({
+        READ: ('Read this conversation\'s patch instance and its recorded, saved and observed placement. Qualified Full children may inspect their owner\'s placement; no worker start or full configuration projection.', schema(target)),
+        BIND: ('Explicitly pin one patch instance to this root\'s recorded execution folder at the observed revision. Requires runtime_configuration/session authority. Full accepts the exact choice without a human sourceMessageId, including qualified children and trusted system callers; no automatic unpinning or replay.', schema({
             **target, 'expectedRevision': string(200),
             'expectedExecutionRevision': {'type': 'integer', 'minimum': 0},
             'choice': {'enum': ['bind-to-execution']}, 'sourceMessageId': string(200),
@@ -91,15 +91,11 @@ def target(service, session):
 def caller(service, args, origin, caller_id, *, active=True):
     session = service._session(args['sessionId'])
     if origin not in {'ui', 'user'}:
-        source = service.collaboration.source({}, origin, caller_id)
-        if source['id'] != session['id']:
-            raise ValueError('Patch placement belongs to the calling root only.')
         from .collaboration import PRINCIPAL
-        native = source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']
-        if PRINCIPAL.get() != native:
+        if origin != 'system' and not PRINCIPAL.get():
             service.collaboration.error('Patch placement requires its authenticated transport root.')
-        if active:
-            service.collaboration.active_binding(source)
+        service.configuration_authority.source(args, origin, caller_id,
+            active=active, allow_descendant=True)
     return session
 
 
@@ -131,10 +127,10 @@ def retained_receipt(management, args, origin, caller_id, command_id, request_fi
     return {**receipt, 'duplicate': True}
 
 
-def choice(session, args, origin):
+def choice(session, args, origin, authority=None):
     if args.get('choice') != 'bind-to-execution':
         raise ValueError('An explicit bind-to-execution choice is required.')
-    if origin not in {'ui', 'user'}:
+    if origin not in {'ui', 'user'} and not (authority and 'accessRevision' in authority):
         message = next((row for row in session['messages']
             if row.get('id') == args.get('sourceMessageId')), None)
         if (not message or message.get('role') != 'user'
@@ -242,7 +238,7 @@ def admit(management, args, origin, caller_id, command_id, authority):
     """Under service.lock, after command dedup, before any asynchronous effect."""
     service = management.service
     session = caller(service, args, origin, caller_id)
-    choice(session, args, origin)
+    choice(session, args, origin, authority)
     bound = target(service, session)
     snapshot = management.placement_snapshots.get(args['expectedRevision'])
     plan, row, stamp = host_saved(service, session, args['moduleId'])

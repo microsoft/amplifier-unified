@@ -443,3 +443,20 @@ async def test_retired_selection_preference_is_not_an_action_setting(tmp_path):
         assert 'prewarm_on_select' not in runtime.retention.settings
     finally:
         await app.close()
+
+
+async def test_new_boundary_protection_is_rechecked_after_waiting_for_admission_lock(manager):
+    process = await warm(manager, 'a')
+    manager.retention.settings['max_warm_workers'] = 0
+    lock = manager._locks['a']
+    await lock.acquire()
+    sweep = asyncio.create_task(manager.retention.sweep())
+    await asyncio.sleep(0)
+    assert not sweep.done()
+    manager.retention.protected = lambda sid: sid == 'a'
+    lock.release()
+    await sweep
+    assert process.returncode is None and 'a' in manager.workers
+    manager.retention.protected = lambda sid: False
+    await manager.retention.sweep()
+    assert process.returncode == 0 and 'a' not in manager.workers

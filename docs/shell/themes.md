@@ -94,6 +94,32 @@ Omitted tokens retain the standard geometry. Narrow conversations reduce the
 message gap to 18–22px; touch-target sizes and panel layout remain host-owned.
 Aurora, Atelier, and Graphite demonstrate small variations in both color modes.
 
+### Shared transcript edges
+
+The shared transcript baseline owns overflow cues, not individual appearances.
+It uses the existing scroll owner to fade only an edge with content beyond it:
+18px at the top and 24px at the bottom. Short transcripts have no fade; reaching
+the bottom removes the bottom fade so the final text and actions remain readable.
+Focus within the transcript disables the mask, and forced colors removes it.
+The scrollbar gutter remains intact. The navigator and composer are outside the
+masked scroller; do not mask the conversation panel or reposition its children.
+
+CSS appearances may tune `--a-transcript-fade-top` and
+`--a-transcript-fade-bottom`; omitted values retain the native defaults above.
+The host clamps fade lengths to 0–48px and at most half the viewport height.
+Classic scrollbar gutters retain opaque mask coverage; overlay scrollbars expose
+no layout gutter, so their edge rendering needs platform-specific inspection.
+These are optional CSS properties, not fields in
+the version 1 theme schema. Prefer omission to copying the mask or deriving
+overflow from a theme. Never add an unconditional transcript mask, an overlay
+that covers the final message, or theme-owned scroll listeners. Remove duplicate
+mask rules from bundled skins when the shared fallback is in place; do not
+rewrite saved user copies.
+
+Check the installed baseline before relying on these properties. This describes
+the shared authoring baseline, not certification that an arbitrary skin preserves
+it; check top/middle/bottom, short content, keyboard focus and forced colors.
+
 ### Main panel surfaces
 
 The main screen also consumes these optional CSS tokens:
@@ -117,6 +143,8 @@ Theme changes remeasure panel space immediately, including previews. Narrow
 screens use an uninterrupted surface; focused and overlay canvases stay square.
 The background-artwork switch hides these panel decorations as well as root
 artwork, while retaining shapes, borders and spacing. Prefer static decorations.
+Keep decorative lines away from navigation controls and labels; selected-row
+indicators are functional feedback, not background artwork.
 The user-directed Digital Rain design intentionally uses continuous optional
 code-rain artwork. This is not a work-status or busy-region effect: it changes
 no layout and conveys no operational information. Such explicitly selected
@@ -135,13 +163,13 @@ or closing Settings clears that preview. Library operations never apply CSS.
 | Intent | Settings | Shared agent action |
 | --- | --- | --- |
 | Create or copy | Expand **Advanced customization**, name the CSS, choose **Save as copy**. | `theme.save({name, css, description})` |
-| Import | **Upload appearance** accepts portable `.css`; it keeps embedded metadata. | `theme.import({css})`; optional `name`/`description` override metadata, `fallbackName` names files with no embedded name. |
+| Import | **Upload appearance** accepts portable `.css` or an appearance ZIP; it keeps embedded metadata. | `theme.import({css})` or `theme.import({packageBase64})`; supply exactly one. Optional `name`/`description` override metadata; `fallbackName` names CSS files with no embedded name. |
 | Edit | Select an entry, choose **Edit**, change name/description/CSS, then **Update saved appearance**. | Read with `theme.read({id})`, then `theme.update({id, expectedFingerprint, name, css, description})`. |
 | Delete | Select a saved entry, choose **Delete**, then **Confirm delete**. Export first to retain a copy. | `theme.delete({id, expectedFingerprint})` |
-| Export | **Export [selected name]** exports that saved/included entry. **Export current appearance** exports committed CSS, not edits or previews. | `theme.export({id})` or the existing no-id `theme.export({})`. |
+| Export | **Export [selected name]** exports CSS; **Export [selected name] as ZIP** includes package assets and notices. Current-appearance controls use committed CSS, not edits or previews. | `theme.export({id, format: "css"})` (default) or `theme.export({id, format: "zip"})`; omit `id` for committed appearance. |
 
 `theme.list` returns metadata and fingerprints, without CSS. `theme.read` returns
-the exact current CSS and its SHA-256 `fingerprint`. Keep that fingerprint with
+the current self-contained CSS and a `fingerprint` for that saved version. Keep that fingerprint with
 the editor draft; do not silently replace it with one from background refresh.
 Settings keeps the target, fingerprint, name, description and CSS together in a
 tab-private editor draft. Another client's Apply or a background library refresh
@@ -195,3 +223,104 @@ motion, decorations off and a narrow layout before applying.
 Digital Rain is included as a complete packaged stylesheet with embedded artwork.
 It is loaded unchanged, rather than rebuilt using another preset's geometry.
 Bundled updates do not overwrite edited saved appearances.
+
+Lightline is an included, neutral architectural appearance: luminous ivory,
+platinum and graphite in light mode, obsidian and cyan in dark mode, a warm user bubble, monospaced
+chat and readable UI text. Its surface highlights are static. It inherits the
+shared transcript edges rather than supplying a permanent mask. Included means
+available to choose, not a new selection for existing users. Shipping it must not
+replace saved copies or change scheme, decorations or accessibility preferences.
+
+Both palettes have an intentional material reference, rather than treating light
+mode as a pastel inversion. The light treatment abstracts illuminated glass,
+white lacquer, acrylic and silver; dark uses obsidian with cyan edge light.
+The [production-design account](https://www.latimes.com/archives/la-xpm-2010-dec-18-la-hm-tron-movie-set-design-20101218-story.html)
+informed those materials, not sampled color values or copied imagery. Functional
+accent colors are readability adaptations. A reference does not replace contrast
+measurements and rendered review in either scheme.
+
+For a bundled appearance change, keep qualification focused: confirm the packaged
+CSS and metadata load unchanged, preview the actual host in both schemes and a
+narrow layout, check decorations/reduced motion/forced colors and essential
+controls, then verify preview/apply/revert and saved-copy preservation. Record
+what ran and what remains unchecked; packaging alone is not visual acceptance.
+
+## ZIP appearance packages
+
+Use an ordinary `.zip`, such as `quiet-studio.zip`. Contents define its type, not
+the filename. Version 1 transports a complete stylesheet, supported local assets
+and license notices. It is not a general archive viewer, plugin installer or
+portable shell composition.
+
+```text
+quiet-studio.zip
+├── appearance.json
+├── theme.css
+├── assets/
+│   ├── background.png
+│   └── reading.woff2
+└── licenses/
+    ├── artwork.txt
+    └── OFL.txt
+```
+
+```json
+{
+  "type": "appearance",
+  "formatVersion": 1,
+  "name": "Quiet studio",
+  "description": "Quiet surfaces with locally bundled assets.",
+  "author": "Example author",
+  "stylesheet": "theme.css",
+  "assets": [
+    {"path": "assets/background.png", "mediaType": "image/png", "license": "licenses/artwork.txt"},
+    {"path": "assets/reading.woff2", "mediaType": "font/woff2", "license": "licenses/OFL.txt"}
+  ],
+  "licenses": ["licenses/artwork.txt", "licenses/OFL.txt"]
+}
+```
+
+`type`, `formatVersion`, `name` and `stylesheet` are required. Optional descriptive
+fields carry attribution, not a verified authorship claim. Every archive member
+must belong to the manifest, stylesheet, declared assets or declared notices.
+Unsupported versions and unknown manifest fields are rejected. Fonts require a
+bundled license reference; the host checks the presence of notices, not whether a
+license grants the submitter every right they claim.
+
+Stylesheets reference declared assets relative to the stylesheet, for example
+`url("assets/background.png")`. Import rewrites those references into embedded
+data URLs before normal preview/apply validation. No remote fetch, extraction to
+arbitrary paths or CSS import is performed. Supported assets are PNG, JPEG, WebP,
+WOFF and WOFF2; SVG, HTML, JavaScript and executable content are not package assets.
+Keep unmodified upstream font files and their copyright/license notices together.
+Pin source revisions and hashes when vendoring. Modified/subset fonts need a fresh
+license review, including reserved font names. Different fonts must earn their
+cost in rendered, realistic comparisons; do not bundle similar families merely
+to increase choice.
+
+The archive reader allows at most 4,000,000 ZIP bytes (5,333,336 base64 transport
+characters), 128 members, 2,000,000 expanded bytes per member and 8,000,000 expanded
+bytes total. Compression ratios above 200:1 are rejected. These limits are checked
+before publishing anything. It rejects path traversal,
+absolute/backslash paths, duplicate names, links, special files, encrypted members,
+unsupported compression and corrupt streams. Runtime CSS retains the existing
+1 MB limit; an otherwise small compressed ZIP can still exceed that limit after
+embedding assets. Import is all-or-nothing and does not apply an appearance.
+Version 1 accepts ordinary ZIP32 STORED/DEFLATE records, including signed or
+unsigned data descriptors. ZIP64 and gaps between member records are unsupported.
+Conflicting notice bodies at the same path fail rather than silently replacing
+attribution. Package metadata in CSS exports carries complete retained notices.
+
+Library refresh still reads and hashes each bounded ZIP. A service-local cache
+retains at most 128 small validated summaries, keyed by exact archive-byte digest;
+unchanged summaries avoid decompression and CSS compilation. Changed bytes and
+explicit full reads validate again. This does not bound the total library count
+or claim constant-time polling.
+
+Read a saved package before editing or deleting it; its fingerprint protects the
+canonical saved package, including assets and notices. Library edits preserve
+package assets/notices. ZIP export preserves them, while CSS export remains
+self-contained and carries required notices. Saving or applying does not execute
+archive contents, change preferences or grant capabilities. Deleting the library
+entry does not remove the already-applied CSS. Existing CSS-only imports and
+default CSS export remain supported.

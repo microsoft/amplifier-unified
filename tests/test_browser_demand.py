@@ -40,7 +40,9 @@ def test_requested_resources_arrive_and_retire_without_deleting_evidence():
         result = project({**state, 'view': {'panel': 'settings', 'settingsExpanded': [page]}})
         assert result[key] == state[key]
     runtime = project({**state, 'view': {'panel': 'runtime'}})
-    assert runtime['runtimeControl'] == state['runtimeControl']
+    assert runtime['runtimeControl']['chat']['task.get'] == {
+        'historyCount': 1, 'historyRef': {'action': 'task.history', 'args': {'sessionId': 'chat'}}}
+    assert runtime['runtimeControl']['chat']['configuration.providers'] == state['runtimeControl']['chat']['configuration.providers']
     assert runtime['sessions'] == state['sessions']
     activity = project({**state, 'view': {'panel': 'activity'}})
     assert activity['attention']['items'] == state['attention']['items']

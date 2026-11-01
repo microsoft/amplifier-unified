@@ -5,7 +5,8 @@ revisioned corrections, status, question IDs, operation IDs, artifact references
 and explicit completion evidence. UI and `app_control` use the same `task.*`
 actions: `get`, `create`, `update`, `pause`, `resume`, `block`, `complete`.
 Agent actions are bound to the calling conversation, including the legacy
-`runtime.control` forwarding alias. These controls do not send input, change a
+`runtime.control` forwarding alias. The narrow assignment-owner controls below
+are separate from general cross-chat task editing. These controls do not send input, change a
 draft/selection, grant permissions, resolve questions, or create a scheduler.
 
 Mutations require exact `expectedRevision` and an idempotent dispatch command ID.
@@ -15,6 +16,89 @@ history when a new objective is created. An existing unfinished task is edited
 rather than replaced. Task actions return authoritative state, unlike a queued
 management acknowledgement. Linked operation IDs are observations; unknown
 outcomes remain unknown until their actual evidence is reconciled.
+
+## Planning and required limits
+
+A standing user request to complete work includes ordinary corrections,
+verification and agreed handoffs within its scope. Managers can revise their own
+planning checkpoints without requesting fresh user approval. Ordinary failure
+correction and the affected focused checks remain part of that mandate; a manager
+does not manufacture fixed attempt allowances or repeated approval cycles.
+Estimates belong in planning, not in enforced limits or instructions that forbid
+ordinary verification. Existing managed profiles and maintained project checks
+should supply qualification; independent review focuses on changed risks and
+original acceptance, with unchanged passing evidence reused. The optional
+`maxTurns` field is an enforced limit, not an estimate; guidance therefore omits
+it unless a hard limit is required. Explicit user, commissioning-owner and host
+limits remain effective. An agent-origin record can contain a user's limit, and
+unknown historical provenance is not reclassified as an adjustable plan.
+
+The existing exact-revision `task.update` action can revise an authorized limit
+without resetting accumulated goal turns or deleting corrections and evidence.
+A completed objective remains immutable; `task.create` can record an already
+authorized follow-up and retains the completed task in history. Neither action
+supplies permission, resolves a pending user choice or overrides Stop. This is
+operating guidance for existing controls, not a new grant or automatic migration.
+
+An assignment owner can use `assignment.task.read` to inspect a bound member's
+canonical task identity, revision, limit, used turns and exact limit-change receipt
+without starting its worker. `assignment.task.setLimit` edits only `maxTurns` and
+a retained correction through the existing native task controller. It requires
+the current assignment owner, same bound member, exact assignment revision and
+exact task identity/revision. The member does not need another model turn, even
+when its current limit is exhausted. Preparation rechecks ownership, location,
+Stop, configuration and authorization at control admission; native application
+checks the exact task identity/revision. An already admitted control may finish,
+but cannot clear a later Stop or resume work.
+
+Increasing or removing an existing limit uses the manager's user-selected Full
+access policy or an original user message / verified saved question answer
+authorizing that correction. A saved answer remains usable after its answering
+turn ends; the user need not repeat it. Generic agent origin does not classify a
+legacy cap as a planning estimate. Full access does not change a deliberate cap
+automatically: the manager still explicitly chooses and records the correction
+within the user's mandate. In Ask mode, missing authorization leaves the cap
+unchanged. Tightening a limit does not require additional permission.
+
+The change retains the same task, accumulated turns, status, evidence, questions,
+operation references and other budgets. It does not clear Stop/pause, resolve an
+unknown effect, or send/replay input. Continuation uses the existing separate
+controls and admission checks. Its exact command receipt stays in the existing
+native control state, including manager and authorization provenance. After a
+lost acknowledgement, read that receipt; absence is not proof that an in-flight
+control did not commit. No new permission store or continuation loop is added.
+
+`assignment.task.complete` lets the same assignment owner close an accepted
+member contribution without asking the worker to spend another model turn.
+Use the existing assignment revision, member task ID/revision and nonempty
+completion evidence. The host reads the exact objective from canonical task state
+and forwards ordinary `task.complete`; objective edits increment the revision and
+replacement tasks have a different ID. The native controller requires idle work,
+including no queued input or active children, and persists its normal completion
+and manager provenance in the existing task receipt. Admission rechecks the same
+ownership, location, Stop and settings boundary as the limit control.
+
+Standing manager responsibility suffices: no fresh human answer or grant is
+required for this acceptance record. A stopped, paused or dependency-blocked
+member may be closed without clearing its Stop or sending input. Cold native
+preparation may be needed to reach the task controller; it never starts a model
+turn. History, used turns, limits, question/operation references, earlier failure
+receipts and owned resources stay intact. The manager must verify that the exact
+contribution is achieved; a diagnostic pass is not proof of its original feature
+or incident being fixed. This is not resource cleanup, assignment retirement,
+shared-task-list completion or closure of other objectives. Those existing controls
+and responsibilities remain separate. Duplicate/readback and unknown responses
+use the same existing command receipt, with no repeated model work.
+
+Cold preparation restores all saved controls before persisting them. It does not
+write mounted defaults over still-unrestored budgets or modes while loading a
+task. If saved-control restoration fails or is cancelled before its final
+persistence, the original control file remains available for recovery; the limit
+correction has not run. This is not rollback for failures during the final write
+or later preparation. Successful restore and later mutations keep ordinary
+persistence.
+
+## Continuation and recovery
 
 The existing goal controller performs continuation. The task revision applies at
 the next `provider:request` boundary during running work. Pause/block/completion
@@ -37,7 +121,13 @@ checks and charges one saved task turn before submission; an uncertain submissio
 retains that charge rather than making a retry free.
 
 The recipient may inspect, reply, defer or decline within its existing authority.
-Only a separate valid owner decision can resume its objective. A human-recorded
+Only a separate valid owner decision can resume its objective. Within a standing
+delegation, the owning agent may make that decision after verifying that its own
+recorded dependency block is resolved; another user approval is not required.
+User pause or Stop still requires the user's instruction to resume. Resuming
+preserves required limits, used turns, unanswered questions and uncertain effects;
+it does not classify those unresolved conditions as successful or authorized.
+A human-recorded
 block, missing provenance, a block recorded from a paused task, Stop, failure,
 completion or cancellation does not receive this exception. Old records can use
 their exact retained agent-origin status changes; reason text is never classified

@@ -395,9 +395,27 @@ async def test_root_above_workspace_cannot_be_selected_implicitly(multi):
     # Explicit paths may select a subdirectory, but the actual Git root must
     # remain within one of the task's known folders.
     subdir = repos[0] / 'subdir'; subdir.mkdir()
-    app._session(sid)['workspace'] = str(subdir)
+    app._session(sid).update(workspace=str(subdir), workingDirectory=str(subdir))
+    assert Path(git(subdir, 'rev-parse', '--show-toplevel').decode().strip()) == repos[0]
     with pytest.raises(AppError, match='Git root lies outside'):
         await inspect(app, sid, '.')
+    assert not app.worktrees.git.records()
+
+
+async def test_relative_repository_selection_uses_explicit_execution_folder(multi):
+    app, sid, _, repos = multi
+    subdir = repos[0] / 'subdir'; subdir.mkdir()
+    app._session(sid).update(workspace=str(subdir), workingDirectory=str(repos[1]))
+    before = copy.deepcopy(app._session(sid))
+    result = await inspect(app, sid, '.')
+    assert result['repository']['root'] == str(repos[1])
+    assert result['historyHome'] == str(subdir)
+    assert result['executionDirectory'] == str(repos[1])
+    after = app._session(sid)
+    for key in ('id', 'workspace', 'workingDirectory', 'executionRevision', 'messages'):
+        assert after[key] == before[key]
+    assert after['worktreeInspection'] == result
+    assert not app.worktrees.git.records()
 
 
 @pytest.mark.parametrize('action,args', [

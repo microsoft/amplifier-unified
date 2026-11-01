@@ -1,5 +1,39 @@
 # Browser state transport and idle work
 
+Apply the [performance validation guidance](validation/performance.md) when changing
+these projections. Measure construction and subscriber work as well as frame bytes;
+a small delta can still conceal a full-history copy, scan or encoding pass.
+
+## Revision-only observations
+
+A delta may advance only the application revision when a committed change has
+no other fields in this client's projection. It is still a causal watermark:
+the browser validates the delta chain, updates current state readback, observes
+navigation receipts, wakes command waiters and notifies state subscribers.
+These frames are not dropped or replaced by a separate polling path.
+
+When all non-revision top-level fields retain their exact immutable identities,
+the bundled browser avoids repainting the unchanged application and scheduling
+another rendered-view scan. New baselines, changed or removed fields and host
+changes use normal rendering. The advanced agent-state panel also keeps normal
+rendering because it displays the revision itself. Reconnect, optimistic drafts
+and navigation, receipt ordering and hidden-tab recovery retain their owners.
+
+## Saved task history
+
+Bound browser frames keep the current task fields used by Work and runtime
+panels, including objective, constraints, corrections, evidence and linked IDs.
+They do not repeat recorded `changes`, internal `goalState`, `originalObjective`
+or completed task bodies in both the session and `task.get` presentation. Counts
+and existing `task.history` / `task.detail` references identify retained history.
+Opening a panel does not automatically read those pages or start model work.
+
+This projection runs before browser snapshot copying and serialization. It does
+not alter canonical task/control records, persistence, command receipts, explicit
+task reads or their revision/authorization checks. Currently rendered fields are
+preserved in full; this is not a total-byte bound on the current task. The existing
+bounded history/detail actions remain the complete historical read path.
+
 ## Selected media availability
 
 The selected session in a bound web frame carries `linkedMediaAvailable`, an

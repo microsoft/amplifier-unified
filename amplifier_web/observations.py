@@ -25,17 +25,17 @@ def definitions(schema, string):
     review = {'previewHash': string(100), 'requestId': string(200), 'sourceMessageId': string(200)}
     revision = {'expectedRevision': {'type': 'integer', 'minimum': 1}}
     return {
-        'observation.qualify': ('Operator-only source qualification of an already installed and connected read-only observer; annotations alone do not qualify.', schema({**sid, 'descriptor': {'type': 'object'}})),
+        'observation.qualify': ('Record source qualification of an installed, connected read-only observer through an operator action or standing Full access. Installed-code and evidence checks remain required; submitted review assertions are not independent verification.', schema({**sid, 'descriptor': {'type': 'object'}})),
         'observation.observers': ('Read qualified observation contracts and current eligibility without connecting or preparing a provider.', schema(sid)),
-        'observation.preview': ('Preview a user-requested quiet watch against persisted task authority. Does not prepare a worker or provider.', schema({**sid, **config, 'sourceMessageId': string(200)}, [*sid, *CONFIG])),
-        'observation.create': ('Arm the exact reviewed quiet observation. Cite actual human sourceMessageId; stable requestId returns the original watch on retry, never rearms it.', schema({**sid, **config, **review}, [*sid, *CONFIG, 'previewHash', 'requestId'])),
+        'observation.preview': ('Preview a quiet watch against persisted task and current standing authority. Does not prepare a worker or provider.', schema({**sid, **config, 'sourceMessageId': string(200)}, [*sid, *CONFIG])),
+        'observation.create': ('Arm the exact reviewed quiet observation. Full access needs no human sourceMessageId; Ask when needed retains human request provenance. Stable requestId returns the original watch on retry, never rearms it.', schema({**sid, **config, **review}, [*sid, *CONFIG, 'previewHash', 'requestId'])),
         'observation.request': ('Read an earlier watch creation by stable request identity without replay.', schema({**sid, 'requestId': string(200)})),
         'observation.list': ('Read quiet watches for this conversation.', schema(sid)),
         'observation.read': ('Read exact quiet watch and bounded audit; never run the observer.', schema(identity)),
         'observation.report': ('Read the same durable observation report; source callbacks cannot author results through this action.', schema(identity)),
         'observation.pause': ('Pause checks and suppress an unadmitted handoff. Watched work is not stopped.', schema({**identity, **revision, 'requestId': string(200)})),
         'observation.cancel': ('Cancel this watch without cancelling or rolling back watched work.', schema({**identity, **revision, 'requestId': string(200)})),
-        'observation.resume': ('Resume a nonterminal watch only after fresh review and renewed human authority. Unknown/terminal handoffs never replay.', schema({**identity, **revision, **config, **review}, [*identity, *revision, *CONFIG, 'previewHash', 'requestId'])),
+        'observation.resume': ('Resume a nonterminal watch after fresh review under still-valid Full authority or renewed human authority. Full access cannot renew a stopped or revoked watch. Unknown/terminal handoffs never replay.', schema({**identity, **revision, **config, **review}, [*identity, *revision, *CONFIG, 'previewHash', 'requestId'])),
     }
 
 
@@ -109,10 +109,28 @@ class Observations:
         binding = {**config, 'presentationGrant': presentation, 'sessionId': sid, 'taskId': task['id'], 'taskRevision': task['revision'],
             'nativeSessionId': session.get('runtimeSessionId') or session.get('nativeIdentity') or sid,
             'executionRevision': session.get('executionRevision', 0), 'interruptionRevision': session.get('interruptionRevision', 0)}
-        return {'previewHash': fingerprint(binding), 'binding': binding, 'handoff': 'one finite background explanation; no product tools', 'expiresInSeconds': config['durationSeconds']}
+        return {'previewHash': fingerprint([binding, self.full_authorization(sid, origin)]), 'binding': binding, 'handoff': 'one finite background explanation; no product tools', 'expiresInSeconds': config['durationSeconds']}
+
+    def full_authorization(self, sid, origin):
+        session = self.app._session(sid)
+        if origin in {'agent', 'system', 'voice', 'user'}:
+            authority = self.app.access_mode.capture_full(session, origin)
+            if authority and 'inputIds' in authority:
+                authority['inputIds'] = sorted(set(authority['inputIds']))
+            return authority
+        return None
 
     def authorization(self, sid, args, origin, previous=None):
         if origin == 'ui': return {'origin': 'ui', 'at': self.clock()}
+        standing = self.full_authorization(sid, origin)
+        if standing:
+            session = self.app._session(sid)
+            if previous:
+                retained = previous.get('authorization', {})
+                if (previous['interruptionRevision'] != session.get('interruptionRevision', 0)
+                        or 'accessRevision' in retained and not self.app.access_mode.full(session, retained['accessRevision'])):
+                    raise ValueError('The original Full access or Stop boundary changed; this watch cannot resume itself')
+            return {**standing, 'at': self.clock()}
         if origin not in {'agent', 'voice', 'user'}: raise ValueError('Only a real user request can authorize a quiet watch')
         source = next((m for m in self.app._session(sid).get('messages', []) if m.get('id') == args.get('sourceMessageId')), None)
         if not source or source.get('role') != 'user' or source.get('inputOrigin') not in {'ui', 'user', 'voice'} or source.get('questionId') or source.get('scheduledRunId') or source.get('observationId'):
@@ -137,7 +155,10 @@ class Observations:
             question = self.app.questions.store.get(session['id'], identity)
             if question['required'] and question['status'] != 'answered': return 'A required decision remains unanswered'
         auth = watch['authorization']
-        if auth.get('messageId'):
+        if 'accessRevision' in auth:
+            if auth.get('sessionId') != session['id'] or not self.app.access_mode.full(session, auth['accessRevision']):
+                return 'The saved Full access authority changed'
+        elif auth.get('messageId'):
             source = next((m for m in session.get('messages', []) if m.get('id') == auth['messageId']), None)
             if not source or fingerprint(source.get('text', '')) != auth['textDigest']: return 'The authorizing human request is unavailable or changed'
         check(self.app.smart_tools, self.store.get('observer', watch['observerId']))
@@ -147,9 +168,12 @@ class Observations:
         sid, now = args['sessionId'], self.clock()
         self.app._session(sid)
         if action == 'observation.qualify':
-            if origin != 'ui': raise ValueError('Only a trusted operator action can qualify source code; agents cannot self-attest')
+            authorization = {'origin': origin, 'sessionId': sid} if origin == 'ui' else self.full_authorization(sid, origin)
+            if authorization is None: raise ValueError('Source qualification requires a trusted operator action or Full access')
             descriptor = qualify(self.app.smart_tools, args['descriptor'])
             descriptor['qualifiedAt'] = now
+            # This records who submitted the review, not independent attestation.
+            descriptor['authorization'] = {**authorization, 'at': now}
             self.store.put('observer', descriptor)
             return {'observer': descriptor}
         if action == 'observation.observers':

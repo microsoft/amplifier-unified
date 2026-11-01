@@ -1,9 +1,10 @@
+import {fixturePython} from './fixture-python.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 const root=fileURLToPath(new URL('../../',import.meta.url));
-const fixture=spawn(root+'.venv/bin/python',['-u',root+'tests/fixtures/browser_detail_server.py',root],{stdio:['ignore','pipe','inherit']});
+const fixture=spawn(fixturePython(root+'.venv/bin/python'),['-u',root+'tests/fixtures/browser_detail_server.py',root],{stdio:['ignore','pipe','inherit']});
 let browser;
 try{
  const port=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exit '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const row=JSON.parse(line);if(row.port){clearTimeout(timer);resolve(row.port)}}catch{}})});

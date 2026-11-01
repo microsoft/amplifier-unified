@@ -278,7 +278,7 @@ def docker_capacity(payload):
     total = len(projects)+pending
     disk = os.statvfs(daemon['DockerRootDir'])
     free = disk.f_bavail * disk.f_frsize
-    maximum, retained, minimum = payload.get('maxRunning', 15), payload.get('maxInstances', 256), payload.get('minFreeBytes', 10*1024**3)
+    maximum, retained, minimum = payload.get('maxRunning', 0), payload.get('maxInstances', 0), payload.get('minFreeBytes', 10*1024**3)
     blockers = []
     if maximum and active >= maximum:
         blockers.append({'code': 'execution_capacity'})
@@ -414,6 +414,7 @@ def remove_owned(payload, identity, backend, config, lib, backend_error, binding
     phase, effect, destination, started = 'observe-stopped', 'not_dispatched', None, False
     recovering, cleanup = payload.get('action') == 'finishCleanup', None
     archive_rejected = False
+    verification = None
     try:
         archive_only = recovering or prepared_archive_custody(payload)
         universe = lib.status(identity, config=config)
@@ -457,10 +458,11 @@ def remove_owned(payload, identity, backend, config, lib, backend_error, binding
                 raise ValueError('The exported selection does not match the original removal.')
         try:
             retained = retention.verify_retention(Path(payload['root']), archives, 'archive-only' if archive_only else 'files')
-        except (ValueError, retention.tarfile.TarError):
+        except (ValueError, retention.tarfile.TarError) as exc:
             # A synchronous validation rejection precedes destroy. Do not turn
             # filesystem/publication errors or helper loss into this receipt.
             archive_rejected = True
+            verification = retention.validation_failure_diagnostic(exc)
             raise
         phase = 'publish-manifest'
         retain_manifest(destination, archives)
@@ -538,10 +540,13 @@ def remove_owned(payload, identity, backend, config, lib, backend_error, binding
                            'removal': diagnostic}
             elif recovering and cleanup == 'rechecking':
                 receipt = {**cleanup_failure(payload, cleanup, identity), 'removal': diagnostic}
+        if verification is not None:
+            receipt['verification'] = verification
         if started:
             try:
                 write_private_record(destination / 'removal-failed.json', {
                     **diagnostic, 'binding': original,
+                    **({'verification': verification} if verification is not None else {}),
                     'startedSha256': retention.digest(destination / 'removal-started.json')[0]})
             except Exception:
                 pass  # Diagnostic persistence cannot change the known external outcome.

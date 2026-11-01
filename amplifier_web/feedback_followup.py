@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import re
 import time
 
-from . import feedback, feedback_edits
+from . import feedback, feedback_context, feedback_edits
 
 UNKNOWN = "GitHub may have received this change. Refresh the issue before starting another change; this request will not be sent again."
 PAGE_SIZE = 20
@@ -25,7 +26,7 @@ def definitions(schema, string):
             schema({**common, "readRequestId": identity, "title": {**string(200), "minLength": 1}, "body": {**string(16000), "minLength": 1}}, ["requestId", "feedbackId", "readRequestId", "title", "body"]),
         ),
         **{action: (
-            f"{label} the user's own feedback only when explicitly requested. expectedRevision comes from a fresh feedback.get. Changes only issue state; preserves title, body and all comments. Exact retries never repeat a remote mutation; unknown outcomes require a fresh read, not replay.",
+            f"{label} the user's own feedback under standing Full or an explicit request. expectedRevision comes from a fresh feedback.get. Changes only issue state; preserves title, body and all comments. Exact retries never repeat a remote mutation; unknown outcomes require a fresh read, not replay.",
             schema({**common, "expectedRevision": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}, ["requestId", "feedbackId", "expectedRevision"]),
         ) for action, label in (("feedback.close", "Close"), ("feedback.reopen", "Reopen"))},
         "feedback.reconcile": (
@@ -33,7 +34,7 @@ def definitions(schema, string):
             schema(common, ["requestId", "feedbackId"]),
         ),
         "feedback.update": (
-            "Publish the user's explicitly requested corrected title/description as a versioned correction COMMENT on their own feedback. Preserves the original issue and maintainer edits: GitHub cannot atomically revision-check an issue replacement. expectedRevision comes from a fresh feedback.get report or an owner-bound feedback.edits.review. With reviewRequestId, exact title/body/revision and attached client must match that one-use review. Exact request retries never post twice; unknown writes are not replayed. Does not close/reopen or edit anyone's text.",
+            "Publish corrected title/description as a versioned correction COMMENT on the user's own feedback under standing Full or an explicit request. Preserves the original issue and maintainer edits: GitHub cannot atomically revision-check an issue replacement. expectedRevision comes from a fresh feedback.get report or an owner-bound feedback.edits.review. With reviewRequestId, exact title/body/revision and attached client must match that one-use review. Exact request retries never post twice; unknown writes are not replayed. Does not close/reopen or edit anyone's text.",
             schema({**common, "title": {**string(200), "minLength": 1}, "body": {**string(16000), "minLength": 1},
                     "expectedRevision": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "reviewRequestId": identity}, ["requestId", "feedbackId", "title", "body", "expectedRevision"]),
         ),
@@ -42,7 +43,7 @@ def definitions(schema, string):
             schema({**common, "page": {"type": "integer", "minimum": 1, "maximum": 10000}}, ["requestId", "feedbackId"]),
         ),
         "feedback.comment": (
-            "Append only the follow-up text the user explicitly asked to send to their own feedback report. feedbackId is the original feedback.submit requestId. Reuse requestId and identical body after a lost response; never start a new request merely to retry. Read /feedback/followups for durable status and canonical URLs. Unknown outcomes are not reposted. Does not edit, close, reopen, or attach files.",
+            "Append exact follow-up text to the user's own feedback under standing Full or an explicit request. feedbackId is the original feedback.submit requestId. Reuse requestId and identical body after a lost response; never start a new request merely to retry. Read /feedback/followups for durable status and canonical URLs. Unknown outcomes are not reposted. Does not edit, close, reopen, or attach files.",
             schema({**common, "body": {**string(16000), "minLength": 1}}, ["requestId", "feedbackId", "body"]),
         ),
     }
@@ -113,9 +114,9 @@ class Followups:
             raise AppError("Choose a successfully submitted feedback report from this host.", 404)
         return url, int(url.rsplit("/", 1)[1])
 
-    def accept(self, action, args, origin):
+    def accept(self, action, args, origin, caller=None):
         if action.startswith("feedback.attachments."):
-            return self.owner.additions.accept(action, args, origin)
+            return self.owner.additions.accept(action, args, origin, caller)
         from .service import AppError
         scoped = action == feedback_edits.ACTION or action == "feedback.update" and "reviewRequestId" in args
         owner = feedback_edits.client(self) if scoped else None
@@ -150,9 +151,22 @@ class Followups:
             raise AppError("Wait for a feedback follow-up to finish before starting another.", 409)
         receipt = {"requestId": args["requestId"], "feedbackId": args["feedbackId"], "action": action,
                    "origin": origin, "status": "queued", "url": url, "createdAt": time.time(), "message": "Checking your feedback report…"}
+        if caller:
+            from .collaboration import PRINCIPAL
+            receipt['sourceSessionId'] = caller
+            if origin == 'agent':
+                receipt['runtimeSessionId'] = PRINCIPAL.get()
+        # Reads may inspect uncertain history after Stop or revocation; they
+        # never renew the authority of the original effect. Direct Ask-mode
+        # follow-ups keep their existing contract.
+        authority = feedback_context.capture(self.service, origin, caller) if action in MUTATIONS else None
+        payload = args
+        if authority:
+            payload = {**args, '_authority': authority}
+            receipt['authority'] = copy.deepcopy(authority)
         if scoped:
             receipt["clientId"] = owner
-        self.service.db.execute("INSERT INTO feedback_followups VALUES (?,?,?,?)", (args["requestId"], fingerprint, json.dumps(args), json.dumps(receipt)))
+        self.service.db.execute("INSERT INTO feedback_followups VALUES (?,?,?,?)", (args["requestId"], fingerprint, json.dumps(payload), json.dumps(receipt)))
         if review:
             feedback_edits.consume(self, review, args["requestId"])
         if action == "feedback.get":
@@ -230,6 +244,8 @@ class Followups:
                 await self.update(identity, audit={'sourceRevision': revision(issue), 'priorState': issue.get('state'),
                                                    'desiredState': desired, 'author': actor})
                 if issue.get('state') != desired:
+                    if args.get('_authority'):
+                        feedback_context.check(self.service, args['_authority'])
                     posting = True
                     result = await feedback.github_api(endpoint, {'state': desired}, method='PATCH')
                     if not owned(result, user, args['feedbackId'], url) or result.get('state') != desired:
@@ -243,6 +259,8 @@ class Followups:
                     body = await correction(self, identity, args, issue, actor)
                     if body is None:
                         return
+                if args.get('_authority'):
+                    feedback_context.check(self.service, args['_authority'])
                 posting = True
                 result = await feedback.github_api(endpoint + "/comments", {"body": body + f"\n\n<!-- amplifier-feedback-comment:{identity} -->"})
                 comment_url = result.get("html_url", "")

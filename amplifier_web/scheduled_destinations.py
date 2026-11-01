@@ -23,22 +23,38 @@ async def create_destination(schedules, current, run):
     app, sid, identity = schedules.app, current['sessionId'], run['destinationSessionId']
     config = current['newTaskConfiguration']
     location = {'location': {'kind': 'managed'}} if is_managed(config) else {'workspace': config['workspace']}
+    rejected = False
+    def guard():
+        nonlocal rejected
+        try:
+            creation_guard(schedules, sid, run['id'], identity)
+            if run.get('creationConfirmed'):
+                destination = app._session(identity, hydrate=False)
+                if (destination.get('interruptionRevision', 0) != run['destinationInterruptionRevision']
+                        or destination.get('executionRevision', 0) != run['destinationExecutionRevision']
+                        or destination.get('configurationBusy') or destination.get('fileAccessPending')
+                        or template(app, destination)[1]['configurationHash'] != run['destinationConfigurationHash']):
+                    raise ValueError('The destination changed or stopped before task creation.')
+        except ValueError:
+            rejected = True
+            raise
     try:
         await app.dispatch('session.create', {
             'id': identity, 'select': False, 'title': current['newTaskTitle'],
             **location, 'bundle': config['bundle'],
             'inheritConfiguration': {'sessionId': sid, 'configurationHash': config['configurationHash'], 'scheduledRunId': run['id']},
-        }, origin='scheduler', command_id=run['id'] + ':create', include_state=False)
+        }, origin='scheduler', command_id=run['id'] + ':create', include_state=False, admission_check=guard)
         async with app.lock:
             destination = app._session(identity)
-            destination['scheduledOrigin'] = {'sessionId': sid, 'scheduleId': current['id'], 'runId': run['id']}
+            configuration = template(app, destination)[1]
             run = schedules.store.transition(sid, run['id'], ['creating'], 'creating', schedules.clock(),
-                destinationConfigurationHash=template(app, destination)[1]['configurationHash'],
+                destinationConfigurationHash=configuration['configurationHash'],
+                destinationConfigurationParts=configuration['configurationParts'],
                 destinationInterruptionRevision=0, destinationExecutionRevision=0, creationConfirmed=True)
             schedules.changed()
         result = await app.dispatch('task.create', {'sessionId': identity, 'expectedRevision': 0,
             'objective': current['prompt'], 'maxTurns': current['newTaskMaxTurns']},
-            origin='scheduler', command_id=run['id'] + ':task', include_state=False)
+            origin='scheduler', command_id=run['id'] + ':task', include_state=False, admission_check=guard)
         task = result['result']['task']
         async with app.lock:
             run = schedules.store.transition(sid, run['id'], ['creating'], 'creating', schedules.clock(), taskId=task['id'], taskRevision=task['revision'])
@@ -48,8 +64,10 @@ async def create_destination(schedules, current, run):
         # Creation or task configuration can have committed before a connection
         # failed. Save the reserved identity, never guess that a retry is safe.
         async with app.lock:
-            detail = 'New-task preparation outcome requires inspection; no automatic retry: ' + str(exc)[:500]
-            saved = schedules.store.transition(sid, run['id'], ['creating'], 'unknown', schedules.clock(), detail=detail)
+            phase = 'skipped' if rejected else 'unknown'
+            detail = ('New-task preparation stopped before the next effect: ' if rejected else
+                      'New-task preparation outcome requires inspection; no automatic retry: ') + str(exc)[:500]
+            saved = schedules.store.transition(sid, run['id'], ['creating'], phase, schedules.clock(), detail=detail)
             schedules.store.review(sid, current['id'], detail, schedules.clock())
             schedules.decide_notification(app._session(sid), saved)
             schedules.changed()

@@ -1,3 +1,4 @@
+import {fixturePython} from './fixture-python.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
@@ -12,7 +13,7 @@ const root=fileURLToPath(new URL('../../',import.meta.url));
 const directory=await mkdtemp(join(tmpdir(),'canvas-restart-'));
 let fixture,browser;
 async function start(port=0){
- fixture=spawn(root+'.venv/bin/python',[root+'tests/fixtures/canvas_restart_ui_server.py',directory,String(port)],{stdio:['ignore','pipe','inherit']});
+ fixture=spawn(fixturePython(root+'.venv/bin/python'),[root+'tests/fixtures/canvas_restart_ui_server.py',directory,String(port)],{stdio:['ignore','pipe','inherit']});
  return new Promise((resolve,reject)=>{
   let output='';const timeout=setTimeout(()=>reject(Error('Fixture startup timed out')),15000);
   fixture.once('exit',code=>{clearTimeout(timeout);reject(Error('Fixture exited '+code))});

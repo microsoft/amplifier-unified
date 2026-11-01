@@ -46,11 +46,11 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       selected: ${{ steps.plan.outputs.selected }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.revision || github.sha }}
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
       - name: Select owners for changed paths or the full post-release matrix
@@ -94,23 +94,23 @@ jobs:
           - 127.0.0.1:17687:7687
         options: --health-cmd "cypher-shell 'RETURN 1'" --health-interval 5s --health-timeout 5s --health-retries 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.revision || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - name: Resolve the declared runtime revision
         id: runtime
         if: contains(fromJSON('["native","cli-interop"]'), matrix.lane)
         run: |
           python -c 'import tomllib; p=tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb")); print("revision=" + p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"])' >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         if: contains(fromJSON('["native","cli-interop"]'), matrix.lane)
         with:
           repository: microsoft/amplifier-module-loop-live
@@ -118,27 +118,27 @@ jobs:
           path: .ci/loop-live
           ssh-key: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
           persist-credentials: false
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         if: matrix.lane == 'cli-interop'
         with:
           repository: microsoft/amplifier-app-cli
           path: .ci/cli
           persist-credentials: false
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         if: matrix.lane == 'context-intelligence'
         with:
           repository: microsoft/amplifier-context-intelligence
           ref: c4fd590e04ebcf9c7db13704dbf273d6049598e6
           path: .ci/ci-server
           persist-credentials: false
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         if: matrix.lane == 'filesystem-aliases'
         with:
           repository: microsoft/amplifier-module-tool-filesystem
           ref: 38e48db57bd9091d4ad439c137240212855d07c8
           path: .ci/tool-filesystem
           persist-credentials: false
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         if: matrix.lane == 'filesystem-aliases'
         with:
           repository: microsoft/amplifier-bundle-filesystem
@@ -154,7 +154,7 @@ jobs:
         run: python scripts/run_owned_integration.py --lane "$LANE" --work "$RUNNER_TEMP/integration" --output "$GITHUB_WORKSPACE/output/integration"
       - name: Retain results and source identities, never private state
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: integration-${{ matrix.lane }}
           path: output/integration/

@@ -24,6 +24,10 @@ class Runtime:
         await emit("runtime.status", {"sessionId": session["id"], "status": "ready"})
 
     async def send(self, session, text, input_id, emit):
+        if hasattr(self, 'provider_scenario'):
+            resolved = await self.provider_scenario.dispatch(session)
+            await emit("runtime.status", {"sessionId": session["id"], "status": "ready",
+                       "report": {"effective_selection": resolved['effective']}})
         if '--startup-failure' in sys.argv and not self.sent:
             from amplifier_web.runtime import RuntimeStartupError
             await self.start_gate.wait()
@@ -101,7 +105,10 @@ async def main(home):
         stored_copy_path.write_text('<p>Saved source α😀</p>\r\n<!--' + 'x' * 1000100 + '-->\r\n')
     runtime = Runtime()
     runtime.start_gate = asyncio.Event()
-    if '--chat-controls' in sys.argv:
+    if '--provider-resolution' in sys.argv:
+        from provider_selection_scenario import Scenario
+        runtime.provider_scenario = Scenario(home)
+    elif '--chat-controls' in sys.argv:
         preferred_model = ['first']
         from amplifier_web.setup import SetupManager
         SetupManager.provider_rows=lambda self,workspace:[{'id':'test-provider','module':'provider-test','config':{'model':preferred_model[0]},'enabled':True}]
@@ -146,6 +153,8 @@ async def main(home):
             "workerCount": len(getattr(runtime, 'workers', {})), "started": getattr(runtime, "started", []), "stopped": getattr(runtime, "stopped", [])})
 
     app.router.add_get("/fixture", inspect)
+    if hasattr(runtime, 'provider_scenario'):
+        runtime.provider_scenario.routes(app)
     if '--navigation-history' in sys.argv:
         async def history_message(request):
             service = app['service']
@@ -174,7 +183,8 @@ async def main(home):
             await app['service'].management.invalidate_configuration()
             return web.json_response({'ok': True})
 
-        app.router.add_post('/fixture/provider-preference', provider_preference)
+        if '--provider-resolution' not in sys.argv:
+            app.router.add_post('/fixture/provider-preference', provider_preference)
 
         async def activity(request):
             data = await request.json()
@@ -338,8 +348,17 @@ async def main(home):
     # Windows event loops cannot register Unix signals; preserve fixture startup
     # there while POSIX qualification exercises graceful application teardown.
     shutdown_signals = (signal.SIGTERM, signal.SIGINT) if os.name == 'posix' else ()
+    def stop_requested(signum):
+        if '--shared-work' in sys.argv:
+            print(json.dumps({'sharedWorkSignal': {
+                'signal': signal.Signals(signum).name, 'at': time.monotonic()}}), flush=True)
+        stopped.set()
+
     for signum in shutdown_signals:
-        loop.add_signal_handler(signum, stopped.set)
+        if '--shared-work' in sys.argv:
+            loop.add_signal_handler(signum, stop_requested, signum)
+        else:
+            loop.add_signal_handler(signum, stopped.set)
     print(json.dumps({"url": url}), flush=True)
     try:
         await stopped.wait()
@@ -348,7 +367,8 @@ async def main(home):
             release_query_gate()
             await runner.cleanup()
             if '--shared-work' in sys.argv:
-                print(json.dumps({'sharedWorkCleanup': {'complete': True, 'at': time.monotonic()}}), flush=True)
+                print(json.dumps({'sharedWorkCleanup': {'complete': True,
+                    'at': time.monotonic(), **app['shared_work_wait_snapshot']()}}), flush=True)
         finally:
             for signum in shutdown_signals:
                 loop.remove_signal_handler(signum)

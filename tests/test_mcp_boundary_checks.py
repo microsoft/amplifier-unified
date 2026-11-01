@@ -283,8 +283,8 @@ def test_mcp_workflow_is_fixed_default_off_with_separate_bounded_job():
     assert not any('continue-on-error' in step for step in steps)
     check = next(step for step in steps if step.get('name') == 'Run the fixed MCP boundary proof')
     assert check['env'] == {'EXPECTED_REVISION': '${{ github.sha }}'}
-    upload = next(step for step in steps if step.get('uses') == 'actions/upload-artifact@v4')
-    assert upload['uses'] == 'actions/upload-artifact@v4'
+    upload = next(step for step in steps if step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02')
+    assert upload['uses'] == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
     assert upload['if'] == "always() && steps.mcp-evidence.outcome == 'success'"
     assert upload['with']['path'] == 'output/browser-checks/mcp-boundary-public/'
     assert upload['with']['if-no-files-found'] == 'error'

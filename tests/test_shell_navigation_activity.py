@@ -66,7 +66,15 @@ async def test_activity_context_uses_only_visible_admitted_metadata(
         service.state.setdefault('runtimeControl', {})['alpha'] = {'task.get': {'task': {'status': 'blocked'}}}
     attention = {'sessions': {'alpha': int(unread)}, 'items': [
         {'id': 'session:alpha', 'sessionId': 'alpha', 'read': reviewed, 'fingerprint': 'owned'}]}
-    monkeypatch.setattr(service.projections, 'attention', lambda state: attention)
+    attention_calls = []
+
+    def scoped_attention(state, *, session_ids):
+        assert state is service.state
+        assert session_ids == (), 'Context must not request the whole attention inbox'
+        attention_calls.append(session_ids)
+        return attention
+
+    monkeypatch.setattr(service.projections, 'attention', scoped_attention)
 
     def forbidden(*args, **kwargs):
         raise AssertionError('Activity context must not read cold bodies or admit dormant owners')
@@ -80,6 +88,7 @@ async def test_activity_context_uses_only_visible_admitted_metadata(
         {'id': 'chats', 'package': 'builtin.chats', 'slot': 'navigation'},
         identity='activity-context', navigation_resources=frozenset(),
         context_visible_ids={'alpha', 'dormant-not-admitted'})
+    assert attention_calls == [()]
     assert set(result['navigationActivityById']) == {'alpha'}
     assert result['navigationActivityById']['alpha']['kind'] == expected
     assert set(result['navigationActivityById']['alpha']) == {'kind', 'label'}

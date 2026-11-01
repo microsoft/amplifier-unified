@@ -20,6 +20,14 @@ from .tls import ca_bytes
 from .request_timing import request_timing
 
 
+# These exact actions only observe revisions; they never admit the work being
+# observed. Do not infer cancellation safety from an action's name or suffix.
+_READ_ONLY_WAIT_ACTIONS = frozenset({
+    "workspace.work.wait", "assignment.tasks.wait", "coordination.wait",
+    "operations.wait", "recall.wait",
+})
+
+
 def _set_response_headers(response: web.StreamResponse, request: web.Request) -> web.StreamResponse:
     path = request.path
     # Some browsers do not include ws/wss in CSP self. Name only this validated
@@ -74,7 +82,7 @@ async def boundaries(request, handler):
 
 
 async def create_app(data_dir, workspace=None, runtime=None, voice=True, background_updates=True,
-                     preload_providers=True, server_config=None):
+                     preload_providers=True, server_config=None, background_work=True):
     data_dir = Path(data_dir).expanduser().resolve()
     config = validate_server(server_config) if server_config is not None else load_server_config(data_dir)
     app = web.Application(middlewares=[request_timing, boundaries, auth_required, client_context], client_max_size=MAX_REQUEST_BYTES)
@@ -125,14 +133,15 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     from .smart_canvas import SmartCanvas
     service.smart_tools = SmartToolsManager(service)
     service.smart_canvas = SmartCanvas(service)
-    service.diagnostics.start()
     service._publish_full(reason='Startup attaches and reconciles application controllers')
     from .management import Management
     service.management = Management(service)
-    service.schedules.start()
-    service.collaboration.start()
-    service.worktrees.start()
-    service.test_queue.start()
+    if background_work:
+        service.diagnostics.start()
+        service.schedules.start()
+        service.collaboration.start()
+        service.worktrees.start()
+        service.test_queue.start()
     service.history.start()
     service.event_log_view.start()
     service.performance_diagnostics.start()
@@ -144,6 +153,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         service.update_manager.task = asyncio.create_task(service.update_manager.loop())
     streams = set()
     call_waiters = set()
+    action_waiters = set()
 
     async def state(request):
         session_id = request.query.get('sessionId')
@@ -374,10 +384,26 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             require_safe_transport(request)
         compact = request.get('companion_device') or request.headers.get('X-Amplifier-State-Transport') == 'delta-v1'
         from .device_pairing import command_admission
+        read_wait = isinstance(payload["action"], str) and payload["action"] in _READ_ONLY_WAIT_ACTIONS
+        if read_wait and service.closed:
+            raise AppError("The host is shutting down.", 503, code="host_shutdown")
+        # No yield between the fence check and ownership registration. A wait
+        # cannot enter after shutdown snapshots this set, including requests
+        # whose JSON body arrived across that boundary.
         task = service._task(service.dispatch(payload["action"], payload.get("args", {}), origin="ui",
                                         command_id=payload.get("id"), expected_revision=payload.get("expectedRevision"),
                                         include_state=not compact, admission_check=command_admission(request)))
-        result = await asyncio.shield(task)
+        if read_wait:
+            action_waiters.add(task)
+            task.add_done_callback(action_waiters.discard)
+        try:
+            result = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if read_wait and service.closed and task.cancelled():
+                # A retired observation is not an accepted/timed-out result.
+                # Effectful dispatches retain their independent shielding.
+                raise AppError("The host is shutting down.", 503, code="host_shutdown") from None
+            raise
         # Reads and validated no-ops can be complete without a state publication.
         # Consume this marker in both transports; clients never author it.
         state_independent = result.get('_stateIndependent') is True
@@ -653,6 +679,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/api/state/detail", state_detail)
     from .message_interactions import install_routes as install_message_annotation_routes
     install_message_annotation_routes(app)
+    from .conversation_stop import install_routes as install_conversation_stop_routes
+    install_conversation_stop_routes(app)
     async def peer_preview(request):
         return web.json_response(await service.peer_preview.read(dict(request.query)))
 
@@ -768,7 +796,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
 
     async def shutdown(app):
         service.begin_shutdown()
-        waiting = list(streams | call_waiters)
+        waiting = list(streams | call_waiters | action_waiters)
         for task in waiting:
             task.cancel()
         await asyncio.gather(*waiting, return_exceptions=True)

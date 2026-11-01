@@ -15,7 +15,7 @@ from pathlib import Path
 import stat
 import uuid
 
-DEFAULTS = {'maxRunning': 15, 'maxInstances': 256, 'minFreeBytes': 10 * 1024**3}
+DEFAULTS = {'maxRunning': 0, 'maxInstances': 0, 'minFreeBytes': 10 * 1024**3}
 MAXIMUM = 2**53 - 1
 MAX_RECORD = 16384
 

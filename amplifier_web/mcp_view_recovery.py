@@ -36,7 +36,7 @@ def revision(binding):
 
 
 def saved(service, identity, *, require_binding=True):
-    from .service import AppError
+    from .errors import AppError
     from .canvas_library import scope
     canvas = service.state.get('canvas', {})
     if canvas.get('id') != identity or canvas.get('kind') != 'mcp-app' or not canvas.get('open') or not scope(service.state, canvas):
@@ -56,7 +56,7 @@ def source(service, identity):
 
 
 def _source(service, canvas, row):
-    from .service import AppError
+    from .errors import AppError
     from .canvas_versions import definition
     row = definition(row, canvas.get('selectedVersion'))
     try:
@@ -75,7 +75,7 @@ def inspect(service, identity):
 
 
 def _inspect(service, canvas, row):
-    from .service import AppError
+    from .errors import AppError
     identity = canvas['id']
     binding = canvas.get('mcp') if isinstance(canvas.get('mcp'), dict) else {}
     result = {'canvasId': identity, 'bindingRevision': revision(binding), 'source': 'available', 'canReconnect': False}
@@ -120,7 +120,7 @@ def _inspect(service, canvas, row):
 def inspect_for_session(service, identity, session_id, client_id=None):
     """Read caller-owned saved facts even when no browser currently shows them."""
     from .agent_canvas import connected_clients, scope
-    from .service import AppError
+    from .errors import AppError
     if not session_id:
         raise AppError('Tool view status requires a calling conversation.', 403)
     sid, workspace_id = scope(service, session_id)
@@ -165,7 +165,7 @@ def inspect_for_session(service, identity, session_id, client_id=None):
 
 
 def admit(service, args):
-    from .service import AppError
+    from .errors import AppError
     status = inspect(service, args['canvasId'])
     if status['bindingRevision'] != args['expectedBindingRevision']:
         raise AppError('This tool view changed. Inspect it before reconnecting.', 409)
@@ -175,7 +175,7 @@ def admit(service, args):
 
 
 async def reconnect(service, args):
-    from .service import AppError
+    from .errors import AppError
     from .canvas_library import remember
     async with service.lock:
         admit(service, args)

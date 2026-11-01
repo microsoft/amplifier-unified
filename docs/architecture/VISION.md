@@ -58,6 +58,11 @@ serialize or hash unrelated historical state. Slow subscribers have bounded
 queues and recover through the protocol. A local input responds immediately;
 durable acknowledgement and model readiness remain distinct outcomes.
 
+Performance claims name the workload and the inputs that grow. Validation measures
+the work needed to construct, persist and deliver an update, as well as its size,
+while preserving history and action meaning. The [performance guidance](../validation/performance.md)
+applies this principle to implementation and review in the current application.
+
 ### 8. Separate ownership enables parallel work
 Web, TUI, host, agent adapters, discovery and optional capabilities have explicit
 repository boundaries. Each can run against a fixture peer. Cross-repo changes
@@ -69,6 +74,34 @@ Clients distinguish local intent, confirmed shared state and unknown outcomes.
 Reconnect restores state through upstream rules and never assumes tool work is
 safe to repeat. Old sessions remain native-resumable when qualified, otherwise
 inspectable with a clear limitation. Saved configuration is not mounted behavior.
+
+### 10. Standing authorization enables unattended work
+An operator can accept the risks of Full access once and authorize agents to use
+all supported capabilities without recurring human approvals. That choice covers
+delegation, collaboration, files, configuration, review, publication and recovery,
+including work initiated by trusted systems with no human in the loop. Clients
+offer a direct way to set it, inspect it and revoke it. Ask when needed remains
+available. A missing browser or human message is not a permission boundary.
+
+Full access follows trusted work relationships across turns and restarts. Actual
+Stop, revoked authority, execution ownership and honest effect receipts still
+govern work. These are controls and correctness requirements, not substitute
+approval ceremonies. The [standing authorization contract](../workspaces/configuration-authority.md#unattended-full-access-direction)
+defines this direction separately from demonstrated implementation.
+
+### 11. Available resources govern throughput
+Ordinary work has no default turn, member, queued-work or retained-resource count
+ceiling. Planning estimates are not reasons to stop an unfinished task. Actual
+machine and provider capacity governs admission; temporary pressure queues work
+and automatically reconsiders it when capacity returns. Machine accounting follows
+the machine doing the work, not an unrelated workspace or viewing device.
+
+Operators may deliberately choose limits and change them through visible settings
+and supported controls. Existing saved limits are not silently reclassified or
+deleted on upgrade. Standing authorization supports revising them without another
+approval ceremony. Stop, ownership, resource conflicts and honest unknown-effect
+receipts still apply. Bounded reads and storage retention are implementation
+controls, not limits on how much useful work an assignment can complete.
 
 ## What this deliberately resists
 
@@ -95,4 +128,7 @@ inspectable with a clear limitation. Saved configuration is not mounted behavior
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-30 | Use resource-based throughput instead of arbitrary default work-count ceilings. | User-requested removal of artificial limits and optional adjustable controls. |
+| 2026-10-30 | Make operator-selected Full access cover unattended and system-delegated work. | User-requested standing authorization and removal of recurring human gates. |
+| 2026-10-29 | Make scaling and semantic preservation explicit in performance evidence. | [Implementation and review guidance](../validation/performance.md); user-requested regression safeguards. |
 | 2026-10-02 | Initial destination for protocol adoption and decomposition. | [Design packet and source assessment](README.md). |

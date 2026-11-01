@@ -15,6 +15,24 @@ from filelock import FileLock
 ACTION = 'workspace.environments.reconcile'
 
 
+def _retained_verification(row, original):
+    """Explain an exact saved rejection, never qualify or reconstruct an effect."""
+    absent = {'status': 'not_retained'}
+    result = original.get('result')
+    if not isinstance(result, dict) or 'verification' not in result:
+        return absent
+    if (original.get('resourceId') != row['id'] or original.get('state') != 'failed'
+            or result.get('ok') is not False
+            or result.get('universeId') != row.get('universeId')
+            or result.get('effectAdmitted') is not False
+            or result.get('phase') not in {'preserving', 'verifying'}
+            or result.get('code') not in {'preservation_failed', 'archive_verification_failed'}):
+        return {'status': 'unverified'}
+    from .environment_retention import validation_diagnostic
+    diagnostic = validation_diagnostic(result['verification'])
+    return {'status': 'recorded', **diagnostic} if diagnostic else {'status': 'unverified'}
+
+
 def _removal_page(app, sid, rid, offset, limit):
     """Project only bounded journal scalars, filtering before pagination."""
     journal = app.operations.requests.journal
@@ -49,7 +67,7 @@ def read_removal(app, args, origin, caller, *, listing=False):
     create operation records. A mutation grant is irrelevant to this read.
     """
     from . import task_resources as storage
-    from .collaboration import PRINCIPAL
+    from .collaboration import BINDING, PRINCIPAL
     from .service import AppError
 
     def root_binding():
@@ -59,6 +77,7 @@ def read_removal(app, args, origin, caller, *, listing=False):
         fields = ('id', 'sessionKind', 'workspace', 'workingDirectory', 'executionRevision',
                   'interruptionRevision', 'runtimeSessionId', 'nativeIdentity', 'nativeProject',
                   'nativeParentId')
+        placement_unavailable = False
         try:
             source, = app._session_read_sources([sid], fields)
             if (not isinstance(source, dict) or source.get('id') != sid or not isinstance(source.get('workspace'), str)
@@ -77,6 +96,7 @@ def read_removal(app, args, origin, caller, *, listing=False):
                 required = ('id', 'sessionKind', 'workspace', 'workingDirectory',
                             'executionRevision', 'interruptionRevision')
                 if any(k not in source for k in required):
+                    placement_unavailable = True
                     raise ValueError('native placement metadata unavailable')
                 if not any(row['id'] == sid for row in app.state['sessions']):
                     # Saved directory summaries default missing revisions to 0.
@@ -88,14 +108,34 @@ def read_removal(app, args, origin, caller, *, listing=False):
                                            "WHERE kind='session' AND id=?", (sid,)).fetchone()
                     if saved is None or any(saved[2*i] != ('integer' if k.endswith('Revision') else 'text')
                                             or saved[2*i+1] != source[k] for i, k in enumerate(required)):
+                        placement_unavailable = True
                         raise ValueError('native saved placement facts unavailable')
         except (AppError, OSError, ValueError, TypeError, KeyError, sqlite3.Error):
+            # Explain only this authenticated caller's incomplete metadata.
+            # Still refuse before touching the resource ledger. No field values,
+            # existence signal, defaults or restoration authority are disclosed.
+            if (placement_unavailable and origin not in {'ui', 'user'} and sid == caller
+                    and not source.get('nativeParentId')
+                    and PRINCIPAL.get() == (source.get('runtimeSessionId') or source.get('nativeIdentity'))
+                    and any(w['id'] == args['workspaceId'] and w['path'] == source['workspace']
+                            for w in app.state['workspaces'])):
+                raise AppError('Removal inspection requires the recorded root owner. '
+                               'Owner placement metadata is unavailable; no resource was inspected.', 403) from None
             raise AppError('Removal inspection requires the recorded root owner.', 403) from None
         principal = source.get('runtimeSessionId') or source.get('nativeIdentity') or sid
         workspace = next((w for w in app.state['workspaces'] if w['id'] == args['workspaceId']), None)
-        if (origin not in {'ui', 'user'} and PRINCIPAL.get() != principal
-                or not workspace or source['workspace'] != workspace['path']):
+        if not workspace or source['workspace'] != workspace['path']:
             raise AppError('Removal inspection requires the recorded root owner.', 403)
+        if origin not in {'ui', 'user'} and (PRINCIPAL.get() != principal or origin == 'system'):
+            if not app.access_mode.full(source):
+                raise AppError('Removal inspection requires the recorded root owner.', 403)
+            if not (origin == 'system' and not PRINCIPAL.get() and not BINDING.get()):
+                # Mounted descendants already have a resident owner. Use its
+                # current binding without hydrating a cold root or its history.
+                live = next((row for row in app.state['sessions'] if row['id'] == sid), None)
+                if live is None:
+                    raise AppError('Removal inspection requires current native work.', 403)
+                app.collaboration.active_binding(live, allow_descendant=True)
         return (principal, *((k in source, source.get(k)) for k in fields))
 
     captured = root_binding()
@@ -176,6 +216,7 @@ def read_removal(app, args, origin, caller, *, listing=False):
                     'physical': 'not_observed',
                     'continuationAvailable': available,
                     'riskDecisionAvailable': False,
+                    'verification': _retained_verification(row, original),
                 }
                 if len(json.dumps(result).encode()) > 4096:
                     raise ValueError('projection exceeds bound')

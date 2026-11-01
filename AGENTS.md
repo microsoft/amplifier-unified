@@ -1,5 +1,9 @@
 # Contributor operating guidance
 
+For source discovery, use the [source and ownership map](docs/source-context.md).
+`python scripts/source_context.py` summarizes tracked inputs without reading
+their bodies; select relevant owners, contracts and tests before expanding context.
+
 ## Assess scope and design before taking on issues or PRs
 
 User direction, October 13, 2026: an issue or PR is a proposal, not an automatic
@@ -18,6 +22,17 @@ Amplifier Agent is separate from Unified's Core/Foundation runtime.
   explicitly as part of the proposal before implementing the divergent behavior.
 - Keep unrelated upstream improvements separate from Unified release gates.
   Close out-of-scope tracking and correct misleading reviews when discovered.
+
+## Make performance changes reviewable
+
+For changes to repeated reads, publication, persistence, runtime preparation or
+provider requests/cache reporting,
+follow [performance validation](docs/validation/performance.md). Identify the
+canonical owner, triggering operation and inputs that grow before choosing an
+optimization. Review work done before filtering or sending a response, including
+history reads, copies, scans and encoding. Retain a focused regression check for
+the demonstrated cost and the affected history, authority and recovery semantics.
+Use measured workload budgets; this does not add a full-suite release gate.
 
 ## Keep the development release loop fast
 

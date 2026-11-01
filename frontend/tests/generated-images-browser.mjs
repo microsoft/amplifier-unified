@@ -1,3 +1,4 @@
+import {fixturePython} from './fixture-python.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -5,7 +6,7 @@ import {readFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const root=fileURLToPath(new URL('../../',import.meta.url));
-const fixture=spawn(root+'.venv/bin/python',['-u',root+'tests/fixtures/generated_images_server.py'],{stdio:['ignore','pipe','inherit']});
+const fixture=spawn(fixturePython(root+'.venv/bin/python'),['-u',root+'tests/fixtures/generated_images_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser,page,releaseSwapGate,primaryFailure,swapObserving=false;
 const swapDiagnostic={schema:2,kind:'generated-image-preview-swap',initial:null,records:[],dropped:0,controls:[],boundaries:null,cleanup:[]};
 let swapPhase=null;

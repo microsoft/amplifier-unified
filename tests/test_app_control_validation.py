@@ -22,6 +22,34 @@ async def mounted_tool(bridge):
     return tools['app_control']
 
 
+async def test_mounted_app_reads_overlap_without_loosening_other_operations():
+    import asyncio
+    from amplifier_module_loop_live.dispatch import GuardedTool
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+    async def bridge(operation, args):
+        calls.append(operation)
+        if len(calls) == 3:
+            entered.set()
+        await release.wait()
+        return {'operation': operation}
+    tool = await mounted_tool(bridge)
+    # Context reads retain image/delivery receipts and dispatch may mutate state.
+    for operation in ('context.read', 'context.focus', 'dispatch', 'unknown'):
+        assert not tool.allows_concurrent_execution({'operation': operation})
+    wrapped = GuardedTool(tool, asyncio.Lock())
+    tasks = [asyncio.create_task(wrapped.execute({'operation': operation}))
+             for operation in ('get_state', 'list_actions', 'history')]
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+    finally:
+        release.set()
+        results = await asyncio.gather(*tasks)
+    assert [result.output['operation'] for result in results] == calls
+    assert all(result.success for result in results)
+
+
 @pytest.mark.parametrize('payload,path,correction', [
     (None, '', 'must be an object'),
     ({}, '/operation', 'operation must be one of'),

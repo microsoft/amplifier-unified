@@ -1,3 +1,4 @@
+import {fixturePython} from './fixture-python.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {readComposerDraft} from './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
@@ -7,7 +8,7 @@ import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 let base=process.env.AMPLIFIER_TEST_URL,fixture;
 if(!base){
- fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/mobile_navigation_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
+ fixture=spawn(fixturePython(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url))),[fileURLToPath(new URL('../../tests/fixtures/mobile_navigation_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
  base=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>{fixture.kill();reject(Error('Fixture startup timed out'))},15000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;const url=output.match(/http:\/\/127\.0\.0\.1:\d+/)?.[0];if(url){clearTimeout(timer);resolve(url)}})});
 }
 const out=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/amplifier-mobile-navigation';await mkdir(out,{recursive:true});

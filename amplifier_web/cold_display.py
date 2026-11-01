@@ -448,7 +448,7 @@ def compact_execution_references(state, db):
         references['execution'] = dict(converted[identity])
 
 
-def execution_reference(db, value, *, prepared=None):
+def execution_reference(db, value, *, prepared=None, resource=None):
     from .capacity import LIVE
     from .execution import LIVE_PHASES, pending_voice_usage
     pending = any(row.get('kind') == 'llm' and row.get('producerId')
@@ -456,6 +456,7 @@ def execution_reference(db, value, *, prepared=None):
                   for row in [*value.get('nodes', []), *value.get('retiredUsageNodes', [])])
     pending_work = any(row.get('phase') in LIVE_PHASES for row in value.get('turns', []))
     from .resource_files import put_prepared
-    reference = put(db, value) if prepared is None else put_prepared(db, prepared)
+    reference = resource if resource is not None else (
+        put(db, value) if prepared is None else put_prepared(db, prepared))
     return {**reference, 'executionProjection': 1, 'pendingObservation': pending, 'pendingWork': pending_work,
             'pendingVoice': pending_voice_usage(value)}

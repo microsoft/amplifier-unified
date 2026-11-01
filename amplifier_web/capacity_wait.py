@@ -10,12 +10,22 @@ from .management import Management
 from .handoff_admission import finishing_turn
 from .model_capacity_settings import policy
 from .model_admission_identity import input_id
+from .child_execution import current as child_execution
 
 
 async def admit(service, sid, args):
     row = args.get('call') or {}
+    binding = BINDING.get() or {}
+    has_child_scope = '_childOrigin' in binding
+    child_scope = copy.deepcopy(binding.get('_childOrigin'))
+    def child_guard(current):
+        if not has_child_scope:
+            return None
+        live = child_execution(service, current, child_id=row.get('sessionId'))
+        if live is None or live != child_scope or input_id(row) not in live['inputIds']:
+            return 'The native child execution changed; no provider request was sent.'
     if not args.get('waitForCapacity') or row.get('lifecycle') == 'background':
-        return await admission(service, sid, args)
+        return await admission(service, sid, args, guard=child_guard)
     async with service.lock:
         session = service._session(sid)
         assignment = service.assignments.current(session)
@@ -36,18 +46,24 @@ async def admit(service, sid, args):
             runtime_workers = getattr(service.runtime, 'workers', None)
             native = runtime_workers.get(sid) if isinstance(runtime_workers, dict) else None
     if direct:
-        return await admission(service, sid, args)
+        return await admission(service, sid, args, guard=child_guard)
 
     def guard(current):
+        if reason := child_guard(current):
+            return reason
         active = current.get('collaborationGeneration') or {}
+        drain = args.get('_handoffDrain')
+        draining = current.get('configurationBusy') and finishing_turn(
+            service, current, row, drain, args.get('_nativeChild'))
         now = (active.get('id'), tuple(active.get('inputIds', [])),
                current.get('interruptionRevision', 0), current.get('configurationPendingRevision', 0))
         if (PRINCIPAL.get() != (current.get('runtimeSessionId') or sid)
-                or not expected[0] or now != expected or active.get('terminal')
-                or input_id(row) not in expected[1]
+                or (not has_child_scope and not draining and (not expected[0] or now != expected
+                    or active.get('terminal') or input_id(row) not in expected[1]))
+                or now[2:] != expected[2:]
                 or current.get('status') in {'stopped', 'stopping', 'interrupted', 'error'}):
             return 'The input or generation changed while waiting; no provider request was sent.'
-        if (current.get('configurationBusy') and not finishing_turn(service, current, row)
+        if (current.get('configurationBusy') and not draining
                 or current.get('fileAccessPending') or Management.unresolved_configuration(current)):
             return 'Conversation access or configuration changed while waiting; no provider request was sent.'
         if (current.get('failure') or {}).get('category') in {'content_filter', 'computer_capture_stop'}:
@@ -63,7 +79,8 @@ async def admit(service, sid, args):
             children = current.get('execution', {}).get('nodes', [])
             child = next((n for n in reversed(children) if n.get('kind') == 'worker'
                           and n.get('sessionId') == row.get('sessionId')), None)
-            if child and child.get('phase') in {'completed', 'cancelled', 'error', 'interrupted'}:
+            if (child and (not child_scope or child.get('runId') == child_scope['runId'])
+                    and child.get('phase') in {'completed', 'cancelled', 'error', 'interrupted'}):
                 return 'The originating child finished while waiting; no provider request was sent.'
         if service.closed:
             return 'The host is closing; no provider request was sent.'
@@ -77,7 +94,8 @@ async def admit(service, sid, args):
         # calls. The queue bound applies only after a call actually must wait.
         if ticket in queue:
             return None
-        if len(queue) >= policy(service)['maxWaitingCalls']:
+        maximum = policy(service)['maxWaitingCalls']
+        if maximum and len(queue) >= maximum:
             return {'allowed': False, 'state': 'wait_expired',
                     'reasons': ['Too many model requests are already waiting. No provider request was sent.']}
         queue.append(ticket)

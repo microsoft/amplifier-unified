@@ -328,7 +328,8 @@ for line in sys.stdin:
         await app.close()
 
 
-async def test_outer_drain_cancellation_persists_not_sent_and_leaves_next_input(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode", ["queue", "auto"])
+async def test_outer_drain_cancellation_persists_not_sent_and_leaves_next_input(tmp_path, monkeypatch, mode):
     from amplifier_web import runtime_profiles
     entered = asyncio.Event()
     async def ensure(*args, **kwargs):
@@ -342,12 +343,14 @@ async def test_outer_drain_cancellation_persists_not_sent_and_leaves_next_input(
     app.state["sessions"] = [source, target]
     source["collaborationGeneration"] = {"id": "source", "inputIds": ["peer"], "terminal": False}
     target["status"] = "ready"
+    target["configurationBusy"] = True
     try:
         for identity in ("first", "second"):
-            await agent(app, source, "coordination.send", {"sessionId": target["id"], "text": identity}, identity)
+            await agent(app, source, "coordination.send", {"sessionId": target["id"], "text": identity, "mode": mode}, identity)
         await asyncio.gather(*list(app.tasks))
         second = copy.deepcopy(app.collaboration.receipt("second"))
         target["status"] = "idle"
+        target["configurationBusy"] = False
         drain = asyncio.create_task(app.collaboration.drain(target["id"]))
         await asyncio.wait_for(entered.wait(), 2)
         drain.cancel()
@@ -360,7 +363,7 @@ async def test_outer_drain_cancellation_persists_not_sent_and_leaves_next_input(
         assert not manager.workers and not manager._preparations
         assert target["id"] not in app.collaboration.draining
         duplicate = await agent(app, source, "coordination.send",
-                                {"sessionId": target["id"], "text": "first"}, "first")
+                                {"sessionId": target["id"], "text": "first", "mode": mode}, "first")
         assert duplicate["duplicate"] and duplicate["delivery"] == "not_sent"
         assert app.collaboration.receipt("second") == second
     finally:
@@ -371,7 +374,7 @@ async def test_outer_drain_cancellation_persists_not_sent_and_leaves_next_input(
 async def test_warmth_releases_only_existing_guarded_queue_once(app, state):
     source, target = app.state["sessions"]
     target["status"] = "ready"
-    await agent(app, source, "coordination.send", {"sessionId": target["id"], "text": "queued"}, "warm-queue")
+    await agent(app, source, "coordination.send", {"sessionId": target["id"], "text": "queued", "mode": "queue"}, "warm-queue")
     await asyncio.gather(*list(app.tasks))
     assert not app.runtime.inputs
     if state == "stopped":

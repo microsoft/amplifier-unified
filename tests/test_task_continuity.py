@@ -162,6 +162,59 @@ async def test_cas_receipts_pause_restart_and_explicit_completion(tmp_path, monk
     for item in (first, restored, newest): await item.close()
 
 
+async def test_authorized_plan_revision_and_followup_preserve_consumed_work(tmp_path, monkeypatch):
+    """The documented recovery path revises a plan without erasing its history."""
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    first, restored = controls(), None
+    try:
+        task = (await create(first, maxTurns=2,
+                             artifactRefs=['failed-check-1.json', 'failed-check-2.json']))['task']
+        original_id = task['id']
+        first.coordinator.session_state['goal']['turns_used'] = 2
+        original_capacity = copy.deepcopy(first.capacity.policy)
+
+        # Routine progress never silently relaxes a recorded hard limit.
+        await first.perform('task.update', {
+            'commandId': 'record-harness-fix', 'expectedRevision': 1,
+            'correction': 'The harness selected the wrong interpreter.', 'origin': 'agent'})
+        assert first.coordinator.session_state['goal']['cap'] == 2
+        assert first.coordinator.session_state['goal']['turns_used'] == 2
+
+        # An authorized owner can explicitly revise its plan using the existing
+        # action; neither counters nor failed evidence become a fresh allowance.
+        await first.perform('task.update', {
+            'commandId': 'revise-plan', 'expectedRevision': 2, 'maxTurns': 4,
+            'correction': 'Owner revised its plan for the corrected harness.', 'origin': 'agent'})
+        goal = first.coordinator.session_state['goal']
+        assert goal['cap'] == 4 and goal['turns_used'] == 2
+        assert first.tasks.record()['id'] == original_id
+        assert first.tasks.record()['artifactRefs'] == ['failed-check-1.json', 'failed-check-2.json']
+        assert first.capacity.policy == original_capacity
+
+        await first.perform('task.complete', {
+            'commandId': 'complete-corrected-check', 'expectedRevision': 3,
+            'condition': 'Ship the verified report', 'evidence': ['corrected-check.json']})
+        await create(first, commandId='authorized-followup', expectedRevision=4,
+                     objective='Complete the already-authorized next deliverable')
+        restored = controls()
+        await restored.restore()
+        previous = restored.tasks.history[-1]
+        assert previous['id'] == original_id and previous['status'] == 'completed'
+        assert previous['goalState']['turns_used'] == 2
+        assert previous['maxTurns'] == 4
+        assert previous['artifactRefs'] == ['failed-check-1.json', 'failed-check-2.json']
+        assert previous['completionEvidence'] == ['corrected-check.json']
+        assert len(previous['corrections']) == 2
+        assert restored.tasks.record()['id'] != original_id
+        assert restored.coordinator.session_state['goal']['turns_used'] == 0
+        assert restored.coordinator.session_state['goal']['cap'] is None
+        assert restored.capacity.policy == original_capacity
+    finally:
+        await first.close()
+        if restored is not None:
+            await restored.close()
+
+
 async def test_shared_agent_ui_actions_target_session_preserve_draft_and_never_send(tmp_path, monkeypatch):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'app'))
     worker = None

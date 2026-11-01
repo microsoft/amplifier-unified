@@ -10,11 +10,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 from pathlib import Path
 import subprocess
 import tomllib
-
 
 EXTRA_DEPENDENCIES = (
     "amplifier-unified",
@@ -33,6 +33,28 @@ REQUIRED_MODULES = (
     "amplifier_module_tool_search.grep", "amplifier_module_tool_search.glob",
     "amplifier_module_hooks_routing.resolver",
 )
+
+
+def integration_dev_dependencies(dependencies: list[str]) -> list[str]:
+    """Keep the native lane's current filesystem source, not a fixture pin.
+
+    The host's installed-skills tests deliberately pin this module. That separate
+    graph remains unchanged; this owner tests the current filesystem/search pair.
+    Refuse an unexpected source rather than silently discard its policy.
+    """
+    result = []
+    for value in dependencies:
+        # This bootstrap runs before third-party packages are installed. Identify
+        # only the distribution token; uv still validates all retained inputs.
+        name = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", value)
+        if not name or re.sub(r"[-_.]+", "-", name[1]).lower() != "amplifier-module-tool-filesystem":
+            result.append(value)
+            continue
+        if not re.fullmatch(
+                r"\s*@\s*git\+https://github\.com/microsoft/amplifier-module-tool-filesystem@(?:main|[0-9a-f]{40})\s*",
+                value[name.end():]):
+            raise ValueError("Review the host filesystem fixture source before native integration")
+    return result
 
 
 def ripgrep_identity() -> dict:
@@ -72,7 +94,8 @@ def project(root: Path, profiling_source: str | None = None, loop_source: Path |
         raise ValueError("Review the canonical runtime project before preparing integrations")
     if "amplifier-core" not in runtime["tool"]["uv"]["no-build-package"]:
         raise ValueError("The runtime must prohibit Core source builds")
-    additions = [*EXTRA_DEPENDENCIES, *host["dependency-groups"]["dev"]]
+    additions = [*EXTRA_DEPENDENCIES,
+                 *integration_dev_dependencies(host["dependency-groups"]["dev"])]
     if profiling_source:
         additions.append("amplifier-profiling @ " + profiling_source)
     source = source.replace('name = "amplifier-web-runtime"',

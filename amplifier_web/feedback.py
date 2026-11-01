@@ -17,7 +17,7 @@ import shutil
 import time
 
 from . import __version__
-from . import attachments, feedback_attachments, feedback_diagnostics
+from . import attachments, feedback_attachments, feedback_context, feedback_diagnostics
 
 REPOSITORY = "microsoft/amplifier-unified"
 ISSUES_URL = "https://github.com/" + REPOSITORY + "/issues"
@@ -43,13 +43,13 @@ def definitions(schema, string):
         **followup_definitions(schema, string),
         **addition_definitions(schema, string),
         "feedback.destination": (
-            "Read the exact repository identity and visibility before reviewing ordinary file uploads. This read is not consent.", schema({}, [])),
+            "Read the exact repository identity, visibility and selected ordinary-file hashes. Full autonomous callers read only their conversation-owned staging; this optional read does not publish.", schema({}, [])),
         "feedback.diagnostics": (
             "Preview complete allowlisted reproduction facts on demand, without posting feedback, reading logs or running a conversation. With requestId, read only the immutable diagnostics saved with that local feedback receipt (null when opted out). Host active component generation does not verify a running worker. No raw logs, message text, paths or credentials.",
             schema({"requestId": request_id, "deviceDiagnostics": feedback_diagnostics.DEVICE_SCHEMA}, []),
         ),
         "feedback.submit": (
-            "Create a GitHub issue in microsoft/amplifier-unified using feedback the user asked to send. Include only reviewed title/body and explicit attachmentIds staged with feedback.attachment.add. Selected files upload to a feedback-assets branch and remain in repository history. Public ordinary files require uploadDestination from feedback.destination and confirmedFiles [{id,sha256}] after explicit review of the complete file set and public retention. Reviewed excerpts use their separately approved visibility. Allowlisted reproduction diagnostics are included by default; includeDiagnostics:false opts out. deviceDiagnostics contains only the submitting browser facts defined by its schema. Never pass raw logs, paths or credentials. Conversation text requires the explicit feedback.excerpt.review/stage flow and confirmExcerpts:true plus confirmedExcerpts:[{id,sha256}] for the exact complete staged excerpt set after user review. Read each hash from view.feedbackDraft.attachments[].excerpt.sha256; changes require fresh consent. Reuse requestId and identical payload after a lost response; never create a new ID merely to retry. Read /feedback/requests for durable results. Unknown outcomes are not reposted.",
+            "Create feedback in microsoft/amplifier-unified with exact title/body and explicit attachmentIds. Under saved Full, a current agent, assigned native child or trusted system with an explicit calling conversation can select its own staged initial files/excerpts without a browser or human confirmation. Staging returns immutable IDs/hashes; the host verifies bytes and records the actual repository identity/visibility before file uploads; plain-text sends need no upload metadata lookup. Optional uploadDestination and confirmedFiles/confirmedExcerpts remain exact preconditions, not human-review claims. Outside this Full path, use reviewed title/body; public ordinary files require uploadDestination plus confirmedFiles after explicit review, and excerpts require feedback.excerpt.review/stage followed by confirmExcerpts:true and the complete confirmedExcerpts set after user review. Files remain in repository history. Allowlisted diagnostics are included by default; includeDiagnostics:false opts out. Never include raw logs, paths or credentials. Reuse requestId and identical payload after a lost response; read /feedback/requests for durable results. Unknown outcomes are not reposted. Later-file additions keep their separate workflow.",
             schema({"requestId": request_id,
                     "title": {**string(200), "minLength": 1}, "body": {**string(16000), "minLength": 1},
                     "category": {"enum": list(CATEGORIES)}, "confirmExcerpts": {"type": "boolean"}, "includeDiagnostics": {"type": "boolean"},
@@ -63,11 +63,11 @@ def definitions(schema, string):
                    ["requestId", "title", "body", "category"]),
         ),
         "feedback.attachment.add": (
-            "Stage a reviewed file/image locally, up to 8 MiB each, 8 files and 24 MiB total. Without feedbackId the initial draft/submit flow is unchanged. With feedbackId stage only in this attached client's independent ordinary-file follow-up draft; see feedback.attachmentDrafts, including exact SHA256. Nothing uploads until separately reviewed and explicitly confirmed. Pass base64 bytes, a display name, and stable requestId; exact retries do not add twice.",
+            "Stage exact file/image bytes locally, up to 8 MiB each, 8 files and 24 MiB total. Full agent/system staging belongs to the explicit calling conversation, returns its file ID/SHA256 directly and does not touch browser drafts. Optional feedbackId selects a separate ordinary-file draft for an existing report; Full uses the same conversation owner there. Other callers keep the browser draft and review flow. Nothing uploads until feedback.submit or the separate follow-up action. Pass base64 bytes, a name and stable requestId; exact retries do not add twice or restore removed files.",
             schema({"requestId": request_id, "feedbackId": request_id, "name": {**string(200), "minLength": 1}, "base64": string(12000000)}, ["requestId", "name", "base64"]),
         ),
         "feedback.attachment.remove": (
-            "Remove a locally staged file before submitting. Optional feedbackId selects only this attached client's ordinary-file follow-up draft. Frozen additions cannot be changed. Submitted files cannot be deleted this way; they remain in repository history.",
+            "Remove a locally staged file before submitting. Full agent/system callers affect only their calling conversation's staging. Optional feedbackId selects that owner's ordinary-file follow-up draft; other callers retain the attached-client draft. Frozen additions cannot be changed. Submitted files cannot be deleted this way; they remain in repository history.",
             schema({"id": attachment_id, "feedbackId": request_id}, ["id"]),
         ),
     }
@@ -120,6 +120,8 @@ class Feedback:
         self.service = service
         service.db.execute("CREATE TABLE IF NOT EXISTS feedback_requests (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, payload TEXT NOT NULL, receipt TEXT NOT NULL)")
         service.db.execute("CREATE TABLE IF NOT EXISTS feedback_attachments (request_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, metadata TEXT NOT NULL)")
+        service.db.execute("CREATE INDEX IF NOT EXISTS feedback_attachment_session ON feedback_attachments "
+                           "(json_extract(metadata,'$._sessionId'), json_extract(metadata,'$._selected'))")
         for identity, text in service.db.execute("SELECT id,receipt FROM feedback_requests").fetchall():
             receipt = json.loads(text)
             if receipt["status"] in {"queued", "sending"}:
@@ -147,16 +149,36 @@ class Feedback:
             "requests": receipts}
         self.followups.refresh()
 
-    def attachment_command(self, action, args):
+    def attachment_command(self, action, args, origin=None, caller=None, *, authority=None):
         """Local-only staging; identical accepted add retries never resurrect removals."""
         if args.get("feedbackId"):
-            return self.additions.stage(action, args)
+            return self.additions.stage(action, args, origin, caller)
         from .service import AppError
-        draft = self.service.state.setdefault("view", {}).setdefault("feedbackDraft", {})
-        if draft.get("pending"):
-            raise AppError("This submission is frozen. Start new feedback to change its attachments.", 409)
-        selected = draft.setdefault("attachments", [])
+        if action == 'feedback.attachment.add':
+            previous = self.service.db.execute('SELECT fingerprint,metadata FROM feedback_attachments WHERE request_id=?', (args['requestId'],)).fetchone()
+            if previous:
+                row = json.loads(previous[1])
+                fingerprint = hashlib.sha256(json.dumps(args, sort_keys=True).encode()).hexdigest()
+                if previous[0] != fingerprint or row.get('_sessionId') and row['_sessionId'] != caller:
+                    raise AppError('This attachment request ID already belongs to a different file or owner.', 409)
+                if row.get('_sessionId'):
+                    return feedback_context.public_file(row)
+        authority = authority or feedback_context.capture(self.service, origin, caller)
+        if authority:
+            selected = feedback_context.rows(self.service, authority['sessionId'])
+            draft = None
+        else:
+            draft = self.service.state.setdefault("view", {}).setdefault("feedbackDraft", {})
+            if draft.get("pending"):
+                raise AppError("This submission is frozen. Start new feedback to change its attachments.", 409)
+            selected = draft.setdefault("attachments", [])
         if action == "feedback.attachment.remove":
+            if authority:
+                for row in selected:
+                    if row['id'] == args['id']:
+                        row['_selected'] = False
+                        self.service.db.execute("UPDATE feedback_attachments SET metadata=? WHERE json_extract(metadata,'$.id')=?", (json.dumps(row), row['id']))
+                return {'id': args['id'], 'selected': False}
             draft["attachments"] = [row for row in selected if row["id"] != args["id"]]
             if len(draft["attachments"]) != len(selected):
                 draft.update(confirmExcerpts=False, confirmedExcerpts=[])
@@ -178,22 +200,29 @@ class Feedback:
             row["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
         except (OSError, ValueError) as exc:
             raise AppError(str(exc)) from None
+        if authority:
+            row.update(_sessionId=authority['sessionId'], _selected=True)
         self.service.db.execute("INSERT INTO feedback_attachments VALUES (?,?,?)", (args["requestId"], fingerprint, json.dumps(row)))
-        selected.append(dict(row))
-        draft.update(confirmExcerpts=False, confirmedExcerpts=[])
+        if draft is not None:
+            selected.append(dict(row))
+            draft.update(confirmExcerpts=False, confirmedExcerpts=[])
+        return feedback_context.public_file(row)
 
-    def selected_files(self, args):
-        selected = {row["id"] for row in self.service.state.get("view", {}).get("feedbackDraft", {}).get("attachments", [])}
+    def selected_files(self, args, authority=None):
+        selected = {row['id'] for row in feedback_context.rows(self.service, authority['sessionId'])} if authority else {
+            row["id"] for row in self.service.state.get("view", {}).get("feedbackDraft", {}).get("attachments", [])}
         # Consent is a snapshot of the complete staged excerpt set. A boolean
         # alone could approve a later agent-added file the user never saw.
         approved = sorted((row["id"], row["sha256"]) for row in args.get("confirmedExcerpts", []))
         actual = []
-        for identity in selected:
+        for identity in (set(args.get('attachmentIds', [])) if authority else selected):
             saved = self.service.db.execute("SELECT metadata FROM feedback_attachments WHERE json_extract(metadata,'$.id')=?", (identity,)).fetchone()
             item = json.loads(saved[0]) if saved else {}
             if item.get("excerpt"):
                 actual.append((identity, item["excerpt"]["sha256"]))
-        if actual or approved:
+        if authority and 'confirmedExcerpts' in args and approved != sorted(actual):
+            raise ExcerptConsentError('The selected excerpt hashes changed.')
+        if not authority and (actual or approved):
             if (args.get("confirmExcerpts") is not True or approved != sorted(actual)
                     or not {identity for identity, _ in actual}.issubset(args.get("attachmentIds", []))):
                 raise ExcerptConsentError("The staged excerpts changed. Review and explicitly confirm their exact files and hashes before sending.")
@@ -203,21 +232,26 @@ class Feedback:
             if not stored or identity not in selected:
                 raise ValueError("An attachment is no longer in this feedback draft. Remove it or attach it again.")
             row = json.loads(stored[0])
-            if row.get("_feedbackId"):
+            if row.get("_feedbackId") or (row.get('_sessionId') != authority['sessionId'] if authority else row.get('_sessionId')):
                 raise ValueError("A follow-up file cannot be selected by an initial feedback submission.")
             feedback_attachments.read_verified(self.service.data_dir, row)
             if row.get('excerpt'):
-                if args.get('confirmExcerpts') is not True or row['sha256'] != row['excerpt']['sha256']:
+                if (not authority and args.get('confirmExcerpts') is not True) or row['sha256'] != row['excerpt']['sha256']:
                     raise ValueError('Explicitly confirm the reviewed conversation excerpts before sending.')
             rows.append(row)
         destination = args.get('uploadDestination')
         if destination is not None:
             ordinary = [row for row in rows if not row.get('excerpt')]
             approved_files = sorted((row['id'], row['sha256']) for row in args.get('confirmedFiles', []))
-            if destination['repository'] != REPOSITORY or approved_files != sorted((row['id'],row['sha256']) for row in ordinary):
+            if destination['repository'] != REPOSITORY or (not authority or 'confirmedFiles' in args) and approved_files != sorted((row['id'],row['sha256']) for row in ordinary):
                 raise ExcerptConsentError('The ordinary files or destination changed. Review the exact files and visibility again.')
-            for row in ordinary:
-                row['uploadConsent'] = {**destination, 'sha256': row['sha256']}
+            if not authority:
+                for row in ordinary:
+                    row['uploadConsent'] = {**destination, 'sha256': row['sha256']}
+        elif authority and 'confirmedFiles' in args:
+            expected = sorted((row['id'], row['sha256']) for row in rows if not row.get('excerpt'))
+            if sorted((row['id'], row['sha256']) for row in args['confirmedFiles']) != expected:
+                raise ExcerptConsentError('The selected file hashes changed.')
         if sum(row["size"] for row in rows) > feedback_attachments.MAX_TOTAL_BYTES:
             raise ValueError("Feedback attachments can total up to 24 MB.")
         return rows
@@ -234,7 +268,7 @@ class Feedback:
         return {'snapshot': 'current', 'capturedAt': time.time(),
                 'diagnostics': feedback_diagnostics.snapshot(self.service.state_context(), args.get('deviceDiagnostics'))}
 
-    def accept(self, args):
+    def accept(self, args, origin=None, caller=None):
         """Called under service.lock, committed with the shared action receipt."""
         from .service import AppError
         args = copy.deepcopy(args)
@@ -242,19 +276,23 @@ class Feedback:
             raise AppError("Enter a title and feedback before sending.")
         identity = args["requestId"]
         fingerprint = hashlib.sha256(json.dumps(args, sort_keys=True).encode()).hexdigest()
-        row = self.service.db.execute("SELECT fingerprint FROM feedback_requests WHERE id=?", (identity,)).fetchone()
+        row = self.service.db.execute("SELECT fingerprint,payload FROM feedback_requests WHERE id=?", (identity,)).fetchone()
         if row:
-            if row[0] != fingerprint:
+            saved_authority = json.loads(row[1]).get('_authority')
+            if row[0] != fingerprint or saved_authority and saved_authority['sessionId'] != caller:
                 raise AppError("This feedback request ID already belongs to different text. Start new feedback for a new intent.", 409)
             self.refresh(identity)
             return False
         active = self.service.db.execute("SELECT count(*) FROM feedback_requests WHERE json_extract(receipt,'$.status') IN ('queued','sending')").fetchone()[0]
         if active >= 8:
             raise AppError("Feedback is still sending. Wait for a submission to finish before sending more.", 409)
+        authority = feedback_context.capture(self.service, origin, caller)
         try:
             # Persist exactly the selected metadata/hash at acceptance. Changes
             # to the draft or file store after this point cannot alter a send.
-            args["_attachments"] = self.selected_files(args)
+            args["_attachments"] = self.selected_files(args, authority)
+            if authority:
+                args['_authority'] = authority
             if args.get("includeDiagnostics", True):
                 args["_diagnostics"] = feedback_diagnostics.snapshot(self.service.state_context(),args.get("deviceDiagnostics"))
         except ExcerptConsentError as exc:
@@ -263,10 +301,16 @@ class Feedback:
             raise AppError("An attachment changed or is unavailable. Remove it and attach it again.") from None
         receipt = {"requestId": identity, "title": args["title"], "category": args["category"],
                    "status": "queued", "message": "Sending feedback to GitHub…", "createdAt": time.time(),
-                   "attachments": [{key: value for key, value in row.items() if key != "sha256"} for row in args["_attachments"]]}
+                   "attachments": [{key: value for key, value in feedback_context.public_file(row).items() if key != "sha256"} for row in args["_attachments"]]}
+        if authority:
+            receipt['authority'] = copy.deepcopy(authority)
         if args["_attachments"]:
             receipt["attachmentsUrl"] = "https://github.com/" + REPOSITORY + "/tree/feedback-assets/" + identity
         self.service.db.execute("INSERT INTO feedback_requests VALUES (?,?,?,?)", (identity, fingerprint, json.dumps(args), json.dumps(receipt)))
+        if authority:
+            for row in args['_attachments']:
+                selected = {**row, '_selected': False}
+                self.service.db.execute("UPDATE feedback_attachments SET metadata=? WHERE json_extract(metadata,'$.id')=?", (json.dumps(selected), row['id']))
         self.refresh()
         return True
 
@@ -300,19 +344,51 @@ class Feedback:
             facts = self.service.state["feedback"]["diagnostics"]
             body += "\n\nApp version: " + facts["appVersion"] + "\nOS family: " + facts["osFamily"]
         body += "\n\n<!-- amplifier-feedback:" + identity + " -->"
+        authority = args.get('_authority')
+        attempted = False
+
+        def admit_write():
+            nonlocal attempted
+            if authority:
+                feedback_context.check(self.service, authority)
+            attempted = True
+
+        async def guarded_api(endpoint, payload):
+            if payload is not None:
+                admit_write()
+            return await github_api(endpoint, payload)
+
         try:
+            destination = None
+            if authority and (files or args.get('uploadDestination') is not None):
+                feedback_context.check(self.service, authority)
+                destination = await github_api('repos/' + REPOSITORY, None)
+                if (destination.get('full_name') != REPOSITORY or type(destination.get('id')) is not int
+                        or type(destination.get('private')) is not bool):
+                    raise feedback_attachments.BeforeUploadError('The feedback destination could not be verified. Nothing was sent.')
+                facts = {'repository': REPOSITORY, 'repositoryId': destination['id'],
+                         'visibility': 'private' if destination['private'] else 'public'}
+                if args.get('uploadDestination') is not None and args['uploadDestination'] != facts:
+                    raise feedback_attachments.BeforeUploadError('The selected feedback destination changed. Nothing was sent.')
+                # This is observed recipient evidence, not a human review or a
+                # change to the accepted caller payload/fingerprint.
+                await self.update(identity, destination=facts)
             if files:
-                await self.update(identity, message="Uploading the selected, reviewed attachments…")
-                uploaded = await feedback_attachments.upload(REPOSITORY, identity, files, github_api)
+                await self.update(identity, message="Uploading the selected attachments…")
+                uploaded = await feedback_attachments.upload(REPOSITORY, identity, files,
+                    guarded_api if authority else github_api, prepared_destination=destination)
                 await self.update(identity, attachments=uploaded, message="Creating the issue with your attachment links…")
                 body += feedback_attachments.markdown(uploaded)
+            admit_write()
             url = await create_issue(args["title"], body)
         except feedback_attachments.BeforeUploadError as exc:
             await self.update(identity, status="failed", message=str(exc))
         except asyncio.CancelledError:
-            await self.update(identity, status="unknown", message=UNKNOWN_FILES if files else UNKNOWN)
+            await self.update(identity, status="failed" if authority and not attempted else "unknown",
+                              message="Delivery stopped before any write. Nothing was sent." if authority and not attempted else UNKNOWN_FILES if files else UNKNOWN)
             raise
         except Exception:
-            await self.update(identity, status="unknown", message=UNKNOWN_FILES if files else UNKNOWN)
+            await self.update(identity, status="failed" if authority and not attempted else "unknown",
+                              message="Delivery could not proceed before any write. Nothing was sent." if authority and not attempted else UNKNOWN_FILES if files else UNKNOWN)
         else:
             await self.update(identity, status="submitted", message="Feedback sent. Thank you.", url=url)

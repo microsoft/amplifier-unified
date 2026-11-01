@@ -20,6 +20,28 @@ READ_GUIDANCE = (
     "the normal action's current admission result to determine whether it may run."
 )
 
+PLANNING_GUIDANCE = (
+    "A standing request to finish work covers ordinary repairs, focused checks "
+    "and agreed handoffs. Give workers the deliverable, acceptance criteria and "
+    "authority to fix known failures through completion. Do not invent fixed "
+    "turn, attempt or review-cycle allowances, or demand another disposition "
+    "after each failed check. Managers can revise their own plans; estimates "
+    "are not enforced limits. Preserve actual user, commissioning-owner and "
+    "host limits until an authorized correction uses the supported control. "
+    "Unknown historical provenance is not permission to erase a saved limit. "
+    "Keep used turns, failed attempts and evidence. Use maintained project "
+    "checks and existing managed profiles; allow cheap preflight during "
+    "authoring instead of building a new qualification runner for each feature. "
+    "Independent review should focus on changed risks and original acceptance. "
+    "Reuse passing evidence when the relevant tested inputs are unchanged; "
+    "rerun affected checks when they change. Change approach when repeated "
+    "failures make no progress. A completed task remains completed; an "
+    "authorized follow-up can use a new objective without another approval "
+    "for ordinary repair. Ask only for an actual missing decision or authority. "
+    "Preserve explicit Stop and unanswered user choices, and reconcile uncertain "
+    "effects before further action."
+)
+
 
 def assignment_orientation(session, summary, principal):
     """Offer one exact passive read, without loading members at every call."""

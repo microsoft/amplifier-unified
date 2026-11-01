@@ -5,6 +5,7 @@ import struct
 from importlib.resources import files
 
 import pytest
+import tinycss2
 
 from amplifier_web.service import validate_theme
 from test_canvas_apps import app, dispatch
@@ -34,6 +35,82 @@ def test_digital_rain_is_portable_and_has_three_original_tiles():
     assert "prefers-reduced-motion:reduce" in css
     assert "forced-colors:active" in css
     assert not re.search(r'conversation["\']?\]?\s*>\s*\*', css)
+
+
+def test_landing_art_reuses_tiles_without_owning_layout_or_busy_feedback():
+    css = source()
+    landing = css.split("/* Landing pages use their own background", 1)[1].split("*/", 1)[1]
+    assert 'background-image:var(--digital-rain-art)' in landing
+    assert 'background-size:512px 768px,704px 960px,896px 1152px' in landing
+    assert '.a-work-group-heading' in landing
+    assert '.a-nav-chat-title' in landing
+    assert '.a-workspace-label>span[data-scroll-title]' in landing
+    assert ':has(.a-work-tabs button[aria-pressed="true"]:not(:first-child))' in landing
+    assert 'data-decorations="off"' in landing
+    assert 'prefers-reduced-motion:reduce' in landing
+    assert 'forced-colors:active' in landing
+    assert 'animation:none' in landing and 'background-image:none' in landing
+
+    rules = tinycss2.parse_stylesheet(landing, skip_comments=True, skip_whitespace=True)
+    def inspect(rows):
+        for rule in rows:
+            assert rule.type != "error"
+            if rule.type == "at-rule":
+                inspect(tinycss2.parse_rule_list(rule.content, skip_comments=True, skip_whitespace=True))
+            elif rule.type == "qualified-rule":
+                selector = tinycss2.serialize(rule.prelude)
+                assert '[data-part="work-browser"]' in selector
+                assert not any(value in selector for value in ("aria-busy", "data-region-pending", "::before", "::after"))
+                declarations = tinycss2.parse_declaration_list(rule.content, skip_comments=True, skip_whitespace=True)
+                for declaration in declarations:
+                    assert declaration.type == "declaration"
+                    assert declaration.name not in {
+                        "position", "display", "height", "min-height", "max-height",
+                        "width", "min-width", "max-width", "overflow", "overflow-y",
+                        "padding", "margin", "transform", "z-index", "pointer-events",
+                    }
+    inspect(rules)
+
+
+def test_assistant_box_excludes_action_row_in_all_color_modes():
+    css = source()
+    body = ".a-message.a-assistant>.a-message-body"
+    assert f"{body}{{box-sizing:border-box;background:#041009ed" in css
+    assert f'#amp-one[data-theme-scheme="light"] {body}{{background:#fbfefced' in css
+    assert f"#amp-one:not([data-theme-scheme]) {body}{{background:#fbfefced" in css
+    assert f"@media(max-width:760px){{#amp-one {body}{{padding:12px}}" in css
+    assert ".a-message.a-assistant{background:transparent!important;border:0!important" in css
+    assert ".a-message.a-assistant>.a-message-actions{background:transparent;border:0;box-shadow:none}" in css
+
+
+def test_digital_rain_inherits_shared_transcript_edges():
+    # Omission exposes the host fallback. A theme-level none/unset reset would
+    # suppress it, including the host's focus and forced-colors handling.
+    assert not re.search(r"(?:-webkit-)?mask(?:-[\w-]+)?\s*:", source())
+
+
+def test_sidebar_content_clears_selection_edge_without_changing_native_rows():
+    selector = '#amp-one [data-part="navigation"] :is(.a-nav-chat:not(.a-nav-chat-rename),.a-workspace-row)'
+    expected = {
+        "box-sizing": "border-box",
+        "padding-inline-start": "8px",
+        "padding-inline-end": "4px",
+    }
+    # Share the accepted spacing, not the entire theme. The navigation scope
+    # excludes landing cards; the :not() preserves native rename form padding.
+    for name in ("digital-rain", "lightline"):
+        css = files("amplifier_web").joinpath(f"appearances/{name}.amplifier.css").read_text()
+        rules = tinycss2.parse_stylesheet(css, skip_comments=True, skip_whitespace=True)
+        matches = [
+            rule for rule in rules
+            if rule.type == "qualified-rule" and tinycss2.serialize(rule.prelude).strip() == selector
+        ]
+        assert len(matches) == 1, name
+        declarations = tinycss2.parse_declaration_list(
+            matches[0].content, skip_comments=True, skip_whitespace=True,
+        )
+        assert all(item.type == "declaration" and not item.important for item in declarations)
+        assert {item.name: tinycss2.serialize(item.value).strip() for item in declarations} == expected
 
 
 def luminance(color):

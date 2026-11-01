@@ -1,6 +1,5 @@
 """One fresh peer input backed by the commissioning owner's human request."""
 import copy
-import json
 
 from amplifier_operations.coordination import fingerprint
 from .schedule_handoff import latest_human
@@ -13,42 +12,35 @@ def latest_root_generation(target):
 
 
 def safety_halt(target):
-    event = latest_root_generation(target) or {}
-    retained_safety = (event.get('event') == 'generation.failed'
-        and event.get('generation_id') == (target.get('collaborationGeneration') or {}).get('id')
-        and event.get('error_category') in {'content_filter', 'computer_capture_stop'})
+    active_id = (target.get('collaborationGeneration') or {}).get('id')
+    # A later detach of the same root does not erase its earlier safety halt.
+    # This retained lifecycle list is bounded; do not inspect transcript bodies.
+    retained_safety = active_id and any(
+        event.get('sessionId', target['id']) == target['id']
+        and event.get('rootSessionId', target['id']) == target['id']
+        and event.get('generation_id') == active_id
+        and event.get('event') in {'generation.failed', 'generation.detached'}
+        and event.get('error_category') in {'content_filter', 'computer_capture_stop'}
+        for event in target.get('generations', []))
     if retained_safety or (target.get('failure') or {}).get('category') in {'content_filter', 'computer_capture_stop'}:
         return ('A safety-related failure is still saved. Inspect it and resolve the halted operation; '
                 'Stop does not clear it. A separate permitted human request can use normal chat input.')
 
 
-def retained_terminal_evidence(app, target):
-    """Separate proof for an old unbound unknown failure; never rewrite its cause."""
+def retained_terminal_evidence(target):
+    """Witness the old terminal state, not delivery or success of its inputs.
+
+    A fresh human request supplies authority. Native service observations need
+    not have peer receipts; neither missing nor unknown receipts are repaired.
+    """
+    from .session_health import current_terminal_failure
     failure = target.get('failure') or {}
     active = target.get('collaborationGeneration') or {}
     terminal = latest_root_generation(target) or {}
-    inputs = active.get('inputIds') or []
     if (failure.get('generationId') or failure.get('category') != 'unknown'
-            or not active.get('id') or not active.get('terminal') or active.get('completed')
-            or terminal.get('event') != 'generation.failed'
-            or terminal.get('generation_id') != active['id'] or not inputs
-            or set(terminal.get('input_ids') or []) != set(inputs)
-            or not isinstance(terminal.get('at'), (int, float))
-            or not isinstance(failure.get('recordedAt'), (int, float))
-            or failure['recordedAt'] < terminal['at']):
+            or not active.get('inputIds') or not current_terminal_failure(target)):
         return None
-    receipts = []
-    for identity in inputs:
-        row = app.db.execute('SELECT receipt FROM commands WHERE id=?', (identity,)).fetchone()
-        receipt = json.loads(row[0]) if row else {}
-        if (receipt.get('commandAction') != 'coordination.send' or receipt.get('accepted') is not True
-                or receipt.get('inputId') != identity
-                or receipt.get('target', {}).get('sessionId') != target['id']
-                or receipt.get('delivery') not in {'accepted', 'applied', 'submitting'}):
-            return None
-        receipts.append({key: copy.deepcopy(receipt.get(key)) for key in
-                         ('requestId', 'inputId', 'senderSessionId', 'target', 'delivery', 'interruptionRevision')})
-    return {'generation': copy.deepcopy(terminal), 'inputs': receipts}
+    return {'generation': copy.deepcopy(terminal)}
 
 
 def prepare(app, source, target, value, lineage, boundary):
@@ -74,7 +66,7 @@ def prepare(app, source, target, value, lineage, boundary):
     if target.get('status') == 'error':
         failure = target.get('failure') or {}
         active = target.get('collaborationGeneration') or {}
-        evidence = retained_terminal_evidence(app, target)
+        evidence = retained_terminal_evidence(target)
         prove = getattr(app.runtime, 'stopped_boundary', None)
         if (not evidence and (not failure.get('generationId') or failure['generationId'] != active.get('id'))
                 or not active.get('terminal') or not callable(prove)
@@ -113,8 +105,11 @@ def guard(app, receipt, source, target):
         return 'The recipient failure changed before recovery.'
     if recovered and recovered.get('terminalEvidence') and (
             recovered['failure'] != target.get('failure')
-            or retained_terminal_evidence(app, target) != recovered['terminalEvidence']):
-        return 'The retained failed-generation or admitted input evidence changed before recovery.'
+            or retained_terminal_evidence(target) != {
+                'generation': recovered['terminalEvidence'].get('generation')}):
+        # Older saved receipts may also retain peer input snapshots. Keep them
+        # as history; the terminal witness is what this fresh admission checks.
+        return 'The retained terminal generation changed before recovery.'
     assignment = app.assignments.current(source)
     if (not human or human['id'] != scope['sourceMessageId']
             or human.get('inputId') != scope['sourceInputId']

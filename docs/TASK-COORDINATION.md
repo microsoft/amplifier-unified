@@ -23,7 +23,13 @@ retention are separate facts. A claimed wait is not proof of notification
 delivery. Queue acceptance is not model consumption; terminal qualification is
 not independent artifact verification or review approval. Negative reports can
 return without satisfying a successful dependency. Unknown evidence remains
-unknown and is never a retry instruction.
+unknown and is never a retry instruction. A timed-out peer control retains its
+original input correlation until its worker replies or exits. An exact late
+acceptance or explicit no-effect refusal reconciles that saved receipt; neither
+resends the request. A delayed native steering event may likewise settle the
+original input/generation while its Stop binding remains current. A recovered
+result or acknowledgement in assistant prose is not delivery evidence. Missing
+native evidence remains unknown, including after process loss.
 
 Saved waits retain task/Stop/location and capacity checks at admission. A busy
 requester waits for a real idle boundary. Backpressure, changed task authority,
@@ -57,8 +63,12 @@ existing roots in the authenticated user's Unified installation.
   remote-host federation and provides no new credentials or filesystem access.
 - Explicit references remain citations unless the existing exact-file result
   mechanism retains their bytes. General peer output libraries, private drafts
-  and files are not shared by sending. Request participants can inspect only
-  their exact retained result relationship; later location changes fail closed.
+  and files are not shared by sending. Request participants can inspect their
+  exact retained result relationship. A registered Full-access observer may also
+  read that exact request and its declared retained artifacts, using `scope:"all"`
+  for other workspaces. It remains an observer: original participants, producer,
+  response provenance and notification ownership are unchanged. Saved endpoint
+  location checks still apply; a result read never loads transcript history.
 - Stable request IDs, cancellation and unknown receipts retain their original
   meaning. Shipping this change never resends rejected or uncertain old input.
 

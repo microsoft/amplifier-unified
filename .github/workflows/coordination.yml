@@ -20,6 +20,9 @@ on:
       - 'tests/test_assignment_brief.py'
       - 'amplifier_web/workspace_awareness.py'
       - 'amplifier_web/coordination_delivery.py'
+      - 'amplifier_web/request_refit.py'
+      - 'amplifier_web/surface_delivery.py'
+      - 'tests/test_pretransport_refit_native.py'
       - 'amplifier_web/coordination_guidance.py'
       - 'frontend/src/workspace-awareness.jsx'
       - 'frontend/tests/workspace-awareness-browser.mjs'
@@ -49,11 +52,19 @@ on:
       - 'tests/test_coordination_bridge_returns.py'
       - 'tests/test_collaborative_workspaces.py'
       - 'tests/test_collaboration_input.py'
+      - 'tests/test_peer_auto_delivery.py'
+      - 'tests/test_peer_admission_reconciliation.py'
       - 'amplifier_web/task_binding.py'
       - 'amplifier_web/task_continuity.py'
       - 'tests/test_task_continuity.py'
+      - 'amplifier_web/completed_followup.py'
+      - 'amplifier_web/runtime_controls.py'
+      - 'tests/test_completed_peer_followup.py'
+      - 'tests/test_completed_peer_native.py'
       - 'tests/test_blocked_peer_input.py'
       - 'tests/test_blocked_peer_native.py'
+      - 'tests/test_complete_input_native.py'
+      - 'tests/test_peer_intake_native.py'
       - 'tests/test_creation_inheritance.py'
       - 'tests/test_inherited_module_sources.py'
       - 'tests/test_runtime_profile_inputs.py'
@@ -70,6 +81,9 @@ on:
       - 'amplifier_web/worktrees.py'
       - 'amplifier_web/handoff_admission.py'
       - 'amplifier_web/handoff_boundary.py'
+      - 'amplifier_web/update_drain.py'
+      - 'tests/test_update_boundary_native.py'
+      - 'tests/test_update_drain.py'
       - 'amplifier_web/capacity.py'
       - 'amplifier_web/capacity_wait.py'
       - 'tests/test_handoff_model_admission.py'
@@ -79,6 +93,8 @@ on:
       - 'amplifier_web/incus_environment_worker.py'
       - 'amplifier_web/test_environment_*.py'
       - 'amplifier_web/test_queue.py'
+      - 'tests/test_test_result_readers.py'
+      - 'tests/test_native_result_readers.py'
       - 'amplifier_web/test_reservation_maintenance.py'
       - 'tests/test_background_reservation_recovery.py'
       - 'frontend/src/workspace-managed-resources.jsx'
@@ -97,6 +113,7 @@ on:
       - 'skills/coordinate-work/**'
       - 'tests/fixtures/coordination_ui_server.py'
       - 'frontend/tests/coordination-browser.mjs'
+      - 'frontend/tests/coordination-disclosure-diagnostics.mjs'
       - '.github/workflows/coordination.yml'
 permissions:
   contents: read
@@ -104,22 +121,22 @@ jobs:
   contracts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - run: uv sync --locked --group dev
       - name: Resolve the declared live-runtime source
         id: runtime-dependency
         run: |
           python -c 'import tomllib; p=tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb")); print("revision=" + p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"])' >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: microsoft/amplifier-module-loop-live
           ref: ${{ steps.runtime-dependency.outputs.revision }}
@@ -166,11 +183,13 @@ jobs:
           tests/test_coordination_revisions.py tests/test_request_cancellation.py tests/test_outcome_acknowledgement.py
           tests/test_coordination_return_policy.py
           tests/test_test_outcome_acknowledgement.py
+          tests/test_test_result_readers.py
           tests/test_coordination_bridge_returns.py
           tests/test_assignment_brief.py
           tests/test_background_reservation_recovery.py
-          tests/test_collaborative_workspaces.py tests/test_collaboration_input.py
+          tests/test_collaborative_workspaces.py tests/test_collaboration_input.py tests/test_peer_auto_delivery.py tests/test_peer_admission_reconciliation.py
           tests/test_task_continuity.py tests/test_blocked_peer_input.py
+          tests/test_completed_peer_followup.py
           tests/test_creation_inheritance.py tests/test_inherited_module_sources.py
           tests/test_runtime_profile_inputs.py tests/test_runtime_source_declarations.py
           tests/test_state_write_scopes.py tests/test_host_storage.py
@@ -185,6 +204,14 @@ jobs:
           tests/test_multi_repository_worktrees.py
           tests/test_file_access_policy.py tests/test_canvas_files.py tests/test_management.py
           tests/test_service.py tests/test_runtime.py tests/test_agent_chat_controls.py -q
+      - name: Verify delegated evidence reads through the native boundary
+        run: |
+          uv run --no-sync pytest -q tests/test_native_result_readers.py --junitxml=output/native-result-readers.xml
+          uv run --no-sync python - <<'PY'
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/native-result-readers.xml').getroot().findall('.//testcase')
+          assert rows and all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          PY
       - name: Verify blocked peer input through the native boundary
         run: |
           uv run --no-sync pytest -q tests/test_blocked_peer_native.py --junitxml=output/blocked-peer-native.xml
@@ -192,6 +219,51 @@ jobs:
           import xml.etree.ElementTree as ET
           rows = ET.parse('output/blocked-peer-native.xml').getroot().findall('.//testcase')
           assert len(rows) == 3
+          assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          PY
+      - name: Verify completed-worker followups through the native boundary
+        run: |
+          uv run --no-sync pytest -q tests/test_completed_peer_native.py --junitxml=output/completed-peer-native.xml
+          uv run --no-sync python - <<'PYCODE'
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/completed-peer-native.xml').getroot().findall('.//testcase')
+          assert len(rows) == 5
+          assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          PYCODE
+      - name: Verify cooperative update yield through the native boundary
+        run: |
+          uv run --no-sync pytest -q tests/test_update_boundary_native.py --junitxml=output/update-boundary-native.xml
+          uv run --no-sync python - <<'PYTHON'
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/update-boundary-native.xml').getroot().findall('.//testcase')
+          assert len(rows) == 4
+          assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          PYTHON
+      - name: Verify complete input native through the native boundary
+        run: |
+          uv run --no-sync pytest -q tests/test_complete_input_native.py --junitxml=output/complete-input-native.xml
+          uv run --no-sync python - <<'PY'
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/complete-input-native.xml').getroot().findall('.//testcase')
+          assert len(rows) == 1
+          assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          PY
+      - name: Verify peer intake native through the native boundary
+        run: |
+          uv run --no-sync pytest -q tests/test_peer_intake_native.py --junitxml=output/peer-intake-native.xml
+          uv run --no-sync python - <<'PY'
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/peer-intake-native.xml').getroot().findall('.//testcase')
+          assert len(rows) == 8
+          assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          PY
+      - name: Verify bounded pretransport request refitting in the native loop
+        run: |
+          uv run --no-sync pytest -q tests/test_pretransport_refit_native.py --junitxml=output/pretransport-refit-native.xml
+          uv run --no-sync python - <<'PY'
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/pretransport-refit-native.xml').getroot().findall('.//testcase')
+          assert len(rows) == 23
           assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
           PY
       - name: Verify repeated peer returns through real Worker processes
@@ -207,7 +279,7 @@ jobs:
           PY
       - name: Retain peer return evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: peer-return-worker-evidence
           path: |
@@ -231,7 +303,16 @@ jobs:
       - run: npx --prefix frontend playwright install --with-deps chromium
       - name: Exercise related work through the browser
         working-directory: frontend
+        env:
+          AMPLIFIER_TEST_OUTPUT_DIR: ${{ runner.temp }}/coordination-browser
         run: node tests/coordination-browser.mjs
+      - name: Retain coordination disclosure failure facts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coordination-disclosure-failure
+          path: ${{ runner.temp }}/coordination-browser/**/coordination-disclosure-failure.json
+          if-no-files-found: ignore
       - name: Exercise exact request withdrawal and cancellation
         working-directory: frontend
         run: node tests/request-cancellation-browser.mjs
@@ -251,7 +332,7 @@ jobs:
         run: node tests/test-environments-browser.mjs
       - name: Retain test environment browser evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: test-environments-browser-evidence
           path: |

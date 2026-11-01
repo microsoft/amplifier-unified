@@ -36,7 +36,7 @@ find **Force restart…**. Its confirmation explains that running chats, workers
 tools and calls will be interrupted, saved history and drafts are retained, and
 interrupted work is not replayed automatically. An unresolved checkout handoff
 is labeled separately: restarting does not reconcile it or clear its chat fence.
-Ordinary automatic updates still wait for their existing idle checks.
+Ordinary automatic updates save current work at a supported native turn boundary, then retain their existing idle and checkpoint checks.
 
 `updates.forceRestart` requires `confirm: true` and the exact
 `hostInstanceId`, staged `revision`, `generation`, and `attemptId` from
@@ -388,3 +388,28 @@ both the resolved registry version and the post-preparation installed package.
 Other update tiers retain the current Core version. Frozen generation receipts
 remain exact for rollback and revalidation; they do not become standing version
 pins for future update checks. The Core source-build prohibition remains enabled.
+
+### Work continues while an application update is pending
+
+Checking, staging and validating an application update do not pause conversations,
+block new messages or freeze delegation. A qualified update waits for the normal
+idle readiness check. Active tools, children, calls and unresolved operations
+postpone the update, not unrelated work. Continuously busy hosts can leave an
+update pending; the existing explicit **Restart now** control is the separate
+operator choice to interrupt work for a qualified restart.
+
+After final candidate validation, activation rechecks readiness under the same
+host lock that commits replacement. Work arriving during validation takes priority
+and postpones that replacement. Only the actual replacement/restart window holds
+ordinary new human messages. They are saved under their original input IDs,
+acknowledged as saved, and sent in order after the exact restarted installation
+is healthy. Stop after saving holds the message without starting work.
+Native-accepted or uncertain inputs are never automatically replayed.
+
+Older pre-replacement cooperative holds are withdrawn through their existing
+boundary and message receipts. A successful withdrawal releases known unsubmitted
+messages and any exact yielded ongoing objective with its original task and used
+allowance. An unconfirmed boundary cancellation remains unresolved; it is not
+assumed successful. Replacement uncertainty remains fenced and is never treated
+as a pre-replacement withdrawal. No new automatic worker-yield boundary is created
+merely because an update is staged.

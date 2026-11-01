@@ -12,7 +12,7 @@ from test_task_continuity import controls
 
 
 class ConfiguredRuntime(Runtime):
-    async def control(self, sid, operation, args):
+    async def control(self, sid, operation, args, *, guard=None):
         if sid not in self.workers:
             control = self.workers[sid] = controls(sid)
             path = control.state_path().with_name("configuration.json")
@@ -20,6 +20,7 @@ class ConfiguredRuntime(Runtime):
             original = control.coordinator.get
             control.coordinator.get = lambda name: {"synthetic": SimpleNamespace()} if name == "providers" else original(name)
             await control.restore()
+        if guard is not None: guard()
         return await self.workers[sid].perform(operation, args)
 
 
@@ -174,6 +175,16 @@ async def test_changes_winning_admission_leave_one_visible_destination_without_e
         assert not runtime.inputs
         run = app.schedules.store.runs(sid)[0]
         assert run['phase'] == 'skipped' and run['creationConfirmed']
+        if mutation == 'destination_configuration':
+            comparison = run['destinationConfigurationComparison']
+            assert comparison['before']['stage'] == 'destination_created'
+            assert comparison['after']['stage'] == 'input_admission'
+            assert comparison['before']['configurationHash'] == run['destinationConfigurationHash']
+            assert comparison['after']['configurationHash'] != run['destinationConfigurationHash']
+            assert comparison['changedCategories'] == ['controls.selection', 'selection']
+            assert 'selection' in run['detail']
+            assert 'another' not in json.dumps(comparison)
+            assert 'synthetic-private-value' not in json.dumps(comparison)
         assert len(app.state['sessions']) == 2
     finally: await app.close()
 

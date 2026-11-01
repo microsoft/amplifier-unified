@@ -1,4 +1,5 @@
 import {createDraftJournal} from './draft-journal.js';
+import {downloadBlobContent} from './appearance-library.js';
 // A page owns one presentation identity. Reload/duplicate restores a copy of
 // the previous view, never the same writable client as another live tab.
 export const clientId=crypto.randomUUID();
@@ -99,7 +100,7 @@ async function measuredRequest(path, options, timing) {
   return data;
 }
 export function download(filename, content, type='application/json') {
-  const blob=new Blob([typeof content==='string'?content:JSON.stringify(content,null,2)],{type});
+  const blob=new Blob([downloadBlobContent(content,type)],{type});
   const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 // Repeated browser observations describe client-owned UI. Conversation text and

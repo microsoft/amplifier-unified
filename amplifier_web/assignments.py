@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager, AsyncExitStack
 from amplifier_operations.coordination import fingerprint
 from .capacity import LIVE, aggregate, evaluate, number, usage_snapshot
 
-DEFAULTS = dict(maxOpenTasks=None, maxMembers=64, maxConcurrentCalls=None,
+DEFAULTS = dict(maxOpenTasks=None, maxMembers=None, maxConcurrentCalls=None,
                 maxTotalTokens=None, maxCostUsd=None, reserveTokens=0,
                 reserveCostUsd=0, unknownPolicy='pause', includeEstimatedCost=False)
 
@@ -20,26 +20,28 @@ def definitions(schema, string):
     target = {'sessionId': string(200)}
     revision = {**target, 'expectedRevision': {'type': 'integer', 'minimum': 0}}
     limits = {key: {'type': ['integer', 'null'], 'minimum': 1}
-              for key in ('maxOpenTasks', 'maxConcurrentCalls')}
-    limits['maxMembers'] = {'type': 'integer', 'minimum': 1, 'maximum': 64}
+              for key in ('maxOpenTasks', 'maxMembers', 'maxConcurrentCalls')}
     limits.update(maxTotalTokens={'type': ['integer', 'null'], 'minimum': 1},
                   maxCostUsd={'type': ['number', 'null'], 'exclusiveMinimum': 0},
                   reserveTokens={'type': 'integer', 'minimum': 0},
                   reserveCostUsd={'type': 'number', 'minimum': 0},
                   unknownPolicy={'enum': ['pause', 'allow']}, includeEstimatedCost={'type': 'boolean'})
     from .assignment_tasks import definitions as task_definitions
+    from .assignment_task_limits import definitions as limit_definitions
     return {
         **task_definitions(schema, string),
+        **limit_definitions(schema, string),
         'assignment.brief': ('Read a compact paged current-member brief with blockers and latest direct-request outcome links. Passive and bounded; no history, worker admission or permission changes. Previews do not replace exact constraints or evidence.', schema({**target, 'after': string(2048), 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 16}}, ['sessionId'])),
         'assignment.read': ('Inspect this explicit assignment, its members and aggregate usage without starting workers. Independent peers are not members.', schema(target, ['sessionId'])),
         'assignment.start': ('Start an assignment for this unassigned root. New commissioned chats join automatically. Adding an existing chat requires explicit adoption.', schema(target, ['sessionId'])),
         'assignment.adoption': ('Review adding one settled existing workspace chat to this manager’s assignment. Does not start work or change membership.', schema({**target, 'targetSessionId': string(200)}, ['sessionId', 'targetSessionId'])),
         'assignment.adopt': ('Explicitly add a reviewed existing chat to this owner’s active assignment. Agents require the current human instruction; do not infer permission from a shared workspace. Preserves history and previous usage, sends no input, and does not clear Stop. Use ordinary guarded resume separately when authorized.', schema({**revision, 'targetSessionId': string(200), 'expectedTargetRevision': string(200), 'sourceMessageId': string(200)}, ['sessionId', 'targetSessionId', 'expectedRevision', 'expectedTargetRevision'])),
-        'assignment.set': ('Owner sets revision-bound aggregate limits. Null maxOpenTasks/maxConcurrentCalls means no execution count limit; retained membership stays bounded. Per-call reservations are allowances, not exact provider spend caps. Existing effects may finish.', schema({**revision, **limits}, ['sessionId', 'expectedRevision'])),
+        'assignment.set': ('Owner sets revision-bound aggregate limits. Null maxOpenTasks/maxMembers/maxConcurrentCalls means no count limit. maxMembers counts current bound and reserved members, not retired history. Per-call reservations are allowances, not exact provider spend caps. Existing effects may finish.', schema({**revision, **limits}, ['sessionId', 'expectedRevision'])),
         'assignment.integration': ('Owner explicitly assigns integration responsibility to a current member, or clears it. Does not start work, enroll peers or grant execution authority.', schema({**revision, 'responsibleSessionId': {'type': ['string', 'null'], 'minLength': 1, 'maxLength': 200}}, ['sessionId', 'expectedRevision', 'responsibleSessionId'])),
         'assignment.stop': ('Owner closes assignment admission before requesting interruption of still-bound roots and native children. Does not stop independent peers or remove resources.', schema(revision, ['sessionId', 'expectedRevision'])),
         'assignment.resume': ('User reopens a settled stopped assignment for new requests, preserving members, shared tasks and cumulative usage. Does not send input, resume paused tasks or replay queued work.', schema(revision, ['sessionId', 'expectedRevision'])),
         'assignment.detach': ('User detaches this idle conversation after assignment work settles, retaining attributed usage. Does not resume or send input.', schema(revision, ['sessionId', 'expectedRevision'])),
+        'assignment.retire': ('Owner closes a finished member’s participation and releases its member slot. Requires settled work and completed local/shared tasks. Retains history, resources and cumulative usage; sends no input. The same chat can later be reviewed and added again with assignment.adoption/adopt.', schema({**revision, 'targetSessionId': string(200)}, ['sessionId', 'targetSessionId', 'expectedRevision'])),
     }
 
 
@@ -79,7 +81,7 @@ class Assignments:
         member = value['members'].get(session['id'])
         if not member:
             self.service.collaboration.error('The assignment membership is unavailable.', 409)
-        return value if member['status'] != 'detached' else None
+        return value if member['status'] not in {'detached', 'retired'} else None
 
     def save(self, value):
         self.service.collaboration.save(value['id'], {
@@ -205,18 +207,18 @@ class Assignments:
 
     def reserve_member(self, source, sid, operation):
         value = self.ensure(source, operation)
-        if sid in value['members']:
+        if sid in value['members'] and value['members'][sid]['status'] != 'retired':
             return value['id']
         limits = value['limits']
-        if len(value['members']) >= limits['maxMembers']:
-            self.service.collaboration.error('The assignment member limit is reached. Retained members and usage are not discarded.', 429)
+        if limits['maxMembers'] is not None and self.active_member_count(value) >= limits['maxMembers']:
+            self.service.collaboration.error('The assignment member limit is reached. Retire a finished member to release a slot; its history and usage stay retained.', 429)
         pending = {row[0] for row in self.service.db.execute("""SELECT DISTINCT
             json_extract(receipt,'$.target.sessionId') FROM commands
             WHERE json_extract(receipt,'$.commandAction')='coordination.send'
             AND json_extract(receipt,'$.delivery') IN ('queued','submitting','pending_steer')""")}
         opened = 0
         for key, member in value['members'].items():
-            if key == value['ownerSessionId'] or member['status'] in {'detached', 'not_created'}:
+            if key == value['ownerSessionId'] or member['status'] in {'detached', 'retired', 'not_created'}:
                 continue
             try:
                 row = self.service._session(key, hydrate=False)
@@ -236,6 +238,26 @@ class Assignments:
         value['revision'] += 1
         self.save(value)
         return value['id']
+
+    @staticmethod
+    def active_member_count(value):
+        return sum(member['status'] in {'bound', 'reserved'} for member in value['members'].values())
+
+    def request_membership_reason(self, receipt):
+        """Old assignment inputs never renew when a finished chat is readmitted."""
+        if not receipt.get('assignmentId'):
+            return None
+        value = self.load(receipt['assignmentId'])
+        target = (receipt.get('target') or {}).get('sessionId') or receipt.get('targetSessionId')
+        if receipt.get('commandAction') == 'coordination.create':
+            target = receipt.get('sessionId')
+        for sid in (receipt.get('senderSessionId'), target):
+            member = value['members'].get(sid, {})
+            if member.get('status') == 'retired':
+                return 'This assignment member was retired; earlier requests remain inspectable.'
+            if member.get('joinedAt', 0) > receipt.get('acceptedAt', 0):
+                return 'This request belongs to an earlier assignment membership; send fresh work after readmission.'
+        return None
 
     def usage(self, value):
         calls, missing = [], []
@@ -334,6 +356,12 @@ class Assignments:
                     self.service._task(self.interrupt(identity, stops))
 
     async def _dispatch(self, action, args, origin, command_id, caller):
+        if action in {'assignment.task.read', 'assignment.task.setLimit', 'assignment.task.complete'}:
+            from .assignment_task_limits import dispatch
+            return await dispatch(self, action, args, origin, command_id, caller)
+        if action == 'assignment.retire':
+            from .assignment_retirement import dispatch
+            return await dispatch(self, action, args, origin, command_id, caller)
         if action in {'assignment.adoption', 'assignment.adopt'}:
             from .assignment_adoption import dispatch
             return await dispatch(self, action, args, origin, command_id, caller)
@@ -395,10 +423,10 @@ class Assignments:
                     limits = {**value['limits'], **{key: args[key] for key in DEFAULTS if key in args}}
                     for key in ('maxOpenTasks', 'maxMembers', 'maxConcurrentCalls'):
                         val = limits[key]
-                        if val is None and key != 'maxMembers':
+                        if val is None:
                             continue
-                        if type(val) is not int or val < 1 or (key == 'maxMembers' and val > 64):
-                            collaboration.error('Assignment execution counts must be positive integers or null; total members must be between 1 and 64.', 400)
+                        if type(val) is not int or val < 1:
+                            collaboration.error('Assignment counts must be positive integers or null for no count limit.', 400)
                     for key in ('maxTotalTokens', 'maxCostUsd', 'reserveTokens', 'reserveCostUsd'):
                         val = limits[key]
                         if val is None and key.startswith('max'):
@@ -424,7 +452,7 @@ class Assignments:
                     value['status'] = 'stopped'
                     value['stoppedAt'] = time.time()
                     for sid, member in value['members'].items():
-                        if member['status'] in {'detached', 'not_created'}:
+                        if member['status'] in {'detached', 'retired', 'not_created'}:
                             continue
                         try:
                             target = self.service._session(sid)
@@ -470,4 +498,4 @@ class Assignments:
     def summary(self, session):
         value = self.current(session)
         if value:
-            return {key: value[key] for key in ('id', 'revision', 'status', 'ownerSessionId', 'limits')} | {'memberCount': len(value['members']), 'integration': value.get('integration')}
+            return {key: value[key] for key in ('id', 'revision', 'status', 'ownerSessionId', 'limits')} | {'memberCount': len(value['members']), 'activeMemberCount': self.active_member_count(value), 'integration': value.get('integration')}

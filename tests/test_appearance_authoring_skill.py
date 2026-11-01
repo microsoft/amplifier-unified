@@ -7,15 +7,23 @@ it qualifies packaged resource loading, not full host startup or browser design.
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
+import csv
+import hashlib
 import importlib.metadata
+from importlib.resources import files
+import io
 import json
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 from types import SimpleNamespace
+import zipfile
+import zlib
 
 async def _loader_probe(root, workspace, *, deferred=False, omitted=False):
     from amplifier_core import AmplifierSession
@@ -78,23 +86,119 @@ async def _loader_probe(root, workspace, *, deferred=False, omitted=False):
         await cleanup()
 
 
+def _installed_package_probe(packages):
+    # Author the input and inspect exported bytes with stdlib, not product helpers.
+    def chunk(kind, body):
+        return (struct.pack(">I", len(body)) + kind + body
+                + struct.pack(">I", zlib.crc32(kind + body) & 0xffffffff))
+
+    png = (b"\x89PNG\r\n\x1a\n"
+           + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(b"\0\x33\x66\x99\xff")) + chunk(b"IEND", b""))
+    notice = b"Copyright Example Contributors\r\nPermission for this synthetic fixture.\r\n"
+    manifest = {
+        "type": "appearance", "formatVersion": 1, "name": "Installed paper",
+        "description": "Offline ZIP fixture", "author": "Example Contributors",
+        "stylesheet": "theme.css",
+        "assets": [{"path": "assets/probe.png", "mediaType": "image/png",
+                    "license": "licenses/probe.txt"}],
+        "licenses": ["licenses/probe.txt"],
+    }
+    css = '#amp-one{background-image:url("assets/probe.png");color:#123456}\n'
+    files = {"appearance.json": json.dumps(manifest).encode("utf-8"), "theme.css": css.encode("utf-8"),
+             "assets/probe.png": png, "licenses/probe.txt": notice}
+    source = io.BytesIO()
+    with zipfile.ZipFile(source, "w", compression=zipfile.ZIP_STORED) as archive:
+        for name, body in files.items():
+            archive.writestr(name, body)
+    package = packages.load(source.getvalue())
+    assert package.manifest == manifest and package.files == files
+    embedded = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+
+    def check_css(value, name, description):
+        header, separator, body = value.partition(" */\n")
+        assert separator and header.startswith("/* amplifier-appearance: ")
+        meta = json.loads(header.removeprefix("/* amplifier-appearance: "))
+        assert meta["name"] == name and meta["description"] == description
+        assert meta["author"] == manifest["author"]
+        assert meta["packageNotices"] == {"licenses/probe.txt": notice.decode("utf-8")}
+        assert body == css.replace("assets/probe.png", embedded)
+        encoded = body.split('url("data:image/png;base64,', 1)[1].split('")', 1)[0]
+        assert base64.b64decode(encoded, validate=True) == png
+
+    check_css(package.css, manifest["name"], manifest["description"])
+    with zipfile.ZipFile(io.BytesIO(packages.encode(package.files))) as archive:
+        assert len(archive.namelist()) == len(files)
+        assert {name: archive.read(name) for name in archive.namelist()} == files
+
+    # CSS-only export must carry the embedded image and original notice bytes too.
+    exported = packages.from_css(package.css, "Installed copy", "Offline export")
+    raw = packages.encode(exported.files)
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        assert sorted(archive.namelist()) == ["appearance.json", "licenses/probe.txt", "theme.css"]
+        assert archive.read("licenses/probe.txt") == notice
+        exported_manifest = json.loads(archive.read("appearance.json"))
+        assert exported_manifest == {**manifest, "name": "Installed copy", "description": "Offline export",
+                                     "assets": []}
+        check_css(archive.read("theme.css").decode("utf-8"), "Installed copy", "Offline export")
+    check_css(packages.load(raw).css, "Installed copy", "Offline export")
+
+
 # The installed probe needs runtime dependencies only, not pytest/PyYAML.
 if __name__ == "__main__":
     assert sys.argv[1] == "--installed-probe" and sys.flags.isolated
     installed = Path(sys.argv[2]).resolve(strict=True)
     sys.path.insert(0, str(installed))
     import amplifier_web
+    from amplifier_web import appearance_packages, theme_library
     from amplifier_web.builtin_behaviors import resource_root
 
     assert Path(amplifier_web.__file__).resolve().is_relative_to(installed)
     distribution = importlib.metadata.distribution("amplifier-unified")
+    assert Path(distribution.locate_file("")).resolve(strict=True) == installed
     direct = json.loads(distribution.read_text("direct_url.json") or "{}")
     assert not direct.get("dir_info", {}).get("editable")
+    expected = json.loads(Path(sys.argv[4]).read_text(encoding="utf-8"))
+    module = Path(appearance_packages.__file__).resolve(strict=True)
+    assert module == installed / "amplifier_web/appearance_packages.py"
+    assert Path(appearance_packages.__spec__.origin).resolve(strict=True) == module
+    entry, = [path for path in distribution.files if str(path) == "amplifier_web/appearance_packages.py"]
+    assert Path(distribution.locate_file(entry)).resolve(strict=True) == module
+    digest = hashlib.sha256(module.read_bytes()).digest()
+    assert digest.hex() == expected["sourceSha256"]
+    assert entry.hash.mode == "sha256"
+    record_hash = "sha256=" + base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+    assert "sha256=" + entry.hash.value == expected["recordHash"] == record_hash
+    assert entry.size == module.stat().st_size == expected["recordSize"]
     assert resource_root().resolve() == installed / "amplifier_web/bundle_data"
     for entry in ("SKILL.md", "examples.md", "quiet-study.json"):
         assert "amplifier_web/bundle_data/skills/appearance-authoring/" + entry in {
             str(path) for path in distribution.files}
+    records = {str(path): path for path in distribution.files}
+    lightline_expected = expected["lightline"]
+    resource = Path(files("amplifier_web").joinpath("appearances", "lightline.amplifier.css"))
+    for relative, actual in (("amplifier_web/theme_library.py", Path(theme_library.__file__)),
+                             (lightline_expected["resource"], resource)):
+        actual = actual.resolve(strict=True)
+        assert actual.is_relative_to(installed)
+        record = records[relative]
+        assert actual == Path(distribution.locate_file(record)).resolve(strict=True)
+        assert record.hash and record.hash.mode == "sha256"
+        assert record.hash.value == base64.urlsafe_b64encode(
+            hashlib.sha256(actual.read_bytes()).digest()).decode("ascii").rstrip("=")
+    data = resource.read_bytes()
+    assert hashlib.sha256(data).hexdigest() == lightline_expected["sha256"]
+    # Resource presets need no AppService, user library or provider configuration.
+    lightline = theme_library.preset(None, "lightline")
+    css = lightline.pop("css")
+    assert lightline == lightline_expected["metadata"]
+    assert css.encode("utf-8") == data
+    assert theme_library.fingerprint(css) == lightline_expected["sha256"]
+    assert theme_library.metadata(css)[0] == {
+        key: lightline_expected["metadata"][key] for key in ("name", "description")}
     asyncio.run(_loader_probe(resource_root(), Path(sys.argv[3])))
+    _installed_package_probe(appearance_packages)
+    print("APPEARANCE_PACKAGE_INSTALLED_OK")
     print("APPEARANCE_SKILL_INSTALLED_OK")
     raise SystemExit(0)
 
@@ -185,11 +289,32 @@ async def test_app_shell_discovery_preserves_selected_loader_policy(tmp_path, mo
 
 def test_wheel_installed_loader_outside_checkout(tmp_path):
     from hatchling.builders.wheel import WheelBuilder
+    from amplifier_web import theme_library
 
     checkout = Path(__file__).resolve().parents[1]
+    assert Path(theme_library.__file__).resolve() == checkout / "amplifier_web/theme_library.py"
+    resource = checkout / "amplifier_web/appearances/lightline.amplifier.css"
+    # Capture checkout expectations before building; the isolated probe imports
+    # only the installed package and receives these independent values as JSON.
+    lightline_expected = {
+        "resource": resource.relative_to(checkout).as_posix(),
+        "sha256": hashlib.sha256(resource.read_bytes()).hexdigest(),
+        "metadata": {"id": "builtin:lightline", "source": "built-in",
+                     **theme_library.RESOURCE_PRESETS["lightline"]},
+    }
     wheels = tmp_path / "wheels"
     wheels.mkdir()
     wheel = Path(next(WheelBuilder(str(checkout)).build(directory=str(wheels))))
+    module_name = "amplifier_web/appearance_packages.py"
+    source_sha256 = hashlib.sha256((checkout / module_name).read_bytes()).hexdigest()
+    with zipfile.ZipFile(wheel) as archive:
+        record, = [name for name in archive.namelist() if name.endswith(".dist-info/RECORD")]
+        row, = [row for row in csv.reader(io.StringIO(archive.read(record).decode("utf-8")))
+                if row[0] == module_name]
+        assert hashlib.sha256(archive.read(module_name)).hexdigest() == source_sha256
+    expected = tmp_path / "installed-expectations.json"
+    expected.write_text(json.dumps({"sourceSha256": source_sha256, "recordHash": row[1],
+                                    "recordSize": int(row[2]), "lightline": lightline_expected}), encoding="utf-8")
     target = tmp_path / "installed"
     uv = shutil.which("uv")
     assert uv, "Wheel qualification requires uv (no packages are downloaded)"
@@ -201,8 +326,9 @@ def test_wheel_installed_loader_outside_checkout(tmp_path):
     environment.update(HOME=str(tmp_path / "home"), AMPLIFIER_HOME=str(tmp_path / "home/.amplifier"))
     probe_python = os.environ.get("UNIFIED_APPEARANCE_PROBE_PYTHON", sys.executable)
     result = subprocess.run([probe_python, "-I", "-B", str(Path(__file__).resolve()),
-                             "--installed-probe", str(target), str(tmp_path / "unrelated")],
+                             "--installed-probe", str(target), str(tmp_path / "unrelated"), str(expected)],
                             cwd=tmp_path, env=environment,
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
     assert "APPEARANCE_SKILL_INSTALLED_OK" in result.stdout
+    assert "APPEARANCE_PACKAGE_INSTALLED_OK" in result.stdout

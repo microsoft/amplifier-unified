@@ -1,3 +1,4 @@
+import {fixturePython} from './fixture-python.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
@@ -7,7 +8,7 @@ import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 import {settingsButton} from './browser-settings.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url)),out=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp/theme-surfaces';
-const fixture=spawn(root+'.venv/bin/python',[root+'tests/fixtures/main_refresh_ui_server.py'],{stdio:['ignore','pipe','inherit']});
+const fixture=spawn(fixturePython(root+'.venv/bin/python'),[root+'tests/fixtures/main_refresh_ui_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser;
 try{
  await mkdir(out,{recursive:true});

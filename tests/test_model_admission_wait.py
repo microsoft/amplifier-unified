@@ -362,10 +362,10 @@ async def test_full_wait_queue_does_not_block_free_unrelated_assignment(app, pro
     await asyncio.gather(a, b)
 
 
-async def test_global_policy_is_user_owned_cas_idempotent_and_persistent(app):
+async def test_global_policy_preserves_user_cas_exact_retry_and_persistence(app):
     from amplifier_web.service import AppError, AppService
     before = (await app.dispatch('modelCapacity.read', {}))['result']
-    assert before == {'revision': 0, 'maxWaitingCalls': 256, 'waitTimeoutSeconds': 0}
+    assert before == {'revision': 0, 'maxWaitingCalls': 0, 'waitTimeoutSeconds': 0}
     args = {'expectedRevision': 0, 'maxWaitingCalls': 500, 'waitTimeoutSeconds': 900}
     with pytest.raises(AppError, match='Only the user'):
         await app.dispatch('modelCapacity.set', args, origin='agent', caller_session_id=app.state['sessions'][0]['id'])
@@ -417,3 +417,30 @@ async def test_wait_deadline_is_rechecked_after_policy_wins_contended_admission_
     finally:
         first.release.set(); second.release.set()
         await asyncio.gather(a, b, return_exceptions=True)
+
+
+async def test_default_waiting_queue_crosses_old_count_ceiling_and_continues_once(app, providers):
+    # Older waiting tickets from other assignments must not reject a new wait.
+    retained = [{'sid': f'other-{i}', 'id': f'call-{i}', 'assignment': f'assignment-{i}',
+                 'visible': False} for i in range(256)]
+    app._model_admission_waiters = list(retained)
+    source, target, first, second, a, b = await waiting_pair(app, providers)
+    assert len(app._model_admission_waiters) == 257
+    assert not second.called and not b.done()
+    first.release.set()
+    await a
+    await until(lambda: second.called)
+    second.release.set()
+    await b
+    assert second.called == ['fixture']
+    assert app._model_admission_waiters == retained
+
+
+async def test_saved_finite_wait_limit_can_be_cleared_globally(app):
+    first = await app.dispatch('modelCapacity.set', {
+        'expectedRevision': 0, 'maxWaitingCalls': 256, 'waitTimeoutSeconds': 60}, command_id='finite')
+    cleared = await app.dispatch('modelCapacity.set', {
+        'expectedRevision': first['result']['revision'], 'maxWaitingCalls': 0,
+        'waitTimeoutSeconds': 0}, command_id='unlimited')
+    assert cleared['result'] == {'revision': 2, 'maxWaitingCalls': 0, 'waitTimeoutSeconds': 0}
+    assert (await app.dispatch('modelCapacity.read', {}))['result'] == cleared['result']

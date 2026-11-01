@@ -1,5 +1,9 @@
 # Contributing
 
+Use the [source and ownership map](docs/source-context.md) to select relevant
+authored code, contracts and tests, and distinguish generated output and retained
+evidence. The path selector does not change packaging or release validation.
+
 Keep repository content useful without exposing a contributor's environment.
 This applies to code, fixtures, documentation, screenshots, logs, issues and
 pull-request descriptions.
@@ -17,6 +21,12 @@ pull-request descriptions.
 - Check tracked filenames as well as file contents before committing. A cleanup
   of the current tree does not remove information from published Git history;
   report that limitation instead of silently rewriting shared history.
+
+For performance-sensitive changes, use [performance validation](docs/validation/performance.md)
+at design and review. Describe the affected operation, scaling inputs, measured
+budget and semantic checks in the PR; distinguish source tests from installed or
+live evidence. Select checks for the changed risk under the
+[release policy](docs/validation/release-qualification.md#local-first-fast-publication-policy-updated-october-14-2026).
 
 For release acceptance, use the [platform and first-use checklist](docs/validation/release-acceptance.md).
 

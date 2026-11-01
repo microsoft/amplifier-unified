@@ -1,4 +1,4 @@
-"""Bounded schedule discovery and explicit human recovery, without owner inference."""
+"""Bounded schedule discovery and explicit future recovery, without owner inference."""
 import copy
 import json
 from pathlib import Path
@@ -51,7 +51,7 @@ def overview(schedules, args):
             'hasMore': offset + len(items) < total, 'readAt': now}
 
 
-def repair_preview(schedules, args):
+def repair_preview(schedules, args, *, full=False):
     app, sid = schedules.app, args['sessionId']
     owner = app._session(sid, hydrate=False)
     record = schedules.store.get(sid, args['id'])
@@ -70,29 +70,44 @@ def repair_preview(schedules, args):
     reviewed = schedules.reviewed(sid, config, None)
     stop = owner.get('status') == 'stopped' or owner.get('interruptionRevision', 0) != record.get('interruptionRevision', 0)
     binding = {'scheduleId': record['id'], 'revision': record['revision'],
-               'review': reviewed['binding'], 'requiresStopAcknowledgement': stop}
-    return {**reviewed, 'previewHash': fingerprint(binding), 'requiresStopAcknowledgement': stop,
+               'review': reviewed['binding'], 'requiresStopAcknowledgement': stop and not full, 'crossesStop': stop}
+    return {**reviewed, 'previewHash': fingerprint(binding), 'requiresStopAcknowledgement': stop and not full, 'crossesStop': stop,
             'ownerStatus': owner.get('status'), 'scheduleRevision': record['revision']}
 
 
-async def repair(schedules, action, args, origin, command_id):
-    if origin != 'ui':
-        raise ValueError('Schedule recovery requires a person to review and confirm in Automation. Peer repair authority is unchanged.')
+async def repair(schedules, action, args, origin, command_id, caller=None):
+    if origin != 'ui' and (origin not in {'agent', 'system'} or not caller or caller != args['sessionId']):
+        raise ValueError('Schedule recovery must identify the calling conversation; a person can also use Automation.')
     async with schedules.app.lock:
-        if action == 'schedule.repairPreview': return repair_preview(schedules, args)
+        intent = {**args, 'authorizationOrigin': origin}
+        if action == 'schedule.repairResume':
+            retained = schedules.store.receipt(command_id, fingerprint([action, intent]))
+            if retained is not None:
+                return retained
+        authority = schedules.full_authority(args['sessionId'], origin, fresh_recovery=True)
+        if origin != 'ui' and authority is None:
+            raise ValueError('Schedule recovery needs current Full access or a person reviewing in Automation.')
+        if action == 'schedule.repairPreview':
+            return repair_preview(schedules, args, full=authority is not None)
         def build(record):
-            reviewed = repair_preview(schedules, args)
+            reviewed = repair_preview(schedules, args, full=authority is not None)
             if args['previewHash'] != reviewed['previewHash']:
                 raise ValueError('The configuration or Stop intent changed. Review again.')
             if reviewed['requiresStopAcknowledgement'] and args.get('acknowledgeStop') is not True:
                 raise ValueError('Explicitly allow future scheduled tasks after Stop before resuming.')
             due = next_after(record['spec'], schedules.clock())
             if due is None: raise ValueError('There is no future occurrence. Past work is not replayed.')
+            provenance = schedules.authorization(args['sessionId'], args, origin, authority=authority)
+            provenance.update(commandId=command_id, recovery='reviewed_future_runs')
+            if authority is None:
+                provenance['acknowledgedStop'] = reviewed['requiresStopAcknowledgement']
+            else:
+                provenance.update(crossedStop=reviewed['crossesStop'],
+                    recoveryInitiation='current_native' if authority.get('runtimeSessionId') else 'fresh_system')
             record.update(reviewed['binding'], status='active', nextDue=due, reviewReason=None,
-                          authorization={'origin': 'ui', 'at': schedules.clock(), 'recovery': 'reviewed_future_runs',
-                                         'acknowledgedStop': reviewed['requiresStopAcknowledgement']},
+                          authorization=provenance,
                           updatedAt=schedules.clock())
             return record
-        result = schedules.store.mutate(action, {**args, 'authorizationOrigin': origin}, command_id, build)
+        result = schedules.store.mutate(action, intent, command_id, build)
         schedules.changed()
         return result

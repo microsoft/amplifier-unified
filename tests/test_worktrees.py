@@ -135,6 +135,45 @@ async def test_ui_agent_handoff_preserves_task_voice_artifacts_drafts_and_home(t
     finally: await app.close()
 
 
+@pytest.mark.parametrize('origin', ['ui', 'agent'])
+@pytest.mark.parametrize('absolute', [False, True])
+async def test_canvas_file_capture_follows_execution_while_files_keep_workspace(tmp_path, monkeypatch, origin, absolute):
+    app, runtime, root, sid = await fixture(tmp_path, monkeypatch)
+    try:
+        workspace_id = app.state['selectedWorkspaceId']
+        inspected = (await app.dispatch('worktree.inspect', {'sessionId': sid}))['result']
+        created = (await app.dispatch('worktree.create', {
+            'sessionId': sid, 'sourceRevision': inspected['repository']['sourceRevision']}))['result']
+        await app.dispatch('worktree.handoff', {
+            'sessionId': sid, 'id': created['id'], 'expectedExecutionRevision': 0})
+        await settle(app)
+        (root / 'report.md').write_text('# Original workspace')
+        execution_file = Path(created['path']) / 'report.md'
+        execution_file.write_text('# Current execution')
+        await app.dispatch('view.update', {'patch': {'draft': 'Keep this draft'}})
+        args = {'sessionId': sid, 'kind': 'markdown',
+                'path': str(execution_file) if absolute else 'report.md'}
+        if origin == 'agent':
+            await app.app_bridge('dispatch', {'action': 'canvas.show', 'args': args}, sid)
+        else:
+            await app.dispatch('canvas.show', args)
+        assert app.state['canvas']['content'] == '# Current execution'
+        assert app.state['canvas']['sessionId'] == sid
+        assert app.state['canvas']['workspaceId'] == workspace_id
+        assert app._session(sid)['workspace'] == str(root)
+        assert app.state['view']['draft'] == 'Keep this draft'
+        # The explicit workspace Files route still previews the original folder.
+        opened = await app.dispatch('canvas.openFile', {
+            'sessionId': sid, 'workspace': str(root), 'path': 'report.md'})
+        assert opened['result']['status'] == 'opened'
+        assert app.state['canvas']['content'] == '# Original workspace'
+        with pytest.raises(AppError, match='inside the selected workspace'):
+            await app.dispatch('canvas.show', {**args, 'path': str(root / 'report.md')})
+        assert app.state['canvas']['content'] == '# Original workspace'
+    finally:
+        await app.close()
+
+
 async def test_unknown_restart_and_explicit_reconcile_never_resubmit(tmp_path, monkeypatch):
     app, runtime, root, sid = await fixture(tmp_path, monkeypatch)
     runtime.quiesce_for_handoff.side_effect = RuntimeError('lost confirmation')

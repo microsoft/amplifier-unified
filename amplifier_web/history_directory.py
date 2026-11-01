@@ -488,30 +488,45 @@ class HistoryDirectory:
         if frame is not None:
             frame['owner'] = (owner, boundary)
 
-    def _overlay_parameters(self):
+    def _overlay_parameters(self, *, include_summary=True):
         """Encode only a changed admitted overlay, never history or query fences.
 
         Live preparation replaces both containers on change; snapshot readers
         also install their own frozen containers. Their scalar rows and notice
-        tuples are never edited after installation. Retain one pair of encodings,
-        not per-page results or mutable application state. Read receipts and
-        native/durable generations remain current on every query.
+        tuples are never edited after installation. Retain at most one full and
+        one body-free row encoding plus notices, not per-page results or mutable
+        application state. Read receipts and native/durable generations remain
+        current on every query.
         """
         prior = self._encoded_overlay
         if prior is None or prior[0] is not self._live_values or prior[1] is not self._live_notices:
-            prior = (self._live_values, self._live_notices,
-                     json.dumps(list(self._live_values.values()), separators=(',', ':')),
+            prior = (self._live_values, self._live_notices, {},
                      json.dumps(self._live_notices, separators=(',', ':')))
             self._encoded_overlay = prior
-        return prior[2:]
+        encoded = prior[2]
+        if include_summary not in encoded:
+            rows = list(self._live_values.values())
+            if not include_summary:
+                # Scalar predicates never inspect summary. Keep column offsets
+                # stable without binding/parsing unrelated retained bodies for
+                # every json_extract in the materialized live-row projection.
+                position = COLUMNS.index('summary')
+                rows = [(*row[:position], None, *row[position + 1:]) for row in rows]
+            encoded[include_summary] = json.dumps(rows, separators=(',', ':'))
+        return encoded[include_summary], prior[3]
 
-    def effective(self, state=None, *, identity=None, public_ids=None, children_of=None, native_root_workspace=None, exact_parent=None, fields=None):
+    def effective(self, state=None, *, identity=None, public_ids=None, children_of=None, native_root_workspace=None, exact_parent=None, fields=None, notice_values=False, local_only=False):
         """Return effective rows with optional alias, exact-ID or child scope.
 
         exact_parent uses the child candidate indexes but preserves the agent
         overview's exact effective parent equality, including self-parent rows.
         fields limits the final UNION projection, after retaining every scalar
         needed by its canonical membership/suppression predicates.
+        notice_values exposes existing item payloads only to the attention
+        reader; ordinary catalog/count queries retain scalar notice columns.
+        local_only retains canonical native metadata and suppression for local
+        owners, but excludes native-only rows. Notices belong to local owners;
+        joining them must not materialize unrelated native catalog rows first.
         """
         if sum(value is not None for value in (identity, public_ids, children_of, exact_parent)) > 1:
             raise ValueError('Use one directory source scope per query.')
@@ -573,8 +588,9 @@ class HistoryDirectory:
             directory_notices AS (
                 SELECT json_extract(value,'$[0]') owner,json_extract(value,'$[2]') key,
                        json_extract(value,'$[3]') fingerprint,json_extract(value,'$[4]') is_error
+                       {",json_extract(value,'$[1]') slot,json_extract(value,'$[5]') value" if notice_values else ''}
                 FROM json_each(?) UNION ALL
-                SELECT owner,key,fingerprint,is_error FROM history_directory_notices n
+                SELECT owner,key,fingerprint,is_error{',slot,value' if notice_values else ''} FROM history_directory_notices n
                 WHERE {'n.owner IN (SELECT id FROM stored_local_rows) AND ' if scoped else ''}n.owner NOT IN (SELECT id FROM live_rows)),
             read_receipts AS MATERIALIZED (SELECT key,value FROM json_each(?)),
             notice_status AS (SELECT owner,MAX(COALESCE(r.value != n.fingerprint,1)) AS unread,
@@ -619,11 +635,11 @@ class HistoryDirectory:
                 f"CASE WHEN {quiet} THEN CASE WHEN ns.unread THEN 'New response' ELSE 'Idle' END ELSE l.base_activity_label END" if name == 'activity_label' else f'l.{name}')
             expressions.append(expression + ' AS ' + name)
         local += ', local_rows AS (SELECT ' + ','.join(expressions) + ' FROM raw_local_rows l LEFT JOIN notice_status ns ON ns.owner=l.id)'
-        parameters = scope_params + [*self._overlay_parameters(),
+        parameters = scope_params + [*self._overlay_parameters(include_summary='summary' in requested_fields),
                       json.dumps(state.get('attentionRead', {}), separators=(',', ':'))]
         if self._native_path:
             parameters.append(self._native_namespace)
-        if self._native_path:
+        if self._native_path and not local_only:
             native = '''native_rows AS (
                 SELECT CASE WHEN EXISTS(SELECT 1 FROM history_native.native_rows d
                     WHERE d.namespace=n.namespace AND d.identity=n.identity AND d.project!=n.project)

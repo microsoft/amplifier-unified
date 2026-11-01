@@ -278,7 +278,7 @@ try{
  });
  await check('all populated top-level sections collapse, reopen and retain choices',async()=>{
   const sectionIds=await overview.locator('details[data-overview-section]').evaluateAll(nodes=>nodes.map(el=>el.dataset.overviewSection));
-  assert.deepEqual(sectionIds,['plan','outputs','sources','agents','workspace','activity','review','publishing']);
+  assert.deepEqual(sectionIds,['plan','outputs','sources','agents','workspace','activity','permissions','review','publishing']);
   for(const id of sectionIds){
    await revealByWheel(summary(id));
    if(!await section(id).evaluate(el=>el.open)){await summary(id).click();await expect(section(id)).toHaveAttribute('open','')}
@@ -465,7 +465,8 @@ try{
     await panel.getByRole('button',{name:'Focus canvas',exact:true}).click();
     await expect(panel).toHaveAttribute('data-focused','true');await page.keyboard.press('Escape');
     await expect(panel).toHaveAttribute('data-focused','false');
-    await expect(panel.getByRole('button',{name:/^(Close canvas panel|Back to canvas)$/})).toHaveCount(0);
+    await expect(panel.getByRole('button',{name:'Close canvas panel',exact:true})).toBeVisible();
+    await expect(panel.getByRole('button',{name:'Back to canvas',exact:true})).toHaveCount(0);
     return {...bounds,navigation,details:{closed:closedInspector,open:openInspector}};
    });
   }

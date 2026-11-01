@@ -193,3 +193,164 @@ async def test_parallel_refs_join_but_post_install_stage_refreshes_remote_result
     assert manager.service.state['updates']['checkTiming'].get('cached', 0) == 0
     await manager.check()
     assert len(requests) == 3  # Another manual check still fetches fresh results.
+
+
+@pytest.mark.parametrize('ready', [False, True])
+async def test_native_settlement_wakes_idle_update_without_timer_or_publication_loop(manager, monkeypatch, ready):
+    from amplifier_web import update_drain
+    service = manager.service
+    await service.dispatch('session.create', {})
+    session = service._session(); session['status'] = 'working'
+    target = {'attemptId': 'a' * 32, 'revision': 'b' * 40, 'generation': 'c' * 32}
+    state = service.state['updates']; state.update(phase='app-staged', pendingApp=target)
+    runtime = service.runtime
+    observations, settlement = [], [False]
+    observed, installed = asyncio.Event(), asyncio.Event()
+    runtime.has_pending_operations = lambda: not settlement[0]
+    async def boundary(*args, **kwargs):
+        pytest.fail('A staged update must not freeze or yield running workers')
+    runtime.handoff_boundary = boundary
+    async def activate():
+        async with manager.lock:
+            observations.append(1)
+            if len(observations) > 1: observed.set()
+            if await update_drain.prepare(manager, target):
+                state.update(phase='installed', pendingApp=None)
+                installed.set()
+    monkeypatch.setattr(manager, 'app', activate)
+    manager._storage_last_pass = time.time()
+    await sleeping_owner(manager, monkeypatch)
+    assert len(observations) == 1 and not manager.wakeup.is_set()
+    settlement[0] = ready
+    session['status'] = 'ready'
+    await service.on_runtime_event('runtime.warmth', {'sessionId': session['id'], 'status': 'warm'})
+    if ready:
+        await asyncio.wait_for(observed.wait(), 1)
+        await asyncio.wait_for(installed.wait(), 1)
+        assert len(observations) == 2
+    else:
+        assert not installed.is_set()
+        for _ in range(3): await manager.publish(detail='Update ready; work continues')
+        await asyncio.sleep(.03)
+        assert len(observations) == 1 and not manager.wakeup.is_set()
+    assert not state.get('drain')
+
+
+@pytest.mark.parametrize('ready', [False, True])
+async def test_settlement_consumed_during_command_lock_rewakes_real_app(manager, monkeypatch, ready):
+    from amplifier_web import update_drain
+    service = manager.service
+    await service.dispatch('session.create', {})
+    session = service._session(); session['status'] = 'working'
+    target = {'attemptId': 'a' * 32, 'revision': 'b' * 40, 'generation': 'c' * 32}
+    state = service.state['updates']
+    state.update(phase='app-staged', pendingApp=target, pendingAppCheckAt=time.time())
+    observed, installed, entered, release, sleeping = (asyncio.Event() for _ in range(5))
+    observations, settlement = [], [False]
+    service.runtime.has_pending_operations = lambda: not settlement[0]
+    async def boundary(*args, **kwargs):
+        pytest.fail('A staged update must not freeze or yield running workers')
+    service.runtime.handoff_boundary = boundary
+    # Keep the real app(), command(), tick() and loop() owners. Only the
+    # external package effect and the concurrent command's work are controlled.
+    async def activate(owner):
+        assert owner is manager and not manager.lock.locked()
+        observations.append(1)
+        if len(observations) > 1: observed.set()
+        if await update_drain.prepare(owner, target):
+            state.update(phase='installed', pendingApp=None)
+            installed.set()
+    async def command_work():
+        async with manager.lock:
+            entered.set()
+            await release.wait()
+    original_wait = manager.wait_for_work
+    async def wait(delay):
+        if delay == 3: return
+        sleeping.set()
+        await original_wait(delay)
+    monkeypatch.setattr(app_updates, 'activate', activate)
+    monkeypatch.setattr(manager, 'check', command_work)
+    monkeypatch.setattr(manager, 'wait_for_work', wait)
+    manager._storage_last_pass = time.time()
+    manager.task = asyncio.create_task(manager.loop())
+    await asyncio.wait_for(sleeping.wait(), 1)
+    assert len(observations) == 1
+    command = asyncio.create_task(manager.command('check'))
+    await asyncio.wait_for(entered.wait(), 1)
+    try:
+        settlement[0] = ready; session['status'] = 'ready'
+        await service.on_runtime_event('runtime.warmth', {'sessionId': session['id'], 'status': 'warm'})
+        # Settling while the command owns the update lock cannot activate in
+        # parallel. The command's finally must retain the idle observation.
+        await asyncio.sleep(.02)
+        assert manager.lock.locked() and not manager.wakeup.is_set()
+        assert len(observations) == 1
+    finally:
+        release.set()
+        await asyncio.wait_for(command, 1)
+    await asyncio.wait_for(observed.wait(), 1)
+    if ready:
+        await asyncio.wait_for(installed.wait(), 1)
+    else:
+        assert not installed.is_set()
+        await manager.publish(detail='Update ready; work continues')
+        await asyncio.sleep(.03)
+        assert len(observations) == 2 and not manager.wakeup.is_set()
+    assert not state.get('drain')
+
+
+async def test_drain_retention_protects_only_exact_unobserved_owner(manager):
+    from types import SimpleNamespace
+    from amplifier_web import update_drain
+    service=manager.service
+    await service.dispatch('session.create', {})
+    sid=service._session()['id']
+    runtime=service.runtime
+    runtime.workers={sid: {'runtimeOwnerId':'current'}}
+    runtime.retention=SimpleNamespace(protected=lambda identity: identity=='voice')
+    update_drain.bind(service,runtime)
+    service.state['updates']['drain']={'phase':'draining','workers':{sid:{'owner':'current','ready':False}}}
+    assert runtime.retention.protected(sid) and runtime.retention.protected('voice')
+    runtime.workers[sid]['runtimeOwnerId']='replacement'
+    assert not runtime.retention.protected(sid)
+    runtime.workers[sid]['runtimeOwnerId']='current'
+    service.state['updates']['drain']['workers'][sid]['ready']=True
+    assert not runtime.retention.protected(sid)
+    service.state['updates']['drain']['workers'][sid]['ready']=False
+    for phase in ('replacing','releasing','released'):
+        service.state['updates']['drain']['phase']=phase
+        assert not runtime.retention.protected(sid)
+        assert runtime.retention.protected('voice')
+
+
+async def test_explicit_stop_waits_for_pending_runtime_work_then_wakes_idle_update(manager, monkeypatch):
+    from amplifier_web import update_drain
+    service=manager.service
+    await service.dispatch('session.create', {})
+    session=service._session();session['status']='working'
+    sid=session['id'];target={'attemptId':'a'*32,'revision':'b'*40,'generation':'c'*32}
+    state=service.state['updates'];state.update(phase='app-staged',pendingApp=target)
+    pending=[True]
+    service.runtime.has_pending_operations=lambda: pending[0]
+    async def boundary(*args,**kwargs):
+        pytest.fail('Passive update readiness must not move or yield a worker')
+    service.runtime.handoff_boundary=boundary
+    installed=asyncio.Event()
+    async def activate():
+        async with manager.lock:
+            if await update_drain.prepare(manager,target):
+                state.update(phase='installed',pendingApp=None);installed.set()
+    monkeypatch.setattr(manager,'app',activate)
+    manager._storage_last_pass=time.time()
+    await sleeping_owner(manager,monkeypatch)
+    assert not installed.is_set()
+    session['interruptionRevision']=1
+    await service.on_runtime_event('runtime.status',{'sessionId':sid,'status':'stopped'})
+    await asyncio.sleep(.02)
+    assert not installed.is_set() and not manager.wakeup.is_set()
+    pending[0]=False
+    await service.on_runtime_event('runtime.warmth',{'sessionId':sid,'status':'cold'})
+    await asyncio.wait_for(installed.wait(),1)
+    assert session['status']=='stopped' and session['interruptionRevision']==1
+    assert not state.get('drain')

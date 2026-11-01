@@ -23,8 +23,63 @@
 @media(prefers-reduced-motion:reduce){.a-rail-mark span{transition:none}}
 
 .a-history-window-controls{display:flex;justify-content:center;gap:12px;flex-wrap:wrap}
-.a-messages[data-overflow-above=true]{mask-image:linear-gradient(to bottom,transparent,black 18px);}
-@media(forced-colors:active){.a-messages[data-overflow-above=true]{mask-image:none}}
+/* Shared transcript mask; fade tokens clamp to 0–48px and each edge to half the pane. */
+#amp-one .a-messages{
+ --_a-transcript-fade-top:0px;
+ --_a-transcript-fade-bottom:0px;
+ --_a-transcript-gutter-left:0px;
+ --_a-transcript-gutter-right:0px;
+ --_a-transcript-edge-mask:linear-gradient(black,black);
+ --_a-transcript-gutter-mask:linear-gradient(to right,
+  black 0,
+  black var(--_a-transcript-gutter-left,0px),
+  transparent var(--_a-transcript-gutter-left,0px),
+  transparent calc(100% - var(--_a-transcript-gutter-right,0px)),
+  black calc(100% - var(--_a-transcript-gutter-right,0px)),
+  black 100%);
+ -webkit-mask-image:none!important;
+ mask-image:none!important;
+}
+#amp-one .a-messages[data-overflow-above=true]{
+ --_a-transcript-fade-top:min(clamp(0px,var(--a-transcript-fade-top,18px),48px),50%);
+}
+#amp-one .a-messages[data-overflow-below=true]{
+ --_a-transcript-fade-bottom:min(clamp(0px,var(--a-transcript-fade-bottom,24px),48px),50%);
+}
+#amp-one .a-messages[data-overflow-above=true][data-overflow-below=true]{
+ --_a-transcript-edge-mask:linear-gradient(to bottom,
+  transparent 0,
+  black var(--_a-transcript-fade-top),
+  black calc(100% - var(--_a-transcript-fade-bottom)),
+  transparent 100%);
+}
+#amp-one .a-messages[data-overflow-above=true]:not([data-overflow-below=true]){
+ --_a-transcript-edge-mask:linear-gradient(to bottom,
+  transparent 0,
+  black var(--_a-transcript-fade-top),
+  black 100%);
+}
+#amp-one .a-messages[data-overflow-below=true]:not([data-overflow-above=true]){
+ --_a-transcript-edge-mask:linear-gradient(to bottom,
+  black 0,
+  black calc(100% - var(--_a-transcript-fade-bottom)),
+  transparent 100%);
+}
+#amp-one .a-messages[data-overflow-above=true]:not(:focus-within),
+#amp-one .a-messages[data-overflow-below=true]:not(:focus-within){
+ -webkit-mask-image:var(--_a-transcript-edge-mask),var(--_a-transcript-gutter-mask)!important;
+ -webkit-mask-composite:source-over!important;
+ mask-image:var(--_a-transcript-edge-mask),var(--_a-transcript-gutter-mask)!important;
+ mask-composite:add!important;
+}
+@media(forced-colors:active){
+ #amp-one .a-messages[data-overflow-above=true]:not(:focus-within),
+ #amp-one .a-messages[data-overflow-below=true]:not(:focus-within){
+  -webkit-mask-image:none!important;
+  mask-image:none!important;
+ }
+}
+/* Overlay scrollbars expose no layout gutter; their track is not guaranteed to sit outside the mask. */
 
 .a-rail-marks[data-overflow-above=true]{mask-image:linear-gradient(to bottom,transparent,black 12px)}
 @media(forced-colors:active){.a-rail-marks[data-overflow-above=true]{mask-image:none}}

@@ -113,7 +113,7 @@ def scope(state, row):
 
 
 def load(state, db, identity, *, open_panel=True, version=None):
-    from .service import AppError
+    from .errors import AppError
     row = next((r for r in state.get('canvasArtifacts',[]) if r['id']==identity and scope(state,r)), None)
     if not row:
         raise AppError('This artifact belongs to another chat or is no longer available.')
@@ -157,7 +157,7 @@ def empty(state, *, open_panel=False):
 
 def open_gif(service, args, proof):
     """Under the action lock, bind one immutable reference to this client only."""
-    from .service import AppError
+    from .errors import AppError
     # Fresh guard immediately before mutation: an earlier guarded record is
     # not authority. Canonical proof is obtained off-lock by the dispatcher.
     record = service.outputs.media.guard(args, proof=proof)
@@ -188,7 +188,7 @@ def open_gif(service, args, proof):
 
 
 def command(state, db, action, args):
-    from .service import AppError
+    from .errors import AppError
     remember(state,db)
     if action=='canvas.select':
         from .canvas_versions import ordinary_preview, latest
@@ -330,6 +330,6 @@ def recover_legacy(state, db, home):
                 except (ValueError,TypeError,KeyError,AttributeError):
                     continue
                 except Exception as exc:
-                    from .service import AppError
+                    from .errors import AppError
                     if not isinstance(exc,AppError):raise
     state['canvasLibraryMigration']={'recovered':recovered,'at':time.time()}

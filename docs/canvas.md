@@ -45,10 +45,11 @@ resized gets the remaining room. Keyboard users can focus a divider and use
 arrows (20 pixels), Home (minimum), or End (maximum). On narrow windows, the
 canvas covers the workspace instead of squeezing both panes.
 
-Canvas has one navigation row: **Overview** and the open documents. Overview
+Canvas has one document navigation row: **Overview** and the open documents. Overview
 stays at the leading edge while the document strip scrolls; its label contracts
 to an icon without resizing the strip. **Open documents** offers the same open
-items in a bounded, searchable list, with named close actions. Closing a tab
+items in a bounded, searchable list, with named close actions. Each tab also has
+an always-visible **Close tab [title]** button beside its title. Closing a tab
 keeps its saved output. Arrow keys move tab focus; Enter selects and Delete closes
 a focused document tab.
 
@@ -64,7 +65,11 @@ in the originating browser tab, scoped to the chat, across document visits and
 Canvas hide/reopen. The overview has one bounded scroll region through Publishing;
 Outputs is not a second nested scroller. The container-header Canvas button hides
 or shows the panel without closing the selected artifact or discarding edits.
-There is no separate Back to chat control inside Canvas.
+The labeled **Close Canvas** button in the Canvas header uses that same visibility
+operation to return to chat, preserving open tabs, saved versions and unsaved
+viewer state. Narrow panes place the header actions below the document strip so
+close controls keep their 44px targets. Reopen with the container-header Canvas
+button; reopen a closed document from Overview's saved outputs.
 
 The short Overview-label transition respects `prefers-reduced-motion`, including
 runtime changes. This revision has no separate app-level Less motion setting.
@@ -131,6 +136,7 @@ controls, reuse the owning entry or record the necessary semantic difference.
 
 | Control / owner | Variants, state and reuse boundary | Accessibility / focused evidence |
 | --- | --- | --- |
+| Document close and panel dismissal: `frontend/src/canvas-library.jsx` (`CanvasTabs.remove`), `shell-panels.jsx`, `canvas-experience.css` | The tab's visible close button and Open documents list share guarded `canvas.tabClose`; saved artifacts/versions remain. Labeled Close Canvas and the container-header toggle share `canvas.visibility`, retaining mounted viewers and open tabs. No new state owner or deletion action. | Named native buttons, 44px targets, keyboard focus and refused-close feedback; `canvas-close-browser.mjs`, `canvas-dirty-browser.mjs`, `canvas-overview.test.mjs`, `shell-panels.test.mjs`. |
 | Compact exact-version card and disclosure: `frontend/src/inline-artifacts.jsx` (`DocumentOutput`, `Preview`, `ArtifactLinks`) | HTML, documents, diagrams and images share title/type/version/open/disclosure; image gallery and specialized renderer bodies remain distinct. Client-local placement, pending/error and explicit HTML reset are not generic card state. | Native buttons; stable `aria-expanded`/`aria-controls`; titled open target; status errors; preserved focus. `tests/test_artifact_presentation.py`, `frontend/tests/artifact-one-surface-browser.mjs`, `frontend/tests/inline-artifacts-browser.mjs`. |
 | Viewer controls: `frontend/src/canvas-controls.jsx`, `canvas-viewer.jsx`, `canvas-workspace.jsx` | Existing renderer host, exact source binding, source/copy/download, portal placement and inline toolbar suppression. Refresh uses `canvas.views.inspect`; executable previews retain their running definition while discovering new versions. Explicit UI-only `canvas.views.loadVersion` binds both the outgoing view and exact incoming version, with visible reset/code consequences and dirty protection. Current/historical/retained, pending, failed and unconfirmed feedback stays visible. Live apps and websites retain their controls. No competing viewer/registry. | Native named Refresh/Load buttons, live status, 44px targets and keyboard/dirty guards; `tests/test_canvas_views.py`, `tests/test_canvas_versions.py`, `frontend/tests/canvas-refresh-browser.mjs`, `canvas-refresh-catchup-browser.mjs`. |
 | Canvas Details inspector: `frontend/src/shell-panels.jsx`, `canvas-experience.css` | The existing control portal stays mounted beside the reader at Canvas widths of 720px or more. Narrower panes use the same bounded right-hand sheet below the single navigation bar; only the covered reader is inert. The compact version/copy/download/Details row and format-specific viewers remain their existing owners. No new renderer or preference is introduced. | Named region, 44px controls, Escape/close focus restoration, retained header toggle and document navigation. `frontend/tests/shell-panels.test.mjs`, `canvas-chrome-browser.mjs` geometry/old-top-band negative and `canvas-dirty-browser.mjs` retained-editor checks. |

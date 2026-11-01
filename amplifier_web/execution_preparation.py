@@ -5,6 +5,7 @@ from another source. Custom reducers are rejected before invocation. JSON and
 its content hash remain the existing storage format and authority.
 """
 from collections import OrderedDict
+from dataclasses import dataclass
 import hashlib
 import json
 import io
@@ -16,6 +17,14 @@ from .resource_files import Prepared, prepare
 
 class Unsupported(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class ReferenceEntry:
+    owner: tuple
+    signature: tuple
+    resource: object
+    charge: int
 
 
 class _BoundedBytes(io.BytesIO):
@@ -58,6 +67,12 @@ class ExecutionPreparation:
         self.bytes = 0
         self.accounting = OrderedDict()
         self.accounting_bytes = 0
+        self.references = OrderedDict()
+
+    def _reserved(self, pending):
+        entries = {id(entry): entry for entry in self.references.values()}
+        entries.update((id(entry), entry) for entry in pending.values() if entry is not None)
+        return sum(entry.charge for entry in entries.values())
 
     def retired(self, owner, rows):
         """Private persistence-only projection; callers must not mutate it.
@@ -117,47 +132,126 @@ class ExecutionPreparation:
             self.accounting_bytes += charge
         return result
 
-    def _part(self, key, value):
+    def _part(self, key, value, reserved=0):
         try:
             witness = _witness(value)
         except (Unsupported, pickle.PicklingError, RecursionError, TypeError, ValueError):
-            return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+            return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')), None
         old = self.entries.get(key)
         if old is not None and old[0] == witness:
             self.entries.move_to_end(key)
-            return old[1]
+            return old[1], old[3]
         # Synchronous builtin traversal: no await or custom hook can mutate
         # the graph between witnessing it and applying the original encoder.
         text = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        token = object()
         charge = sys.getsizeof(witness) + sys.getsizeof(text) + sys.getsizeof(key) + 256
         if old is not None:
             self.bytes -= self.entries.pop(key)[2]
-        if charge <= self.MAX_BYTES:
-            while self.entries and self.bytes + charge > self.MAX_BYTES:
+        if charge + reserved <= self.MAX_BYTES:
+            while self.entries and self.bytes + charge + reserved > self.MAX_BYTES:
                 self.bytes -= self.entries.popitem(last=False)[1][2]
-            self.entries[key] = (witness, text, charge)
+            self.entries[key] = (witness, text, charge, token)
             self.bytes += charge
-        return text
+            return text, token
+        return text, None
 
     def prepare(self, owner, tree):
+        result, _ = self._prepare(owner, tree, reserved=self._reserved({}))
+        return result
+
+    def _prepare(self, owner, tree, *, previous=None, reserved=0):
         if (type(owner) is not str or len(owner) > 200 or type(tree) is not dict
                 or any(type(key) is not str or len(key) > 200 for key in tree)):
-            return prepare(tree)
-        fields = []
+            return prepare(tree), None
+        fragments, signature = [], []
+        cacheable = True
         for name in sorted(tree):
             value = tree[name]
             if type(value) is list and len(value) >= self.CHUNK:
-                parts = [self._part((owner, name, start), value[start:start + self.CHUNK])[1:-1]
+                parts = [self._part((owner, name, start), value[start:start + self.CHUNK], reserved)
                          for start in range(0, len(value), self.CHUNK)]
-                text = '[' + ','.join(parts) + ']'
+                chunked = True
             else:
-                text = self._part((owner, name, None), value)
+                parts = [self._part((owner, name, None), value, reserved)]
+                chunked = False
+            tokens = tuple(token for _, token in parts)
+            cacheable &= all(token is not None for token in tokens)
+            signature.append((name, chunked, tokens))
+            fragments.append((name, chunked, parts))
+        signature = tuple(signature) if cacheable else None
+        if signature is not None and signature == previous:
+            return None, signature
+        fields = []
+        for name, chunked, parts in fragments:
+            text = ('[' + ','.join(part[1:-1] for part, _ in parts) + ']'
+                    if chunked else parts[0][0])
             fields.append(json.dumps(name, ensure_ascii=False) + ':' + text)
         text = '{' + ','.join(fields) + '}'
         encoded = text.encode()
-        return Prepared(text, hashlib.sha256(encoded).hexdigest(), len(encoded))
+        return Prepared(text, hashlib.sha256(encoded).hexdigest(), len(encoded)), signature
+
+    def reference(self, db, session, tree, pending):
+        """Reuse only complete freshly witnessed, successfully committed files."""
+        from . import resource_files
+        identity = session['id']
+        owner = (id(session), session.get('runtimeSessionId'), session.get('workspace'))
+        eligible = all(type(value) in (str, type(None)) for value in owner[1:])
+        previous = self.references.get(identity) if eligible else None
+        if previous is not None and previous.owner != owner:
+            previous = None
+        prepared, signature = self._prepare(identity, tree,
+            previous=previous.signature if previous is not None else None,
+            reserved=self._reserved(pending))
+        if prepared is None:
+            reference = resource_files.reuse_reference(db, previous.resource)
+            if reference is not None:
+                pending[identity] = previous
+                return reference
+            # Missing or changed storage evidence keeps ordinary preparation,
+            # adoption and complete file validation, never a dangling pointer.
+            prepared, signature = self._prepare(identity, tree, reserved=self._reserved(pending))
+        reference = resource_files.put_prepared(db, prepared)
+        pending[identity] = None
+        if signature is not None and eligible:
+            resource = resource_files.validate_reference(db, reference)
+            if resource is not None:
+                charge = (1024 + sys.getsizeof(identity) + sys.getsizeof(owner)
+                    + sum(sys.getsizeof(value) for value in owner)
+                    + sys.getsizeof(signature) + sys.getsizeof(resource.source.indexed)
+                    + sys.getsizeof(str(resource.source.directory))
+                    + sum(sys.getsizeof(field) + sys.getsizeof(field[0]) + sys.getsizeof(field[2])
+                          + sum(sys.getsizeof(token) for token in field[2]) for field in signature))
+                if charge + self._reserved(pending) <= self.MAX_BYTES:
+                    pending[identity] = ReferenceEntry(owner, signature, resource, charge)
+                    reserved = self._reserved(pending)
+                    while self.entries and self.bytes + reserved > self.MAX_BYTES:
+                        self.bytes -= self.entries.popitem(last=False)[1][2]
+        return reference
+
+    def committed(self, pending, owners, deleted=()):
+        """Failed transactions never promote or replace reference evidence."""
+        from .cold_display import MARKER
+        def current(identity, entry):
+            owner = owners.get(identity)
+            if identity in deleted or owner is None or owner.get('historyManaged'):
+                return False
+            key = (id(owner), owner.get('runtimeSessionId'), owner.get('workspace'))
+            return (all(type(value) in (str, type(None)) for value in key[1:])
+                    and key == entry.owner and dict.__contains__(owner, 'execution')
+                    and 'execution' not in dict.get(owner, MARKER, {}))
+        for identity, entry in tuple(self.references.items()):
+            if not current(identity, entry):
+                self.references.pop(identity)
+        for identity, entry in pending.items():
+            self.references.pop(identity, None)
+            if entry is not None and current(identity, entry):
+                self.references[identity] = entry
 
     def retain(self, owners):
+        for owner in tuple(self.references):
+            if owner not in owners:
+                self.references.pop(owner)
         for key in tuple(self.entries):
             if key[0] not in owners:
                 self.bytes -= self.entries.pop(key)[2]

@@ -98,14 +98,29 @@ This does not change canonical event capture, transcripts, or model context.
 
 The save path uses existing `_coldFields` resources in the **stored
 projection only** for large messages and retained execution accounting. Live
-objects remain mutable. Every save re-encodes resident content, so nested,
-same-length edits cannot reuse a stale reference. Normalization and the existing
+objects remain mutable. Every eligible save freshly checks complete typed
+content, including nested, same-length edits. Normalization and the existing
 execution filtering still precede storage; receipts are not discarded.
 
+Unchanged execution may reuse its committed resource after every fragment passes
+its bounded content check and the exact resource index and validated backing-file
+evidence still match under the SQLite writer lock. Initial file evidence requires
+the complete content hash; changed evidence requires canonical preparation and
+validation. Compact reference metadata shares the existing encoding budget and
+is promoted only after commit. Failed saves, owner replacement, cold/native
+transitions and unsupported content cannot acknowledge a new cached reference.
+
 This reduces repeated large-file writes when only progress changes, not all
-serialization. Unchanged-save CPU can increase. Restart, private drafts, command
+serialization. Changed content still uses canonical encoding. Restart, private drafts, command
 replay, nested edits, accounting and missing/corrupt resources require checks.
 Derived message summaries must retire when their mutable body is handed out.
+
+Passive peer notifications load the recipient's messages when appending, while
+unrelated cold execution, configuration and catalog references stay indirect.
+They still verify native history and reconcile a changed transcript before the
+append. The message and receipt share their existing save boundary; an uncommitted
+failure restores the append and its navigation/reference metadata, and an exact
+retry of a committed notification never wakes the recipient.
 
 Do not infer physical cleanup from transaction rollback: a process may die after
 writing a file but before committing its index. Resource creation now takes the
@@ -218,9 +233,25 @@ Settings → Storage → **Automatic cleanup** applies to every workspace on thi
 app installation. It is enabled by default, with a seven-day period beginning
 when an owned code copy is first verified unused, and a 10 GiB size target.
 Zero days removes the extra waiting period; a zero size target disables size
-pressure. Turning automatic cleanup off leaves explicit, reviewed cleanup
+pressure. Turning automatic cleanup off leaves explicit cleanup
 available. Settings changes use a revision check, and a lost reply is recovered
 with the original request ID rather than submitting another cleanup.
+
+Agents, native children and trusted systems with an explicit calling conversation
+can save this policy and run it under standing Full access, without a browser,
+new human confirmation or mandatory preview. Ask retains the existing user
+controls. Accepted explicit work keeps its source authority across ordinary turn
+completion, but rechecks the captured Full revision, Stop, assignment status,
+workspace and native execution ownership after waits and at each owner's removal
+admission. Revoking and restoring Full does not renew an already captured run.
+
+The saved global policy is durable configuration: automatic maintenance continues
+after its setter finishes or loses Full. Stop and revocation fence that setter's
+in-flight explicit cleanup, not the committed maintenance policy. New autonomous
+request receipts belong to their canonical source conversation and retain the
+actual agent/system actor privately. Exact retries after Stop or revocation only
+observe the original receipt; they do not refresh authority or repeat an attempt.
+Global reads and public results omit private authority and input identities.
 
 The policy asks the existing ecosystem-generation and purpose-installed test
 runner and qualified dependency-layer owners to remove only copies they can still prove unused. Current and

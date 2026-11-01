@@ -18,7 +18,7 @@ previous acknowledgements. Inputs over 64 KB are refused without truncation.
 Whole-conversation, large or sensitive exports require an additional review
 acknowledgement; the browser offers a minimal range by default.
 
-`feedback.excerpt.stage` requires disclosure acknowledgement (plus warnings where
+Outside the Full initial-publication path below, `feedback.excerpt.stage` requires disclosure acknowledgement (plus warnings where
 applicable), stages those exact bytes locally, and uses a stable request ID.
 Agents use these same actions with their own conversation and an explicit
 connected browser target for staging. The user must have reviewed and approved
@@ -33,8 +33,8 @@ the reviewed conversation to remain selected and cannot overwrite newer feedback
 text. The host verifies hashes and
 rechecks repository identity and visibility before any upload. A visibility
 change refuses all file writes and requires new review. Public upload is allowed
-only for explicitly reviewed excerpt files; ordinary attachments still require
-a private repository. Files are stored in an isolated root commit and linked
+only for explicitly reviewed excerpt files or ordinary files with exact public
+destination/file confirmation. Files are stored in an isolated root commit and linked
 from the issue. Submitted content may remain in repository history and is not
 retractable through the app. Unknown delivery outcomes are never reposted.
 
@@ -42,3 +42,52 @@ Validation uses an isolated real service/browser and intercepted GitHub calls.
 This does not claim a live issue was posted or that redaction finds every type
 of private information. Structured tool-output bundles and per-message omission
 controls beyond editing the excerpt are outside this initial slice.
+
+## Initial publication under Full access
+
+A current agent, assigned native child or trusted host system with an explicit
+calling conversation can prepare, stage and submit exact initial feedback under
+that conversation's saved Full access. It does not need a browser, a selected chat,
+a new human message or disclosure/warning acknowledgements. The existing
+minimal export and excerpt preparation checks still apply. Selection of an
+immutable same-conversation review retains agent/system attribution; the
+preparation action does not imply human or independent review.
+
+Initial Full file staging uses conversation ownership in the existing attachment
+rows and returns the exact file ID and SHA256. Browser drafts remain private.
+`attachmentIds` selects only that owner's files; unselected excerpts do not force
+publication of the whole staging set. The host rechecks stored bytes and the
+prepared excerpt's repository identity/visibility. Optional `confirmedExcerpts`
+and `confirmedFiles` are exact content preconditions when supplied, not claims
+that a human reviewed them. A mismatched set or hash still refuses the send.
+
+For files or an explicit `uploadDestination`, the sender verifies and records the
+actual fixed feedback repository before its first write. Plain-text feedback
+without that precondition goes directly to issue creation, retaining the same
+authority check before the write. Full accepts publication/retention risk without a separate
+`feedback.destination` call; an explicitly supplied `uploadDestination` remains
+an exact precondition. Accepted payloads and request fingerprints stay unchanged.
+New Full receipts retain the actual origin, source conversation, access revision,
+native/execution identity and Stop boundary, plus the assigned generation and
+actual runtime principal for an agent. Each child invocation keeps its assigned inputs captured before preparation,
+including nested and resumed execution; later root inputs are not substituted.
+The native worker supplies every assigned input ID. Missing or empty input
+transport records unavailable coverage.
+Fresh Full capture shares the access-mode owner with observations. A system call
+without native transport invents no native actor; supplied native transport must
+be current, and malformed or foreign input identities refuse.
+Every upload/issue write checks that retained authority. Revocation
+or Stop prevents later writes; once a write may have happened, its outcome stays
+unknown and is never replayed. An accepted background send can outlive its turn.
+
+Initial publication, direct text follow-ups and later ordinary-file additions
+support standing Full through the same retained authority. Later files use
+conversation-owned staging and an exact selected file manifest; review is
+optional under Full. Their existing upload journal retains per-phase receipts
+and supports read-only reconciliation after Stop or revocation. Optional text
+comparison reviews retain their separate client workflow; general GitHub issue,
+PR or release management is outside these feedback actions. Existing Ask-mode/browser
+confirmation keeps its behavior. Admission consumes the canonical current
+generation/Stop check with explicit descendant support, not a second generation
+authority service. Runtime and release qualification remain distinct from this
+source contract.

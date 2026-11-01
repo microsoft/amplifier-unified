@@ -6,6 +6,12 @@ preparation and compatibility checks before a worker can accept its first input.
 The existing progress messages describe those stages; they are not delivery
 acknowledgements.
 
+Use [performance validation](performance.md) for startup and checkpoint changes.
+Declare transcript size, retained job count and cold/warm conditions; separate
+required recovery checks from repeated scans or copies. A no-op disk write does
+not establish a cheap checkpoint, and faster preparation must preserve ownership,
+native history, interruption evidence and cancellation cleanup.
+
 Each newly prepared profile retains a private `profile-attempt.json` in its
 generation receipt directory. It now records monotonic durations, in milliseconds,
 for preflight, waiting for the configuration lock, the attempt overall, and these
@@ -29,6 +35,35 @@ The attempt duration is the enclosing interval. A process crash may leave a phas
 marked running; that is a historical receipt, not proof that a process is alive.
 A cached profile retains its original receipt, unchanged. These timings describe
 qualification, not each later cache hit or first-token latency.
+
+## Per-worker startup clocks
+
+A worker retains its latest completed startup attempt in private
+`runtime-reports/<session-id>/startup-timing.json`, beside its mount reports.
+This is separate from profile installation and qualification. Fixed labels split
+package bootstrap/imports, ownership/recovery, manager configuration and native
+history load, bundle load/plan/preparation, provider setup, receipt repair,
+session creation, context/children/settings restoration, initial checkpoint,
+control restoration, app access, ownership registration, support metadata and
+the worker's ready publication.
+
+Each bounded row records monotonic elapsed milliseconds, process CPU milliseconds,
+offset from worker-start entry, and succeeded/failed/cancelled status. Exception
+class names are retained without exception text, arguments, configuration or
+conversation content. The receipt identifies its attempt, process and start time.
+Writes are private and best effort; a write failure cannot replace startup's
+outcome or cancellation. It is written after startup cleanup and replaces only
+the previous timing receipt. Failure before diagnostics initialize or a process
+crash can leave no new receipt; verify its attempt and process before attributing
+it to the current startup.
+
+**Do not sum nested durations:** `manager.prepare` includes its manager phases.
+Process CPU can include worker threads and does not identify one coroutine's CPU.
+The final ready phase means the worker published readiness, not that the host
+received it. These clocks exclude process spawning, prior profile qualification,
+input admission and model response time; unlabelled intervals and teardown may
+also appear in the attempt total. They diagnose costs without changing startup
+order, eager restoration, provider selection or native-history authority.
 
 ## Startup cleanup ownership
 

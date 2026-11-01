@@ -34,7 +34,7 @@ def definitions(schema, string):
         "question.create": ("Ask a durable question in this conversation. Use Markdown and artifacts:[{id,version}] from saved Canvas receipts when review material informs the answer; versions are exact, not Latest. required=true blocks only the named dependency. This never grants permission. Keep a stable command ID for retries.", schema({"sessionId": identity["sessionId"], **content}, ["sessionId", "prompt", "required", "dependency"])),
         "question.list": ("Read this conversation's saved questions without selecting it or starting work. Pending is not answered, regardless of elapsed time.", schema({"sessionId": identity["sessionId"], "status": {"enum": ["pending", "answered", "cancelled", "superseded"]}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 50}}, ["sessionId"])),
         "question.read": ("Read one exact question, its answer provenance and separate runtime delivery state.", schema(identity)),
-        "question.answer": ("Record an explicit answer once for this question revision. Choose optionId or text. Agents must cite sourceMessageId from a user message or voice transcript in this conversation. Answering never grants permission. Duplicate answers never replay work.", schema({**identity, **revision, "optionId": string(100), "text": string(8000), "sourceMessageId": string(200)}, ["sessionId", "id", "expectedRevision"])),
+        "question.answer": ("Record an explicit answer once for this question revision. Choose optionId or text. Cite the actual user's sourceMessageId. For an answer delivered from another chat, also supply sourceRequestId from that coordination.send; the host verifies the original human input and exact handoff. Do not ask the user to repeat an answer already delivered this way. Answering does not grant tool permissions or reset budgets. Duplicate answers never replay work.", schema({**identity, **revision, "optionId": string(100), "text": string(8000), "sourceMessageId": string(200), "sourceRequestId": string(200)}, ["sessionId", "id", "expectedRevision"])),
         "question.cancel": ("Cancel a pending question at the exact revision. Cancellation is not an answer and does not authorize the dependent work.", schema({**identity, **revision, "reason": string(1000)}, ["sessionId", "id", "expectedRevision"])),
         "question.supersede": ("Replace a pending question atomically. Late answers to the old question are rejected. The replacement has its own ID and revision.", schema({**identity, **revision, **content}, ["sessionId", "id", "expectedRevision", "prompt", "required", "dependency"])),
     }
@@ -70,13 +70,63 @@ class Questions:
     def __init__(self, app):
         self.app = app
         self.store = QuestionStore(app.db)
-        for record in self.store.all():
+        records = self.store.all()
+        uncertain = {(r["sessionId"], r["delivery"].get("inputId")) for r in records
+                     if r.get("status") == "answered" and
+                     (r.get("delivery") or {}).get("status") in {"sending", "unknown"} and
+                     r["delivery"].get("inputId") == "question:" + r["id"] + ":answer"}
+        # Recovery uses only already resident evidence, once, not a transcript
+        # scan per question. Cold/native-only evidence uses conversation.delivery.
+        accepted = {(s["id"], m.get("inputId")) for s in app.state["sessions"]
+                    for m in s.get("messages", [])
+                    if (s["id"], m.get("inputId")) in uncertain and
+                    m.get("role") == "user" and
+                    (m.get("delivery") or {}).get("status") == "accepted"}
+        for record in records:
+            if (record["sessionId"], (record.get("delivery") or {}).get("inputId")) in accepted:
+                record["delivery"].update(status="accepted", updatedAt=time.time())
+                record["delivery"].pop("message", None)
+                self.store.put(record)
             if (record.get("delivery") or {}).get("status") == "sending":
                 record["delivery"].update(status="unknown", message="The app restarted before delivery was confirmed. The answer was saved; work was not replayed.", updatedAt=time.time())
                 self.store.put(record)
         self._projection_version = -1
         self._grouped = {}
         self.sync()
+
+    def for_input(self, session_id, input_id):
+        """Find one immutable answer by its exact session/input binding."""
+        from .service import AppError
+        if not isinstance(input_id, str) or not input_id.startswith("question:") or not input_id.endswith(":answer"):
+            return None
+        identity = input_id[len("question:"):-len(":answer")]
+        try:
+            record = self.store.get(session_id, identity)
+        except AppError as exc:
+            if exc.status == 404:
+                return None
+            raise
+        if (record["status"] != "answered" or not record.get("answer") or
+                (record.get("delivery") or {}).get("inputId") != input_id):
+            return None
+        return record
+
+    def accept_delivery(self, session_id, input_id):
+        """Apply exact positive input evidence; admission is not work completion.
+
+        The immutable answer's saved input binding is the authority, not a
+        caller's command ID, matching text, a later turn or session status.
+        Callers own the service lock and publication transaction.
+        """
+        record = self.for_input(session_id, input_id)
+        if record is None or record["delivery"]["status"] == "accepted":
+            return False
+        delivery = record["delivery"]
+        delivery.update(status="accepted", updatedAt=time.time())
+        delivery.pop("message", None)
+        self.store.put(record)
+        self.sync({session_id})
+        return True
 
     def sync(self, session_ids=None):
         if session_ids is not None:
@@ -190,6 +240,53 @@ class Questions:
             raise AppError("This question's saved artifact changed; no replacement was displayed.", 409)
         return ref
 
+    def _answer_source(self, session, args, record):
+        """An existing delivered handoff can carry the user's original answer.
+
+        This records a decision, not a new permission grant. The receiving chat
+        still owns its question. Do not infer human authorship from peer prose,
+        and do not use an unrelated message merely because the agent can read it.
+        """
+        from .collaboration import PROTOCOL
+        from .peer_scope import participant_matches
+        from .service import AppError
+
+        source_session, request = session, None
+        if args.get('sourceRequestId'):
+            if not args.get('sourceMessageId'):
+                raise AppError('Cite the original human sourceMessageId with this handoff.', 409)
+            request = self.app.collaboration.receipt(args['sourceRequestId'])
+            if (request.get('commandAction') != 'coordination.send'
+                    or request.get('protocol') != PROTOCOL
+                    or request.get('target', {}).get('sessionId') != session['id']
+                    or request.get('senderSessionId') == session['id']
+                    or request.get('delivery') not in {'accepted', 'applied', 'notified'}
+                    or request.get('cancellation')
+                    or session.get('status') in {'stopping', 'interrupted', 'stopped', 'error', 'cancelled', 'failed'}):
+                raise AppError('Use an exact delivered handoff to this conversation for the answer.', 409)
+            source_session = self.app._session(request['senderSessionId'], hydrate=False)
+            if (not participant_matches(request, source_session)
+                    or not participant_matches(request, session)
+                    or request.get('sourceInterruptionRevision') != source_session.get('interruptionRevision', 0)
+                    or request.get('interruptionRevision') != session.get('interruptionRevision', 0)):
+                raise AppError('This answer handoff changed location or was interrupted. Read the current request.', 409)
+
+        source = next((m for m in source_session['messages']
+                       if m['id'] == args.get('sourceMessageId') and m.get('role') == 'user'), None)
+        if source is None:
+            raise AppError('Answer provenance must reference an original user message in this conversation or its delivered handoff.', 409)
+        if source.get('inputOrigin') not in {'ui', 'user', 'voice'}:
+            raise AppError('Answer provenance needs a verified user input; agent-authored or unattributed messages cannot answer for the user.', 409)
+        if source.get('questionId'):
+            raise AppError("Use the user's original response, not a generated question-answer receipt.", 409)
+        if source.get('createdAt', 0) < record['createdAt']:
+            raise AppError('The user response must follow this question.', 409)
+        if request and (not source.get('inputId')
+                        or source['inputId'] not in request.get('sourceInputIds', [])
+                        or source.get('createdAt', 0) > request.get('acceptedAt', 0)):
+            raise AppError('The handoff must retain this exact human response in its admitted input lineage.', 409)
+        return source, source_session['id']
+
     def dispatch(self, action, args, origin, client_id, pending):
         from .service import AppError
         app = self.app
@@ -224,21 +321,16 @@ class Questions:
             if (has_option and option is None) or (has_text and (not record["allowFreeText"] or not text.strip())):
                 raise AppError("Use an offered option or an allowed nonempty free-text answer.")
             source = None
-            if args.get("sourceMessageId"):
-                source = next((m for m in session["messages"] if m["id"] == args["sourceMessageId"] and m.get("role") == "user"), None)
-                if source is None:
-                    raise AppError("Answer provenance must reference a user message in this conversation.", 409)
-                if source.get('inputOrigin') not in {'ui', 'user', 'voice'}:
-                    raise AppError("Answer provenance needs a verified user input; agent-authored or unattributed messages cannot answer for the user.", 409)
-                if source.get("questionId"):
-                    raise AppError("Use the user's original response, not a generated question-answer receipt.", 409)
-                if source.get("createdAt", 0) < record["createdAt"]:
-                    raise AppError("The user response must follow this question.", 409)
+            source_session_id = session['id']
+            if args.get("sourceMessageId") or args.get('sourceRequestId'):
+                source, source_session_id = self._answer_source(session, args, record)
             if origin == "agent" and source is None:
                 raise AppError("An agent must cite the user's answer with sourceMessageId; it cannot answer on the user's behalf.", 409)
             provenance = {"origin": origin, "clientId": client_id, "via": "call" if source and source.get("via") == "call" else "chat" if source else "ui"}
             if source:
                 provenance.update(messageId=source["id"], text=source.get("text", ""), inputOrigin=source['inputOrigin'], voiceId=source.get("voiceId"), voiceItemId=source.get("voiceItemId"))
+                if args.get('sourceRequestId'):
+                    provenance.update(sourceSessionId=source_session_id, sourceRequestId=args['sourceRequestId'])
             input_id = "question:" + record["id"] + ":answer"
             record.update(status="answered", answer={"text": text, "optionId": option["id"] if option else None,
                 "questionRevision": record["revision"], "answeredAt": time.time(), "provenance": provenance,
@@ -278,11 +370,17 @@ class Questions:
             message = str(exc)
         async with self.app.lock:
             record = self.store.get(session["id"], question_id)
-            record["delivery"].update(status=status, updatedAt=time.time())
-            if message:
-                record["delivery"]["message"] = message
-            self.store.put(record)
-            self.sync({session['id']})
-            self.app._publish_changes(sessions={session['id']})
+            # A late timeout/cancellation cannot erase acceptance observed by
+            # the input event path while the send RPC was still outstanding.
+            if record["delivery"]["status"] != "accepted":
+                if status == "accepted":
+                    self.accept_delivery(session["id"], input_id)
+                else:
+                    record["delivery"].update(status=status, updatedAt=time.time())
+                    if message:
+                        record["delivery"]["message"] = message
+                    self.store.put(record)
+                    self.sync({session['id']})
+                self.app._publish_changes(sessions={session['id']})
         if cancelled:
             raise asyncio.CancelledError

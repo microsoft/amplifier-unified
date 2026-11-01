@@ -32,8 +32,9 @@ so their returned recovery hint can be followed without changing route or scope.
 | `recall.search/read` | Shared selector, with the existing additional task scope. Search references include the chosen scope; source reads require it again and verify the indexed source revision. Search results recheck registered scope after index I/O. |
 | Agent `history.list`, `history.shared.list/view` | Resolve through the same passive registered-history query and bounded result/pagination shape. Human legacy/shared-history UI keeps its existing explicit library browser. |
 | Agent `session.inspect/history/titlePreview`, `message.copy`, `conversation.delivery`, `history.export` | Shared scope check before domain work and at the service mutation boundary. Existing availability, ownership, export and client-transport checks still apply. |
-| `coordination.result` | Accepts the declared scope but retains the exact request participant and each endpoint's saved location checks even with all. A cross-workspace request does not grant an unrelated reader access. A successful read is neither an artifact-library grant nor a new task instruction. |
+| `coordination.result/artifact` | Original participants retain exact request access. A registered Full-access observer may read an exact request/result or declared retained artifact using workspace/all selection, without becoming a participant. Both original endpoint locations, response revision and output identity/hash remain checked. Results read canonical receipts without loading transcripts; artifact authority is rechecked after I/O. A successful read grants neither peer-library access nor reply/notification ownership. |
 | `outputs.*` and image resources | Existing caller-owned output library and exact identity/hash checks. All does not authorize reading a peer's library. Request artifact references remain references, not a broader library capability. |
+| `workspace.tests.read/result` | Full-access reviewers can inspect a producer's saved check list or exact bounded output using its session and workspace IDs. Same-workspace by default; another registered workspace requires explicit all. Reads do not start a worker, run or cancel checks, reconcile resources, or release ownership. Ask-mode owners retain their own reads. |
 | Attached per-session HTTP | Authenticated user-client routes retain the explicit path session as the target. A different body target is rejected even with all. Reading a chosen registered conversation needs no new approval. |
 
 Native roots and finite, resumed, persistent, nested and in-process
@@ -42,6 +43,14 @@ app-control tools. Children can read the same explicitly selected own-history
 library; this does not lend them their parent's mutation principal. The optional
 full recipe module is not claimed qualified; subprocess recipe execution remains
 unsupported by the existing adapter.
+
+The passive `coordination.result/artifact` and `workspace.tests.read/result`
+routes also accept a Full-access root's currently admitted native descendants.
+They validate the actual mounted child's assignment and current worker, never a
+root identity supplied in tool arguments. Stop, worker replacement, changed
+execution and withdrawn Full access remain rejection boundaries. Artifact reads
+repeat that validation after file I/O. They do not grant reply, acknowledgement,
+submission, cancellation or cleanup authority.
 
 Same-user UI selection of an exact registered conversation keeps its current
 library access. It does not require the browser's previously selected workspace

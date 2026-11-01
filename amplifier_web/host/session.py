@@ -831,8 +831,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                           ask=None, report_dir=None, resume=False, selection=None,
                           application_host="Amplifier Unified", shared_handle=None,
                           shared_handle_getter=None, shared_snapshot=None,
-                          write_guard=None, resolved_root=None, execution_workspace=None,
-                          refresh_dependencies=False, install_overrides=None, qualification_readonly=False, global_only=False, runtime_plan=None, **kwargs):
+                          write_guard=None, resolved_root=None, execution_workspace=None, owner_session_id=None,
+                          refresh_dependencies=False, install_overrides=None, qualification_readonly=False, global_only=False, runtime_plan=None, startup_timing=None, **kwargs):
+    from ..worker_diagnostics import StartupTimings
+    startup_timing = startup_timing or StartupTimings()
     if refresh_dependencies and resume:
         raise ValueError("Dependency refresh is limited to a new isolated qualification session.")
     from amplifier_foundation import SessionConfigurator
@@ -844,9 +846,11 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     from .storage import SessionStore
 
     runtime = runtime or Runtime()
-    config = load_config(workspace, session_id=runtime.session_id, global_only=global_only)
-    from .config import prepare_registry
-    prepare_registry(config)
+    with startup_timing.phase('manager.config'):
+        config = load_config(workspace, session_id=runtime.session_id, global_only=global_only,
+            **({'owner_session_id': owner_session_id} if owner_session_id is not None else {}))
+        from .config import prepare_registry
+        prepare_registry(config)
     # Registry/cache ownership is passed explicitly below. AMPLIFIER_HOME must
     # remain the community data root, including for mounted CI logging hooks.
     execution_workspace = Path(execution_workspace or config.workspace).expanduser().resolve(strict=True)
@@ -859,30 +863,31 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     # A common checkpoint is read only for an explicitly legacy-only session;
     # a stale or corrupt checkpoint cannot prevent opening valid native history.
     native_guard = _NativeTranscriptGuard(store.directory(runtime.session_id) / "transcript.jsonl")
-    saved = store.load(runtime.session_id) if resume else None
-    history_source = "native" if saved is not None else "new"
-    if resume and saved is None:
-        if shared_snapshot is None and shared_handle is not None:
-            shared_snapshot = shared_handle.read()
-        if shared_snapshot is not None:
-            def legacy_value(name, default=None):
-                return shared_snapshot.get(name, default) if isinstance(shared_snapshot, dict) else getattr(shared_snapshot, name, default)
-            messages, metadata = legacy_value("messages"), legacy_value("metadata", {})
-            if not isinstance(messages, list) or not isinstance(metadata, dict):
-                raise ValueError("The legacy shared session checkpoint is malformed.")
-            saved = messages, {**metadata, "bundle": legacy_value("bundle")}
-            history_source = "legacy-checkpoint"
-        else:
-            store._migrate(runtime.session_id)
-            # Migration intentionally writes once; take its stamp before the
-            # read so a concurrent older CLI write cannot become our baseline.
-            native_guard.saved()
-            saved = store.load(runtime.session_id)
-            if saved is None and shared_handle is None:
-                saved = store.import_cli(runtime.session_id, workspace=config.workspace)
-            if saved is not None:
-                history_source = "native"
-    native_guard.check()
+    with startup_timing.phase('manager.history.load'):
+        saved = store.load(runtime.session_id) if resume else None
+        history_source = "native" if saved is not None else "new"
+        if resume and saved is None:
+            if shared_snapshot is None and shared_handle is not None:
+                shared_snapshot = shared_handle.read()
+            if shared_snapshot is not None:
+                def legacy_value(name, default=None):
+                    return shared_snapshot.get(name, default) if isinstance(shared_snapshot, dict) else getattr(shared_snapshot, name, default)
+                messages, metadata = legacy_value("messages"), legacy_value("metadata", {})
+                if not isinstance(messages, list) or not isinstance(metadata, dict):
+                    raise ValueError("The legacy shared session checkpoint is malformed.")
+                saved = messages, {**metadata, "bundle": legacy_value("bundle")}
+                history_source = "legacy-checkpoint"
+            else:
+                store._migrate(runtime.session_id)
+                # Migration intentionally writes once; take its stamp before the
+                # read so a concurrent older CLI write cannot become our baseline.
+                native_guard.saved()
+                saved = store.load(runtime.session_id)
+                if saved is None and shared_handle is None:
+                    saved = store.import_cli(runtime.session_id, workspace=config.workspace)
+                if saved is not None:
+                    history_source = "native"
+        native_guard.check()
     saved_bundle = (saved[1].get("bundle_name") or saved[1].get("bundle")) if saved else None
     if isinstance(saved_bundle, str):
         saved_bundle = saved_bundle.removeprefix("bundle:")
@@ -892,35 +897,37 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     chosen = canonical_bundle_reference(config, saved_bundle or bundle or config.active_bundle)
     bundle_identity = chosen
     directory = Path(report_dir or config.home / "runtime-reports" / runtime.session_id)
-    registry, loaded, chosen = (resolved_root.take(config, chosen, execution_workspace=execution_workspace) if resolved_root is not None
-                               else await load_root_bundle(config, chosen, execution_workspace=execution_workspace))
-    snapshot = is_snapshot(loaded)
-    from ..runtime_controls import override_path
-    edited_path = override_path(runtime.session_id)
-    if runtime_plan is not None or edited_path.exists():
-        edited = runtime_plan if runtime_plan is not None else json.loads(edited_path.read_text())
-        loaded = apply_runtime_plan(loaded, edited, config, execution_workspace)
-    if not snapshot:
-        from .mentions import include_instruction_files
-        loaded = include_instruction_files(loaded, config_home=config.settings_file.parent,
-                                           execution_workspace=execution_workspace)
-    baseline = loaded.to_mount_plan()
-    from ..provider_recording import apply_provider_recording
-    apply_provider_recording(baseline, home=config.home)
-    loaded.providers = baseline.get('providers', [])
-    loaded.agents = baseline.get('agents', {})
-    adapted, replacements = live_plan(baseline, background_delegate)
-    # Modify the public Bundle fields before prepare(): loop-live and every
-    # agent-specific source go through Foundation's normal activation mechanism.
-    loaded.session = adapted["session"]
-    loaded.agents = adapted.get("agents", {})
-    components = getattr(loaded, "_host_components", None) or required_components()
-    components.apply(loaded)
-    from .config import configure_skill_cache
-    configure_skill_cache(loaded, config.registry_home)
-    adapted = components.normalize(adapted)
-    write_private(directory / "baseline-mount-plan.json", json.dumps(redact(baseline), indent=2, default=str))
-    write_private(directory / "live-mount-plan.json", json.dumps(redact(adapted), indent=2, default=str))
+    with startup_timing.phase('manager.bundle.load'):
+        registry, loaded, chosen = (resolved_root.take(config, chosen, execution_workspace=execution_workspace) if resolved_root is not None
+                                   else await load_root_bundle(config, chosen, execution_workspace=execution_workspace))
+    with startup_timing.phase('manager.plan'):
+        snapshot = is_snapshot(loaded)
+        from ..runtime_controls import override_path
+        edited_path = override_path(runtime.session_id)
+        if runtime_plan is not None or edited_path.exists():
+            edited = runtime_plan if runtime_plan is not None else json.loads(edited_path.read_text())
+            loaded = apply_runtime_plan(loaded, edited, config, execution_workspace)
+        if not snapshot:
+            from .mentions import include_instruction_files
+            loaded = include_instruction_files(loaded, config_home=config.settings_file.parent,
+                                               execution_workspace=execution_workspace)
+        baseline = loaded.to_mount_plan()
+        from ..provider_recording import apply_provider_recording
+        apply_provider_recording(baseline, home=config.home)
+        loaded.providers = baseline.get('providers', [])
+        loaded.agents = baseline.get('agents', {})
+        adapted, replacements = live_plan(baseline, background_delegate)
+        # Modify the public Bundle fields before prepare(): loop-live and every
+        # agent-specific source go through Foundation's normal activation mechanism.
+        loaded.session = adapted["session"]
+        loaded.agents = adapted.get("agents", {})
+        components = getattr(loaded, "_host_components", None) or required_components()
+        components.apply(loaded)
+        from .config import configure_skill_cache
+        configure_skill_cache(loaded, config.registry_home)
+        adapted = components.normalize(adapted)
+        write_private(directory / "baseline-mount-plan.json", json.dumps(redact(baseline), indent=2, default=str))
+        write_private(directory / "live-mount-plan.json", json.dumps(redact(adapted), indent=2, default=str))
     def progress(action, detail):
         # The callback's detail can be a URL with credentials. Publish only the
         # documented phase, never arbitrary source strings or installer logs.
@@ -936,40 +943,43 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         preparation_policy["install_overrides"] = Path(install_overrides)
     # Activate modules from the same generation as the bundle registry. The
     # shared AMPLIFIER_HOME still owns history/settings, not app module caches.
-    prepared = await loaded.prepare(strict=True, install_deps=not (qualification_readonly or os.environ.get("AMPLIFIER_RUNTIME_IMMUTABLE") == "1"), **preparation_policy,
-        cache_dir=config.registry_home / "cache",
-        source_resolver=lambda module, source: module_source(config, snapshot, module, source, components),
-        progress_callback=progress)
+    with startup_timing.phase('manager.bundle.prepare'):
+        prepared = await loaded.prepare(strict=True, install_deps=not (qualification_readonly or os.environ.get("AMPLIFIER_RUNTIME_IMMUTABLE") == "1"), **preparation_policy,
+            cache_dir=config.registry_home / "cache",
+            source_resolver=lambda module, source: module_source(config, snapshot, module, source, components),
+            progress_callback=progress)
     if getattr(prepared, "resolver", None) is not None:
         prepared.resolver = ComponentResolver(prepared.resolver, components)
-    await materialize_bundle_providers(loaded, prepared, **({"isolation": isolation} if isolation else {}))
-    # Bound child plans inherit an exact parent selection, including image
-    # capability. Do not discover a new account outside that inherited plan.
-    if not snapshot and not getattr(loaded, '_host_provider_credentials_bound', False):
-        from ..image_defaults import apply_defaults
-        await apply_defaults(prepared.mount_plan, config.settings,
-                             **({"check_available": lambda row: not isolation.failure(row)} if isolation else {}))
-    environment_plan = prepared.mount_plan
-    if isolation:
-        environment_plan = copy.deepcopy(environment_plan)
-        for row in iter_provider_rows(environment_plan):
-            if isolation.failure(row):
-                row["enabled"] = False
-    apply_provider_environment(environment_plan)
+    with startup_timing.phase('manager.providers'):
+        await materialize_bundle_providers(loaded, prepared, **({"isolation": isolation} if isolation else {}))
+        # Bound child plans inherit an exact parent selection, including image
+        # capability. Do not discover a new account outside that inherited plan.
+        if not snapshot and not getattr(loaded, '_host_provider_credentials_bound', False):
+            from ..image_defaults import apply_defaults
+            await apply_defaults(prepared.mount_plan, config.settings,
+                                 **({"check_available": lambda row: not isolation.failure(row)} if isolation else {}))
+        environment_plan = prepared.mount_plan
+        if isolation:
+            environment_plan = copy.deepcopy(environment_plan)
+            for row in iter_provider_rows(environment_plan):
+                if isolation.failure(row):
+                    row["enabled"] = False
+        apply_provider_environment(environment_plan)
     from ..session_files import project_slug
     prepared.mount_plan.update(application_host=application_host, root_session_id=runtime.session_id,
         project_slug=project_slug(config.workspace),
         bundle_name=chosen, project_dir=str(config.workspace), project_name=config.workspace.name)
-    messages = saved[0] if saved else None
-    jobs = JobStore(store.base_dir / runtime.session_id / "live-jobs")
-    recovered = []
-    if jobs.rows:
-        if not resume:
-            jobs.close()
-            raise RuntimeError("Existing job evidence requires explicit resume")
-        messages, recovered = jobs.recover(messages or [])
-    if messages is not None:
-        messages = repair_interrupted_receipts(messages)
+    with startup_timing.phase('manager.history.repair'):
+        messages = saved[0] if saved else None
+        jobs = JobStore(store.base_dir / runtime.session_id / "live-jobs")
+        recovered = []
+        if jobs.rows:
+            if not resume:
+                jobs.close()
+                raise RuntimeError("Existing job evidence requires explicit resume")
+            messages, recovered = jobs.recover(messages or [])
+        if messages is not None:
+            messages = repair_interrupted_receipts(messages)
     approvals = Approvals(runtime, ask)
     session = None
     from ..provider_catalog import mounted_catalog_keys
@@ -989,9 +999,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 if routing_callback:
                     await routing_callback(session)
             routing_policy["before_initialize"] = initialize_with_isolation
-        session = await prepared.create_session(session_id=runtime.session_id,
-            session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None,
-            **routing_policy)
+        with startup_timing.phase('manager.session.create'):
+            session = await prepared.create_session(session_id=runtime.session_id,
+                session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None,
+                **routing_policy)
         coordinator = session.coordinator
         coordinator.register_capability("approval.interactive", approvals.interactive)
         from ..read_policy import validate_mounted_read_policy
@@ -1015,29 +1026,33 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         register = coordinator.get_capability("approval.register_provider")
         if register:
             register(approvals)
-        if messages is not None:
-            await coordinator.get("context").set_messages(messages)
-        await install_children(session, prepared, runtime, store, approvals, host_adapter=adapter)
+        with startup_timing.phase('manager.context.restore'):
+            if messages is not None:
+                await coordinator.get("context").set_messages(messages)
+        with startup_timing.phase('manager.children'):
+            await install_children(session, prepared, runtime, store, approvals, host_adapter=adapter)
         configurator = SessionConfigurator(session, prepared)
         coordinator.register_capability("web.configurator", configurator)
         coordinator.register_capability("web.prepared", prepared)
         coordinator.register_capability("web.registry", registry)
-        if not snapshot:
-            await configurator.apply_saved_settings(config.settings.get("configurator") or {})
-        configurator.take_snapshot()
+        with startup_timing.phase('manager.settings'):
+            if not snapshot:
+                await configurator.apply_saved_settings(config.settings.get("configurator") or {})
+            configurator.take_snapshot()
         providers = coordinator.get("providers") or {}
         if not providers:
             raise RuntimeError("No provider is configured. Add config.providers to the shared Amplifier settings.yaml.")
-        choices = []
-        for identity, provider in providers.items():
-            info = provider.get_info()
-            if inspect.isawaitable(info):
-                info = await info
-            defaults = getattr(info, "defaults", {}) or {}
-            choices.append({"id": identity, "provider": getattr(info, "id", identity),
-                "display_name": getattr(info, "display_name", None),
-                **({"available": False, "failure": provider.failure} if isinstance(provider, UnavailableProvider) else {}),
-                "model": defaults.get("model"), "effort": defaults.get("reasoning_effort") or next((row.get("config",{}).get("reasoning_effort") for row in prepared.mount_plan.get("providers",[]) if (row.get("instance_id") or row.get("id") or row["module"].removeprefix("provider-"))==identity),None), "sharedCatalogKey":catalog_keys.get(identity), "models": []})
+        with startup_timing.phase('manager.provider.info'):
+            choices = []
+            for identity, provider in providers.items():
+                info = provider.get_info()
+                if inspect.isawaitable(info):
+                    info = await info
+                defaults = getattr(info, "defaults", {}) or {}
+                choices.append({"id": identity, "provider": getattr(info, "id", identity),
+                    "display_name": getattr(info, "display_name", None),
+                    **({"available": False, "failure": provider.failure} if isinstance(provider, UnavailableProvider) else {}),
+                    "model": defaults.get("model"), "effort": defaults.get("reasoning_effort") or next((row.get("config",{}).get("reasoning_effort") for row in prepared.mount_plan.get("providers",[]) if (row.get("instance_id") or row.get("id") or row["module"].removeprefix("provider-"))==identity),None), "sharedCatalogKey":catalog_keys.get(identity), "models": []})
         # Keep public connection choices available even when a saved ID prevents
         # startup. Reading this receipt never chooses a connection or runs work.
         write_private(directory / "provider-choices.json", json.dumps({
@@ -1117,7 +1132,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         async def cleanup_jobs():
             jobs.close()
         coordinator.register_cleanup(cleanup_jobs)
-        await checkpoint()
+        with startup_timing.phase('manager.checkpoint'):
+            await checkpoint()
         failures = getattr(loop, "load_failures", [])
         fatal_failures = [row for row in failures if not isolation or row.get("type") != "provider"]
         if fatal_failures:
@@ -1153,8 +1169,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         report["config_inputs"] = config_inputs
         report["history_source"] = history_source
         report["execution_workspace"] = str(execution_workspace)
-        write_private(directory / "mounted.json", json.dumps(redact(report), indent=2, default=str))
-        registry.save()
+        with startup_timing.phase('manager.report'):
+            write_private(directory / "mounted.json", json.dumps(redact(report), indent=2, default=str))
+            registry.save()
         return session, runtime, report
     except BaseException:
         if session:

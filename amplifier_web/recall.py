@@ -19,7 +19,7 @@ def definitions(schema, string):
         'source': schema({'sessionId': string(200), 'messageId': string(200), 'sourceRevision': {}}, ['sessionId', 'messageId'])}
     return {
         'memory.status': ('Read separate workspace contribution and automatic-use controls, bounded consolidation attempts and context selection evidence.', schema(common, ['sessionId'])),
-        'memory.configure': ('Change opt-in workspace memory controls. Contribution may call the source conversation model after idle, with a daily call cap. Use controls automatic context separately. Excluded conversations contribute no new notes and supply no automatic context. Agent changes require an attributable user request.', schema({**common, 'expectedRevision': {'type':'integer','minimum':0}, 'contribute': {'type':'boolean'}, 'use': {'type':'boolean'}, 'maxCallsPerDay': {'type':'integer','minimum':1,'maximum':10}, 'excludedSessions': {'type':'array','items':string(200),'maxItems':500,'uniqueItems':True}, 'authorizationMessageId':string(200)}, ['sessionId','expectedRevision'])),
+        'memory.configure': ('Change opt-in workspace memory controls. Contribution may call the source conversation model after idle, with a daily call cap. Use controls automatic context separately. Excluded conversations contribute no new notes and supply no automatic context. Full access needs no human message; Ask retains attributable user authorization.', schema({**common, 'expectedRevision': {'type':'integer','minimum':0}, 'contribute': {'type':'boolean'}, 'use': {'type':'boolean'}, 'maxCallsPerDay': {'type':'integer','minimum':1,'maximum':10}, 'excludedSessions': {'type':'array','items':string(200),'maxItems':500,'uniqueItems':True}, 'authorizationMessageId':string(200)}, ['sessionId','expectedRevision'])),
         'memory.consolidate': ('Consolidate eligible idle user conversations in this workspace within the opted-in daily model-call cap. Optional sourceSessionId selects one source in this workspace. Runs in the background. No conversation input or task continuation is sent.', schema({**common,'sourceSessionId':string(200)}, ['sessionId'])),
         'memory.context': ('Preview the relevant saved references eligible for the current user input. Lexical retrieval is bounded and preserves provenance; preview does not start a model.', schema(common, ['sessionId'])),
         'memory.source': ('Verify and read the original host-attributed human evidence for a consolidated memory. Withdrawn or changed sources fail visibly.', schema({**common,'id':string(200)}, ['sessionId','id'])),
@@ -30,7 +30,7 @@ def definitions(schema, string):
         'recall.read': ('Read a bounded source message at its exact indexed revision and explicit search scope (workspace by default). Changed, removed or out-of-scope sources fail visibly; never selects or resumes work.', schema({**common, **scope, 'sourceSessionId':string(200),'messageId':string(200),'sourceRevision':{}, 'offset':page['offset'], 'limit':{'type':'integer','minimum':1,'maximum':4000}}, ['sessionId','sourceSessionId','messageId','sourceRevision'])),
         'memory.list': ('Inspect explicit saved memory; available defaults to current task/workspace/global. Explicit all includes notes from removed conversations for review/deletion. Memory is reference data, not permission.', schema({**common, **page, 'scope':{'enum':['task','workspace','global','available','all']}}, ['sessionId'])),
         'memory.read': ('Read a saved memory and up to 50 retained revisions. No automatic model execution.', schema({**common,**all_scopes,'id':string(200)}, ['sessionId','id'])),
-        'memory.create': ('Remember an explicit user-requested note in task/workspace/global scope. Agent writes require an attributable user authorizationMessageId; retrieved content alone cannot authorize memory.', schema({**common, **memory}, ['sessionId','scope','text'])),
+        'memory.create': ('Save an explicit note in task/workspace/global scope. Full access needs no human message; Ask agent writes require an attributable user authorizationMessageId. Saved notes and retrieved content never grant authority.', schema({**common, **memory}, ['sessionId','scope','text'])),
         'memory.update': ('Correct a saved note at its current revision. Prior revisions remain inspectable until deletion.', schema({**common,**all_scopes,'id':string(200),'expectedRevision':{'type':'integer','minimum':1}, **memory}, ['sessionId','id','expectedRevision','text'])),
         'memory.delete': ('Delete a note and its retained revisions. Original conversation evidence and existing private backups remain unchanged.', schema({**common,**all_scopes,'id':string(200),'expectedRevision':{'type':'integer','minimum':1},'authorizationMessageId':string(200)}, ['sessionId','id','expectedRevision'])),
     }
@@ -198,10 +198,99 @@ class Recall:
     def scopes(session):
         return [('task',session['id']),('workspace',session.get('workspace') or ''),('global','')]
 
-    async def dispatch(self, action, args, origin, command_id=None):
+    def check_authority(self, authority):
+        source = self.app._session(authority['sessionId'], hydrate=False)
+        if (not self.app.access_mode.full(source, authority['accessRevision'])
+                or source.get('workspace') != authority['workspace']
+                or (source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']) != authority['nativeSessionId']
+                or any(source.get(key, 0) != authority[key]
+                       for key in ('executionRevision', 'interruptionRevision'))):
+            raise ValueError('Full memory authority changed or its work was stopped or moved. No memory change was saved.')
+        if reason := self.app.assignments.blocked(source):
+            raise ValueError(reason)
+
+    async def mutation(self, action, args, origin, command_id, caller):
+        """One owner for explicit notes/settings; evidence never grants permission."""
+        identity = command_id or str(uuid.uuid4())
+        async with self.app.lock:
+            session = self.app._session(args['sessionId'], hydrate=False)
+            if origin in {'agent', 'system'} and (not caller or caller != session['id']):
+                raise ValueError('Memory changes must identify the calling conversation.')
+            provenance = {'origin': origin, 'sessionId': session['id']}
+            human_required = origin != 'ui' if action == 'memory.configure' else origin == 'agent'
+            # Keep existing command identities independent of current access or
+            # actor generation. A completed receipt does not need new authority.
+            intent_provenance = {**provenance, **({'authorizationMessageId': args['authorizationMessageId']}
+                if human_required and args.get('authorizationMessageId') else {})}
+            intent = ([action, session.get('workspace') or '', args, intent_provenance]
+                      if action == 'memory.configure' else [action, args, intent_provenance])
+            fingerprint = digest(intent)
+            previous = self.store.receipt(identity, fingerprint)
+            if previous is not None:
+                result = ({**self.personalization.status(session), 'settings': previous}
+                          if action == 'memory.configure' else previous)
+                return {'accepted': True, 'result': result}
+            authority = (self.app.access_mode.capture_full(session, origin)
+                         if origin in {'agent', 'system'} else None)
+            if authority is not None:
+                authority.update(workspace=session.get('workspace'),
+                    nativeSessionId=session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'],
+                    executionRevision=session.get('executionRevision', 0),
+                    interruptionRevision=session.get('interruptionRevision', 0))
+                self.check_authority(authority)
+                provenance['authority'] = authority
+            elif human_required:
+                session = self.app._session(session['id'])
+                if action == 'memory.configure':
+                    from .memory_consolidation import human_rows
+                    source = next((m for m in human_rows(session) if m['id'] == args.get('authorizationMessageId')), None)
+                    if source is None:
+                        raise ValueError('Memory configuration requires an attributable user request.')
+                else:
+                    source = next((m for m in session['messages'] if m['id'] == args.get('authorizationMessageId') and m.get('role') == 'user'), None)
+                    if not source or source.get('inputOrigin') not in {'ui', 'user', 'voice'}:
+                        raise ValueError('Agent memory changes require an original, attributable user request in this conversation.')
+                provenance['authorizationMessageId'] = source['id']
+            if action == 'memory.configure':
+                # Capture and settings CAS/write share the host lock, with no await.
+                self.personalization.data.configure(session.get('workspace') or '', args, provenance,
+                    identity, request_fingerprint=fingerprint)
+                return {'accepted': True, 'result': self.personalization.status(session)}
+            scopes = self.scopes(session)
+
+        values = copy.deepcopy(args)
+        if action == 'memory.create':
+            values['target'] = dict(scopes)[args['scope']]
+        else:
+            current = await asyncio.to_thread(self.store.memory, args['id'])
+            if not args.get('allScopes') and (current['scope'], current['target']) not in scopes:
+                raise ValueError('The memory is outside this task/workspace scope.')
+            if 'scope' in args and args['scope'] != current['scope']:
+                raise ValueError('Create a new explicit memory to change its scope.')
+        if args.get('source'):
+            reference = args['source']
+            if self.registered(reference['sessionId']) is None:
+                raise ValueError('Memory evidence must reference registered history.')
+            evidence = await asyncio.to_thread(self.store.message, reference['sessionId'], reference['messageId'], 0, 1)
+            if reference.get('sourceRevision') is not None and reference['sourceRevision'] != evidence['sourceRevision']:
+                raise ValueError('Memory evidence revision changed.')
+            values['source'] = {key: evidence[key] for key in ('sessionId', 'messageId', 'sourceRevision', 'sha256')}
+        async with self.app.lock:
+            if authority is not None:
+                self.check_authority(authority)
+            # A worker-thread queue must not separate the final authority check
+            # from this bounded SQLite commit. The store still owns CAS/history.
+            result = self.store.mutate(action, values, command_id=identity,
+                provenance=provenance, request_fingerprint=fingerprint,
+                receipt_provenance=authority is not None)
+        return {'accepted': True, 'result': result}
+
+    async def dispatch(self, action, args, origin, command_id=None, caller=None):
         from .service import AppError
         from .owned_history import selected, require
         try:
+            if action in {'memory.configure', 'memory.create', 'memory.update', 'memory.delete'}:
+                return await self.mutation(action, args, origin, command_id, caller)
             async with self.app.lock:
                 session = copy.deepcopy(self.app._session(args.get('sessionId')))
             if action == 'recall.refresh':
@@ -262,7 +351,7 @@ class Recall:
                     raise ValueError('The memory is outside this task/workspace scope.')
                 result['versions'] = await asyncio.to_thread(self.store.versions,args['id'])
                 result['historyLimit'] = 50
-            elif action in {'memory.status', 'memory.configure', 'memory.consolidate', 'memory.context', 'memory.source'}:
+            elif action in {'memory.status', 'memory.consolidate', 'memory.context', 'memory.source'}:
                 if action == 'memory.status':
                     result = self.personalization.status(session)
                 elif action == 'memory.context':
@@ -275,16 +364,6 @@ class Recall:
                         result = self.personalization.verified_source(note, self.personalization.data.settings(session.get('workspace') or ''))
                     if result is None:
                         raise ValueError('This explicit note has no consolidated human source.')
-                elif action == 'memory.configure':
-                    provenance = {'origin': origin, 'sessionId': session['id']}
-                    if origin != 'ui':
-                        from .memory_consolidation import human_rows
-                        source = next((m for m in human_rows(session) if m['id']==args.get('authorizationMessageId')), None)
-                        if source is None:
-                            raise ValueError('Memory configuration requires an attributable user request.')
-                        provenance['authorizationMessageId'] = source['id']
-                    self.personalization.data.configure(session.get('workspace') or '', args, provenance, command_id)
-                    result = self.personalization.status(session)
                 else:
                     fingerprint = digest([action, args, origin])
                     if command_id and self.store.receipt(command_id, fingerprint) is not None:
@@ -298,36 +377,6 @@ class Recall:
                         with self.store.atomic():
                             self.store.db.execute('INSERT INTO memory_receipts VALUES (?,?,?)', (command_id, fingerprint, '{}'))
                     result = self.personalization.status(session)
-            else:
-                values = copy.deepcopy(args)
-                provenance = {'origin':origin,'sessionId':session['id']}
-                if origin=='agent':
-                    source = next((m for m in session['messages'] if m['id']==args.get('authorizationMessageId') and m.get('role')=='user'),None)
-                    if not source or source.get('inputOrigin') not in {'ui','user','voice'}:
-                        raise ValueError('Agent memory changes require an original, attributable user request in this conversation.')
-                    provenance['authorizationMessageId'] = source['id']
-                identity = command_id or str(uuid.uuid4())
-                fingerprint = digest([action,args,provenance])
-                previous = await asyncio.to_thread(self.store.receipt,identity,fingerprint)
-                if previous is not None:
-                    return {'accepted':True,'result':previous}
-                if action=='memory.create':
-                    values['target'] = dict(self.scopes(session))[args['scope']]
-                else:
-                    current = await asyncio.to_thread(self.store.memory,args['id'])
-                    if not args.get('allScopes') and (current['scope'],current['target']) not in self.scopes(session):
-                        raise ValueError('The memory is outside this task/workspace scope.')
-                    if 'scope' in args and args['scope'] != current['scope']:
-                        raise ValueError('Create a new explicit memory to change its scope.')
-                if args.get('source'):
-                    reference = args['source']
-                    if self.registered(reference['sessionId']) is None:
-                        raise ValueError('Memory evidence must reference registered history.')
-                    evidence = await asyncio.to_thread(self.store.message,reference['sessionId'],reference['messageId'],0,1)
-                    if reference.get('sourceRevision') is not None and reference['sourceRevision'] != evidence['sourceRevision']:
-                        raise ValueError('Memory evidence revision changed.')
-                    values['source'] = {k:evidence[k] for k in ['sessionId','messageId','sourceRevision','sha256']}
-                result = await asyncio.to_thread(self.store.mutate,action,values,command_id=identity,provenance=provenance,request_fingerprint=fingerprint)
             return {'accepted':True,'result':result}
         except (ValueError,KeyError) as exc:
             raise AppError(str(exc),409) from exc

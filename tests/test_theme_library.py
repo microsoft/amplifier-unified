@@ -14,7 +14,7 @@ async def test_bundled_library_previews_applies_and_reverts_without_changing_cha
     original = dict(app.state['theme'])
     sid = app.state['selectedSessionId']
     listing = (await dispatch(app, 'theme.list', {}))['result']
-    assert [row['name'] for row in listing['items']] == ['Amplifier', 'Aurora', 'Atelier', 'Graphite', 'Digital Rain']
+    assert [row['name'] for row in listing['items']] == ['Amplifier', 'Aurora', 'Atelier', 'Graphite', 'Digital Rain', 'Lightline']
     assert not Path(listing['directory']).exists(), 'Browsing does not allocate user storage'
     for row in listing['items']:
         assert 'css' not in row
@@ -64,7 +64,7 @@ async def test_bad_imports_do_not_replace_library_or_current_appearance(app, tmp
     (root / 'linked.css').symlink_to(outside)
     (root / 'bad.css').write_text('@import "https://example.com/bad.css";')
     listing = (await dispatch(app, 'theme.list', {}))['result']
-    assert len(listing['items']) == 5 and len(listing['errors']) == 2
+    assert len(listing['items']) == 6 and len(listing['errors']) == 2
     assert app.state['theme'] == original
 
 
@@ -261,9 +261,13 @@ async def test_library_links_and_special_files_are_rejected(app, tmp_path):
             await dispatch(app, action, args)
     assert outside.read_text().endswith('#amp-one{color:red}') and path.is_symlink()
     if hasattr(os, 'mkfifo'):
-        os.mkfifo(path.parent / 'pipe.css')
-        listing = (await dispatch(app, 'theme.list', {}))['result']
-        assert {row['name'] for row in listing['errors']} == {path.name, 'pipe.css'}
+        pipe = path.parent / 'pipe.css'
+        os.mkfifo(pipe)
+        try:
+            listing = (await dispatch(app, 'theme.list', {}))['result']
+            assert {row['name'] for row in listing['errors']} == {path.name, 'pipe.css'}
+        finally:
+            pipe.unlink(missing_ok=True)
 
 
 async def test_symlink_library_directory_cannot_be_read_or_written(app, tmp_path):

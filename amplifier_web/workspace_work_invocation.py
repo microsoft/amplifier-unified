@@ -14,9 +14,11 @@ import uuid
 
 from amplifier_operations.coordination import fingerprint
 from .collaboration import BINDING, CREATION, PRINCIPAL
-from .task_binding import continuation_epoch
+from .task_binding import continuation_epoch, dependency_blocked
+from .child_execution import current as child_execution, generation as execution_generation
 from .workspace_work import CONTEXT_BYTES, EVENT, RECORD, _decode, _encode
 from .workspace_work_evidence import _link_current, mutate
+from .work_projection import input_identity_bytes
 
 PROMISE_KEYS = ('interpretation', 'criteria', 'constraints', 'commitment',
                 'promiseRevision', 'originalSourceRef', 'promiseEventRef')
@@ -30,7 +32,8 @@ def references_schema(schema, string):
     revision = {'type': 'integer', 'minimum': 1}
     return {'type': 'array', 'minItems': 1, 'maxItems': 8, 'items': schema({
         'workId': {**string(200), 'minLength': 1}, 'expectedRevision': revision,
-        'promiseRevision': revision, 'candidate': {**string(100), 'minLength': 1},
+        'promiseRevision': revision, 'candidate': {**string(100), 'minLength': 1,
+            'description': 'Copy the current saved Work candidate. If candidate is null, establish an executor link with workspace.work.link first. intentKey and command/request IDs do not establish a candidate.'},
         'role': {'enum': ['executor', 'reviewer']}},
         ['workId', 'expectedRevision', 'promiseRevision', 'candidate', 'role'])}
 
@@ -63,13 +66,40 @@ class WorkInvocation:
                  'continuationEpoch': continuation_epoch(task), 'status': task.get('status')}
                 if task.get('id') else None)
 
-    def root_facts(self, row):
+    def dependency_binding(self, row, expected):
+        """An exact agent dependency-block transition does not revoke its child.
+
+        Reuse canonical change history; no missing/replaced task or intervening
+        instruction, human block, pause or resume can qualify this exception.
+        """
+        task = row.get('task') or self.service.coordination.task(row['id'])
+        if (not expected or expected.get('status') != 'active'
+                or expected.get('taskId') != task.get('id') or not dependency_blocked(task)):
+            return False
+        revision = expected.get('revision')
+        if type(revision) is not int:
+            return False
+        changes = [change for change in task.get('changes', []) if change.get('revision', 0) > revision]
+        for change in changes:
+            fields = change.get('fields') or {}
+            if (change.get('revision') != revision + 1 or change.get('origin') != 'agent'
+                    or not fields or set(fields) - {'status', 'blockedReason', 'blockProvenance'}
+                    or fields.get('status', 'blocked') != 'blocked'):
+                return False
+            revision += 1
+        return bool(changes) and revision == task['revision']
+
+    def root_facts(self, row, *, admitted_child=False, expected_task=None):
         from .updates import work_paused
         task = self.task_binding(row)
+        dependent = admitted_child and dependency_blocked(row.get('task') or self.service.coordination.task(row['id']))
+        if dependent and self.dependency_binding(row, expected_task):
+            task = copy.deepcopy(expected_task)
         if (row.get('sessionKind', 'root') != 'root' or row.get('_deleting')
                 or work_paused(self.service.state)
                 or row.get('status') in {'stopped', 'stopping', 'error', 'interrupted'}
-                or task and task.get('status') in {'paused', 'blocked', 'completed'}):
+                or task and (task.get('status') in {'paused', 'completed'}
+                             or task.get('status') == 'blocked' and not dependent)):
             self.work.error('Work root is stopped or inactive.', 403)
         assignment = self.service.assignments.current(row)
         reason = self.service.assignments.blocked(row)
@@ -201,13 +231,15 @@ class WorkInvocation:
         receipt['workAssociationRef'] = {'requestId': operation['requestId'], 'version': 1}
 
     def bound_root(self, sid, *, require_generation=False):
-        row = self.receipts.source({}, 'agent', sid, hydrate=False)
+        row = self.service._session(sid, hydrate=False)
+        if child_execution(self.service, row) is None:
+            row = self.receipts.source({}, 'agent', sid, hydrate=False)
         native = row.get('runtimeSessionId') or row.get('nativeIdentity') or row['id']
-        if PRINCIPAL.get() != native:
+        if PRINCIPAL.get() != native and child_execution(self.service, row) is None:
             self.work.error('Invocation reads require the actual root principal.', 403)
         if require_generation:
             binding = BINDING.get() or {}
-            active = row.get('collaborationGeneration') or {}
+            active = execution_generation(self.service, row)
             if not binding.get('_generationId') or binding['_generationId'] != active.get('id') or active.get('terminal'):
                 self.work.error('Invocation generation changed.', 409)
         return row
@@ -247,7 +279,11 @@ class WorkInvocation:
                 or association.get('workspaceId') != workspace['id']):
             self.work.error('Commissioned input association is corrupt.')
         source = self.service._session(association['sourceRootId'], hydrate=False)
-        owner_facts, target_facts = self.root_facts(source), self.root_facts(target)
+        admitted_child = child_execution(self.service, target) is not None
+        owner_facts = self.root_facts(source, admitted_child=admitted_child,
+                                      expected_task=association.get('sourceTaskBinding'))
+        target_facts = self.root_facts(target, admitted_child=admitted_child,
+                                       expected_task=association.get('targetTaskBinding'))
         if (source['workspace'] != workspace['path']
                 or source.get('interruptionRevision', 0) != operation['sourceInterruptionRevision']
                 or target.get('interruptionRevision', 0) != request['interruptionRevision']
@@ -282,7 +318,7 @@ class WorkInvocation:
     def required(self, sid):
         from .service import AppError
         target = self.bound_root(sid)
-        binding, active = BINDING.get() or {}, target.get('collaborationGeneration') or {}
+        binding, active = BINDING.get() or {}, execution_generation(self.service, target)
         header = {'status': 'unavailable', 'reason': None, 'version': None,
                   'rootSessionId': sid, 'generationId': active.get('id'), 'inputIds': [],
                   'associationRequestIds': [], 'workCount': None, 'requirementCount': None,
@@ -291,7 +327,7 @@ class WorkInvocation:
         coverage = header['coverage']
         try:
             self.bound_root(sid, require_generation=True)
-            self.root_facts(target)
+            self.root_facts(target, admitted_child=child_execution(self.service, target) is not None)
             delivered = set(active.get('inputIds', []))
             inputs = binding.get('_inputBindings', [])
             if not isinstance(inputs, list) or any(not isinstance(row, dict) for row in inputs):
@@ -300,14 +336,9 @@ class WorkInvocation:
             if (not requested <= delivered
                     or any(not isinstance(i, str) or not 1 <= len(i) <= 200 for i in requested)):
                 self.work.error('Invocation inputs were not observed delivered.')
-            if len(delivered) > 16:
-                header['inputCount'] = len(delivered)
-                coverage.update(reason='input_coverage_overflow',
-                                deliveredInputCount=len(delivered), projectedInputCount=len(requested))
-                self.work.error('Invocation input coverage exceeds the bounded projection.')
-            if not requested:
-                self.work.error('Invocation inputs were not observed delivered.')
             header['inputIds'] = sorted(delivered)
+            if not delivered:
+                self.work.error('Invocation inputs were not observed delivered.')
             if requested != delivered:
                 coverage.update(reason='input_projection_incomplete',
                                 missingInputIds=sorted(delivered - requested),
@@ -350,18 +381,11 @@ class WorkInvocation:
             header.update(status='available', reason=None, version=version, workCount=len(items), requirementCount=count,
                 requirementsRef={'action': 'workspace.work.invocation', 'args': {'sessionId': sid, 'expectedVersion': version}})
             coverage['complete'] = True
-            if len(json.dumps(header, ensure_ascii=False).encode()) > CONTEXT_BYTES - 512:
-                self.work.error('Invocation header exceeds its byte bound.')
             return header, [items[key] for key in sorted(items)]
         except (AppError, KeyError, TypeError, ValueError) as exc:
             header.update(status='unavailable', version=None, reason=str(exc)[:200],
                           workCount=None, requirementCount=None, requirementsRef=None)
             coverage['complete'] = False
-            if len(json.dumps(header, ensure_ascii=False).encode()) > CONTEXT_BYTES - 512:
-                # Expose incomplete coverage, never a false complete empty set.
-                header.update(inputCount=len(header['inputIds']), inputIds=[], associationRequestIds=[])
-                header['coverage'] = {'complete': False, 'reason': 'header_overflow',
-                                      'detail': 'Input identities exceed this bounded projection.'}
             return header, []
 
     def current(self, sid):
@@ -374,7 +398,7 @@ class WorkInvocation:
             while True:
                 discovery = self.work.listing(workspace, {'limit': limit}, owner=target['id'], context=True)
                 packet = {'available': True, 'discovery': discovery, 'required': required}
-                if len(json.dumps(packet, ensure_ascii=False).encode()) <= CONTEXT_BYTES:
+                if len(json.dumps(packet, ensure_ascii=False).encode()) - input_identity_bytes(required) <= CONTEXT_BYTES:
                     return packet
                 if limit <= 1:
                     self.work.error('Work current projection exceeds its byte bound.', 413)
@@ -420,7 +444,7 @@ class WorkInvocation:
             end = offset + len(result['items'])
             result.update(truncated=end < header['requirementCount'],
                           nextAfter=_encode([sid, header['version'], end]) if end < header['requirementCount'] else None)
-            if len(json.dumps({'accepted': True, 'result': result}, ensure_ascii=False).encode()) > CONTEXT_BYTES:
+            if len(json.dumps({'accepted': True, 'result': result}, ensure_ascii=False).encode()) - input_identity_bytes(header) > CONTEXT_BYTES:
                 result['items'].pop()
                 break
             if len(result['items']) >= args.get('limit', 20):

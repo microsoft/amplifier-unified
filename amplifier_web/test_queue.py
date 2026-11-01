@@ -19,6 +19,7 @@ from . import test_environment_profiles as profiles
 from . import test_capacity_settings as capacity_settings
 from . import registered_test_runners as registered_runners
 from . import test_execution_settings as execution_settings
+from . import owned_history
 from .collaboration import PROTOCOL
 from amplifier_operations.coordination import fingerprint
 
@@ -50,11 +51,11 @@ def definitions(schema, string):
             'waitSeconds': {'type': 'integer', 'minimum': 0, 'maximum': profiles.MAX_SECONDS},
             'independent': {'type': 'boolean', 'description': 'Allow this check to overlap other independent checks in this chat within the global environment limit. Use only when no earlier check result is required. Default false preserves ordered execution.'},
             'notify': {'type': 'boolean'}}, [*scope, 'requestId', 'profileId', 'command'])),
-        'workspace.tests.read': ('Read this chat’s queued checks and retained outcomes. A recoveredOutcome separately reports exact later cleanup and the verified check result; the original status remains retained. Does not execute or replay a check.', schema({**scope,
+        'workspace.tests.read': ('Read queued checks and retained outcomes. Full-access roots and their current delegated reviewers can inspect another registered chat in the same workspace, or explicitly use scope=all for another workspace. Use the producer’s sessionId and workspaceId. A recoveredOutcome separately reports exact later cleanup and the verified check result; the original status remains retained. Does not execute or replay a check.', schema({**scope, 'scope': owned_history.SCOPE,
             'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 20}}, list(scope))),
         'workspace.tests.cancel': ('Cancel this chat’s waiting check or request prompt termination of its admitted durable guest job. Cancellation is confirmed only after observed termination and owned cleanup. Evidence is retained.', schema({**scope,
             'requestId': string(200)}, [*scope, 'requestId'])),
-        'workspace.tests.result': ('Read a bounded page of the exact recorded check output and its retained environment. A recoveredOutcome can confirm later cleanup without changing an unknown check into a pass. Never executes or repeats a check.', schema({**scope,
+        'workspace.tests.result': ('Read a bounded page of the exact recorded check output and its retained environment. Full-access roots and their current delegated reviewers can inspect peer evidence using the producer’s sessionId and workspaceId; another workspace requires explicit scope=all. A recoveredOutcome can confirm later cleanup without changing an unknown check into a pass. Never executes or repeats a check.', schema({**scope, 'scope': owned_history.SCOPE,
             'requestId': string(200), 'offset': {'type': 'integer', 'minimum': 0}}, [*scope, 'requestId'])),
     }
 
@@ -131,34 +132,40 @@ class TestQueue:
         if earlier and (not independent or any(not row['independent'] for row in earlier)):
             reason = 'Waiting for an earlier check in this chat to finish and clean up.'
         with closing(environments.storage.connect(self.app.data_dir)) as db:
-            owned = [dict(zip(('id', 'commandId', 'backendAdmitted'), row)) for row in db.execute("""SELECT id,json_extract(body,'$.commandId'),json_extract(body,'$.backendAdmitted') FROM allocations WHERE root=?
+            owned = [dict(zip(('id', 'commandId', 'backendAdmitted', 'environmentState', 'pendingRequest', 'preparationPending'), row)) for row in db.execute("""SELECT id,json_extract(body,'$.commandId'),json_extract(body,'$.backendAdmitted'),
+                json_extract(body,'$.environmentState'),json_extract(body,'$.pendingRequest'),json_extract(body,'$.preparationPending') FROM allocations WHERE root=?
                 AND status!='retired' AND json_extract(body,'$.kind')=?""", (sid, environments.KIND))]
             total, root_total = db.execute("SELECT COUNT(*), coalesce(sum(root=?),0) FROM allocations WHERE status!='retired'", (sid,)).fetchone()
         command = identity+':start:'+str(receipt['job'].get('attempt', 0))
         own = [row for row in owned if row.get('commandId') == command and not row.get('backendAdmitted')]
         other_owners = [row for row in owned if row not in own]
+        # Stopped files still consume storage and count against explicit owner
+        # ceilings, but do not serialize new checks behind failed preservation.
+        # Pending operations/preparation and live or unknown owners still wait.
+        ordering_owners = [row for row in other_owners if row['environmentState'] != 'stopped'
+                           or row['pendingRequest'] or row['preparationPending']]
         # Earlier queued checks reserve FIFO positions. Once allocated, count
         # the same command only once, even before its resourceId is linked.
         occupants = {row.get('commandId', row['id']) for row in other_owners}
         occupants.update(row['requestId']+':start:'+str(row['attempt']) for row in earlier)
         # A terminal queue receipt can still own a live/unknown environment.
-        # Preserve its ordinary ordering barrier until that exact owner retires;
+        # Preserve its ordinary ordering barrier until confirmed stopped;
         # overlap requires the original check, not only the new one, to opt in.
-        if reason is None and independent and other_owners:
+        if reason is None and independent and ordering_owners:
             barrier = self.app.db.execute("""SELECT 1 FROM commands
                 WHERE json_extract(receipt,'$.commandAction')=?
                 AND json_extract(receipt,'$.senderSessionId')=? AND id!=?
                 AND coalesce(json_extract(receipt,'$.job.independent'),0)!=1
                 AND id||':start:'||coalesce(json_extract(receipt,'$.job.attempt'),0)
                     IN (SELECT value FROM json_each(?)) LIMIT 1""",
-                (ACTION, sid, identity, json.dumps([row.get('commandId') for row in other_owners]))).fetchone()
+                (ACTION, sid, identity, json.dumps([row.get('commandId') for row in ordering_owners]))).fetchone()
             if barrier:
                 reason = 'Waiting for an earlier check in this chat to finish and clean up.'
-        if reason is None and other_owners and not independent:
+        if reason is None and ordering_owners and not independent:
             reason = 'Waiting for this chat’s previous test environment cleanup to be confirmed.'
         if reason is None and not own and limit and len(occupants) >= limit:
             reason = 'Waiting for this chat’s test environment capacity and cleanup to be confirmed.'
-        if reason is None and not own and (total >= limits['maxOwnedResources'] or root_total >= limits['maxOwnedResourcesPerChat']):
+        if reason is None and not own and ((limits['maxOwnedResources'] and total >= limits['maxOwnedResources']) or (limits['maxOwnedResourcesPerChat'] and root_total >= limits['maxOwnedResourcesPerChat'])):
             reason = 'Waiting for retained resource owner capacity. Inspect retained resources or adjust Advanced execution limits in Settings.'
         if reason:
             if receipt['job'].get('detail') != reason:
@@ -306,9 +313,13 @@ class TestQueue:
 
     async def dispatch(self, action, args, origin, caller, authority):
         owner = self.app.collaboration
-        source = owner.source(args, origin, caller, hydrate=False)
+        reading = action in {'workspace.tests.read', 'workspace.tests.result'}
+        source = (owner.result_source(args, origin, caller) if reading
+                  else owner.source(args, origin, caller, hydrate=False))
         if source['id'] != args['sessionId']:
-            owner.error('A queued check belongs to its calling root conversation.')
+            if not reading or not self.app.access_mode.full(source):
+                owner.error('A queued check belongs to its calling root conversation.')
+            source = owned_history.require(self.app, source['id'], args['sessionId'], owned_history.selected(args))
         workspace = next((w for w in self.app.state['workspaces'] if w['id'] == args['workspaceId']), None)
         if not workspace or workspace['path'] != source['workspace']:
             owner.error('Choose this conversation’s current workspace.')
@@ -385,7 +396,7 @@ class TestQueue:
                 owner.error(reason, 409)
             if queue_policy['maxPendingPerChat'] and self.pending_count(sid=source['id']) >= queue_policy['maxPendingPerChat']:
                 owner.error('This chat’s pending check limit has been reached. Inspect its checks or adjust Advanced execution limits in Settings.', 429)
-            if self.pending_count() >= queue_policy['maxPending']:
+            if queue_policy['maxPending'] and self.pending_count() >= queue_policy['maxPending']:
                 owner.error('The saved queue limit has been reached. Inspect pending checks or adjust Advanced execution limits in Settings.', 429)
             notify = args.get('notify', True)
             if notify:
@@ -408,7 +419,6 @@ class TestQueue:
                     'actor': {'sessionId': source['id'],
                         'principal': source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']}}}
             receipt['job']['runnerCandidates'] = registered_runners.retain_candidates(self.app, config, args['profileId'])
-            owner.require_causal_depth(receipt['causalDepth'])
             owner.insert(identity, digest, receipt)
             self.app.db.commit()
         self.start()

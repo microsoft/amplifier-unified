@@ -237,7 +237,7 @@ async def prepared_activation(tmp_path,monkeypatch):
     service=AppService(tmp_path,Runtime(),workspace=tmp_path)
     service.port=8941
     manager=UpdateManager(service);service.update_manager=manager
-    release={'status':'update','revision':'a'*40,'latest':'v99.0.0'}
+    release={'status':'update','revision':'a'*40,'latest':'v99.0.0','attemptId':'d'*32}
     service.state['updates']['pendingApp']=release
     folder=manager.directory/'applications'/release['revision'];folder.mkdir(parents=True)
     (folder/'validated.json').write_text(json.dumps({'revision':release['revision'],'version':'99.0.0'}))
@@ -248,6 +248,7 @@ async def prepared_activation(tmp_path,monkeypatch):
 
 async def test_manually_launched_host_with_installed_unit_uses_helper_and_termination(tmp_path,monkeypatch):
     service,manager,candidate=await prepared_activation(tmp_path,monkeypatch)
+    await service.dispatch('session.create', {})
     calls=[]
     async def process(*args,**kwargs):
         assert service.state['updates']['phase']=='activating'
@@ -256,8 +257,8 @@ async def test_manually_launched_host_with_installed_unit_uses_helper_and_termin
     async def spawn(*args,**kwargs):
         assert service.state['updates']['phase']=='activating'
         assert args[0]==str(candidate)
-        with pytest.raises(Exception,match='update is activating'):
-            await service.dispatch('conversation.send',{'text':'Must not start during restart'})
+        result = await service.dispatch('conversation.send', {'text': 'Must not start during restart'})
+        assert result['delivery'] == 'queued_for_update' and not service.runtime.sent
         calls.append(('helper',))
     def kill(*args):
         assert service.state['updates']['phase']=='activating'
@@ -302,8 +303,8 @@ async def test_failed_installed_probe_retains_host_and_holds_work_until_verified
     assert service.state['updates']['pendingApp'] is None
     assert service.state['updates']['pendingReplacement']
     assert work_paused(service.state) and manager.awaiting_restart()
-    with pytest.raises(AppError):
-        await service.dispatch('conversation.send', {'text': 'Wait for exact installation verification'})
+    result = await service.dispatch('conversation.send', {'text': 'Wait for exact installation verification'})
+    assert result['delivery'] == 'queued_for_update' and not service.runtime.sent
     await service.close()
 
 @pytest.mark.parametrize('receipt',[

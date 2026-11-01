@@ -288,6 +288,7 @@ async def confirm_readiness(manager, health, expected=None, command_id=None, *, 
             manager.diagnostics.record(phase, 'succeeded', observedVersion=identity['version'],
                                        observedRevision=identity['revision'])
             manager.service._publish_changes(globals={'updates'})
+        manager.wakeup.set()
         return True
 
 

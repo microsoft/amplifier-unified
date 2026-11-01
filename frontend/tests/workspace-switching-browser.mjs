@@ -43,7 +43,7 @@ try{
  const shortcut=workspace=>page.getByRole('button',{name:'Open chats in '+workspace.path,exact:true});
  async function expectWorkspace(workspace,other){
   await expect(header.locator('strong')).toHaveText(workspace.name);
-  await expect(header.getByRole('button',{name:'Home',exact:true})).toBeVisible();
+  await expect(page.getByRole('navigation',{name:'Site navigation',exact:true}).getByRole('button',{name:'Home',exact:true})).toBeVisible();
   await expect(body.getByRole('heading',{level:1,name:workspace.name,exact:true})).toBeVisible();
   await expect(shortcut(workspace)).toHaveAttribute('aria-pressed','true');
   await expect(shortcut(other)).toHaveAttribute('aria-pressed','false');
