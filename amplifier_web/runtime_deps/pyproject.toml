@@ -43,7 +43,7 @@ default = true
 
 [tool.uv.sources]
 # Companion failure-code contract; qualify the accepted upstream commit before release.
-amplifier-module-loop-live = { git = "https://github.com/microsoft/amplifier-module-loop-live", rev = "afb381f543a38da200a1825fefbfecd1a93e55eb" }
+amplifier-module-loop-live = { git = "https://github.com/microsoft/amplifier-module-loop-live", rev = "670f405f711658c3c38e81dbd50a35d3d8c2ac3c" }
 amplifier-foundation = { git = "https://github.com/microsoft/amplifier-foundation", rev = "main" }
 amplifier-module-hooks-session-naming = { git = "https://github.com/microsoft/amplifier-foundation", rev = "main", subdirectory = "modules/hooks-session-naming" }
 amplifier-module-loop-streaming = { git = "https://github.com/microsoft/amplifier-module-loop-streaming", rev = "main" }
