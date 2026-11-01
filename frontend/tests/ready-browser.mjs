@@ -145,6 +145,12 @@ try{
   return {settings:s.settings,view:s.view,selectedSessionId:s.selectedSessionId,selectedWorkspaceId:s.selectedWorkspaceId,
    presentation:shell.effectiveComposition.presentation};
  });
+ // Apply owns exactly these two view fields. Keep all other view keys,
+ // including editor drafts, in the preservation comparison.
+ const unaffectedByApply=({view,...rest})=>{
+  const {themeUndo,themePreview,...unaffectedView}=view;
+  return {...rest,view:unaffectedView};
+ };
  const presentation=patch=>page.evaluate(async patch=>{
   const s=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
   const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:s.revision,
@@ -365,13 +371,39 @@ try{
  await expect(pane.locator('.a-message.a-assistant')).toHaveCount(1);await expect(input).toHaveDraft('');
  const draft='Keep this synthetic unsent draft across READY appearance and navigation.';
  await input.fill(draft);
- const beforeApply=await preferences();
+ const beforeApply=await preferences(),priorTheme=(await state()).theme;
  phase('candidate-apply');
  await action('theme.apply',{name:ready.name,css:ready.css});
  await expect.poll(async()=>hash((await state()).theme.css)).toBe(report.cssSha256);
  await page.waitForFunction(css=>[...document.querySelectorAll('#amp-one > style')].some(node=>node.textContent===css),css);
- assert.deepEqual(await preferences(),beforeApply,'Applying CSS leaves draft, selection, settings and presentation preferences unchanged');
- snapshot('apply-invariance',{selectedSessionId:longId,draft,preferencesSha256:hash(JSON.stringify(beforeApply))});
+ const applied=await state(),appliedPreferences=await preferences();
+ assert.deepEqual(applied.theme,{name:ready.name,css:ready.css},'Apply commits the exact candidate name and CSS');
+ assert.equal(applied.view.themePreview,false,'Apply ends preview mode');
+ assert.deepEqual(unaffectedByApply(appliedPreferences),unaffectedByApply(beforeApply),
+  'Apply preserves every unrelated view field, draft, selection, setting and presentation preference');
+ assert.ok(applied.view.themeUndo?.before?.$resource,'Undo retains the prior theme resource');
+ assert.match(applied.view.themeUndo.after,/^[a-f0-9]{64}$/,'Undo identifies the applied theme');
+ await expect(input).toHaveDraft(draft);
+ // Exercise the canonical guard and restoration rather than reproducing the
+ // backend fingerprint or trusting that an opaque resource ID is the right one.
+ await action('theme.revert');
+ const reverted=await state();
+ assert.deepEqual(reverted.theme,priorTheme,'Undo restores the exact theme that preceded Apply');
+ assert.equal(Object.hasOwn(reverted.view,'themeUndo'),false,'Successful Undo clears its consumed record');
+ assert.equal(reverted.view.themePreview,false);
+ assert.deepEqual(unaffectedByApply(await preferences()),unaffectedByApply(beforeApply));
+ await expect(input).toHaveDraft(draft);
+ await action('theme.apply',{name:ready.name,css:ready.css});
+ const reapplied=await state();
+ assert.deepEqual(reapplied.theme,applied.theme,'Reapply restores the exact candidate for the matrix');
+ assert.equal(reapplied.view.themePreview,false);
+ assert.deepEqual(reapplied.view.themeUndo,applied.view.themeUndo,'Undo binds the same prior and applied themes');
+ assert.deepEqual(unaffectedByApply(await preferences()),unaffectedByApply(beforeApply));
+ await expect(input).toHaveDraft(draft);
+ await page.waitForFunction(css=>[...document.querySelectorAll('#amp-one > style')].some(node=>node.textContent===css),css);
+ snapshot('apply-invariance',{selectedSessionId:longId,draft,
+  preferencesSha256:hash(JSON.stringify(unaffectedByApply(beforeApply))),
+  themeBookkeepingChecked:['themeUndo','themePreview'],undoVerifiedBy:'fixture Apply/Revert/Reapply'});
  const originalPresentation=beforeApply.presentation;
  const user=()=>pane.locator('.a-message.a-user > .a-message-body');
  const assistant=()=>pane.locator('.a-message.a-assistant > .a-message-body');
