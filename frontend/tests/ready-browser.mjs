@@ -151,14 +151,20 @@ try{
   const {themeUndo,themePreview,...unaffectedView}=view;
   return {...rest,view:unaffectedView};
  };
- const presentation=patch=>page.evaluate(async patch=>{
+ const changePresentation=(value,replace)=>page.evaluate(async({value,replace})=>{
   const s=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
   const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:s.revision,
-   composition:{...s.effectiveComposition,presentation:{...s.effectiveComposition.presentation,...patch}}});
+   composition:{...s.effectiveComposition,presentation:replace?value:{...s.effectiveComposition.presentation,...value}}});
   if(!prepared.accepted)throw Error('Presentation prepare refused: '+JSON.stringify(prepared.error));
   const applied=await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:s.revision,changeId:prepared.result.id});
   if(!applied.accepted)throw Error('Presentation apply refused: '+JSON.stringify(applied.error));
- },patch);
+  return {changeId:prepared.result.id,baseRevision:s.revision,appliedRevision:applied.result.revision,
+   status:applied.result.status};
+ },{value,replace});
+ const presentation=patch=>changePresentation(patch,false);
+ // Restoration replaces the complete saved presentation, including absent keys.
+ // Merging an empty original would retain the temporary scheme/decorations.
+ const replacePresentation=value=>changePresentation(value,true);
  const settled=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  const app=page.locator('#amp-one'),pane=page.locator('[data-part="messages"]');
  const input=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
@@ -590,9 +596,24 @@ try{
  await input.fill('Synthetic short exchange.');await send.click();
  await expect(pane.locator('.a-message.a-assistant')).toHaveCount(1);await end('Short transcript',{short:true});
  await action('session.select',{id:longId});await enter('chat');await expect(input).toHaveDraft(draft);
- phase('restore-and-final-readback');await presentation(originalPresentation);
- assert.deepEqual(await page.evaluate(()=>window.amplifier.getShellState().effectiveComposition.presentation),originalPresentation,
+ phase('restore-and-final-readback');
+ const compositionBeforeRestore=await page.evaluate(()=>window.amplifier.getShellState().effectiveComposition);
+ const restoreReceipt=await replacePresentation(originalPresentation);
+ assert.ok(Number.isSafeInteger(restoreReceipt.appliedRevision),'Restoration returns an exact committed shell revision');
+ snapshot('presentation-restoration-request',{before:compositionBeforeRestore.presentation,
+  expected:originalPresentation,receipt:restoreReceipt});
+ // Apply commits before the browser asynchronously refreshes its shell bootstrap.
+ // Observe that exact revision before asserting the restored composition.
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState().revision),
+  {message:'Browser observes the exact restored shell revision'}).toBe(restoreReceipt.appliedRevision);
+ const compositionAfterRestore=await page.evaluate(()=>window.amplifier.getShellState().effectiveComposition);
+ snapshot('presentation-restoration',{before:compositionBeforeRestore.presentation,expected:originalPresentation,
+  after:compositionAfterRestore.presentation,receipt:restoreReceipt});
+ assert.deepEqual(compositionAfterRestore.presentation,originalPresentation,
   'Scheme/decorations changes were temporary fixture presentation only');
+ const {presentation:beforePresentation,...otherBeforeRestore}=compositionBeforeRestore;
+ const {presentation:afterPresentation,...otherAfterRestore}=compositionAfterRestore;
+ assert.deepEqual(otherAfterRestore,otherBeforeRestore,'Restoring presentation preserves every other composition field');
  const final=await state();assert.equal(final.selectedSessionId,longId);assert.equal(hash(final.theme.css),report.cssSha256);
  assert.deepEqual(final.settings,beforeApply.settings,'Settings remain unchanged');
  const libraryIdentity=items=>items.map(({id,name,source,fingerprint})=>({id,name,source,fingerprint}));
