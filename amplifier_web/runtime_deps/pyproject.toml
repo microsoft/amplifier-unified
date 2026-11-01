@@ -42,7 +42,8 @@ url = "https://pypi.org/simple"
 default = true
 
 [tool.uv.sources]
-amplifier-module-loop-live = { git = "https://github.com/microsoft/amplifier-module-loop-live", rev = "main" }
+# Companion failure-code contract; qualify the accepted upstream commit before release.
+amplifier-module-loop-live = { git = "https://github.com/microsoft/amplifier-module-loop-live", rev = "afb381f543a38da200a1825fefbfecd1a93e55eb" }
 amplifier-foundation = { git = "https://github.com/microsoft/amplifier-foundation", rev = "main" }
 amplifier-module-hooks-session-naming = { git = "https://github.com/microsoft/amplifier-foundation", rev = "main", subdirectory = "modules/hooks-session-naming" }
 amplifier-module-loop-streaming = { git = "https://github.com/microsoft/amplifier-module-loop-streaming", rev = "main" }
