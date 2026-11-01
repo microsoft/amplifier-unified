@@ -246,7 +246,7 @@ dependencies = [
 [[package]]
 name = "amplifier-module-loop-streaming"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-module-loop-streaming?rev=main#270a998503c689b4b6185df817d3f6249c32e956" }
+source = { git = "https://github.com/microsoft/amplifier-module-loop-streaming?rev=main#072d50c5bcc0f7c57ca4d336ef03915563fa7861" }
 
 [[package]]
 name = "amplifier-module-tool-computer-use"
@@ -274,7 +274,7 @@ dependencies = [
 
 [[package]]
 name = "amplifier-unified"
-version = "0.45.0"
+version = "0.45.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
