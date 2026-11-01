@@ -163,7 +163,21 @@ class WindowsInstallerSourceTests(unittest.TestCase):
         self.assertIn("Import-Module Microsoft.PowerShell.Security -ErrorAction Stop", fixture)
         # Keep the successful post-dispose rename as the refusal's control.
         self.assertIn("finally { $pinned.Dispose() }", fixture)
-        self.assertIn("[IO.Directory]::Move(($ancestor + '-replacement'), $ancestor)", fixture)
+        control = fixture.index("\n    [IO.Directory]::Move($ancestor, ($ancestor + '-replacement'))")
+        # Disposing just the nested context is not enough to establish that
+        # the fixture no longer owns overlapping traversal/descendant pins.
+        release = fixture.index("$fixtureStorage.Dispose()")
+        reverse = fixture.index("[IO.Directory]::Move(($ancestor + '-replacement'), $ancestor)")
+        passed = fixture.index("Write-Output 'OFFLINE FIXTURE PASS")
+        cleanup = fixture.index("Remove-Item -LiteralPath $root -Recurse -Force")
+        self.assertLess(fixture.index("finally { $pinned.Dispose() }"), release)
+        self.assertLess(fixture.index("'Artifact checksum mismatch'"), release)
+        self.assertLess(release, control)
+        self.assertLess(control, reverse)
+        self.assertLess(reverse, passed)
+        self.assertLess(passed, cleanup)
+        self.assertIn("Write-Output $_.InvocationInfo.PositionMessage", fixture)
+        self.assertIn("Write-Output $_.ScriptStackTrace", fixture)
 
     def test_fixture_launcher_module_path_is_child_only_and_edition_specific(self):
         # Exercise the real launcher with only process execution mocked.

@@ -88,10 +88,6 @@ try {
         Assert-SharingRefused 'pinned-private-root-rename' { [IO.Directory]::Move($pinned.Root, ($pinned.Root + '-replacement')) }
         $pinned.Validate()
     } finally { $pinned.Dispose() }
-    # Prove that the sharing refusal, not a permanently broken rename fixture,
-    # caused the failure. No live context pins this synthetic ancestor now.
-    [IO.Directory]::Move($ancestor, ($ancestor + '-replacement'))
-    [IO.Directory]::Move(($ancestor + '-replacement'), $ancestor)
     Assert-Equal ([IO.File]::ReadAllText($canary)) 'outside remains unchanged'
 
     $name = 'amplifier_unified-0.44.0-py3-none-any.whl'
@@ -307,7 +303,21 @@ try {
     Assert-Equal $script:Downloads.Count 6
     $script:BadWheel = $true
     Assert-Refused { Invoke-UnifiedInstall '0.44.0' $true $true } 'Artifact checksum mismatch'
+    # The positive control belongs after ALL fixture pins have been released,
+    # not just $pinned: the outer fixture owns traversal/descendant pins too.
+    # Keep both renames mandatory; a failure is not retried or treated as a pass.
+    $fixtureStorage.Dispose()
+    [IO.Directory]::Move($ancestor, ($ancestor + '-replacement'))
+    [IO.Directory]::Move(($ancestor + '-replacement'), $ancestor)
+    Assert-Equal ([IO.File]::ReadAllText($canary)) 'outside remains unchanged'
     Write-Output 'OFFLINE FIXTURE PASS (not clean-machine or native installation qualification)'
+} catch {
+    # Offline synthetic fixture only: report the original source location
+    # before cleanup can obscure it. Do not dump environment or child output.
+    Write-Output 'OFFLINE FIXTURE FAILURE LOCATION'
+    Write-Output $_.InvocationInfo.PositionMessage
+    Write-Output $_.ScriptStackTrace
+    throw
 } finally {
     $fixtureStorage.Dispose()
     Remove-Item -LiteralPath $root -Recurse -Force

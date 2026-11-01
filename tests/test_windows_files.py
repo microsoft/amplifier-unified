@@ -166,6 +166,54 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             api.validate_acl(1, private=True)
 
+    def test_inherited_fixture_oracle_uses_structure_not_sddl_aliases(self):
+        from types import SimpleNamespace
+        api = wf._API.__new__(wf._API)
+        api.sid = "S-1-5-21-100-200-300-500"
+        state = {"owner": api.sid, "control": 4, "dacl": 2, "flags": 0x10}
+        ace = wf.ACE()
+        rendered = "O:LAD:AI(A;ID;FA;;;LA)"
+        rendered_buffer = C.create_unicode_buffer(rendered)
+
+        def security(handle, kind, fields, owner, group, dacl, sacl, descriptor):
+            C.cast(owner, C.POINTER(wf.PVOID))[0] = 1
+            C.cast(dacl, C.POINTER(wf.PVOID))[0] = state["dacl"]
+            C.cast(descriptor, C.POINTER(wf.PVOID))[0] = 3
+            return 0
+
+        def control(descriptor, output, revision):
+            C.cast(output, C.POINTER(wf.WORD))[0] = state["control"]
+            return True
+
+        def acl_info(dacl, output, size, kind):
+            C.cast(output, C.POINTER(wf.ACL_INFO)).contents.count = 1
+            return True
+
+        def get_ace(dacl, index, output):
+            ace.flags = state["flags"]
+            C.cast(output, C.POINTER(wf.PVOID))[0] = C.addressof(ace)
+            return True
+
+        def convert(descriptor, revision, fields, output, length):
+            C.cast(output, C.POINTER(wf.PVOID))[0] = C.addressof(rendered_buffer)
+            return True
+
+        api.GetSecurityInfo, api.GetSecurityDescriptorControl = security, control
+        api.GetAclInformation, api.GetAce = acl_info, get_ace
+        api.sid_text = lambda owner: state["owner"]
+        api.open = lambda *a, **k: 10
+        api.close = api.LocalFree = lambda value: None
+        dll = SimpleNamespace(ConvertSecurityDescriptorToStringSecurityDescriptorW=convert)
+        with patch.object(wf, "_API", return_value=api), patch.object(C, "WinDLL", return_value=dll, create=True):
+            snapshot = lambda: NativeTests.security_text(self, SOURCE, inherited=True)
+            self.assertEqual(snapshot(), rendered)  # LA alias is not a different owner.
+            for field, value in (("owner", "S-1-5-32-544"), ("control", 0x1004),
+                                 ("control", 0), ("dacl", 0), ("flags", 0)):
+                with self.subTest(field=field, value=value), patch.dict(state, {field: value}):
+                    # Unchanged plausible SDDL cannot hide a structurally bad fixture.
+                    with self.assertRaises(AssertionError):
+                        snapshot()
+
     def test_new_security_descriptor_is_protected_owner_and_system(self):
         api = wf._API.__new__(wf._API)
         api.sid = "S-1-5-21-100-200-300-1001"
@@ -488,18 +536,34 @@ class NativeTests(unittest.TestCase):
         finally:
             api.LocalFree(descriptor)
 
-    def security_text(self, path):
+    def security_text(self, path, *, inherited=False):
         api = wf._API()
         handle = api.open(path, directory=path.is_dir())
-        descriptor = wf.PVOID()
+        owner, dacl, descriptor = wf.PVOID(), wf.PVOID(), wf.PVOID()
         text = C.c_wchar_p()
         convert = C.WinDLL("advapi32", use_last_error=True).ConvertSecurityDescriptorToStringSecurityDescriptorW
         convert.argtypes = [wf.PVOID, wf.DWORD, wf.DWORD, C.POINTER(C.c_wchar_p), wf.PDWORD]
         convert.restype = wf.BOOL
         try:
-            error = api.GetSecurityInfo(handle, 1, 5, None, None, None, None, C.byref(descriptor))
+            error = api.GetSecurityInfo(handle, 1, 5, C.byref(owner), None,
+                                        C.byref(dacl), None, C.byref(descriptor))
             if error:
                 raise C.WinError(error)
+            if inherited:
+                # SDDL may abbreviate an owner SID (for example LA). Check the
+                # actual owner and inheritance structure, not display spelling.
+                self.assertTrue(api.sid_text(owner) == api.sid, "fixture must be TokenUser-owned")
+                control, revision = wf.WORD(), wf.DWORD()
+                api.ok(api.GetSecurityDescriptorControl(descriptor, C.byref(control), C.byref(revision)))
+                self.assertTrue(control.value & 4 and dacl, "fixture must have a non-null DACL")
+                self.assertFalse(control.value & 0x1000, "fixture DACL must be unprotected")
+                acl, inherited_aces = wf.ACL_INFO(), []
+                api.ok(api.GetAclInformation(dacl, C.byref(acl), C.sizeof(acl), 2))
+                for index in range(acl.count):
+                    pointer = wf.PVOID()
+                    api.ok(api.GetAce(dacl, index, C.byref(pointer)))
+                    inherited_aces.append(bool(C.cast(pointer, C.POINTER(wf.ACE)).contents.flags & 0x10))
+                self.assertTrue(any(inherited_aces), "fixture must have real inherited ACEs")
             api.ok(convert(descriptor, 1, 5, C.byref(text), None))
             return text.value
         finally:
@@ -541,14 +605,10 @@ class NativeTests(unittest.TestCase):
                 api.close(handle)
         finally:
             api.LocalFree(descriptor)
-        before = {path: self.security_text(path) for path in (inherited, target)}
-        for text in before.values():
-            self.assertTrue(text.startswith(f"O:{api.sid}"), "fixture must be TokenUser-owned")
-            self.assertTrue("D:P" not in text and "ID;" in text,
-                            "fixture must have real unprotected inherited ACEs")
+        before = {path: self.security_text(path, inherited=True) for path in (inherited, target)}
         with wf.directory(inherited, owned_root=self.root) as pinned:
             self.assertEqual(pinned.read_private("session-secret", limit=64), b"safe-existing")
-        self.assertEqual({path: self.security_text(path) for path in before}, before)
+        self.assertEqual({path: self.security_text(path, inherited=True) for path in before}, before)
 
     def test_foreign_read_grant_is_refused_unmodified(self):
         with wf.directory(self.path, owned_root=self.root) as pinned:

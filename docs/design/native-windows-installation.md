@@ -438,12 +438,37 @@ requires ordinary x64 CPython 3.13 and both PowerShell 5.1 and 7. A separate
 four-dependency job selects configuration, TLS and service policy checks,
 explicitly excluding Task Scheduler registration. Local verification of that
 selection passed 145 tests, with 9 native skips and 1 deselection. YAML and
-embedded Python checks passed; PowerShell parsing and native execution remain
-unverified until Windows CI runs. Selection alone is not native test evidence.
+embedded Python checks passed. The following native runs supersede the earlier
+unexecuted status, but do not establish full mechanism or host acceptance.
 
-**Next native-CI dependency:** qualify Unified's focused mechanisms through a
-draft PR. The original upstream ownership/store merge and CI prerequisites above
-are satisfied; ordinary private native-history persistence remains separate work.
+### Initial Unified native CI
+
+Draft [PR 1431](https://github.com/microsoft/amplifier-unified/pull/1431)
+published only the bounded committed mechanisms, not the remaining local
+browser/runtime candidates. The failed runs below remain qualification evidence.
+
+| Candidate and run | Observed result | Unresolved boundary |
+| --- | --- | --- |
+| `e824e014010b6280324416dab40c66457511509b`, [CI 41269236533](https://github.com/microsoft/amplifier-unified/actions/runs/41269236533) | Linux passed. All 11 native Windows process cases passed. Windows standalone had 3 failures, 1 error and 9 POSIX-only skips. Configuration/TLS had 151 passes, 2 failures, 1 skip and 1 deselection. macOS failed the cwd path-spelling assertion. | Inherited-file/config fixtures, junction command quoting, both PowerShell fixtures and macOS alias handling required repair. No aggregate native pass. |
+| `1c57dacb41f3cfa45f7422e4c635880aff8c3ab0`, [CI 41270115320](https://github.com/microsoft/amplifier-unified/actions/runs/41270115320) | Linux and macOS passed. Windows configuration/TLS/service-policy passed: 153 passed, 1 generic TLS skip and 1 Scheduler deselection. Windows standalone ran 139 checks with 3 failures and 9 POSIX-only skips. | The inherited-owner assertion and both PowerShell fixtures still failed. New sharing access strengthened directory pins; native fixture lifetime and structural owner checks still require qualification. |
+
+The repair requests real directory-list access so bootstrap directory handles
+participate in sharing enforcement. The Windows PowerShell fixture removes an
+inherited cross-edition module path only from its child environment. Private
+ownership rules and both activation gates remain unchanged.
+
+Ordinary private native-history persistence is separately proposed in Foundation
+[PR 456](https://github.com/microsoft/amplifier-foundation/pull/456), candidate
+`1cc7cd0dc0b082f4e61da5b15a5a2b5e138dbb4b`. Its initial
+[CI 41269990061](https://github.com/microsoft/amplifier-foundation/actions/runs/41269990061)
+passed all three Linux legs and failed all three Windows legs. The Windows
+failures include existing fork/store paths with nonprivate creation and the
+native warm-append bound. This candidate is not merged or qualified; the original
+ownership/store merges above do not qualify these new history operations.
+
+**Next native-CI dependency:** repair the demonstrated failures and verify their
+named native cases. The original upstream ownership/store merge and CI
+prerequisites above are satisfied; the new private-history dependency is not.
 Until the standalone mechanism passes its own native checks, do not integrate
 runtime process callers. After that boundary, preserve owner cleanup-failure
 custody and generation leases, distinguish guard/payload/worker identities, and

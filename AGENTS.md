@@ -94,8 +94,9 @@ locks, bounded UTF-8 worker pipes, private files, owned-process containment and
 offline installer fixtures, not full Windows installation. Windows preflight
 requires ordinary x64 CPython 3.13 and both PowerShell 5.1 and 7. A separate
 focused job checks private configuration, TLS and service policy; it explicitly
-excludes synthetic Task Scheduler registration. These selections remain
-unexecuted on Windows until the candidate reaches native CI. Keep its
+excludes synthetic Task Scheduler registration. Inspect named native cases and
+skip reasons in the candidate's CI logs; partial passes do not qualify the host.
+Keep its
 worker subprocess probes isolated with `-I -S`: installed application packages
 must not hide import dependencies in this standard-library check. A cancelled
 Windows stdin read stops delivery; its daemon thread/descriptor may remain until
