@@ -14,6 +14,51 @@ from amplifier_web.service import AppService
 from amplifier_web.session_files import append_event, capture_dir, project_slug, read_event, sessions_dir
 
 
+@pytest.mark.parametrize('worker_count', [1, 504])
+async def test_presentation_encodes_once_and_keeps_exact_resource_and_borrowed_edits(tmp_path, monkeypatch, worker_count):
+    from amplifier_web.session_projection import view_path
+    from amplifier_web.state_records import load_owner
+    from amplifier_web.resource_files import prepare
+    from amplifier_web.state_storage import resource as read
+
+    app = AppService(tmp_path / 'app', workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        session = app._session()
+        sid = session['id']
+        session['workers'] = [{'id': f'worker-{i}', 'status': 'completed',
+            'report': {'text': 'Retained 雪 result ' * 512}} for i in range(worker_count)]
+        borrowed = session['workers'][-1]['report']
+        original = json.JSONEncoder.iterencode
+        encoded = []
+        def observe(encoder, value, *args, **kwargs):
+            if isinstance(value, dict) and value.get('id') == sid and 'workers' in value:
+                encoded.append(True)
+            return original(encoder, value, *args, **kwargs)
+        with monkeypatch.context() as m:
+            m.setattr(json.JSONEncoder, 'iterencode', observe)
+            app._save_changes(sessions={sid})
+        assert len(encoded) == 1  # Full presentation encoding, not helper call count.
+        path = view_path(app.data_dir, session)
+        saved = json.loads(path.read_text())
+        reference = load_owner(app.db, sid)[0]['$viewPayload']
+        expected = prepare(saved)
+        assert reference == {'$resource': expected.identity, 'bytes': expected.size}
+        assert read(app.db, reference['$resource']) == saved
+        before = path.stat().st_mtime_ns
+        app._save_changes(sessions={sid})
+        assert path.stat().st_mtime_ns == before
+        assert load_owner(app.db, sid)[0]['$viewPayload'] == reference
+        borrowed['text'] = borrowed['text'].replace('雪', '月')
+        app._save_changes(sessions={sid})
+        updated = load_owner(app.db, sid)[0]['$viewPayload']
+        assert updated != reference
+        assert read(app.db, updated['$resource'])['workers'][-1]['report'] == borrowed
+        assert read(app.db, reference['$resource'])['workers'][-1]['report']['text'].startswith('Retained 雪')
+    finally:
+        await app.close()
+
+
 def test_project_paths_and_transcripts_share_cli_changes_without_checkpoint_copy(tmp_path):
     workspace = tmp_path / 'Project name.v2_with-underscores'
     assert project_slug(workspace) == str(workspace.resolve()).replace('/', '-')
