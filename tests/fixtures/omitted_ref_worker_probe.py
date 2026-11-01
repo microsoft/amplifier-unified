@@ -853,18 +853,31 @@ def adopted(rows, *, generation, revision, payload_hash, prefix, pid, source_roo
         installed, = [item for item in graph if item['name'] == name]
         source = source_root / 'modules' / kind
         cache = installed.get('cacheSource', {})
-        require(Path(installed['path']).resolve() == source.resolve()
-                and cache.get('url') == URL and cache.get('revision') == revision
+        installed_source = Path(installed['path']).resolve(strict=True)
+        require(cache.get('url') == URL and cache.get('revision') == revision
                 and cache.get('subdirectory') == 'modules/' + kind and cache.get('dirty') is False,
                 'Installed distribution is not bound to the verified source object')
+        # Foundation installs from its owned build view, but loads modules from
+        # the immutable object. Equality of those directory names is not promised.
+        if installed_source != source.resolve(strict=True):
+            build = installed_source.parent.parent
+            require(build.parent == source_root.parents[2] / 'builds'
+                    and installed_source == build / 'modules' / kind
+                    and not build.is_symlink()
+                    and json.loads((build / '.amplifier_cache_meta.json').read_text()).get('buildInput') is True,
+                    'Installed source is not an owned Foundation build view')
         origin = Path(row['origin'])
         expected = source / row['module'] / '__init__.py'
         packaged = prefix / 'lib/python3.13/site-packages' / row['module'] / '__init__.py'
         require(origin.is_absolute() and origin.resolve(strict=True) in {
                     expected.resolve(strict=True), packaged.resolve(strict=True)},
                 'Worker module origin is neither its verified source nor installed package')
-        require(origin.read_bytes() == expected.read_bytes() == packaged.read_bytes(),
-                'Worker module bytes differ from the qualified source and installation')
+        for filename in ('__init__.py', '_proof.py', '_payload.py'):
+            require((origin.parent / filename).read_bytes()
+                    == (expected.parent / filename).read_bytes()
+                    == (packaged.parent / filename).read_bytes()
+                    == (installed_source / row['module'] / filename).read_bytes(),
+                    'Worker module bytes differ from source, build view or installation')
         require(digest(origin.with_name('_payload.py')) == payload_hash,
                 'Worker origin payload differs from its mount evidence')
     return selected

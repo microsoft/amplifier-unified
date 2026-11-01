@@ -168,9 +168,10 @@ def test_plain_path_refuses_symlinks(tmp_path, probe, location):
         probe.plain_path(target, tree=tree)
 
 
-@pytest.mark.parametrize("origin_kind", ["source", "installed", "unrelated", "wrong-source", "wrong-bytes"])
+@pytest.mark.parametrize("origin_kind", ["source", "installed", "build-view", "wrong-build", "unrelated", "wrong-source", "wrong-bytes"])
 def test_adoption_binds_both_valid_origins_to_installed_source(tmp_path, probe, origin_kind):
-    prefix, source_root = tmp_path / "project/.venv", tmp_path / "source"
+    prefix = tmp_path / "project/.venv"
+    source_root = tmp_path / "store/objects/repository" / REVISION
     prefix.mkdir(parents=True)
     rows, graph = [], []
     payload = b"PAYLOAD = 1\n"
@@ -183,7 +184,17 @@ def test_adoption_binds_both_valid_origins_to_installed_source(tmp_path, probe, 
         for target in (package, installed):
             target.mkdir(parents=True)
             (target / "__init__.py").write_text("# synthetic module\n")
+            (target / "_proof.py").write_text("# proof\n")
             (target / "_payload.py").write_bytes(payload)
+        installed_source = source
+        if origin_kind in ("build-view", "wrong-build"):
+            build = tmp_path / ("store/builds" if origin_kind == "build-view" else "elsewhere") / "build-id"
+            installed_source = build / "modules" / kind
+            target = installed_source / module
+            target.mkdir(parents=True)
+            for filename in ("__init__.py", "_proof.py", "_payload.py"):
+                (target / filename).write_bytes((package / filename).read_bytes())
+            (build / ".amplifier_cache_meta.json").write_text('{"buildInput":true}')
         origin = installed if origin_kind == "installed" else package
         if origin_kind == "unrelated":
             origin = tmp_path / "unrelated" / module
@@ -196,12 +207,12 @@ def test_adoption_binds_both_valid_origins_to_installed_source(tmp_path, probe, 
                      "module": module, "generation": "g", "revision": REVISION,
                      "payloadSha256": payload_hash, "prefix": str(prefix),
                      "executable": str(prefix / "bin/python"), "origin": str(origin / "__init__.py")})
-        graph.append({"name": name, "path": str(source),
+        graph.append({"name": name, "path": str(installed_source),
                       "cacheSource": {"url": probe.URL, "revision": "b" * 40 if origin_kind == "wrong-source" else REVISION,
                                       "subdirectory": "modules/" + kind, "dirty": False}})
     kwargs = dict(generation="g", revision=REVISION, payload_hash=payload_hash,
                   prefix=prefix, pid=123, source_root=source_root, graph=graph)
-    if origin_kind in ("source", "installed"):
+    if origin_kind in ("source", "installed", "build-view"):
         assert probe.adopted(rows, **kwargs) == rows
     else:
         with pytest.raises(AssertionError):
