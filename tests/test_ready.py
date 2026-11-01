@@ -90,10 +90,10 @@ def test_ready_is_small_portable_static_and_uses_authored_contrast():
     css = data.decode("utf-8")
     validate_theme(css)
     metadata, body = theme_library.metadata(css)
-    assert metadata["name"] == "READY."
+    assert metadata["name"] == "Breadbin"
     assert metadata["description"] == theme_library.RESOURCE_PRESETS["ready"]["description"]
     assert css.count(theme_library.MARKER) == 1
-    assert body.lstrip().startswith("/* READY.")
+    assert body.lstrip().startswith("/* Breadbin.")
     assert not re.search(r"https?://|file:|@import|@font-face|url\s*\(|</?script", css, re.I)
 
     forbidden = {
@@ -309,7 +309,7 @@ async def test_ready_is_a_passive_builtin_and_saves_as_a_copy(app):
     selected = app.state["selectedSessionId"]
     listing = (await dispatch(app, "theme.list", {}))["result"]
     row = next(item for item in listing["items"] if item["id"] == "builtin:ready")
-    assert row["name"] == "READY." and row["source"] == "built-in"
+    assert row["name"] == "Breadbin" and row["source"] == "built-in"
     assert row["tag"] == "Retro / Hardware"
     assert row["radius"] == "5px" and row["background"] == "none"
     assert row["palette"]["accent"] == theme_library.RESOURCE_PRESETS["ready"]["palette"]["accent"]
@@ -343,7 +343,7 @@ async def test_ready_builtin_is_immutable_and_export_roundtrip_does_not_apply(ap
     exported = await dispatch(app, "theme.export", {"id": theme["id"]})
     css = exported["result"]["css"]
     assert exported["effects"][0]["content"] == css
-    assert exported["effects"][0]["filename"] == "ready.amplifier.css"
+    assert exported["effects"][0]["filename"] == "breadbin.amplifier.css"
     assert theme_library.metadata(css) == theme_library.metadata(theme["css"])
     validate_theme(css)
     saved = (await dispatch(app, "theme.import", {"css": css}))["result"]

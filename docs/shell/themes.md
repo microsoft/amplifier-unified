@@ -239,7 +239,7 @@ informed those materials, not sampled color values or copied imagery. Functional
 accent colors are readability adaptations. A reference does not replace contrast
 measurements and rendered review in either scheme.
 
-READY. is a static, home-computer-inspired appearance with warm ivory casing
+Breadbin is a static, home-computer-inspired appearance with warm ivory casing
 and deep violet accents in light mode, a blue-violet conversation screen and
 smoked casing in dark mode, and an optional four-color header edge. It uses
 system UI text and readable monospace conversation, not a bundled retro font.

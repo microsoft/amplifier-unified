@@ -14,7 +14,7 @@ async def test_bundled_library_previews_applies_and_reverts_without_changing_cha
     original = dict(app.state['theme'])
     sid = app.state['selectedSessionId']
     listing = (await dispatch(app, 'theme.list', {}))['result']
-    assert [row['name'] for row in listing['items']] == ['Amplifier', 'Aurora', 'Atelier', 'Graphite', 'Digital Rain', 'Lightline', 'READY.']
+    assert [row['name'] for row in listing['items']] == ['Amplifier', 'Aurora', 'Atelier', 'Graphite', 'Digital Rain', 'Lightline', 'Breadbin']
     assert not Path(listing['directory']).exists(), 'Browsing does not allocate user storage'
     for row in listing['items']:
         assert 'css' not in row

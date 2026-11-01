@@ -356,7 +356,7 @@ try{
  const initial=await state(),beforeListing=await preferences(),listing=(await action('theme.list')).result;
  const ready=(await action('theme.read',{id:'builtin:ready'})).result;
  assert.equal(listing.items.filter(row=>row.id==='builtin:ready').length,1);
- assert.equal(ready.name,'READY.');assert.equal(ready.source,'built-in');assert.equal(ready.css,css);
+ assert.equal(ready.name,'Breadbin');assert.equal(ready.source,'built-in');assert.equal(ready.css,css);
  assert.equal(ready.fingerprint,report.cssSha256,'Served builtin CSS fingerprint matches exact source resource');
  assert.deepEqual((await state()).theme,initial.theme);assert.deepEqual(await preferences(),beforeListing);
  assert.doesNotMatch(css,/(?:-webkit-)?mask-image\s*:/i,'Candidate inherits the native transcript mask');
