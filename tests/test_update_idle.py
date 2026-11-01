@@ -73,10 +73,13 @@ async def test_ready_during_cold_start_send_keeps_admitted_turn_protected(prepar
     entered, deliver = asyncio.Event(), asyncio.Event()
     original = service.runtime._request
 
-    async def before_send(*args, **kwargs):
-        entered.set()
-        await deliver.wait()
-        return await original(*args, **kwargs)
+    async def before_send(sid, op, **kwargs):
+        # Background setup can also issue requests. Hold only the accepted
+        # message transport whose cold-start admission this case exercises.
+        if op == 'send':
+            entered.set()
+            await deliver.wait()
+        return await original(sid, op, **kwargs)
 
     monkeypatch.setattr(service.runtime, '_request', before_send)
     send = asyncio.create_task(service.dispatch('conversation.send', {'text': 'Accepted work'}))
