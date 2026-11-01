@@ -84,6 +84,64 @@ def test_read_repeat_distinct_recovery_and_next_failure(tmp_path):
     assert len(active(state)) == 1 and not active(state)[0]['read']
 
 
+async def test_source_binding_reasons_stay_distinct_exportable_and_unresolved_after_preparation(tmp_path):
+    import json
+    from amplifier_web.runtime_environment import ProtectedRuntimeSource
+    from amplifier_web.runtime_source_alignment import verify_checked_selection
+    from amplifier_web.update_diagnostics import failure_guidance
+    from amplifier_web.update_report import event
+
+    state, diagnostics = fixture(tmp_path)
+    package = 'amplifier-module-hooks-approval'
+    private_source = 'https://example.invalid/private-source'
+    checked = {package: {'url': private_source, 'ref': 'main', 'revision': 'a' * 40}}
+
+    async def source_failure(status):
+        diagnostics.begin('ecosystem', 'c' * 40, components=[package])
+        async def preflight():
+            verify_checked_selection(checked, {
+                'batchPaths': {package: '/private/source'},
+                'packages': {package: {'status': status, 'url': private_source}},
+            })
+        with pytest.raises(ProtectedRuntimeSource):
+            await diagnostics.run('ecosystem-source-preflight', preflight)
+        return diagnostics.state['lastFailure']
+
+    first = await source_failure('unbound')
+    first_identity = active(state)[0]['fingerprint']
+    read_all(state)
+    conflict = await source_failure('conflicting')
+    repeated = await source_failure('unbound')
+    groups = {item['firstFailure']['reason']: item for item in active(state)}
+    assert set(groups) == {'runtime-source-unbound', 'runtime-source-conflict'}
+    unbound = groups['runtime-source-unbound']
+    assert unbound['fingerprint'] == first_identity and unbound['read']
+    assert unbound['firstFailure'] == first and unbound['latestFailure'] == repeated
+    assert unbound['occurrences'] == 2
+    assert groups['runtime-source-conflict']['occurrences'] == 1
+    assert not groups['runtime-source-conflict']['read']
+    assert groups['runtime-source-conflict']['fingerprint'] != first_identity
+    for original in (first, conflict, repeated):
+        exported = event(original)
+        assert exported['reason'] == original['reason'] and exported['package'] == package
+        assert exported['errorType'] == 'ProtectedRuntimeSource'
+        assert 'does not establish local edits' in failure_guidance(exported)
+        assert 'private' not in json.dumps(exported)
+    assert failure_guidance(first) != failure_guidance(conflict)
+    retained = [json.loads(line) for line in diagnostics.path.read_text().splitlines()]
+    assert all(original in retained for original in (first, conflict, repeated))
+    assert 'private' not in json.dumps(retained)
+
+    read_all(state)
+    before = copy.deepcopy(diagnostics.state['activeFailures'])
+    diagnostics.begin('ecosystem', 'c' * 40, components=[package])
+    diagnostics.clear_failure()
+    for phase in ('ecosystem-prepare', 'ecosystem-validation', 'ecosystem-stage'):
+        diagnostics.record(phase, 'succeeded')
+        assert diagnostics.state['activeFailures'] == before
+        assert len(active(state)) == snapshot(state)['badgeUnread'] == 2
+
+
 @pytest.mark.parametrize('phase', ['restart-ack', 'restart-reconcile', 'restart-superseded'])
 def test_application_success_does_not_resolve_ecosystem_failure(tmp_path, phase):
     state, diagnostics = fixture(tmp_path)
