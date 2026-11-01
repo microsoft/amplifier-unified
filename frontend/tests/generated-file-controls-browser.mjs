@@ -22,8 +22,9 @@ const touchEventDiagnosticMode=process.env.FILE_CONTROLS_TOUCH_EVENT_DIAGNOSTIC=
 const nativeStateDiagnosticMode=process.env.FILE_CONTROLS_NATIVE_STATE_DIAGNOSTIC==='1';
 const portalHostExperimentMode=process.env.FILE_CONTROLS_PORTAL_HOST_EXPERIMENT==='1';
 const stateReductionMode=process.env.FILE_CONTROLS_STATE_REDUCTION==='1';
+const focusContrastMode=process.env.FILE_CONTROLS_FOCUS_CONTRAST==='1';
 const coarseToolbarQualificationMode=process.env.FILE_CONTROLS_COARSE_TOOLBAR_QUALIFICATION==='1';
-assert.ok([cornerDiagnosticMode,touchEventDiagnosticMode,nativeStateDiagnosticMode,portalHostExperimentMode,stateReductionMode,coarseToolbarQualificationMode].filter(Boolean).length<=1,
+assert.ok([cornerDiagnosticMode,touchEventDiagnosticMode,nativeStateDiagnosticMode,portalHostExperimentMode,stateReductionMode,focusContrastMode,coarseToolbarQualificationMode].filter(Boolean).length<=1,
  'Conflicting file-controls diagnostic/qualification modes');
 // Fixed binding to the retained failed first-390 gesture, NOT a new measurement
 // chosen to fit this candidate. No predecessor report is modified or rerun.
@@ -44,8 +45,15 @@ const coarseToolbarBaseline={
 // geometry. A missing binding stops before fixture startup.
 const portalHostBaseline=portalHostExperimentMode?JSON.parse(await readFile(
  '/artifacts/files1318-portal-host-experiment/portal-host-baseline.json','utf8')):null;
-const stateReductionBaseline=stateReductionMode?JSON.parse(await readFile(
+const stateReductionBaseline=stateReductionMode||focusContrastMode?JSON.parse(await readFile(focusContrastMode?
+ '/artifacts/files1318-focus-contrast/focus-contrast-baseline.json':
  '/artifacts/files1318-state-reduction/state-reduction-baseline.json','utf8')):null;
+const focusContrast={version:'focus-contrast-v1',baseline:stateReductionBaseline,arms:[],outcome:'inconclusive',
+ productAcceptance:false,unfinished:focusContrastMode?`Unsubmitted touch note — ${randomUUID()}`:null,
+ limits:['Two fresh sequential browser contexts over one immutable synthetic v1/v2/deleted-source fixture.',
+  'Only the outside arm traverses Shift+Tab to the existing visible header Canvas toggle; no activation or focus repair.',
+  'One original primary tap per context; no card/pointer rehearsal. A gate/capture/cleanup gap is inconclusive.',
+  'Focus dependence is not engine cause or a product fix; both misses only show iframe focus was not necessary here.']};
 const stateReduction={version:'state-reduction-v1',baseline:stateReductionBaseline,gates:[],card:null,primary:null,
  outcome:'inconclusive',productAcceptance:false,
  limits:['Two real product surfaces in one touch context; card geometry is intentionally not a causal match.',
@@ -1632,7 +1640,9 @@ async function cornerTap(control,corner,diagnostic=null,beforeTap=null,precondit
    assert.equal(sequence[0].pointerType,'touch');
    assert.equal(sequence[2].sourceCapabilities?.firesTouchEvents,true);
    if(diagnostic.reductionPhase==='primary')
-    assert.equal(sequence[0].reductionSnapshot.focus?.nodeId,diagnostic.focus.outer.nodeId,'Iframe lost focus before pointerdown');
+    assert.equal(sequence[0].reductionSnapshot.focus?.nodeId,
+     diagnostic.focusContrastArm?diagnostic.focus.expectedNodeId:diagnostic.focus.outer.nodeId,
+     'Accepted focus changed before pointerdown');
    diagnostic.captureValid=true;
   }catch(error){diagnosticFailures.push(error)}
   // Evaluate trusted raw event targets BEFORE any later geometry/cleanup error.
@@ -1754,7 +1764,7 @@ async function connect(owner,options){
   await target.addInitScript({content:`window.__fileControlsToolbarSnapshot=(${coarseToolbarSnapshot.toString()});`});
  if(portalHostExperimentMode)
   await target.addInitScript({content:`window.__fileControlsPortalHostSnapshot=(${portalHostSnapshot.toString()});`});
- if(stateReductionMode)
+ if(stateReductionMode||focusContrastMode)
   await target.addInitScript({content:`window.__fileControlsReductionSnapshot=(${reductionSnapshot.toString()});`});
  await target.addInitScript({content:`window.__fileControlsCircularContour=(${circularContour.toString()});`+
   `window.__fileControlsSupportedCircularCornerShape=(${supportedCircularCornerShape.toString()});`+
@@ -1793,7 +1803,7 @@ const executionMarker=frame=>frame.evaluate(()=>({
  token:document.body.dataset.fileControlsToken
 }));
 
-async function startPreview(target,row,draft,label){
+async function startPreview(target,row,draft,label,unfinishedNote=null){
  // A separate, deliberate preview SETUP, after the card-only no-document oracle.
  // Never classify this canvas.select or its document request as a download.
  const before=documentRequests(target).length;
@@ -1809,7 +1819,7 @@ async function startPreview(target,row,draft,label){
   await expect(frame.getByRole('heading',{name:'Original résumé α — 雪',exact:true})).toBeVisible();
   await frame.waitForFunction(()=>window.fileControlsExecutions===1&&document.body.dataset.fileControlsToken,undefined,{timeout:4000});
   const input=frame.getByRole('textbox',{name:'Unfinished preview note',exact:true});
-  const unfinished=`Unsubmitted ${label} note — ${randomUUID()}`;
+  const unfinished=unfinishedNote??`Unsubmitted ${label} note — ${randomUUID()}`;
   await input.fill(unfinished);
   const marker=await executionMarker(frame);
   assert.equal(marker.count,1);assert.equal(marker.executed,'1');
@@ -1988,14 +1998,14 @@ async function usePreviewControls(retained,label,mode){
   marker:retained.marker,unfinished:retained.unfinished,documents:documentRequests(target),state:await previewState(target,row)});
 }
 
-async function reductionDataGate(target,phase){
+async function reductionDataGate(target,phase,gates=stateReduction.gates){
  const fixtureState=await fixtureRead(target);
  const client=await target.evaluate(()=>{
   const s=window.amplifier.getState(),session=s.sessions.find(row=>row.id===s.selectedSessionId);
   return {selected:s.selectedSessionId,workingDirectory:session?.workingDirectory,workspace:session?.workspace,
    draft:s.view.draft,canvas:{id:s.canvas.id,version:s.canvas.selectedVersion,readOnly:s.canvas.readOnlyVersion}};
  });
- const gate={phase,fixture:fixtureState,client,passed:false};stateReduction.gates.push(gate);
+ const gate={phase,fixture:fixtureState,client,passed:false};gates.push(gate);
  assert.equal(fixtureState.seed.sessionId,seed.sessionId);
  assert.equal(fixtureState.seed.artifacts.html.id,seed.artifacts.html.id);
  assert.equal(fixtureState.newer.id,seed.artifacts.html.id);assert.equal(fixtureState.newer.revision,2);
@@ -2003,7 +2013,7 @@ async function reductionDataGate(target,phase){
  assert.equal(client.selected,seed.sessionId);assert.equal(client.workingDirectory,seed.workingDirectory);
  assert.equal(client.workspace,seed.workspace);assert.notEqual(seed.workingDirectory,seed.workspace);
  assert.equal(client.draft,stateReductionBaseline.draft);
- const expectedId=phase.startsWith('card')?seed.unrelated.id:seed.artifacts.html.id;
+ const expectedId=phase.startsWith('card')||phase==='unrelated'?seed.unrelated.id:seed.artifacts.html.id;
  assert.deepEqual(client.canvas,{id:expectedId,version:1,readOnly:true});
  gate.passed=true;return gate;
 }
@@ -2091,6 +2101,198 @@ async function runStateReduction(){
  primaryGesture.passed=true;
  assert.deepEqual(errors,[]);assert.deepEqual(contourOracle.cornerShapeCaptureErrors,[]);
 }
+// Existing header Canvas toggle is outside the narrow pane; the composer is
+// hidden there. Read visibility/occlusion, never focus/activate a hidden control.
+async function focusBoundarySnapshot(retained){
+ const host=await retained.element.evaluate(frame=>{
+  const toggle=document.querySelector('#canvas-toggle'),panel=document.querySelector('#workspace-canvas');
+  const id=window.__fileControlsNodeId,active=document.activeElement,s=window.amplifier.getState();
+  if(!toggle||!panel)throw Error('Required outer Canvas toggle/pane absent');
+  const rect=toggle.getBoundingClientRect(),style=getComputedStyle(toggle);
+  const point={x:rect.left+rect.width/2,y:rect.top+rect.height/2},hit=document.elementFromPoint(point.x,point.y);
+  const selected=getSelection();
+  if((selected?.toString().length||0)>4096)throw Error('Focus selection evidence exceeds 4096 characters');
+  return {at:Date.now(),active:{nodeId:id(active),tag:active.tagName,id:active.id,label:active.getAttribute('aria-label'),
+    inCanvas:panel.contains(active)},frame:{nodeId:id(frame),connected:frame.isConnected,focused:active===frame},
+   toggle:{nodeId:id(toggle),tag:toggle.tagName,id:toggle.id,label:toggle.getAttribute('aria-label'),
+    rect:rect.toJSON(),outsideCanvas:!panel.contains(toggle),connected:toggle.isConnected,
+    visible:toggle.checkVisibility({checkVisibilityCSS:true})&&toggle.getClientRects().length>0,
+    disabled:toggle.disabled,tabIndex:toggle.tabIndex,blocked:!!toggle.closest('[hidden],[inert],[aria-hidden="true"]'),
+    pointerEvents:style.pointerEvents,inViewport:rect.left>=0&&rect.top>=0&&rect.right<=innerWidth&&rect.bottom<=innerHeight,
+    point,hit:hit&&{nodeId:id(hit),tag:hit.tagName},reachable:!!hit&&toggle.contains(hit)},
+   pane:{open:s.canvas.open,focused:!!s.view.canvasFocused,controls:!!s.view.canvasControlsExpanded,
+    hidden:panel.hidden,inert:panel.inert,rect:panel.getBoundingClientRect().toJSON()},
+   scroll:{x:scrollX,y:scrollY},selection:selected?{text:selected.toString(),anchorOffset:selected.anchorOffset,
+    focusOffset:selected.focusOffset,anchorNodeId:selected.anchorNode?id(selected.anchorNode):null,
+    focusNodeId:selected.focusNode?id(selected.focusNode):null}:null};
+ });
+ const inner=await retained.input.evaluate(node=>({at:Date.now(),connected:node.isConnected,focused:document.activeElement===node,
+  documentFocused:document.hasFocus(),tag:node.tagName,id:node.id,value:node.value,
+  selectionStart:node.selectionStart,selectionEnd:node.selectionEnd,selectionDirection:node.selectionDirection,
+  scroll:{x:scrollX,y:scrollY}}));
+ return {host,inner};
+}
+function focusBoundaryOracle(value,arm){
+ const {host,inner}=value,t=host.toggle;
+ assert.ok(t.connected&&t.visible&&t.outsideCanvas&&!t.disabled&&!t.blocked&&t.tabIndex>=0&&t.inViewport&&t.reachable,
+  'Design invalid: outer Canvas toggle is not an ordinary visible keyboard target');
+ assert.equal(t.tag,'BUTTON');assert.equal(t.id,'canvas-toggle');assert.equal(t.label,'Hide canvas');
+ assert.notEqual(t.pointerEvents,'none');
+ assert.equal(host.pane.open,true);assert.equal(host.pane.focused,false);assert.equal(host.pane.controls,false);
+ assert.equal(host.pane.hidden,false);assert.equal(host.pane.inert,false);
+ assert.equal(host.frame.connected,true);assert.equal(inner.connected,true);
+ assert.equal(inner.tag,'INPUT');assert.equal(inner.id,'preview-note');assert.equal(inner.value,focusContrast.unfinished);
+ if(arm==='inside'){
+  assert.equal(host.frame.focused,true);assert.equal(inner.focused,true);assert.equal(inner.documentFocused,true);
+  assert.equal(host.active.nodeId,host.frame.nodeId);
+ }else{
+  assert.equal(host.active.nodeId,t.nodeId);assert.equal(host.active.inCanvas,false);
+  assert.equal(host.frame.focused,false);assert.equal(inner.documentFocused,false);
+  // A blurred child document can retain input as activeElement. documentFocused
+  // and the actual parent activeElement, not that retained pointer, own focus.
+ }
+}
+function sameFocusContext(before,after){
+ const input=value=>Object.fromEntries(['connected','tag','id','value','selectionStart','selectionEnd','selectionDirection','scroll']
+  .map(key=>[key,value.inner[key]]));
+ assert.deepEqual(input(after),input(before),'Keyboard traversal mutated input/selection/scroll');
+ for(const key of ['pane','scroll','selection','toggle'])
+  assert.deepEqual(after.host[key],before.host[key],`Keyboard traversal changed host ${key}`);
+}
+function focusArmVerdict(arm){
+ const g=arm.gesture,d=downloadSettlements.find(row=>row.label===`focus-${arm.name}-primary-v1`);
+ if(!arm.focusEstablished||!g?.preconditionsPassed||!reductionEventsComplete(g)||
+  !g.postGesturePreservation||g.postErrors?.length||arm.gates.length!==3||!arm.gates.every(gate=>gate.passed)||
+  !arm.closed||arm.closeError||arm.lifecycle.operations.some(op=>op.state!=='fulfilled')||
+  !d?.settled||!d.observation.listenerRemoved||!d.observation.timerCleared||d.observation.error||
+  !['received','cancelled'].includes(d.observation.state))return 'inconclusive';
+ const sequence=g.capture.events.filter(e=>e.isTrusted&&['pointerdown','pointerup','mousedown','mouseup','click'].includes(e.type));
+ if(sequence.some(e=>!e.sameNode)&&/must reach the native control/.test(g.settlement.primaryFailure?.message||''))
+  return 'miss';
+ return g.strictEventsPassed&&g.download&&!arm.error?'hit':'inconclusive';
+}
+async function runFocusContrast(){
+ ready=await startup;assert.notEqual(process.env.AMPLIFIER_TEST_INSTALLED,'1');
+ contourLogicChecks();cornerShapeLogicChecks();
+ const failures=[];
+ for(const name of ['inside','outside']){
+  const arm={name,createdAt:Date.now(),gates:[],keyboard:[],focusEstablished:false,closed:false};
+  focusContrast.arms.push(arm);
+  const owner=await launchOwner(`focus-${name}`,browserOwners);
+  page=await connect(owner,touchOptions);
+  const lifecycle={record:{operations:[],otherFailures:[]},owner,abort:null};
+  arm.lifecycle=lifecycle.record;
+  let retained;
+  try{
+   arm.browser={version:owner.browser.version(),options:touchOptions,launch:launchOptions};
+   assert.equal(arm.browser.version,stateReductionBaseline.browser);
+   await computedCornerPreflight(page,owner);
+   arm.preflight=structuredClone(contourOracle.browserPreflight);
+   if(name==='inside'){
+    await action(page,'session.create',{title:'Generated file controls'});
+    await showFixtureConversation(page,{navPinned:false});seed=await fixturePost(page,'seed');
+    focusContrast.newer=await fixturePost(page,'newer');
+    focusContrast.deleted=await fixturePost(page,'delete-source');
+   }else{
+    // One immutable server dataset, distinct fresh browser/client-local state.
+    // Do not replay the seed/newer/delete one-shot effects for the second client.
+    await action(page,'session.select',{id:seed.sessionId});
+    await showFixtureConversation(page,{navPinned:false});
+   }
+   arm.client=await identity(page);
+   if(name==='outside')assert.notEqual(arm.client.clientId,focusContrast.arms[0].client.clientId);
+   const html=seed.artifacts.html,draft=stateReductionBaseline.draft;
+   assert.equal(html.version,1);assert.equal(html.byteLength,426);assert.equal(html.sha256,stateReductionBaseline.html.sha256);
+   await action(page,'canvas.select',{id:seed.unrelated.id,sessionId:seed.sessionId,version:1,presentation:'canvas'});
+   await action(page,'canvas.visibility',{open:false,sessionId:seed.sessionId,canvasId:seed.unrelated.id});
+   await page.getByRole('textbox',{name:'Message Amplifier',exact:true}).fill(draft);
+   await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.draft)).toBe(draft);
+   arm.unrelatedPreservation=await preserved(page,draft);
+   await reductionDataGate(page,'unrelated',arm.gates);
+   retained=await startPreview(page,html,draft,'touch',focusContrast.unfinished);
+   arm.retained={marker:retained.marker,unfinished:retained.unfinished,state:retained.state,documents:retained.documents};
+   const primary=retained.panel.locator('.a-canvas-primary-actions').getByRole('button',{name:'Download canvas source',exact:true});
+   await expect(retained.panel.getByRole('region',{name:'Canvas details',exact:true})).toBeHidden();
+   await measureControls(page,[primary,retained.panel.getByRole('button',{name:'Canvas details',exact:true})],
+    `focus-${name}-primary-before`);
+   const geometryBefore=await primary.evaluate(node=>window.__fileControlsReductionSnapshot(node));
+   reductionSnapshotOracle(geometryBefore,true);arm.geometryBeforeFocus=geometryBefore;
+   arm.focusBefore=await tapOperation(lifecycle,'focus-boundary-before',()=>focusBoundarySnapshot(retained),3000);
+   focusBoundaryOracle(arm.focusBefore,'inside');
+   const commandStart=commands.length;
+   if(name==='outside'){
+    for(let index=0;index<24;index++){
+     // No click, Enter, Space, .focus() or fallback. Deadline closes the owner
+     // and drains the original RPC, not merely a rejected timeout race.
+     await tapOperation(lifecycle,'keyboard-shift-tab',()=>page.keyboard.press('Shift+Tab'),1500);
+     const snapshot=await tapOperation(lifecycle,'keyboard-focus-read',()=>focusBoundarySnapshot(retained),3000);
+     const step={key:'Shift+Tab',snapshot};arm.keyboard.push(step);
+     sameFocusContext(arm.focusBefore,snapshot);
+     step.geometry=await tapOperation(lifecycle,'keyboard-geometry',()=>
+      primary.evaluate(node=>window.__fileControlsReductionSnapshot(node)),2000);
+     reductionSnapshotOracle(step.geometry,true);
+     step.preservation=await tapOperation(lifecycle,'keyboard-preservation',()=>previewPreserved(retained),3000);
+     step.commands=commands.slice(commandStart);
+     assert.deepEqual(step.commands,[],'Keyboard focus caused an application action');
+     if(snapshot.host.active.nodeId===snapshot.host.toggle.nodeId)break;
+     assert.ok(snapshot.host.active.inCanvas,'Design invalid: keyboard left Canvas somewhere other than its header toggle');
+    }
+   }
+   arm.focusAfter=await tapOperation(lifecycle,'focus-boundary-after',()=>focusBoundarySnapshot(retained),3000);
+   sameFocusContext(arm.focusBefore,arm.focusAfter);focusBoundaryOracle(arm.focusAfter,name);
+   arm.focusEstablished=true;
+   const g=arm.gesture={reductionRequested:true,reductionPhase:'primary',focusContrastArm:name,tapAttempts:0,
+    preconditionsPassed:false,checkpointObserved:false,originalOraclePassed:false,strictEventsPassed:false};
+   let gestureError;
+   try{
+    g.download=await saveControlAndVerify(page,primary,html,`focus-${name}-primary-v1`,
+     (control,armDownload)=>cornerTap(control,'bottom-right',g,armDownload,async diagnostic=>{
+      diagnostic.preGesturePreservation=await previewPreserved(retained);
+      assert.deepEqual(retained.state.views.map(({viewId,generation,selectedVersion})=>({viewId,generation,selectedVersion})),
+       stateReductionBaseline.views);
+      await reductionDataGate(page,'primary-before',arm.gates);
+      const focus=await focusBoundarySnapshot(retained);
+      sameFocusContext(arm.focusBefore,focus);focusBoundaryOracle(focus,name);
+      diagnostic.focus={...focus,expectedNodeId:focus.host.active.nodeId};
+      assert.equal(diagnostic.beforeStructure.focus.nodeId,diagnostic.focus.expectedNodeId);
+     }),true);
+   }catch(error){gestureError=error}
+   finally{
+    const postErrors=[],post={record:g.settlement||lifecycle.record,owner,abort:null};
+    try{
+     g.postGesturePreservation=await tapOperation(post,'focus-post-preservation',()=>previewPreserved(retained),3000);
+     await tapOperation(post,'focus-post-state',()=>reductionDataGate(page,'primary-after',arm.gates),4000);
+    }catch(error){postErrors.push(error)}
+    g.postErrors=postErrors.map(errorEvidence);
+    if(gestureError||postErrors.length)throw new AggregateError([gestureError,...postErrors].filter(Boolean),
+     gestureError?.message||'Focus post-gesture preservation failed');
+   }
+  }catch(error){arm.error=errorEvidence(error);failures.push(error)}
+  finally{
+   if(retained)try{await tapOperation(lifecycle,'focus-preview-dispose',()=>retained.element.dispose())}
+   catch(error){arm.disposeError=errorEvidence(error);failures.push(error)}
+   try{await tapOperation(lifecycle,'focus-owner-close',()=>closeOwner(owner),4000);
+    arm.closed=owner.closed&&!owner.browser.isConnected();arm.closedAt=Date.now()}
+   catch(error){arm.closeError=errorEvidence(error);failures.push(error)}
+  }
+  arm.verdict=focusArmVerdict(arm);
+  if(arm.verdict==='inconclusive'||arm.disposeError||errors.length||tapPending.size||
+   metadataExchanges.some(row=>row.error))break; // Invalid arm is not repaired or replayed.
+ }
+ if(failures.length)throw new AggregateError(failures,'Focus contrast retained original failed gesture(s)');
+ assert.equal(focusContrast.arms.length,2,'Focus contrast incomplete');
+}
+function focusContrastOutcome(){
+ const arms=focusContrast.arms;
+ if(arms.length!==2||arms.some(a=>focusArmVerdict(a)==='inconclusive'||a.disposeError)||
+  !tapDrain.settled||tapDrain.pendingAfter!==0||errors.length||screenshotErrors.length||
+  metadataExchanges.some(r=>r.error)||records.find(r=>r.cleanup)?.cleanup.homeRemoved!==true||
+  cleanup?.code!==0||cleanup?.signal!==null)return 'inconclusive';
+ const [inside,outside]=arms.map(focusArmVerdict);
+ focusContrast.pattern=`inside-${inside}-outside-${outside}`;
+ if(inside==='miss')return outside==='miss'?'both-miss-iframe-focus-not-necessary':'inside-miss-outside-hit-focus-dependence-only';
+ return 'inconclusive'; // Retain both raw hits/misses; the known failing control did not reproduce.
+}
 function reductionOutcome(){
  const card=stateReduction.card,primary=stateReduction.primary;
  if(!card?.passed||!primary?.preconditionsPassed||!reductionEventsComplete(card)||!reductionEventsComplete(primary)||
@@ -2107,6 +2309,7 @@ function reductionOutcome(){
  return !failure&&primary.passed&&primary.strictEventsPassed&&primary.download?'non-reproduction-not-product-acceptance':'inconclusive';
 }
 async function run(){
+ if(focusContrastMode)return runFocusContrast();
  if(stateReductionMode)return runStateReduction();
  ready=await startup;
  if(process.env.AMPLIFIER_TEST_INSTALLED==='1'||process.env.AMPLIFIER_TEST_PACKAGE_ROOT)assert.equal(ready.installedVerified,true);
@@ -2428,10 +2631,12 @@ try{
  }
  catch(error){failure=failure?new AggregateError([failure,error],'Metadata observation cleanup failed'):error}
  if(stateReductionMode)stateReduction.outcome=reductionOutcome();
+ if(focusContrastMode)focusContrast.outcome=focusContrastOutcome();
  const writes=await Promise.allSettled([
   writeFile(join(evidence,'fixture.log'),logs),
   writeFile(join(evidence,'observations.json'),JSON.stringify({passed:!failure,error:failure?.stack,failure:errorEvidence(failure),screenshotErrors,
   ...(stateReductionMode?{mode:'state-reduction',productAcceptance:false,stateReduction}:{}),
+  ...(focusContrastMode?{mode:'focus-contrast',productAcceptance:false,focusContrast}:{}),
   ...(cornerDiagnosticMode?{mode:'corner-diagnostic',diagnosticComplete:cornerDiagnosticComplete,
    stoppedAfter:cornerDiagnosticComplete?'first-desktop-measure':null,cornerDiagnostics}:{}),
   ...(touchEventDiagnosticMode||nativeStateDiagnosticMode||portalHostExperimentMode?{
@@ -2457,7 +2662,7 @@ try{
   requests,commands,metadataExchanges,detailsReadiness,preCleanupSnapshots,
   errors,cleanup,fixtureCleanup:records.find(row=>row.cleanup)?.cleanup,
   browserCleanup:browserOwners.map(owner=>({label:owner.label,closed:owner.closed,connected:owner.browser?.isConnected()??false})),
-  limits:stateReductionMode?stateReduction.limits:['Synthetic runtime and fixture bearer authentication; no provider, login, remote server or physical touch-device claim.',
+  limits:focusContrastMode?focusContrast.limits:stateReductionMode?stateReduction.limits:['Synthetic runtime and fixture bearer authentication; no provider, login, remote server or physical touch-device claim.',
    'Clipboard/403/wrong-byte faults are deliberate test injections; positive clipboard reads and downloaded files are real browser results.',
    'The two later HTML previews execute deliberately as setup; copy/download must retain each original frame and execution token.',
    'Exact-byte identity covers ordinary saved UTF-8 HTML/Markdown, not Babylon engine-prepending exports.',
@@ -2470,7 +2675,8 @@ try{
  assert.ok(entries.every(entry=>entry.isFile()),'Export only ordinary evidence files, never fixture sockets/profile/state');
 }
 if(failure)throw failure;
-console.log(stateReductionMode?`State/history reduction: ${stateReduction.outcome}; not product acceptance; evidence: ${evidence}`:
+console.log(focusContrastMode?`Focus contrast: ${focusContrast.outcome}; not product acceptance; evidence: ${evidence}`:
+ stateReductionMode?`State/history reduction: ${stateReduction.outcome}; not product acceptance; evidence: ${evidence}`:
  touchEventDiagnosticMode||nativeStateDiagnosticMode||portalHostExperimentMode?`Generated file controls touch event checkpoint observed (cause unknown; not qualification); evidence: ${evidence}`:
  cornerDiagnosticMode?`Generated file controls corner diagnostic complete (not full qualification); evidence: ${evidence}`:
  `Generated file controls passed; evidence: ${evidence}`);

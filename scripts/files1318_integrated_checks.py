@@ -115,6 +115,18 @@ Download in the SAME touch context. No Copy/320/fault/race/desktop exercises,
 trace, product edit, build, wheel or install. Wrong target remains exit 1.
 card/state/geometry/focus/capture/cleanup gaps are inconclusive. A smaller
 reproduction is not cause; non-reproduction does not qualify the full product.
+
+--focus-contrast uses /workspace/output/files1318-focus-contrast-manifest.json
+and /artifacts/files1318-focus-contrast. Bind focusContrastReuse=REUSE_BINDING,
+the same 23 reuseEvidence files, and focusContrastBefore=FOCUS_CONTRAST_BEFORE
+(accepted failed check 19 plus its original geometry baseline). Product/CSS
+must be byte-identical to retained pre-gap source. Two fresh sequential
+browser contexts share only the immutable seeded v1/v2/deleted-source dataset.
+Inside keeps iframe/input focus; outside reaches the existing header Canvas
+toggle by Shift+Tab only. No target activation/focus repair, extra tap, trace,
+build, wheel or installed run. Both misses show iframe focus was not necessary;
+inside miss/outside hit supports focus dependence only. Gate/cleanup/receipt
+gaps are inconclusive. Every wrong target remains a failed check/exit 1.
 """
 from __future__ import annotations
 
@@ -163,6 +175,7 @@ COARSE_TOOLBAR_MANIFEST = ROOT / 'output/files1318-coarse-toolbar-manifest.json'
 NATIVE_STATE_MANIFEST = ROOT / 'output/files1318-native-state-manifest.json'
 PORTAL_HOST_MANIFEST = ROOT / 'output/files1318-portal-host-manifest.json'
 STATE_REDUCTION_MANIFEST = ROOT / 'output/files1318-state-reduction-manifest.json'
+FOCUS_CONTRAST_MANIFEST = ROOT / 'output/files1318-focus-contrast-manifest.json'
 HARNESS = OUT / 'harness'
 VENV = OUT / 'installed'
 DRIVER = 'scripts/files1318_integrated_checks.py'
@@ -174,6 +187,19 @@ COARSE_TOOLBAR_OUT = Path('/artifacts/files1318-coarse-toolbar-qualified')
 NATIVE_STATE_OUT = Path('/artifacts/files1318-native-state-diagnostic')
 PORTAL_HOST_OUT = Path('/artifacts/files1318-portal-host-experiment')
 STATE_REDUCTION_OUT = Path('/artifacts/files1318-state-reduction')
+FOCUS_CONTRAST_OUT = Path('/artifacts/files1318-focus-contrast')
+FOCUS_CONTRAST_PRODUCER_SHA = '6bf81451c8e49d58b66ccd93af337e16894d1e1600a0b0cfbfb46c5f87099b83'
+FOCUS_CONTRAST_BEFORE_ROOT = ROOT / 'output/files1318-state-reduction-v1-result'
+FOCUS_CONTRAST_BEFORE = {
+    'sourceRevision': '0c497fe30eb7d7c174977ab82f8348d3d9ebfedb',
+    'sourceTree': '7abf038918ed94cc2298a59d172723a9e626eeea',
+    'files': {
+        'parent-manifest.json': 'abc292089be81dceb49092cf3e579832203c923cc73718a58e9555e9bdba58fb',
+        'generated-source/evidence/generated-file-controls-yfIKxY/observations.json':
+            'b2a27a44dd084dd00a4fdfdcd1dd37f36afdacef682783e4b77bf7e71b203cd5',
+        'state-reduction-baseline.json': 'e4d5b1f5a3a46eeaabd354ff2fae044788d7ae8918e3ae63f040f35d361fc77f',
+    },
+}
 STATE_REDUCTION_PRODUCER_SHA = '641ba7a518711bc22ec07bc62bc7c413c8022b2236f2868465f4800ecbcfdedb'
 PORTAL_HOST_PRODUCER_SHA = '31dc5d7895fea5223b4b7b32de767e384ebc923cb1c28da644c764af832827ae'
 PORTAL_HOST_CSS_SHA = 'a3ca24cd47c7df134cc32d6f096dc071684dc438203ce4109f1fe0d21632d13b'
@@ -335,7 +361,7 @@ def select_output(folder):
     """Keep the main process and every private child on the same fixed paths."""
     global OUT, HARNESS, VENV
     require(folder in (QUALIFIED_OUT, CORNER_OUT, CONTOUR_OUT, TOUCH_EVENT_OUT, COARSE_TOOLBAR_OUT,
-                      NATIVE_STATE_OUT, PORTAL_HOST_OUT, STATE_REDUCTION_OUT),
+                      NATIVE_STATE_OUT, PORTAL_HOST_OUT, STATE_REDUCTION_OUT, FOCUS_CONTRAST_OUT),
             'Unknown evidence destination')
     OUT = folder
     HARNESS, VENV = OUT / 'harness', OUT / 'installed'
@@ -379,7 +405,7 @@ def frozen_inputs(frozen, *, built=False):
                 and str(Path(name)) == name
                 and path not in (MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST,
                                  COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST, PORTAL_HOST_MANIFEST,
-                                 STATE_REDUCTION_MANIFEST), 'Unsafe frozen path')
+                                 STATE_REDUCTION_MANIFEST, FOCUS_CONTRAST_MANIFEST), 'Unsafe frozen path')
         require(path.parent.resolve().is_relative_to(ROOT), 'Frozen path escapes snapshot')
         require(expected['mode'] in ('100644', '100755', '120000')
                 and re.fullmatch('[a-f0-9]{64}', expected['sha256']), 'Invalid frozen identity')
@@ -398,7 +424,7 @@ def diagnostic_static(frozen, *, binding='diagnosticReuse'):
     unit_only = binding in ('coarseToolbarReuse', 'portalHostReuse')
     require(not unit_only or OUT in (COARSE_TOOLBAR_OUT, PORTAL_HOST_OUT), 'Unexpected unit-only reuse mode')
     require(binding in ('diagnosticReuse', 'contourReuse', 'touchEventReuse', 'coarseToolbarReuse', 'nativeStateReuse',
-                        'portalHostReuse', 'stateReductionReuse')
+                        'portalHostReuse', 'stateReductionReuse', 'focusContrastReuse')
             and frozen.get(binding) == REUSE_BINDING, 'Missing exact static reuse binding')
     archive, metadata_path = REUSE_INPUT / 'static.tar', REUSE_INPUT / 'reuse.json'
     for path, digest in ((archive, REUSE_BINDING['archiveSha256']),
@@ -595,6 +621,38 @@ def retained_environment(prior):
         'currentRuntimeSha256': sha(OUT / 'runtime-readiness.json'),
         'distributionCount': len(current['distributions']),
     })
+
+
+def focus_contrast_inputs(frozen):
+    require(OUT == FOCUS_CONTRAST_OUT and frozen.get('focusContrastReuse') == REUSE_BINDING
+            and frozen.get('focusContrastBefore') == FOCUS_CONTRAST_BEFORE
+            and frozen['files'][PRODUCER]['sha256'] == FOCUS_CONTRAST_PRODUCER_SHA
+            and frozen['files'][COARSE_TOOLBAR_CSS]['sha256'] == NATIVE_STATE_CSS_SHA,
+            'Focus contrast requires exact source/reuse/before bindings and original CSS')
+    for name, digest in FOCUS_CONTRAST_BEFORE['files'].items():
+        source, destination = FOCUS_CONTRAST_BEFORE_ROOT / name, OUT / 'before-evidence' / name
+        require(source.resolve() == source and source.is_file() and sha(source) == digest, 'Focus before evidence changed')
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        require(sha(destination) == digest, 'Focus before copy differs')
+    previous = read(OUT / 'before-evidence/parent-manifest.json')
+    require(previous['revision'] == FOCUS_CONTRAST_BEFORE['sourceRevision']
+            and previous['tree'] == FOCUS_CONTRAST_BEFORE['sourceTree']
+            and previous['files'].keys() == frozen['files'].keys()
+            and {name for name in frozen['files'] if previous['files'][name] != frozen['files'][name]} == {DRIVER, PRODUCER},
+            'Focus contrast may change only producer/driver')
+    name, = [name for name in FOCUS_CONTRAST_BEFORE['files'] if name.endswith('/observations.json')]
+    proof = read(OUT / 'before-evidence' / name)
+    baseline = read(OUT / 'before-evidence/state-reduction-baseline.json')
+    reduction = proof['stateReduction']
+    require(proof['passed'] is False and proof['mode'] == 'state-reduction'
+            and reduction['baseline'] == baseline and reduction['outcome'] == 'smaller-reproduction-not-cause'
+            and reduction['card']['passed'] is True and reduction['primary']['preconditionsPassed'] is True
+            and reduction['primary']['focus']['outer']['focused'] is True
+            and reduction['primary']['focus']['inner']['documentFocused'] is True
+            and reduction['primary']['delivered']['event']['sameNode'] is False,
+            'Focus contrast must bind accepted failed inside-focus check 19')
+    save('focus-contrast-baseline.json', {**baseline, 'focusReference': FOCUS_CONTRAST_BEFORE})
 
 
 def state_reduction_inputs(frozen):
@@ -1887,6 +1945,248 @@ def touch_event_diagnostic_proof(exit_code, *, native_state=False, portal_host=F
              else 'generated-source/touch-event-diagnostic-report.json', result)
 
 
+def focus_contrast_proof(exit_code):
+    result = {'exitCode': exit_code, 'outcome': 'inconclusive', 'checkpointObserved': False, 'productAcceptance': False}
+    try:
+        path, = (OUT / 'generated-source/evidence').glob('generated-file-controls-*/observations.json')
+        proof, baseline = read(path), read(OUT / 'focus-contrast-baseline.json')
+        value, seed = proof['focusContrast'], proof['seed']
+        result.update(path=str(path), sha256=sha(path), originalFailure=proof.get('failure'))
+        require(type(exit_code) is int and exit_code in (0, 1) and proof['mode'] == 'focus-contrast'
+                and proof['passed'] is (exit_code == 0) and proof['productAcceptance'] is False
+                and value['version'] == 'focus-contrast-v1' and value['baseline'] == baseline
+                and [arm['name'] for arm in value['arms']] == ['inside', 'outside'], 'Focus mode/arms/baseline missing')
+        require(value['newer']['id'] == seed['artifacts']['html']['id'] and value['newer']['revision'] == 2
+                and value['deleted'] == {'sourceDeleted': True, 'sourceExists': False}, 'Focus immutable dataset setup differs')
+        require(Counter(c['check'] for c in proof['checks']) == Counter({
+                    'contour formula and unsupported geometry logic checks': 1,
+                    'computed corner-shape exact-value predicate checks': 1,
+                    'actual browser computed round accepted and noncircular corner rejected by same sampler': 2,
+                    'deliberate saved-v1 preview setup, not a download': 2})
+                and len([g for g in proof['geometry'] if g['label'] == 'corner-tap-before']) == 2
+                and proof['fileFrameCaptures'] == []
+                and not any(c.get('action') in ('canvas.copy', 'canvas.views.inline', 'conversation.send', 'session.send')
+                            for c in proof['commands']), 'Focus diagnostic exceeded its two primary taps')
+
+        def structure(s):
+            require(s['limits'] == {'descendants': 24, 'ancestors': 20} and s['truncations'] == []
+                    and len(s['descendants']) <= 24 and len(s['ancestors']) <= 20
+                    and s['button']['connected'] is True and s['context']['coarse'] is True
+                    and s['context']['dpr'] == 1 and s['context']['maxTouchPoints'] > 0, 'Focus structure capture incomplete')
+            for key in ('download', 'details'):
+                row = s['primary'][key]
+                require(row['geometry'] == baseline[key] and len(row['corners']) == 4
+                        and all(c['reachable'] for c in row['corners'])
+                        and all(row['geometry']['rect'][k] >= 44 for k in ('width', 'height')),
+                        'Focus primary/neighbor geometry changed')
+            require(all(s['primary'][key]['rect'] == baseline[key + 'Rect'] for key in ('toolbar', 'body', 'notice'))
+                    and s['primary']['body']['computed']['margin'] == '0px'
+                    and any(a['className'] == 'a-canvas-primary-actions' and a['computed']['display'] == 'contents'
+                            for a in s['ancestors']), 'Focus product layout/topology differs')
+
+        def boundary(b, name):
+            h, i = b['host'], b['inner']
+            t = h['toggle']
+            require(t['connected'] is True and t['visible'] is True and t['outsideCanvas'] is True
+                    and t['disabled'] is False and t['blocked'] is False and t['tabIndex'] >= 0
+                    and t['inViewport'] is True and t['reachable'] is True and t['pointerEvents'] != 'none'
+                    and (t['tag'], t['id'], t['label']) == ('BUTTON', 'canvas-toggle', 'Hide canvas')
+                    and h['pane']['open'] is True and all(h['pane'][k] is False for k in ('focused', 'controls', 'hidden', 'inert'))
+                    and h['frame']['connected'] is True and i['connected'] is True
+                    and (i['tag'], i['id'], i['value']) == ('INPUT', 'preview-note', value['unfinished']),
+                    'Outer control or retained preview is not a valid natural focus boundary')
+            if name == 'inside':
+                require(h['frame']['focused'] is True and i['focused'] is True and i['documentFocused'] is True
+                        and h['active']['nodeId'] == h['frame']['nodeId'], 'Inside iframe/input focus missing')
+            else:
+                require(h['frame']['focused'] is False and i['documentFocused'] is False
+                        and h['active']['nodeId'] == t['nodeId'] and h['active']['inCanvas'] is False,
+                        'Outside focus did not reach the visible header control')
+
+        def unchanged(before, after):
+            require(all(before['host'][key] == after['host'][key] for key in ('pane', 'scroll', 'selection', 'toggle'))
+                    and all(before['inner'][key] == after['inner'][key] for key in
+                            ('connected', 'tag', 'id', 'value', 'selectionStart', 'selectionEnd', 'selectionDirection', 'scroll')),
+                    'Focus traversal mutated pane/input/selection/scroll')
+
+        def preservation(observed, retained):
+            require(observed['iframeConnected'] is True and observed['sameIframe'] is True and observed['iframeCount'] == 1
+                    and observed['prohibitedCommands'] == []
+                    and all(observed[k] == retained[k] for k in ('marker', 'unfinished', 'state', 'documents')),
+                    'Focus arm changed original iframe/token/input/lease/draft')
+
+        def truncated(v):
+            if isinstance(v, dict):
+                return any((k.endswith('Truncated') and child is True) or truncated(child) for k, child in v.items())
+            return isinstance(v, list) and any(truncated(child) for child in v)
+
+        verdicts, downloaded = [], []
+        for arm in value['arms']:
+            name, g, retained = arm['name'], arm['gesture'], arm['retained']
+            require(arm['focusEstablished'] is True and arm['closed'] is True and not arm.get('closeError')
+                    and not arm.get('disposeError') and all(op['state'] == 'fulfilled' for op in arm['lifecycle']['operations'])
+                    and arm['browser'] == {'version': baseline['browser'], 'options': {
+                        'viewport': {'width': 390, 'height': 844}, 'isMobile': True, 'hasTouch': True, 'deviceScaleFactor': 1},
+                        'launch': {'headless': True, 'timeout': 8000, 'args': []}}
+                    and baseline['browser'] == read(OUT / 'browser-readiness.json')['browser']
+                    and arm['client']['sessionId'] == seed['sessionId'], 'Focus owner/runtime differs or did not close')
+            preflight = arm['preflight']
+            p = preflight['result']
+            require(preflight['passed'] is True and preflight['client'] == 'focus-' + name
+                    and preflight['browser'] == {'name': 'chromium', 'version': baseline['browser']}
+                    and p['removed'] is True and p['error'] is None
+                    and p['supported'] == {'round': True, 'bevel': True}
+                    and p['negative']['accepted'] is False
+                    and p['negative']['raw'] in ('bevel', 'superellipse(0)'), 'Focus actual-browser contour preflight missing')
+            contour_sample(p['positive'])
+            span = preflight['observationRange']
+            observed = proof['contourOracle']['cornerShapeObservations'][span['start']:span['end']]
+            require([r['stage'] for r in observed] == ['before-validation', 'before-validation', 'rejected']
+                    and observed[0]['cornerShapes'] == p['positive']['cornerShapes']
+                    and observed[1]['cornerShapes'] == observed[2]['cornerShapes']
+                    and observed[2]['cornerShapes'][0]['raw'] == p['negative']['raw']
+                    and 'noncircular corner shape top-left=' in p['negative']['error']['message'],
+                    'Focus browser preflight raw observations differ')
+            require([gate['phase'] for gate in arm['gates']] == ['unrelated', 'primary-before', 'primary-after'],
+                    'Focus state gate missing')
+            for gate in arm['gates']:
+                f, c = gate['fixture'], gate['client']
+                canvas_id = seed['unrelated']['id'] if gate['phase'] == 'unrelated' else seed['artifacts']['html']['id']
+                require(gate['passed'] is True and f['seed'] == seed and f['newer'] == value['newer']
+                        and f['sourceDeleted'] is True and f['sourceExists'] is False and f['sent'] == []
+                        and c == {'selected': seed['sessionId'], 'workspace': seed['workspace'],
+                            'workingDirectory': seed['workingDirectory'], 'draft': baseline['draft'],
+                            'canvas': {'id': canvas_id, 'version': 1, 'readOnly': True}}
+                        and seed['workspace'] != seed['workingDirectory'], 'Focus arm dataset/client state differs')
+            u = arm['unrelatedPreservation']
+            require(u['selected'] == seed['sessionId'] and u['draft'] == baseline['draft']
+                    and u['canvas'] == {'id': seed['unrelated']['id'], 'version': 1, 'readOnly': True}
+                    and u['iframeSightings'] == [], 'Fresh arm did not reconstruct unrelated historical state')
+            structure(arm['geometryBeforeFocus']);boundary(arm['focusBefore'], 'inside')
+            boundary(arm['focusAfter'], name);unchanged(arm['focusBefore'], arm['focusAfter'])
+            require((name == 'inside' and arm['keyboard'] == []) or
+                    (name == 'outside' and 0 < len(arm['keyboard']) <= 24
+                     and all(k['key'] == 'Shift+Tab' for k in arm['keyboard'])
+                     and arm['keyboard'][-1]['snapshot']['host']['active']['nodeId'] == arm['focusAfter']['host']['toggle']['nodeId']),
+                    'Focus change did not use bounded ordinary keyboard traversal')
+            for k in arm['keyboard']:
+                unchanged(arm['focusBefore'], k['snapshot'])
+                structure(k['geometry']);preservation(k['preservation'], retained)
+                require(k['commands'] == [] and (k['snapshot']['host']['active']['inCanvas'] is True
+                        or k['snapshot']['host']['active']['nodeId'] == arm['focusAfter']['host']['toggle']['nodeId']),
+                        'Keyboard changed app state or used another outer control')
+            require(g['focusContrastArm'] == name and g['reductionPhase'] == 'primary'
+                    and g['reductionRequested'] is True and g['tapAttempts'] == 1 and g['preconditionsPassed'] is True
+                    and g['captureValid'] is True and g['captureErrors'] == g['cleanupErrors'] == []
+                    and g['originalListenerRemoved'] is True and g['handleDisposed'] is True
+                    and all(g['before'][key] == expected for key, expected in baseline['tap'].items()),
+                    'Focus gesture/preconditions changed or cleanup lost')
+            contour_sample(g['before']);structure(g['beforeStructure'])
+            require(g['beforeStructure']['button']['nodeId'] == g['before']['nodeId']
+                    == g['settlement']['retained']['nodeId'], 'Focus retained native identity changed')
+            boundary(g['focus'], name);unchanged(arm['focusBefore'], g['focus'])
+            require(g['focus']['expectedNodeId'] == g['focus']['host']['active']['nodeId']
+                    == g['beforeStructure']['focus']['nodeId'], 'Focus evidence is not bound to actual pre-tap activeElement')
+            require(retained['unfinished'] == value['unfinished'] and retained['marker']['count'] == 1
+                    and retained['marker']['executed'] == '1' and re.fullmatch(r'\d+-\d+-\d+-\d+', retained['marker']['token'])
+                    and retained['state']['selected'] == seed['sessionId'] and retained['state']['draft'] == baseline['draft']
+                    and retained['state']['canvas'] == {'id': seed['artifacts']['html']['id'], 'version': 1, 'readOnly': True}
+                    and [{key: v[key] for key in ('viewId', 'generation', 'selectedVersion')} for v in retained['state']['views']] == baseline['views']
+                    and retained['state']['views'][0]['resourceId'] == seed['artifacts']['html']['id'],
+                    'Focus arm preview/lease setup changed')
+            preservation(g['preGesturePreservation'], retained);preservation(g['postGesturePreservation'], retained)
+            require(g['postErrors'] == [], 'Focus post-gesture readback failed')
+            cap = g['capture']
+            require(cap['limits'] == {'windowMs': 2000, 'records': 128, 'stack': 16, 'path': 24,
+                        'ancestors': 16, 'notices': 4, 'touches': 4, 'errors': 8}
+                    and len(cap['events']) <= 128 and cap['errors'] == [] and not truncated(cap['events'])
+                    and all(n == 0 for n in cap['truncations'].values())
+                    and cap['finished']['listenersRemoved'] is True and cap['finished']['timerCleared'] is True
+                    and g['checkpointObserved'] is True
+                    and not any(e['type'] in ('pointercancel', 'touchcancel') for e in cap['events']),
+                    'Focus passive capture incomplete')
+            seq = [e for e in cap['events'] if e['isTrusted'] and e['type'] in ('pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click')]
+            require([e['type'] for e in seq] == ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click']
+                    and seq[0]['pointerType'] == 'touch' and seq[2]['sourceCapabilities']['firesTouchEvents'] is True
+                    and seq[0]['reductionSnapshot']['focus']['nodeId'] == g['focus']['expectedNodeId'],
+                    'Focus native sequence/active focus missing')
+            for i, e in enumerate(cap['events']):
+                require(e['index'] == i and cap['armedAt'] <= e['at'] < cap['deadline'] and not e.get('captureError'),
+                        'Invalid focus event index/time/capture')
+            for e in seq:
+                structure(e['reductionSnapshot'])
+                require(e['intendedButton']['nodeId'] == g['before']['nodeId']
+                        and e['intendedButton']['connected'] is True and e['intendedButton']['rect'] == g['before']['rect']
+                        and e['intended'] == g['before']['intended'] and e['reductionSnapshot']['button']['nodeId'] == g['before']['nodeId']
+                        and e['atIntended']['point'] == g['before']['intended']
+                        and type(e['sameNode']) is bool and e['actual'] is not None
+                        and all(type(e['actual'][key]) in (int, float) and math.isfinite(e['actual'][key]) for key in ('x', 'y')),
+                        'Original native target/geometry changed')
+            require(seq[0]['actual'] == {k: g['delivered']['event'][k] for k in ('x', 'y')}
+                    and seq[0]['sameNode'] == g['delivered']['event']['sameNode'], 'Focus pointer observers disagree')
+            wrong = any(not e['sameNode'] for e in seq)
+            if wrong:
+                require(g['settlement'].get('primaryFailure') and 'must reach the native control' in g['settlement']['primaryFailure']['message']
+                        and arm.get('error'), 'Wrong target was suppressed in focus arm')
+                verdict = 'miss'
+            else:
+                require(g['strictEventsPassed'] is True and not arm.get('error') and g.get('download'),
+                        'Focus hit without strict click/download proof')
+                d = g['download'];html = seed['artifacts']['html']
+                saved = path.parent / (d['label'] + '-' + d['filename'])
+                require(d['label'] == f'focus-{name}-primary-v1' and d['filename'] == html['filename']
+                        and d['bytes'] == baseline['html']['bytes'] == 426
+                        and d['sha256'] == baseline['html']['sha256'] == sha(saved) and saved.read_bytes() == html['body'].encode(),
+                        'Focus actual downloaded bytes differ')
+                downloaded.append(d);verdict = 'hit'
+            require(arm['verdict'] == verdict, 'Unsupported focus arm verdict');verdicts.append(verdict)
+            observation, = [d for d in proof['downloadSettlements'] if d['label'] == f'focus-{name}-primary-v1']
+            require(observation['trigger']['state'] == ('rejected' if wrong else 'fulfilled')
+                    and observation['observation']['state'] in (('cancelled', 'received') if wrong else ('received',))
+                    and not observation['observation'].get('error'), 'Focus trigger/download settlement inconsistent')
+        inside, outside = value['arms']
+        require(inside['client']['clientId'] != outside['client']['clientId'] and inside['closedAt'] <= outside['createdAt']
+                and inside['retained']['marker']['token'] != outside['retained']['marker']['token'],
+                'Focus arms did not use fresh sequential contexts')
+        require(proof['downloads'] == downloaded and len(proof['downloadSettlements']) == len(proof['tapSettlements']) == 2
+                and proof['tapSettlements'] == [a['gesture']['settlement'] for a in value['arms']]
+                and all(t['settled'] and t['otherFailures'] == [] and t['handleDisposed'] and t['listenerCleanup']['state'] == 'removed'
+                        and t['retained']['connected'] is True and all(op['state'] == 'fulfilled' for op in t['operations'])
+                        for t in proof['tapSettlements'])
+                and all(d['settled'] and d['observation']['listenerRemoved'] and d['observation']['timerCleared']
+                        for d in proof['downloadSettlements'])
+                and proof['tapDrain'].get('settled') is True and proof['tapDrain']['pendingAfter'] == 0,
+                'Focus observation/gesture branches not settled')
+        require(Counter(r['client'] for r in proof['requests'] if r['path'].endswith('/document')) ==
+                    Counter(('focus-inside', 'focus-outside'))
+                and proof['errors'] == proof['screenshotErrors'] == [] and proof['contourOracle']['cornerShapeCaptureErrors'] == []
+                and all(not r.get('error') and r.get('completedAt') for r in proof['metadataExchanges']),
+                'Focus document/page/metadata errors')
+        cleanup = proof['cleanup']
+        require(cleanup['code'] == 0 and cleanup['signal'] is None
+                and proof['fixtureCleanup'] == {'pid': cleanup['pid'], 'homeRemoved': True}
+                and proof['browserCleanup'] == [{'label': label, 'closed': True, 'connected': False}
+                                               for label in ('focus-inside', 'focus-outside')], 'Focus owner cleanup missing')
+        expected = read(OUT / 'candidate.json')
+        require(proof['installed'] == {'packageRoot': str(ROOT / 'amplifier_web'), 'verified': False,
+                    'staticSha256': {p.removeprefix('amplifier_web/static/'): h for p, h in expected['static'].items()}}
+                and all(read(OUT / f'source-fixture-origins-{when}.json')['pid'] == cleanup['pid'] for when in ('before', 'after'))
+                and read(OUT / 'source-fixture-payload-before.json') == read(OUT / 'source-fixture-payload-after.json'),
+                'Focus fixture payload/origins changed')
+        require(exit_code == (1 if 'miss' in verdicts else 0), 'Focus wrong target must remain exit 1')
+        pattern = f'inside-{verdicts[0]}-outside-{verdicts[1]}'
+        outcome = ('both-miss-iframe-focus-not-necessary' if verdicts == ['miss', 'miss'] else
+                   'inside-miss-outside-hit-focus-dependence-only' if verdicts == ['miss', 'hit'] else 'inconclusive')
+        require(value['pattern'] == pattern and value['outcome'] == outcome, 'Unsupported focus comparison classification')
+        result.update(outcome=outcome, pattern=pattern, checkpointObserved=outcome != 'inconclusive',
+                      expectedExit=exit_code, cause='unknown')
+    except Exception as error:
+        result['validationError'] = {'type': type(error).__name__, 'message': str(error)}
+    finally:
+        save('generated-source/focus-contrast-report.json', result)
+    return result
+
+
 def state_reduction_proof(exit_code):
     result = {'exitCode': exit_code, 'outcome': 'inconclusive', 'checkpointObserved': False, 'productAcceptance': False}
     try:
@@ -2447,7 +2747,7 @@ def main():
     parser.add_argument('--manifest', required=True, type=Path,
                         choices=[MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST,
                                  COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST, PORTAL_HOST_MANIFEST,
-                                 STATE_REDUCTION_MANIFEST])
+                                 STATE_REDUCTION_MANIFEST, FOCUS_CONTRAST_MANIFEST])
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--corner-diagnostic', action='store_true')
     modes.add_argument('--contour-qualification', action='store_true')
@@ -2455,14 +2755,18 @@ def main():
     modes.add_argument('--native-state-diagnostic', action='store_true')
     modes.add_argument('--portal-host-experiment', action='store_true')
     modes.add_argument('--state-reduction', action='store_true')
+    modes.add_argument('--focus-contrast', action='store_true')
     modes.add_argument('--coarse-toolbar-qualification', action='store_true')
     args = parser.parse_args()
-    touch_checkpoint = args.touch_event_diagnostic or args.native_state_diagnostic or args.portal_host_experiment or args.state_reduction
+    touch_checkpoint = (args.touch_event_diagnostic or args.native_state_diagnostic or args.portal_host_experiment
+                        or args.state_reduction or args.focus_contrast)
     checkpoint_mode = args.corner_diagnostic or touch_checkpoint
-    reuse_mode = args.contour_qualification or args.touch_event_diagnostic or args.native_state_diagnostic or args.state_reduction
+    reuse_mode = (args.contour_qualification or args.touch_event_diagnostic or args.native_state_diagnostic
+                  or args.state_reduction or args.focus_contrast)
     fresh_product = args.coarse_toolbar_qualification or args.portal_host_experiment
     reused_phases = COARSE_TOOLBAR_REUSED_PHASES if fresh_product else REUSED_PHASES
     manifest_path = (CORNER_MANIFEST if args.corner_diagnostic
+                     else FOCUS_CONTRAST_MANIFEST if args.focus_contrast
                      else STATE_REDUCTION_MANIFEST if args.state_reduction
                      else PORTAL_HOST_MANIFEST if args.portal_host_experiment
                      else NATIVE_STATE_MANIFEST if args.native_state_diagnostic
@@ -2472,6 +2776,7 @@ def main():
     if args.manifest != manifest_path:
         parser.error('The manifest must match the selected qualification mode')
     select_output(CORNER_OUT if args.corner_diagnostic
+                  else FOCUS_CONTRAST_OUT if args.focus_contrast
                   else STATE_REDUCTION_OUT if args.state_reduction
                   else PORTAL_HOST_OUT if args.portal_host_experiment
                   else NATIVE_STATE_OUT if args.native_state_diagnostic
@@ -2505,7 +2810,8 @@ def main():
         for name, row in report['phases'].items():
             if name not in selected:
                 row['reason'] = 'outside_touch_event_diagnostic_scope'
-        report.update(mode='state-reduction' if args.state_reduction else 'portal-host-experiment' if args.portal_host_experiment
+        report.update(mode='focus-contrast' if args.focus_contrast else 'state-reduction' if args.state_reduction
+                      else 'portal-host-experiment' if args.portal_host_experiment
                       else 'native-state-diagnostic' if args.native_state_diagnostic else 'touch-event-diagnostic',
                       outcome='not_started', cause='unknown',
                       productAcceptance=False, checkpointObserved=False)
@@ -2523,6 +2829,13 @@ def main():
                 'One 390 card Download and primary preview Download in one product touch context. '
                 'Card/state/geometry/focus/capture/cleanup gap is inconclusive; '
                 'smaller reproduction is not cause, non-reproduction is not product acceptance.')
+        if args.focus_contrast:
+            report.update(priorChecksConsumed=19)
+            report['limits'].append(
+                'Fresh sequential contexts over one immutable fixture. Only outside uses normal Shift+Tab to the visible '
+                'header Canvas toggle. No activation/focus repair; one primary tap each, no pointer rehearsal. '
+                'Both misses: iframe focus not necessary. Inside miss/outside hit: focus dependence, not engine cause. '
+                'Inside control non-reproduction, state/geometry/capture/cleanup gaps: inconclusive.')
     if reuse_mode:
         if args.contour_qualification:
             report['mode'] = 'contour-qualification'
@@ -2623,6 +2936,8 @@ def main():
                 portal_host_inputs(frozen)
             if args.state_reduction:
                 state_reduction_inputs(frozen)
+            if args.focus_contrast:
+                focus_contrast_inputs(frozen)
             if args.coarse_toolbar_qualification:
                 require(isinstance(COARSE_TOOLBAR_PRODUCER_SHA, str)
                         and re.fullmatch('[a-f0-9]{64}', COARSE_TOOLBAR_PRODUCER_SHA)
@@ -2694,6 +3009,8 @@ def main():
         }
         if args.corner_diagnostic:
             env['FILES1318_CORNER_DIAGNOSTIC'] = '1'  # Fixed child evidence destination only.
+        elif args.focus_contrast:
+            env['FILES1318_FOCUS_CONTRAST'] = '1'
         elif args.state_reduction:
             env['FILES1318_STATE_REDUCTION'] = '1'
         elif args.portal_host_experiment:
@@ -2738,20 +3055,24 @@ def main():
                     report['checkpointObserved'] = row['diagnostic']['checkpointObserved']
                     save('report.json', report)
                 if touch_checkpoint and name == 'generated-source':
-                    row['diagnostic'] = (state_reduction_proof(raw['exitCode']) if args.state_reduction
+                    row['diagnostic'] = (focus_contrast_proof(raw['exitCode']) if args.focus_contrast
+                                         else state_reduction_proof(raw['exitCode']) if args.state_reduction
                                          else touch_event_diagnostic_proof(
                                              raw['exitCode'], native_state=args.native_state_diagnostic, portal_host=args.portal_host_experiment))
                     report['checkpointObserved'] = row['diagnostic']['checkpointObserved']
                     report['observationOutcome'] = row['diagnostic']['outcome']
-                    if args.state_reduction:
+                    if args.state_reduction or args.focus_contrast:
                         # Producer observation is not a runner settlement receipt.
                         # Validate both legitimate terminal outcomes BEFORE the
                         # normal exit-zero gate rejects a clean reproduction.
                         expected_exit = {
                             'smaller-reproduction-not-cause': 1,
                             'non-reproduction-not-product-acceptance': 0,
+                            **({'both-miss-iframe-focus-not-necessary': 1,
+                                'inside-miss-outside-hit-focus-dependence-only': 1} if args.focus_contrast else {}),
                         }.get(report['observationOutcome'])
-                        row['reductionRunnerReceipt'] = {
+                        receipt_key = 'focusRunnerReceipt' if args.focus_contrast else 'reductionRunnerReceipt'
+                        row[receipt_key] = {
                             'complete': result.get('complete'), 'passed': result.get('passed'),
                             'status': raw.get('status'), 'exitCode': raw.get('exitCode'), 'runnerCode': code,
                             'cleanup': raw.get('cleanup'), 'reason': raw.get('reason'),
@@ -2764,10 +3085,10 @@ def main():
                                 and type(code) is int and code == expected_exit),
                         }
                     save('report.json', report)
-                    if args.state_reduction:
+                    if args.state_reduction or args.focus_contrast:
                         require(row['diagnostic']['outcome'] != 'inconclusive',
                                 'Reduction inconclusive; inspect retained gates/capture/cleanup, no retry')
-                        require(row['reductionRunnerReceipt']['validated'],
+                        require(row[receipt_key]['validated'],
                                 'Reduction runner receipt incomplete, inconsistent or cleanup failed')
                 require(raw['cleanup'] == CLEAN and raw['reason'] is None, f'{name}: process/cleanup failure')
                 require(result['complete'] is True and result['passed'] is (not negative)
@@ -2799,7 +3120,8 @@ def main():
                     frozen, binding='portalHostReuse' if args.portal_host_experiment else 'coarseToolbarReuse'))
             else:
                 step('static-reuse', lambda: diagnostic_static(
-                    frozen, binding='stateReductionReuse' if args.state_reduction
+                    frozen, binding='focusContrastReuse' if args.focus_contrast
+                    else 'stateReductionReuse' if args.state_reduction
                     else 'nativeStateReuse' if args.native_state_diagnostic
                     else 'touchEventReuse' if args.touch_event_diagnostic else 'contourReuse'))
             # No status changes until every original proof, dependency identity,
@@ -2878,6 +3200,9 @@ def main():
             if args.state_reduction:
                 require(mode == 'source', 'State reduction cannot exercise installed mode')
                 extra['FILE_CONTROLS_STATE_REDUCTION'] = '1'
+            if args.focus_contrast:
+                require(mode == 'source', 'Focus contrast cannot exercise installed mode')
+                extra['FILE_CONTROLS_FOCUS_CONTRAST'] = '1'
             if args.coarse_toolbar_qualification:
                 extra['FILE_CONTROLS_COARSE_TOOLBAR_QUALIFICATION'] = '1'
             run('topology-' + mode, [NODE, 'tests/file-controls-topology-preflight.mjs'], root=root,
@@ -3041,6 +3366,11 @@ def main():
                                     for folder in (PORTAL_HOST_BEFORE_ROOT, OUT / 'before-evidence')
                                     for name, digest in PORTAL_HOST_BEFORE['files'].items()),
                                 'Reduction immutable before evidence changed')
+                    if args.focus_contrast:
+                        require(all(sha(folder / name) == digest
+                                    for folder in (FOCUS_CONTRAST_BEFORE_ROOT, OUT / 'before-evidence')
+                                    for name, digest in FOCUS_CONTRAST_BEFORE['files'].items()),
+                                'Focus immutable before evidence changed')
                     save('source-payload-final.json', expected['files'])
                     save('static-final.json', tree(ROOT / 'amplifier_web/static'))
                     integrity.update(status='passed', reason=None)
@@ -3065,12 +3395,13 @@ def main():
                 report['outcome'] = 'checkpoint_observed_cause_unknown' if report['complete'] else 'failed'
                 if touch_checkpoint and not report['checkpointObserved']:
                     report['outcome'] = 'unknown'
-                if args.state_reduction:
+                if args.state_reduction or args.focus_contrast:
                     report['outcome'] = (report.get('observationOutcome', 'inconclusive')
                                          if report['finalization']['status'] == 'passed'
                                          and report['phases']['final-integrity']['status'] == 'passed'
                                          and report['phases']['generated-source'].get(
-                                             'reductionRunnerReceipt', {}).get('validated') is True else 'inconclusive')
+                                             'focusRunnerReceipt' if args.focus_contrast else 'reductionRunnerReceipt',
+                                             {}).get('validated') is True else 'inconclusive')
             report['durationSeconds'] = round(time.monotonic() - started, 3)
             save('report.json', report)
             signal.setitimer(signal.ITIMER_REAL, 0)
@@ -3086,13 +3417,16 @@ if __name__ == '__main__':
     native_state = os.environ.get('FILES1318_NATIVE_STATE_DIAGNOSTIC') == '1'
     portal_host = os.environ.get('FILES1318_PORTAL_HOST_EXPERIMENT') == '1'
     state_reduction = os.environ.get('FILES1318_STATE_REDUCTION') == '1'
+    focus_contrast = os.environ.get('FILES1318_FOCUS_CONTRAST') == '1'
     coarse_toolbar = os.environ.get('FILES1318_COARSE_TOOLBAR_QUALIFICATION') == '1'
-    require(sum((corner, contour, touch_event, native_state, portal_host, state_reduction, coarse_toolbar)) <= 1, 'Conflicting child qualification modes')
-    select_output(CORNER_OUT if corner else STATE_REDUCTION_OUT if state_reduction else PORTAL_HOST_OUT if portal_host
+    require(sum((corner, contour, touch_event, native_state, portal_host, state_reduction, focus_contrast, coarse_toolbar)) <= 1,
+            'Conflicting child qualification modes')
+    select_output(CORNER_OUT if corner else FOCUS_CONTRAST_OUT if focus_contrast
+                  else STATE_REDUCTION_OUT if state_reduction else PORTAL_HOST_OUT if portal_host
                   else NATIVE_STATE_OUT if native_state else TOUCH_EVENT_OUT if touch_event
                   else COARSE_TOOLBAR_OUT if coarse_toolbar
                   else CONTOUR_OUT if contour else QUALIFIED_OUT)
-    if touch_event or native_state or portal_host or state_reduction:
+    if touch_event or native_state or portal_host or state_reduction or focus_contrast:
         require(os.environ.get('FILES1318_FIXTURE') != 'installed'
                 and sys.argv[1:] not in (['--python-tests'], ['--installed-ready']),
                 'Touch event diagnostic cannot run units or installed children')
