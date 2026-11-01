@@ -1,4 +1,5 @@
 """Native resume/admission tests use real storage and no provider calls."""
+import asyncio
 import copy
 import json
 import os
@@ -78,6 +79,67 @@ def mounted_host(tmp_path, monkeypatch):
 
 def snapshot(messages):
     return {"messages": copy.deepcopy(messages), "metadata": {}, "bundle": "anchors"}
+
+
+async def test_checkpoints_persist_tools_without_republishing_unchanged_message_anchors(mounted_host):
+    h = mounted_host
+    h.runtime.generation = {'id': 'generation-one', 'input_ids': ['input-one']}
+    h.runtime.emit = AsyncMock()
+    rows = [
+        {'role': 'user', 'content': 'Synthetic input',
+         'metadata': {'amplifier_input': {'id': 'input-one'}}},
+        {'role': 'assistant', 'content': 'Inspecting the local files.'},
+    ]
+    await h.prepare(snapshot(rows))
+    checkpoint = h.capabilities['live.checkpoint']
+    assert h.runtime.emit.await_count == 1
+    first = h.runtime.emit.call_args.kwargs['messageAnchors']
+    # Parallel tools and repeated native checkpoints do not add assistant
+    # anchors, but their transcript results must still be saved exactly.
+    for number in range(6):
+        h.context.messages.append({'role': 'tool', 'tool_call_id': f'tool-{number}',
+                                   'content': f'Synthetic result {number}'})
+        await checkpoint()
+        saved = [json.loads(line) for line in h.path.read_text().splitlines()]
+        assert saved[-1]['content'] == f'Synthetic result {number}'
+    assert h.runtime.emit.await_count == 1
+    h.context.messages.append({'role': 'assistant', 'content': 'Inspection completed.'})
+    await checkpoint()
+    assert h.runtime.emit.await_count == 2
+    assert len(h.runtime.emit.call_args.kwargs['messageAnchors']) == len(first) + 1
+    # Generation identity is authority even when the transcript is unchanged.
+    h.runtime.generation['id'] = 'generation-two'
+    await checkpoint()
+    assert h.runtime.emit.await_count == 3
+    assert h.runtime.emit.call_args.kwargs['generation_id'] == 'generation-two'
+    # Reopening the native history establishes a fresh notification, even when
+    # this process's previous mount had published the same exact references.
+    await h.prepare()
+    assert h.runtime.emit.await_count == 4
+
+
+@pytest.mark.parametrize('failure', [RuntimeError('pipe failed'), asyncio.CancelledError()])
+async def test_failed_anchor_notification_is_retried_on_next_checkpoint(mounted_host, failure):
+    h = mounted_host
+    await h.prepare()
+    h.runtime.generation = {'id': 'generation-one', 'input_ids': ['input-one']}
+    async def emit(*args, **kwargs):
+        if h.runtime.emit.await_count == 1:
+            raise failure
+    h.runtime.emit = AsyncMock(side_effect=emit)
+    h.context.messages = [
+        {'role': 'user', 'content': 'Synthetic input',
+         'metadata': {'amplifier_input': {'id': 'input-one'}}},
+        {'role': 'assistant', 'content': 'Saved response.'},
+    ]
+    checkpoint = h.capabilities['live.checkpoint']
+    with pytest.raises(type(failure)):
+        await checkpoint()
+    assert 'Saved response.' in h.path.read_text()
+    await checkpoint()
+    assert h.runtime.emit.await_count == 2
+    await checkpoint()
+    assert h.runtime.emit.await_count == 2
 
 
 @pytest.mark.parametrize('connected', [False, True])

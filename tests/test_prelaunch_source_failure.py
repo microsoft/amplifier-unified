@@ -15,11 +15,12 @@ from test_test_environment_worker import library, Failure, payload
 from test_test_queue import queue, submit, drive, record
 
 
-def test_returned_source_export_failure_reports_no_launch(library, tmp_path):
+@pytest.mark.parametrize('code', ['repository-source-changed', 'repository-file-unsupported'])
+def test_returned_source_export_failure_reports_no_launch(library, tmp_path, code):
     lib, calls = library
     def changed(*args):
         failure = Failure('private source path must not escape')
-        failure.code = 'repository-source-changed'
+        failure.code = code
         raise failure
     lib.export_repository_snapshot = changed
     data = payload(tmp_path, 'prepare')
@@ -27,14 +28,14 @@ def test_returned_source_export_failure_reports_no_launch(library, tmp_path):
     result = worker.execute_call(data)
     assert result['status'] == 'not-started'
     assert result['effectAdmitted'] is False
-    assert result['code'] == 'repository-source-changed'
+    assert result['code'] == code
     assert 'No environment or test command was started' in result['message']
     assert 'private source path' not in json.dumps(result)
     assert not calls
     assert not (tmp_path / 'compose.json').exists()
 
 
-@pytest.mark.parametrize('action,code', [('prepare', 'backend-unavailable'), ('start', 'repository-source-changed')])
+@pytest.mark.parametrize('action,code', [('prepare', 'backend-unavailable'), ('start', 'repository-source-changed'), ('start', 'repository-file-unsupported')])
 def test_other_backend_failures_keep_uncertainty(library, tmp_path, monkeypatch, action, code):
     lib, calls = library
     def failure(*args, **kwargs):
@@ -49,7 +50,7 @@ def test_other_backend_failures_keep_uncertainty(library, tmp_path, monkeypatch,
     assert result['status'] == 'unknown' and 'effectAdmitted' not in result
 
 
-async def failed_source(app, queue, monkeypatch, *, legacy=True):
+async def failed_source(app, queue, monkeypatch, *, legacy=True, code='repository-source-changed'):
     calls = []
     def invoke(config, home, row, action, args):
         calls.append(action)
@@ -59,7 +60,7 @@ async def failed_source(app, queue, monkeypatch, *, legacy=True):
                                      universe, {'backend': 'docker', 'daemon': 'owned-daemon'})
             worker.write_private_record(owner.storage.directory(home, row) / 'backend-binding.json', binding)
             return {'ok': False, 'status': 'unknown' if legacy else 'not-started',
-                    'universeId': universe, 'snapshot': None, 'code': 'repository-source-changed',
+                    'universeId': universe, 'snapshot': None, 'code': code,
                     'message': 'Historical generic uncertainty' if legacy else 'No environment or test command was started.',
                     **({} if legacy else {'effectAdmitted': False})}
         assert action == 'reconcile', 'No physical effect is allowed after source refusal'
@@ -76,14 +77,22 @@ async def failed_source(app, queue, monkeypatch, *, legacy=True):
 
 
 @pytest.mark.parametrize('legacy', [True, False])
-async def test_reconcile_retains_exact_failed_launch_without_backend_replay(app, queue, backend, monkeypatch, legacy):
+@pytest.mark.parametrize('code', ['repository-source-changed', 'repository-file-unsupported'])
+async def test_reconcile_retains_exact_failed_launch_without_backend_replay(app, queue, backend, monkeypatch, legacy, code):
     admitted_backend = owner.invoke
-    row, calls = await failed_source(app, queue, monkeypatch, legacy=legacy)
+    row, calls = await failed_source(app, queue, monkeypatch, legacy=legacy, code=code)
     original = copy.deepcopy(row['lastOperation'])
     result = await act(app, 'reconcile', row, 'inspect-source-failure')
     assert result['request']['state'] == 'completed'
     proof = result['request']['result']
     assert proof['status'] == 'not-started' and proof['effectAdmitted'] is False
+    assert proof['preLaunchFailure']['code'] == code
+    if code == 'repository-file-unsupported':
+        assert 'not a regular file or symlink' in proof['message']
+    else:
+        # Saved historical proofs are compared exactly during projection repair.
+        assert proof['message'] == ('The original source snapshot failed before launch. No environment or test command was started. '
+                                    'The failed request is retained; use stable source for a new check.')
     assert proof['preLaunchFailure']['originalRequestId'] == original['requestId']
     assert 'observation' not in proof  # No fabricated physical-absence claim.
     assert result['resource']['lastOperation'] == original
@@ -150,9 +159,10 @@ async def test_source_failure_recovery_obeys_revision_lock_and_agent_authority(a
     assert calls == ['prepare']
 
 
+@pytest.mark.parametrize('code', ['repository-source-changed', 'repository-file-unsupported'])
 @pytest.mark.parametrize('tamper', ['binding-missing', 'binding-root', 'binding-operation', 'binding-universe', 'result-code', 'result-admitted'])
-async def test_missing_or_changed_bound_evidence_stays_held(app, queue, backend, monkeypatch, tamper):
-    row, calls = await failed_source(app, queue, monkeypatch)
+async def test_missing_or_changed_bound_evidence_stays_held(app, queue, backend, monkeypatch, tamper, code):
+    row, calls = await failed_source(app, queue, monkeypatch, code=code)
     if tamper.startswith('binding'):
         path = owner.storage.directory(app.data_dir, row) / 'backend-binding.json'
         if tamper == 'binding-missing':
