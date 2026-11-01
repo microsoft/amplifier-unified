@@ -35,6 +35,13 @@ The copied fixture invokes its existing package_identity guard, then records
 origins and verifies payload/static/RECORD in that SAME process before and after.
 No selectors, environment overrides, retries, preparation or publication CLI.
 
+The current compact-button candidate uses the SAME default full qualification
+(no mode flag), with /workspace/output/files1318-compact-button-manifest.json.
+Only that manifest admits the two pinned product files below. It requires a
+fresh canonical build, all existing source/installed journeys and the additional
+compact decoration/strict native event/neighbor/Space evidence. No old 311-file
+build or unit proof is reused on this path. All 22 prior outcomes remain retained.
+
 --corner-diagnostic is a separate, source-only checkpoint, NOT qualification.
 It uses /artifacts/files1318-corner-diagnostic and the fixed retained inputs in
 output/files1318-corner-inputs/{reuse.json,static.tar}. The schema-2 manifest must
@@ -157,6 +164,7 @@ import sysconfig
 import tarfile
 import time
 import tomllib
+from urllib.parse import parse_qs, urlsplit
 import xml.etree.ElementTree as ET
 
 # -I deliberately removes the script directory as well as PYTHONPATH. Restore
@@ -183,10 +191,17 @@ PORTAL_HOST_MANIFEST = ROOT / 'output/files1318-portal-host-manifest.json'
 STATE_REDUCTION_MANIFEST = ROOT / 'output/files1318-state-reduction-manifest.json'
 FOCUS_CONTRAST_MANIFEST = ROOT / 'output/files1318-focus-contrast-manifest.json'
 FOCUS_CONTRAST_SETTLED_MANIFEST = ROOT / 'output/files1318-focus-contrast-settled-v2-manifest.json'
+COMPACT_BUTTON_MANIFEST = ROOT / 'output/files1318-compact-button-manifest.json'
 HARNESS = OUT / 'harness'
 VENV = OUT / 'installed'
 DRIVER = 'scripts/files1318_integrated_checks.py'
 PRODUCER = 'frontend/tests/generated-file-controls-browser.mjs'
+COMPACT_BUTTON_INPUTS = {
+    PRODUCER: '23ba33a84aedec2caef8968a51d0bcc8e80fb8dd3326964d84eeff0f668b98a8',
+    'frontend/src/artifact-file-details.jsx': '68af1597d6c666a7d147537cb1d03d315a3f1249b477f498ade24cb9f51f2e4b',
+    'frontend/src/canvas-workspace.css': '54436d4227d0ad121f6cf463260d97ac785aa1b070cd0dab55a39cc86b6c0a5d',
+}
+COMPACT_BUTTON_PRODUCT_PATHS = frozenset(COMPACT_BUTTON_INPUTS) - {PRODUCER}
 CORNER_OUT = Path('/artifacts/files1318-corner-diagnostic')
 CONTOUR_OUT = Path('/artifacts/files1318-computed-round-qualified')
 TOUCH_EVENT_OUT = Path('/artifacts/files1318-touch-event-diagnostic')
@@ -413,7 +428,7 @@ def frozen_inputs(frozen, *, built=False):
                 and path not in (MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST,
                                  COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST, PORTAL_HOST_MANIFEST,
                                  STATE_REDUCTION_MANIFEST, FOCUS_CONTRAST_MANIFEST,
-                                 FOCUS_CONTRAST_SETTLED_MANIFEST), 'Unsafe frozen path')
+                                 FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST), 'Unsafe frozen path')
         require(path.parent.resolve().is_relative_to(ROOT), 'Frozen path escapes snapshot')
         require(expected['mode'] in ('100644', '100755', '120000')
                 and re.fullmatch('[a-f0-9]{64}', expected['sha256']), 'Invalid frozen identity')
@@ -1343,7 +1358,7 @@ def file_frame_proof(proof, folder):
                     for key in ('intersections', 'headerIntersections')), 'Occlusion evidence missing')
 
 
-def generated_coverage(proof, folder):
+def generated_coverage(proof, folder, *, compact_button=False):
     source = (ROOT / 'frontend/tests/generated-file-controls-browser.mjs').read_text()
     taps = [g for g in proof['geometry'] if g['label'] == 'corner-tap-before']
     require(len(taps) == 14, 'Missing corner-tap measurements')
@@ -1372,6 +1387,11 @@ def generated_coverage(proof, folder):
         'card-only phase completed with zero document requests and unrelated historical Canvas retained': 1,
         'negative controls: lost input and changed execution token rejected by the same retained-preview oracle': 1,
     })
+    if compact_button:
+        counts.update({
+            'ordinary Details and inspector Copy do not activate primary Download': 3,
+            'native primary Space downloads exact saved bytes and preserves preview': 1,
+        })
     require(Counter(re.findall(r"checks\.push\(\{check:'([^']+)'", source)) ==
             Counter({name: 1 for name in counts}), 'Journey check definitions changed')
     require(Counter(c['check'] for c in proof['checks']) == counts, 'Journey check coverage/counts changed')
@@ -1398,6 +1418,8 @@ def generated_coverage(proof, folder):
               'touch-390-deleted-v1', 'touch-320-deleted-v1',
               *(f'{p}-{s}-v1' for p in ('desktop-preview', 'touch-390-preview', 'touch-320-preview')
                 for s in ('primary', 'rail')), 'adjacent-markdown', 'saved-only', 'negative-wrong-bytes']
+    if compact_button:
+        labels.append('desktop-preview-primary-space-v1')
     require(Counter(d['label'] for d in proof['downloads']) == Counter(labels), 'Download coverage/counts')
     for download in proof['downloads']:
         row = proof['seed']['artifacts'][{'adjacent-markdown': 'adjacent', 'saved-only': 'saved'}.get(download['label'], 'html')]
@@ -1410,6 +1432,8 @@ def generated_coverage(proof, folder):
     require(Counter(r['client'] for r in proof['requests'] if r['path'].endswith('/document')) ==
             Counter(('desktop', 'touch')), 'Unexpected preview document requests')
     file_frame_proof(proof, folder)
+    if compact_button:
+        compact_button_proof(proof, taps)
 
 
 def contour_sample(sample, *, reachable=(True, True, True, True)):
@@ -1630,7 +1654,302 @@ def contour_proof(proof, taps, padding_count):
             'Missing/changed per-touch padding conversion negatives')
 
 
-def generated_proof(mode, *, coarse_toolbar=False):
+def compact_button_proof(proof, taps):
+    """Validate the pinned full producer's raw evidence, not just its pass flags."""
+    finite = lambda n: type(n) in (int, float) and math.isfinite(n)
+    labels = ('desktop-preview', 'touch-390-preview', 'touch-320-preview')
+    checks = lambda name: [c for c in proof['checks'] if c['check'] == name]
+    html = proof['seed']['artifacts']['html']
+    require(html['version'] == 1 and html['byteLength'] == 426
+            and html['sha256'] == '93229c6d39952ff4ab7b89ec66ae6d92e49da7a0d4da4269b736b8430caabfb0',
+            'Compact qualification must use the original saved HTML bytes')
+    decorations = proof['downloadDecorations']
+    require([r['label'] for r in decorations] ==
+            ['file-details'] * 9 + [name for label in labels for name in
+                                    (label + '-primary-before', label + '-primary-after', 'file-details')],
+            'Compact/card/inspector decoration coverage differs')
+    compact = {}
+    for record in decorations:
+        s, label = record['sample'], record['label']
+        expected_compact = label != 'file-details'
+        require(record['passed'] is True and record['compact'] is expected_compact
+                and s['tag'] == 'BUTTON' and s['connected'] is True
+                and type(s['nodeId']) is int and s['nodeId'] > 0
+                and s['compact'] == ('true' if expected_compact else None)
+                and s['label'] == ('Download canvas source' if expected_compact else 'Download saved file')
+                and all(isinstance(s[k], str) and s[k] and s[k] != 'none'
+                        for k in ('pointerEvents', 'statusPointerEvents'))
+                and 2 <= len(s['children']) <= 16, 'Native Download/status boundary changed')
+        svg, = [c for c in s['children'] if c['tag'] == 'svg']
+        require(svg['ariaHidden'] == 'true' and svg['focusable'] == 'false'
+                and any(c['tag'] == 'span' for c in s['children']), 'Decoration accessibility/label differs')
+        for child in s['children']:
+            rect, point = child['rect'], child['point']
+            require(all(finite(rect[k]) for k in ('left', 'top', 'width', 'height'))
+                    and point == {'x': rect['left'] + rect['width'] / 2, 'y': rect['top'] + rect['height'] / 2}
+                    and type(child['visible']) is bool and type(child['hitIsButton']) is bool
+                    and child['hitIsButton'] is (child['hitNodeId'] == s['nodeId']),
+                    'Decoration hit-test evidence inconsistent')
+            if expected_compact:
+                require(child['pointerEvents'] == 'none'
+                        and (not child['visible'] or (rect['width'] > 0 and rect['height'] > 0
+                             and child['hitNodeId'] == s['nodeId'])), 'Compact descendant remains a pointer target')
+            else:
+                require(isinstance(child['pointerEvents'], str) and child['pointerEvents']
+                        and child['pointerEvents'] != 'none', 'Compact rule leaked to card/inspector')
+        if expected_compact:
+            measured, = [g for g in proof['geometry'] if g['label'] == label and g.get('name') == s['label']]
+            require(svg['visible'] is True and svg['hitNodeId'] == s['nodeId']
+                    and measured['nodeId'] == s['nodeId'], 'Compact icon/geometry identity differs')
+            compact[label] = s
+
+    journeys = checks('right-rail paths/download and primary Download preserve running saved-v1 HTML')
+    require([j['label'] for j in journeys] == list(labels), 'Full preview journey missing')
+    for journey in journeys:
+        client = 'desktop' if journey['mode'] == 'keyboard' else 'touch'
+        setup, = [r for r in checks('deliberate saved-v1 preview setup, not a download') if r['label'] == client]
+        state, marker = journey['state'], journey['marker']
+        require(all(journey[k] == setup[k] for k in ('state', 'marker', 'documents'))
+                and marker['count'] == 1 and marker['executed'] == '1'
+                and re.fullmatch(r'\d+-\d+-\d+-\d+', marker['token'])
+                and re.fullmatch(r'Unsubmitted ' + client + r' note — [a-f0-9-]{36}', journey['unfinished'])
+                and state['selected'] == proof['seed']['sessionId']
+                and state['draft'] == ('Keep this unsent file-inspection draft — α.' if client == 'desktop'
+                                        else 'Keep touch draft — unsubmitted.')
+                and state['canvas'] == {'id': html['id'], 'version': 1, 'readOnly': True}
+                and len(state['views']) == len(state['iframeSightings']) == len(journey['documents']) == 1,
+                'Compact preview/input/token/selection/draft setup changed')
+        view = state['views'][0]
+        require(view['viewId'] == 'primary' and view['resourceId'] == html['id'] and view['selectedVersion'] == 1
+                and type(view['generation']) is int and view['generation'] > 0
+                and re.fullmatch('[a-f0-9]{64}', view['resourceRevision'])
+                and journey['documents'] == [r for r in proof['requests']
+                                             if r['client'] == client and r['path'].endswith('/document')]
+                and state['iframeSightings'] == [journey['documents'][0]['path'] + journey['documents'][0]['query']],
+                'Compact renderer lease/document identity changed')
+
+    def preservation(observed, retained):
+        require(observed == {'iframeConnected': True, 'sameIframe': True, 'iframeCount': 1,
+                **{k: retained[k] for k in ('marker', 'unfinished', 'state', 'documents')}, 'prohibitedCommands': []},
+                'Compact gesture lost original iframe/input/token/lease/selection/draft')
+
+    def untruncated(value):
+        if isinstance(value, dict):
+            return all(not (k.endswith('Truncated') and v is not False) and untruncated(v) for k, v in value.items())
+        return not isinstance(value, list) or all(untruncated(v) for v in value)
+
+    gestures = proof['compactPrimaryGestures']
+    require([g['label'] for g in gestures] == list(labels[1:]), 'Both original narrow primary gestures required')
+    event_types = ['pointerover', 'pointerenter', 'pointerdown', 'pointermove', 'pointerup', 'pointercancel',
+                   'pointerout', 'pointerleave', 'gotpointercapture', 'lostpointercapture',
+                   'touchstart', 'touchmove', 'touchend', 'touchcancel', 'mouseover', 'mouseenter', 'mousemove',
+                   'mousedown', 'mouseup', 'click', 'mouseout', 'mouseleave', 'auxclick', 'contextmenu']
+    for g, tap_index in zip(gestures, (6, 10)):
+        label, before, delivered, capture = g['label'], g['before'], g['delivered'], g['capture']
+        node = before['nodeId']
+        require(g['compactDecorationRequested'] is True and g['tapAttempts'] == 1
+                and g['checkpointObserved'] is True and g['originalOraclePassed'] is True and g['strictEventsPassed'] is True
+                and g['originalListenerRemoved'] is True and g['handleDisposed'] is True
+                and g['captureErrors'] == g['cleanupErrors'] == [] and not g.get('failure')
+                and compact[label + '-primary-before']['nodeId'] == compact[label + '-primary-after']['nodeId'] == node,
+                'Compact original native gesture incomplete')
+        contour_sample(before);contour_sample(delivered)
+        require(all(taps[tap_index][k] == v for k, v in before.items() if k != 'corners')
+                and taps[tap_index]['acceptance']['corners'] == before['corners'],
+                'Compact capture is not the existing first/second primary tap')
+        if label == 'touch-390-preview':
+            # Immutable original failed 8ac gesture; no candidate-derived inset.
+            expected = {
+                'rect': {'x': 292, 'y': 207.5, 'width': 44, 'height': 44, 'top': 207.5, 'right': 336, 'bottom': 251.5, 'left': 292},
+                'radii': ['9px'] * 4, 'borders': {'left': 0, 'top': 0, 'right': 0, 'bottom': 0},
+                'viewport': {'width': 390, 'height': 844, 'scale': 1, 'offsetLeft': 0, 'offsetTop': 0},
+                'intended': {'x': 331.24264068711926, 'y': 246.7426406871193},
+                'position': {'x': 39.24264068711926, 'y': 39.24264068711929},
+            }
+            require(g['baselineMatched'] is True and all(before[k] == v for k, v in expected.items()),
+                    'Original first-390 Download geometry/tap changed')
+        events = capture['events']
+        require(capture['limits'] == {'windowMs': 2000, 'records': 128, 'stack': 16, 'path': 24,
+                                     'ancestors': 16, 'notices': 4, 'touches': 4, 'errors': 8}
+                and capture['types'] == event_types and 5 <= len(events) <= 128
+                and capture['errors'] == [] and capture['truncations'] == {k: 0 for k in
+                    ('records', 'stack', 'path', 'ancestors', 'notices', 'touches', 'errors')}
+                and untruncated(events) and capture['deadline'] == capture['armedAt'] + 2000
+                and capture['finished']['listenersRemoved'] is True and capture['finished']['timerCleared'] is True
+                and capture['finished']['reason'] in ('deadline', 'deadline-observed')
+                and all(finite(n) for n in (capture['armedAt'], capture['deadline'], capture['finished']['at'])),
+                'Compact native event capture incomplete/lossy')
+        for i, e in enumerate(events):
+            require(e['index'] == i and e['type'] in event_types and not e.get('captureError')
+                    and all(finite(e[k]) for k in ('at', 'wallTime', 'timeStamp'))
+                    and capture['armedAt'] <= e['at'] < capture['deadline'] and e['at'] <= capture['finished']['at']
+                    and (i == 0 or e['at'] >= events[i - 1]['at'])
+                    and e['intended'] == before['intended'] and e['intendedButton']['nodeId'] == node
+                    and len(e['composedPath']) <= 24 and len(e['ancestors']) <= 16
+                    and len(e['notices']) <= 4 and len(e.get('changedTouches') or []) <= 4
+                    and e['atIntended']['point'] == before['intended'] and len(e['atIntended']['elements']) <= 16
+                    and (e['actual'] is None or (e['atActual']['point'] == e['actual'] and len(e['atActual']['elements']) <= 16)),
+                    'Compact raw event correlation/time/bounds differ')
+        kinds = ('pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click')
+        pair = [e for e in events if e['isTrusted'] and e['type'] in kinds]
+        require([e['type'] for e in pair] == list(kinds)
+                and not any(e['type'] in ('pointercancel', 'touchcancel') for e in events)
+                and g['sequence'] == [e['type'] for e in events]
+                and g['pairPresence'] == {'pointerdown': pair[0]['index'], 'firstMousedown': pair[2]['index']}
+                and pair[0]['pointerType'] == pair[1]['pointerType'] == 'touch'
+                and pair[2]['sourceCapabilities'] == {'firesTouchEvents': True},
+                'Missing/repeated/cancelled native event; synthetic link.click is not touch delivery')
+        for e in pair:
+            require(e['sameNode'] is True and e['target']['nodeId'] == node and e['target']['tag'] == 'BUTTON'
+                    and e['target']['connected'] is True and e['target']['rect'] == before['rect']
+                    and e['intendedButton']['connected'] is True and e['intendedButton']['tag'] == 'BUTTON'
+                    and e['intendedButton']['rect'] == before['rect']
+                    and {'nodeId': node, 'tag': 'BUTTON'} in e['composedPath']
+                    and all(finite(e['actual'][axis]) for axis in ('x', 'y'))
+                    and before['rect']['left'] <= e['actual']['x'] < before['rect']['right']
+                    and before['rect']['top'] <= e['actual']['y'] < before['rect']['bottom'],
+                    'Trusted compact event reached decoration/notice/Details instead of original button')
+        require(pair[0]['actual'] == {axis: delivered['event'][axis] for axis in ('x', 'y')}
+                and delivered['event']['sameNode'] is True, 'Compact independent pointer observers disagree')
+        settlement = g['settlement']
+        require(settlement == proof['tapSettlements'][tap_index]
+                and settlement['retained']['nodeId'] == node and settlement['retained']['connected'] is True
+                and settlement['rawTargets'] == [{k: e[k] for k in
+                    ('index', 'type', 'isTrusted', 'sameNode', 'target', 'actual', 'intendedButton')}
+                    for e in events if e['type'] in ('pointerdown', 'click')],
+                'Compact retained handle/raw event settlement mismatch')
+        journey, = [j for j in journeys if j['label'] == label]
+        retained, post = g['retained'], g['postGesture']
+        require(all(retained[k] == journey[k] for k in ('marker', 'unfinished', 'state', 'documents')),
+                'Compact gesture retargeted preview state')
+        preservation(post['preservation'], retained)
+        download, = [d for d in proof['downloads'] if d['label'] == label + '-primary-v1']
+        require(post['passed'] is True and post['download'] == g['download'] == download
+                and post['check'] == 'compact primary exact saved HTML download and running preview preserved'
+                and download['bytes'] == 426 and download['sha256'] == html['sha256'],
+                'Compact gesture byte/preservation result differs')
+
+    neighbors = proof['downloadNeighbors']
+    require([n['label'] for n in neighbors] == list(labels)
+            and checks('ordinary Details and inspector Copy do not activate primary Download') ==
+                [{'check': 'ordinary Details and inspector Copy do not activate primary Download', **n} for n in neighbors],
+            'Details exclusion records/checks differ')
+    for n, previous in zip(neighbors, (-1, neighbors[0]['requestStart'], neighbors[1]['requestStart'])):
+        require(n['version'] == 'neighbor-request-boundary-v1' and n['passed'] is True
+                and n['readyForPositive'] is True and not n.get('failure')
+                and n['observerErrors'] == [] and n['pendingAtStart'] == []
+                and n['listenerRemoved'] is True and type(n['downloads']) is int and n['downloads'] == 0
+                and n['downloadRequests'] == [] and type(n['requestStart']) is int
+                and previous < n['requestStart'] < len(proof['requests']), 'Details/Copy triggered download or lost observation')
+        client = 'desktop' if n['label'] == 'desktop-preview' else 'touch'
+        target = {'id': html['id'], 'version': 1, 'sessionId': proof['seed']['sessionId']}
+        require(n['client'] == client and n['clientIdentity']['sessionId'] == target['sessionId']
+                and isinstance(n['clientIdentity']['clientId'], str) and n['clientIdentity']['clientId'],
+                'Neighbor observer belongs to another client')
+        trace = proof['detailsReadiness'][n['detailsTraceIndex']]
+        require(trace['client'] == client and trace['expected'] == target and trace['passed'] is True
+                and not any(trace.get(k) for k in ('error', 'captureError', 'disposeError')) and trace['matches'],
+                'Neighbor lacks the actual fresh Details lifecycle')
+        expected = n['expectedInspect']
+        require(expected == [{'requestId': r['requestId'], 'metadataIndex': proof['metadataExchanges'].index(r)}
+                             for r in trace['matches']]
+                and 0 < len(expected) <= 16 and len(n['inspectionRequests']) == len(expected)
+                and n['metadataSettlement'] == [{'requestId': e['requestId'], 'metadataIndex': e['metadataIndex'],
+                                                  'record': proof['metadataExchanges'][e['metadataIndex']]} for e in expected],
+                'Allowed inspect identities must come from freshDetails, not a count or broad predicate')
+        boundary, settled, positive = n['boundary'], n['afterSettlement'], n['positive']
+        for key, start, maximum in (('commandEnd', n['commandStart'], len(proof['commands'])),
+                                    ('metadataEnd', n['metadataStart'], len(proof['metadataExchanges'])),
+                                    ('requestEnd', n['requestStart'], len(proof['requests']))):
+            require(all(type(v) is int for v in (start, settled[key], boundary[key], positive[key]))
+                    and 0 <= start <= settled[key] <= boundary[key] < positive[key] <= maximum,
+                    'Neighbor/positive interval indexes are missing or overlap')
+        require(type(n['copyCommandStart']) is int
+                and n['commandStart'] <= n['copyCommandStart'] <= settled['commandEnd']
+                and settled['metadataEnd'] == boundary['metadataEnd']
+                and all(s['inspections'] == [e['requestId'] for e in expected]
+                        and s['downloads'] == s['attachments'] == 0 for s in (settled, boundary)),
+                'Metadata arrived after negative settlement')
+        inspections = [(index, c) for index, c in enumerate(proof['commands'])
+                       if n['commandStart'] <= index < boundary['commandEnd'] and c.get('action') == 'canvas.versions.inspect']
+        require([r['commandIndex'] for r in n['inspectionRequests']] == [index for index, _ in inspections]
+                and proof['metadataExchanges'][n['metadataStart']:boundary['metadataEnd']] == trace['matches']
+                and not any(r['path'].endswith('/download')
+                            for r in proof['requests'][n['requestStart']:boundary['requestEnd']]),
+                'Unexpected inspect/attachment in Details/Copy interval')
+        for r, e in zip(n['inspectionRequests'], expected):
+            command, metadata = proof['commands'][r['commandIndex']], proof['metadataExchanges'][r['metadataIndex']]
+            require(r['requestId'] == e['requestId'] == metadata['requestId']
+                    and r['metadataIndex'] == e['metadataIndex']
+                    and r['target'] == metadata['target'] == target and r['client'] == metadata['client'] == client
+                    and r['clientId'] == metadata['clientId'] == n['clientIdentity']['clientId']
+                    and metadata['commandIndex'] == r['commandIndex']
+                    and r['command'] == command and command['action'] == 'canvas.versions.inspect'
+                    and command['args'] == target and r['commandIndex'] < n['copyCommandStart']
+                    and metadata['httpStatus'] == 200 and metadata['response']['accepted'] is True
+                    and metadata['response']['id'] == html['id'] and metadata['response']['version'] == 1
+                    and metadata['response']['filePaths'] == html['filePaths'] and not metadata.get('error')
+                    and n['armedAt'] <= metadata['requestedAt'] <= metadata['completedAt'] <= trace['settledAt']
+                    <= n['metadataSettledAt'] <= n['controlsReadAt'] <= n['positiveStartedAt']
+                    <= positive['completedAt'] <= n['observersRemovedAt'],
+                    'Neighbor expected inspect was not completed before Copy/positive handoff')
+        for key, label in (('primary', 'Download canvas source'), ('rail', 'Download saved file')):
+            c = n['controls'][key]
+            require(c['tag'] == 'BUTTON' and c['label'] == label and c['connected'] is True
+                    and c['disabled'] is False and c['busy'] == 'false' and type(c['nodeId']) is int and c['nodeId'] > 0,
+                    'A save was queued/in flight at the negative boundary')
+        require(n['controls']['primary']['nodeId'] == compact[n['label'] + '-primary-after']['nodeId'],
+                'Negative readback replaced original primary')
+        # The next legitimate activation has its OWN inspect and attachment,
+        # after the negative boundary. Identical bytes from a late prior save
+        # alone cannot satisfy this request/response association.
+        following_index, = [i for i in range(boundary['commandEnd'], positive['commandEnd'])
+                            if proof['commands'][i].get('action') == 'canvas.versions.inspect']
+        following = proof['commands'][following_index]
+        metadata, = proof['metadataExchanges'][boundary['metadataEnd']:positive['metadataEnd']]
+        attachment, = [r for r in proof['requests'][boundary['requestEnd']:positive['requestEnd']]
+                       if r['path'].endswith('/download')]
+        url = urlsplit(metadata['response']['download']['url'])
+        require(following['action'] == 'canvas.versions.inspect' and following['args'] == target
+                and metadata['target'] == target and metadata['client'] == client
+                and metadata['commandIndex'] == following_index and metadata['clientId'] == n['clientIdentity']['clientId']
+                and metadata['requestId'] not in [e['requestId'] for e in expected]
+                and metadata['httpStatus'] == 200 and metadata['response']['accepted'] is True and not metadata.get('error')
+                and n['positiveStartedAt'] <= metadata['requestedAt'] <= metadata['completedAt'] <= positive['completedAt']
+                and attachment['client'] == client and attachment['path'] == url.path
+                and parse_qs(attachment['query'].lstrip('?')) ==
+                    {**parse_qs(url.query), 'clientId': [n['clientIdentity']['clientId']]}
+                and positive['downloadLabel'] == n['label'] + '-rail-v1',
+                'Following download did not originate from the separate legitimate inspect/attachment')
+        lifecycle = n['settlement']
+        require(lifecycle['settled'] is True and lifecycle['otherFailures'] == []
+                and not lifecycle.get('browserAbort') and not lifecycle.get('ownerClosed')
+                and [op['name'] for op in lifecycle['operations']] ==
+                    ['neighbor-client-identity', 'neighbor-retain-primary', 'neighbor-metadata-settlement',
+                     'neighbor-primary-idle', 'neighbor-rail-idle', 'neighbor-primary-dispose']
+                and all(op['state'] == 'fulfilled' and not op.get('deadlineExceeded') and not op.get('error')
+                        for op in lifecycle['operations']), 'Neighbor metadata/handle lifecycle did not settle')
+    space, = checks('native primary Space downloads exact saved bytes and preserves preview')
+    download, = [d for d in proof['downloads'] if d['label'] == 'desktop-preview-primary-space-v1']
+    require(space['label'] == 'desktop-preview' and space['download'] == download, 'Native Space download missing')
+    preservation(space['preservation'], journeys[0])
+    require(len(proof['downloads']) == len(proof['downloadSettlements']) == 15
+            and [d['label'] for d in proof['downloadSettlements']] == [d['label'] for d in proof['downloads']]
+            and all(d['settled'] is True and d['trigger']['state'] == 'fulfilled' and not d.get('primaryFailure')
+                    and d['observation']['state'] == 'received' and not d['observation'].get('error')
+                    and d['observation']['listenerRemoved'] is True and d['observation']['timerCleared'] is True
+                    and d['observation']['filename'] == saved['filename']
+                    for d, saved in zip(proof['downloadSettlements'], proof['downloads']))
+            and len(proof['tapSettlements']) == 14
+            and all(t['settled'] is True and not t.get('primaryFailure') and t['otherFailures'] == []
+                    and t['handleDisposed'] is True and t['listenerCleanup']['state'] == 'removed'
+                    and t['retained']['connected'] is True and t['operations']
+                    and all(op['state'] == 'fulfilled' for op in t['operations']) for t in proof['tapSettlements'])
+            and proof['tapDrain'].get('settled') is True and proof['tapDrain']['pendingAfter'] == 0,
+            'Full native/download branches or listener cleanup did not settle')
+
+
+def generated_proof(mode, *, coarse_toolbar=False, compact_button=False):
     reports = list((OUT / f'generated-{mode}/evidence').glob('generated-file-controls-*/observations.json'))
     require(len(reports) == 1, 'Require one generated-file journey report')
     proof = read(reports[0])
@@ -1647,7 +1966,7 @@ def generated_proof(mode, *, coarse_toolbar=False):
             and proof['fixtureCleanup'] == {'pid': cleanup['pid'], 'homeRemoved': True}, 'Fixture exit/identity')
     require(proof['browserCleanup'] == [{'label': label, 'closed': True, 'connected': False}
                                        for label in ('desktop', 'touch')], 'Browser cleanup')
-    generated_coverage(proof, reports[0].parent)
+    generated_coverage(proof, reports[0].parent, compact_button=compact_button)
     expected = read(OUT / 'candidate.json')
     static = {p.removeprefix('amplifier_web/static/'): h for p, h in expected['static'].items()}
     package = (read(OUT / 'installed-identity.json')['packageRoot']
@@ -1663,7 +1982,7 @@ def generated_proof(mode, *, coarse_toolbar=False):
     else:
         require(read(OUT / 'source-fixture-payload-before.json') ==
                 read(OUT / 'source-fixture-payload-after.json'), 'Source payload/static changed')
-    if coarse_toolbar:
+    if coarse_toolbar or compact_button:
         build_identity = read(OUT / 'frontend-build-identity.json')
         require(build_identity['reusedBuild'] is False and expected['static'] == build_identity['static']
                 and read(Path(package) / 'static/build.json') == build_identity['build']
@@ -1683,7 +2002,8 @@ def generated_proof(mode, *, coarse_toolbar=False):
             'serverOrigins': server_origins, 'build': build_identity['build'],
             'static': static, 'reusedBuild': False,
             'basis': 'same-fixture server module origins and adjacent static bytes; not browser response capture'})
-        coarse_toolbar_proof(proof, mode)
+        if coarse_toolbar:
+            coarse_toolbar_proof(proof, mode)
     save(f'generated-{mode}/accepted-report.json', {
         'path': str(reports[0]), 'sha256': sha(reports[0]), 'visualJudgment': 'pending',
         'frameBindingCounts': dict(Counter(c['binding']['status'] for c in proof['fileFrameCaptures']))})
@@ -2829,7 +3149,7 @@ def main():
                         choices=[MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST,
                                  COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST, PORTAL_HOST_MANIFEST,
                                  STATE_REDUCTION_MANIFEST, FOCUS_CONTRAST_MANIFEST,
-                                 FOCUS_CONTRAST_SETTLED_MANIFEST])
+                                 FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST])
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--corner-diagnostic', action='store_true')
     modes.add_argument('--contour-qualification', action='store_true')
@@ -2856,9 +3176,11 @@ def main():
                      else COARSE_TOOLBAR_MANIFEST if args.coarse_toolbar_qualification
                      else CONTOUR_MANIFEST if args.contour_qualification else MANIFEST)
     manifest_paths = ((FOCUS_CONTRAST_MANIFEST, FOCUS_CONTRAST_SETTLED_MANIFEST)
-                      if args.focus_contrast else (manifest_path,))
+                      if args.focus_contrast else (MANIFEST, COMPACT_BUTTON_MANIFEST)
+                      if manifest_path == MANIFEST else (manifest_path,))
     if args.manifest not in manifest_paths:
         parser.error('The manifest must match the selected qualification mode')
+    compact_button = args.manifest == COMPACT_BUTTON_MANIFEST
     select_output(CORNER_OUT if args.corner_diagnostic
                   else FOCUS_CONTRAST_OUT if args.focus_contrast
                   else STATE_REDUCTION_OUT if args.state_reduction
@@ -2876,6 +3198,11 @@ def main():
               'limits': ['Synthetic fixtures, Chromium desktop/touch emulation; not physical devices.',
                          'Locked prepared test dependencies reused, not a minimal dependency install.',
                          'No publication, full suite, provider, OS reveal or independent pixel acceptance.']}
+    if compact_button:
+        report.update(qualification='compact-button', priorChecksConsumed=22, reusedBuild=False)
+        report['limits'].append(
+            'Full source and installed qualification, not a checkpoint. Fresh canonical assets required; '
+            'first-390 wrong target stops the journey and remains a failure, without retry or waiver.')
     if args.corner_diagnostic:
         selected = {'snapshot', 'runtime-readiness', 'browser-readiness', 'static-reuse',
                     'source-freeze', 'topology-source', 'generated-source', 'final-integrity'}
@@ -2988,11 +3315,17 @@ def main():
                     and frozen['tree'] != frozen['baselineTree'] and frozen['reviewed'] is True,
                     'Require the committed, parent-reviewed candidate, not dirty baseline bytes')
             changed = frozen['changedPaths']
-            allowed_changes = (REVIEWED_CHANGES | {COARSE_TOOLBAR_CSS}
-                               if fresh_product else REVIEWED_CHANGES)
+            allowed_changes = (REVIEWED_CHANGES | COMPACT_BUTTON_PRODUCT_PATHS if compact_button
+                               else REVIEWED_CHANGES | {COARSE_TOOLBAR_CSS} if fresh_product else REVIEWED_CHANGES)
             require(isinstance(changed, list) and len(changed) == len(set(changed))
                     and DRIVER in changed and set(changed) <= allowed_changes
                     and set(changed) <= frozen['files'].keys(), 'Candidate changes exceed selected fixed scope')
+            if compact_button:
+                require(not checkpoint_mode and not reuse_mode and not fresh_product
+                        and set(changed) == allowed_changes
+                        and all(frozen['files'].get(name) == {'sha256': digest, 'mode': '100644'}
+                                for name, digest in COMPACT_BUTTON_INPUTS.items()),
+                        'Compact full qualification requires exact product/producer identities and full scope')
             save('parent-manifest.json', frozen)
             report['manifestSha256'] = sha(args.manifest)
             save('source-before.json', frozen_inputs(frozen))
@@ -3120,7 +3453,7 @@ def main():
                 save('report.json', report)
                 remaining = work_deadline - CLEANUP_RESERVE - time.monotonic()
                 require(remaining > 0, 'Combined budget exhausted; cleanup/finalization reserved')
-                if fresh_product:
+                if fresh_product or compact_button:
                     row['executed'] = True
                 code = run_scenarios(root, {'schemaVersion': 1, 'scenarios': [
                     {'id': name, 'command': row['command'], 'env': selected_env}]},
@@ -3221,7 +3554,7 @@ def main():
             save('reuse-evidence-validation.json', reused)
             report['reuseEvidence'] = reused
             save('report.json', report)
-        if args.portal_host_experiment:
+        if args.portal_host_experiment or compact_button:
             # Preserve committed static as before-context. Never restore either
             # the failed gap build or native17's reused build for this variant.
             before = tree(ROOT / 'amplifier_web/static')
@@ -3254,6 +3587,23 @@ def main():
                 save('frontend-build-identity.json', {
                     'build': build_identity, 'sourceRevision': frozen['revision'], 'sourceTree': frozen['tree'],
                     'manifestSha256': report['manifestSha256'], 'css': frozen['files'][COARSE_TOOLBAR_CSS],
+                    'static': value['static'], 'reusedBuild': False})
+            if compact_button:
+                build_identity = read(ROOT / 'amplifier_web/static/build.json')
+                before = read(OUT / 'static-before.json')
+                require(set(build_identity) == {'id', 'version'}
+                        and re.fullmatch('[a-f0-9]{16}', build_identity['id'])
+                        and build_identity['version'] ==
+                            tomllib.loads((ROOT / 'pyproject.toml').read_text())['project']['version']
+                        and build_identity['id'] != read(OUT / 'static-before/build.json')['id']
+                        and {name.removeprefix('amplifier_web/static/'): digest
+                             for name, digest in value['static'].items()} != before
+                        and report['phases']['frontend-build']['status'] == 'passed'
+                        and report['phases']['frontend-build']['executed'] is True,
+                        'Compact candidate must use a fresh changed canonical build, not restored static')
+                save('frontend-build-identity.json', {
+                    'build': build_identity, 'sourceRevision': frozen['revision'], 'sourceTree': frozen['tree'],
+                    'manifestSha256': report['manifestSha256'], 'inputs': COMPACT_BUTTON_INPUTS,
                     'static': value['static'], 'reusedBuild': False})
             save('candidate.json', value)
             save('static.json', value['static'])
@@ -3295,7 +3645,7 @@ def main():
             run('generated-' + mode, [NODE, 'tests/generated-file-controls-browser.mjs'],
                 root=root, extra=extra, cap=160,
                 verify=None if checkpoint_mode else lambda: generated_proof(
-                    mode, coarse_toolbar=args.coarse_toolbar_qualification))
+                    mode, coarse_toolbar=args.coarse_toolbar_qualification, compact_button=compact_button))
 
         generated('source')
         if not checkpoint_mode:
@@ -3364,6 +3714,19 @@ def main():
                 require(wheel_proof(package) == read(OUT / 'installed-wheel-after.json'), 'Final installed integrity')
                 save('source-payload-final.json', expected['files'])
                 save('static-final.json', tree(package / 'amplifier_web/static'))
+                if compact_button:
+                    build_identity = read(OUT / 'frontend-build-identity.json')
+                    require(build_identity['inputs'] == COMPACT_BUTTON_INPUTS and build_identity['reusedBuild'] is False
+                            and expected['static'] == build_identity['static']
+                            and read(ROOT / 'amplifier_web/static/build.json') == build_identity['build']
+                            and read(package / 'amplifier_web/static/build.json') == build_identity['build']
+                            and tree(package / 'amplifier_web/static') == {
+                                name.removeprefix('amplifier_web/static/'): digest for name, digest in expected['static'].items()}
+                            and tree(OUT / 'static-before') == read(OUT / 'static-before.json')
+                            and report['phases']['frontend-build']['status'] == 'passed'
+                            and report['phases']['frontend-build']['executed'] is True
+                            and not any(row['status'] == 'REUSED' for row in report['phases'].values()),
+                            'Compact full qualification lost fresh-build/source/installed identity')
                 if args.contour_qualification:
                     require(expected['static'] == read(OUT / 'reuse-metadata.json')['files']
                             and tree(OUT / 'static-before') == read(OUT / 'static-before.json'),

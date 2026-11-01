@@ -39,7 +39,7 @@ function DownloadControl({target,dispatch,label,compact}){
   }catch(error){if(mounted.current)setStatus(error.message||'The saved file could not be downloaded.')}
   finally{pending.current=null;if(mounted.current)setBusy(false)}
  }
- return <div className="a-saved-file-download"><button type="button" className={compact?'a-icon':'a-soft'} aria-label={label} aria-busy={busy} disabled={busy} onClick={save}><Download aria-hidden="true"/><span>{compact?'Download':label}</span></button><span role="status" aria-live="polite">{status}</span></div>;
+ return <div className="a-saved-file-download" data-compact={compact?'true':undefined}><button type="button" className={compact?'a-icon':'a-soft'} aria-label={label} aria-busy={busy} disabled={busy} onClick={save}><Download aria-hidden="true" focusable="false"/><span>{compact?'Download':label}</span></button><span role="status" aria-live="polite">{status}</span></div>;
 }
 
 // One path/details owner for compact cards and the existing Canvas inspector.

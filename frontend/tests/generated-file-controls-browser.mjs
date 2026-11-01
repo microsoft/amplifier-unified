@@ -26,6 +26,8 @@ const focusContrastMode=process.env.FILE_CONTROLS_FOCUS_CONTRAST==='1';
 const coarseToolbarQualificationMode=process.env.FILE_CONTROLS_COARSE_TOOLBAR_QUALIFICATION==='1';
 assert.ok([cornerDiagnosticMode,touchEventDiagnosticMode,nativeStateDiagnosticMode,portalHostExperimentMode,stateReductionMode,focusContrastMode,coarseToolbarQualificationMode].filter(Boolean).length<=1,
  'Conflicting file-controls diagnostic/qualification modes');
+const fullJourney=![cornerDiagnosticMode,touchEventDiagnosticMode,nativeStateDiagnosticMode,portalHostExperimentMode,
+ stateReductionMode,focusContrastMode,coarseToolbarQualificationMode].some(Boolean);
 // Fixed binding to the retained failed first-390 gesture, NOT a new measurement
 // chosen to fit this candidate. No predecessor report is modified or rerun.
 const coarseToolbarBaseline={
@@ -70,6 +72,7 @@ const fixture=spawn(python,['-u',fixturePath],{cwd:dirname(fixturePath),stdio:['
 const stop=ownFixture(fixture,{label:'Generated file controls fixture'});
 const records=[],checks=[],geometry=[],downloads=[],requests=[],commands=[],errors=[],screenshotErrors=[];
 const fileFrameCaptures=[];
+const compactPrimaryGestures=[],downloadDecorations=[],downloadNeighbors=[];
 const downloadSettlements=[],tapSettlements=[],tapPending=new Set(),tapDrain={};
 const metadataExchanges=[],detailsReadiness=[],preCleanupSnapshots=[],metadataPending=new Set();
 const metadataByRequest=new WeakMap();
@@ -191,7 +194,8 @@ const detailsSnapshot=details=>details.evaluate(node=>window.__fileDetailsSnapsh
 function observeMetadata(request,payload,client,requestId){
  const args=payload.args||{},gate=observedGate('Exact metadata response completion');
  const record={client,requestedAt:Date.now(),requestId,
-  target:{id:args.id,version:args.version,sessionId:args.sessionId}};
+  target:{id:args.id,version:args.version,sessionId:args.sessionId},
+  ...(fullJourney?{commandIndex:commands.length-1,clientId:request.headers()['x-amplifier-client']}:{})};
  metadataExchanges.push(record);
  const observed={record,wait:()=>gate.wait()};metadataByRequest.set(request,observed);
  const pending=(async()=>{
@@ -206,6 +210,7 @@ function observeMetadata(request,payload,client,requestId){
    gate.resolve(record);
   }catch(error){record.failedAt=Date.now();record.error=errorEvidence(error);gate.reject(error)}
  })();
+ observed.completion=pending; // Original response/body completion, also drainable after owned-browser close.
  metadataPending.add(pending);pending.finally(()=>metadataPending.delete(pending));
  return observed;
 }
@@ -323,6 +328,41 @@ async function controlsOracle(details,row){
  const snapshot=await detailsSnapshot(details);
  detailsReadiness.push({kind:'atomic-oracle',at:Date.now(),expected:{id:row.id,version:row.version},snapshot});
  controlsSnapshotOracle(snapshot,row);
+ if(fullJourney)await downloadDecorationCheck(button(details,names[2]),'file-details',false);
+}
+
+// Read-only component invariant: compact decorations are not independent pointer
+// targets. Noncompact card/inspector descendants retain their normal hit behavior.
+async function downloadDecorationCheck(control,label,compact){
+ const sample=await control.evaluate(node=>{
+  const id=window.__fileControlsNodeId,wrapper=node.parentElement,children=[...node.querySelectorAll('*')];
+  if(children.length>16)throw Error('Download decoration evidence exceeds 16 descendants');
+  return {nodeId:id(node),tag:node.tagName,connected:node.isConnected,label:node.getAttribute('aria-label'),
+   compact:wrapper.getAttribute('data-compact'),pointerEvents:getComputedStyle(node).pointerEvents,
+   statusPointerEvents:getComputedStyle(wrapper.querySelector('[role="status"]')).pointerEvents,
+   children:children.map(child=>{
+    const r=child.getBoundingClientRect(),point={x:r.left+r.width/2,y:r.top+r.height/2};
+    const visible=child.checkVisibility({checkVisibilityCSS:true})&&r.width>0&&r.height>0;
+    const hit=visible?document.elementFromPoint(point.x,point.y):null;
+    return {tag:child.tagName.toLowerCase(),pointerEvents:getComputedStyle(child).pointerEvents,
+     ariaHidden:child.getAttribute('aria-hidden'),focusable:child.getAttribute('focusable'),
+     rect:r.toJSON(),visible,point,hitNodeId:hit?id(hit):null,hitIsButton:hit===node};
+   })};
+ });
+ const record={label,compact,sample,passed:false};downloadDecorations.push(record);
+ assert.equal(sample.tag,'BUTTON');assert.equal(sample.connected,true);
+ assert.equal(sample.label,compact?'Download canvas source':'Download saved file');
+ assert.equal(sample.compact,compact?'true':null);
+ assert.notEqual(sample.pointerEvents,'none');assert.notEqual(sample.statusPointerEvents,'none');
+ const svg=sample.children.filter(child=>child.tag==='svg');
+ assert.equal(svg.length,1);assert.equal(svg[0].ariaHidden,'true');assert.equal(svg[0].focusable,'false');
+ assert.ok(sample.children.some(child=>child.tag==='span'),'Native button label missing');
+ for(const child of sample.children){
+  if(compact){assert.equal(child.pointerEvents,'none');if(child.visible)assert.equal(child.hitIsButton,true)}
+  else assert.notEqual(child.pointerEvents,'none','Noncompact controls must not inherit the compact rule');
+ }
+ if(compact)assert.ok(svg[0].visible&&svg[0].hitIsButton,'Visible compact icon must hit its native button');
+ record.passed=true;return record;
 }
 
 async function copy(target,details,name,expected,trigger){
@@ -1148,12 +1188,12 @@ function reductionEventsComplete(gesture){
 // Installed only at the first 390px primary Download, after the existing contour
 // measurement/oracles and immediately before its unchanged locator.tap. All
 // listeners are passive document capture observers. No event or DOM is changed.
-function armTouchEventCapture(node,intended){
+function armTouchEventCapture(node,{intended,compactDecoration=false}){
  const types=['pointerover','pointerenter','pointerdown','pointermove','pointerup','pointercancel',
   'pointerout','pointerleave','gotpointercapture','lostpointercapture',
   'touchstart','touchmove','touchend','touchcancel','mouseover','mouseenter','mousemove',
   'mousedown','mouseup','click','mouseout','mouseleave','auxclick','contextmenu'];
- const limits={windowMs:2000,records:window.__fileControlsReductionSnapshot?128:64,
+ const limits={windowMs:2000,records:compactDecoration||window.__fileControlsReductionSnapshot?128:64,
   stack:16,path:24,ancestors:16,notices:4,touches:4,errors:8};
  const events=[],errors=[],truncations={records:0,stack:0,path:0,ancestors:0,notices:0,touches:0,errors:0};
  const id=window.__fileControlsNodeId,armedAt=performance.now(),deadline=armedAt+limits.windowMs;
@@ -1601,7 +1641,14 @@ async function cornerTap(control,corner,diagnostic=null,beforeTap=null,precondit
     if(precondition)await tapOperation(tap,'reduction-state-and-focus',()=>precondition(diagnostic),4000);
     diagnostic.preconditionsPassed=true;
    }
-   probe=await tapOperation(tap,'arm-passive-capture',()=>original.evaluateHandle(armTouchEventCapture,measured.intended));
+   if(diagnostic.compactDecorationRequested&&diagnostic.label==='touch-390-preview'){
+    // Fixed original failed contour, not a point chosen from this candidate.
+    for(const [key,value] of Object.entries(coarseToolbarBaseline.before))
+     assert.deepEqual(measured[key],value,`Original first-390 ${key} changed`);
+    diagnostic.baselineMatched=true;
+   }
+   probe=await tapOperation(tap,'arm-passive-capture',()=>original.evaluateHandle(armTouchEventCapture,
+    {intended:measured.intended,compactDecoration:!!diagnostic.compactDecorationRequested}));
   }
   try{
    if(native)await native.start();
@@ -1690,12 +1737,21 @@ async function cornerTap(control,corner,diagnostic=null,beforeTap=null,precondit
    diagnostic.originalOraclePassed=true;
    assert.equal(diagnostic.checkpointObserved,true,'Native touch event pair is UNKNOWN: missing event, truncation or capture loss; no retry');
    if(diagnostic.qualification)qualifyToolbarEvents(diagnostic);
-   if(diagnostic.nativeStateRequested||diagnostic.portalHostRequested||diagnostic.reductionRequested){
+   if(diagnostic.nativeStateRequested||diagnostic.portalHostRequested||diagnostic.reductionRequested||diagnostic.compactDecorationRequested){
     const events=diagnostic.capture.events;
+    if(diagnostic.compactDecorationRequested){
+     assert.equal(reductionCaptureTruncated(events),false,'Compact native sequence capture truncated');
+     assert.equal(events.some(event=>['pointercancel','touchcancel'].includes(event.type)),false);
+    }
     for(const type of ['pointerdown','pointerup','mousedown','mouseup','click']){
-     const matches=events.filter(event=>event.type===type&&(!diagnostic.reductionRequested||event.isTrusted));
+     const matches=events.filter(event=>event.type===type&&
+      (!(diagnostic.reductionRequested||diagnostic.compactDecorationRequested)||event.isTrusted));
      assert.equal(matches.length,1,`Native-state diagnostic requires exactly one ${type}`);
      assert.equal(matches[0].isTrusted,true);assert.equal(matches[0].sameNode,true,`${type} must reach the native control`);
+     if(diagnostic.compactDecorationRequested){
+      assert.equal(matches[0].target.nodeId,measured.nodeId,'Compact decoration intercepted native input');
+      assert.equal(matches[0].target.tag,'BUTTON');
+     }
      if(diagnostic.portalHostRequested){
       const snapshot=matches[0].portalHost;
       portalHostOracle(snapshot,portalHostBaseline);
@@ -1875,6 +1931,117 @@ async function tabTo(target,control){
  }
  throw Error(`Native keyboard traversal did not reach ${await control.getAttribute('aria-label')||await control.innerText()}`);
 }
+async function observeNeighborDownloads(target,primary,row,label){
+ const record={version:'neighbor-request-boundary-v1',label,client:pageLabels.get(target),downloads:0,
+  commandStart:commands.length,requestStart:requests.length,metadataStart:metadataExchanges.length,
+  inspectionRequests:[],downloadRequests:[],observerErrors:[],listenerRemoved:false,passed:false,
+  settlement:{operations:[],otherFailures:[],settled:false}};
+ downloadNeighbors.push(record);
+ const owner=browserOwners.find(o=>o.label===record.client),lifecycle={record:record.settlement,owner,abort:null};
+ record.clientIdentity=await tapOperation(lifecycle,'neighbor-client-identity',()=>identity(target));
+ const observed=[];
+ let original;
+ const snapshot=()=>({
+  commandEnd:commands.length,requestEnd:requests.length,metadataEnd:metadataExchanges.length,
+  inspections:record.inspectionRequests.map(r=>r.requestId),downloads:record.downloads,
+  attachments:record.downloadRequests.length
+ });
+ const onRequest=request=>{
+  try{
+   const metadata=metadataByRequest.get(request);
+   if(metadata){
+    assert.ok(observed.length<16,'Neighbor metadata evidence exceeds 16 requests');
+    observed.push(metadata);
+    record.inspectionRequests.push({commandIndex:commands.length-1,metadataIndex:metadataExchanges.indexOf(metadata.record),
+     requestId:metadata.record.requestId,target:metadata.record.target,client:metadata.record.client,
+     clientId:request.headers()['x-amplifier-client'],command:commands.at(-1)});
+    assert.equal(record.inspectionRequests.at(-1).clientId,record.clientIdentity.clientId);
+   }
+   const url=new URL(request.url());
+   if(url.pathname.startsWith('/api/canvas/')&&url.pathname.endsWith('/download')){
+    assert.ok(record.downloadRequests.length<16,'Neighbor attachment evidence exceeds 16 requests');
+    record.downloadRequests.push({requestIndex:requests.length-1,url:request.url(),method:request.method(),
+     path:url.pathname,query:url.search,client:record.client});
+   }
+  }catch(error){if(!record.observerErrors.length)record.observerErrors.push(errorEvidence(error))}
+ };
+ const onDownload=()=>{record.downloads++};
+ const assertBoundary=()=>{
+  assert.deepEqual(record.observerErrors,[]);
+  const expected=record.expectedInspect;
+  assert.ok(expected?.length,'Missing fresh Details metadata identity');
+  assert.deepEqual(record.inspectionRequests.map(r=>r.requestId),expected.map(r=>r.requestId),
+   'Details/Copy issued an inspect outside its fresh Details lifecycle');
+  assert.deepEqual(record.inspectionRequests.map(r=>r.metadataIndex),expected.map(r=>r.metadataIndex));
+  assert.equal(record.downloads,0,'Details/Copy emitted an unintended browser download');
+  assert.deepEqual(record.downloadRequests,[],'Details/Copy started an attachment fetch');
+ };
+ const drain=()=>tapOperation(lifecycle,'neighbor-metadata-settlement',async()=>{
+  // Join originals, including a response already completed before this wait.
+  // A newly observed request is collected too; the enclosing deadline is finite.
+  let count=-1;
+  while(count!==observed.length){count=observed.length;await Promise.all(observed.map(o=>o.completion))}
+  record.metadataSettlement=record.inspectionRequests.map(r=>({requestId:r.requestId,metadataIndex:r.metadataIndex,
+   record:metadataExchanges[r.metadataIndex]}));
+  for(const o of observed){if(o.record.error)throw Error(`Neighbor metadata failed: ${o.record.error.message}`);metadataOracle(o.record,row)}
+ },8000);
+ record.pendingAtStart=metadataExchanges.filter(r=>r.client===record.client&&!r.completedAt&&!r.failedAt).map(r=>r.requestId);
+ assert.deepEqual(record.pendingAtStart,[],'Previous metadata remains pending before Details negative');
+ target.on('request',onRequest);target.on('download',onDownload);record.armedAt=Date.now();
+ return {
+  record,
+  async retain(){original=await tapOperation(lifecycle,'neighbor-retain-primary',()=>primary.elementHandle({timeout:1000}),1500);
+   assert.ok(original,'Original primary Download missing')},
+  async settle(traceIndex,details){
+   const trace=detailsReadiness[traceIndex];record.detailsTraceIndex=traceIndex;
+   assert.ok(trace?.passed&&!trace.error&&!trace.captureError&&!trace.disposeError,'Fresh Details lifecycle incomplete');
+   record.expectedInspect=trace.matches.map(r=>({requestId:r.requestId,metadataIndex:metadataExchanges.indexOf(r)}));
+   assert.equal(trace.client,record.client);assert.deepEqual(trace.expected,{id:row.id,version:row.version,sessionId:seed.sessionId});
+   assertBoundary(); // An extra inspect fails even if its attachment is still delayed.
+   await drain();assertBoundary();
+   record.afterSettlement=snapshot();record.metadataSettledAt=Date.now();
+   // save() sets busy synchronously before queuing inspect. This catches a
+   // queued invocation whose HTTP request has not yet reached the observer.
+   const busy=node=>({nodeId:window.__fileControlsNodeId(node),connected:node.isConnected,tag:node.tagName,
+    label:node.getAttribute('aria-label'),disabled:node.disabled,busy:node.getAttribute('aria-busy')});
+   record.controls={primary:await tapOperation(lifecycle,'neighbor-primary-idle',()=>original.evaluate(busy)),
+    rail:await tapOperation(lifecycle,'neighbor-rail-idle',()=>button(details,names[2]).evaluate(busy))};
+   for(const control of Object.values(record.controls)){
+    assert.equal(control.connected,true);assert.equal(control.tag,'BUTTON');
+    assert.equal(control.disabled,false);assert.equal(control.busy,'false','Download is queued or in flight during negative');
+   }
+   assert.equal(record.controls.primary.label,'Download canvas source');assert.equal(record.controls.rail.label,'Download saved file');
+   record.controlsReadAt=Date.now();
+   assertBoundary();record.readyForPositive=true;
+  },
+  beforePositive(){
+   assert.equal(record.readyForPositive,true);
+   assertBoundary();
+   record.boundary=snapshot();record.positiveStartedAt=Date.now();
+   // Synchronous boundary immediately before the existing key/tap. Its positive
+   // observer cannot consume a negative event that this guard has already seen.
+   target.off('request',onRequest);target.off('download',onDownload);record.listenerRemoved=true;
+   record.passed=true;
+  },
+  async abort(error){
+   record.failure=errorEvidence(error);const failures=[error];
+   // An assertion failure must not leave a queued save/fetch for the next positive.
+   // Close this owner FIRST, then collect original metadata promises; no retry.
+   try{await tapOperation(lifecycle,'neighbor-failure-close',()=>closeOwner(owner),4000);
+    record.settlement.ownerClosed=owner.closed&&!owner.browser.isConnected()}
+   catch(closeError){failures.push(closeError)}
+   try{await drain()}catch(drainError){failures.push(drainError)}
+   throw new AggregateError(failures,error.message);
+  },
+  async dispose(){
+   target.off('request',onRequest);target.off('download',onDownload);record.listenerRemoved=true;
+   record.observersRemovedAt=Date.now();
+   try{if(original)await tapOperation(lifecycle,'neighbor-primary-dispose',()=>original.dispose())}
+   finally{record.settlement.settled=record.settlement.operations.every(op=>op.state!=='pending')&&
+    record.settlement.browserAbort?.state!=='pending'}
+  }
+ };
+}
 async function usePreviewControls(retained,label,mode){
  const {target,panel,row}=retained;
  const primary=panel.locator('.a-canvas-primary-actions').getByRole('button',{name:'Download canvas source',exact:true});
@@ -1884,6 +2051,7 @@ async function usePreviewControls(retained,label,mode){
  await expect(primary).toBeVisible();
  assert.equal(await primary.evaluate(node=>node.tagName),'BUTTON');
  await measureControls(target,[primary,toggle],label+'-primary-before');
+ if(fullJourney)await downloadDecorationCheck(primary,label+'-primary-before',true);
  if(coarseToolbarQualificationMode)await qualifyToolbarLayout(primary,label,'before',mode==='touch');
  if((nativeStateDiagnosticMode||portalHostExperimentMode)&&mode==='touch'){
   assert.equal(label,'touch-390-preview','Native-state diagnostic may only observe the first 390px primary Download');
@@ -1929,6 +2097,12 @@ async function usePreviewControls(retained,label,mode){
    tapAttempts:0,checkpointObserved:false,originalOraclePassed:false,outcome:'unknown'};
   coarseToolbarQualification.gesture=qualificationGesture;
  }
+ if(fullJourney&&mode==='touch'){
+  qualificationGesture={compactDecorationRequested:true,label,tapAttempts:0,checkpointObserved:false,
+   originalOraclePassed:false,strictEventsPassed:false,
+   retained:{marker:retained.marker,unfinished:retained.unfinished,state:retained.state,documents:retained.documents}};
+  compactPrimaryGestures.push(qualificationGesture);
+ }
  let primaryDownload;
  if(mode==='keyboard'){
   // Copy precedes Download in the actual primary action row.
@@ -1942,11 +2116,13 @@ async function usePreviewControls(retained,label,mode){
  if(qualificationGesture){
   assert.equal(primaryDownload.bytes,coarseToolbarBaseline.html.bytes);
   assert.equal(primaryDownload.sha256,coarseToolbarBaseline.html.sha256);
-  qualificationGesture.postGesture={check:'first-390 exact saved HTML download and running preview preserved',
+  qualificationGesture.postGesture={check:qualificationGesture.compactDecorationRequested?
+   'compact primary exact saved HTML download and running preview preserved':'first-390 exact saved HTML download and running preview preserved',
    passed:true,download:primaryDownload,preservation};
   qualificationGesture.outcome='qualified-gesture-download-and-preservation';
  }
  await measureControls(target,[primary,toggle],label+'-primary-after');
+ if(fullJourney)await downloadDecorationCheck(primary,label+'-primary-after',true);
  const notice=primary.locator('..').getByRole('status');
  await expect(notice).toBeVisible();
  const feedback=await notice.evaluate(node=>{
@@ -1963,6 +2139,10 @@ async function usePreviewControls(retained,label,mode){
   coarseToolbarQualification.layoutChecks.at(-1).feedback=feedback;
  }
  await captureFileFrame(target,primary,label+'-primary');
+ const neighbor=fullJourney?await observeNeighborDownloads(target,primary,row,label):null;
+ const neighborErrors=[];
+ try{
+ if(neighbor)await neighbor.retain();
  if(mode==='keyboard'){
   // Download temporarily disables its button. Re-anchor after completion so a
   // browser's native disabled-control blur is not mistaken for wrong tab order.
@@ -1979,7 +2159,9 @@ async function usePreviewControls(retained,label,mode){
   await expect(inspector.getByRole('button',{name:'Close canvas details',exact:true})).toBeFocused();
   await tabTo(target,summary);
  }
+ const detailsTraceIndex=detailsReadiness.length;
  await freshDetails(target,details,row,()=>mode==='keyboard'?target.keyboard.press('Enter'):summary.tap());
+ if(neighbor)neighbor.record.copyCommandStart=commands.length;
  await controlsOracle(details,row);
  for(const [name,value] of [[names[0],row.filePaths.absolute],[names[1],row.filePaths.relative]]){
   if(mode==='keyboard'){
@@ -1988,10 +2170,25 @@ async function usePreviewControls(retained,label,mode){
   }else await copy(target,details,name,value,control=>cornerTap(control,name===names[0]?'top-left':'bottom-right'));
   await previewPreserved(retained);
  }
+ if(neighbor)await neighbor.settle(detailsTraceIndex,details);
  if(mode==='keyboard'){
   await tabTo(target,button(details,names[2]));await expect(button(details,names[2])).toBeFocused();
-  await saveAndVerify(target,details,row,label+'-rail-v1',()=>target.keyboard.press('Enter'));
- }else await saveAndVerify(target,details,row,label+'-rail-v1',control=>cornerTap(control,'bottom-right'));
+  await saveAndVerify(target,details,row,label+'-rail-v1',()=>{
+   neighbor?.beforePositive();return target.keyboard.press('Enter');
+  });
+ }else await saveAndVerify(target,details,row,label+'-rail-v1',
+  control=>cornerTap(control,'bottom-right',null,()=>neighbor?.beforePositive()));
+ if(neighbor)neighbor.record.positive={commandEnd:commands.length,requestEnd:requests.length,
+  metadataEnd:metadataExchanges.length,completedAt:Date.now(),downloadLabel:label+'-rail-v1'};
+ }catch(error){
+  if(neighbor)try{await neighbor.abort(error)}catch(failure){neighborErrors.push(failure)}
+  else neighborErrors.push(error);
+ }finally{
+  if(neighbor)try{await neighbor.dispose()}catch(error){neighborErrors.push(error)}
+ }
+ if(neighborErrors.length)throw new AggregateError(neighborErrors,'Details/Copy exclusion or following positive failed');
+ if(neighbor)checks.push({check:'ordinary Details and inspector Copy do not activate primary Download',...neighbor.record});
+ const details=inspector.locator('details.a-canvas-file-path');
  await previewPreserved(retained);
  await measure(target,details,label+'-rail');
  const close=inspector.getByRole('button',{name:'Close canvas details',exact:true});
@@ -2000,6 +2197,15 @@ async function usePreviewControls(retained,label,mode){
  }else await close.tap();
  await expect(inspector).toBeHidden();
  await previewPreserved(retained);
+ if(fullJourney&&mode==='keyboard'){
+  // Escape restores the ordinary Details invoker; reverse the real tab order.
+  // This is a separate keyboard activation, never a retry of the touch falsifier.
+  await expect(toggle).toBeFocused();
+  await target.keyboard.press('Shift+Tab');await expect(primary).toBeFocused();
+  const download=await saveControlAndVerify(target,primary,row,label+'-primary-space-v1',()=>target.keyboard.press('Space'));
+  const preservation=await previewPreserved(retained);
+  checks.push({check:'native primary Space downloads exact saved bytes and preserves preview',label,download,preservation});
+ }
  await target.screenshot({path:join(evidence,label+'-retained-preview.png')});
  checks.push({check:'right-rail paths/download and primary Download preserve running saved-v1 HTML',label,mode,
   marker:retained.marker,unfinished:retained.unfinished,documents:documentRequests(target),state:await previewState(target,row)});
@@ -2715,6 +2921,19 @@ async function run(){
   'Every nonzero-border touch must reject the old padding conversion');
  assert.deepEqual(contourOracle.cornerShapeCaptureErrors,[],'Corner-shape console evidence capture failed');
  assert.deepEqual(errors,[]);
+ if(fullJourney){
+  assert.deepEqual(compactPrimaryGestures.map(g=>g.label),['touch-390-preview','touch-320-preview']);
+  assert.equal(compactPrimaryGestures[0].baselineMatched,true);
+  for(const gesture of compactPrimaryGestures){
+   assert.equal(gesture.tapAttempts,1);assert.equal(gesture.strictEventsPassed,true);
+   assert.equal(gesture.originalOraclePassed,true);assert.equal(gesture.originalListenerRemoved,true);
+   assert.equal(gesture.handleDisposed,true);assert.deepEqual(gesture.captureErrors,[]);assert.deepEqual(gesture.cleanupErrors,[]);
+   assert.equal(gesture.postGesture.passed,true);
+  }
+  assert.ok(downloadDecorations.length>6&&downloadDecorations.every(r=>r.passed));
+  assert.deepEqual(downloadDecorations.filter(r=>r.compact).map(r=>r.label),
+   ['desktop-preview','touch-390-preview','touch-320-preview'].flatMap(label=>[label+'-primary-before',label+'-primary-after']));
+ }
  if(coarseToolbarQualificationMode){
   const {layoutChecks,gesture}=coarseToolbarQualification;
   assert.deepEqual(layoutChecks.map(({label,phase,passed})=>({label,phase,passed})),
@@ -2803,6 +3022,7 @@ try{
     'The contact-envelope check assumes DPR=1 and visual scale=1; fine desktop and coarse 390/320 layouts are separate observations.',
     'Existing screenshots and all 13 narrow PNG brackets remain evidence awaiting independent visual judgment.']}:{}),
   contourOracle,
+  ...(fullJourney?{downloadDecorations,compactPrimaryGestures,downloadNeighbors}:{}),
   installed:ready&&{packageRoot:ready.packageRoot,verified:ready.installedVerified,staticSha256:ready.staticSha256},
   seed,checks,geometry,fileFrameCaptures,downloads,downloadSettlements,tapSettlements,tapDrain,
   requests,commands,metadataExchanges,detailsReadiness,preCleanupSnapshots,

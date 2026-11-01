@@ -20,6 +20,8 @@
 #amp-one .a-document-output>.a-canvas-file-path,#amp-one .a-compact-artifact .a-canvas-file-path{padding:0 12px}
 #amp-one .a-saved-file-download{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0}
 #amp-one .a-saved-file-download>span{font-size:var(--a-text-sm,12px);white-space:normal;overflow-wrap:anywhere}
+/* Compact icon/text are decoration; the native button owns the whole target. */
+#amp-one .a-saved-file-download[data-compact="true"] > button *{pointer-events:none}
 /* The compact toolbar must not size itself to a completion sentence. Keep
    actions in their native order and give visible feedback a bounded second row.
    Only plain layout wrappers use contents; the live status remains a real box. */
