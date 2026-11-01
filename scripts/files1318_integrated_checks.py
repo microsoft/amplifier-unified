@@ -42,6 +42,16 @@ fresh canonical build, all existing source/installed journeys and the additional
 compact decoration/strict native event/neighbor/Space evidence. No old 311-file
 build or unit proof is reused on this path. All 22 prior outcomes remain retained.
 
+The fixed files1318-compact23-continuation-manifest.json continues that full
+qualification after check 23's renderer startup failure (no new mode flag).
+Bind compact23Before=COMPACT23_BEFORE. Supply the unchanged 419-file retained
+packet at output/files1318-compact23-result and the EXACT check-23 built static
+tree at output/files1318-compact23-static (not static-before). Only DRIVER and
+the pinned renderer test may differ from check 23's complete tracked closure.
+Current readiness and exact environment comparison precede reuse of its build,
+70/19 tests, topology-source and full generated-source proof. Remaining renderer,
+negative, adjacent, wheel and installed phases run normally; no source replay.
+
 --corner-diagnostic is a separate, source-only checkpoint, NOT qualification.
 It uses /artifacts/files1318-corner-diagnostic and the fixed retained inputs in
 output/files1318-corner-inputs/{reuse.json,static.tar}. The schema-2 manifest must
@@ -192,6 +202,22 @@ STATE_REDUCTION_MANIFEST = ROOT / 'output/files1318-state-reduction-manifest.jso
 FOCUS_CONTRAST_MANIFEST = ROOT / 'output/files1318-focus-contrast-manifest.json'
 FOCUS_CONTRAST_SETTLED_MANIFEST = ROOT / 'output/files1318-focus-contrast-settled-v2-manifest.json'
 COMPACT_BUTTON_MANIFEST = ROOT / 'output/files1318-compact-button-manifest.json'
+COMPACT23_MANIFEST = ROOT / 'output/files1318-compact23-continuation-manifest.json'
+COMPACT23_ROOT = ROOT / 'output/files1318-compact23-result'
+COMPACT23_STATIC = ROOT / 'output/files1318-compact23-static'
+COMPACT23_RENDERER = 'frontend/tests/canvas-renderers-browser.mjs'
+COMPACT23_RENDERER_SHA = '5ab06880187a934d4eca3d0452928485ec1d30a0e715a1cc3b3bc5ad6bb37eb5'
+COMPACT23_BEFORE = {
+    'revision': '3f0d5913af81c07e58430dcf25d44c926beaa5b8',
+    'tree': '0e4b1d6835804c7dcd23eb69fb4291139fc99cb6',
+    'contractSha256': '2a127e92e2bea39a22301924a972944f51f4e8a576c4403fee2d0aa87f0543a3',
+    'files': {
+        'report.json': 'd87dd14c2e7dc345f0c8cc7d39f412ed3d78d7e91609723ea81a65b1d008030a',
+        'evidence-manifest.json': 'f28dc39ac13a3d2b745bf0b3c626004b0227c3c36ad2d7798473860a52884ee1',
+        'parent-manifest.json': '7381fea0accdcb1cf741fff55a435ac931f048e819b03d75f46220e76b680003',
+    },
+}
+COMPACT23_REUSED_PHASES = ('frontend-build', 'python-tests', 'frontend-units', 'topology-source', 'generated-source')
 HARNESS = OUT / 'harness'
 VENV = OUT / 'installed'
 DRIVER = 'scripts/files1318_integrated_checks.py'
@@ -428,7 +454,7 @@ def frozen_inputs(frozen, *, built=False):
                 and path not in (MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST,
                                  COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST, PORTAL_HOST_MANIFEST,
                                  STATE_REDUCTION_MANIFEST, FOCUS_CONTRAST_MANIFEST,
-                                 FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST), 'Unsafe frozen path')
+                                 FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST), 'Unsafe frozen path')
         require(path.parent.resolve().is_relative_to(ROOT), 'Frozen path escapes snapshot')
         require(expected['mode'] in ('100644', '100755', '120000')
                 and re.fullmatch('[a-f0-9]{64}', expected['sha256']), 'Invalid frozen identity')
@@ -615,6 +641,108 @@ def retained_proofs(frozen, *, unit_only=False):
         result.update(priorStaticFiles=311, buildReusable=False,
                       reusablePhases=list(COARSE_TOOLBAR_REUSED_PHASES))
     save('reuse-evidence-validation.json', result)
+    return result
+
+
+def compact23_reuse(frozen):
+    """One exact partial-run continuation; no test execution or generic resume cursor."""
+    require(OUT == QUALIFIED_OUT and frozen.get('compact23Before') == COMPACT23_BEFORE,
+            'Missing exact check-23 continuation binding')
+    for name, digest in COMPACT23_BEFORE['files'].items():
+        require(sha(COMPACT23_ROOT / name) == digest, f'Check-23 anchor changed: {name}')
+    evidence = read(COMPACT23_ROOT / 'evidence-manifest.json')
+    require(len(evidence) == 417 and evidence['parent-manifest.json'] == COMPACT23_BEFORE['files']['parent-manifest.json'],
+            'Check-23 evidence inventory differs')
+    bindings = {**evidence, **COMPACT23_BEFORE['files']}
+    prior = OUT / 'prior-compact23'
+    prior.mkdir()
+    for name, digest in bindings.items():
+        source, destination = COMPACT23_ROOT / name, prior / name
+        require(not Path(name).is_absolute() and '..' not in Path(name).parts and str(Path(name)) == name
+                and source.resolve() == source and stat.S_ISREG(source.lstat().st_mode)
+                and re.fullmatch('[a-f0-9]{64}', digest) and sha(source) == digest, f'Changed check-23 evidence: {name}')
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        require(sha(destination) == digest, f'Check-23 evidence copy differs: {name}')
+    old, previous = read(prior / 'report.json'), read(prior / 'parent-manifest.json')
+    require(previous['revision'] == COMPACT23_BEFORE['revision'] and previous['tree'] == COMPACT23_BEFORE['tree']
+            and previous['files'].keys() == frozen['files'].keys()
+            and {n for n in frozen['files'] if previous['files'][n] != frozen['files'][n]} == {DRIVER, COMPACT23_RENDERER},
+            'Only renderer setup and this driver may differ; product/build/unit/source-journey closure must be exact')
+    require(old['passed'] is False and old['complete'] is False and old['finalization'] == {'status': 'passed'}
+            and old['qualification'] == 'compact-button' and old['manifestSha256'] == bindings['parent-manifest.json']
+            and old['evidenceManifestSha256'] == bindings['evidence-manifest.json']
+            and old['phases']['canvas-renderers']['status'] == 'failed'
+            and all(old['phases'][name]['status'] == 'unrun' for name in
+                    ('renderer-stalled-response', 'canvas-usability', 'wheel-build', 'generated-installed', 'final-integrity')),
+            'Check 23 must remain a partial failure, never a prior complete pass')
+    failure = read(prior / 'canvas-renderers/evidence/canvas-renderers-normal.json')
+    require(failure['outcome'] == 'failed' and failure['request'] is None and failure['browserErrors'] == []
+            and failure['failure']['name'] == 'TimeoutError' and 'Message Amplifier' in failure['failure']['message']
+            and failure['fixtureExit']['code'] == 0 and failure['fixtureExit']['signal'] is None
+            and failure['fixtureStopSucceeded'] is True, 'Unexpected original renderer failure')
+    provenance = {'manifestSha256': bindings['parent-manifest.json'], 'revision': previous['revision'],
+                  'tree': previous['tree'], 'baselineRevision': previous['baselineRevision'],
+                  'baselineTree': previous['baselineTree'], 'contractSha256': COMPACT23_BEFORE['contractSha256']}
+    commands = {
+        'frontend-build': [str(NPM), 'run', 'build'],
+        'python-tests': [str(PYTHON), '-I', '-B', str(ROOT / DRIVER), '--python-tests'],
+        'frontend-units': [str(NODE), '--test', '--test-reporter=tap', *(str(ROOT / name) for name in UNIT_FILES)],
+        'topology-source': [str(NODE), 'tests/file-controls-topology-preflight.mjs'],
+        'generated-source': [str(NODE), 'tests/generated-file-controls-browser.mjs'],
+        'canvas-renderers': [str(NPM), 'run', 'test:canvas-renderers-browser'],
+    }
+    for phase, command in commands.items():
+        result, row = read(prior / phase / 'results.json'), old['phases'][phase]
+        raw, = result['scenarios']
+        passed = phase != 'canvas-renderers'
+        require(result['source'] == provenance and result['complete'] is True and result['passed'] is passed
+                and raw['id'] == phase and raw['command'] == row['command'] == command
+                and row['process'] == raw and row['cwd'] == str(ROOT / 'frontend') and row['env'] == raw['env']
+                and raw['status'] == row['status'] == ('passed' if passed else 'failed')
+                and type(raw['exitCode']) is int and raw['exitCode'] == (0 if passed else 1)
+                and raw['reason'] is None and raw['cleanup'] == CLEAN
+                and (not passed or row['verdict'] == 'passed'), f'Check-23 {phase} receipt mismatch')
+    retained_environment(prior)
+    require(read(prior / 'execution-contract.json')['source']['sourceHead'] == previous['revision']
+            and read(prior / 'pytest-call.json') == {'call': 'pytest.main', 'args': pytest_arguments(QUALIFIED_OUT)}
+            and junit(prior) == read(prior / 'python-counts.json'), 'Check-23 Python provenance/counts differ')
+    unit_proof(prior)
+    expected, build = read(prior / 'candidate.json'), read(prior / 'frontend-build-identity.json')
+    require(expected['static'] == read(prior / 'static.json') == build['static']
+            and build['sourceRevision'] == previous['revision'] and build['sourceTree'] == previous['tree']
+            and build['manifestSha256'] == bindings['parent-manifest.json'] and build['inputs'] == COMPACT_BUTTON_INPUTS
+            and build['reusedBuild'] is False and len(expected['static']) == 311,
+            'Check-23 canonical build is not the exact passing source build')
+    static_files = {n.removeprefix('amplifier_web/static/'): digest for n, digest in expected['static'].items()}
+    require(COMPACT23_STATIC.is_dir() and COMPACT23_STATIC.resolve() == COMPACT23_STATIC
+            and tree(COMPACT23_STATIC) == static_files, 'Supply exact check-23 built assets, not static-before or a new build')
+    for name, digest in static_files.items():
+        path = COMPACT23_STATIC / name
+        require(not Path(name).is_absolute() and '..' not in Path(name).parts and path.resolve() == path
+                and stat.S_ISREG(path.lstat().st_mode) and sha(path) == digest, 'Unsafe/changed check-23 asset')
+    static = ROOT / 'amplifier_web/static'
+    before = tree(static)
+    shutil.copytree(static, OUT / 'static-before')
+    save('static-before.json', before)
+    require(tree(OUT / 'static-before') == before, 'Original static preservation failed')
+    shutil.rmtree(static)  # Guest-only build output, after byte-verified preservation.
+    shutil.copytree(COMPACT23_STATIC, static)
+    require(tree(static) == static_files and read(static / 'build.json') == build['build'], 'Restored check-23 build differs')
+    # Same current validators, unchanged producer, retained bytes; never run the
+    # passing source journey. Recorded absolute PNG paths stay original.
+    topology_proof('source', prior)
+    generated_proof('source', compact_button=True, evidence_root=prior)
+    accepted = read(prior / 'generated-source/accepted-report.json')
+    raw, = (prior / 'generated-source/evidence').glob('generated-file-controls-*/observations.json')
+    require(accepted['sha256'] == sha(raw) and accepted['path'] == str(QUALIFIED_OUT / raw.relative_to(prior)),
+            'Check-23 accepted source report points to different evidence')
+    shutil.copyfile(prior / 'frontend-build-identity.json', OUT / 'frontend-build-identity.json')
+    result = {'sourceRevision': previous['revision'], 'sourceTree': previous['tree'], 'priorPassed': False,
+              'priorComplete': False, 'reusedPhases': list(COMPACT23_REUSED_PHASES), 'proofFiles': bindings,
+              'static': expected['static'], 'build': build['build'], 'originalRendererFailure': failure,
+              'validation': 'exact-closure-environment-receipts-and-current-source-oracles'}
+    save('compact23-reuse.json', result)
     return result
 
 
@@ -1303,14 +1431,15 @@ def unit_proof(folder=None):
             'names': expected}
 
 
-def topology_proof(mode):
-    proof = read(OUT / f'topology-{mode}/evidence/result.json')
+def topology_proof(mode, evidence_root=None):
+    folder = evidence_root or OUT
+    proof = read(folder / f'topology-{mode}/evidence/result.json')
     require(proof['passed'] is True and proof['attempts'] == 1 and proof['noFallback'] is True
             and proof['serverClosed'] is True and not proof.get('error'), 'Topology did not pass')
     require(Counter(r['owner'] for r in proof['checks']) == Counter(('desktop', 'touch')), 'Missing topology')
     body = 'Topology download α\r\n'.encode()
     for row in proof['checks']:
-        path = OUT / f'topology-{mode}/evidence' / (row['owner'] + '-download.txt')
+        path = folder / f'topology-{mode}/evidence' / (row['owner'] + '-download.txt')
         require(row['touch'] is (row['owner'] == 'touch') and row['browser']
                 and row['clipboard'] == f"preflight-{row['owner']}-clipboard-α"
                 and row['bytes'] == len(body) and path.read_bytes() == body
@@ -1319,7 +1448,7 @@ def topology_proof(mode):
                                 for label in ('desktop', 'touch')], 'Topology did not close')
 
 
-def file_frame_proof(proof, folder):
+def file_frame_proof(proof, folder, recorded_folder=None):
     """Bracket evidence only. Raw sibling/header occlusion is NOT visual clearance."""
     captures = proof['fileFrameCaptures']
     labels = [f'{base}-{suffix}' for base in ('touch-320', 'touch-320-preview-rail')
@@ -1328,9 +1457,11 @@ def file_frame_proof(proof, folder):
             'Require all 13 existing 320px PNG brackets, not empty/partial captures')
     for capture in captures:
         png, binding = capture['png'], capture['binding']
-        path = Path(png['path'])
-        require(path.parent.resolve() == folder.resolve() and not path.is_symlink()
-                and path.name == capture['label'] + '.png', 'Capture path escaped evidence')
+        recorded = Path(png['path'])
+        require(recorded.parent == (recorded_folder or folder)
+                and recorded.name == capture['label'] + '.png', 'Capture path escaped evidence')
+        path = folder / recorded.name
+        require(path.resolve() == path and path.is_file(), 'Retained capture is not an ordinary evidence file')
         data = path.read_bytes()
         require(data.startswith(b'\x89PNG\r\n\x1a\n') and len(data) == png['bytes']
                 and sha(path) == png['sha256'] and int.from_bytes(data[16:20], 'big') == 320,
@@ -1358,7 +1489,7 @@ def file_frame_proof(proof, folder):
                     for key in ('intersections', 'headerIntersections')), 'Occlusion evidence missing')
 
 
-def generated_coverage(proof, folder, *, compact_button=False):
+def generated_coverage(proof, folder, *, compact_button=False, recorded_folder=None):
     source = (ROOT / 'frontend/tests/generated-file-controls-browser.mjs').read_text()
     taps = [g for g in proof['geometry'] if g['label'] == 'corner-tap-before']
     require(len(taps) == 14, 'Missing corner-tap measurements')
@@ -1431,7 +1562,7 @@ def generated_coverage(proof, folder, *, compact_button=False):
                 'Download bytes/name/hash mismatch')
     require(Counter(r['client'] for r in proof['requests'] if r['path'].endswith('/document')) ==
             Counter(('desktop', 'touch')), 'Unexpected preview document requests')
-    file_frame_proof(proof, folder)
+    file_frame_proof(proof, folder, recorded_folder)
     if compact_button:
         compact_button_proof(proof, taps)
 
@@ -1949,8 +2080,9 @@ def compact_button_proof(proof, taps):
             'Full native/download branches or listener cleanup did not settle')
 
 
-def generated_proof(mode, *, coarse_toolbar=False, compact_button=False):
-    reports = list((OUT / f'generated-{mode}/evidence').glob('generated-file-controls-*/observations.json'))
+def generated_proof(mode, *, coarse_toolbar=False, compact_button=False, evidence_root=None, reused_build=False):
+    folder = evidence_root or OUT
+    reports = list((folder / f'generated-{mode}/evidence').glob('generated-file-controls-*/observations.json'))
     require(len(reports) == 1, 'Require one generated-file journey report')
     proof = read(reports[0])
     require((proof.get('mode') == 'coarse-toolbar-qualification' if coarse_toolbar else 'mode' not in proof)
@@ -1966,30 +2098,31 @@ def generated_proof(mode, *, coarse_toolbar=False, compact_button=False):
             and proof['fixtureCleanup'] == {'pid': cleanup['pid'], 'homeRemoved': True}, 'Fixture exit/identity')
     require(proof['browserCleanup'] == [{'label': label, 'closed': True, 'connected': False}
                                        for label in ('desktop', 'touch')], 'Browser cleanup')
-    generated_coverage(proof, reports[0].parent, compact_button=compact_button)
-    expected = read(OUT / 'candidate.json')
+    recorded_folder = QUALIFIED_OUT / reports[0].parent.relative_to(folder) if evidence_root else None
+    generated_coverage(proof, reports[0].parent, compact_button=compact_button, recorded_folder=recorded_folder)
+    expected = read(folder / 'candidate.json')
     static = {p.removeprefix('amplifier_web/static/'): h for p, h in expected['static'].items()}
     package = (read(OUT / 'installed-identity.json')['packageRoot']
                if mode == 'installed' else str(ROOT / 'amplifier_web'))
     require(proof['installed'] == {'packageRoot': package, 'verified': mode == 'installed',
                                    'staticSha256': static}, 'Journey used wrong package/static')
     for when in ('before', 'after'):
-        identity = read(OUT / f'{mode}-fixture-origins-{when}.json')
+        identity = read(folder / f'{mode}-fixture-origins-{when}.json')
         require(identity['pid'] == proof['cleanup']['pid'], 'Origin proof is not the fixture process')
     if mode == 'installed':
         require(read(OUT / 'installed-wheel-before.json') == read(OUT / 'installed-wheel-after.json'),
                 'Installed payload/static/RECORD changed')
     else:
-        require(read(OUT / 'source-fixture-payload-before.json') ==
-                read(OUT / 'source-fixture-payload-after.json'), 'Source payload/static changed')
+        require(read(folder / 'source-fixture-payload-before.json') ==
+                read(folder / 'source-fixture-payload-after.json'), 'Source payload/static changed')
     if coarse_toolbar or compact_button:
-        build_identity = read(OUT / 'frontend-build-identity.json')
+        build_identity = read(folder / 'frontend-build-identity.json')
         require(build_identity['reusedBuild'] is False and expected['static'] == build_identity['static']
                 and read(Path(package) / 'static/build.json') == build_identity['build']
                 and tree(Path(package) / 'static') == static, 'Journey serving package is not the fresh build')
         server_origins = {}
         for when in ('before', 'after'):
-            process = read(OUT / f'{mode}-fixture-origins-{when}.json')
+            process = read(folder / f'{mode}-fixture-origins-{when}.json')
             origin = process['modules']['amplifier_web.server']
             require(origin == {'path': str(Path(package) / 'server.py'),
                                'sha256': expected['files']['amplifier_web/server.py']},
@@ -1997,14 +2130,14 @@ def generated_proof(mode, *, coarse_toolbar=False, compact_button=False):
             server_origins[when] = origin
         # The frozen server's index/static routes resolve beside server.py.
         # This proves the same fixture's serving package/assets, not a packet trace.
-        save(f'generated-{mode}/serving-assets.json', {
+        save(f'{"compact23-validation" if evidence_root else "generated-" + mode}/serving-assets.json', {
             'fixturePid': proof['cleanup']['pid'], 'packageRoot': package,
             'serverOrigins': server_origins, 'build': build_identity['build'],
-            'static': static, 'reusedBuild': False,
+            'static': static, 'reusedBuild': reused_build or bool(evidence_root),
             'basis': 'same-fixture server module origins and adjacent static bytes; not browser response capture'})
         if coarse_toolbar:
             coarse_toolbar_proof(proof, mode)
-    save(f'generated-{mode}/accepted-report.json', {
+    save(f'{"compact23-validation" if evidence_root else "generated-" + mode}/accepted-report.json', {
         'path': str(reports[0]), 'sha256': sha(reports[0]), 'visualJudgment': 'pending',
         'frameBindingCounts': dict(Counter(c['binding']['status'] for c in proof['fileFrameCaptures']))})
 
@@ -3013,11 +3146,20 @@ def native_state_proof(proof, folder, exit_code):
             'cause': 'unknown', 'candidateMembership': 'not_exposed', 'productAcceptance': False}
 
 
-def renderer_proof(negative=False):
+def renderer_proof(negative=False, *, startup=False):
     phase = 'renderer-stalled-response' if negative else 'canvas-renderers'
     mode = 'stalled-body' if negative else 'normal'
     proof = read(OUT / phase / 'evidence' / f'canvas-renderers-{mode}.json')
     require(proof['schemaVersion'] == 1 and proof['mode'] == mode, 'Wrong renderer report')
+    if startup:
+        arrival, conversation = proof['startup']['arrival'], proof['startup']['conversation']
+        require(proof['startup']['complete'] is True and proof['startup']['phase'] == 'conversation-surface'
+                and proof['startup']['created']['accepted'] is True and arrival['clientId']
+                and conversation['clientId'] == arrival['clientId']
+                and conversation['selectedSessionId'] == proof['startup']['created']['selectedSessionId']
+                and conversation['selectedSessionId'] and conversation['workSurface'] == 'chat'
+                and conversation['composer'] == {'attached': True, 'visible': True},
+                'Renderer did not establish app-ready -> created session -> visible conversation')
     require(type(proof['fixtureExit']['pid']) is int and proof['fixtureExit']['pid'] > 0
             and proof['fixtureExit']['code'] == 0 and proof['fixtureExit']['signal'] is None
             and proof['fixtureExit']['settled'] is True and proof['fixtureStopSucceeded'] is True,
@@ -3149,7 +3291,7 @@ def main():
                         choices=[MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST,
                                  COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST, PORTAL_HOST_MANIFEST,
                                  STATE_REDUCTION_MANIFEST, FOCUS_CONTRAST_MANIFEST,
-                                 FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST])
+                                 FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST])
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--corner-diagnostic', action='store_true')
     modes.add_argument('--contour-qualification', action='store_true')
@@ -3176,11 +3318,12 @@ def main():
                      else COARSE_TOOLBAR_MANIFEST if args.coarse_toolbar_qualification
                      else CONTOUR_MANIFEST if args.contour_qualification else MANIFEST)
     manifest_paths = ((FOCUS_CONTRAST_MANIFEST, FOCUS_CONTRAST_SETTLED_MANIFEST)
-                      if args.focus_contrast else (MANIFEST, COMPACT_BUTTON_MANIFEST)
+                      if args.focus_contrast else (MANIFEST, COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST)
                       if manifest_path == MANIFEST else (manifest_path,))
     if args.manifest not in manifest_paths:
         parser.error('The manifest must match the selected qualification mode')
-    compact_button = args.manifest == COMPACT_BUTTON_MANIFEST
+    compact23 = args.manifest == COMPACT23_MANIFEST
+    compact_button = args.manifest in (COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST)
     select_output(CORNER_OUT if args.corner_diagnostic
                   else FOCUS_CONTRAST_OUT if args.focus_contrast
                   else STATE_REDUCTION_OUT if args.state_reduction
@@ -3199,10 +3342,17 @@ def main():
                          'Locked prepared test dependencies reused, not a minimal dependency install.',
                          'No publication, full suite, provider, OS reveal or independent pixel acceptance.']}
     if compact_button:
-        report.update(qualification='compact-button', priorChecksConsumed=22, reusedBuild=False)
+        report.update(qualification='compact-button', priorChecksConsumed=23 if compact23 else 22, reusedBuild=compact23)
         report['limits'].append(
-            'Full source and installed qualification, not a checkpoint. Fresh canonical assets required; '
+            'Full source and installed qualification, not a checkpoint. Exact canonical assets required; '
             'first-390 wrong target stops the journey and remains a failure, without retry or waiver.')
+    if compact23:
+        report.update(continuationOf=COMPACT23_BEFORE, priorPrelaunchNotRunsRetained=2)
+        report['phases']['compact23-reuse'] = {'status': 'unrun', 'reason': 'not_started'}
+        for name in COMPACT23_REUSED_PHASES:
+            report['phases'][name]['reason'] = 'reuse_pending_exact_check23_proof'
+        report['limits'].append('Check 23 remains failed at renderer startup. No new build, Python/Node unit tests '
+                                'or source journey; reuse is conditional on exact input, environment and retained bytes.')
     if args.corner_diagnostic:
         selected = {'snapshot', 'runtime-readiness', 'browser-readiness', 'static-reuse',
                     'source-freeze', 'topology-source', 'generated-source', 'final-integrity'}
@@ -3326,6 +3476,10 @@ def main():
                         and all(frozen['files'].get(name) == {'sha256': digest, 'mode': '100644'}
                                 for name, digest in COMPACT_BUTTON_INPUTS.items()),
                         'Compact full qualification requires exact product/producer identities and full scope')
+            if compact23:
+                require(frozen.get('compact23Before') == COMPACT23_BEFORE
+                        and frozen['files'][COMPACT23_RENDERER]['sha256'] == COMPACT23_RENDERER_SHA,
+                        'Continuation must bind the reviewed renderer correction and exact check-23 evidence')
             save('parent-manifest.json', frozen)
             report['manifestSha256'] = sha(args.manifest)
             save('source-before.json', frozen_inputs(frozen))
@@ -3527,6 +3681,15 @@ def main():
                 "assert not build.ProjectBuilder('/workspace').check_dependencies('wheel')"], cap=30)
         run('browser-readiness', [NODE, '--input-type=module', '-e',
             BROWSER_READY.replace('/artifacts/files1318-qualified', str(OUT))], cap=45)
+        if compact23:
+            reused = step('compact23-reuse', lambda: compact23_reuse(frozen))
+            for name in COMPACT23_REUSED_PHASES:
+                report['phases'][name].update(status='REUSED', executed=False,
+                    reason='exact_check23_source_environment_and_evidence_verified',
+                    sourceRevision=COMPACT23_BEFORE['revision'], sourceTree=COMPACT23_BEFORE['tree'],
+                    priorEvidence=f'prior-compact23/{name}/results.json',
+                    priorEvidenceSha256=reused['proofFiles'][f'{name}/results.json'])
+            save('report.json', report)
         if args.corner_diagnostic:
             step('static-reuse', lambda: diagnostic_static(frozen))
         elif reuse_mode or fresh_product:
@@ -3554,18 +3717,18 @@ def main():
             save('reuse-evidence-validation.json', reused)
             report['reuseEvidence'] = reused
             save('report.json', report)
-        if args.portal_host_experiment or compact_button:
+        if args.portal_host_experiment or compact_button and not compact23:
             # Preserve committed static as before-context. Never restore either
             # the failed gap build or native17's reused build for this variant.
             before = tree(ROOT / 'amplifier_web/static')
             save('static-before.json', before)
             shutil.copytree(ROOT / 'amplifier_web/static', OUT / 'static-before')
             require(tree(OUT / 'static-before') == before, 'Pre-build static preservation differs')
-        if (not checkpoint_mode and not reuse_mode) or args.portal_host_experiment:
+        if (not checkpoint_mode and not reuse_mode and not compact23) or args.portal_host_experiment:
             run('frontend-build', [NPM, 'run', 'build'], cap=240)
 
         def source_freeze():
-            save('source-after-reuse.json' if (checkpoint_mode or reuse_mode) and not args.portal_host_experiment
+            save('source-after-reuse.json' if (checkpoint_mode or reuse_mode or compact23) and not args.portal_host_experiment
                  else 'source-after-build.json',
                  frozen_inputs(frozen, built=True))
             value = candidate(frozen)
@@ -3588,7 +3751,7 @@ def main():
                     'build': build_identity, 'sourceRevision': frozen['revision'], 'sourceTree': frozen['tree'],
                     'manifestSha256': report['manifestSha256'], 'css': frozen['files'][COARSE_TOOLBAR_CSS],
                     'static': value['static'], 'reusedBuild': False})
-            if compact_button:
+            if compact_button and not compact23:
                 build_identity = read(ROOT / 'amplifier_web/static/build.json')
                 before = read(OUT / 'static-before.json')
                 require(set(build_identity) == {'id', 'version'}
@@ -3605,10 +3768,13 @@ def main():
                     'build': build_identity, 'sourceRevision': frozen['revision'], 'sourceTree': frozen['tree'],
                     'manifestSha256': report['manifestSha256'], 'inputs': COMPACT_BUTTON_INPUTS,
                     'static': value['static'], 'reusedBuild': False})
+            if compact23:
+                require(value['static'] == reused['static'] and read(ROOT / 'amplifier_web/static/build.json') == reused['build'],
+                        'Continuation assets differ from the verified check-23 build')
             save('candidate.json', value)
             save('static.json', value['static'])
         step('source-freeze', source_freeze)
-        if not checkpoint_mode and not reuse_mode and not args.coarse_toolbar_qualification:
+        if not checkpoint_mode and not reuse_mode and not args.coarse_toolbar_qualification and not compact23:
             run('python-tests', [PYTHON, '-I', '-B', ROOT / DRIVER, '--python-tests'], cap=180, verify=junit)
             run('frontend-units', [NODE, '--test', '--test-reporter=tap',
                                   *(ROOT / name for name in UNIT_FILES)], cap=60, verify=unit_proof)
@@ -3645,16 +3811,17 @@ def main():
             run('generated-' + mode, [NODE, 'tests/generated-file-controls-browser.mjs'],
                 root=root, extra=extra, cap=160,
                 verify=None if checkpoint_mode else lambda: generated_proof(
-                    mode, coarse_toolbar=args.coarse_toolbar_qualification, compact_button=compact_button))
+                    mode, coarse_toolbar=args.coarse_toolbar_qualification, compact_button=compact_button, reused_build=compact23))
 
-        generated('source')
+        if not compact23:
+            generated('source')
         if not checkpoint_mode:
             run('canvas-renderers', [NPM, 'run', 'test:canvas-renderers-browser'],
-                verify=renderer_proof)
+                verify=lambda: renderer_proof(startup=compact23))
             # Raw nonzero is retained; only the exact correlated negative qualifies.
             run('renderer-stalled-response', [NPM, 'run', 'test:canvas-renderers-browser'],
                 extra={'CANVAS_RENDERER_STALLED_BODY': '1'}, cap=120,
-                verify=lambda: renderer_proof(True), negative=True)
+                verify=lambda: renderer_proof(True, startup=compact23), negative=True)
             run('canvas-usability', [NODE, 'tests/canvas-usability-browser.mjs'], verify=usability_proof)
             run('standard-ux-canvas-files', [NODE, 'tests/standard-ux-canvas-files-browser.mjs'],
                 verify=standard_files_proof)
@@ -3723,10 +3890,17 @@ def main():
                             and tree(package / 'amplifier_web/static') == {
                                 name.removeprefix('amplifier_web/static/'): digest for name, digest in expected['static'].items()}
                             and tree(OUT / 'static-before') == read(OUT / 'static-before.json')
-                            and report['phases']['frontend-build']['status'] == 'passed'
-                            and report['phases']['frontend-build']['executed'] is True
-                            and not any(row['status'] == 'REUSED' for row in report['phases'].values()),
+                            and report['phases']['frontend-build']['status'] == ('REUSED' if compact23 else 'passed')
+                            and report['phases']['frontend-build']['executed'] is (not compact23)
+                            and {name for name, row in report['phases'].items() if row['status'] == 'REUSED'} ==
+                                (set(COMPACT23_REUSED_PHASES) if compact23 else set()),
                             'Compact full qualification lost fresh-build/source/installed identity')
+                if compact23:
+                    require(all(sha(folder / name) == digest
+                                for folder in (COMPACT23_ROOT, OUT / 'prior-compact23')
+                                for name, digest in reused['proofFiles'].items())
+                            and all(report['phases'][name]['executed'] is False for name in COMPACT23_REUSED_PHASES),
+                            'Check-23 proofs changed or a passing phase was replayed')
                 if args.contour_qualification:
                     require(expected['static'] == read(OUT / 'reuse-metadata.json')['files']
                             and tree(OUT / 'static-before') == read(OUT / 'static-before.json'),

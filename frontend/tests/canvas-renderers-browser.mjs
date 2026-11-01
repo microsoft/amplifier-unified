@@ -5,6 +5,7 @@ import {readFile,mkdir,writeFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const stalledBody=process.env.CANVAS_RENDERER_STALLED_BODY==='1',mode=stalledBody?'stalled-body':'normal';
@@ -24,7 +25,16 @@ fixture.stdout.on('data',chunk=>{
  }
 });
 const errorRecord=error=>({name:error?.name||'Error',message:String(error?.message||error),...(error?.code?{code:error.code}:{}),...(error instanceof AggregateError?{errors:error.errors.map(errorRecord)}:{})});
-let browser,failure;
+let browser,page,failure;
+proof.startup={phase:'fixture',complete:false};
+const startupState=()=>page.evaluate(()=>{
+ const s=window.amplifier?.getState?.(),textbox=document.querySelector('[aria-label="Message Amplifier"]');
+ const text=document.body?.innerText||'';
+ return {clientId:s?.client?.id??null,selectedSessionId:s?.selectedSessionId??null,
+  sessionCount:s?.sessions?.length??null,workSurface:s?.view?.workSurface??null,panel:s?.view?.panel??null,
+  composer:{attached:!!textbox,visible:!!textbox?.checkVisibility({checkVisibilityCSS:true})},
+  text:text.slice(0,4096),textTruncated:text.length>4096};
+});
 try{
  const url=await new Promise((resolve,reject)=>{
   const timer=setTimeout(()=>reject(Error('Fixture startup timed out')),15000);let output='';
@@ -34,11 +44,13 @@ try{
  browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1500,height:1050},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  await context.addInitScript(()=>window.addEventListener('unhandledrejection',event=>console.error('canvas-renderer-unhandled:'+String(event.reason?.stack||event.reason))));
- const page=await context.newPage(),errors=proof.browserErrors;let streams=0,resourceReads=0;
+ page=await context.newPage();const errors=proof.browserErrors;let streams=0,resourceReads=0;
  page.on('console',message=>{if(message.type()==='error'&&message.text().startsWith('canvas-renderer-unhandled:'))unhandledRejections.push({source:'browser',message:message.text()})});
  page.on('pageerror',error=>errors.push(error.message));
  page.on('websocket',socket=>{if(new URL(socket.url()).pathname==='/api/events/ws')streams++});page.on('request',request=>{if(new URL(request.url()).pathname==='/api/events')streams++;if(request.url().includes('/api/canvas/views/'))resourceReads++});
- await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ proof.startup.phase='app-ready';
+ await page.goto(url);await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id);
+ proof.startup.arrival=await startupState();
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const inspect=()=>action('canvas.views.inspect').then(result=>result.result);
@@ -54,7 +66,16 @@ try{
   await expect(reader).not.toHaveAttribute('aria-hidden','true');
   await expect(reader.getByRole('region',{name:'Artifact view',exact:true})).toBeVisible();
  };
- await action('session.create',{});
+ proof.startup.phase='create-session';
+ const created=await action('session.create',{});assert.equal(created.accepted,true);
+ proof.startup.created={accepted:created.accepted,selectedSessionId:(await state()).selectedSessionId};
+ assert.ok(proof.startup.created.selectedSessionId);
+ proof.startup.phase='conversation-surface';
+ await showFixtureConversation(page);
+ await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ proof.startup.conversation=await startupState();
+ assert.equal(proof.startup.conversation.selectedSessionId,proof.startup.created.selectedSessionId);
+ assert.equal(proof.startup.conversation.workSurface,'chat');proof.startup.complete=true;
  await action('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true,canvasWidth:640}});
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep this draft through viewer changes');
  await page.waitForFunction(()=>window.amplifier.getState().view.draft==='Keep this draft through viewer changes');
@@ -276,7 +297,17 @@ try{
  assert.equal(streams,3,'One event stream per page load');
  await writeFile(root+'output/canvas-proof/evidence.json',JSON.stringify({externalDigest:staged.digest,resourceId:markdown.resourceId,streams,resourceReads,checks:['production hot loading after independent build','single viewer and retained saved artifacts','draft and conversation retention','renderer choices and state after reload','stale action rejection','failed live renderer fallback and recovery']},null,2));
  console.log('Canvas renderer proof passed: external validated hot loading, single viewer and preserved draft, reload retention, stale actions, fallback/recovery.');
-}catch(error){failure=error}
+}catch(error){
+ failure=error;
+ if(!proof.startup.complete&&page&&!page.isClosed()){
+  let timer;
+  try{proof.startup.failureState=await Promise.race([startupState(),new Promise((_,reject)=>{
+   timer=setTimeout(()=>reject(Error('Startup failure evidence exceeded 1500ms')),1500);
+  })])}
+  catch(captureError){proof.startup.captureError=errorRecord(captureError)}
+  finally{clearTimeout(timer)}
+ }
+}
 finally{
  try{
   await finishFixture({label:'Canvas renderer fixture',close:[['Canvas renderer browser',()=>browser?.close()]],stop:async()=>{
