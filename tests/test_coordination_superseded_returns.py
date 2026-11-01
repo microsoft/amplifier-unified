@@ -14,6 +14,9 @@ from test_coordination_revisions import revised, subscribe
 
 async def first_return(app, kind='question', outcome='question'):
     source, target = app.state['sessions'][:2]
+    # Keep the first return positively unadmitted until this fixture opens the
+    # idle boundary; busy roots can otherwise accept automatic delivery.
+    app.runtime.unavailable_boundaries.add(source['id'])
     await declared_result(app, kind=kind, outcome=outcome)
     wait = await subscribe(app)
     await finish(app, target, 'result-request')
