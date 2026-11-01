@@ -17,7 +17,11 @@ READ_GUIDANCE = (
     "completion and never replaces required Work details. A read receipt with "
     "effectAuthorized:false grants no execution authority; that field alone is "
     "not an execution denial. Preserve its status, coverage and reason, and use "
-    "the normal action's current admission result to determine whether it may run."
+    "the normal action's current admission result to determine whether it may run. "
+    "An ordinary human input may have no commissioned Work association. "
+    "An unavailable Work read alone does not override saved Full access; inspect "
+    "the current action's admission rather than treating an older refusal as current. "
+    "Never invent an association or retry an unknown effect."
 )
 
 PLANNING_GUIDANCE = (

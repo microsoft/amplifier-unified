@@ -291,7 +291,7 @@ def prelaunch_source_failure(app, row):
     Missing flags alone, an inventory, or a caller-supplied result is not proof.
     """
     from . import task_environments as owner
-    from .test_environment_worker import read_private_record, binding
+    from .test_environment_worker import read_private_record, binding, PRELAUNCH_SOURCE_REFUSALS, source_refusal_message
     if (row.get('status') != 'retired' or row.get('environmentState') != 'not-started'
             or row.get('backendType') != 'docker' or not row.get('backendConfigRetained')
             or row.get('owner', {}).get('sessionId') != row.get('sessionId')
@@ -309,7 +309,7 @@ def prelaunch_source_failure(app, row):
                 or original.get('state') != 'failed' or result.get('ok') is not False
                 or result.get('effectAdmitted') is True
                 or result.get('status') != 'not-started' or result.get('snapshot') is not None
-                or result.get('code') != 'repository-source-changed'
+                or result.get('code') not in PRELAUNCH_SOURCE_REFUSALS
                 or not row.get('universeId') or result.get('universeId') != row['universeId']
                 or not row.get('launchOperationId')
                 or owner.storage.observe(app.data_dir, row)['observation'] != 'present'):
@@ -328,7 +328,10 @@ def prelaunch_source_failure(app, row):
                 'code': result['code'], 'resourceId': row['id'], 'rootOwner': row['sessionId'],
                 'operationId': row['launchOperationId'], 'backendKey': row['backendKey'],
                 'backendIdentity': actual, 'universeId': row['universeId']},
-            'message': 'The original source snapshot failed before launch. No environment or test command was started. The failed request is retained; use stable source for a new check.'}
+            # Existing completed receipts are compared exactly during projection repair.
+            'message': ('The original source snapshot failed before launch. No environment or test command was started. The failed request is retained; use stable source for a new check.'
+                        if result['code'] == 'repository-source-changed' else
+                        source_refusal_message(result['code']) + ' The original failed request is retained.')}
 
 
 def project(app, row, request):
