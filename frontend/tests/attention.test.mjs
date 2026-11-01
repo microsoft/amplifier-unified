@@ -7,6 +7,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {AttentionBadge,AttentionReview,ActivityPanel,FailureDisposition,FailureDispositions,readItems,reviewItems,completionToRead}=await server.ssrLoadModule('/src/attention.jsx');
+const {request}=await server.ssrLoadModule('/src/api.js');
 const {FeedbackNotice}=await server.ssrLoadModule('/src/feedback.jsx');
 const {browserPreviewPolicy,BrowserPreview}=await server.ssrLoadModule('/src/canvas-library.jsx');
 const {WorkspaceRail:Rail}=await server.ssrLoadModule('/src/shell-panels.jsx');
@@ -139,6 +140,50 @@ test('explicit disposition freezes the reviewed occurrence; read and new arrival
  assert.equal(render(FailureDisposition,{item:{id:'ordinary'},act}),'');
  const history=render(FailureDispositions,{state:{updates:{diagnostics:{failureDispositions:[{id:'receipt',at:1,target:item.id,occurrences:2}]}}}});
  assert.match(history,/Closed with recovery unverified/);assert.doesNotMatch(history,/Succeeded/);
+});
+test('unreadable disposition acknowledgements keep confirmation open without replay or verified recovery',async()=>{
+ const original=globalThis.fetch;
+ try{
+  for(const [status,body] of [[502,'<html>Proxy acknowledgement unavailable</html>'],[200,'{"accepted":']]){
+   const item={id:'updates:failure-overflow',title:'Additional update failures need review',
+    detail:'Recovery is unverified.',occurrences:2,dispositionOccurrence:'a'.repeat(64)};
+   const calls=[],errors=[];let root;
+   globalThis.fetch=async(path,options)=>{
+    assert.equal(path,'/api/actions');assert.equal(options.method,'POST');
+    calls.push(JSON.parse(options.body));
+    return new Response(body,{status});
+   };
+   const act=async(action,args)=>{
+    try{return await request('/api/actions',{method:'POST',body:{action,args}})}
+    catch(error){errors.push(error);throw error}
+   };
+   const button=text=>root.root.findAllByType('button').find(node=>node.children.includes(text));
+   try{
+    await renderAct(async()=>{root=create(React.createElement(FailureDisposition,{item,act}))});
+    await renderAct(async()=>button('Close unresolved notice').props.onClick());
+    await renderAct(async()=>button('Close with recovery unverified').props.onClick());
+    assert.deepEqual(calls,[{action:'updates.failureDisposition',args:{id:item.id,
+     expectedOccurrence:item.dispositionOccurrence,disposition:'acknowledged-uncertainty'}}]);
+    assert.equal(errors.length,1);assert.equal(errors[0].code,'invalid_response');assert.equal(errors[0].unconfirmed,true);
+    assert.match(root.root.findByProps({role:'alert'}).children[0],/unexpected response/);
+    assert.equal(root.root.findAllByProps({'aria-label':'Confirm uncertainty disposition'}).length,1);
+    const newer={...item,occurrences:3,dispositionOccurrence:'b'.repeat(64)};
+    await renderAct(async()=>root.update(React.createElement(FailureDisposition,{item:newer,act})));
+    assert.equal(calls.length,1,'A new occurrence must not replay the uncertain disposition');
+    await renderAct(async()=>button('Cancel').props.onClick());
+    assert.equal(root.root.findAllByProps({'aria-label':'Confirm uncertainty disposition'}).length,0);
+    await renderAct(async()=>button('Close unresolved notice').props.onClick());
+    globalThis.fetch=async(path,options)=>{
+     calls.push(JSON.parse(options.body));
+     return new Response(JSON.stringify({accepted:true,result:{status:'acknowledged-uncertainty',recoveryVerified:false}}));
+    };
+    await renderAct(async()=>button('Close with recovery unverified').props.onClick());
+    assert.equal(calls.length,2,'Only a fresh explicit confirmation sends another command');
+    assert.equal(calls[1].args.expectedOccurrence,newer.dispositionOccurrence);
+    assert.equal(root.root.findAllByProps({'aria-label':'Confirm uncertainty disposition'}).length,0);
+   }finally{if(root)await renderAct(async()=>root.unmount())}
+  }
+ }finally{globalThis.fetch=original}
 });
 test('finished response review excludes questions and errors and failures can be retried',async()=>{
  const items=[{id:'completion:a',fingerprint:'a',label:'First',title:'Response ready'},{id:'question:q',fingerprint:'q',title:'Answer needed'},{id:'provider-auth:p',fingerprint:'p',title:'Sign in',reviewable:false}];

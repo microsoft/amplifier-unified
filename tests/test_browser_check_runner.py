@@ -231,6 +231,8 @@ def test_cli_initialization_and_execution_record_exact_source_and_plan(tmp_path)
 def test_existing_scenario_commands_environments_and_distinct_modes_are_preserved():
     plan = json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())
     rows = runner.validate_plan(plan)
+    canvas_additions = canvas_browser_additions(rows, set())
+    historical_rows = [row for row in rows if not canvas_additions.intersection(row['command'])]
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
     additions = {
@@ -316,8 +318,8 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     ]
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
-    original = [row for row in rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(rows) == 132
+    original = [row for row in historical_rows if row['id'] not in additions and row['id'] not in recovery_ids]
+    assert len(original) == 65 and len(historical_rows) == 132
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -558,6 +560,47 @@ def provider_browser_additions(rows, readiness_scripts):
     return scripts
 
 
+@pytest.mark.parametrize('canvas', ['canvas-refresh', 'canvas-refresh-catchup'])
+@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'different-command', 'readiness-owner',
+                                 'missing-env', 'wrong-env', 'wrong-id', 'wrong-command'])
+def test_canvas_browser_additions_reject_changed_or_duplicate_ordinary_owner(canvas, fault):
+    rows = json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())['scenarios']
+    script = f'tests/{canvas}-browser.mjs'
+    owner = next(row for row in rows if row['id'] == canvas)
+    readiness_scripts = set()
+    if fault == 'missing':
+        rows.remove(owner)
+    elif fault in {'duplicate', 'different-command'}:
+        rows.append({**owner, 'id': canvas + '-extra', 'command': ['node', script] +
+                     (['--extra'] if fault == 'different-command' else [])})
+    elif fault == 'readiness-owner':
+        readiness_scripts.add(script)
+    elif fault == 'missing-env':
+        owner.pop('env')
+    elif fault == 'wrong-env':
+        owner['env']['AMPLIFIER_TEST_ARTIFACTS'] = '{root}/output/browser-checks/other'
+    elif fault == 'wrong-id':
+        owner['id'] = canvas + '-renamed'
+    else:
+        owner['command'] = ['node', 'tests/canvas-dirty-browser.mjs']
+    with pytest.raises(AssertionError, match=re.escape(script)):
+        canvas_browser_additions(rows, readiness_scripts)
+
+
+def canvas_browser_additions(rows, readiness_scripts):
+    """Validate new Canvas owners before excluding them from frozen inventories."""
+    scripts = set()
+    for name in ('canvas-refresh', 'canvas-refresh-catchup'):
+        script = f'tests/{name}-browser.mjs'
+        owners = [row for row in rows if row['id'] == name or script in row['command']]
+        expected = {'id': name, 'command': ['node', script],
+                    'env': {'AMPLIFIER_TEST_ARTIFACTS': f'{{root}}/output/browser-checks/{name}'}}
+        assert owners == [expected], f'{script}: expected exactly one ordinary owner with its exact environment'
+        assert script not in readiness_scripts, f'{script}: duplicate readiness owner'
+        scripts.add(script)
+    return scripts
+
+
 def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     workflows = ROOT / '.github/workflows'
     readiness = yaml.load((workflows / 'public-readiness.yml').read_text(), Loader=yaml.BaseLoader)
@@ -655,9 +698,10 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert update_delivery in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', update_delivery] for row in plan['scenarios']) == 1
     provider_additions = provider_browser_additions(plan['scenarios'], readiness_scripts)
+    canvas_additions = canvas_browser_additions(plan['scenarios'], readiness_scripts)
     # Freeze all three prior counts; validate each new owner before subtracting
-    # the additions so missing or duplicated provider coverage cannot disappear.
-    previous_scripts = (readiness_scripts | extended_scripts) - {state_stream, update_delivery} - provider_additions
+    # the additions so missing or duplicated coverage cannot disappear.
+    previous_scripts = (readiness_scripts | extended_scripts) - {state_stream, update_delivery} - provider_additions - canvas_additions
     assert len(previous_scripts - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience, pin_reorder, approval, dormant, shared_work} - feature_additions - voice_additions) == 146
     assert len(previous_scripts - {shared_work, 'tests/delegate-work-stream-browser.mjs', 'tests/client-traffic-browser.mjs'} - voice_additions) == 164
     assert len(previous_scripts) == 171
