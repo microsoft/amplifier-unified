@@ -489,11 +489,11 @@ def test_workflow_keeps_independent_artifacts_and_readiness_unique_python_covera
     readiness = yaml.load((workflows / 'public-readiness.yml').read_text(), Loader=yaml.BaseLoader)
     # Ordered normal critical run blocks from reviewed a99ab643, before the
     # independent diagnostic job was merged, plus host helper recovery coverage.
-    # Eight pytest calls / 102 targets; cooperative update drain, event-driven
-    # readiness and retention coverage are additive; previous ordering retained.
+    # Eight pytest calls / 103 targets; pending-update admission, legacy drain,
+    # event-driven readiness and retention coverage are additive; ordering retained.
     assert_readiness_python_coverage(
-        readiness, targets=102,
-        run_blocks_sha256='a7b446de95533301605ab383391efd8c7c03a3c860c1f35dc8919cdbb2b5443b',
+        readiness, targets=103,
+        run_blocks_sha256='d44aefd9f103f8f5c55e098d43543297a7f353c052af96386cbbee1aff429371',
     )
 
 

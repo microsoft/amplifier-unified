@@ -89,6 +89,30 @@ def test_digital_rain_inherits_shared_transcript_edges():
     assert not re.search(r"(?:-webkit-)?mask(?:-[\w-]+)?\s*:", source())
 
 
+def test_sidebar_content_clears_selection_edge_without_changing_native_rows():
+    selector = '#amp-one [data-part="navigation"] :is(.a-nav-chat:not(.a-nav-chat-rename),.a-workspace-row)'
+    expected = {
+        "box-sizing": "border-box",
+        "padding-inline-start": "8px",
+        "padding-inline-end": "4px",
+    }
+    # Share the accepted spacing, not the entire theme. The navigation scope
+    # excludes landing cards; the :not() preserves native rename form padding.
+    for name in ("digital-rain", "lightline"):
+        css = files("amplifier_web").joinpath(f"appearances/{name}.amplifier.css").read_text()
+        rules = tinycss2.parse_stylesheet(css, skip_comments=True, skip_whitespace=True)
+        matches = [
+            rule for rule in rules
+            if rule.type == "qualified-rule" and tinycss2.serialize(rule.prelude).strip() == selector
+        ]
+        assert len(matches) == 1, name
+        declarations = tinycss2.parse_declaration_list(
+            matches[0].content, skip_comments=True, skip_whitespace=True,
+        )
+        assert all(item.type == "declaration" and not item.important for item in declarations)
+        assert {item.name: tinycss2.serialize(item.value).strip() for item in declarations} == expected
+
+
 def luminance(color):
     channels = [int(color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
     linear = [value / 12.92 if value <= .04045 else ((value + .055) / 1.055) ** 2.4 for value in channels]

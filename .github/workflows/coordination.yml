@@ -20,6 +20,9 @@ on:
       - 'tests/test_assignment_brief.py'
       - 'amplifier_web/workspace_awareness.py'
       - 'amplifier_web/coordination_delivery.py'
+      - 'amplifier_web/request_refit.py'
+      - 'amplifier_web/surface_delivery.py'
+      - 'tests/test_pretransport_refit_native.py'
       - 'amplifier_web/coordination_guidance.py'
       - 'frontend/src/workspace-awareness.jsx'
       - 'frontend/tests/workspace-awareness-browser.mjs'
@@ -50,6 +53,7 @@ on:
       - 'tests/test_collaborative_workspaces.py'
       - 'tests/test_collaboration_input.py'
       - 'tests/test_peer_auto_delivery.py'
+      - 'tests/test_peer_admission_reconciliation.py'
       - 'amplifier_web/task_binding.py'
       - 'amplifier_web/task_continuity.py'
       - 'tests/test_task_continuity.py'
@@ -183,7 +187,7 @@ jobs:
           tests/test_coordination_bridge_returns.py
           tests/test_assignment_brief.py
           tests/test_background_reservation_recovery.py
-          tests/test_collaborative_workspaces.py tests/test_collaboration_input.py tests/test_peer_auto_delivery.py
+          tests/test_collaborative_workspaces.py tests/test_collaboration_input.py tests/test_peer_auto_delivery.py tests/test_peer_admission_reconciliation.py
           tests/test_task_continuity.py tests/test_blocked_peer_input.py
           tests/test_completed_peer_followup.py
           tests/test_creation_inheritance.py tests/test_inherited_module_sources.py
@@ -251,6 +255,15 @@ jobs:
           import xml.etree.ElementTree as ET
           rows = ET.parse('output/peer-intake-native.xml').getroot().findall('.//testcase')
           assert len(rows) == 8
+          assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          PY
+      - name: Verify bounded pretransport request refitting in the native loop
+        run: |
+          uv run --no-sync pytest -q tests/test_pretransport_refit_native.py --junitxml=output/pretransport-refit-native.xml
+          uv run --no-sync python - <<'PY'
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/pretransport-refit-native.xml').getroot().findall('.//testcase')
+          assert len(rows) == 23
           assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
           PY
       - name: Verify repeated peer returns through real Worker processes

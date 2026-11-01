@@ -23,6 +23,11 @@ plus per-job checks preserves the same recovery result. Trace reads, copies,
 serialization, hashing and comparisons before filtering the final result. A small
 response, unchanged file or quiet UI does not prove that its construction was cheap.
 
+When a compatible file and immutable resource store the same presentation value,
+reuse one canonical encoding. Keep resource identity and transaction/rollback
+ownership unchanged. Qualify changed and unchanged saves, exact readback and
+borrowed nested edits; skipping writes alone must not conceal duplicate encoding.
+
 ## Separate current presentation from historical evidence
 
 Routine state carries the current fields its consumers need. Historical bodies
@@ -111,6 +116,19 @@ Keep budgets and measurements with their executable fixture or exact evidence
 record. Update them when workload or contract changes, with a reason and retained
 comparison. Link that evidence from the PR; passing one fixture is not a claim
 about all histories, platforms, provider behavior or deployed user latency.
+
+### Cold browser startup and HTTPS delivery
+
+Measure complete critical-asset downloads over actual TLS, including time to first
+byte and time to last byte under concurrent host work. A fast health response,
+HTTP-only fixture or completed response headers does not prove a usable reload.
+Tiny repeated executor reads can multiply a busy event loop's delay across one
+asset. Keep transfer buffers bounded and honor slow-client backpressure, rather
+than loading arbitrary files into a permanent cache or bypassing authentication.
+`tests/test_static_files.py` checks the real HTTPS path's read count as asset size
+grows, exact bytes, validators, ranges, disconnects and static-file confinement.
+Run these checks when changing file delivery or upgrading its HTTP dependency;
+retain aiohttp's file and routing checks when adapting its transfer path.
 
 ## Long-lived conversation baseline
 

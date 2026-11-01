@@ -7,6 +7,7 @@ import asyncio
 import copy
 import json
 import sys
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -37,6 +38,21 @@ def replacement_install(args, kwargs):
 
 def saved_updates(service):
     return load_saved_state(service.db)["updates"]
+
+
+async def save_held_input(service, identity):
+    sid = service._session()["id"]
+    receipt = await service.dispatch("conversation.send", {
+        "sessionId": sid, "text": "Continue once the replacement is verified",
+    }, command_id=identity, include_state=False)
+    assert receipt["accepted"] and receipt["delivery"] == "queued_for_update"
+    saved = json.loads(service.db.execute("SELECT receipt FROM commands WHERE id=?", (identity,)).fetchone()[0])
+    assert saved["delivery"] == "queued_for_update"
+    assert [sid, identity] in saved_updates(service)["drain"]["messages"]
+    assert not service.runtime.sent
+    # Saving a new human input does not open runtime admission for retries.
+    with pytest.raises(AppError, match="ecosystem update is activating"):
+        await service.dispatch("conversation.retry", {"sessionId": sid, "inputId": identity})
 
 
 def successful_probe():
@@ -119,8 +135,10 @@ async def test_uncertain_replacement_failures_hold_work_and_later_feature_fastpa
     assert saved_updates(service)["pendingReplacement"] == marker
     assert not state.get("pendingRestart")
     assert work_paused(service.state) and manager.awaiting_restart()
-    with pytest.raises(AppError):
-        await service.dispatch("conversation.send", {"text": "Must remain gated"})
+    await save_held_input(service, "held-after-failure")
+    await manager.tick()
+    assert not service.runtime.sent
+    assert saved_updates(service)["pendingReplacement"] == marker
     before = list(managed.calls)
     # Reproduce the dangerous package-presence shortcut after the uv write.
     monkeypatch.setattr(app_updates, "installed_extras", lambda: ["native-desktop", "tui"])
@@ -230,20 +248,35 @@ async def test_uncertain_replacement_opens_only_for_exact_authenticated_new_host
         return successful_probe()
 
     monkeypatch.setattr(app_updates, "process", repaired_probe)
+    await save_held_input(managed.service, "held-for-recovery")
     confirmed = await successor.confirm_readiness(health)
     state = managed.service.state["updates"]
     assert confirmed is (mismatch is None)
     if mismatch:
         assert state["pendingReplacement"] == marker
         assert work_paused(managed.service.state) and successor.awaiting_restart()
-        with pytest.raises(AppError):
-            await managed.service.dispatch("conversation.send", {"text": "Still blocked"})
+        await successor.tick()
+        assert not managed.service.runtime.sent
+        assert saved_updates(managed.service)["pendingReplacement"] == marker
+        assert state["drain"]["phase"] == "replacing"
     else:
         assert not state.get("pendingReplacement") and not state.get("pendingRestart")
         assert not work_paused(managed.service.state) and not successor.awaiting_restart()
         assert not saved_updates(managed.service).get("pendingReplacement")
         if kind == "feature":
             assert state["featureResults"]["request-one"]["phase"] == "installed"
+        # The fixture has no background loop. Exercise its real tick/finish
+        # lifecycle; only subsequent unrelated component discovery is mocked.
+        assert successor.wakeup.is_set()
+        assert not managed.service.runtime.sent
+        successor.check = AsyncMock()
+        await successor.tick()
+        await successor.tick()
+        assert [row[2] for row in managed.service.runtime.sent] == ["held-for-recovery"]
+        assert state["drain"]["phase"] == "released"
+        saved = json.loads(managed.service.db.execute(
+            "SELECT receipt FROM commands WHERE id='held-for-recovery'").fetchone()[0])
+        assert saved["delivery"] == "accepted"
         receipt = await managed.service.dispatch("conversation.send", {"text": "Admitted after exact recovery"})
         assert receipt["delivery"] == "accepted"
     if mismatch:

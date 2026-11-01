@@ -30,3 +30,22 @@ retry does not promise exactly-once remote inference or unchanged generated text
 Tests exercise retry exhaustion, Stop, changed authority, partial output,
 provider opt-out, exact input retention, and root/child adapter installation with
 synthetic providers. Physical sleep and paid inference require separate evidence.
+
+## A changed fitted request before transport
+
+At the prepared dispatch boundary, Streaming may request one new measurement
+through the optional provider `refit_request(request, error=...)` capability.
+SurfaceProvider returns a budget decision only for its exact retained local
+content/binding refusal, before any provider transport began. The existing
+explicit budget preparation stabilizes stale visual warnings before measurement.
+The loop validates the normal hard-fit decision and sends that newly measured
+request once, without repeating a tool, hook, input, turn or context compaction.
+
+The original native generation, complete inputs, Stop revision and required Work
+version must remain valid. Changed or unavailable authority, unknown/sent calls,
+ordinary provider errors, any stream event, an unavailable/oversized measurement
+or a second refusal remain terminal. This is not the timeout retry policy above.
+Local diagnostic reasons distinguish missing/changed binding, changed request
+components, changed native scope and changed/unavailable authority; they contain
+only fixed reason/component names, never prompt text, image data or request hashes.
+The recovery event is metadata only and does not prove provider admission.

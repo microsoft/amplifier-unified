@@ -7,6 +7,7 @@ import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 import {showComposerOption} from './composer-options-helpers.mjs';
+import {discoveryProblems,listRequestProblems} from './provider-native-readiness.mjs';
 
 const root=process.env.AMPLIFIER_TEST_ARTIFACTS;
 assert.ok(root,'An owned artifact directory is required');
@@ -53,6 +54,27 @@ try{
  }),60000,'Native fixture readiness');
  browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{})});
  const context=await browser.newContext({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ // Observe configuration synchronously at the actual fetch call. This is
+ // browser-observed state, not a fabricated server configuration revision.
+ // Forward exactly once with unchanged arguments; no delays or extra actions.
+ await context.addInitScript(()=>{
+  const original=window.fetch,observations=[];
+  window.__providerListObservations=observations;
+  window.fetch=function(input,init){
+   try{
+    if(new URL(typeof input==='string'?input:input.url,location.href).pathname==='/api/actions'&&init?.method==='POST'){
+     const command=JSON.parse(init.body);
+     if(command.action==='providers.list'){
+      const state=window.amplifier?.getState();
+      observations.push({command,sequence:observations.length,clientId:new Headers(init.headers).get('X-Amplifier-Client'),
+       observedClientId:state?.client?.id,hostInstanceId:state?.client?.hostInstanceId,configurationRevision:state?.configurationRevision??0,
+       revision:state?.revision});
+     }
+    }
+   }catch(error){observations.push({error:error.message})}
+   return original.apply(this,arguments);
+  };
+ });
  page=await context.newPage();page.setDefaultTimeout(10000);
  page.on('pageerror',error=>pageErrors.push(error.message));
  const requests=new Map();let eventWrites=Promise.resolve();
@@ -137,28 +159,6 @@ try{
   discoverySnapshots.push(row);await appendFile(evidence+'/discovery-state.jsonl',JSON.stringify(row)+'\n');
   return row;
  };
- function discoveryProblems(row,binding){
-  const problems=[],draft=row.view?.newSessionDraft,setup=row.setup||{},defaults=row.defaults;
-  if(row.client?.id!==binding.clientId||row.client?.hostInstanceId!==binding.hostInstanceId)problems.push('client/host');
-  if(row.revision<binding.minimumRevision||row.configurationRevision!==binding.configurationRevision)problems.push('stale revision');
-  if(row.selectedSessionId||draft?.workspace!==''||draft?.location?.kind!=='managed'||(draft.bundle||'')!=='')problems.push('draft scope');
-  if(Object.keys(draft?.selection||{}).length)problems.push('explicit draft pin');
-  if(row.defaultsKey!==managedKey||setup.providersWorkspace!==managedWorkspace||setup.providersRequestedWorkspace!==''||setup.providersLocation?.kind!=='managed')problems.push('catalog scope');
-  if(!setup.providersLoadedAt||!['native-a','native-b'].every(id=>setup.providers?.some(p=>p.id===id&&p.enabled!==false)))problems.push('provider rows');
-  if(defaults?.phase!=='ready'||!['native-a','native-b'].every(id=>defaults.providers?.some(p=>p.id===id)))problems.push('default rows');
-  if(defaults?.globalOnly!==true||defaults?.bundle!==evidence+'/fixture/root.yaml')problems.push('default scope');
-  if(defaults?.effective?.instance!==A.instance||defaults?.effective?.model!==A.model||defaults?.effective?.effort!==A.effort)problems.push('effective default');
-  if(!['native-a','native-b'].every(id=>{
-   const entry=setup.providerCatalogs?.[id];
-   return entry?.phase==='ready'&&!entry.error&&!entry.modelsDeferred&&entry.sharedCatalogKey&&
-    entry.metadata?.info&&entry.models?.some(model=>(typeof model==='string'?model:model.id)==='native-model');
-  }))problems.push('catalog settlement');
-  const canonical=row.canonical,operation=canonical?.setup?.operations?.['providers.list:'];
-  if(canonical?.hostInstanceId!==binding.hostInstanceId||canonical?.configurationRevision!==binding.configurationRevision)problems.push('canonical revision');
-  if(canonical?.setup?.configurationTarget!=null)problems.push('targeted settings snapshot');
-  if(operation?.phase!=='ready'||operation?.error||operation?.commandId!==binding.listId)problems.push('list operation');
-  return problems;
- }
  async function completionFor(id,name,args,receipt,client){
   assert.equal(receipt.accepted,true);
   let completion;
@@ -179,17 +179,54 @@ try{
   const id=crypto.randomUUID(),receipt=await page.evaluate(([name,args,id])=>window.amplifier.dispatch(name,args,{id}),[name,args,id]);
   return completionFor(id,name,args,receipt,(await state()).client);
  }
+ let exerciseOrderedSuccessor=true;
  async function settleManagedDraft(){
   const before=await discoveryRead();
   assert.equal(before.view.setupJourney,'done','Visible first-connection flow must have completed');
-  const completed=await Promise.all([
-   completedRead('providers.list',{workspace:'',location:{kind:'managed'}}),
+  const listArgs={workspace:'',location:{kind:'managed'}};
+  let completed,orderedSuccessor;
+  if(exerciseOrderedSuccessor){
+   // Deterministically exercise the observed ordering using actual accepted
+   // actions/completions, not fabricated setup rows or selected providers.
+   const original=await completedRead('providers.list',listArgs);
+   orderedSuccessor=await completedRead('providers.list',listArgs);
+   completed=[original,await completedRead('configuration.defaults',{workspace:'',bundle:'',location:{kind:'managed'}})];
+   assert.notEqual(original.id,orderedSuccessor.id);
+   await save('ordered-list-successor.json',{original,successor:orderedSuccessor,defaults:completed[1]});
+   exerciseOrderedSuccessor=false;
+  }else completed=await Promise.all([
+   completedRead('providers.list',listArgs),
    completedRead('configuration.defaults',{workspace:'',bundle:'',location:{kind:'managed'}}),
   ]);
   const binding={clientId:before.client.id,hostInstanceId:before.client.hostInstanceId,configurationRevision:before.configurationRevision,
-   minimumRevision:Math.max(before.revision,...completed.map(row=>row.body.revision)),listId:completed[0].id};
-  let ready;
-  await expect.poll(async()=>{ready=await discoveryRead();return discoveryProblems(ready,binding)},{timeout:10000}).toEqual([]);
+   minimumRevision:Math.max(before.revision,...completed.map(row=>row.body.revision)),listId:completed[0].id,
+   listArgs:{workspace:'',location:{kind:'managed'}},managedKey,managedWorkspace,rootBundle:evidence+'/fixture/root.yaml',effective:A};
+  const completions={[completed[0].id]:completed[0]};
+  if(orderedSuccessor)completions[orderedSuccessor.id]=orderedSuccessor;
+  let ready,joined;
+  await expect.poll(async()=>{
+   const selected=await discoveryRead(),candidateId=selected.canonical?.setup?.operations?.['providers.list:']?.commandId;
+   const observations=await page.evaluate(()=>window.__providerListObservations);
+   await save('list-request-observations.json',observations);
+   const observed=actions.map(row=>{
+    const matches=observations.filter(value=>value.command?.id===row.command.id);
+    return {...row,witness:matches.length===1?matches[0]:null};
+   });
+   const candidates=observed.filter(row=>row.command.id===candidateId),originals=observed.filter(row=>row.command.id===binding.listId);
+   if(candidates.length===1&&originals.length===1&&!completions[candidateId]&&
+      !listRequestProblems(originals[0],binding).length&&!listRequestProblems(candidates[0],binding,originals[0]).length){
+    const candidate=candidates[0];
+    completions[candidateId]=await completionFor(candidateId,candidate.command.action,candidate.command.args,candidate.receipt,before.client);
+   }
+   // Completion evidence is per-command; the slot can change during its lookup.
+   // Re-read instead of declaring a historical completion to be current.
+   ready=await discoveryRead();joined={actions:observed,completions,candidateId};
+   const problems=discoveryProblems(ready,binding,joined);
+   await appendFile(evidence+'/list-currentness.jsonl',JSON.stringify({binding,selected,ready,candidateId,problems,
+    original:originals[0],candidate:candidates[0],completions})+'\n');
+   return problems;
+  },{timeout:10000}).toEqual([]);
+  if(orderedSuccessor)assert.notEqual(joined.candidateId,binding.listId,'Successful later list must own the current slot');
   await expect(page.getByRole('dialog',{name:'Settings',exact:true})).toBeHidden();
   assert.equal(ready.view.setupJourney,'done');
   const checks=[];
@@ -197,13 +234,13 @@ try{
    ['old-snapshot',row=>{row.revision=binding.minimumRevision-1},'stale revision'],
    ['wrong-scope',row=>{row.setup.providersLocation={kind:'workspace'}},'catalog scope'],
    ['empty-provider-snapshot',row=>{row.setup.providers=[];row.setup.providerCatalogs={}},'provider rows'],
-   ['wrong-operation',row=>{row.canonical.setup.operations['providers.list:'].commandId='old-operation'},'list operation'],
+   ['wrong-operation',row=>{row.canonical.setup.operations['providers.list:'].commandId='old-operation'},'list currentness'],
    ['old-configuration',row=>{row.configurationRevision--},'stale revision'],
   ]){
-   const bad=structuredClone(ready);mutate(bad);const rejected=discoveryProblems(bad,binding);
+   const bad=structuredClone(ready);mutate(bad);const rejected=discoveryProblems(bad,binding,joined);
    assert.ok(rejected.includes(reason),name);checks.push({name,rejected});
   }
-  await save('discovery-readiness.json',{binding,completed,ready,negativeControls:checks});
+  await save('discovery-readiness.json',{binding,completed,ready,listEvidence:joined,negativeControls:checks});
   return ready;
  }
  async function close(){

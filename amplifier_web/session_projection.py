@@ -1,6 +1,7 @@
 """Persist Unified's presentation beside, never instead of, shared transcripts."""
 import json
 import copy
+import hashlib
 import uuid
 from pathlib import Path
 
@@ -308,15 +309,18 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
             value['_coldMessageCount'] = len(messages)
             value['_coldNotifications'] = notifications(session)
             value.pop('messages')
-        text = json.dumps(value, ensure_ascii=False)
+        # The compatible view and immutable resource represent the same value.
+        # Encode once in the existing resource format, including exact Unicode.
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
         prior = references.get(session['id'], {}) if references is not None else {}
         payload = prior.get('$viewPayload') if cache.get(str(path)) == text else None
         if payload is None and db is not None:
-            from .resource_files import put
+            from .resource_files import Prepared, put_prepared
             # SQLite's committed pointer owns the exact immutable projection.
             # view.json remains a compatible presentation, never the authority
             # for a newer transaction that failed before its pointer committed.
-            payload = put(db, value)
+            encoded = text.encode()
+            payload = put_prepared(db, Prepared(text, hashlib.sha256(encoded).hexdigest(), len(encoded)))
         if cache.get(str(path)) != text:
             if undo is not None:
                 # Restore the pre-transaction presentation if SQLite rejects its

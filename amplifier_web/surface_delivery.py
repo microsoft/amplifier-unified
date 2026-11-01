@@ -182,9 +182,9 @@ class SurfaceProvider:
         self.refused = []
         self.refusal_overflow = False
 
-    async def _prepare(self, request, commit=False, *, explicit_budget=False):
+    async def _prepare(self, request, commit=False, *, explicit_budget=False, refit_binding=None):
         entry = next((row for row in self.prepared if row[0] is request), None)
-        refused = any(source is request for source in self.refused) or (entry is None and self.refusal_overflow)
+        refused = any(row[0] is request for row in self.refused) or (entry is None and self.refusal_overflow)
         if refused and not explicit_budget:
             raise ValueError("The request was refused before transport; a new explicit budget/refit is required.")
         if entry is None:
@@ -196,8 +196,16 @@ class SurfaceProvider:
             boundary = hasattr(self.delivery, "finalize_work")
             entry = (request, cached, cached.model_dump_json() if boundary else None,
                      self.delivery.work_request(cached) if boundary else None)
+            if refit_binding is not None:
+                from .request_refit import RequestFitChanged
+                self.delivery.check_execution_scope(refit_binding['executionScope'])
+                current = entry[3]
+                if (not current or current.get('required') != refit_binding.get('required')
+                        or current.get('executionScope') != refit_binding.get('executionScope')):
+                    self.delivery.discard_work(current)
+                    raise RequestFitChanged('authority_changed')
             self.prepared = (self.prepared + [entry])[-4:]
-            self.refused = [source for source in self.refused if source is not request]
+            self.refused = [row for row in self.refused if row[0] is not request]
         _, cached, fitted, binding = entry
         if commit:
             try:
@@ -205,13 +213,13 @@ class SurfaceProvider:
                     cached = await self.delivery.revalidate(cached)
                 if fitted is not None:
                     cached = await self.delivery.finalize_work(cached, fitted=fitted, binding=binding)
-            except Exception:
+            except Exception as error:
                 # Only the pretransport checks are covered. A sent/unknown
                 # provider request never enters this refit path.
                 self.prepared = [row for row in self.prepared if row[0] is not request]
                 if hasattr(self.delivery, "discard_work"):
                     self.delivery.discard_work(binding)
-                self.refused.append(request)
+                self.refused.append((request, error, binding))
                 if len(self.refused) > 16:
                     self.refused.pop(0)
                     self.refusal_overflow = True
@@ -219,6 +227,42 @@ class SurfaceProvider:
             self.delivery.commit(cached)
             self.prepared = [row for row in self.prepared if row[0] is not request]
         return cached
+
+    @staticmethod
+    async def _budget(method, request, *, request_options=None, **kwargs):
+        # Match the independently released loop's named-option capability.
+        # **kwargs-only and uninspectable methods retain their old call shape;
+        # a TypeError from inside the method is never retried.
+        try:
+            parameter = inspect.signature(method).parameters.get('request_options')
+        except (TypeError, ValueError):
+            parameter = None
+        if parameter is not None and parameter.kind in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):
+            kwargs['request_options'] = request_options
+        decision = method(request, **kwargs)
+        return await decision if inspect.isawaitable(decision) else decision
+
+    async def refit_request(self, request, *, error, request_options=None, **kwargs):
+        """One explicit measurement of an exactly retained local refusal.
+
+        The loop owns the one-refit bound. Sent/unknown provider errors never
+        enter this list, and a fresh observation cannot replace old authority.
+        """
+        from .request_refit import RequestFitChanged
+        row = next((row for row in self.refused if row[0] is request and row[1] is error), None)
+        if (row is None or not isinstance(error, RequestFitChanged)
+                or error.reason not in {'content_changed', 'binding_missing', 'binding_changed'}):
+            return None
+        binding = row[2]
+        if not binding or binding.get('executionScope') is None:
+            return None
+        self.delivery.check_execution_scope(binding['executionScope'])
+        budget = getattr(self.original, 'request_budget', None)
+        if not callable(budget):
+            return None
+        cached = await self._prepare(request, explicit_budget=True, refit_binding=binding)
+        return await self._budget(budget, cached, request_options=request_options, **kwargs)
 
     def __getattr__(self, name):
         method = getattr(self.original, name)
@@ -263,10 +307,9 @@ class SurfaceProvider:
                             self.delivery.close_work_stream(attempt)
             return stream
         if name == 'request_budget' and callable(method):
-            async def budget(request, **kwargs):
+            async def budget(request, *, request_options=None, **kwargs):
                 request = await self._prepare(request, explicit_budget=True)
-                result = method(request, **kwargs)
-                return await result if inspect.isawaitable(result) else result
+                return await self._budget(method, request, request_options=request_options, **kwargs)
             return budget
         return method
 
