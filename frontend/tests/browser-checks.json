@@ -64,6 +64,7 @@
     {"id": "appearance-startup", "command": ["node", "tests/appearance-startup-browser.mjs"]},
     {"id": "appearance-library", "command": ["node", "tests/appearance-library-browser.mjs"]},
     {"id": "review-during-send", "command": ["node", "tests/review-during-send-browser.mjs"]},
+    {"id": "question-transcript-fade", "command": ["node", "tests/question-transcript-fade-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/question-transcript-fade", "AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python"}},
     {"id": "execution-observability", "command": ["node", "tests/execution-observability-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/execution-observability"}},
     {"id": "execution-inspection", "command": ["node", "tests/execution-inspection-browser.mjs"]},
     {"id": "execution-actions", "command": ["node", "tests/execution-actions-browser.mjs"]},
