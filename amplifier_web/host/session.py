@@ -1075,7 +1075,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             "created": (saved[1].get("created") if saved else None) or datetime.now(UTC).isoformat(),
             "application_host": application_host, "config": redact(session.config)}
         continuity = None
+        published_anchors = None
         async def checkpoint(status="in_progress"):
+            nonlocal published_anchors
             if write_guard:
                 write_guard()
             persist_controls = coordinator.get_capability("web.controls.persist")
@@ -1096,9 +1098,13 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 continuity.save()
             from ..collaboration_input import checkpoint_anchors
             anchors = checkpoint_anchors(canonical, runtime)
-            if anchors:
-                await runtime.emit("collaboration.checkpoint", generation_id=runtime.generation["id"],
+            if anchors and anchors != published_anchors:
+                # Transcript persistence above is unconditional. This bounded
+                # notification carries message/generation identity, not a save
+                # heartbeat; unchanged tool checkpoints add no host authority.
+                await runtime.emit("collaboration.checkpoint", generation_id=anchors[-1]["generationId"],
                                    messageAnchors=anchors)
+                published_anchors = anchors  # A failed emit remains retryable.
             return canonical
         coordinator.register_capability("live.checkpoint", checkpoint)
         from ..context_continuity import install as install_continuity
