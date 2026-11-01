@@ -300,6 +300,13 @@
   outline-offset: 3px;
 }
 
+/* The shared composer surface owns its focus ring, not the text inside it.
+   Keep standalone textboxes and the composer's action buttons independently
+   focus-visible; only suppress the redundant nested editor rectangle. */
+#amp-one.a-chat-shell.a-approachable-shell [data-part="composer-surface"] [role="textbox"][contenteditable="true"]:focus-visible {
+  outline: none;
+}
+
 #amp-one.a-chat-shell.a-approachable-shell [data-part="work-browser"] {
   background-color: var(--a-bg);
   background-image: none;

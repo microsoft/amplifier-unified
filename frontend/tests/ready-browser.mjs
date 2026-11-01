@@ -246,6 +246,24 @@ try{
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'No page horizontal overflow');
   return geometry;
  };
+ const composerFocus=async label=>{
+  await input.focus();await page.keyboard.press('Tab');await page.keyboard.press('Shift+Tab');
+  await expect(input).toBeFocused();await expect(input).toBeInViewport();
+  const boundary=await input.evaluate(el=>{
+   const surface=el.closest('[data-part="composer-surface"]');
+   if(!surface)throw Error('The editor must be inside the real composer surface');
+   const editorStyle=getComputedStyle(el),surfaceStyle=getComputedStyle(surface);
+   return {editorFocusVisible:el.matches(':focus-visible'),editorOutline:editorStyle.outlineStyle,
+    surfaceFocusWithin:surface.matches(':focus-within'),surfaceOutline:surfaceStyle.outlineStyle,
+    surfaceOutlineWidth:parseFloat(surfaceStyle.outlineWidth),surfaceOutlineOffset:parseFloat(surfaceStyle.outlineOffset)};
+  });
+  assert.equal(boundary.editorFocusVisible,true,label+': actual keyboard editing focus');
+  assert.equal(boundary.editorOutline,'none',label+': no nested rectangle around text');
+  assert.equal(boundary.surfaceFocusWithin,true);
+  assert.equal(boundary.surfaceOutline,'solid');assert.ok(boundary.surfaceOutlineWidth>=2);
+  assert.ok(boundary.surfaceOutlineOffset>=0,'Composer boundary retains its visible external focus ring');
+  check('composer-focus',{label,...boundary});
+ };
  const fade=()=>pane.evaluate(el=>{
   const s=getComputedStyle(el);
   return {top:el.scrollTop,remaining:el.scrollHeight-el.clientHeight-el.scrollTop,above:el.dataset.overflowAbove,
@@ -503,7 +521,8 @@ try{
   const primary=await contrast(send.locator('svg'),'Primary Send icon');
   assert.equal(primary.stroke,primary.color,'Actual Send icon stroke uses its measured ink');
   const primaryFill=await paint(send);
-  await contrast(input,'Composer container');await textLeaves(input,'Composer text');await focus(send,'Send');
+  await contrast(input,'Composer container');await textLeaves(input,'Composer text');
+  await composerFocus(`${scheme}-${width}`);await focus(send,'Send');
   const add=page.getByRole('button',{name:'Add attachments',exact:true});
   const model=page.getByRole('button',{name:'Model and reasoning settings',exact:true});
   for(const control of [add,send,model]){await expect(control).toBeVisible();await expect(control).toBeInViewport();await expect(control).toBeEnabled()}
@@ -527,14 +546,14 @@ try{
  check('system-scheme',{follows:['light','dark']});
  await page.setViewportSize({width:1600,height:1000});await presentation({scheme:'dark',decorations:true});
  phase('reduced-motion');await page.emulateMedia({reducedMotion:'reduce'});await staticArt('Reduced motion');
- await focus(send,'Reduced-motion Send');await sidebar({rename:false});await end('Reduced-motion end');
+ await composerFocus('Reduced motion');await focus(send,'Reduced-motion Send');await sidebar({rename:false});await end('Reduced-motion end');
  phase('decorations-off');await presentation({decorations:false});await expect(app).toHaveAttribute('data-decorations','off');
- await staticArt('Decorations off chat',true);await focus(send,'Decorations-off Send');
+ await staticArt('Decorations off chat',true);await composerFocus('Decorations off');await focus(send,'Decorations-off Send');
  await selection(reading(),'Decorations-off selection');
  await sidebar({rename:false});await end('Decorations-off end');
  await enter('home');await staticArt('Decorations off Home',true);await enter('chat');
  phase('forced-colors');await presentation({decorations:true});await page.emulateMedia({forcedColors:'active'});
- await staticArt('Forced colors chat',true);await focus(send,'Forced-colors Send');
+ await staticArt('Forced colors chat',true);await composerFocus('Forced colors');await focus(send,'Forced-colors Send');
  await selection(reading(),'Forced-colors selection');await sidebar({rename:false,forced:true});
  await end('Forced-colors end',{forced:true});await enter('workspace');await staticArt('Forced colors workspace',true);
  await page.emulateMedia({forcedColors:'none',reducedMotion:'no-preference'});

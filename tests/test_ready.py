@@ -267,6 +267,11 @@ def test_ready_paints_real_parts_and_preserves_native_layout_owners():
         "outline": "2px solid var(--a-accent)",
         "outline-offset": "3px",
     }
+    inner_editor_focus = composer + ' [role="textbox"][contenteditable="true"]:focus-visible'
+    assert declarations(inner_editor_focus) == {"outline": "none"}
+    # This exception removes only the nested editor outline. The host's
+    # composer-surface :focus-within still owns the visible boundary indicator.
+    assert "outline" not in declarations(composer + ":focus-within")
     # This authored outline also applies in forced colors; its accent resolves
     # to Highlight below. No separate media-context selector is required.
 
