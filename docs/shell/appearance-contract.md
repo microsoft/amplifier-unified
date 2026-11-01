@@ -166,6 +166,11 @@ descendant has keyboard-visible focus, or when an `input`, `textarea`, `select`,
 `[contenteditable]`, or `iframe` is focused. This keeps focus feedback and active
 editing readable without disabling fades for pointer/programmatic focus on a
 non-visible container, such as the question section focused by **Review questions**.
+For embedded browsing contexts, the host document's active `iframe` inside the
+transcript is authoritative even if CSS `:focus` and `:focus-within` are false.
+The shared scroll owner observes native host focus changes without reading the
+child document, moving focus, or changing scrolling. A mounted but inactive frame
+must not disable fades. Leaving or removing the frame clears the host guard.
 Do not remove native focus indicators. Forced colors removes the mask.
 Decorations-off does not remove this functional cue. Appearances may tune
 documented fade lengths, but should not replace the mask, add scroll listeners or

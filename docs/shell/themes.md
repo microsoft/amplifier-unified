@@ -103,6 +103,10 @@ the bottom removes the bottom fade so the final text and actions remain readable
 Keyboard-visible focus on the scroll pane or a descendant, and focus on an active
 editor (`input`, `textarea`, `select`, `[contenteditable]`, or `iframe`), disables
 the mask. Pointer/programmatic focus on a non-visible container alone does not.
+An active embedded review is detected from the host document's active iframe,
+not only CSS focus selectors; no child-document access is required. A mounted
+but inactive iframe leaves the fade enabled. Native focus changes and frame
+removal clear this host-owned guard without moving the reading position.
 Forced colors removes the mask. The scrollbar gutter remains intact. The navigator
 and composer are outside the masked scroller; do not mask the conversation panel
 or reposition its children.

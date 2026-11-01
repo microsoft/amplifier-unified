@@ -166,6 +166,8 @@ const inspect=async(pane,questionId)=>pane.evaluate((el,id)=>{
    activeInsidePane:!!active&&el.contains(active),
    activeTextarea:active instanceof HTMLTextAreaElement,
    activeIframe:active instanceof HTMLIFrameElement,
+   activeIframeCssFocus:active instanceof HTMLIFrameElement&&active.matches(':focus'),
+   transcriptIframeFocus:el.dataset.transcriptIframeFocus??null,
    activeEditable:!!active?.matches?.('input:focus, textarea:focus, select:focus, [contenteditable]:focus, iframe:focus'),
    paneFocused:document.activeElement===el,
    paneFocusVisible:el.matches(':focus-visible'),
@@ -530,17 +532,32 @@ try{
  await expect(iframe).toHaveAttribute('sandbox','allow-scripts');
  await expect(inner.getByRole('heading',{name:'HTML mockup v1',exact:true})).toBeVisible();
  const innerControl=inner.getByRole('button',{name:'Try mockup',exact:true});
+ // Merely mounting a review must not disable the overflow cue.
+ await composer.evaluate(element=>element.focus({preventScroll:true}));await expect(composer).toBeFocused();
+ await expect(pane).not.toHaveAttribute('data-transcript-iframe-focus','true');
+ for(let index=0;index<4&&(await readState()).geometry.remaining<=1;index++)await wheelAtPane(-400);
+ const iframeInactive=await record('question-review-iframe-inactive',pane,reviewFixture.question.id);
+ assert.equal(iframeInactive.focus.activeIframe,false);
+ assert.ok(iframeInactive.geometry.remaining>1,'Inactive iframe negative control has actual overflow');
+ assertMasked(iframeInactive,'An inactive mounted iframe does not suppress the shared overflow mask');
  await innerControl.click();
  await expect(inner.locator('#value')).toHaveText('1');
+ assert.equal(await iframe.evaluate(element=>element.ownerDocument.activeElement===element),true,
+  'The host active element is this real sandboxed question review');
+ await expect(pane).toHaveAttribute('data-transcript-iframe-focus','true');
  const iframePointer=await record('question-review-iframe-pointer',pane,reviewFixture.question.id);
  assert.equal(iframePointer.focus.activeIframe,true,'Inner pointer focus is represented by the real host iframe');
  assert.equal(iframePointer.focus.activeInsidePane,true);
- assert.equal(iframePointer.focus.activeEditable,true,'The shared editor guard includes focused review iframes');
+ assert.equal(iframePointer.focus.transcriptIframeFocus,'true','Host active iframe identity protects the review independently of CSS :focus');
+ assert.ok(iframePointer.geometry.remaining>1,'Iframe pointer focus check exercises actual bottom overflow');
  assert.equal(maskActive(iframePointer),false,'Interactive iframe pointer focus suppresses transcript masking');
  // Traverse out and back with the keyboard; host focus-visible alone cannot
  // describe focus on a control in an opaque-origin sandbox.
  await page.keyboard.press('Tab');await page.keyboard.press('Shift+Tab');
  await expect(innerControl).toBeFocused();
+ assert.equal(await iframe.evaluate(element=>element.ownerDocument.activeElement===element),true,
+  'Inner keyboard focus retains this real review as the host active element');
+ await expect(pane).toHaveAttribute('data-transcript-iframe-focus','true');
  const innerFocus=await innerControl.evaluate(element=>({
   active:document.activeElement===element,focusVisible:element.matches(':focus-visible'),
   outlineStyle:getComputedStyle(element).outlineStyle,
@@ -555,14 +572,16 @@ try{
  report.focus.at(-1).inner=innerFocus;
  assert.equal(iframeKeyboard.focus.activeIframe,true);
  assert.equal(iframeKeyboard.focus.activeInsidePane,true);
+ assert.equal(iframeKeyboard.focus.transcriptIframeFocus,'true');
  assert.ok(iframeKeyboard.geometry.remaining>1,'Iframe focus check exercises actual bottom overflow');
  assert.equal(iframeKeyboard.overflow.below,'true');
  assert.equal(maskActive(iframeKeyboard),false,'Inner keyboard controls remain fully unmasked');
  const iframeScroll=iframeKeyboard.geometry.scrollTop;
  await composer.evaluate(element=>element.focus({preventScroll:true}));
- await expect(composer).toBeFocused();await settled();
+ await expect(composer).toBeFocused();await expect(pane).not.toHaveAttribute('data-transcript-iframe-focus','true');await settled();
  const iframeBlurred=await record('question-review-iframe-blurred',pane,reviewFixture.question.id);
  assert.equal(iframeBlurred.focus.activeInsidePane,false);
+ assert.notEqual(iframeBlurred.focus.transcriptIframeFocus,'true');
  assert.ok(Math.abs(iframeBlurred.geometry.scrollTop-iframeScroll)<=1,'Leaving the iframe preserves the transcript position');
  assert.equal(iframeBlurred.overflow.below,'true');
  assertMasked(iframeBlurred,'Leaving the real iframe restores the shared overflow mask');
