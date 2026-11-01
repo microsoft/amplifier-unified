@@ -1,8 +1,8 @@
 """Cooperative app replacement using the existing update and input receipts.
 
-The drain is not a task pause. Only positively unsubmitted messages wait here;
-native-accepted work must save and park before the ordinary updater may replace
-its process. No input or uncertain effect is replayed.
+Staging does not pause work. Only positively unsubmitted messages wait during
+actual replacement and restart. Older pre-replacement holds can be withdrawn
+through their existing receipts. No input or uncertain effect is replayed.
 """
 import copy
 import json
@@ -99,75 +99,29 @@ def hold_message(service, session, message):
 
 
 async def prepare(manager, release):
-    """One bounded observation of currently owned workers, never model work."""
-    service, runtime = manager.service, manager.service.runtime
-    if not runtime or not callable(getattr(runtime, 'handoff_boundary', None)):
-        return not manager.busy()
-    target = {key: release.get(key) for key in ('attemptId', 'revision', 'generation')}
-    prior = service.state['updates'].get('drain')
-    if prior and prior.get('target') != target and prior.get('phase') == 'draining':
+    """Observe idle readiness without reserving workers or withholding input."""
+    service = manager.service
+    prior = service.state['updates'].get('drain') or {}
+    if prior.get('phase') == 'draining':
+        # Older hosts could freeze all work before a restart was possible.
+        # Withdraw only that pre-replacement boundary using its saved receipts.
+        # A released continuation may not have reached admission yet: do not
+        # replace the host in the same observation that releases its work.
         await finish(manager, 'withdrawn')
-    async with service.lock:
-        drain = service.state['updates'].get('drain')
-        changed = False
-        if drain and drain.get('phase') == 'releasing':
-            return False
-        if not held(service):
-            if not manager.busy():
-                return True
-            drain = {'attemptId': release['attemptId'], 'target': target, 'phase': 'draining',
-                     'hostInstanceId': service.instance_id, 'workers': {}, 'messages': []}
-            changed = True
-            service.state['updates']['drain'] = drain
-            service.state['updates']['detail'] = 'Saving current work before updating. Your saved messages will continue afterward.'
-        # Preparations admitted before the gate can finish creating their owner.
-        for sid, worker in getattr(runtime, 'workers', {}).items():
-            if worker['process'].returncode is None and sid not in drain['workers']:
-                session = service._session(sid)
-                changed = True
-                drain['workers'][sid] = {'sessionId': sid, 'owner': worker['runtimeOwnerId'],
-                    'binding': binding(session), 'boundaryId': 'update:' + drain['attemptId'] + ':' + sid}
-        if changed:
-            service._publish_changes(globals={'updates'})
-    ready = True
-    for sid, row in list(drain['workers'].items()):
-        worker = getattr(runtime, 'workers', {}).get(sid)
-        if worker is None or worker['process'].returncode is not None:
-            current = service._session(sid)
-            if current.get('interruptionRevision', 0) != row['binding']['interruptionRevision']:
-                boundary = getattr(runtime, 'stopped_boundary', None)
-                if boundary:
-                    try:
-                        async with service.lock:
-                            with boundary(current) as proof:
-                                row.update(ready=True, stopped=proof, waitingFor=[])
-                                row.pop('yieldedGoal', None)
-                                service._publish_changes(globals={'updates'})
-                    except (RuntimeError, OSError):
-                        pass
-            # A retained positive checkpoint survives retirement; an absent
-            # process alone never proves that its active work settled.
-            ready = ready and row.get('ready') is True
-            continue
-        if worker.get('runtimeOwnerId') != row['owner']:
-            row.update(owner=worker['runtimeOwnerId'], ready=False)
-            if binding(service._session(sid)) != row['binding']:
-                row.pop('yieldedGoal', None)
-        try:
-            status = await runtime.handoff_boundary(sid, row['boundaryId'], update=True)
-        except (RuntimeError, ValueError, TimeoutError) as exc:
-            status = {'ready': False, 'waitingFor': ['native-boundary'], 'detail': str(exc)}
-        async with service.lock:
-            if service.state['updates'].get('drain') is not drain:
-                return False
-            if any(row.get(key) != value for key, value in status.items()):
-                row.update(copy.deepcopy(status))
-                if status.get('ready'):
-                    row['generationId'] = (service._session(sid).get('collaborationGeneration') or {}).get('id')
-                    row['lastInputId'] = latest_input(service._session(sid))
-                service._publish_changes(globals={'updates'})
-        ready = ready and status.get('ready') is True
-    return ready and not manager.busy()
+        return False
+    return not held(service) and not manager.busy()
+
+
+def begin_replacement(manager, release):
+    """Close admission under the final activation lock, never during staging."""
+    service = manager.service
+    identity = manager.diagnostics.state['attemptId']
+    service.state['updates']['drain'] = {
+        'attemptId': identity,
+        'target': {'attemptId': identity, 'revision': release['revision'],
+                   'generation': release.get('generation')},
+        'phase': 'replacing', 'hostInstanceId': service.instance_id,
+        'workers': {}, 'messages': []}
 
 
 def latest_input(session, excluding_request=None):

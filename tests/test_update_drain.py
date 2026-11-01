@@ -2,7 +2,6 @@
 import asyncio
 import copy
 import json
-from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -135,33 +134,34 @@ async def test_update_gate_does_not_reclassify_a_retry_as_unattempted(app):
     assert app.state['updates']['drain']['messages'] == []
 
 
-async def test_settled_explicit_stop_releases_old_worker_boundary_without_continuation(app):
+async def test_old_pre_replacement_hold_is_withdrawn_without_same_tick_activation(app):
     sid = app._session()['id']
-    row = {'sessionId': sid, 'owner': 'original', 'boundaryId': 'boundary',
-           'binding': drain.binding(app._session()), 'ready': False, 'yieldedGoal': {'task_id': 't'}}
-    app.state['updates']['drain']['workers'][sid] = row
-    app.runtime.workers = {}
-    app.runtime.handoff_boundary = AsyncMock()
-    @contextmanager
-    def absent(session):
-        assert session['interruptionRevision'] == 1
-        yield {'workerAbsent': True}
-    app.runtime.stopped_boundary = absent
-    app._session().update(interruptionRevision=1, status='stopped')
-    release = {**app.state['updates']['drain']['target']}
-    assert await drain.prepare(app.update_manager, release)
-    assert row['ready'] and row['stopped']['workerAbsent'] and 'yieldedGoal' not in row
-    assert not app.runtime.sent
-
-
-async def test_missing_worker_without_settlement_is_still_unknown(app):
-    sid = app._session()['id']
-    app.state['updates']['drain']['workers'][sid] = {'sessionId': sid, 'owner': 'gone',
-        'binding': drain.binding(app._session()), 'boundaryId': 'boundary', 'ready': False}
-    app.runtime.workers = {}
-    app.runtime.handoff_boundary = AsyncMock()
+    app.state['updates']['drain']['workers'][sid] = {
+        'sessionId': sid, 'owner': 'original', 'boundaryId': 'boundary',
+        'binding': drain.binding(app._session()), 'ready': False}
+    app.runtime.workers = {sid: {'runtimeOwnerId': 'original'}}
+    app.runtime.handoff_boundary = AsyncMock(return_value={'cancelled': True})
+    await send(app, 'retained-before-withdrawal')
     assert not await drain.prepare(app.update_manager, app.state['updates']['drain']['target'])
+    app.runtime.handoff_boundary.assert_awaited_once_with(sid, 'boundary', cancel=True)
+    assert [row[2] for row in app.runtime.sent] == ['retained-before-withdrawal']
+    assert app.state['updates']['drain']['phase'] == 'released'
+    assert not app.update_manager.busy()
+
+
+async def test_unconfirmed_old_boundary_withdrawal_preserves_held_input(app):
+    sid = app._session()['id']
+    app.state['updates']['drain']['workers'][sid] = {
+        'sessionId': sid, 'owner': 'original', 'boundaryId': 'boundary',
+        'binding': drain.binding(app._session()), 'ready': False}
+    app.runtime.workers = {sid: {'runtimeOwnerId': 'original'}}
+    app.runtime.handoff_boundary = AsyncMock(side_effect=TimeoutError('not confirmed'))
+    await send(app, 'still-retained')
+    with pytest.raises(TimeoutError):
+        await drain.prepare(app.update_manager, app.state['updates']['drain']['target'])
     assert not app.runtime.sent
+    assert app.state['updates']['drain']['phase'] == 'draining'
+    assert app._session()['messages'][0]['delivery']['status'] == 'queued_for_update'
 
 
 async def test_new_message_during_release_cannot_overtake_saved_inputs(app):

@@ -496,9 +496,9 @@ async def _activate(manager, *, force=None):
             replacement['forceRestart'] = {key: force[key] for key in ('hostInstanceId', 'revision', 'generation', 'attemptId')}
         # Persist this marker before uv can change the active environment. Every
         # error, cancellation and process exit must retain the admission fence.
-        drain = manager.service.state['updates'].get('drain')
-        if drain and drain.get('phase') == 'draining':
-            drain['phase'] = 'replacing'
+        if force is None:
+            from .update_drain import begin_replacement
+            begin_replacement(manager, release)
         manager.service.state['updates'].update(phase='activating',pendingReplacement=replacement,detail='Installing the app update and restarting…')
         manager.service._publish_changes(globals={'updates'})
     try:

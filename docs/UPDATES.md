@@ -389,31 +389,27 @@ Other update tiers retain the current Core version. Frozen generation receipts
 remain exact for rollback and revalidation; they do not become standing version
 pins for future update checks. The Core source-build prohibition remains enabled.
 
-### Saving work before an application update
+### Work continues while an application update is pending
 
-A validated pending application release may ask its current workers to finish
-their admitted work and yield automatic goal continuation at the native turn
-boundary. Settings shows **Saving current work before updating**. Existing
-tools, child workers, approval answers and Stop remain available; new delegated
-work waits. An already claimed scheduled occurrence settles through its existing
-receipt, while unclaimed occurrences wait. Long-running children, tools, calls,
-unsupported native boundaries and unresolved operations remain visible blockers;
-this is not a forced cancellation or a task pause.
+Checking, staging and validating an application update do not pause conversations,
+block new messages or freeze delegation. A qualified update waits for the normal
+idle readiness check. Active tools, children, calls and unresolved operations
+postpone the update, not unrelated work. Continuously busy hosts can leave an
+update pending; the existing explicit **Restart now** control is the separate
+operator choice to interrupt work for a qualified restart.
 
-Ordinary new human messages are saved under their original input IDs, acknowledged
-as saved, and sent in order after the exact restarted installation is healthy.
-Only messages positively held before transport enter this queue. Native-accepted
-inputs continue settling in their original worker; sending/unknown inputs are
-never automatically replayed. Generation-only steering retains its original
-window. Peer messages stay in their existing durable queues. The update gate
-remains active while saved messages are released, including messages arriving
-during release; Stop after a message was saved holds it without starting work.
+After final candidate validation, activation rechecks readiness under the same
+host lock that commits replacement. Work arriving during validation takes priority
+and postpones that replacement. Only the actual replacement/restart window holds
+ordinary new human messages. They are saved under their original input IDs,
+acknowledged as saved, and sent in order after the exact restarted installation
+is healthy. Stop after saving holds the message without starting work.
+Native-accepted or uncertain inputs are never automatically replayed.
 
-Only a continuing objective actually yielded by this update receives one retained
-continuation after healthy activation (or a known pre-replacement withdrawal).
-It keeps its task identity, continuation epoch, used allowance, saved work and
-current constraints. A changed objective, Stop, pause, completion or exhausted
-allowance cannot acquire a new turn. Newly saved input takes precedence. Idle
-active tasks that were already waiting are not woken. Continuation uses the
-existing request/outcome receipt and first-admission rules, not a new scheduler.
-An uncertain replacement remains fenced; its failure is not treated as withdrawal.
+Older pre-replacement cooperative holds are withdrawn through their existing
+boundary and message receipts. A successful withdrawal releases known unsubmitted
+messages and any exact yielded ongoing objective with its original task and used
+allowance. An unconfirmed boundary cancellation remains unresolved; it is not
+assumed successful. Replacement uncertainty remains fenced and is never treated
+as a pre-replacement withdrawal. No new automatic worker-yield boundary is created
+merely because an update is staged.
