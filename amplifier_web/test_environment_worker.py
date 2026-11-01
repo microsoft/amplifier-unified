@@ -35,6 +35,20 @@ source_transfer = importlib.util.module_from_spec(_transfer_spec)
 _transfer_spec.loader.exec_module(source_transfer)
 
 
+# Both codes are emitted synchronously by DTU's repository exporter, before
+# dependency preparation or guest admission. Keep unknown backend failures held.
+PRELAUNCH_SOURCE_REFUSALS = frozenset({'repository-source-changed', 'repository-file-unsupported'})
+
+
+def source_refusal_message(code):
+    reason = ('The source changed while its snapshot was being prepared.'
+              if code == 'repository-source-changed' else
+              'The source snapshot contains a selected path that is not a regular file or symlink.')
+    correction = ('Keep the source stable' if code == 'repository-source-changed' else
+                  'Use only regular files or symlinks in the selected source')
+    return reason + ' No environment or test command was started. ' + correction + ' and submit a new check.'
+
+
 def selected_profile(payload):
     spec = importlib.util.spec_from_file_location('_environment_profiles', Path(__file__).with_name('test_environment_profiles.py'))
     profiles = importlib.util.module_from_spec(spec)
@@ -808,12 +822,12 @@ def execute_call(payload):
     except RemovalFailure:
         raise  # Preserve the inner bounded receipt, including confirmed destruction.
     except DigitalTwinUniverseError as exc:
-        if action == 'prepare' and exc.code == 'repository-source-changed':
+        if action == 'prepare' and exc.code in PRELAUNCH_SOURCE_REFUSALS:
             # This synchronous source export returned before dependency or
             # guest admission. Never describe it as an uncertain running check.
             return {'ok': False, 'status': 'not-started', 'effectAdmitted': False,
                     'universeId': identity, 'snapshot': None, 'code': exc.code,
-                    'message': 'The source changed while its snapshot was being prepared. No environment or test command was started. Keep the source stable and submit a new check.'}
+                    'message': source_refusal_message(exc.code)}
         if action in {'remove', 'finishCleanup'}:
             return {'ok': False, 'status': 'unknown', 'code': 'backend_unconfirmed',
                     'message': 'The original removal could not be confirmed. Inspect retained evidence; do not replay.'}

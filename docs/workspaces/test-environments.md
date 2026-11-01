@@ -32,9 +32,10 @@ automatically replayed. A read can observe containers without proving that an
 earlier command finished. Stop of a conversation revokes agent approval; it does
 not itself claim to stop an environment or cancel an in-container command.
 
-A returned `repository-source-changed` failure during source preparation is a
-terminal failed check: no dependency preparation, guest launch or test command
-started. Keep the source stable and submit a **new** check explicitly; the failed
+A returned `repository-source-changed` or `repository-file-unsupported` failure
+during source preparation is a terminal failed check: no dependency preparation, guest launch or test command
+started. Keep the source stable, or correct selected paths that are neither
+regular files nor symlinks, and submit a **new** check explicitly; the failed
 request is never replayed. Reconciliation can recognize an already-retired
 allocation from its exact original failed receipt and private owner/backend
 binding. This reports the historical no-launch result, not current physical
