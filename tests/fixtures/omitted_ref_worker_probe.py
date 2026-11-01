@@ -980,7 +980,10 @@ async def run(args, evidence):
         app.state['sessions'].append(source)
         events = []
         async def emit(kind, data):
-            if kind == 'runtime.status' and data.get('status') == 'ready':
+            # Kernel session.ready is also normalized to status=ready. Count
+            # only the manager's exact worker-ready publication, not both layers.
+            if (kind == 'runtime.status' and data.get('status') == 'ready'
+                    and data.get('phase') == 'ready' and data.get('runtimeOwnerId')):
                 events.append({'type': kind, 'sessionId': data.get('sessionId'), 'status': 'ready'})
 
         for cycle in (1, 2):
