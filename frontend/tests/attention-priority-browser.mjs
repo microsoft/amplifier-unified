@@ -3,13 +3,13 @@ import {spawn} from 'node:child_process';
 import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
-import {mkdir} from 'node:fs/promises';
+import {mkdir,writeFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const artifacts=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp';
 const installed=process.env.ATTENTION_INSTALLED==='1';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/browser_detail_server.py',process.env.ATTENTION_PACKAGE_PARENT||root],{stdio:['ignore','pipe','inherit']});
-let browser,vite;const errors=[];
+let browser,vite,currentPage;const errors=[],failedRequests=[];
 try{
  await mkdir(artifacts,{recursive:true});
  const ready=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),30000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exit '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.port){clearTimeout(timer);resolve(value)}}catch{}})});
@@ -20,7 +20,9 @@ try{
  browser=await chromium.launch({headless:true});
  for(const narrow of [false,true]){
   const context=await browser.newContext({viewport:narrow?{width:390,height:844}:{width:1280,height:920},hasTouch:narrow,extraHTTPHeaders:headers});
-  const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
+  const page=await context.newPage();currentPage=page;page.on('pageerror',e=>errors.push(e.message));
+  page.on('requestfailed',request=>failedRequests.push({url:request.url(),error:request.failure()?.errorText}));
+  page.on('response',response=>{if(response.status()>=400)failedRequests.push({url:response.url(),status:response.status()})});
   await control('recover');const before=await control('seed');
   await page.goto(url);await page.locator('#amp-one').waitFor();
   const activity=page.getByRole('button',{name:/^Activity(?: \d+ (?:unread items|items needing attention))?$/});
@@ -107,4 +109,11 @@ try{
  }
  assert.deepEqual(errors,[]);
  console.log('PASS attention priority: quiet 53 notices + 3 receipts; first/read/repeat/check/distinct/recovery/next; preferences; explicit unknown/overflow disposition; stale confirmation refusal; concurrent failure preserved; closed-history reload; keyboard + touch; desktop + narrow; '+(installed?'installed':'source')+' boundary.');
+}catch(error){
+ console.error('Browser diagnostics:',JSON.stringify({errors,failedRequests}));
+ if(currentPage&&!currentPage.isClosed()){
+  await currentPage.screenshot({path:`${artifacts}/attention-failed-${installed?'installed':'source'}.png`,fullPage:true});
+  await writeFile(`${artifacts}/attention-failed-${installed?'installed':'source'}.html`,await currentPage.content());
+ }
+ throw error;
 }finally{await browser?.close();await vite?.close();fixture.kill('SIGTERM');await new Promise(resolve=>fixture.exitCode!==null?resolve():fixture.once('exit',resolve));}
