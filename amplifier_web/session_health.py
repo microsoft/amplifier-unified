@@ -63,13 +63,20 @@ def generation_failure(event):
     known = {'native_input_oversized', 'native_checkpoint_invalid', 'native_no_reduction',
              'native_measurement_unavailable', 'native_compaction_failed', 'disabled',
              'request_context_unavailable', 'invalid_native_contract', 'authoritative_measurement_unavailable',
-             'summary_output_limit', 'summary_empty', 'previous_failure', 'summary_failed', 'native_failed'}
+             'summary_output_limit', 'summary_empty', 'previous_failure', 'summary_failed', 'native_failed',
+             'native_recovery_required_context_oversized', 'checkpoint_persist_failed'}
     code = code if isinstance(code, str) else None
     if category == 'context_compaction':
         stage = 'context_preparation'
         if code == 'native_input_oversized':
             summary = 'Saved history is too large for native compaction.'
             guidance = 'Restore a compatible checkpoint or explicitly recover this history in bounded windows. Retrying the same request will not fix it. Original history is preserved; no foreground model request was sent for this step.'
+        elif code == 'native_recovery_required_context_oversized':
+            summary = 'Required conversation content exceeds the recovery allowance.'
+            guidance = 'Inspect the retained instructions, attachments and current tool exchange before continuing. Original history is preserved; required content was not truncated and no foreground model request was sent.'
+        elif code == 'checkpoint_persist_failed':
+            summary = 'Conversation summary progress could not be saved.'
+            guidance = 'Restore checkpoint storage before continuing. Original history is preserved; no foreground model request was sent.'
         elif code == 'native_checkpoint_invalid':
             summary = 'The saved native checkpoint cannot be used by the selected provider or model.'
             guidance = 'Restore a compatible checkpoint or explicitly recover the history. Original history is preserved; no automatic summary fallback was used.'
