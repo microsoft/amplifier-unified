@@ -1,23 +1,27 @@
 """Actual Core/Streaming preparation; synthetic model and retained visual data."""
+import asyncio
 import copy
 import importlib.util
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from amplifier_core import ProviderInfo, ToolResult
-from amplifier_core.message_models import ChatResponse, Message, TextBlock, ToolCall, Usage
+from amplifier_core import HookResult, ProviderInfo, ToolResult
+from amplifier_core.message_models import ChatRequest, ChatResponse, Message, TextBlock, ToolCall, Usage
 from amplifier_foundation.bundle import Bundle, PreparedBundle, BundleModuleResolver
 
 from amplifier_web.coordination_delivery import CoordinationDelivery
 from amplifier_web.surface_delivery import SurfaceProvider
 from amplifier_web.voice_visual_delivery import VoiceVisualDelivery
+from amplifier_web.output_image_delivery import OutputImageDelivery, pair_retained
 from test_coordination_delivery import Previous, available_requirements, empty_discovery
+from test_output_image_pairs import pair, identities, pixels, status
 
 
-async def native_case(mode='stale_visual', max_iterations=-1, legacy_budget=False):
+async def native_case(mode='stale_visual', max_iterations=-1, legacy_budget=False, output_pair=None):
     plan = {'session': {'orchestrator': {'module': 'loop-streaming', 'config': {
         'use_streaming': False, 'extended_thinking': True,
         'min_delay_between_calls_ms': 0, 'max_iterations': max_iterations,
@@ -25,7 +29,8 @@ async def native_case(mode='stale_visual', max_iterations=-1, legacy_budget=Fals
     paths = {name: Path(importlib.util.find_spec('amplifier_module_' + name.replace('-', '_')).origin).parent
              for name in ('loop-streaming', 'context-simple')}
     session = await PreparedBundle(plan, BundleModuleResolver(paths),
-        Bundle(name='refit-fixture', session=plan['session'])).create_session(session_id='refit-fixture')
+        Bundle(name='refit-fixture', session=plan['session'])).create_session(
+            session_id=output_pair.sid if output_pair else 'refit-fixture')
     scope = {'rootSessionId': session.session_id, 'runtimeSessionId': session.session_id,
              'generationId': 'generation-1', 'inputIds': ['original-input'],
              'inputCoverage': 'complete', 'stopRevision': 0}
@@ -35,7 +40,10 @@ async def native_case(mode='stale_visual', max_iterations=-1, legacy_budget=Fals
     required['coverage']['supportedInputIds'] = scope['inputIds']
     required['requirementsRef']['args']['sessionId'] = session.session_id
     state = SimpleNamespace(stale=False, measurements=[], transports=[], tools=0, preparations=0,
-                            budget_options=[], dispatch_options=[])
+                            budget_options=[], dispatch_options=[], image_reads=0,
+                            timeout_cancelled=False, timeout_elapsed=None, bound=[])
+    pair_input = {'operation': 'dispatch', 'args': {'action': 'outputs.images',
+        'args': {'images': identities(output_pair.rows)}}} if output_pair else None
 
     class Surfaces(Previous):
         epoch = ['original-input']
@@ -60,10 +68,36 @@ async def native_case(mode='stale_visual', max_iterations=-1, legacy_budget=Fals
             if state.stale:
                 raise ValueError('Synthetic observation revoked')
             return {'_image': 'c3ludGhldGlj', 'source': 'Synthetic capture'}
+        if operation == 'context.manifest':
+            return {'inputIds': list(scope['inputIds'])}
+        if operation == 'outputs.images.read':
+            assert output_pair is not None
+            assert args == {'images': identities(output_pair.rows)}
+            state.image_reads += 1
+            if state.image_reads == 2:
+                started = time.monotonic()
+                try:
+                    # Use the production two-second wait_for in revalidate;
+                    # do not substitute TimeoutError or shorten its deadline.
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    state.timeout_cancelled = True
+                    state.timeout_elapsed = time.monotonic() - started
+                    if mode == 'pair_stop':
+                        scope['stopRevision'] += 1
+                    elif mode == 'pair_input_changed':
+                        scope['inputIds'] = ['original-input', 'later-input']
+                    elif mode == 'pair_work_changed':
+                        required['version'] = 'changed-authority'
+                    raise
+            if mode == 'pair_timeout_without_pixels' and state.image_reads > 2:
+                raise ValueError('Synthetic saved-image read remains unavailable')
+            return await output_pair.app.app_bridge(operation, args, output_pair.sid)
         raise AssertionError(operation)
 
     work = CoordinationDelivery(Surfaces(), bridge, origin_scope=lambda: copy.deepcopy(scope))
-    visual = VoiceVisualDelivery(work, bridge)
+    visual = OutputImageDelivery(work, bridge) if output_pair else VoiceVisualDelivery(work, bridge)
+    state.delivery = visual
 
     class Tool:
         name = 'app_control'
@@ -72,6 +106,11 @@ async def native_case(mode='stale_visual', max_iterations=-1, legacy_budget=Fals
 
         async def execute(self, arguments):
             state.tools += 1
+            if output_pair:
+                assert arguments == pair_input
+                receipt = await output_pair.app.dispatch('outputs.images', {
+                    'sessionId': output_pair.sid, 'images': identities(output_pair.rows)})
+                return ToolResult(success=True, output=visual.remember_pair(receipt, arguments))
             return ToolResult(success=True, output=visual.remember({
                 'accepted': True, 'result': {'id': 'capture-1', 'callId': 'visual-1'}}))
 
@@ -123,7 +162,7 @@ async def native_case(mode='stale_visual', max_iterations=-1, legacy_budget=Fals
                     from amplifier_web.request_refit import RequestFitChanged
                     raise RequestFitChanged('content_changed')
             return ChatResponse(content=[] if len(state.transports) == 1 else [TextBlock(text='Done')],
-                tool_calls=[ToolCall(id='read-once', name='app_control', arguments={})]
+                tool_calls=[ToolCall(id='read-once', name='app_control', arguments=pair_input or {})]
                     if len(state.transports) == 1 else [],
                 usage=Usage(input_tokens=100, output_tokens=1, total_tokens=101))
 
@@ -134,6 +173,12 @@ async def native_case(mode='stale_visual', max_iterations=-1, legacy_budget=Fals
             return await named_budget(self, request, **kwargs)
         Provider.request_budget = legacy
     await session.coordinator.mount('tools', Tool(), name='app_control')
+    if output_pair:
+        async def bind_image_pair(event, data):
+            visual.bind_pair(data)
+            state.bound.append(copy.deepcopy(data))
+            return HookResult()
+        session.coordinator.hooks.register('tool:post', bind_image_pair, name='fixture-image-pair-receipt')
     await session.coordinator.mount('providers', SurfaceProvider(Provider(), visual), name='fixture')
     return session, state
 
@@ -209,5 +254,52 @@ async def test_actual_loop_legacy_budget_keeps_its_kwargs_shape_during_refit():
         assert state.budget_options == [None] * 3
         assert state.dispatch_options == [{'extended_thinking': True}] * 2
         assert state.transports[-1] == state.measurements[-1]
+    finally:
+        await session.cleanup()
+
+
+@pytest.mark.parametrize('mode', ['pair_timeout', 'pair_timeout_without_pixels',
+                                  'pair_work_changed', 'pair_input_changed', 'pair_stop'])
+async def test_output_pair_deadline_refits_real_retained_selection_once(pair, mode):
+    session, state = await native_case(mode, output_pair=pair)
+    try:
+        execution = session.execute('Compare the saved images once, then finish.')
+        if mode in {'pair_work_changed', 'pair_input_changed', 'pair_stop'}:
+            reason = 'authority_changed' if mode == 'pair_work_changed' else 'native_scope_changed'
+            with pytest.raises(RuntimeError, match=reason):
+                await execution
+            assert len(state.measurements) == 2 and len(state.transports) == 1
+        else:
+            assert await execution == 'Done'
+            assert len(state.measurements) == 3 and len(state.transports) == 2
+            assert state.transports[-1] == state.measurements[-1]
+            sent = ChatRequest.model_validate_json(state.transports[-1])
+            manifest = status(sent)
+            assert manifest['toolCallId'] == 'read-once'
+            assert manifest['requested'] == identities(pair.rows)
+            if mode == 'pair_timeout':
+                assert pixels(sent) == pair.data
+                assert manifest['comparisonReady'] is True
+                assert manifest['delivered'] == identities(pair.rows)
+            else:
+                assert pixels(sent) == []
+                assert manifest['comparisonReady'] is False and manifest['delivered'] == []
+                assert {row['reasonCode'] for row in manifest['omitted']} == {'image_read_unavailable'}
+        assert state.timeout_cancelled is True and state.timeout_elapsed >= 1.9
+        assert state.tools == 1 and len(state.bound) == 1
+        assert state.bound[0]['tool_name'] == 'app_control'
+        assert state.bound[0]['tool_call_id'] == 'read-once'
+        assert state.bound[0]['tool_input']['args']['action'] == 'outputs.images'
+        observation = state.delivery.observation
+        assert observation['tool_call_id'] == 'read-once'
+        measured_pair = ChatRequest.model_validate_json(state.measurements[1])
+        assert pair_retained(measured_pair, observation) is True
+        assert pixels(measured_pair) == pair.data
+        assert status(measured_pair)['inspectionReceipt'] == observation['receipt']['result']['inspection']['receipt']
+        assert state.delivery.output_selection() == identities(pair.rows)
+        history = await session.coordinator.get('context').get_messages()
+        assert sum(m.get('role') == 'tool' and m.get('tool_call_id') == 'read-once' for m in history) == 1
+        assert sum(m.get('role') == 'user' and m.get('content') ==
+                   'Compare the saved images once, then finish.' for m in history) == 1
     finally:
         await session.cleanup()
