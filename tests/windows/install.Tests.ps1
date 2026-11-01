@@ -35,6 +35,25 @@ function Assert-SharingRefused([string] $Case, [scriptblock] $Action) {
     }
     throw "Fixture [$Case] expected an access/sharing refusal; operation succeeded."
 }
+function Assert-PrivateFileAcl([string] $Path) {
+    $acl = Get-Acl -LiteralPath $Path
+    $owner = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $owner -or
+        -not $acl.AreAccessRulesProtected) { throw 'Fixture file lacks exact TokenUser/protected DACL.' }
+    $seen = @()
+    foreach ($rule in $acl.Access) {
+        $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+        if ($sid -notin @($owner, 'S-1-5-18') -or $rule.IsInherited -or
+            $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
+            $rule.FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl) {
+            throw 'Fixture file lacks explicit owner/SYSTEM-only full control.'
+        }
+        $seen += $sid
+    }
+    if ($seen.Count -ne 2 -or $seen -notcontains $owner -or $seen -notcontains 'S-1-5-18') {
+        throw 'Fixture file lacks the two expected trustees.'
+    }
+}
 
 $root = New-PrivateInstallDirectory
 $fixtureStorage = $script:InstallStorage
@@ -58,7 +77,7 @@ try {
     # P1: a normal (not reparse) ancestor with foreign mutation must be refused
     # before storage/log/download writes. A safe read/traverse grant is accepted.
     $canary = Join-Path $root 'outside-canary.txt'
-    [IO.File]::WriteAllText($canary, 'outside remains unchanged')
+    Write-PrivateInstallText $canary 'outside remains unchanged'
     $foreign = New-Object Security.Principal.SecurityIdentifier('S-1-5-21-111111111-222222222-333333333-4242')
     foreach ($rights in @('DeleteSubdirectoriesAndFiles', 'WriteAttributes', 'ChangePermissions',
         'TakeOwnership', 'WriteData', 'WriteExtendedAttributes', 'Delete', 'ReadAndExecute')) {
@@ -98,8 +117,34 @@ try {
     Assert-Refused { Get-ExactChecksum "$hash  not-$name" $name } 'Missing'
     Assert-Refused { Get-ExactChecksum "broken  $name" $name } 'Malformed'
     Assert-Refused { Get-ExactChecksum "$hash  ../$name" $name } 'Malformed'
+    # Inspect creation security while the stream is EMPTY, before the first
+    # payload byte. Inherited DACLs do not guarantee the TokenUser owner.
+    $part = Join-Path $root 'stream.part'
+    $stream = $fixtureStorage.CreateFile($part)
+    try {
+        Assert-Equal $stream.Length 0
+        Assert-PrivateFileAcl $part
+        $bytes = [Text.Encoding]::UTF8.GetBytes('private stream')
+        $payload = New-Object IO.MemoryStream(,$bytes)
+        try { $payload.CopyTo($stream) } finally { $payload.Dispose() }
+        $stream.Flush($true)
+    } finally { $stream.Dispose() }
+    # Exercise the download's same-volume publication without any network.
+    $published = Join-Path $root 'stream.bin'
+    [IO.File]::Move($part, $published)
+    $fixtureStorage.HoldFile($published, $false)
+    Assert-PrivateFileAcl $published
+    Assert-Equal ([IO.File]::ReadAllText($published)) 'private stream'
+    Assert-Refused { $unexpected = $fixtureStorage.CreateFile($published) } 'already exists'
+    Assert-Equal ([IO.File]::ReadAllText($published)) 'private stream'
+    $missingLog = Join-Path $root 'missing.log'
+    Assert-Refused { Write-PrivateInstallText $missingLog 'must not create' -Append } 'pinned mutable'
+    Assert-Equal ([IO.File]::Exists($missingLog)) $false
     $body = Join-Path $root 'body'
-    [IO.File]::WriteAllText($body, 'unchanged')
+    Write-PrivateInstallText $body 'unchanged'
+    Assert-PrivateFileAcl $body
+    Assert-Refused { Write-PrivateInstallText $body 'must not replace' } 'already exists'
+    Assert-Refused { Write-PrivateInstallText $body 'must not append' -Append } 'pinned mutable'
     Assert-Refused { Assert-FileChecksum $body ('0' * 64) } 'mismatch'
     Assert-FileChecksum $body (Get-FileHash -LiteralPath $body -Algorithm SHA256).Hash.ToLowerInvariant()
     Assert-SharingRefused 'hashed-file-append' { [IO.File]::AppendAllText($body, 'must not reach hashed bytes') }
@@ -111,16 +156,22 @@ try {
     foreach ($entryName in @('ok.txt', '../escape.txt', '/absolute.txt', 'C:/drive.txt',
         'folder/file:stream', 'CON.txt', 'folder/trailing.')) {
         $archivePath = Join-Path $root ([Guid]::NewGuid().ToString('N') + '.zip')
-        $archive = [IO.Compression.ZipFile]::Open($archivePath, [IO.Compression.ZipArchiveMode]::Create)
+        $archiveStream = $fixtureStorage.CreateFile($archivePath)
         try {
-            $entry = $archive.CreateEntry($entryName)
-            $writer = New-Object IO.StreamWriter($entry.Open())
-            try { $writer.Write('fixture') } finally { $writer.Dispose() }
-        } finally { $archive.Dispose() }
+            Assert-PrivateFileAcl $archivePath
+            $archive = New-Object IO.Compression.ZipArchive($archiveStream, [IO.Compression.ZipArchiveMode]::Create, $true)
+            try {
+                $entry = $archive.CreateEntry($entryName)
+                $writer = New-Object IO.StreamWriter($entry.Open())
+                try { $writer.Write('fixture') } finally { $writer.Dispose() }
+            } finally { $archive.Dispose() }
+        } finally { $archiveStream.Dispose() }
+        $fixtureStorage.HoldFile($archivePath, $false)
         $destination = Join-Path $root ('space ' + [char]0x03B2 + ' ' + [Guid]::NewGuid().ToString('N'))
         if ($entryName -eq 'ok.txt') {
             Expand-ContainedZip $archivePath $destination
             Assert-Equal ([IO.File]::ReadAllText((Join-Path $destination 'ok.txt'))) 'fixture'
+            Assert-PrivateFileAcl (Join-Path $destination 'ok.txt')
             Assert-Refused { Expand-ContainedZip $archivePath $destination } 'already exists'
             Assert-SharingRefused 'extraction-root-rename' { [IO.Directory]::Move($destination, ($destination + '-replacement')) }
             $fixtureStorage.Validate()
@@ -130,14 +181,14 @@ try {
     }
     # Exact extraction creation refuses even a pre-existing ordinary safe root.
     $collision = Join-Path $root 'extraction-collision'
-    $null = [IO.Directory]::CreateDirectory($collision)
-    [IO.File]::WriteAllText((Join-Path $collision 'keep.txt'), 'never adopted')
+    $fixtureStorage.CreateDirectory($collision)
+    Write-PrivateInstallText (Join-Path $collision 'keep.txt') 'never adopted'
     Assert-Refused { Expand-ContainedZip $archivePath $collision } 'already exists'
     Assert-Equal ([IO.File]::ReadAllText((Join-Path $collision 'keep.txt'))) 'never adopted'
     $junctionTarget = Join-Path $root 'junction-target'
     $junction = Join-Path $root 'junction'
-    $null = [IO.Directory]::CreateDirectory($junctionTarget)
-    [IO.File]::WriteAllText((Join-Path $junctionTarget 'canary.txt'), 'junction target unchanged')
+    $fixtureStorage.CreateDirectory($junctionTarget)
+    Write-PrivateInstallText (Join-Path $junctionTarget 'canary.txt') 'junction target unchanged'
     # CPython's native junction fixture requires no symlink privilege or shell.
     & $PythonExecutable -I -S -c 'import _winapi,sys; _winapi.CreateJunction(sys.argv[1],sys.argv[2])' $junctionTarget $junction
     if ($LASTEXITCODE -ne 0) { throw 'Native junction fixture could not be created; not a pass.' }
@@ -149,16 +200,20 @@ try {
     if (Test-Path -LiteralPath (Join-Path $root 'escape.txt')) { throw 'ZIP escaped destination.' }
     foreach ($unsafeKind in @('case-collision', 'symlink')) {
         $archivePath = Join-Path $root "$unsafeKind.zip"
-        $archive = [IO.Compression.ZipFile]::Open($archivePath, [IO.Compression.ZipArchiveMode]::Create)
+        $archiveStream = $fixtureStorage.CreateFile($archivePath)
         try {
-            if ($unsafeKind -eq 'case-collision') {
-                $null = $archive.CreateEntry('same.txt')
-                $null = $archive.CreateEntry('SAME.txt')
-            } else {
-                $entry = $archive.CreateEntry('link')
-                $entry.ExternalAttributes = (40960 -shl 16)
-            }
-        } finally { $archive.Dispose() }
+            $archive = New-Object IO.Compression.ZipArchive($archiveStream, [IO.Compression.ZipArchiveMode]::Create, $true)
+            try {
+                if ($unsafeKind -eq 'case-collision') {
+                    $null = $archive.CreateEntry('same.txt')
+                    $null = $archive.CreateEntry('SAME.txt')
+                } else {
+                    $entry = $archive.CreateEntry('link')
+                    $entry.ExternalAttributes = (40960 -shl 16)
+                }
+            } finally { $archive.Dispose() }
+        } finally { $archiveStream.Dispose() }
+        $fixtureStorage.HoldFile($archivePath, $false)
         $destination = Join-Path $root $unsafeKind
         Assert-Refused { Expand-ContainedZip $archivePath $destination } 'Unsafe|duplicated'
         Assert-Equal (@(Get-ChildItem -LiteralPath $destination).Count) 0
@@ -184,6 +239,11 @@ try {
     $fixtureStorage.CreateDirectory($script:InstallWork)
     $script:InstallLog = Join-Path $root 'child.log'
     Write-PrivateInstallText $script:InstallLog '' -Mutable
+    Assert-PrivateFileAcl $script:InstallLog
+    Write-PrivateInstallText $script:InstallLog 'first' -Append
+    Write-PrivateInstallText $script:InstallLog 'second' -Append
+    Assert-Equal ([IO.File]::ReadAllText($script:InstallLog)) 'firstsecond'
+    Assert-PrivateFileAcl $script:InstallLog
     $script:InstallStage = 'fixture'
     $script:UseAnonymous = $true
     # An executable shadow in an unsafe PATH-like directory is refused before
@@ -192,7 +252,14 @@ try {
     [IO.File]::WriteAllText($shadow, 'not executable')
     Assert-Refused { Invoke-InstallChild $shadow @('--version') @{} } 'Foreign mutation'
     $appendShadow = Join-Path $root 'append-shadow.exe'
-    [IO.File]::WriteAllText($appendShadow, 'not executable')
+    # Start from exact valid ownership; only the deliberate foreign append grant
+    # below makes this negative fixture unsafe. Do not retain it as a valid pin.
+    $stream = $fixtureStorage.CreateFile($appendShadow)
+    try {
+        Assert-PrivateFileAcl $appendShadow
+        $bytes = [Text.Encoding]::UTF8.GetBytes('not executable')
+        $stream.Write($bytes, 0, $bytes.Length)
+    } finally { $stream.Dispose() }
     $acl = Get-Acl -LiteralPath $appendShadow
     $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($foreign, 'AppendData', 'Allow')))
     Set-Acl -LiteralPath $appendShadow -AclObject $acl
@@ -295,7 +362,7 @@ try {
             $asset = ([Uri]$Url).Segments[-1]
             $body = $script:FixtureBodies[$asset]
             if ($script:BadWheel -and $asset -eq $name) { $body = 'corrupted fixture' }
-            [IO.File]::WriteAllText($Destination, $body, (New-Object Text.UTF8Encoding($false)))
+            Write-PrivateInstallText $Destination $body
         }
     }
     $script:Downloads.Clear()

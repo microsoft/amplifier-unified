@@ -83,7 +83,7 @@ class WindowsInstallerSourceTests(unittest.TestCase):
             "$current.UserInfo", "$allowedHosts -notcontains",
             "$request.AllowAutoRedirect = $false", "$request.ReadWriteTimeout = 30000",
             "$total -gt $MaxBytes", "$clock.Elapsed.TotalSeconds -gt 180",
-            "[IO.FileMode]::CreateNew", "$firstFailure.Exception.GetType().Name",
+            "$script:InstallStorage.CreateFile($part)", "$firstFailure.Exception.GetType().Name",
         ):
             self.assertIn(required, download)
         self.assertNotIn("-SkipCertificateCheck", self.source)
@@ -91,7 +91,7 @@ class WindowsInstallerSourceTests(unittest.TestCase):
 
     def test_archives_prevalidate_all_paths_before_extraction(self):
         unzip = self.function("Expand-ContainedZip")
-        self.assertLess(unzip.index("$target.StartsWith"), unzip.index("::ExtractToFile"))
+        self.assertLess(unzip.index("$target.StartsWith"), unzip.index(".CreateFile($target)"))
         for required in (
             "OrdinalIgnoreCase", "$seen.Add", "$unixType -eq 40960",
             "ExternalAttributes -band 1024", "536870912", "20000",
@@ -100,6 +100,9 @@ class WindowsInstallerSourceTests(unittest.TestCase):
             self.assertIn(required, unzip)
         self.assertNotIn("Test-Path", unzip)
         self.assertNotIn("[IO.Directory]::CreateDirectory", unzip)
+        self.assertNotIn("::ExtractToFile", unzip)
+        self.assertIn("$inputStream.CopyTo($output)", unzip)
+        self.assertIn("$script:InstallStorage.HoldFile($target, $false)", unzip)
 
     def test_helpers_have_inspected_official_exact_assets_and_notices(self):
         helper = self.function("Install-VerifiedHelper")
@@ -149,6 +152,77 @@ class WindowsInstallerSourceTests(unittest.TestCase):
         )
         self.assertIn("mutable ? 3u : 1u", private)  # never share DELETE
         self.assertNotIn("directory ? 0u", private)  # metadata-only is not a pin
+
+    def test_private_file_creation_sets_security_and_validates_before_stream_exposure(self):
+        private = self.function("Initialize-InstallStorage")
+        self.assertIn("public FileStream CreateFile(string path) {", private)
+        create = private.split("public FileStream CreateFile(string path) {", 1)[1].split(
+            "public FileStream OpenAppend", 1,
+        )[0]
+        for required in (
+            'EntryPoint="CreateFileW"', "ref Attributes security",
+            'sd.Owner.Value != owner',
+        ):
+            self.assertIn(required, private)
+        for required in (
+            "AssertOwnedPath(path)", '"O:" + owner + "D:P(A;;FA;;;"',
+            '")(A;;FA;;;SY)"', "inherit=false", "LocalFree(descriptor)",
+            "ref attributes, 1, 0x00200080",  # CREATE_NEW + OPEN_REPARSE_POINT
+            "CreatePrivateFileW(path, 0xC0020080u, 1u",  # no WRITE/DELETE sharing
+            "Inspect(new Pin {path=path, handle=handle, privateAcl=true})",
+            "new FileStream(handle, FileAccess.ReadWrite)",
+            "error == 80 || error == 183", "never adopted", "handle.Dispose()",
+        ):
+            self.assertIn(required, create)
+        self.assertLess(create.index("AssertOwnedPath"), create.index("CreatePrivateFileW"))
+        self.assertLess(create.index('"O:" + owner'), create.index("CreatePrivateFileW"))
+        self.assertLess(create.index("Inspect("), create.index("new FileStream"))
+        self.assertNotIn("Set-Acl", self.source)
+        self.assertNotIn("SetAccessControl", self.source)
+
+    def test_append_requires_existing_mutable_pin_and_revalidates_open_handle(self):
+        private = self.function("Initialize-InstallStorage")
+        self.assertIn("public FileStream OpenAppend(string path) {", private)
+        append = private.split("public FileStream OpenAppend(string path) {", 1)[1].split(
+            "public void HoldFile", 1,
+        )[0]
+        for required in (
+            "pins.TryGetValue(path, out pin)", "!pin.mutable", "Verify(pin)",
+            "IntPtr.Zero, 3, 0x00200000",  # OPEN_EXISTING, never create on append
+            "Inspect(new Pin", "info.volume != pin.volume", "info.high != pin.high",
+            "info.low != pin.low", "stream.Seek(0, SeekOrigin.End)",
+        ):
+            self.assertIn(required, append)
+        self.assertLess(append.index("Verify(pin)"), append.index("CreateFileW"))
+        self.assertLess(append.index("info.volume != pin.volume"), append.index("new FileStream"))
+
+    def test_native_fixture_checks_empty_file_security_and_valid_state_routes(self):
+        fixture = FIXTURE.read_text(encoding="utf-8")
+        self.assertIn("$stream = $fixtureStorage.CreateFile($part)", fixture)
+        self.assertIn("$payload.CopyTo($stream)", fixture)
+        start = fixture.index("$stream = $fixtureStorage.CreateFile($part)")
+        before_bytes = fixture[start:fixture.index("$payload.CopyTo($stream)", start)]
+        self.assertIn("Assert-Equal $stream.Length 0", before_bytes)
+        self.assertIn("Assert-PrivateFileAcl $part", before_bytes)
+        for required in (
+            "GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $owner",
+            "-not $acl.AreAccessRulesProtected", "$rule.IsInherited",
+            "$seen.Count -ne 2", "$seen -notcontains 'S-1-5-18'",
+            "Write-PrivateInstallText $body 'unchanged'",
+            "Write-PrivateInstallText $Destination $body",
+            "Assert-PrivateFileAcl (Join-Path $destination 'ok.txt')",
+            "$fixtureStorage.HoldFile($archivePath, $false)",
+            "Write-PrivateInstallText $missingLog 'must not create' -Append",
+            "Write-PrivateInstallText $body 'must not append' -Append",
+            "Assert-Equal ([IO.File]::Exists($missingLog)) $false",
+            "'private stream'", "'firstsecond'",
+        ):
+            self.assertIn(required, fixture)
+        # Only the deliberately unsafe ancestor executable uses default creation.
+        self.assertEqual(fixture.count("[IO.File]::WriteAllText("), 1)
+        self.assertIn("[IO.File]::WriteAllText($shadow, 'not executable')", fixture)
+        self.assertNotIn("[IO.Compression.ZipFile]::Open($archivePath", fixture)
+        self.assertIn("$acl.AddAccessRule(", fixture)  # retain foreign-append negative
 
     def test_native_fixture_tags_refusals_and_checks_exact_private_owner(self):
         fixture = FIXTURE.read_text(encoding="utf-8")
@@ -211,11 +285,18 @@ class WindowsInstallerSourceTests(unittest.TestCase):
 
     def test_pins_cover_writes_hashes_extraction_and_existing_executable_probes(self):
         writer = self.function("Write-PrivateInstallText")
-        self.assertLess(writer.index("AssertOwnedPath"), writer.index("[IO.File]::Open"))
-        self.assertIn("[IO.FileMode]::CreateNew", writer)
+        self.assertLess(writer.index("AssertOwnedPath"), writer.index(".CreateFile($Path)"))
+        self.assertLess(writer.index(".CreateFile($Path)"), writer.index("$stream.Write"))
+        self.assertIn("$script:InstallStorage.OpenAppend($Path)", writer)
+        self.assertNotIn("[IO.File]::Open", self.source)
+        self.assertNotIn("[IO.FileMode]::Append", writer)
         download = self.function("Get-BoundedDownload")
         self.assertIn("$script:InstallStorage.Validate()", download)
         self.assertIn("HoldFile($Destination, $false)", download)
+        self.assertLess(download.index(".CreateFile($part)"), download.index("$output.Write"))
+        self.assertIn("if ($partCreated) { [IO.File]::Delete($part) }", download)
+        self.assertLess(download.index(".CreateFile($part)"), download.index("$partCreated = $true"))
+        self.assertLess(download.index("$output.Dispose()"), download.index("[IO.File]::Move"))
         checksum = self.function("Assert-FileChecksum")
         self.assertLess(checksum.index("HoldFile"), checksum.index("Get-FileHash"))
         child = self.function("Invoke-InstallChild")

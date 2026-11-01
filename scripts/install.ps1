@@ -82,7 +82,7 @@ namespace UnifiedBootstrap {
     public sealed class InstallStorage : IDisposable {
         sealed class Pin {
             public string path; public SafeFileHandle handle;
-            public uint volume, high, low; public bool directory, privateAcl;
+            public uint volume, high, low; public bool directory, privateAcl, mutable;
         }
         readonly Dictionary<string, Pin> pins =
             new Dictionary<string, Pin>(StringComparer.OrdinalIgnoreCase);
@@ -106,6 +106,9 @@ namespace UnifiedBootstrap {
         [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
         static extern SafeFileHandle CreateFileW(string path, uint access, uint share,
             IntPtr security, uint disposition, uint flags, IntPtr template);
+        [DllImport("kernel32.dll", EntryPoint="CreateFileW", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
+        static extern SafeFileHandle CreatePrivateFileW(string path, uint access, uint share,
+            ref Attributes security, uint disposition, uint flags, IntPtr template);
         [DllImport("kernel32.dll", SetLastError=true)]
         static extern bool GetFileInformationByHandle(SafeFileHandle handle, out Info info);
         [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
@@ -195,7 +198,7 @@ namespace UnifiedBootstrap {
             // the entire lifetime, and deny WRITE sharing except our mutable log.
             // Metadata-only directory opens do not participate in NT sharing
             // checks. FILE_LIST_DIRECTORY (1) makes the no-DELETE share effective.
-            var pin = new Pin { path=path, directory=directory, privateAcl=privateAcl };
+            var pin = new Pin { path=path, directory=directory, privateAcl=privateAcl, mutable=mutable };
             pin.handle = CreateFileW(path, 0x20080u | (directory ? 1u : 0x80000000u),
                 mutable ? 3u : 1u, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
             try {
@@ -276,6 +279,53 @@ namespace UnifiedBootstrap {
             EnsureDirectory(Path.GetDirectoryName(path));
             CreateDirectory(path); // Only this context's prior creations can be reused.
         }
+        public FileStream CreateFile(string path) {
+            path = Address(path); AssertOwnedPath(path);
+            if (order.Count >= 4096) throw new IOException("Bootstrap pin budget exceeded.");
+            // Explicit TokenUser owner and protected owner/SYSTEM DACL at
+            // CREATE_NEW, not inherited defaults or ACL repair after a write.
+            IntPtr descriptor; uint size;
+            Need(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                "O:" + owner + "D:P(A;;FA;;;" + owner + ")(A;;FA;;;SY)",
+                1, out descriptor, out size));
+            try {
+                var attributes = new Attributes {
+                    length=Marshal.SizeOf(typeof(Attributes)), descriptor=descriptor, inherit=false
+                };
+                SafeFileHandle handle = CreatePrivateFileW(path, 0xC0020080u, 1u,
+                    ref attributes, 1, 0x00200080, IntPtr.Zero);
+                try {
+                    if (handle.IsInvalid) {
+                        int error = Marshal.GetLastWin32Error();
+                        if (error == 80 || error == 183)
+                            throw new IOException("Bootstrap file already exists; never adopted.");
+                        throw new Win32Exception(error);
+                    }
+                    // Validate the very handle that will receive payload bytes.
+                    Inspect(new Pin {path=path, handle=handle, privateAcl=true});
+                    return new FileStream(handle, FileAccess.ReadWrite);
+                } catch { handle.Dispose(); throw; }
+            } finally { LocalFree(descriptor); }
+        }
+        public FileStream OpenAppend(string path) {
+            path = Address(path); AssertOwnedPath(path);
+            Pin pin;
+            if (!pins.TryGetValue(path, out pin) || pin.directory || !pin.mutable)
+                throw new IOException("Append requires this context's pinned mutable file.");
+            Verify(pin);
+            // OPEN_EXISTING only. Never create/adopt an unvalidated log on append.
+            SafeFileHandle handle = CreateFileW(path, 0x40020080u, 3u,
+                IntPtr.Zero, 3, 0x00200000, IntPtr.Zero);
+            try {
+                if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+                Info info = Inspect(new Pin {path=path, handle=handle, privateAcl=true});
+                if (info.volume != pin.volume || info.high != pin.high || info.low != pin.low)
+                    throw new IOException("Bootstrap append identity changed.");
+                var stream = new FileStream(handle, FileAccess.Write);
+                try { stream.Seek(0, SeekOrigin.End); return stream; }
+                catch { stream.Dispose(); throw; }
+            } catch { handle.Dispose(); throw; }
+        }
         public void HoldFile(string path, bool mutable) {
             path = Address(path); AssertOwnedPath(path); Hold(path, false, true, mutable);
         }
@@ -303,8 +353,7 @@ function New-PrivateInstallDirectory {
 
 function Write-PrivateInstallText([string] $Path, [string] $Text, [switch] $Append, [switch] $Mutable) {
     $script:InstallStorage.AssertOwnedPath($Path)
-    $mode = if ($Append) { [IO.FileMode]::Append } else { [IO.FileMode]::CreateNew }
-    $stream = [IO.File]::Open($Path, $mode, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+    $stream = if ($Append) { $script:InstallStorage.OpenAppend($Path) } else { $script:InstallStorage.CreateFile($Path) }
     try {
         $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($Text)
         $stream.Write($bytes, 0, $bytes.Length)
@@ -332,6 +381,7 @@ function Get-BoundedDownload([string] $Url, [string] $Destination, [long] $MaxBy
     $script:InstallStorage.AssertOwnedPath($part)
     $firstFailure = $null
     for ($attempt = 0; $attempt -lt 2; $attempt++) {
+        $partCreated = $false
         try {
             $current = $uri
             if ($current.Scheme -ne 'https' -or $current.UserInfo -or
@@ -368,8 +418,10 @@ function Get-BoundedDownload([string] $Url, [string] $Destination, [long] $MaxBy
                 $length = $response.ContentLength
                 if ($length -gt $MaxBytes) { throw 'Download exceeds its size bound.' }
                 $inputStream = $response.GetResponseStream()
-                $output = [IO.File]::Open($part, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+                $output = $null
                 try {
+                    $output = $script:InstallStorage.CreateFile($part)
+                    $partCreated = $true
                     $buffer = New-Object byte[] 65536
                     $total = 0L
                     $clock = [Diagnostics.Stopwatch]::StartNew()
@@ -383,16 +435,18 @@ function Get-BoundedDownload([string] $Url, [string] $Destination, [long] $MaxBy
                     if ($length -ge 0 -and $total -ne $length) { throw 'Download was incomplete.' }
                     $output.Flush($true)
                 } finally {
-                    $output.Dispose()
+                    if ($null -ne $output) { $output.Dispose() }
                     $inputStream.Dispose()
                 }
             } finally { $response.Dispose() }
             [IO.File]::Move($part, $Destination)
+            $partCreated = $false
             $script:InstallStorage.HoldFile($Destination, $false)
             return
         } catch {
             if ($null -eq $firstFailure) { $firstFailure = $_ }
-            if ([IO.File]::Exists($part)) { [IO.File]::Delete($part) }
+            # A CREATE_NEW collision never authorizes deleting somebody else's file.
+            if ($partCreated) { [IO.File]::Delete($part) }
             # Retry downloads only. No installation or lifecycle mutation retry.
         }
     }
@@ -458,7 +512,13 @@ function Expand-ContainedZip([string] $Archive, [string] $Destination) {
             } else {
                 $script:InstallStorage.EnsureDirectory([IO.Path]::GetDirectoryName($target))
                 $script:InstallStorage.AssertOwnedPath($target)
-                [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $false)
+                $output = $script:InstallStorage.CreateFile($target)
+                try {
+                    $inputStream = $entry.Open()
+                    try { $inputStream.CopyTo($output) } finally { $inputStream.Dispose() }
+                    $output.Flush($true)
+                } finally { $output.Dispose() }
+                $script:InstallStorage.HoldFile($target, $false)
             }
         }
         $script:InstallStorage.Validate()
