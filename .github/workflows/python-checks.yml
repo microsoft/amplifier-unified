@@ -21,6 +21,9 @@ on:
           - shared-work-native
           - cold-control-restore
           - goal-peer-publisher-0410
+          - updater-omitted-ref
+          - updater-synthetic-acquisition
+          - updater-expanded-lock
       core_wheels:
         description: Qualify published Core wheels and real runtime on both Linux architectures
         type: boolean
@@ -37,7 +40,7 @@ permissions:
   contents: read
 jobs:
   python:
-    if: ${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' }}
+    if: ${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' && inputs.suite != 'updater-omitted-ref' && inputs.suite != 'updater-synthetic-acquisition' && inputs.suite != 'updater-expanded-lock' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -479,3 +482,21 @@ jobs:
             output/cold-control-restore/
           if-no-files-found: error
           retention-days: 14
+
+  updater-omitted-ref:
+    if: ${{ !inputs.core_wheels && inputs.suite == 'updater-omitted-ref' }}
+    uses: ./.github/workflows/updater-omitted-ref.yml
+    secrets:
+      LOOP_LIVE_CI_READ_KEY: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
+
+  updater-synthetic-acquisition:
+    if: ${{ !inputs.core_wheels && inputs.suite == 'updater-synthetic-acquisition' }}
+    uses: ./.github/workflows/updater-synthetic-acquisition.yml
+
+  updater-expanded-lock:
+    if: ${{ !inputs.core_wheels && inputs.suite == 'updater-expanded-lock' }}
+    uses: ./.github/workflows/updater-omitted-ref.yml
+    with:
+      offline_lock_preflight: true
+    secrets:
+      LOOP_LIVE_CI_READ_KEY: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}

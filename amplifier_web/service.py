@@ -226,6 +226,7 @@ ACTION_DEFINITIONS = {
     "updates.smartToolRetry": ("Retry one failed Smart Tool update using its current update resultId (or previous installation ID when no resultId is present). Healthy tools are not repeated.", schema({"id":string(200)},["id"])),
     "updates.smartToolSkip": ("Skip one failed Smart Tool revision using its current update resultId (or previous installation ID when no resultId is present). Retain the current installation; newer revisions remain eligible.", schema({"id":string(200)},["id"])),
     "updates.check": ("Check published application releases and ecosystem sources for updates", schema()),
+    "updates.failureDisposition": ("User-only: close one exact overflow or unknown-feature-scope failure as acknowledged uncertainty, not verified recovery. Use dispositionOccurrence from attention; reading alone never closes it.", schema({"id":string(300),"expectedOccurrence":{"type":"string","pattern":"^[a-f0-9]{64}$"},"disposition":{"enum":["acknowledged-uncertainty"]}},["id","expectedOccurrence","disposition"])),
     "updates.diagnostics": ("Collect a sanitized update support report, including source provenance, without credentials, chat content or private paths.", schema()),
     "updates.forceRestart": ("Explicitly confirm interrupting active work to restart into one staged qualified app. Saved history and unresolved checkout fences remain; no work is replayed.", schema({"confirm":{"enum":[True]},"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(200)}, ["confirm","hostInstanceId","revision","generation","attemptId"])),
     "updates.install": ("Stage and validate available application or ecosystem updates; activate when idle. Application updates restart the host.", schema()),
@@ -2913,7 +2914,7 @@ class AppService:
                         owner = self._session(sid) if sid else None
                         file_root = (owner.get('workingDirectory') or owner.get('workspace')) if owner else None
                         canvas_command(scoped,action,args,origin,file_root=file_root)
-                    from .canvas_versions import assert_clean, reference, message_id
+                    from .canvas_versions import assert_clean, reference, message_id, ordinary_preview
                     publication_message = message_id(scoped, sid)
                     if destination == 'inline':
                         from .canvas_views import INLINE_KINDS
@@ -2932,10 +2933,18 @@ class AppService:
                     remember(scoped,self.db)
                     diagnostic_result = {'id': scoped['canvas']['id'], 'revision': scoped['canvas'].get('revision', 1), 'reference': reference(scoped['canvas'])}
                     if sid==self.state.get('selectedSessionId') and scoped['selectedWorkspaceId']==self.state['selectedWorkspaceId']:
-                        self.canvas_views.choose(scoped['canvas'], diagnostic_result['revision'], destination,
-                                                 message_id=publication_message, origin=origin)
+                        current = self.state.get('canvas', {})
+                        retain_preview = (destination == 'canvas' and current.get('id') == scoped['canvas']['id']
+                                          and ordinary_preview(current) and not current.get('_presentationDisposed')
+                                          and (current.get('open') or (self.clients.record() or {}).get('canvasViews', {}).get('retained')))
+                        if not retain_preview:
+                            self.canvas_views.choose(scoped['canvas'], diagnostic_result['revision'], destination,
+                                                     message_id=publication_message, origin=origin)
                         if destination == 'canvas':
-                            self.state['canvas']=scoped['canvas']
+                            if not retain_preview:
+                                self.state['canvas']=scoped['canvas']
+                            elif current['id'] in scoped.get('canvasTabs', {}):
+                                scoped['canvasTabs'][current['id']]['view'] = copy.deepcopy(current.get('view', {}))
                             if args.get('kind') == 'settings':
                                 self.state['view']['panel'] = None
                             self.state['view'].setdefault('canvasDraft',{}).update(library=False,open=False,browser=False,overview=False)
@@ -3648,6 +3657,14 @@ class AppService:
                         'generation': copy.deepcopy(target.get('collaborationGeneration')),
                         'target': self.management.configuration_target_binding(target)},)
                 pending.append((self.management.command, values))
+            elif action == "updates.failureDisposition":
+                if origin not in {'ui', 'user'}:
+                    raise AppError('Closing update uncertainty requires an explicit user action.', 403)
+                if not self.update_manager: raise AppError("Update service is unavailable.")
+                try:
+                    diagnostic_result = self.update_manager.diagnostics.dispose(args['id'], args['expectedOccurrence'])
+                except ValueError as error:
+                    raise AppError(str(error), 409) from None
             elif action.startswith("updates."):
                 if not self.update_manager: raise AppError("Update service is unavailable.")
                 if action == 'updates.forceRestart':
