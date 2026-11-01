@@ -4,6 +4,9 @@
 param([Parameter(Mandatory = $true)][string] $PythonExecutable)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
+# A version-only preflight cannot detect cross-edition module shadowing.
+# Import by name so failure reports the actual module-loading cause.
+Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
 $installer = Join-Path $PSScriptRoot '..\..\scripts\install.ps1'
 $tokens = $null
 $errors = $null
@@ -22,13 +25,15 @@ function Assert-Refused([scriptblock] $Action, [string] $Pattern) {
     }
     throw "Fixture expected refusal matching $Pattern."
 }
-function Assert-SharingRefused([scriptblock] $Action) {
+function Assert-SharingRefused([string] $Case, [scriptblock] $Action) {
     try { & $Action } catch {
         $code = $_.Exception.GetBaseException().HResult -band 65535
-        if ($code -notin @(5, 32, 33)) { throw }
+        if ($code -notin @(5, 32, 33)) {
+            throw "Fixture [$Case] expected access/sharing refusal, got error $code."
+        }
         return
     }
-    throw 'Fixture expected an access/sharing refusal.'
+    throw "Fixture [$Case] expected an access/sharing refusal; operation succeeded."
 }
 
 $root = New-PrivateInstallDirectory
@@ -79,8 +84,8 @@ try {
     $null = [IO.Directory]::CreateDirectory($ancestor)
     $pinned = New-Object UnifiedBootstrap.InstallStorage($ancestor)
     try {
-        Assert-SharingRefused { [IO.Directory]::Move($ancestor, ($ancestor + '-replacement')) }
-        Assert-SharingRefused { [IO.Directory]::Move($pinned.Root, ($pinned.Root + '-replacement')) }
+        Assert-SharingRefused 'pinned-ancestor-rename' { [IO.Directory]::Move($ancestor, ($ancestor + '-replacement')) }
+        Assert-SharingRefused 'pinned-private-root-rename' { [IO.Directory]::Move($pinned.Root, ($pinned.Root + '-replacement')) }
         $pinned.Validate()
     } finally { $pinned.Dispose() }
     # Prove that the sharing refusal, not a permanently broken rename fixture,
@@ -101,8 +106,8 @@ try {
     [IO.File]::WriteAllText($body, 'unchanged')
     Assert-Refused { Assert-FileChecksum $body ('0' * 64) } 'mismatch'
     Assert-FileChecksum $body (Get-FileHash -LiteralPath $body -Algorithm SHA256).Hash.ToLowerInvariant()
-    Assert-SharingRefused { [IO.File]::AppendAllText($body, 'must not reach hashed bytes') }
-    Assert-SharingRefused { [IO.File]::Move($body, ($body + '-replacement')) }
+    Assert-SharingRefused 'hashed-file-append' { [IO.File]::AppendAllText($body, 'must not reach hashed bytes') }
+    Assert-SharingRefused 'hashed-file-rename' { [IO.File]::Move($body, ($body + '-replacement')) }
     Assert-Equal ([IO.File]::ReadAllText($body)) 'unchanged'
 
     # Real Windows extraction, including Unicode/space paths and zip-slip cases.
@@ -121,7 +126,7 @@ try {
             Expand-ContainedZip $archivePath $destination
             Assert-Equal ([IO.File]::ReadAllText((Join-Path $destination 'ok.txt'))) 'fixture'
             Assert-Refused { Expand-ContainedZip $archivePath $destination } 'already exists'
-            Assert-SharingRefused { [IO.Directory]::Move($destination, ($destination + '-replacement')) }
+            Assert-SharingRefused 'extraction-root-rename' { [IO.Directory]::Move($destination, ($destination + '-replacement')) }
             $fixtureStorage.Validate()
         } else {
             Assert-Refused { Expand-ContainedZip $archivePath $destination } 'Unsafe|escaped'
@@ -232,6 +237,7 @@ try {
         $acl = Get-Acl -LiteralPath $private
         Assert-Equal $acl.AreAccessRulesProtected $true
         $owner = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        Assert-Equal ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value) $owner
         foreach ($rule in $acl.Access) {
             $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
             if ($sid -notin @($owner, 'S-1-5-18')) { throw 'Unexpected private-directory trustee.' }

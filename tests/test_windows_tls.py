@@ -534,17 +534,19 @@ def test_native_openssl_files_cannot_be_replaced_while_loading(native_root, monk
 
 def test_native_tls_junction_rejected_and_target_unchanged(native_root):
     import subprocess
-    target = native_root / "unrelated"
+    target = native_root / "unrelated target"
     config = tls.setup_local_ca(target, deployment.load_server_config(target))
     before = {p.name: p.read_bytes() for p in tls.tls_dir(target).iterdir()}
-    alias = native_root / "alias"
-    result = subprocess.run(["cmd.exe", "/d", "/c", f'mklink /J "{alias}" "{target}"'],
+    alias = native_root / "alias with spaces"
+    # Do not embed quoted cmd syntax in one list argument: list2cmdline would
+    # backslash-escape those quotes rather than quote the path arguments.
+    result = subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(alias), str(target)],
                             capture_output=True, timeout=10)
     assert result.returncode == 0, result.stderr.decode(errors="replace")
     try:
-        with pytest.raises(PermissionError):
+        with pytest.raises(PermissionError, match="reparse point"):
             tls.setup_local_ca(alias, config, force=True)
-        with pytest.raises(PermissionError):
+        with pytest.raises(PermissionError, match="reparse point"):
             tls.ssl_context(alias, config)
         assert {p.name: p.read_bytes() for p in tls.tls_dir(target).iterdir()} == before
     finally:
@@ -576,16 +578,16 @@ def test_native_foreign_read_acl_is_refused_not_repaired(native_root):
     apply.argtypes, apply.restype = [C.c_wchar_p, wf.DWORD, wf.PVOID], wf.BOOL
     try:
         api.ok(apply(str(path), 0x80000004, descriptor))
-        with pytest.raises(PermissionError):
+        with pytest.raises(PermissionError, match="foreign access"):
             tls.ssl_context(native_root, config)
-        with pytest.raises(PermissionError):
+        with pytest.raises(PermissionError, match="foreign access"):
             tls.setup_local_ca(native_root, config, force=True)
         assert path.read_bytes() == before
         # Successful repair would remove the foreign grant. Check that the
         # reviewed validator continues to reject the same unchanged descriptor.
         handle = api.open(path)
         try:
-            with pytest.raises(PermissionError):
+            with pytest.raises(PermissionError, match="foreign access"):
                 api.validate_acl(handle, private=True)
         finally:
             api.close(handle)

@@ -300,8 +300,12 @@ class PortableGuardTests(unittest.TestCase):
             out, err = process.communicate(frame(cfg) + payload, timeout=5)
             self.assertEqual(process.returncode, 0, err)
             header, data = out.split(b"\n", 1)
-            self.assertEqual(json.loads(header), [
-                cfg["argv"][5:], directory, "value 雪"])
+            arguments, cwd, value = json.loads(header)
+            self.assertEqual(arguments, cfg["argv"][5:])
+            # macOS getcwd expands /var's /private/var alias. Check the actual
+            # directory identity, not the temporary-directory path spelling.
+            self.assertTrue(os.path.samefile(cwd, directory))
+            self.assertEqual(value, "value 雪")
             self.assertEqual(data, payload)
             self.assertEqual(err, b"error\r\n")
 

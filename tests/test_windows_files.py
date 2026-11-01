@@ -153,9 +153,15 @@ class PolicyTests(unittest.TestCase):
         api.GetAclInformation = lambda *args: True  # empty DACL: grants nobody
         api.LocalFree = lambda *args: None
         api.validate_acl(1, private=True)
-        owner[0] = "foreign"
-        with self.assertRaises(PermissionError):
-            api.validate_acl(1, private=True)
+        for candidate in ("foreign", *sorted(wf._OS_AUTHORITIES)):
+            with self.subTest(owner=candidate):
+                owner[0] = candidate
+                # OS authorities are trusted traversal owners, not TokenUser
+                # owners of private state (including on an elevated runner).
+                with self.assertRaises(PermissionError):
+                    api.validate_acl(1, private=True)
+                if candidate in wf._OS_AUTHORITIES:
+                    api.validate_acl(1, private=False)
         owner[0], present[0] = "user", False
         with self.assertRaises(PermissionError):
             api.validate_acl(1, private=True)
@@ -507,19 +513,42 @@ class NativeTests(unittest.TestCase):
         self.assertTrue(link.is_relative_to(self.root))
         self.assertTrue(target.is_relative_to(self.root))
         # mklink /J requires neither Developer Mode nor symlink privilege.
-        # Quote both fixture paths; use only our own synthetic target.
-        result = subprocess.run(["cmd.exe", "/d", "/c", f'mklink /J "{link}" "{target}"'],
+        # Separate arguments let list2cmdline quote spaces without backslash-
+        # escaping embedded quotes that cmd.exe would treat as path characters.
+        result = subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
                                 capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
 
     def test_safe_inherited_existing_directory_and_file(self):
         inherited = self.root / "inherited"
-        inherited.mkdir()
-        (inherited / "session-secret").write_bytes(b"safe-existing")
-        before = self.security_text(inherited)
+        target = inherited / "session-secret"
+        api = wf._API()
+        descriptor = wf.PVOID()
+        # An elevated token can default to Administrators ownership. Specify
+        # TokenUser at creation, but leave the DACL absent so the kernel
+        # inherits the private parent's ACEs. Do not protect or repair it.
+        api.ok(api.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            f"O:{api.sid}", 1, C.byref(descriptor), None))
+        try:
+            security = wf.SECURITY_ATTRIBUTES(C.sizeof(wf.SECURITY_ATTRIBUTES), descriptor, False)
+            api.ok(api.CreateDirectoryW(str(inherited), C.byref(security)))
+            handle = api.CreateFileW(str(target), 0x40000000, 0, C.byref(security),
+                                     1, 0x200000, None)  # CREATE_NEW | OPEN_REPARSE_POINT
+            self.assertNotEqual(handle, wf._INVALID, "cannot create inherited fixture file")
+            try:
+                api.write(handle, b"safe-existing")
+            finally:
+                api.close(handle)
+        finally:
+            api.LocalFree(descriptor)
+        before = {path: self.security_text(path) for path in (inherited, target)}
+        for text in before.values():
+            self.assertTrue(text.startswith(f"O:{api.sid}"), "fixture must be TokenUser-owned")
+            self.assertTrue("D:P" not in text and "ID;" in text,
+                            "fixture must have real unprotected inherited ACEs")
         with wf.directory(inherited, owned_root=self.root) as pinned:
             self.assertEqual(pinned.read_private("session-secret", limit=64), b"safe-existing")
-        self.assertEqual(self.security_text(inherited), before)
+        self.assertEqual({path: self.security_text(path) for path in before}, before)
 
     def test_foreign_read_grant_is_refused_unmodified(self):
         with wf.directory(self.path, owned_root=self.root) as pinned:
@@ -528,9 +557,9 @@ class NativeTests(unittest.TestCase):
         self.set_dacl(target, "(A;;FR;;;WD)")
         before = self.security_text(target)
         with wf.directory(self.path, owned_root=self.root) as pinned:
-            with self.assertRaises(PermissionError):
+            with self.assertRaisesRegex(PermissionError, "foreign access"):
                 pinned.read_private(target.name, limit=64)
-            with self.assertRaises(PermissionError):
+            with self.assertRaisesRegex(PermissionError, "foreign access"):
                 pinned.publish_private(target.name, b"bad", replace=True)
         self.assertEqual(self.security_text(target), before)
         self.assertEqual(target.read_bytes(), b"sentinel")
@@ -540,23 +569,23 @@ class NativeTests(unittest.TestCase):
         ancestor.mkdir()
         self.set_dacl(ancestor, "(A;;0x100;;;WD)")  # FILE_WRITE_ATTRIBUTES
         before = self.security_text(ancestor)
-        with self.assertRaises(PermissionError):
+        with self.assertRaisesRegex(PermissionError, "foreign access"):
             with wf.directory(ancestor / "app/config", owned_root=ancestor / "app", create=True):
                 pass
         self.assertFalse((ancestor / "app").exists())
         self.assertEqual(self.security_text(ancestor), before)
 
     def test_intermediate_and_leaf_junctions_preserve_outside_sentinel(self):
-        outside = self.root / "outside"
+        outside = self.root / "outside target"
         outside.mkdir()
         sentinel = outside / "control-token"
         sentinel.write_bytes(b"outside-sentinel")
-        app = self.root / "app"
+        app = self.root / "app with spaces"
         with wf.directory(app, owned_root=app, create=True):
             pass
         intermediate = app / "config"
         self.junction(intermediate, outside)
-        with self.assertRaises(PermissionError):
+        with self.assertRaisesRegex(PermissionError, "reparse point"):
             with wf.directory(intermediate / "auth", owned_root=app, create=True):
                 pass
         self.assertFalse((outside / "auth").exists())
@@ -564,9 +593,9 @@ class NativeTests(unittest.TestCase):
         leaf = self.path / "control-token"
         self.junction(leaf, outside)
         with wf.directory(self.path, owned_root=self.root) as pinned:
-            with self.assertRaises(PermissionError):
+            with self.assertRaisesRegex(PermissionError, "reparse point"):
                 pinned.read_private("control-token", limit=64)
-            with self.assertRaises(PermissionError):
+            with self.assertRaisesRegex(PermissionError, "reparse point"):
                 pinned.publish_private("control-token", b"bad", replace=True)
         self.assertEqual(sentinel.read_bytes(), b"outside-sentinel")
         leaf.rmdir()

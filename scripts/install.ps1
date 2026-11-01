@@ -193,8 +193,10 @@ namespace UnifiedBootstrap {
             if (order.Count >= 4096) throw new IOException("Bootstrap pin budget exceeded.");
             // OPEN_REPARSE_POINT + BACKUP_SEMANTICS. Deny DELETE sharing for
             // the entire lifetime, and deny WRITE sharing except our mutable log.
+            // Metadata-only directory opens do not participate in NT sharing
+            // checks. FILE_LIST_DIRECTORY (1) makes the no-DELETE share effective.
             var pin = new Pin { path=path, directory=directory, privateAcl=privateAcl };
-            pin.handle = CreateFileW(path, 0x20080u | (directory ? 0u : 0x80000000u),
+            pin.handle = CreateFileW(path, 0x20080u | (directory ? 1u : 0x80000000u),
                 mutable ? 3u : 1u, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
             try {
                 if (pin.handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());

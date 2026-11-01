@@ -5,11 +5,13 @@ is skipped, not simulated, on hosts without native Windows PowerShell.
 """
 
 from pathlib import Path
+import os
 import re
 import shutil
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -139,6 +141,60 @@ class WindowsInstallerSourceTests(unittest.TestCase):
         self.assertNotIn("Directory.CreateDirectory(", private)
         self.assertNotIn("SetAccessRule", private)
 
+    def test_directory_pins_request_list_access_for_sharing_enforcement(self):
+        private = self.function("Initialize-InstallStorage")
+        self.assertIn(
+            "CreateFileW(path, 0x20080u | (directory ? 1u : 0x80000000u)",
+            private,
+        )
+        self.assertIn("mutable ? 3u : 1u", private)  # never share DELETE
+        self.assertNotIn("directory ? 0u", private)  # metadata-only is not a pin
+
+    def test_native_fixture_tags_refusals_and_checks_exact_private_owner(self):
+        fixture = FIXTURE.read_text(encoding="utf-8")
+        for tag in (
+            "pinned-ancestor-rename", "pinned-private-root-rename",
+            "hashed-file-append", "hashed-file-rename", "extraction-root-rename",
+        ):
+            self.assertIn(f"Assert-SharingRefused '{tag}'", fixture)
+        self.assertNotRegex(fixture, r"Assert-SharingRefused\s+\{")
+        self.assertIn("Fixture [$Case]", fixture)
+        self.assertIn("$acl.GetOwner([Security.Principal.SecurityIdentifier]).Value", fixture)
+        self.assertIn("Import-Module Microsoft.PowerShell.Security -ErrorAction Stop", fixture)
+        # Keep the successful post-dispose rename as the refusal's control.
+        self.assertIn("finally { $pinned.Dispose() }", fixture)
+        self.assertIn("[IO.Directory]::Move(($ancestor + '-replacement'), $ancestor)", fixture)
+
+    def test_fixture_launcher_module_path_is_child_only_and_edition_specific(self):
+        # Exercise the real launcher with only process execution mocked.
+        inherited = {
+            "PSModulePath": r"C:\fixture\PowerShell\7\Modules",
+            "pSmOdUlEpAtH": r"C:\fixture\other-modules",
+            "PATH": r"C:\fixture\bin",
+            "FIXTURE_MARKER": "unchanged",
+        }
+        with mock.patch.object(os, "environ", inherited):
+            before = dict(os.environ)
+            for name in ("powershell.exe", "pwsh.exe"):
+                with self.subTest(name=name), mock.patch.object(
+                    shutil, "which", return_value=rf"C:\fixture\{name}",
+                ), mock.patch.object(subprocess, "run") as run:
+                    run.return_value = subprocess.CompletedProcess(
+                        [], 0, "OFFLINE FIXTURE PASS", "",
+                    )
+                    case = NativePowerShellInstallerTests(
+                        "test_offline_fixture_windows_powershell_51",
+                    )
+                    case.run_fixture(name)
+                expected = {
+                    key: value for key, value in before.items()
+                    if name != "powershell.exe" or key.upper() != "PSMODULEPATH"
+                }
+                self.assertIn("env", run.call_args.kwargs)
+                self.assertEqual(run.call_args.kwargs["env"], expected)
+                self.assertEqual(dict(os.environ), before)
+                self.assertNotIn("-ExecutionPolicy", run.call_args.args[0])
+
     def test_pins_cover_writes_hashes_extraction_and_existing_executable_probes(self):
         writer = self.function("Write-PrivateInstallText")
         self.assertLess(writer.index("AssertOwnedPath"), writer.index("[IO.File]::Open"))
@@ -212,10 +268,18 @@ class NativePowerShellInstallerTests(unittest.TestCase):
         shell = shutil.which(name)
         if not shell:
             self.skipTest(f"{name} unavailable; no native pass claimed")
+        # pwsh -> Python -> powershell.exe does not get pwsh's direct-child
+        # PSModulePath sanitization. Let 5.1 rebuild its own defaults; leave the
+        # parent process and the PowerShell 7 fixture's environment unchanged.
+        child_env = {
+            key: value for key, value in os.environ.items()
+            if name != "powershell.exe" or key.upper() != "PSMODULEPATH"
+        }
         result = subprocess.run(
             [shell, "-NoProfile", "-NonInteractive", "-File", str(FIXTURE),
              "-PythonExecutable", sys.executable],
             cwd=ROOT, text=True, capture_output=True, timeout=90,
+            env=child_env,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("OFFLINE FIXTURE PASS", result.stdout)

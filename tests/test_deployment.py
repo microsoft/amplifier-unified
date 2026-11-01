@@ -88,9 +88,16 @@ def test_server_config_rejects_boolean_numbers(tmp_path, key, value):
 
 def test_server_config_preserves_extension_fields_without_rewriting_on_load(tmp_path):
     path = config_path(tmp_path)
-    path.parent.mkdir(parents=True)
     original = "# Private extension configuration\nport: 8941\ndebug:\n  profiling: true\n  labels: [cpu]\ncustom_extension: disabled\n"
-    path.write_text(original)
+    if os.name == "nt":
+        # Ordinary mkdir/write_text can default to Administrators ownership on
+        # elevated runners. Seed valid private state, not a load-time ACL repair.
+        with deployment.windows_files.directory(path.parent, owned_root=tmp_path, create=True) as pinned:
+            pinned.publish_private(path.name, original.encode("utf-8"))
+        assert_private_config(path, tmp_path)
+    else:
+        path.parent.mkdir(parents=True)
+        path.write_text(original)
 
     config = load_server_config(tmp_path, overrides={"port": 9321})
     assert config["debug"] == {"profiling": True, "labels": ["cpu"]}
