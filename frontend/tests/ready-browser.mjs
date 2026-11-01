@@ -309,12 +309,26 @@ try{
   await locator.click({clickCount:3});
   assert.ok(await page.evaluate(()=>!!window.getSelection()?.toString().trim()),label+': real text selection');
   const value=await locator.evaluate(el=>{const s=getComputedStyle(el,'::selection');return {color:s.color,background:s.backgroundColor}});
-  const bg=rgb(value.background);assert.equal(bg[3],1,label+': opaque selection paint');
-  const valueRatio=ratio(over(rgb(value.color),bg),bg);
-  check('selection',{label,...value,ratio:valueRatio});
+  const forced=await page.evaluate(()=>matchMedia('(forced-colors: active)').matches);
+  const sample=await paint(locator);
+  // Retain raw system colors and the selected leaf's real backing even if a
+  // paint qualification below fails. Forced Highlight may be translucent.
+  check('selection-paint',{label,forced,...value,paint:sample});
+  for(const row of sample.contexts){
+   assert.equal(Number(row.opacity),1,label+': unqualified selection opacity at '+row.node);
+   assert.equal(row.filter,'none',label+': unqualified selection filter at '+row.node);
+   assert.equal(row.blend,'normal',label+': unqualified selection blend at '+row.node);
+  }
+  const bg=rgb(value.background),ink=rgb(value.color);
+  if(forced)assert.ok(bg[3]>0&&bg[3]<=1,label+': visible system selection paint');
+  else assert.equal(bg[3],1,label+': opaque selection paint');
+  const measuredBacking=backing(sample.ancestors,label+' selection backing');
+  const resolvedBackground=over(bg,measuredBacking);
+  const valueRatio=ratio(over(ink,resolvedBackground),resolvedBackground);
+  check('selection',{label,forced,...value,measuredBacking,resolvedBackground,ratio:valueRatio,minimum:4.5});
   assert.ok(valueRatio>=4.5,label+': selection text contrast >= 4.5');
   if(primary){assert.deepEqual(bg,rgb(primary.background),'Selection uses the actual primary accent fill');
-   assert.deepEqual(rgb(value.color),rgb(primary.color),'Selection uses actual on-accent ink')}
+   assert.deepEqual(ink,rgb(primary.color),'Selection uses actual on-accent ink')}
   await input.focus();
  };
  const bubbles=async width=>{
