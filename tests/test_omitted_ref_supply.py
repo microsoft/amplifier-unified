@@ -1,11 +1,13 @@
 """Synthetic supply guards only; no uv, runtime imports, or fixture main."""
+from copy import deepcopy
 import importlib.util
 import hashlib
+import json
 from pathlib import Path
 import sys
 import tomllib
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, call, patch
 
 import pytest
 
@@ -217,3 +219,451 @@ def test_adoption_binds_both_valid_origins_to_installed_source(tmp_path, probe, 
     else:
         with pytest.raises(AssertionError):
             probe.adopted(rows, **kwargs)
+
+
+CANONICAL_GIT_URL = "https://github.com/microsoft/amplifier-synthetic.git"
+CANONICAL_REF_CASES = [
+    ("branch=main", "refs/heads/main"),
+    ("rev=main", "refs/heads/main"),
+    ("tag=main", "refs/tags/main"),
+    (f"rev={REVISION}", REVISION),
+]
+
+
+def canonical_package(policy="branch=main", *, url=CANONICAL_GIT_URL,
+                      revision=REVISION, name="synthetic-git"):
+    return {"name": name, "source": {"git": f"{url}?{policy}#{revision}"}}
+
+
+def canonical_transport(ref="refs/heads/main", *, url=CANONICAL_GIT_URL):
+    # Expected identity is derived from explicit input, not the production filter.
+    return {"url": url, "ref": ref, "revision": REVISION,
+            "mirrorrelative": "canonical-git/" + hashlib.sha256(url.encode()).hexdigest() + ".git"}
+
+
+@pytest.mark.parametrize("policy,ref", CANONICAL_REF_CASES)
+def test_canonical_transport_preserves_exact_authored_ref(probe, policy, ref):
+    assert probe.canonical_git_transports([canonical_package(policy)]) == [canonical_transport(ref)]
+
+
+def test_canonical_transport_deduplicates_subdirectories_not_repository_urls(probe):
+    other_url = "https://github.com/microsoft/amplifier-other"
+    graph = [
+        canonical_package("branch=main&subdirectory=modules/first", name="first"),
+        canonical_package("rev=main&subdirectory=modules/second", name="second"),
+        canonical_package("branch=main&subdirectory=modules/first", name="duplicate"),
+        canonical_package(url=other_url, name="first"),
+        {"name": "wheel", "source": {"registry": "https://example.invalid/simple"}},
+    ]
+    assert probe.canonical_git_transports(graph) == [
+        canonical_transport(url=other_url), canonical_transport(),
+    ]
+
+
+@pytest.mark.parametrize("policy,revision", [
+    ("branch=main", "b" * 40),
+    ("tag=main", REVISION),
+])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_canonical_transport_refuses_conflicting_commits_or_ref_kinds(probe, policy, revision, reverse):
+    graph = [canonical_package("rev=main"), canonical_package(policy, revision=revision)]
+    with pytest.raises(AssertionError, match="conflicting kinds or locked commits"):
+        probe.canonical_git_transports(graph[::-1] if reverse else graph)
+
+
+@pytest.mark.parametrize("url", [
+    "https://example.invalid/microsoft/amplifier-synthetic",
+    "https://github.com.example.invalid/microsoft/amplifier-synthetic",
+    "https://github.com/another-owner/amplifier-synthetic",
+    "https://github.com/microsoft/unrelated",
+    CANONICAL_GIT_URL + "/nested",
+    "https://github.com/microsoft/../amplifier-synthetic",
+    "file:///tmp/amplifier-synthetic.git",
+])
+def test_canonical_transport_refuses_noncanonical_host_repository_or_path(probe, url):
+    with pytest.raises(AssertionError, match="owned URL and exact commit"):
+        probe.canonical_git_transports([canonical_package(url=url)])
+
+
+@pytest.mark.parametrize("policy,message", [
+    ("", "ambiguous ref policy"),
+    ("subdirectory=modules/first", "ambiguous ref policy"),
+    ("branch=", "ambiguous ref policy"),
+    ("branch=main&branch=main", "ambiguous ref policy"),
+    ("branch=main&rev=main", "ambiguous ref policy"),
+    ("branch=main&unexpected=value", "ambiguous ref policy"),
+    ("branch=HEAD", "only named main"),
+    ("rev=HEAD", "only named main"),
+    ("tag=HEAD", "only named main"),
+    ("branch=develop", "only named main"),
+    (f"branch={REVISION}", "exact ref differs"),
+    (f"tag={REVISION}", "exact ref differs"),
+    ("rev=" + "b" * 40, "exact ref differs"),
+])
+def test_canonical_transport_refuses_missing_ambiguous_or_invented_policy(probe, policy, message):
+    with pytest.raises(AssertionError, match=message):
+        probe.canonical_git_transports([canonical_package(policy)])
+
+
+@pytest.mark.parametrize("revision", ["", "HEAD", "a" * 39])
+def test_canonical_transport_requires_exact_locked_commit(probe, revision):
+    with pytest.raises(AssertionError, match="owned URL and exact commit"):
+        probe.canonical_git_transports([canonical_package(revision=revision)])
+
+
+@pytest.fixture
+def canonical_mirror_case(tmp_path):
+    row = canonical_transport()
+    mirror = tmp_path / row["mirrorrelative"]
+    (mirror / "objects/info").mkdir(parents=True)
+    (mirror / "HEAD").write_text("ref: refs/heads/main\n")
+    return tmp_path, row, mirror
+
+
+def test_canonical_mirror_accepts_private_regular_tree(probe, canonical_mirror_case):
+    root, row, mirror = canonical_mirror_case
+    assert probe.canonical_mirror(root, row) == mirror.resolve()
+
+
+@pytest.mark.parametrize("location", ["leaf", "ancestor", "tree"])
+def test_canonical_mirror_refuses_symlinks(probe, canonical_mirror_case, location):
+    root, row, mirror = canonical_mirror_case
+    if location == "tree":
+        (mirror / "linked-head").symlink_to(mirror / "HEAD")
+    else:
+        target = mirror if location == "leaf" else mirror.parent
+        moved = root / "moved"
+        target.rename(moved)
+        target.symlink_to(moved, target_is_directory=True)
+    with pytest.raises(AssertionError, match="symlink"):
+        probe.canonical_mirror(root, row)
+
+
+@pytest.mark.parametrize("relative", [
+    "objects/info/alternates", "objects/info/http-alternates", "info/grafts",
+    "commondir", "shallow", ".git", ".venv",
+])
+def test_canonical_mirror_refuses_external_or_incomplete_state(probe, canonical_mirror_case, relative):
+    root, row, mirror = canonical_mirror_case
+    target = mirror / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if relative in (".git", ".venv"):
+        target.mkdir()
+    else:
+        target.write_text("")  # Even an empty marker must fail closed.
+    with pytest.raises(AssertionError, match="not self-contained"):
+        probe.canonical_mirror(root, row)
+
+
+def test_canonical_mirror_refuses_hardlink_outside_tree(probe, canonical_mirror_case):
+    root, row, mirror = canonical_mirror_case
+    (root / "shared-head").hardlink_to(mirror / "HEAD")
+    with pytest.raises(AssertionError, match="shared hardlinks"):
+        probe.canonical_mirror(root, row)
+
+
+@pytest.fixture
+def canonical_process(tmp_path):
+    """All process responses are synthetic; this never invokes a subprocess."""
+    def make(refs, *, peeled=REVISION):
+        mirror = tmp_path / canonical_transport()["mirrorrelative"]
+        clone = ("git", "clone", "--bare", "--no-hardlinks", CANONICAL_GIT_URL, str(mirror))
+        identity = ("git", "rev-parse", "--absolute-git-dir",
+                    "--is-bare-repository", "--is-shallow-repository", REVISION + "^{commit}")
+        list_refs = ("git", "for-each-ref", "--format=%(refname)")
+        answers = {
+            identity: "\n".join((str(mirror), "true", "false", REVISION)),
+            list_refs: "\n".join(refs),
+            ("git", "update-ref", "refs/heads/main", REVISION): "",
+            ("git", "rev-parse", "refs/tags/main^{commit}"): peeled,
+        }
+
+        async def simulate(*argv, **kwargs):
+            if argv == clone:
+                mirror.mkdir()
+                return ""
+            assert argv in answers, f"Unexpected process call: {argv}"
+            return answers[argv]
+
+        process = AsyncMock(side_effect=simulate)
+        expected = [call(*clone, timeout=900), call(*identity, cwd=mirror), call(*list_refs, cwd=mirror)]
+        return process, mirror, expected
+
+    return make
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy,ref", CANONICAL_REF_CASES)
+async def test_prepare_canonical_git_clones_exact_url_and_binds_only_existing_ref(
+    tmp_path, probe, canonical_process, policy, ref,
+):
+    refs = [ref] if ref.startswith("refs/") else ["refs/heads/other"]
+    process, mirror, expected = canonical_process(refs)
+    graph = [canonical_package(policy + "&subdirectory=modules/first", name="first"),
+             canonical_package(policy + "&subdirectory=modules/second", name="second")]
+    await probe.prepare_canonical_git(tmp_path, graph, process)
+    if ref == "refs/heads/main":
+        expected.append(call("git", "update-ref", ref, REVISION, cwd=mirror))
+    elif ref == "refs/tags/main":
+        expected.append(call("git", "rev-parse", ref + "^{commit}", cwd=mirror))
+    # Exact call list forbids alias creation, extra clones, or a substituted URL.
+    assert process.call_args_list == expected
+    assert process.await_args_list == expected
+    receipt = tmp_path / "canonical-transports.json"
+    assert json.loads(receipt.read_text()) == [canonical_transport(ref)]
+    assert receipt.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy,refs,peeled,message", [
+    ("branch=main", ["HEAD", "refs/heads/other"], REVISION, "named ref is absent"),
+    ("rev=main", ["HEAD", "refs/heads/other"], REVISION, "named ref is absent"),
+    ("branch=main", ["refs/heads/main", "refs/tags/main"], REVISION, "ambiguous ref kind"),
+    ("rev=main", ["refs/heads/main", "refs/tags/main"], REVISION, "ambiguous ref kind"),
+    ("tag=main", ["refs/heads/main"], REVISION, "named ref is absent"),
+    ("tag=main", ["refs/tags/main"], "b" * 40, "tag differs"),
+])
+async def test_prepare_canonical_git_refuses_missing_ambiguous_or_wrong_main(
+    tmp_path, probe, canonical_process, policy, refs, peeled, message,
+):
+    process, mirror, expected = canonical_process(refs, peeled=peeled)
+    with pytest.raises(AssertionError, match=message):
+        await probe.prepare_canonical_git(tmp_path, [canonical_package(policy)], process)
+    if message == "tag differs":
+        expected.append(call("git", "rev-parse", "refs/tags/main^{commit}", cwd=mirror))
+    assert process.call_args_list == expected  # No manufactured main or HEAD alias.
+    assert process.await_args_list == expected
+    assert not (tmp_path / "canonical-transports.json").exists()
+
+
+@pytest.mark.parametrize("policy,_", CANONICAL_REF_CASES)
+@pytest.mark.parametrize("subdirectory", ["", "modules/context"])
+def test_canonical_lock_source_retains_semantics(probe, policy, _, subdirectory):
+    query = policy + (f"&subdirectory={subdirectory}" if subdirectory else "")
+    kind, ref = policy.split("=", 1)
+    assert probe.canonical_lock_source(canonical_package(query)["source"]["git"]) == {
+        "url": CANONICAL_GIT_URL, "ref": ref, "refKind": kind,
+        "subdirectory": subdirectory, "revision": REVISION,
+    }
+
+
+@pytest.mark.parametrize("source", [
+    None,
+    CANONICAL_GIT_URL + "?rev=main",
+    CANONICAL_GIT_URL + "?rev=main#HEAD",
+    CANONICAL_GIT_URL + f"#{REVISION}",
+    CANONICAL_GIT_URL + f"?rev=#{REVISION}",
+    CANONICAL_GIT_URL + f"?rev=main&branch=main#{REVISION}",
+    CANONICAL_GIT_URL + f"?rev=main&rev=main#{REVISION}",
+    CANONICAL_GIT_URL + f"?rev=main&subdirectory=#{REVISION}",
+    CANONICAL_GIT_URL + f"?rev=main&other=value#{REVISION}",
+])
+def test_canonical_lock_source_refuses_incomplete_or_ambiguous_identity(probe, source):
+    with pytest.raises(AssertionError, match="Canonical Git lock source"):
+        probe.canonical_lock_source(source)
+
+
+@pytest.fixture
+def canonical_generation_case():
+    def make(kind="rev", pinned=True):
+        git = {**canonical_package(f"{kind}=main&subdirectory=modules/context"), "version": "1.2.3"}
+        core = {"name": "amplifier-core", "version": "2.0.0",
+                "source": {"registry": "https://pypi.org/simple"}}
+        graph = [git, core]
+        source = {"url": CANONICAL_GIT_URL, "ref": REVISION if pinned else "main",
+                  "subdirectory": "modules/context", "revision": REVISION}
+        origin = {**source, "kind": ("tag-reference" if kind == "tag" else "unresolved-reference")
+                  if pinned else "prepared-manifest"}
+        if pinned:
+            origin["originalRef"] = "main"
+        policies = {"synthetic-git": {**source, "policyOrigin": origin}}
+        return graph, {"package": deepcopy(graph)}, policies
+    return make
+
+
+@pytest.mark.parametrize("kind,pinned", [
+    ("branch", False), ("rev", False), ("rev", True), ("tag", True),
+])
+@pytest.mark.parametrize("normalize", [False, True])
+def test_canonical_generation_accepts_bound_policy_forms_without_mutation(
+    probe, canonical_generation_case, kind, pinned, normalize,
+):
+    graph, lock, policies = canonical_generation_case(kind, pinned)
+    if normalize:
+        lock["package"][0]["source"]["git"] = canonical_package(
+            f"rev={REVISION}&subdirectory=modules/context")["source"]["git"]
+    lock["package"][0]["metadata"] = {"resolver-only": True}
+    lock["package"].reverse()
+    lock["package"].append({"name": "synthetic-root", "source": {"virtual": "."}})
+    inputs = deepcopy((graph, lock, policies))
+    semantic = [
+        {"name": "amplifier-core", "version": "2.0.0", "source": {"registry": "https://pypi.org/simple"}},
+        {"name": "synthetic-git", "version": "1.2.3", "source": {
+            "url": CANONICAL_GIT_URL, "ref": "main", "refKind": kind,
+            "subdirectory": "modules/context", "revision": REVISION}},
+    ]
+    assert probe.verify_canonical_generation(graph, lock, policies) == {
+        "packageCount": 2, "gitPackageCount": 1, "registryPackageCount": 1,
+        "semanticSha256": hashlib.sha256(json.dumps(semantic, sort_keys=True).encode()).hexdigest(),
+    }
+    assert (graph, lock, policies) == inputs
+
+
+@pytest.mark.parametrize("target,path,value,message", [
+    ("lock", ("package", 0, "version"), "1.2.4", "changed version"),
+    ("lock", ("package", 1, "version"), "2.0.1", "changed version"),
+    ("lock", ("package", 0, "source"), {"registry": "https://pypi.org/simple"}, "changed source kind"),
+    ("lock", ("package", 1, "source"), {"git": SOURCE + f"#{REVISION}"}, "registry package changed origin"),
+    ("lock", ("package", 1, "source", "registry"), "https://example.invalid/simple", "registry package changed origin"),
+    ("policies", ("synthetic-git",), None, "policy changed repository"),
+    ("policies", ("synthetic-git", "policyOrigin"), None, "origin is not bound"),
+    ("policies", ("synthetic-git", "policyOrigin", "originalRef"), None, "lost its authored ref semantics"),
+    ("policies", ("synthetic-git", "policyOrigin", "originalRef"), "HEAD", "lost its authored ref semantics"),
+    ("policies", ("synthetic-git", "policyOrigin", "kind"), "prepared-manifest", "lost its authored ref semantics"),
+    ("policies", ("synthetic-git", "policyOrigin", "kind"), "", "origin is not bound"),
+    ("policies", ("synthetic-git", "policyOrigin", "ref"), "main", "origin is not bound"),
+])
+def test_canonical_generation_refuses_changed_rows_or_unbound_policy(
+    probe, canonical_generation_case, target, path, value, message,
+):
+    graph, lock, policies = canonical_generation_case()
+    node = {"lock": lock, "policies": policies}[target]
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = value
+    with pytest.raises(AssertionError, match=message):
+        probe.verify_canonical_generation(graph, lock, policies)
+
+
+@pytest.mark.parametrize("field,before,after", [
+    ("url", CANONICAL_GIT_URL, "https://github.com/microsoft/amplifier-other"),
+    ("subdirectory", "modules/context", "modules/provider"),
+    ("revision", REVISION, "b" * 40),
+])
+@pytest.mark.parametrize("target", ["lock", "policy", "origin"])
+def test_canonical_generation_binds_every_source_identity_field(
+    probe, canonical_generation_case, field, before, after, target,
+):
+    graph, lock, policies = canonical_generation_case()
+    if target == "lock":
+        source = lock["package"][0]["source"]
+        source["git"] = source["git"].replace(before, after)
+    else:
+        node = policies["synthetic-git"]
+        if target == "origin":
+            node = node["policyOrigin"]
+        node[field] = after
+    with pytest.raises(AssertionError, match="changed repository|origin is not bound"):
+        probe.verify_canonical_generation(graph, lock, policies)
+
+
+@pytest.mark.parametrize("defect,message", [
+    ("missing-row", "missing or ambiguous"), ("duplicate-row", "missing or ambiguous"),
+    ("duplicate-original", "missing or ambiguous"), ("missing-map", "no source policy map"),
+    ("wrong-lock-ref", "lost the authored ref"), ("wrong-lock-kind", "lost the authored ref"),
+    ("branch-as-pin", "lost its authored ref semantics"),
+    ("tag-as-main", "lost its authored ref semantics"), ("wrong-original-core", "original registry origin"),
+])
+def test_canonical_generation_refuses_identity_and_policy_substitution(
+    probe, canonical_generation_case, defect, message,
+):
+    graph, lock, policies = canonical_generation_case(
+        "branch" if defect == "branch-as-pin" else "tag" if defect == "tag-as-main" else "rev",
+        pinned=defect != "tag-as-main",
+    )
+    if defect == "missing-row":
+        lock["package"].pop(0)
+    elif defect == "duplicate-row":
+        lock["package"].append(deepcopy(lock["package"][0]))
+    elif defect == "duplicate-original":
+        graph.append(deepcopy(graph[0]))
+    elif defect == "missing-map":
+        policies = None
+    elif defect == "wrong-lock-ref":
+        lock["package"][0]["source"]["git"] = lock["package"][0]["source"]["git"].replace("rev=main", "rev=HEAD")
+    elif defect == "wrong-lock-kind":
+        lock["package"][0]["source"]["git"] = lock["package"][0]["source"]["git"].replace("rev=main", "tag=main")
+    elif defect == "wrong-original-core":
+        for rows in (graph, lock["package"]):
+            rows[1]["source"] = {"registry": "https://example.invalid/simple"}
+    with pytest.raises(AssertionError, match=message):
+        probe.verify_canonical_generation(graph, lock, policies)
+
+
+@pytest.fixture
+def canonical_consumer(tmp_path, probe, monkeypatch):
+    root, supply = tmp_path / "consumer", tmp_path / "supply"
+    mirror = supply / canonical_transport()["mirrorrelative"]
+    mirror.mkdir(parents=True)
+    for key, value in {"GIT_ALLOW_PROTOCOL": "file", "GIT_CONFIG_COUNT": "0",
+                       "GIT_CONFIG_GLOBAL": str(root / "gitconfig")}.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(probe.shutil, "which", lambda name: str(root / "bin" / name))
+    return root, supply, mirror
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ref,output", [
+    ("refs/heads/main", f"{REVISION}\trefs/heads/main\n"),
+    ("refs/tags/main", f"{REVISION}\trefs/tags/main\n"),
+    ("refs/tags/main", f"{'b' * 40}\trefs/tags/main\n{REVISION}\trefs/tags/main^{{}}\n"),
+    (REVISION, f"{REVISION}\t{REVISION}\n"),
+])
+async def test_canonical_transport_verification_reads_actual_wrapper_and_exact_ref(
+    probe, canonical_consumer, ref, output,
+):
+    root, supply, mirror = canonical_consumer
+    process = AsyncMock(side_effect=[CANONICAL_GIT_URL, output])
+    assert await probe.verify_canonical_transports(root, supply, [canonical_transport(ref)], process) == {
+        "verifiedTransportRefCount": 1,
+    }
+    expected = [
+        call("git", "remote", "get-url", "origin", cwd=mirror, timeout=15),
+        call("git", "ls-remote", "--exit-code", CANONICAL_GIT_URL, ref, ref + "^{}", timeout=15),
+    ]
+    assert process.call_args_list == process.await_args_list == expected  # No alternate executable/env or HEAD.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ref,output,message", [
+    ("refs/heads/main", "", "invalid ref evidence"),
+    ("refs/heads/main", "not-a-sha\trefs/heads/main", "invalid ref evidence"),
+    ("refs/heads/main", f"{REVISION} refs/heads/main", "invalid ref evidence"),
+    ("refs/heads/main", f"{'b' * 40}\trefs/heads/main", "exact locked commit"),
+    ("refs/heads/main", f"{REVISION}\tHEAD", "exact locked commit"),
+    ("refs/heads/main", f"{REVISION}\trefs/heads/main\n" * 2, "exact locked commit"),
+    ("refs/heads/main", f"{REVISION}\trefs/heads/main\n{REVISION}\trefs/heads/main^{{}}", "exact locked commit"),
+    ("refs/tags/main", f"{REVISION}\trefs/tags/main\n{'b' * 40}\trefs/tags/main^{{}}", "exact locked commit"),
+    ("refs/tags/main", f"{REVISION}\trefs/tags/main^{{}}", "exact locked commit"),
+    (REVISION, "", "invalid ref evidence"),
+    (REVISION, f"{REVISION}\trefs/heads/main", "exact locked commit"),
+])
+async def test_canonical_transport_verification_refuses_unadvertised_or_false_evidence(
+    probe, canonical_consumer, ref, output, message,
+):
+    root, supply, mirror = canonical_consumer
+    process = AsyncMock(side_effect=[CANONICAL_GIT_URL, output])
+    with pytest.raises(AssertionError, match=message):
+        await probe.verify_canonical_transports(root, supply, [canonical_transport(ref)], process)
+    assert process.call_args_list == process.await_args_list == [
+        call("git", "remote", "get-url", "origin", cwd=mirror, timeout=15),
+        call("git", "ls-remote", "--exit-code", CANONICAL_GIT_URL, ref, ref + "^{}", timeout=15),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("defect", ["GIT_ALLOW_PROTOCOL", "GIT_CONFIG_COUNT", "GIT_CONFIG_GLOBAL", "wrapper", "origin"])
+async def test_canonical_transport_verification_requires_isolated_wrapper_and_authored_origin(
+    probe, canonical_consumer, monkeypatch, defect,
+):
+    root, supply, mirror = canonical_consumer
+    process = AsyncMock(return_value="https://example.invalid/alias")
+    if defect == "wrapper":
+        monkeypatch.setattr(probe.shutil, "which", lambda name: "/usr/bin/git")
+    elif defect != "origin":
+        monkeypatch.setenv(defect, "incorrect")
+    message = "authored canonical origin" if defect == "origin" else "isolated Git wrapper"
+    with pytest.raises(AssertionError, match=message):
+        await probe.verify_canonical_transports(root, supply, [canonical_transport()], process)
+    expected = [call("git", "remote", "get-url", "origin", cwd=mirror, timeout=15)] if defect == "origin" else []
+    assert process.call_args_list == process.await_args_list == expected

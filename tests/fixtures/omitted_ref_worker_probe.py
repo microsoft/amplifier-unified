@@ -29,7 +29,8 @@ network sandbox (unshare --net).
 The fixture checks a separate Linux network namespace with only loopback before
 clearing UV_OFFLINE: uv otherwise refuses the uncached synthetic Git source even
 though Git redirects it to a local fixture. GIT_ALLOW_PROTOCOL=file stays set;
-all other dependencies must resolve from the declared cache. No network retry,
+canonical Git sources use exact-lock local mirrors and registry dependencies use
+the declared cache. No network retry,
 fallback supply, host-site-packages inheritance or source-policy bypass is used.
 """
 from __future__ import annotations
@@ -479,6 +480,7 @@ def isolated_environment(root, git_binary, uv_cache):
         'XDG_CACHE_HOME': str(root / 'cache'), 'PYTHONDONTWRITEBYTECODE': '1',
         'PYTHONNOUSERSITE': '1', 'UV_CACHE_DIR': str(uv_cache),
         'UV_PYTHON_DOWNLOADS': 'never', 'UV_NO_PROGRESS': '1',
+        'UV_NO_GITHUB_FAST_PATH': '1',
         'UV_HTTP_TIMEOUT': '5', 'UV_HTTP_RETRIES': '0',
         'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_COUNT': '0',
         'GIT_TERMINAL_PROMPT': '0', 'GIT_ALLOW_PROTOCOL': 'file',
@@ -644,6 +646,239 @@ async def repository_identity(repo, process):
     return {'repoCommit': revision, 'repoTree': tree, 'repoContentSha256': content.hexdigest()}
 
 
+def canonical_git_transports(graph):
+    """Derive only original Git identities; named refs are narrowly main-only."""
+    selected = {}
+    for package in graph:
+        source = package.get('source', {}).get('git')
+        if source is None:
+            continue
+        require(isinstance(source, str), 'Invalid canonical Git source')
+        parsed = urlsplit(source)
+        url = parsed._replace(query='', fragment='').geturl()
+        require(re.fullmatch(r'https://github\.com/microsoft/amplifier-[a-z0-9-]+(?:\.git)?', url)
+                and re.fullmatch(r'[a-f0-9]{40}', parsed.fragment),
+                'Canonical Git transport requires an owned URL and exact commit')
+        query = parse_qs(parsed.query, strict_parsing=True, keep_blank_values=True)
+        kinds = set(query) & {'rev', 'branch', 'tag'}
+        require(len(kinds) == 1 and set(query) <= kinds | {'subdirectory'}
+                and all(len(values) == 1 and values[0] for values in query.values()),
+                'Canonical Git source has ambiguous ref policy')
+        kind, = kinds
+        authored_ref = query[kind][0]
+        if re.fullmatch(r'[a-f0-9]{40}', authored_ref):
+            require(kind == 'rev' and authored_ref == parsed.fragment,
+                    'Canonical exact ref differs from its locked commit')
+            ref = authored_ref
+        else:
+            require(authored_ref == 'main', 'Canonical transport supports only named main refs')
+            ref = ('refs/tags/' if kind == 'tag' else 'refs/heads/') + authored_ref
+        row = {'url': url, 'ref': ref, 'revision': parsed.fragment,
+               'mirrorrelative': 'canonical-git/' + hashlib.sha256(url.encode()).hexdigest() + '.git'}
+        key = (url, authored_ref)
+        require(key not in selected or selected[key] == row,
+                'Canonical Git ref has conflicting kinds or locked commits')
+        selected[key] = row
+    require(selected, 'Original graph has no canonical Git transports')
+    return sorted(selected.values(), key=lambda row: (row['url'], row['ref']))
+
+
+def canonical_mirror(root, row):
+    mirror = plain_path(root / row['mirrorrelative'], tree=True)
+    require(mirror.is_dir() and not any((mirror / name).exists() for name in (
+        'objects/info/alternates', 'objects/info/http-alternates', 'info/grafts',
+        'commondir', 'shallow', '.git', '.venv')),
+        'Canonical Git mirror is not self-contained')
+    require(all(not path.is_file() or path.stat().st_nlink == 1 for path in mirror.rglob('*')),
+            'Canonical Git mirror contains shared hardlinks')
+    return mirror
+
+
+async def prepare_canonical_git(root, graph, process):
+    """Online setup only: clone the SAME authored URLs using existing mappings."""
+    rows = canonical_git_transports(graph)
+    (root / 'canonical-git').mkdir(mode=0o700)
+    for url in sorted({row['url'] for row in rows}):
+        group = [row for row in rows if row['url'] == url]
+        target = root / group[0]['mirrorrelative']
+        require(not target.exists(), 'Canonical mirror destination already exists')
+        await process('git', 'clone', '--bare', '--no-hardlinks', url, str(target), timeout=900)
+        mirror = canonical_mirror(root, group[0])
+        revisions = [row['revision'] for row in group]
+        actual = await process('git', 'rev-parse', '--absolute-git-dir',
+                               '--is-bare-repository', '--is-shallow-repository',
+                               *(revision + '^{commit}' for revision in revisions), cwd=mirror)
+        require(actual.splitlines() == [str(mirror), 'true', 'false', *revisions],
+                'Canonical mirror lacks a complete exact commit')
+        refs = set((await process('git', 'for-each-ref', '--format=%(refname)', cwd=mirror)).splitlines())
+        for row in group:
+            ref, revision = row['ref'], row['revision']
+            if ref.startswith('refs/'):
+                require(ref in refs, 'Authored named ref is absent from its repository')
+                if ref.startswith('refs/heads/'):
+                    # rev=main is accepted only as an actual, unambiguous branch.
+                    # Snapshot that branch, never manufacture a HEAD/main alias.
+                    require('refs/tags/main' not in refs, 'Canonical main has ambiguous ref kind')
+                    await process('git', 'update-ref', ref, revision, cwd=mirror)
+                else:
+                    # Keep the tag object (including annotated tags), not a new branch.
+                    require(await process('git', 'rev-parse', ref + '^{commit}', cwd=mirror) == revision,
+                            'Canonical tag differs from its locked commit')
+    receipt = root / 'canonical-transports.json'
+    with receipt.open('x') as stream:
+        stream.write(json.dumps(rows, indent=2, sort_keys=True) + '\n')
+    receipt.chmod(0o600)
+
+
+async def canonical_git_identity(root, process):
+    """Verify the private exact-graph receipt, real Git objects/refs and file bytes."""
+    receipt = plain_path(root / 'canonical-transports.json')
+    require(receipt.is_file() and receipt.stat().st_size <= 65536, 'Invalid canonical transport receipt')
+    original = tomllib.loads((root / 'original/uv.lock').read_text())
+    rows = canonical_git_transports(original['package'])
+    require(json.loads(receipt.read_text()) == rows, 'Canonical transport receipt differs from original graph')
+    content = hashlib.sha256()
+    urls = sorted({row['url'] for row in rows})
+    for url in urls:
+        group = [row for row in rows if row['url'] == url]
+        mirror = canonical_mirror(root, group[0])
+        require(await process('git', 'config', '--local', '--get', 'remote.origin.url', cwd=mirror) == url,
+                'Canonical mirror changed its authored origin')
+        expressions = [value + '^{commit}' for row in group for value in (row['revision'], row['ref'])]
+        actual = await process('git', 'rev-parse', '--absolute-git-dir',
+                               '--is-bare-repository', '--is-shallow-repository', *expressions, cwd=mirror)
+        require(actual.splitlines() == [str(mirror), 'true', 'false',
+                                       *(row['revision'] for row in group for _ in range(2))],
+                'Canonical mirror commit or named ref changed')
+        await process('git', 'fsck', '--full', '--no-reflogs', cwd=mirror)
+        for path in sorted(mirror.rglob('*')):
+            if path.is_file():
+                content.update(path.relative_to(root).as_posix().encode() + b'\0')
+                content.update(bytes.fromhex(digest(path)))
+    return {'canonicalGitTransportCount': len(urls),
+            'canonicalGitReceiptSha256': digest(receipt),
+            'canonicalGitContentSha256': content.hexdigest()}
+
+
+async def verify_canonical_transports(root, supply, rows, process):
+    """Exercise the consumer's actual wrapper/mappings before baseline install."""
+    require(os.environ.get('GIT_ALLOW_PROTOCOL') == 'file'
+            and os.environ.get('GIT_CONFIG_COUNT') == '0'
+            and os.environ.get('GIT_CONFIG_GLOBAL') == str(root / 'gitconfig')
+            and shutil.which('git') == str(root / 'bin/git'),
+            'Canonical transport readiness requires the isolated Git wrapper')
+    for row in rows:
+        mirror = plain_path(supply / row['mirrorrelative'])
+        require(await process('git', 'remote', 'get-url', 'origin', cwd=mirror, timeout=15) == row['url'],
+                'Git wrapper did not preserve the authored canonical origin')
+        # No env substitution: this is exactly the Git command path used by the
+        # isolated worker. Ask for the peeled tag too, never substitute HEAD.
+        # An unadvertised exact SHA also fails readiness; object availability
+        # alone cannot certify this transport, and no branch alias is invented.
+        output = await process('git', 'ls-remote', '--exit-code', row['url'],
+                               row['ref'], row['ref'] + '^{}', timeout=15)
+        lines = [line.split('\t') for line in output.splitlines()]
+        require(len(output) <= 4096 and 1 <= len(lines) <= 2
+                and all(len(line) == 2 and re.fullmatch(r'[a-f0-9]{40}', line[0]) for line in lines),
+                'Canonical transport returned invalid ref evidence')
+        refs = {ref: revision for revision, ref in lines}
+        allowed = {row['ref'], row['ref'] + '^{}'} if row['ref'].startswith('refs/tags/') else {row['ref']}
+        require(len(refs) == len(lines) and row['ref'] in refs and set(refs) <= allowed
+                and refs.get(row['ref'] + '^{}', refs[row['ref']]) == row['revision'],
+                'Canonical transport did not advertise its exact locked commit')
+    return {'verifiedTransportRefCount': len(rows)}
+
+
+def canonical_lock_source(value):
+    """Pure Git lock semantics; ref spelling may later normalize to its commit."""
+    require(isinstance(value, str), 'Canonical Git lock source is not text')
+    parsed = urlsplit(value)
+    query = parse_qs(parsed.query, strict_parsing=True, keep_blank_values=True)
+    kinds = set(query) & {'rev', 'branch', 'tag'}
+    require(len(kinds) == 1 and set(query) <= kinds | {'subdirectory'}
+            and all(len(values) == 1 and isinstance(values[0], str) and values[0]
+                    for values in query.values())
+            and re.fullmatch(r'[a-f0-9]{40}', parsed.fragment),
+            'Canonical Git lock source is ambiguous or lacks an exact commit')
+    kind, = kinds
+    return {'url': parsed._replace(query='', fragment='').geturl(),
+            'ref': query[kind][0], 'refKind': kind,
+            'subdirectory': query.get('subdirectory', [''])[0], 'revision': parsed.fragment}
+
+
+def verify_canonical_generation(setup_graph, generation_lock, policies):
+    """Pure, read-only comparison of original rows against qualified semantics.
+
+    Inputs are original package rows, parsed generation uv.lock and parsed
+    runtime-sources.json. Ignore resolver formatting/metadata, not version or
+    source identity. Return only bounded counts and a semantic identity hash.
+    """
+    original = {row['name']: row for row in setup_graph}
+    current_rows = generation_lock['package']
+    current = {row['name']: row for row in current_rows}
+    require(len(original) == len(setup_graph) and len(current) == len(current_rows)
+            and original.keys() <= current.keys() and not original.keys() & PACKAGES.keys(),
+            'Canonical generation has missing or ambiguous package identities')
+    require(isinstance(policies, dict), 'Canonical generation has no source policy map')
+    semantic = []
+    git_count = registry_count = 0
+    for name, expected in sorted(original.items()):
+        observed = current[name]
+        require(expected.get('version') and observed.get('version') == expected['version'],
+                'An unselected canonical package changed version')
+        source, actual_source = expected.get('source', {}), observed.get('source', {})
+        if set(source) == {'registry'}:
+            require(actual_source == source, 'An unselected registry package changed origin')
+            semantic.append({'name': name, 'version': expected['version'], 'source': source})
+            registry_count += 1
+            continue
+        require(set(source) == set(actual_source) == {'git'},
+                'An unselected canonical package changed source kind')
+        expected_git = canonical_lock_source(source['git'])
+        actual_git = canonical_lock_source(actual_source['git'])
+        identity = {key: expected_git[key] for key in ('url', 'subdirectory', 'revision')}
+        require(all(actual_git[key] == value for key, value in identity.items()),
+                'An unselected canonical Git package changed repository, subdirectory or commit')
+        # verify_resolution accepts either the authored ref or uv's exact
+        # rev=<commit> normalization. Neither permits an unrelated named ref.
+        require((actual_git['ref'] == expected_git['ref']
+                 and actual_git['refKind'] == expected_git['refKind'])
+                or (actual_git['refKind'] == 'rev' and actual_git['ref'] == identity['revision']),
+                'Canonical Git lock lost the authored ref or exact normalization')
+        policy = policies.get(name)
+        require(isinstance(policy, dict)
+                and all(policy.get(key, '') == value for key, value in identity.items()),
+                'Canonical Git policy changed repository, subdirectory or commit')
+        origin = policy.get('policyOrigin')
+        require(isinstance(origin, dict) and isinstance(origin.get('kind'), str) and origin['kind']
+                and all(origin.get(key, '') == policy.get(key, '')
+                        for key in ('url', 'ref', 'subdirectory', 'revision')),
+                'Canonical Git policy origin is not bound to its source')
+        authored_ref = expected_git['ref']
+        if expected_git['refKind'] == 'tag':
+            valid_ref = (policy.get('ref') == identity['revision']
+                         and origin['kind'] == 'tag-reference' and origin.get('originalRef') == authored_ref)
+        else:
+            valid_ref = (policy.get('ref') == authored_ref and origin['kind'] != 'tag-reference'
+                         and origin.get('originalRef', authored_ref) == authored_ref)
+            # freeze_policies conservatively retains rev=main as an unresolved
+            # exact pin; freeze may instead overlay the preserved staged main
+            # policy. Do not manufacture branch authority or reject either form.
+            valid_ref = valid_ref or (expected_git['refKind'] == 'rev'
+                and policy.get('ref') == identity['revision']
+                and origin['kind'] == 'unresolved-reference' and origin.get('originalRef') == authored_ref)
+        require(valid_ref, 'Canonical Git policy lost its authored ref semantics')
+        semantic.append({'name': name, 'version': expected['version'],
+                         'source': {**identity, 'ref': authored_ref, 'refKind': expected_git['refKind']}})
+        git_count += 1
+    core = original.get('amplifier-core', {})
+    require(core.get('source') == {'registry': 'https://pypi.org/simple'},
+            'Canonical Core must retain its original registry origin')
+    return {'packageCount': len(original), 'gitPackageCount': git_count,
+            'registryPackageCount': registry_count,
+            'semanticSha256': hashlib.sha256(json.dumps(semantic, sort_keys=True).encode()).hexdigest()}
+
+
 async def supply_identity(root, process):
     files = {
         'originalManifestSha256': root / 'original/pyproject.toml',
@@ -660,6 +895,7 @@ async def supply_identity(root, process):
         'repositoryLockSha256': digest(CHECKOUT / 'uv.lock'),
         **{name: digest(path) for name, path in files.items()},
         **(await repository_identity(root / 'origin', process)),
+        **(await canonical_git_identity(root, process)),
     }
 
 
@@ -728,6 +964,8 @@ async def prepare_supply(args, evidence):
         shutil.copy2(args.runtime_lock, expanded / 'uv.lock')
         require(digest(expanded / 'uv.lock') == evidence.report['supply']['setupLockSha256'],
                 'Original setup lock copy changed')
+        evidence.phase('prepare-supply-canonical-transports')
+        await prepare_canonical_git(args.root, setup_graph, updates.process)
         evidence.phase('prepare-supply-install')
         # Keep the adapter's existing transport mappings and online policy.
         # No provider, model, probe or worker is mounted during preparation.
@@ -806,6 +1044,18 @@ async def consume_supply(args, generated, evidence, process):
             'Prepared supply differs from the exact canonical transformation')
     package_count = verify_expanded_lock(
         args, supply / 'expanded/uv.lock', project_name, setup_graph, identity['repoCommit'])
+    # Identity and the original graph must agree before installing transports.
+    # Reuse the verified bare mirrors in place; never copy expanded/.venv.
+    transports = canonical_git_transports(setup_graph)
+    require(json.loads((supply / 'canonical-transports.json').read_text()) == transports,
+            'Canonical transports differ from the caller original graph')
+    with (args.root / 'gitconfig').open('a') as stream:
+        for url in sorted({row['url'] for row in transports}):
+            row = next(row for row in transports if row['url'] == url)
+            mirror = plain_path(supply / row['mirrorrelative'])
+            stream.write('[url ' + json.dumps(mirror.as_uri()) + ']\n insteadOf = ' + url + '\n')
+    evidence.phase('canonical-transport-readiness')
+    transport_readiness = await verify_canonical_transports(args.root, supply, transports, process)
     for name in ('origin', 'shared'):
         target = plain_path(args.root / name, tree=True)
         require(target.is_dir() and not any(target.iterdir()), 'Fixture destination is not empty')
@@ -819,7 +1069,7 @@ async def consume_supply(args, generated, evidence, process):
     require(digest(args.root / 'shared/settings.yaml') == identity['settingsSha256'],
             'Copied fixture settings changed')
     evidence.report['preparedSupply'] = {
-        **identity, 'receiptSha256': digest(receipt), 'packageCount': package_count}
+        **identity, 'receiptSha256': digest(receipt), 'packageCount': package_count, **transport_readiness}
     evidence.save()
     return identity['repoCommit'], required, setup_graph, project_name
 
@@ -1009,7 +1259,17 @@ async def run(args, evidence):
             manager.inventory = inventory
             await manager.publish(items=inventory, available=len(chosen))
             before_processes = len(observations.owned)
+            selected = [row for row in inventory if row.get('status') == 'update'
+                        and row.get('eligible') and row.get('kind') != 'smart tool']
+            canonical_packages = {row['name'] for row in setup_graph}
+            evidence.report.setdefault('cyclePolicies', []).append({
+                'cycle': cycle,
+                'environmentUpdate': any(row.get('kind') == 'runtime environment' for row in selected),
+                'selectedCanonicalCount': sum(row.get('package') in canonical_packages for row in selected),
+                'syntheticRefreshCount': sum(row.get('package') in PACKAGES for row in selected)})
             evidence.phase(f'cycle-{cycle}-install-qualify-activate')
+            require(not any(row.get('package') in canonical_packages for row in selected),
+                    'This scenario must not select canonical package updates')
             await manager.install()  # Owns validate(), receipt and activation.
             state = app.state['updates']
             require(state['phase'] == 'installed' and state.get('pendingRelease') is None,
@@ -1034,6 +1294,11 @@ async def run(args, evidence):
             require(required <= {row['name'] for row in graph}, 'Qualified graph omits canonical packages')
             require('include-system-site-packages = false' in (project / '.venv/pyvenv.cfg').read_text().lower(), 'Generation inherits host site-packages')
             policies = json.loads((stage / 'runtime-sources.json').read_text())
+            canonical_identity = verify_canonical_generation(
+                setup_graph, tomllib.loads((project / 'uv.lock').read_text()), policies)
+            evidence.report.setdefault('canonicalGenerations', []).append({
+                'cycle': cycle, **canonical_identity})
+            evidence.save()
             for name in PACKAGES:
                 require(policies[name]['ref'] == 'main' and policies[name]['revision'] == checked and policies[name]['url'] == URL,
                         'Recorded policy differs from checked source')
