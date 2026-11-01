@@ -28,8 +28,8 @@ runtime blockers below. Installing Visual Studio is not the proposed solution.
 
 ## Recommended experience
 
-The owner approved the two authentication/lifetime policies below on October 31,
-2026. Implementation details and platform qualification remain pending.
+The authentication/lifetime policies below define the proposed experience.
+Implementation details and platform qualification remain pending.
 
 1. Run one PowerShell bootstrap as the signed-in user. It explains what it will
    install and where; no administrator terminal or machine execution-policy change.
@@ -313,21 +313,19 @@ Keep private usernames, SIDs, paths, tokens and screenshots out of public eviden
 | Is the signed-in owner OS session sufficient to authorize a browser? | Yes, through a narrow single-use launcher grant. | Supports passwordless accounts without asking for the OS password. A fresh Hello challenge would add a different security requirement. |
 | Must work continue after Windows sign-out? | Not for the ordinary user-logon deployment. | Browser and terminal closure are supported; sign-out is a documented lifecycle boundary. Always-on execution needs a separately designed service mode. |
 
-The owner answered **"Use both recommended defaults"** to the two-policy question
-on October 31, 2026. This selects only owner-session browser authorization and
+The accepted choices cover only owner-session browser authorization and
 user-logon lifetime, not every implementation detail in this document.
 No fresh Windows password or Hello challenge is required. A user-logon host starts
 again on the next sign-in; unknown tool effects are never replayed.
 Remote browser access and architecture coverage remain explicit qualification work,
 not an implicit promise or a silent scope reduction.
 
-## Current delivery status
+## Qualification record
 
-This document records the design and source audit. The accompanying README change
-selects 3.13 in manual commands and identifies the current native-Windows limitation.
-Neither change supplies a working Windows installer or closes the upstream and
-runtime dependencies. Check the candidate's actual diff and acceptance records
-before describing any implementation item as complete.
+This document records the design, source audit and bounded qualification results.
+The README selects 3.13 in manual commands and identifies the native-Windows
+limitation. No working native Windows installer is claimed. Earlier results below
+are historical evidence for their exact candidates, not current release acceptance.
 
 The accompanying safety increment replaces Windows lease liveness signaling with
 `OpenProcess(SYNCHRONIZE)` and a zero-timeout wait. Uncertain results retain storage.
@@ -343,9 +341,6 @@ python -I -S -B -c "import sys, unittest; sys.path.insert(0, '.'); suite = unitt
 
 Local link targets, workflow YAML parsing and `git diff --check` also passed.
 Independent source review found no actionable defect in the passive probe.
-The initial pytest installer check could not start because pytest was absent.
-An isolated check did not start because repository snapshot admission failed;
-it is not an isolated-test pass.
 
 ### Host mechanism implementation increment
 
@@ -377,9 +372,9 @@ no result is claimed for that invocation. The smaller named checks above ran
 separately. Source review and these Linux results do not establish Win32 API
 execution, Windows account/privacy behavior or clean-machine installation.
 
-Foundation and memory candidates remain separate upstream work. The bounded
-Foundation ownership increment is not checkpoint persistence or Windows
-cooperative handoff; review and native qualification must precede integration.
+At this stage, Foundation and memory were separate upstream candidates. Their
+subsequent merge and CI results are recorded below. The bounded Foundation
+ownership increment is not checkpoint persistence or Windows cooperative handoff.
 Optional publishing/transfer startup isolation must preserve retained ownership
 and transfer fences, not replace unavailable controllers with empty state.
 Owner browser authorization, user-logon lifecycle, process-tree containment,
@@ -389,14 +384,13 @@ Native Windows, macOS and WSL runtime execution remain unverified here.
 ### Subsequent bounded qualification
 
 These results qualify the named increments only. They do not establish an
-installed native Windows host, a clean-machine installer, or a merged upstream
-dependency graph.
+installed native Windows host or a clean-machine installer.
 
 | Increment | Observed evidence | Remaining boundary |
 | --- | --- | --- |
-| Foundation ownership and advisory reads | Draft [PR 455](https://github.com/microsoft/amplifier-foundation/pull/455), exact head `06a825db4732f7c540b51f1d095d499c67d92b0a`; [CI 41218283216](https://github.com/microsoft/amplifier-foundation/actions/runs/41218283216) passed Windows and Linux Python 3.11/3.12/3.13. Each Windows job ran all 20 native cases, with zero native skips; 2548 total passed and 75 other skips. | Windows Server 2025 build 26100, not minimum Windows 10 or clean Windows 11. Checkpoint/fence mutation and Windows handoff remain unsupported. PR remains draft and unmerged. |
-| Memory store locking/encoding | Draft [PR 24](https://github.com/microsoft/amplifier-bundle-memory/pull/24), exact head `6820d5cc2cb7701ec9f965c493886a1e89ef22d5`; [CI 41215809263](https://github.com/microsoft/amplifier-bundle-memory/actions/runs/41215809263) passed all four Windows/Linux Python 3.11/3.13 jobs: 34 tests per job, no skips. | Selected store mechanisms, not the whole installed runtime; PR remains draft and unmerged. |
-| Unified private config files and owned processes | Reviewed local candidates retain lexical paths, handle-bound rename, no-replace credential initialization, exact interpreter identity and bounded pipe finalization. Parent checks: 24 file tests passed/13 native skips; 29 deployment tests passed/1 native skip; 34 process tests passed/11 native skips. | Linux control-flow and real-pipe checks are not native Win32 acceptance. No production process callers integrated yet. |
+| Foundation ownership and advisory reads | [PR 455](https://github.com/microsoft/amplifier-foundation/pull/455), reviewed head `06a825db4732f7c540b51f1d095d499c67d92b0a`, merged as `99fdb524037fb998b9c36355315e66a3052b662f`. [Candidate CI 41218283216](https://github.com/microsoft/amplifier-foundation/actions/runs/41218283216) passed Windows and Linux Python 3.11/3.12/3.13. Each Windows job ran all 20 native cases, with zero native skips; 2548 total passed and 75 other skips. [Post-merge CI 41267999104](https://github.com/microsoft/amplifier-foundation/actions/runs/41267999104) passed all six Windows/Linux jobs at the merge commit. | Windows Server 2025 build 26100, not minimum Windows 10 or clean Windows 11. Checkpoint/fence mutation and Windows handoff remain unsupported. |
+| Memory store locking/encoding | [PR 24](https://github.com/microsoft/amplifier-bundle-memory/pull/24), reviewed head `6820d5cc2cb7701ec9f965c493886a1e89ef22d5`, merged as `5ac75ac85b9972e06936630e347023af107fd364`. [Candidate CI 41215809263](https://github.com/microsoft/amplifier-bundle-memory/actions/runs/41215809263) passed all four Windows/Linux Python 3.11/3.13 jobs: 34 tests per job, no skips. [Post-merge CI 41268245374](https://github.com/microsoft/amplifier-bundle-memory/actions/runs/41268245374) passed all four Windows/Linux jobs at the merge commit. | Selected store mechanisms, not the whole installed runtime. |
+| Unified private config files and owned processes | Reviewed local candidates retain lexical paths, handle-bound rename, no-replace credential initialization, exact interpreter identity and bounded pipe finalization. Focused checks: 24 file tests passed/13 native skips; 29 deployment tests passed/1 native skip; 34 process tests passed/11 native skips. | Linux control-flow and real-pipe checks are not native Win32 acceptance. No production process callers integrated yet. |
 | Owner browser entry | The reproduced unverified-HTTP bearer disclosure is repaired in the local candidate. Independent real-socket HTTP/wrong-leaf/proxy/redirect checks pass; private credential adapters use bounded pinned-directory reads. | Browser activation still unconditionally refuses pending native credential/TLS and combined rendered-flow qualification. No passwordless-account acceptance is claimed. |
 
 The initial Foundation [CI 41215809534](https://github.com/microsoft/amplifier-foundation/actions/runs/41215809534)
@@ -411,7 +405,8 @@ Native TLS storage/loading, Scheduled Task lifecycle, PowerShell bootstrap,
 process caller integration and the native acceptance rubric remain separate
 work. Publication of Unified still follows upstream merge/CI; isolated
 combined-source testing does not require those merges.
-The installed app's 0.44.0 adoption does not install these local Windows changes.
+An installed release does not contain local candidate changes merely because
+its version is newer than the candidate's base.
 
 ### Reviewed local candidates, not native acceptance
 
@@ -419,30 +414,36 @@ The retained local increments now include:
 
 1. **Private files and TLS:** fixed app-owned certificate/key paths, bounded
    reads, held file handles through OpenSSL loading, and a stable bounded TLS
-   lock. Parent checks: 49 passed, 7 native skips; independent changed-risk
+   lock. Focused checks: 49 passed, 7 native skips; independent changed-risk
    review: 24 passed. Per-file publication is not pair-atomic. Partial material
    fails explicitly without automatic CA regeneration.
 2. **Interactive Scheduled Task:** owner-SID identity, least privilege,
    live-definition ownership checks and private explicit-replacement backups.
    Executable and working-directory fields reject `%` because Scheduler expands
    those fields; encoded data/state paths retain literal percent characters.
-   Parent checks: 98 passed, 2 native skips before the narrow repair; 21 focused
+   Focused checks: 98 passed, 2 native skips before the narrow repair; 21 focused
    repair cases pass. The CLI's 26 checks pass after forwarding the selected data
    root. Task state is not health; authenticated host/process correlation, logs
    and automatic managed restart remain unavailable.
 3. **PowerShell bootstrap:** pinned, owner/DACL-validated traversal, exclusive
    extraction-root creation, immutable checked-file handles and correct
-   PowerShell source quoting. Parent and independent review each observed
+   PowerShell source quoting. Implementation verification and independent review each observed
    15 portable guards passed, 2 native skips. Neither PowerShell parsing,
    embedded C# compilation nor Win32 fixture execution has occurred here.
    Both release-support and activation gates remain closed.
 
 The focused platform workflow selects the standalone file, process and installer
-fixtures without importing installed application dependencies. That workflow
-change is local and unexecuted on Windows; selection is not test evidence.
+fixtures without importing installed application dependencies. Windows preflight
+requires ordinary x64 CPython 3.13 and both PowerShell 5.1 and 7. A separate
+four-dependency job selects configuration, TLS and service policy checks,
+explicitly excluding Task Scheduler registration. Local verification of that
+selection passed 145 tests, with 9 native skips and 1 deselection. YAML and
+embedded Python checks passed; PowerShell parsing and native execution remain
+unverified until Windows CI runs. Selection alone is not native test evidence.
 
-**Next native-CI/publication dependency:** upstream Foundation and memory merge/CI, followed
-by Unified's approved draft-PR/native-CI route. No merge authority was granted.
+**Next native-CI dependency:** qualify Unified's focused mechanisms through a
+draft PR. The original upstream ownership/store merge and CI prerequisites above
+are satisfied; ordinary private native-history persistence remains separate work.
 Until the standalone mechanism passes its own native checks, do not integrate
 runtime process callers. After that boundary, preserve owner cleanup-failure
 custody and generation leases, distinguish guard/payload/worker identities, and
@@ -481,10 +482,10 @@ The deterministic roundtrips saved/read UTF-8 memory through the real library,
 resumed SDK history, preserved synthetic configuration bytes, and persisted CLI
 user/tool/assistant content. Separate-process checks established live-owner
 refusal, release, old-capability fencing and successor checkpoint readback
-across the two environments. Parent verification repeated the two consumer
+across the two environments. Independent verification repeated the two consumer
 roundtrips and ownership sequence with fresh synthetic data, and checked all
 208 exported evidence-file hashes before teardown. The owned DTU was removed;
-the seven pre-existing environments were left untouched.
+unrelated environments were left untouched.
 
 **Mocked boundaries remain explicit:** scripted provider, CLI first-run and
 bundle-assembly seams, and fixture tool bridges to the real memory library.
@@ -496,13 +497,13 @@ is established by these checks.
 A separate Windows x64/ordinary CPython 3.13 resolution passed for each default
 package graph: Unified, Agent and App CLI. Native-only binary rechecks preserved
 the selected identities; 24 unique native wheels across 91 selected registry
-releases were available and hash-verified. Parent readback verified the wheels,
+releases were available and hash-verified. Independent readback verified the wheels,
 210 retained evidence files and 97 AMD64 PE members. PyYAML 6.0.3 has a matching
 CPython 3.13 Windows wheel but none compatible with ordinary CPython 3.15.
 Pure-Python/VCS packaging was not globally prohibited. Wheel availability does
 not establish Windows execution, OS-wrapper behavior or optional/dynamic graphs.
 
-Astra and Fable separately reviewed the earlier evidence brief, not source or
+Two independent reviews assessed the earlier evidence brief, not source or
 DTU execution. Their requested consumer/provenance and native-wheel checks now
 have the bounded evidence above. Their native runtime, security/lifecycle and
 clean-install gaps remain open. Both activation gates stay closed.
