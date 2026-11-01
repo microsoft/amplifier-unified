@@ -13,6 +13,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 
 from .work_projection import input_identity_bytes
+from .request_refit import RequestFitChanged, changed_components
 
 WORK_BYTES = 12 * 1024
 STUB_FIELDS = frozenset({
@@ -249,7 +250,7 @@ class CoordinationDelivery:
 
     def check_execution_scope(self, scope):
         if scope is not None and self.execution_scope() != scope:
-            raise ValueError('Native generation, inputs or Stop changed during preparation; refit before transport.')
+            raise RequestFitChanged('native_scope_changed')
 
     def call_consumed(self, identity):
         # Execution evidence outlives missing/recovered Work observations and
@@ -876,8 +877,10 @@ class CoordinationDelivery:
             return request
         saved = self._request(request)
         before = request.model_dump_json()
-        if saved is not binding or before != fitted:
-            raise ValueError('Work request bytes changed after fitting; refit before transport.')
+        if saved is not binding:
+            raise RequestFitChanged('binding_missing' if saved is None else 'binding_changed')
+        if before != fitted:
+            raise RequestFitChanged('content_changed', components=changed_components(fitted, before))
         if full:
             # Keep the fitted bytes, but never promote their observed Work
             # version to current assurance when that check was waived.
@@ -886,14 +889,19 @@ class CoordinationDelivery:
             try:
                 check = await asyncio.wait_for(self.bridge('work.invocation.revalidate',
                                                           {'version': saved['required']['version']}), 1.5)
-                if (check.get('current') is not True or check.get('effectAuthorized') is not False
-                        or check.get('required') != saved['required']):
-                    raise ValueError('Required Work authority changed.')
-            except Exception as exc:
-                raise ValueError('Work request changed or currentness is unavailable; refit before transport.') from exc
+            except Exception:
+                raise RequestFitChanged('authority_unavailable') from None
+            if not isinstance(check, dict):
+                raise RequestFitChanged('authority_unavailable')
+            if (check.get('current') is not True or check.get('effectAuthorized') is not False
+                    or check.get('required') != saved['required']):
+                raise RequestFitChanged('authority_changed')
         self.check_execution_scope(scope)
-        if request.model_dump_json() != before or self._request(request) is not saved:
-            raise ValueError('Work request changed while checking currentness; refit before transport.')
+        after = request.model_dump_json()
+        if self._request(request) is not saved:
+            raise RequestFitChanged('binding_missing' if self._request(request) is None else 'binding_changed')
+        if after != before:
+            raise RequestFitChanged('content_changed', components=changed_components(before, after))
         # Diagnostic evidence only. It cannot authorize a later tool without
         # the adapter-owned actual-transport/request-to-effect causal binding.
         saved['coverage'] = self.request_coverage(request)
