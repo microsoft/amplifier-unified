@@ -166,7 +166,7 @@ def main():
     if not save_status(output / 'status.json', status):
         return 1  # No command starts without its initial receipt.
 
-    def run(label, command, *, cwd=ROOT, env=None, timeout=None):
+    def run(label, command, *, cwd=ROOT, env=None, timeout=None, owned_group=False):
         timeout = timeout if timeout is not None else (30 if args.offline_lock_preflight else 900)
         log = raw_logs / (label + '.log')
         record = {'label': label, 'returncode': None}
@@ -176,7 +176,7 @@ def main():
         stream = None
         try:
             stream = log.open('w')
-            if args.offline_lock_preflight:
+            if args.offline_lock_preflight or owned_group:
                 result = preflight_process(command, cwd=cwd, env=env, stream=stream,
                                            timeout=timeout, record=record)
             else:
@@ -268,7 +268,7 @@ def main():
         cache = work / 'uv-cache'
         setup_env = mirror_seed_environment(cache, mirror)
         run('runtime-resolve', ['uv', 'sync', '--project', str(seed), '--python', sys.executable],
-            env=setup_env, timeout=450 if args.offline_lock_preflight else 900)
+            env=setup_env, timeout=300, owned_group=True)
         lock = tomllib.loads((seed / 'uv.lock').read_text())
         resolved_loop, = [p for p in lock['package'] if p['name'] == LOOP]
         assert resolved_loop['source']['git'].rsplit('#', 1)[1] == pin
@@ -356,18 +356,52 @@ Path(sys.argv[1]).write_text(json.dumps({'python':sys.executable,'prefix':sys.pr
             # Existing actual-worker path; the preflight never enters it.
             host_python = ROOT / '.venv/bin/python'
             assert host_python.is_file()
+            prepared = work / 'prepared-fixture'
+            supply_env = {**setup_env, 'GIT_CONFIG_COUNT': '2',
+                          'GIT_CONFIG_KEY_1': 'url.' + (prepared / 'origin').as_uri() + '.insteadOf',
+                          'GIT_CONFIG_VALUE_1': 'https://example.invalid/approval'}
+            # Complete the test graph while normal setup acquisition is available.
+            # The isolated baseline consumes this exact lock, never the seed venv.
+            # Preparation keeps normal setup networking, but every descendant is
+            # owned by this PID namespace even if it starts a new session.
+            supply_command = ['/usr/bin/sudo', '-n', '/usr/bin/unshare',
+                '--pid', '--fork', '--mount-proc', '--kill-child=KILL', '--',
+                '/usr/bin/setpriv', '--reuid', str(os.getuid()), '--regid', str(os.getgid()),
+                '--clear-groups', '--bounding-set=-all', '--inh-caps=-all',
+                '--ambient-caps=-all', '--no-new-privs', '--pdeathsig=KILL',
+                '/usr/bin/env', '-i']
+            for key in ('PATH', 'LANG', 'UV_PYTHON_DOWNLOADS', 'UV_NO_GITHUB_FAST_PATH',
+                        'UV_CACHE_DIR', 'GIT_TERMINAL_PROMPT', 'GIT_CONFIG_NOSYSTEM',
+                        'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0',
+                        'GIT_CONFIG_KEY_1', 'GIT_CONFIG_VALUE_1'):
+                if key in supply_env:
+                    supply_command.append(key + '=' + supply_env[key])
+            supply_command += ['HOME=' + str(work / 'supply-home'), 'PYTHONDONTWRITEBYTECODE=1',
+                '/usr/bin/timeout', '--signal=TERM', '--kill-after=20s', '280s', str(host_python),
+                str(ROOT / 'tests/fixtures/omitted_ref_worker_probe.py'), '--prepare-supply',
+                '--root', str(prepared),
+                '--runtime-manifest', str(seed / 'pyproject.toml'), '--runtime-lock', str(seed / 'uv.lock'),
+                '--uv-cache', str(cache), '--output', str(output / 'prepared-supply')]
+            run('complete-fixture-supply', supply_command,
+                env={'PATH': os.environ['PATH'], 'LANG': 'C.UTF-8'}, timeout=320, owned_group=True)
+            assert json.loads((output / 'prepared-supply/result.json').read_text())['status'] == 'passed'
             fixture_env = {'PATH': os.environ['PATH'], 'LANG': 'C.UTF-8', 'PYTHONDONTWRITEBYTECODE': '1',
                            'HOME': str(work / 'fixture-home'), 'UV_PYTHON_DOWNLOADS': 'never'}
             status['status'] = 'checking'
-            command = ['sudo', '-n', 'unshare', '--net', '--', 'setpriv', '--reuid', str(os.getuid()),
-                '--regid', str(os.getgid()), '--init-groups', '/usr/bin/env', '-i',
+            command = ['/usr/bin/sudo', '-n', '/usr/bin/unshare', '--net', '--pid', '--fork', '--mount-proc',
+                '--kill-child=KILL', '--', '/usr/bin/setpriv', '--reuid', str(os.getuid()),
+                '--regid', str(os.getgid()), '--clear-groups', '--bounding-set=-all',
+                '--inh-caps=-all', '--ambient-caps=-all', '--no-new-privs', '--pdeathsig=KILL',
+                '/usr/bin/env', '-i',
                 'PATH=' + fixture_env['PATH'], 'LANG=C.UTF-8', 'PYTHONDONTWRITEBYTECODE=1',
-                'HOME=' + fixture_env['HOME'], str(host_python),
+                'HOME=' + fixture_env['HOME'],
+                '/usr/bin/timeout', '--signal=TERM', '--kill-after=20s', '600s', str(host_python),
                 str(ROOT / 'tests/fixtures/omitted_ref_worker_probe.py'), '--root', str(work / 'fixture'),
                 '--runtime-manifest', str(seed / 'pyproject.toml'), '--runtime-lock', str(seed / 'uv.lock'),
                 '--uv-cache', str(cache), '--parent-netns', os.readlink('/proc/self/ns/net'),
+                '--prepared-supply', str(prepared),
                 '--output', str(output / 'fixture')]
-            run('real-worker-adoption', command, env=fixture_env, timeout=1200)
+            run('real-worker-adoption', command, env=fixture_env, timeout=640, owned_group=True)
             status.update(status='passed', modelCalls=0)
     except BaseException as error:
         status.update(status='failed', errorType=type(error).__name__,

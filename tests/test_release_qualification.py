@@ -514,7 +514,7 @@ def test_expanded_lock_preflight_reuses_private_checkout_without_running_worker(
     assert uv_steps == [
         {
             'uses': 'astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e',
-            'if': '${{ !inputs.offline_lock_preflight }}',
+            'if': '${{ !inputs.offline_lock_preflight }}', 'with': {'version': '0.13.6'},
         },
         {
             'uses': 'astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e',

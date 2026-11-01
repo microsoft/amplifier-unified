@@ -1,8 +1,9 @@
 """Issue #1279: real omitted-ref qualification, promotion and worker adoption.
 
 Authoring this fixture is not qualification. Run once in an isolated Linux/Python
-3.13 CI job. Supply --runtime-manifest, its exact --runtime-lock, and the
-dedicated populated --uv-cache from preparation, all under --root's parent.
+3.13 CI job. First use --prepare-supply in the existing online setup; then supply
+--prepared-supply, --runtime-manifest, its exact --runtime-lock, and the dedicated
+populated --uv-cache to the isolated run, all under --root's parent.
 Keep canonical Git/registry source identities, including wheel-only registry
 Core; only loop-live's repository-lock pin and Linux/Python bounds may differ.
 
@@ -23,7 +24,8 @@ not exported; probe records use the production sanitizer, and runtime.ready is
 reduced to fixed identity/capability fields. Failures contain no exception text,
 source lines or arbitrary diagnostic payloads.
 
-The caller must launch this process in its OS network sandbox (unshare --net).
+Except in --prepare-supply mode, the caller must launch this process in its OS
+network sandbox (unshare --net).
 The fixture checks a separate Linux network namespace with only loopback before
 clearing UV_OFFLINE: uv otherwise refuses the uncached synthetic Git source even
 though Git redirects it to a local fixture. GIT_ALLOW_PROTOCOL=file stays set;
@@ -440,6 +442,21 @@ def fresh_directory(path):
     return path.resolve()
 
 
+def plain_path(path, *, tree=False):
+    """Reject symlinks before resolving inputs, including their ancestors."""
+    path = Path(path).absolute()
+    require(not any(item.is_symlink() for item in (path, *path.parents)),
+            'Supply paths must not contain symlinks')
+    path = path.resolve(strict=True)
+    require(path.is_file() or path.is_dir(), 'Supply input must be a regular file or directory')
+    if tree:
+        require(path.is_dir(), 'Supply tree must be a directory')
+        for item in path.rglob('*'):
+            require(not item.is_symlink() and (item.is_file() or item.is_dir()),
+                    'Supply tree contains a symlink or special file')
+    return path
+
+
 def require_network_sandbox(parent_netns):
     """Bounded read-only prerequisite; the caller owns network isolation."""
     require(re.fullmatch(r'net:\[\d+\]', parent_netns) is not None, 'Missing caller network identity')
@@ -545,10 +562,105 @@ def prepare_manifest(args, destination, evidence):
         'canonicalManifestSha256': digest(CHECKOUT / 'amplifier_web/runtime_deps/pyproject.toml'),
         'repositoryLockSha256': digest(CHECKOUT / 'uv.lock'),
         'generatedManifestSha256': digest(destination), 'loopRevision': loop.fragment,
-        'directDependencyCount': len(required), 'setupPackageCount': len(original_graph),
-        'uvCache': str(args.uv_cache), 'cacheContentIdentity': 'mutable; exact setup lock retained'}
+        'directDependencyCount': len(required), 'setupPackageCount': len(original_graph)}
     evidence.save()
     return required, original_graph, project_name
+
+
+def fixture_source(value, kind, revision):
+    parsed = urlsplit(value)
+    require(parsed._replace(query='', fragment='').geturl() == URL
+            and parsed.fragment == revision
+            and parse_qs(parsed.query, strict_parsing=True) == {
+                'branch': ['main'], 'subdirectory': ['modules/' + kind]},
+            'Fixture source differs from its exact branch, subdirectory or commit')
+
+
+def verify_expanded_lock(args, path, project_name, original_graph, revision):
+    """Only the three fixture rows and their root declarations may be added."""
+    original = tomllib.loads(args.runtime_lock.read_text())
+    expanded = tomllib.loads(path.read_text())
+    for data in (original, expanded):
+        names = [row['name'] for row in data['package']]
+        require(len(names) == len(set(names)), 'Lock contains duplicate package rows')
+    require(lock_identity(expanded, project_name) == original_graph
+            and len(expanded['package']) == len(original['package']) + len(PACKAGES),
+            'Expanded lock changed the original package graph')
+    require({k: v for k, v in original.items() if k != 'package'}
+            == {k: v for k, v in expanded.items() if k != 'package'},
+            'Expanded lock changed the canonical lock policy')
+    for name, (_, kind) in PACKAGES.items():
+        rows = [row for row in expanded['package'] if row['name'] == name]
+        require(len(rows) == 1 and rows[0]['version'] == '0.1.0'
+                and not rows[0].get('dependencies') and set(rows[0]['source']) == {'git'},
+                'Expanded lock lacks the exact dependency-free fixture package')
+        fixture_source(rows[0]['source']['git'], kind, revision)
+    roots = [row for row in expanded['package'] if row['name'] == project_name]
+    require(len(roots) == 1, 'Expanded lock has ambiguous root identity')
+    root = copy.deepcopy(roots[0])
+    for entries, metadata in ((root['dependencies'], False),
+                              (root['metadata']['requires-dist'], True)):
+        added = [row for row in entries if row['name'] in PACKAGES]
+        require(len(added) == len(PACKAGES) and {row['name'] for row in added} == set(PACKAGES),
+                'Expanded root must declare each fixture exactly once')
+        for row in added:
+            if metadata:
+                require(set(row) == {'name', 'git'}, 'Unexpected fixture requirement')
+                fixture_source(row['git'], PACKAGES[row['name']][1], '')
+            else:
+                require(set(row) == {'name'}, 'Unexpected fixture dependency')
+        entries[:] = [row for row in entries if row['name'] not in PACKAGES]
+    require([root] == [row for row in original['package'] if row['name'] == project_name],
+            'Expanded lock changed an original root declaration')
+    return len(expanded['package'])
+
+
+async def repository_identity(repo, process):
+    """Require a clean, self-contained main checkout, not a linked worktree."""
+    repo = plain_path(repo, tree=True)
+    git = repo / '.git'
+    require(git.is_dir() and not any((git / name).exists() for name in (
+        'objects/info/alternates', 'objects/info/http-alternates', 'commondir', 'shallow')),
+        'Fixture Git checkout is not self-contained')
+    require(Path(await process('git', 'rev-parse', '--show-toplevel', cwd=repo)) == repo
+            and Path(await process('git', 'rev-parse', '--absolute-git-dir', cwd=repo)) == git,
+            'Fixture Git checkout resolves outside its supply')
+    require(await process('git', 'symbolic-ref', '--short', 'HEAD', cwd=repo) == 'main',
+            'Fixture checkout is not on main')
+    require(not await process('git', '--no-optional-locks', 'status', '--porcelain',
+                              '--untracked-files=all', '--ignored=matching', cwd=repo),
+            'Fixture checkout is dirty')
+    await process('git', 'fsck', '--full', '--no-reflogs', cwd=repo)
+    revision = str(await process('git', 'rev-parse', 'HEAD', cwd=repo))
+    tree = str(await process('git', 'rev-parse', 'HEAD^{tree}', cwd=repo))
+    require(all(re.fullmatch(r'[a-f0-9]{40}', value) for value in (revision, tree)),
+            'Invalid fixture Git identity')
+    content = hashlib.sha256()
+    for path in sorted(repo.rglob('*')):
+        relative = path.relative_to(repo)
+        if path.is_file() and '.git' not in relative.parts:
+            content.update(relative.as_posix().encode() + b'\0')
+            content.update(bytes.fromhex(digest(path)))
+    return {'repoCommit': revision, 'repoTree': tree, 'repoContentSha256': content.hexdigest()}
+
+
+async def supply_identity(root, process):
+    files = {
+        'originalManifestSha256': root / 'original/pyproject.toml',
+        'originalLockSha256': root / 'original/uv.lock',
+        'expandedManifestSha256': root / 'expanded/pyproject.toml',
+        'expandedLockSha256': root / 'expanded/uv.lock',
+        'settingsSha256': root / 'shared/settings.yaml',
+    }
+    require(all(plain_path(path).is_file() for path in files.values()),
+            'Supply file is not regular')
+    return {
+        'schema': 1, 'fixtureSha256': digest(__file__),
+        'canonicalManifestSha256': digest(CHECKOUT / 'amplifier_web/runtime_deps/pyproject.toml'),
+        'repositoryLockSha256': digest(CHECKOUT / 'uv.lock'),
+        **{name: digest(path) for name, path in files.items()},
+        **(await repository_identity(root / 'origin', process)),
+    }
 
 
 async def make_repository(root, process):
@@ -587,6 +699,131 @@ async def make_repository(root, process):
     return await process('git', 'rev-parse', 'HEAD', cwd=repo)
 
 
+async def prepare_supply(args, evidence):
+    """Resolve and install once in the adapter's online dependency-setup phase."""
+    original_path, original_bytecode = list(sys.path), sys.dont_write_bytecode
+    observations = ProcessObservations(evidence)
+    failure = None
+    try:
+        require(sys.platform == 'linux' and sys.version_info[:2] == (3, 13),
+                'Requires Linux and Python 3.13')
+        require(int(Path('/proc/self/stat').read_text().split(' ', 1)[0]) == os.getpid(),
+                'Process evidence requires namespace-local procfs')
+        uv = shutil.which('uv')
+        require(uv and shutil.which('git'), 'Requires installed uv and Git')
+        sys.dont_write_bytecode = True
+        sys.path.insert(0, str(CHECKOUT))
+        asyncio.create_subprocess_exec = observations
+        from amplifier_web import updates
+        from amplifier_web import runtime_qualification as qualification
+        evidence.phase('prepare-supply-repository')
+        for name in ('origin', 'shared', 'original', 'expanded'):
+            (args.root / name).mkdir(mode=0o700)
+        baseline_revision = str(await make_repository(args.root, updates.process))
+        shutil.copy2(args.runtime_manifest, args.root / 'original/pyproject.toml')
+        shutil.copy2(args.runtime_lock, args.root / 'original/uv.lock')
+        expanded = args.root / 'expanded'
+        evidence.phase('prepare-supply-manifest')
+        required, setup_graph, project_name = prepare_manifest(args, expanded / 'pyproject.toml', evidence)
+        shutil.copy2(args.runtime_lock, expanded / 'uv.lock')
+        require(digest(expanded / 'uv.lock') == evidence.report['supply']['setupLockSha256'],
+                'Original setup lock copy changed')
+        evidence.phase('prepare-supply-install')
+        # Keep the adapter's existing transport mappings and online policy.
+        # No provider, model, probe or worker is mounted during preparation.
+        await updates.process(uv, 'sync', '--project', str(expanded), '--python', '3.13',
+                              '--cache-dir', str(args.uv_cache), timeout=900)
+        evidence.phase('prepare-supply-verify')
+        package_count = verify_expanded_lock(
+            args, expanded / 'uv.lock', project_name, setup_graph, baseline_revision)
+        graph = qualification.installed_graph(expanded)
+        require(required | set(PACKAGES) <= {row['name'] for row in graph},
+                'Prepared installation lacks required packages')
+        require('include-system-site-packages = false'
+                in (expanded / '.venv/pyvenv.cfg').read_text().lower(),
+                'Prepared installation inherits host site-packages')
+        for name, (_, kind) in PACKAGES.items():
+            installed = [row for row in graph if row['name'] == name]
+            require(len(installed) == 1 and installed[0]['version'] == '0.1.0',
+                    'Prepared fixture installation is missing or ambiguous')
+            direct = installed[0].get('directUrl', {})
+            require(direct.get('url') == URL and direct.get('subdirectory') == 'modules/' + kind
+                    and direct.get('vcs_info', {}).get('commit_id') == baseline_revision
+                    and direct['vcs_info'].get('vcs') == 'git'
+                    and direct['vcs_info'].get('requested_revision') == 'main',
+                    'Prepared installation differs from the locked fixture source')
+        identity = await supply_identity(args.root, updates.process)
+        require(identity['repoCommit'] == baseline_revision
+                and identity['originalManifestSha256'] == digest(args.runtime_manifest)
+                == evidence.report['supply']['manifestSha256']
+                and identity['originalLockSha256'] == digest(args.runtime_lock)
+                == evidence.report['supply']['setupLockSha256']
+                and identity['expandedManifestSha256'] == evidence.report['supply']['generatedManifestSha256'],
+                'Preparation changed its source inputs')
+        receipt = args.root / 'supply.json'
+        with receipt.open('x') as stream:
+            stream.write(json.dumps(identity, indent=2, sort_keys=True) + '\n')
+        receipt.chmod(0o600)
+        evidence.report['preparedSupply'] = {
+            **identity, 'receiptSha256': digest(receipt),
+            'packageCount': package_count, 'installedPackageCount': len(graph)}
+        evidence.phase('prepare-supply-complete')
+    except BaseException as error:
+        failure = error
+        evidence.report['failure'] = safe_failure(error, evidence.report['phase'])
+    finally:
+        ended = observations.settle()
+        evidence.report['cleanup'].update(
+            status='completed' if ended and not failure else 'settled-after-failure' if ended else 'failed',
+            allOwnedProcessesEnded=ended, retainedRoot=True)
+        if not ended:
+            failure = failure or AssertionError('Preparation subprocess exit was not confirmed')
+        asyncio.create_subprocess_exec = observations.spawn
+        sys.path[:] = original_path
+        sys.dont_write_bytecode = original_bytecode
+        if evidence.capture_failed:
+            failure = failure or RuntimeError('Preparation diagnostic capture failed')
+        evidence.report['status'] = 'failed' if failure else 'passed'
+        if not evidence.save_observation():
+            failure = failure or RuntimeError('Preparation receipt unavailable')
+    return 1 if failure else 0
+
+
+async def consume_supply(args, generated, evidence, process):
+    """Copy only verified fixture source/settings; never copy its environment."""
+    supply = args.prepared_supply
+    receipt = plain_path(supply / 'supply.json')
+    require(receipt.is_file() and receipt.stat().st_size <= 16384, 'Invalid supply receipt')
+    recorded = json.loads(receipt.read_text())
+    identity = await supply_identity(supply, process)
+    require(recorded == identity, 'Prepared supply identity changed')
+    required, setup_graph, project_name = prepare_manifest(args, generated, evidence)
+    require(identity['originalManifestSha256'] == evidence.report['supply']['manifestSha256']
+            and identity['originalLockSha256'] == evidence.report['supply']['setupLockSha256']
+            and (supply / 'original/pyproject.toml').read_bytes() == args.runtime_manifest.read_bytes()
+            and (supply / 'original/uv.lock').read_bytes() == args.runtime_lock.read_bytes()
+            and (supply / 'expanded/pyproject.toml').read_bytes() == generated.read_bytes(),
+            'Prepared supply differs from the exact canonical transformation')
+    package_count = verify_expanded_lock(
+        args, supply / 'expanded/uv.lock', project_name, setup_graph, identity['repoCommit'])
+    for name in ('origin', 'shared'):
+        target = plain_path(args.root / name, tree=True)
+        require(target.is_dir() and not any(target.iterdir()), 'Fixture destination is not empty')
+    # copytree fills the empty directory made by isolated_environment. It never
+    # deletes a destination or copies expanded/.venv or a prepared interpreter.
+    shutil.copytree(supply / 'origin', args.root / 'origin', dirs_exist_ok=True)
+    shutil.copy2(supply / 'shared/settings.yaml', args.root / 'shared/settings.yaml')
+    require(await repository_identity(args.root / 'origin', process) == {
+        key: identity[key] for key in ('repoCommit', 'repoTree', 'repoContentSha256')},
+        'Copied fixture repository changed')
+    require(digest(args.root / 'shared/settings.yaml') == identity['settingsSha256'],
+            'Copied fixture settings changed')
+    evidence.report['preparedSupply'] = {
+        **identity, 'receiptSha256': digest(receipt), 'packageCount': package_count}
+    evidence.save()
+    return identity['repoCommit'], required, setup_graph, project_name
+
+
 def mounts(root):
     path = root / 'mounts.jsonl'
     if not path.exists():
@@ -611,7 +848,12 @@ def adopted(rows, *, generation, revision, payload_hash, prefix, pid):
         require(row['generation'] == generation and row['revision'] == revision, 'Worker did not adopt the activated source revision')
         require(row['payloadSha256'] == payload_hash, 'Worker mounted stale same-version payload')
         require(Path(row['prefix']) == prefix and Path(row['executable']).parent == prefix / 'bin', 'Worker used a different interpreter')
-        require(Path(row['origin']).is_absolute(), 'Missing concrete module origin')
+        origin = Path(row['origin'])
+        require(origin.is_absolute() and origin.resolve(strict=True).is_relative_to(prefix.resolve(strict=True))
+                and origin.name == '__init__.py' and origin.parent.name == row['module'],
+                'Worker module origin is outside its qualified environment')
+        require(digest(origin.with_name('_payload.py')) == payload_hash,
+                'Worker origin payload differs from its mount evidence')
     return selected
 
 
@@ -635,6 +877,8 @@ async def run(args, evidence):
     failure = None
     try:
         require(sys.platform == 'linux' and sys.version_info[:2] == (3, 13), 'Requires Linux and Python 3.13')
+        require(int(Path('/proc/self/stat').read_text().split(' ', 1)[0]) == os.getpid(),
+                'Process evidence requires namespace-local procfs')
         uv, git_binary = shutil.which('uv'), shutil.which('git')
         require(uv and git_binary, 'Requires installed uv and Git')
         evidence.phase('network-sandbox-prerequisite')
@@ -653,10 +897,10 @@ async def run(args, evidence):
         from amplifier_web.bundles import profile_candidates
         from amplifier_web.runtime_profiles import configuration_key
         from amplifier_web.update_sequence import classify
-        baseline_revision = await make_repository(root, updates.process)
         generated = root / 'runtime-supply.toml'
         evidence.phase('canonical-supply-prerequisite')
-        required, setup_graph, project_name = prepare_manifest(args, generated, evidence)
+        baseline_revision, required, setup_graph, project_name = await consume_supply(
+            args, generated, evidence, updates.process)
         manifest_path = environments.manifest_path
         environments.manifest_path = lambda: generated
         home, workspace = root / 'app', root / 'workspace'
@@ -667,17 +911,18 @@ async def run(args, evidence):
         require(profile_candidates(read_config(workspace, home=home)) == [PROFILE], 'Unexpected profiles would fetch unrelated dependencies')
         evidence.phase('baseline-install')
         baseline = environments.prepare_project(home)
-        shutil.copy2(args.runtime_lock, baseline / 'uv.lock')
-        require(digest(baseline / 'uv.lock') == evidence.report['supply']['setupLockSha256'], 'Baseline lock copy changed')
-        # The exact supplied lock is the starting point. Adding only three
-        # dependency-free fixtures requires a lock update, not --locked here.
-        observations.baseline_command = (uv, 'sync', '--project', str(baseline), '--python', '3.13')
+        shutil.copy2(args.prepared_supply / 'expanded/uv.lock', baseline / 'uv.lock')
+        require(digest(baseline / 'uv.lock') == evidence.report['preparedSupply']['expandedLockSha256'],
+                'Baseline expanded lock copy changed')
+        observations.baseline_command = (
+            uv, 'sync', '--project', str(baseline), '--python', '3.13', '--locked', '--offline')
         try:
             await updates.process(*observations.baseline_command, timeout=900)
         finally:
             observations.baseline_command = None
-        require(lock_identity(tomllib.loads((baseline / 'uv.lock').read_text()), project_name) == setup_graph,
-                'Adding fixture dependencies changed the exact setup package graph')
+        require(digest(baseline / 'uv.lock') == evidence.report['preparedSupply']['expandedLockSha256'],
+                'Offline baseline installation changed the prepared lock bytes')
+        verify_expanded_lock(args, baseline / 'uv.lock', project_name, setup_graph, baseline_revision)
         baseline_graph = qualification.installed_graph(baseline)
         require(required <= {row['name'] for row in baseline_graph}, 'Baseline lacks the canonical worker graph')
         evidence.report['baseline'] = {'revision': str(baseline_revision), 'packageCount': len(baseline_graph),
@@ -852,6 +1097,10 @@ async def run(args, evidence):
         require(digest(args.runtime_manifest) == evidence.report['supply']['manifestSha256']
                 and digest(args.runtime_lock) == evidence.report['supply']['setupLockSha256'],
                 'Caller-owned setup identity changed during qualification')
+        prepared = await supply_identity(args.prepared_supply, updates.process)
+        require(all(evidence.report['preparedSupply'][key] == value for key, value in prepared.items())
+                and digest(args.prepared_supply / 'supply.json') == evidence.report['preparedSupply']['receiptSha256'],
+                'Prepared supply changed during qualification')
         evidence.report['modelCalls'] = 0
         evidence.report['positiveChecksComplete'] = True
     except BaseException as error:
@@ -927,27 +1176,37 @@ async def run(args, evidence):
     return 1 if failure else 0
 
 
+class QuietParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise ValueError('Invalid arguments')
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = QuietParser(description=__doc__)
     parser.add_argument('--root', required=True, type=Path)
     parser.add_argument('--runtime-manifest', required=True, type=Path)
     parser.add_argument('--runtime-lock', required=True, type=Path)
     parser.add_argument('--uv-cache', required=True, type=Path)
-    parser.add_argument('--parent-netns', required=True)
+    parser.add_argument('--parent-netns', default='')
+    parser.add_argument('--prepared-supply', type=Path)
+    parser.add_argument('--prepare-supply', action='store_true')
     parser.add_argument('--output', required=True, type=Path)
-    args = parser.parse_args()
-    require(args.root.resolve() != args.output.resolve() and not args.output.resolve().is_relative_to(args.root.resolve())
-            and not args.root.resolve().is_relative_to(args.output.resolve()), 'Evidence and disposable root must be separate')
-    original_home = str(Path.home())
-    args.output = fresh_directory(args.output)
-    evidence = Evidence(args.output, [(str(args.root.resolve()), '<fixture-root>'),
-        (str(CHECKOUT), '<checkout>'), (str(args.root.resolve().parent), '<task-root>'),
-        (original_home, '<original-home>')])
+    evidence = None
     try:
+        args = parser.parse_args()
+        require(args.root.resolve() != args.output.resolve() and not args.output.resolve().is_relative_to(args.root.resolve())
+                and not args.root.resolve().is_relative_to(args.output.resolve()), 'Evidence and disposable root must be separate')
+        original_home = str(Path.home())
+        args.output = fresh_directory(args.output)
+        evidence = Evidence(args.output, [(str(args.root.resolve()), '<fixture-root>'),
+            (str(CHECKOUT), '<checkout>'), (str(args.root.resolve().parent), '<task-root>'),
+            (original_home, '<original-home>')])
+        if args.prepare_supply:
+            require(not args.root.exists(), 'Preparation requires a new root')
         args.root = fresh_directory(args.root)
         evidence.phase('declared-supply-paths')
         for name in ('runtime_manifest', 'runtime_lock', 'uv_cache'):
-            path = getattr(args, name).resolve(strict=True)
+            path = plain_path(getattr(args, name))
             require(path.is_relative_to(args.root.parent) and path != args.root.parent
                     and not path.is_relative_to(args.root) and not path.is_relative_to(args.output),
                     'Supply must remain under the task parent, outside fixture root/output')
@@ -956,9 +1215,33 @@ def main():
         require(args.runtime_manifest != args.runtime_lock
                 and not args.runtime_manifest.is_relative_to(args.uv_cache)
                 and not args.runtime_lock.is_relative_to(args.uv_cache)
+                and not args.root.is_relative_to(args.uv_cache)
+                and not args.output.is_relative_to(args.uv_cache)
                 and any(args.uv_cache.iterdir()), 'Supply needs distinct inputs and a populated dedicated cache')
-        code = asyncio.run(run(args, evidence))
+        if args.prepare_supply:
+            require(args.prepared_supply is None or plain_path(args.prepared_supply) == args.root,
+                    'Preparation supply must be its new root')
+            args.prepared_supply = args.root
+            code = asyncio.run(prepare_supply(args, evidence))
+        else:
+            require(args.prepared_supply is not None, 'Run requires a prepared supply')
+            args.prepared_supply = plain_path(args.prepared_supply)
+            require(args.prepared_supply.is_dir() and args.prepared_supply.parent == args.root.parent
+                    and args.prepared_supply != args.root
+                    and not args.prepared_supply.is_relative_to(args.output)
+                    and not args.output.is_relative_to(args.prepared_supply)
+                    and not args.prepared_supply.is_relative_to(args.uv_cache)
+                    and not args.uv_cache.is_relative_to(args.prepared_supply),
+                    'Prepared supply must be a separate sibling of the run root')
+            code = asyncio.run(run(args, evidence))
+    except SystemExit as error:
+        if error.code == 0:  # --help contains only the static fixture description.
+            return 0
+        raise
     except BaseException as error:
+        if evidence is None:
+            print(json.dumps({'status': 'failed', 'completedCycles': 0, 'phase': 'arguments'}), flush=True)
+            return 1
         evidence.report.update(status='failed', launcherFailure=safe_failure(error, evidence.report['phase']))
         evidence.save_observation()
         code = 1

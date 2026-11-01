@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, urlsplit
 
 CHECKOUT = Path(__file__).resolve().parents[2]
 FORMS_SHA256 = 'bdae0ba56eaee027ec09823561b2a6dea3204c2b20f861ba9f03c278ce23d5a1'
-EXPERIMENT_SHA256 = '8ed5a8ecef086f96df3f77208c8ec5c4dc7a18274a196843d0f89e40daf385ca'
+EXPERIMENT_SHA256 = 'da9cdc2c3d36af21a3ce1ac544bf9558b87c4f121713b224137a08bc737ace67'
 CANONICAL_SHA256 = 'a533406d51eb2877b08d1be6dac163c3108d6526db4a066dc905de7837eaa179'
 REPOSITORY_LOCK_SHA256 = 'd819bbe081b1c292f0914456a31962458df5fc8a04ef288b079ce60393d4db8f'
 PHASES = ('readiness', 'synthetic-repository', 'synthetic-cache',
