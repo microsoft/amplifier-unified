@@ -180,6 +180,7 @@ try {
     Assert-Equal ([IO.File]::ReadAllText($body)) 'unchanged'
 
     # Real Windows extraction, including Unicode/space paths and zip-slip cases.
+    Add-Type -AssemblyName System.IO.Compression -ErrorAction Stop
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     foreach ($entryName in @('ok.txt', '../escape.txt', '/absolute.txt', 'C:/drive.txt',
         'folder/file:stream', 'CON.txt', 'folder/trailing.')) {
@@ -276,8 +277,31 @@ try {
     $script:UseAnonymous = $true
     # An executable shadow in an unsafe PATH-like directory is refused before
     # even a version probe. It need not be a runnable binary for this falsifier.
-    $shadow = Join-Path $root 'ancestor-WriteData\shadow.exe'
-    [IO.File]::WriteAllText($shadow, 'not executable')
+    # Create BOTH parent and leaf privately, then release this separate context
+    # before tampering with the parent. Default directory/file ownership would
+    # confound the intended foreign-mutation refusal on an elevated token.
+    $shadowStorage = New-Object UnifiedBootstrap.InstallStorage($root)
+    $shadowParent = $shadowStorage.Root
+    $shadow = Join-Path $shadowParent 'shadow.exe'
+    try {
+        $parentAcl = Get-Acl -LiteralPath $shadowParent
+        Assert-Equal ($parentAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value) ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+        Assert-Equal $parentAcl.AreAccessRulesProtected $true
+        $stream = $shadowStorage.CreateFile($shadow)
+        try {
+            Assert-Equal $stream.Length 0
+            Assert-PrivateFileAcl $shadow
+            $bytes = [Text.Encoding]::UTF8.GetBytes('not executable')
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush($true)
+        } finally { $stream.Dispose() }
+        # Positive validator control without executing the synthetic payload.
+        $shadowStorage.TrustExecutable($shadow)
+        $shadowStorage.Validate()
+    } finally { $shadowStorage.Dispose() }
+    $parentAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($foreign, 'WriteData', 'Allow')))
+    Set-Acl -LiteralPath $shadowParent -AclObject $parentAcl
+    Assert-PrivateFileAcl $shadow
     Assert-Refused { Invoke-InstallChild $shadow @('--version') @{} } 'Foreign mutation'
     $appendShadow = Join-Path $root 'append-shadow.exe'
     # Start from exact valid ownership; only the deliberate foreign append grant

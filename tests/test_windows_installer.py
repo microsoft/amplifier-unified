@@ -104,6 +104,60 @@ class WindowsInstallerSourceTests(unittest.TestCase):
         self.assertIn("$inputStream.CopyTo($output)", unzip)
         self.assertIn("$script:InstallStorage.HoldFile($target, $false)", unzip)
 
+    def test_zip_assemblies_are_explicit_before_first_type_use_in_both_editions(self):
+        core_load = "Add-Type -AssemblyName System.IO.Compression -ErrorAction Stop\n"
+        filesystem_load = "Add-Type -AssemblyName System.IO.Compression.FileSystem\n"
+        unzip = self.function("Expand-ContainedZip")
+        fixture = FIXTURE.read_text(encoding="utf-8")
+        for source, use in (
+            (unzip, "[IO.Compression.ZipFile]::OpenRead"),
+            (fixture, "[IO.Compression.ZipArchiveMode]::Create"),
+        ):
+            with self.subTest(use=use):
+                self.assertIn(core_load, source)
+                self.assertIn(filesystem_load, source)
+                self.assertIn(use, source)
+                self.assertLess(source.index(core_load), source.index(filesystem_load))
+                self.assertLess(source.index(filesystem_load), source.index(use))
+
+    def test_shadow_ancestor_refusal_starts_with_valid_private_parent_and_leaf(self):
+        fixture = FIXTURE.read_text(encoding="utf-8")
+        self.assertIn("$shadowStorage = New-Object UnifiedBootstrap.InstallStorage($root)", fixture)
+        self.assertIn("$appendShadow = Join-Path $root 'append-shadow.exe'", fixture)
+        shadow = fixture.split("$shadowStorage = New-Object UnifiedBootstrap.InstallStorage($root)", 1)[1].split(
+            "$appendShadow = Join-Path $root 'append-shadow.exe'", 1,
+        )[0]
+        for required in (
+            "$shadowParent = $shadowStorage.Root",
+            "$shadow = Join-Path $shadowParent 'shadow.exe'",
+            "$parentAcl = Get-Acl -LiteralPath $shadowParent",
+            "Assert-Equal ($parentAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value) ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)",
+            "Assert-Equal $parentAcl.AreAccessRulesProtected $true",
+            "$stream = $shadowStorage.CreateFile($shadow)",
+            "Assert-Equal $stream.Length 0", "Assert-PrivateFileAcl $shadow",
+            "$stream.Write($bytes, 0, $bytes.Length)", "$stream.Flush($true)",
+            "$shadowStorage.TrustExecutable($shadow)", "$shadowStorage.Validate()",
+            "finally { $shadowStorage.Dispose() }",
+            "$parentAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($foreign, 'WriteData', 'Allow')))",
+            "Set-Acl -LiteralPath $shadowParent -AclObject $parentAcl",
+            "Assert-Refused { Invoke-InstallChild $shadow @('--version') @{} } 'Foreign mutation'",
+        ):
+            self.assertIn(required, shadow)
+        self.assertLess(shadow.index("$parentAcl.GetOwner("), shadow.index("$shadowStorage.CreateFile("))
+        self.assertLess(shadow.index("$parentAcl.AreAccessRulesProtected"), shadow.index("$shadowStorage.CreateFile("))
+        self.assertLess(shadow.index("Assert-PrivateFileAcl $shadow"), shadow.index("$stream.Write("))
+        self.assertLess(shadow.index("$stream.Dispose()"), shadow.index("$shadowStorage.TrustExecutable("))
+        self.assertLess(shadow.index("$shadowStorage.Validate()"), shadow.index("$shadowStorage.Dispose()"))
+        self.assertLess(shadow.index("$shadowStorage.Dispose()"), shadow.index("$parentAcl.AddAccessRule("))
+        self.assertLess(shadow.index("Set-Acl"), shadow.rindex("Assert-PrivateFileAcl $shadow"))
+        self.assertLess(shadow.rindex("Assert-PrivateFileAcl $shadow"), shadow.index("Invoke-InstallChild"))
+        self.assertNotIn("[IO.Directory]::CreateDirectory", shadow)
+        self.assertNotIn("$fixtureStorage.CreateDirectory", shadow)  # no retained unsafe-parent pin
+        self.assertNotIn("'Untrusted bootstrap owner", shadow)  # do not broaden the oracle
+        append = fixture.split("$appendShadow = Join-Path $root 'append-shadow.exe'", 1)[1]
+        self.assertIn("FileSystemAccessRule($foreign, 'AppendData', 'Allow')", append)
+        self.assertIn("Assert-Refused { Invoke-InstallChild $appendShadow @('--version') @{} } 'Foreign mutation'", append)
+
     def test_helpers_have_inspected_official_exact_assets_and_notices(self):
         helper = self.function("Install-VerifiedHelper")
         for value in (
@@ -307,9 +361,9 @@ class WindowsInstallerSourceTests(unittest.TestCase):
             "'private stream'", "'firstsecond'",
         ):
             self.assertIn(required, fixture)
-        # Only the deliberately unsafe ancestor executable uses default creation.
-        self.assertEqual(fixture.count("[IO.File]::WriteAllText("), 1)
-        self.assertIn("[IO.File]::WriteAllText($shadow, 'not executable')", fixture)
+        # Negative executable fixtures start private; only the intended grant
+        # is then changed. Default leaf ownership must not confound the oracle.
+        self.assertNotIn("[IO.File]::WriteAllText(", fixture)
         self.assertNotIn("[IO.Compression.ZipFile]::Open($archivePath", fixture)
         self.assertIn("$acl.AddAccessRule(", fixture)  # retain foreign-append negative
 

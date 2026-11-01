@@ -539,6 +539,7 @@ function Assert-FileChecksum([string] $Path, [string] $Expected) {
 }
 
 function Expand-ContainedZip([string] $Archive, [string] $Destination) {
+    Add-Type -AssemblyName System.IO.Compression -ErrorAction Stop
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $script:InstallStorage.Validate()
     $script:InstallStorage.HoldFile($Archive, $false)
