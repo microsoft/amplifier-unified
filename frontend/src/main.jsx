@@ -331,7 +331,7 @@ function App(){
    }
    // Navigation and answers have separate queues; neither may overtake an
    // already declared renderer edit when its transition can remove the view.
-   if((navigation||['question.answer','question.cancel','question.supersede'].includes(action))&&dirtyBarrier)await dirtyBarrier;
+   if((navigation||['question.answer','question.cancel','question.supersede','canvas.views.loadVersion'].includes(action))&&dirtyBarrier)await dirtyBarrier;
    if(capabilityMutation)capabilityStopFence.current.assertMutation(args,meta.capabilityRead);
    if(meta.chatLink&&!meta.chatLinkIsCurrent())return {accepted:false};
    if(meta.archiveIsCurrent&&!meta.archiveIsCurrent())return {accepted:false};
@@ -359,10 +359,18 @@ function App(){
      void capabilityStopFence.current.reconcile(stop.sessionId);
     }
     if(historyVisit)destinationHistory.current.finish(result);
-    if(result.state)acceptState(result.state);
-    // Exact annotation and read-only preview receipts settle locally. Navigation
-    // still waits for its authoritative frame and exact history confirmation.
-    else if(!['message.reaction','peer.preview'].includes(action))await awaitState(result);
+    try{
+     if(result.state)acceptState(result.state);
+     // Exact annotation and read-only preview receipts settle locally. Navigation
+     // still waits for its authoritative frame and exact history confirmation.
+     else if(!['message.reaction','peer.preview'].includes(action))await awaitState(result);
+    }catch(error){
+     // An accepted reset is not a refusal when only its following read fails.
+     // Keep the exact receipt; the Canvas owner offers a read, never a replay.
+     if(action==='canvas.views.loadVersion'&&result.accepted===true)
+      return {...result,stateConfirmation:{status:'unconfirmed',message:error.message}};
+     throw error;
+    }
     if(historyVisit){
      // awaitState's recovery may return without the receipt's revision. The
      // history model requires its own exact route/host/revision evidence.

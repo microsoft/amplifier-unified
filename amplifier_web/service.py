@@ -2913,7 +2913,7 @@ class AppService:
                         owner = self._session(sid) if sid else None
                         file_root = (owner.get('workingDirectory') or owner.get('workspace')) if owner else None
                         canvas_command(scoped,action,args,origin,file_root=file_root)
-                    from .canvas_versions import assert_clean, reference, message_id
+                    from .canvas_versions import assert_clean, reference, message_id, ordinary_preview
                     publication_message = message_id(scoped, sid)
                     if destination == 'inline':
                         from .canvas_views import INLINE_KINDS
@@ -2932,10 +2932,18 @@ class AppService:
                     remember(scoped,self.db)
                     diagnostic_result = {'id': scoped['canvas']['id'], 'revision': scoped['canvas'].get('revision', 1), 'reference': reference(scoped['canvas'])}
                     if sid==self.state.get('selectedSessionId') and scoped['selectedWorkspaceId']==self.state['selectedWorkspaceId']:
-                        self.canvas_views.choose(scoped['canvas'], diagnostic_result['revision'], destination,
-                                                 message_id=publication_message, origin=origin)
+                        current = self.state.get('canvas', {})
+                        retain_preview = (destination == 'canvas' and current.get('id') == scoped['canvas']['id']
+                                          and ordinary_preview(current) and not current.get('_presentationDisposed')
+                                          and (current.get('open') or (self.clients.record() or {}).get('canvasViews', {}).get('retained')))
+                        if not retain_preview:
+                            self.canvas_views.choose(scoped['canvas'], diagnostic_result['revision'], destination,
+                                                     message_id=publication_message, origin=origin)
                         if destination == 'canvas':
-                            self.state['canvas']=scoped['canvas']
+                            if not retain_preview:
+                                self.state['canvas']=scoped['canvas']
+                            elif current['id'] in scoped.get('canvasTabs', {}):
+                                scoped['canvasTabs'][current['id']]['view'] = copy.deepcopy(current.get('view', {}))
                             if args.get('kind') == 'settings':
                                 self.state['view']['panel'] = None
                             self.state['view'].setdefault('canvasDraft',{}).update(library=False,open=False,browser=False,overview=False)
