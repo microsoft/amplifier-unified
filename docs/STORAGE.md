@@ -122,6 +122,17 @@ append. The message and receipt share their existing save boundary; an uncommitt
 failure restores the append and its navigation/reference metadata, and an exact
 retry of a committed notification never wakes the recipient.
 
+Background owners that write or commit through the shared application connection
+must use the existing application writer lock, including continuation retries,
+queued-test completion/recovery and task creation. SQLite savepoints belong to
+the connection: an unrelated commit can end another operation's savepoint while
+its file write is awaiting completion. Capture and publish state under the lock;
+keep backend calls and worker waits outside it, then re-read current receipts
+before publishing. `tests/test_retained_result_writer_exclusion.py` pauses a real
+retained-file write and checks concurrent owners, rollback, observer visibility
+and exactly-once notification. Extend that coverage when adding a background
+writer; do not add a second transaction owner or serialize backend execution.
+
 Do not infer physical cleanup from transaction rollback: a process may die after
 writing a file but before committing its index. Resource creation now takes the
 SQLite writer lock first; failed writes undo their index savepoint without
