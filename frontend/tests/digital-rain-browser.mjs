@@ -13,7 +13,7 @@ const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',
  [root+'tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
 const stop=ownFixture(fixture,{label:'Digital Rain fixture'});
 const out=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp/amplifier-digital-rain';
-let browser,failure;
+let browser,page,failure,phase='fixture';
 const spacingMeasurements=[];
 try{
  const url=await new Promise((resolve,reject)=>{
@@ -25,7 +25,7 @@ try{
  });
  await mkdir(out,{recursive:true});
  browser=await chromium.launch({headless:true});
- const page=await browser.newPage({viewport:{width:1600,height:1000},colorScheme:'light',
+ page=await browser.newPage({viewport:{width:1600,height:1000},colorScheme:'light',
   reducedMotion:'no-preference',extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
@@ -65,12 +65,45 @@ try{
    messagesBottom:box.bottom,composerTop:el.querySelector('form[data-part="composer"]').getBoundingClientRect().top};
  });
  const baseline=await geometry();
+ const nav=page.locator('#amp-one [data-part="navigation"]'),rail=nav.locator(':scope > .a-nav-rail');
+ const toggle=page.locator('#amp-one [data-part="header"] #navigation-toggle');
+ const resize=async(width,height)=>{
+  phase=`responsive layout ${width}`;
+  await page.setViewportSize({width,height});
+  // Observe both responsive consumers before opening: WorkspaceLayout publishes
+  // data-narrow; WorkspaceRail changes its role at the same 900px breakpoint.
+  await expect(page.locator('#amp-one [data-part="workspace"][data-pane-layout]'))
+   .toHaveAttribute('data-narrow',String(width<=900));
+  await expect.poll(()=>nav.getAttribute('role')).toBe(width<=900?'dialog':null);
+ };
  const navigation=async native=>{
+  phase=`${native?'Digital Rain':'Graphite'} navigation setup ${page.viewportSize().width}`;
   const draft=await page.evaluate(()=>window.amplifier.getState().view.draft);
-  await action('view.update',{patch:{navExpanded:true,navPinned:false,navMode:'browse',navSectionsCollapsed:[]}});
-  const nav=page.locator('#amp-one [data-part="navigation"]'),rail=nav.locator(':scope > .a-nav-rail');
+  assert.equal((await action('view.update',{patch:{navExpanded:false,navPinned:false,navMode:'browse',navSectionsCollapsed:[]}})).accepted,true);
+  await expect.poll(()=>page.evaluate(()=>{
+   const {navExpanded,navPinned}=window.amplifier.getState().view;return {navExpanded,navPinned};
+  })).toEqual({navExpanded:false,navPinned:false});
+  await expect(nav).toHaveAttribute('hidden','');await expect(nav).toHaveAttribute('inert','');
+  await expect(rail).toBeHidden();
+  await expect(toggle).toBeVisible();await expect(toggle).toBeEnabled();
+  await expect(toggle).toHaveAccessibleName('Open navigation');
+  await expect(toggle).toHaveAttribute('aria-expanded','false');
+  await expect(toggle).toHaveAttribute('aria-controls','workspace-navigation');
+  // Use the real header control once, not a direct open that can precede the
+  // resize commit. A failed open remains a failure, with the state logged below.
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded','true');
+  await expect(nav).not.toHaveAttribute('hidden','');await expect(nav).not.toHaveAttribute('inert','');
   // The unpinned outer slot can have zero width while its absolute rail is open.
   await expect(rail).toBeVisible();
+  // The desktop header also pins. Unpin without reopening so these measurements
+  // retain the original floating-rail scenario on every width.
+  if(page.viewportSize().width>900)
+   assert.equal((await action('view.update',{patch:{navPinned:false}})).accepted,true);
+  await expect(nav).toHaveAttribute('data-docked','false');
+  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.navPinned)).toBe(false);
+  await expect(toggle).toHaveAttribute('aria-expanded','true');await expect(rail).toBeVisible();
+  phase=`${native?'Digital Rain':'Graphite'} navigation assertions ${page.viewportSize().width}`;
   const pinned=rail.locator('[data-sidebar-section="pinned"]');
   const chat=pinned.locator(`.a-nav-chat[data-session-id="${selected}"]`);
   const folder=pinned.locator('.a-workspace-row');
@@ -137,19 +170,24 @@ try{
    await writeFile(`${out}/navigation-spacing.json`,JSON.stringify(spacingMeasurements,null,2));
    if(width!==760)await page.screenshot({path:`${out}/digital-rain-navigation-${scheme}-${width}.png`});
   }
-  await action('view.update',{patch:{navExpanded:false}});
+  assert.equal((await action('view.update',{patch:{navExpanded:false}})).accepted,true);
+  await expect(toggle).toHaveAttribute('aria-expanded','false');
+  await expect(nav).toHaveAttribute('hidden','');await expect(nav).toHaveAttribute('inert','');
+  await expect(rail).toBeHidden();
   assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),selected);
   await expect(input).toHaveDraft(draft);
   return {rows,rename};
  };
  const nativeNavigation={};
  for(const width of [1600,760,390]){
-  await page.setViewportSize({width,height:width===1600?1000:900});
+  await resize(width,width===1600?1000:900);
   nativeNavigation[width]=await navigation();
  }
- await page.setViewportSize({width:1600,height:1000});
+ await resize(1600,1000);
+ phase='Digital Rain conversation appearance';
  await action('theme.apply',{name:theme.name,css:theme.css});
  for(const scheme of ['light','dark','system']){
+  phase=`Digital Rain ${scheme} conversation appearance`;
   await presentation({scheme});
   const expected=scheme==='system'?'light':scheme;
   await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',expected);
@@ -193,6 +231,7 @@ try{
   await page.screenshot({path:`${out}/digital-rain-${scheme}.png`});
   if(scheme!=='system')await navigation(nativeNavigation[1600]);
  }
+ phase='Digital Rain media modes';
  await page.emulateMedia({colorScheme:'dark'});
  await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme','dark');
  await page.emulateMedia({reducedMotion:'reduce'});
@@ -205,7 +244,8 @@ try{
  await page.emulateMedia({forcedColors:'none',reducedMotion:'no-preference'});
  await input.fill('Long retained draft. '.repeat(100));
  for(const width of [760,390]){
-  await page.setViewportSize({width,height:900});
+  await resize(width,900);
+  phase=`Digital Rain narrow conversation ${width}`;
   await expect(input).toBeVisible();await expect(page.locator('[data-part="composer-primary-action"]')).toBeInViewport();
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   const bubble=await page.locator('.a-message.a-assistant:has(> .a-message-actions)').first().evaluate(el=>{
@@ -220,6 +260,7 @@ try{
    await navigation(nativeNavigation[width]);
   }
  }
+ phase='Digital Rain switch-back and reload';
  await action('theme.apply',{name:preset.name,css:preset.css});
  assert.equal(await page.locator('[data-part="conversation"]').evaluate(el=>getComputedStyle(el,'::before').animationName),'none');
  await action('theme.apply',{name:theme.name,css:theme.css});
@@ -228,5 +269,32 @@ try{
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),selected);
  assert.deepEqual(errors,[]);
  console.log('Digital Rain passed: light/dark/system, three animated layers, native layout, transparent wrappers, fade, motion/decorations/forced-colors, narrow layouts, sidebar 8/4px insets and grip/icon/title clearance, native row/control heights, keyboard focus and rename exclusion, switch-back and reload with draft.');
-}catch(error){failure=error;throw error}
+}catch(error){
+ failure=error;
+ // One bounded stderr record; do not add screenshots or unbounded state dumps.
+ // Keep the original assertion authoritative if diagnostic collection fails.
+ if(page)try{
+  const state=await page.evaluate(()=>{
+   const view=window.amplifier?.getState()?.view||{};
+   const describe=selector=>{
+    const el=document.querySelector(selector);if(!el)return null;
+    const style=getComputedStyle(el),rect=el.getBoundingClientRect();
+    return {role:el.getAttribute('role'),hidden:el.hidden,inert:el.inert,
+     blocked:!!el.closest('[hidden],[inert]'),label:el.getAttribute('aria-label'),
+     expanded:el.getAttribute('aria-expanded'),controls:el.getAttribute('aria-controls'),
+     display:style.display,visibility:style.visibility,width:rect.width,height:rect.height};
+   };
+   return {width:innerWidth,height:innerHeight,narrowMedia:matchMedia('(max-width: 900px)').matches,
+    narrowLayout:document.querySelector('#amp-one [data-part="workspace"][data-pane-layout]')?.getAttribute('data-narrow'),
+    scheme:document.querySelector('#amp-one')?.getAttribute('data-theme-scheme'),
+    view:{navExpanded:view.navExpanded,navPinned:view.navPinned,navMode:view.navMode,
+     canvasFocused:!!view.canvasFocused,panelOpen:!!view.panel,toolbarMenuOpen:!!view.toolbarMenuOpen},
+    toggle:describe('#amp-one [data-part="header"] #navigation-toggle'),
+    navigation:describe('#amp-one [data-part="navigation"]'),
+    rail:describe('#amp-one [data-part="navigation"] > .a-nav-rail')};
+  });
+  console.error('Digital Rain failure state: '+JSON.stringify({phase,viewport:page.viewportSize(),...state}));
+ }catch(diagnosticError){console.error('Digital Rain failure state unavailable: '+String(diagnosticError.message).slice(0,300))}
+ throw error;
+}
 finally{await finishFixture({label:'Digital Rain fixture',close:[['Digital Rain browser',()=>browser?.close()]],stop,originalError:failure})}
