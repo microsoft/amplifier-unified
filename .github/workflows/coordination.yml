@@ -53,6 +53,7 @@ on:
       - 'tests/test_collaborative_workspaces.py'
       - 'tests/test_collaboration_input.py'
       - 'tests/test_peer_auto_delivery.py'
+      - 'tests/test_peer_admission_reconciliation.py'
       - 'amplifier_web/task_binding.py'
       - 'amplifier_web/task_continuity.py'
       - 'tests/test_task_continuity.py'
@@ -186,7 +187,7 @@ jobs:
           tests/test_coordination_bridge_returns.py
           tests/test_assignment_brief.py
           tests/test_background_reservation_recovery.py
-          tests/test_collaborative_workspaces.py tests/test_collaboration_input.py tests/test_peer_auto_delivery.py
+          tests/test_collaborative_workspaces.py tests/test_collaboration_input.py tests/test_peer_auto_delivery.py tests/test_peer_admission_reconciliation.py
           tests/test_task_continuity.py tests/test_blocked_peer_input.py
           tests/test_completed_peer_followup.py
           tests/test_creation_inheritance.py tests/test_inherited_module_sources.py

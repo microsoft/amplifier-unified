@@ -76,6 +76,21 @@ def automatic_delivery(receipt):
     return receipt.get('mode') == 'auto' or receipt.get('automaticDelivery') is True
 
 
+def admission_observation(receipt, phase, result):
+    """An awaited transport failure cannot erase evidence already committed."""
+    current = receipt.get('delivery')
+    recorded = receipt.get('admission') or {}
+    if (phase == 'unknown' and current not in {'accepted', 'applied', 'held'}
+            and recorded.get('accepted') is False and recorded.get('effect') == 'none'
+            and (receipt.get('steering') or {}).get('event') != 'steering.unknown'):
+        return 'not_sent', recorded
+    if current in {'accepted', 'applied', 'held', 'not_sent'}:
+        return current, receipt.get('admission', result) if phase == 'unknown' else result
+    if current == 'unknown' and (automatic_delivery(receipt) or receipt.get('mode') == 'steer'):
+        return current, result
+    return phase, result
+
+
 def definitions(schema, string):
     from .result_artifacts import REFERENCE_HELP
     from .workspace_work_invocation import references_schema
@@ -804,11 +819,13 @@ class Collaboration:
         phase = receipt.get('delivery')
         if phase in {'unknown', 'not_sent', 'suppressed', 'expired'}:
             detail = (receipt.get('admission') or {}).get('reason') or receipt.get('detail') or 'Inspect the retained admission receipt.'
-            receipt['terminalOutcome'] = {'status': 'observed', 'kind': 'admission',
+            outcome = {'status': 'observed', 'kind': 'admission',
                 'outcome': 'unknown' if phase == 'unknown' else 'failed', 'qualified': False,
-                'requestId': receipt['requestId'], 'observedAt': time.time(),
+                'requestId': receipt['requestId'],
                 'text': f'The host recorded input admission as {phase}. {detail}'}
-            self.record_outcome(receipt, receipt['terminalOutcome'])
+            if any((receipt.get('terminalOutcome') or {}).get(k) != v for k, v in outcome.items()):
+                receipt['terminalOutcome'] = {**outcome, 'observedAt': time.time()}
+                self.record_outcome(receipt, receipt['terminalOutcome'])
         self.save(receipt['requestId'], receipt)
         if notify and receipt.get('subscription') and continuation_outcome(receipt):
             self.enqueue_continuation(receipt)
@@ -1092,6 +1109,9 @@ class Collaboration:
                         AND json_extract(receipt,'$.target.sessionId')=?""", (sid,)).fetchone()[0]
                     receipt['admittedAt'] = time.time()
                     receipt["delivery"] = "submitting"
+                    # This field describes only the newly claimed attempt. A
+                    # previous safe wait is not absence proof for this control.
+                    receipt.pop("admission", None)
                     self.save(identity, receipt)
                     self.service.db.commit()
                     self.cancel_expiry(identity)
@@ -1119,16 +1139,14 @@ class Collaboration:
                             # while transport is awaited. Reconcile only admission
                             # against the durable owner, never the pre-await copy.
                             receipt = self.receipt(identity)
-                            if automatic_delivery(receipt) and receipt.get('delivery') in {'accepted', 'applied', 'held', 'unknown'}:
-                                phase = receipt['delivery']
-                            receipt.update(delivery=phase, detail=result["reason"], admission=result)
+                            phase, result = admission_observation(receipt, phase, result)
+                            receipt.update(delivery=phase, detail=result.get("reason"), admission=result)
                             self.observe_admission(receipt)
                             self.service.db.commit()
                         raise
                 async with self.service.lock:
                     receipt = self.receipt(identity)
-                    if automatic_delivery(receipt) and receipt.get('delivery') in {'accepted', 'applied', 'held', 'unknown'}:
-                        phase = receipt['delivery']  # Native evidence may precede the transport reply.
+                    phase, result = admission_observation(receipt, phase, result)
                     receipt.update(delivery=phase, admission=result)
                     if automatic_delivery(receipt) and result.get('accepted'):
                         receipt['admissionMode'] = result.get('mode')
@@ -1215,23 +1233,86 @@ class Collaboration:
                 async with self.service.lock:
                     receipt = self.receipt(identity)
                     # Native applied/held evidence can beat the acknowledgement.
-                    receipt.update(delivery=receipt.get("delivery") if receipt.get("delivery") in {"applied", "held", "unknown"} else phase,
-                                   admission=result)
-                    self.save(identity, receipt)
+                    phase, result = admission_observation(receipt, phase, result)
+                    receipt.update(delivery=phase, admission=result)
+                    if phase == 'not_sent':
+                        self.observe_admission(receipt)
+                    else:
+                        self.save(identity, receipt)
                     self.service.db.commit()
                 raise
         async with self.service.lock:
             receipt = self.receipt(identity)
             # Applied/held events can precede the transport acknowledgement.
-            receipt.update(delivery=receipt.get("delivery") if receipt.get("delivery") in {"applied", "held", "unknown"} else phase,
-                           admission=result)
-            self.save(identity, receipt)
+            phase, result = admission_observation(receipt, phase, result)
+            receipt.update(delivery=phase, admission=result)
+            if phase == 'not_sent':
+                self.observe_admission(receipt)
+            else:
+                self.save(identity, receipt)
             self.publish_receipt(receipt)
             return receipt
+
+    def reconcile_admission(self, session, payload):
+        """Settle a timed-out control from its original worker reply, without replay."""
+        identity = payload.get('inputId')
+        try:
+            receipt = self.receipt(identity)
+        except Exception:
+            return set()
+        result = payload.get('peerAdmission')
+        if (not isinstance(result, dict) or receipt.get('commandAction') != 'coordination.send'
+                or receipt.get('protocol') != PROTOCOL or receipt.get('inputId') != identity
+                or receipt.get('target', {}).get('sessionId') != session['id']
+                or receipt.get('delivery') not in {'submitting', 'unknown'}
+                or (receipt.get('steering') or {}).get('event') == 'steering.unknown'
+                or payload.get('interruptionRevision') != receipt.get('interruptionRevision', 0)
+                or payload.get('interruptionRevision') != session.get('interruptionRevision', 0)
+                or result.get('inputId', identity) != identity):
+            return set()
+        anchor = receipt.get('targetGenerationId')
+        if payload.get('targetGenerationId') and payload['targetGenerationId'] != anchor:
+            return set()
+        if result.get('accepted') is True:
+            if result.get('mode') == 'steer' or receipt.get('mode') == 'steer':
+                generation = result.get('generationId') or payload.get('targetGenerationId')
+                if not generation or (anchor or (session.get('collaborationGeneration') or {}).get('id')) != generation:
+                    return set()
+                receipt.update(targetGenerationId=generation, admissionMode='steer')
+            elif automatic_delivery(receipt) and result.get('mode') != 'queue':
+                return set()  # Auto must identify which native admission route succeeded.
+            receipt.update(delivery='accepted', admission=copy.deepcopy(result))
+            self.reconcile_unknown_outcome(receipt)
+            self.save(identity, receipt)
+        elif result.get('accepted') is False and result.get('effect') == 'none':
+            if receipt['delivery'] == 'submitting':
+                # The normal caller still owns wait/suppression disposition.
+                # Keep absence evidence if cancellation wins before it resumes.
+                receipt['admission'] = copy.deepcopy(result)
+                self.save(identity, receipt)
+                return set()
+            # Positive absence settles the uncertainty, but is not permission to
+            # retarget a historical request or retry its original control.
+            receipt.update(delivery='not_sent', admission=copy.deepcopy(result))
+            self.observe_admission(receipt)
+        else:
+            return set()
+        return {receipt['senderSessionId'], session['id']}
+
+    @staticmethod
+    def reconcile_unknown_outcome(receipt):
+        outcome = receipt.get('terminalOutcome') or {}
+        if (outcome.get('status') == 'observed' and outcome.get('kind') == 'admission'
+                and outcome.get('outcome') == 'unknown'):
+            # Keep the old observation, but it no longer describes current
+            # admission. Positive admission is still not successful task work.
+            outcome.update(status='reconciled', reconciledAt=time.time(), delivery=receipt['delivery'])
 
     def observe(self, session, kind, payload):
         """Host event linkage, never prose classification or semantic success."""
         changed = self.watches.observe(session, kind, payload)
+        if kind == 'runtime.delivery' and 'peerAdmission' in payload:
+            return changed | self.reconcile_admission(session, payload)
         if (kind == 'runtime.ended' and not payload.get('backgroundOnly')
                 and payload.get('sessionId') is not None
                 and payload.get('sessionId') in {session['id'], session.get('runtimeSessionId')}
@@ -1272,9 +1353,11 @@ class Collaboration:
                     or receipt.get("target", {}).get("sessionId") != session["id"]):
                 return changed
             target_generation = payload.get('target_generation_id')
+            if receipt.get('interruptionRevision', 0) != session.get('interruptionRevision', 0):
+                return changed
             if automatic and not receipt.get('targetGenerationId'):
                 active = session.get('collaborationGeneration') or {}
-                if (receipt.get('delivery') not in {'submitting', 'accepted'}
+                if (receipt.get('delivery') not in {'submitting', 'accepted', 'unknown'}
                         or not target_generation or active.get('id') != target_generation):
                     return changed
                 # The native steering event, never a caller-supplied generation,
@@ -1287,6 +1370,8 @@ class Collaboration:
                       "steering.held": "held", "steering.unknown": "unknown"}
             if payload.get("event") in phases:
                 receipt.update(delivery=phases[payload["event"]], steering=copy.deepcopy(payload))
+                if receipt["delivery"] != "unknown":
+                    self.reconcile_unknown_outcome(receipt)
                 self.save(receipt["requestId"], receipt)
                 changed.update({receipt["senderSessionId"], session["id"]})
             if payload.get("event") == "steering.applied":
