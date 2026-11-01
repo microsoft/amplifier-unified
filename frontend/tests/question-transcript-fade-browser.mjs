@@ -1,36 +1,19 @@
 // Focused production-host regression for question cards inside the shared
-// transcript scroller. Requires the already-prepared exact-source browser-test
-// executionContract; it builds/installs nothing and uses no live provider.
+// transcript scroller. Uses the prepared browser-test contract or ordinary
+// background runner; it builds/installs nothing and uses no live provider.
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {mkdtempSync,readFileSync,realpathSync,writeFileSync} from 'node:fs';
-import {isAbsolute,join,relative,sep} from 'node:path';
+import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
+import {questionFadeExecution} from './question-fade-runtime.mjs';
 
 const root=realpathSync(fileURLToPath(new URL('../../',import.meta.url)));
-const within=(parent,path)=>{
- const rel=relative(parent,path);
- return rel===''||(!isAbsolute(rel)&&rel!=='..'&&!rel.startsWith('..'+sep));
-};
-const contractPath=process.env.AMPLIFIER_TEST_CONTRACT;
-const pythonEnv=process.env.AMPLIFIER_TEST_PYTHON;
-const artifactEnv=process.env.AMPLIFIER_TEST_ARTIFACTS;
-assert.ok(contractPath,'An owned browser-test executionContract is required.');
-assert.ok(pythonEnv,'Use the Python executable supplied by the executionContract.');
-assert.ok(artifactEnv,'Use the artifact directory supplied by the executionContract.');
-const contractBytes=readFileSync(realpathSync(contractPath));
-const contract=JSON.parse(contractBytes);
-assert.equal(contract.profileId,'browser-test');
-assert.equal(realpathSync(contract.workspace),root,'Run the admitted source, not another checkout.');
-assert.ok(isAbsolute(contract.python),'Use the contract’s explicit Python executable.');
-assert.equal(realpathSync(pythonEnv),realpathSync(contract.python));
-const artifactRoot=realpathSync(artifactEnv);
-assert.equal(artifactRoot,realpathSync(contract.artifacts));
-assert.ok(!within(root,artifactRoot),'Retained evidence must stay outside the repository.');
+const {python,artifactRoot,evidence:executionEvidence}=questionFadeExecution({root});
 
 const artifacts=mkdtempSync(join(artifactRoot,'question-transcript-fade-'));
 const hash=value=>createHash('sha256').update(value).digest('hex');
@@ -41,6 +24,7 @@ const sourceFiles=[
  'frontend/src/chat-scroll.js',
  'frontend/tests/transcript-overflow.test.mjs',
  'frontend/tests/question-transcript-fade-browser.mjs',
+ 'frontend/tests/question-fade-runtime.mjs',
  'frontend/tests/fixture-lifecycle.mjs',
  'tests/fixtures/questions_ui_server.py',
 ];
@@ -51,8 +35,9 @@ const report={
  status:'running',
  runtime:'synthetic-question-fixture',
  liveProvider:false,
- executionContract:{version:contract.version,profileId:contract.profileId,source:contract.source},
- contractSha256:hash(contractBytes),
+ ...executionEvidence,
+ observedRuntime:{node:process.version,platform:process.platform,arch:process.arch,selectedPython:python,
+  pythonIdentity:'Selected executable; not an installed-distribution attestation'},
  sourceSha256:sourceHashes(),
  build:{
   path:'amplifier_web/static/build.json',
@@ -77,7 +62,7 @@ const report={
  instrumentationErrors:[],
  evidenceDropped:0,
  limits:{
-  successScreenshots:4,
+  successScreenshots:6,
   failureScreenshots:1,
   stderrTailCharacters:24000,
   retainedEntriesPerArray:32,
@@ -206,7 +191,7 @@ const failureShot=async()=>{
 
 try{
  const fixturePath=join(root,'tests/fixtures/questions_ui_server.py');
- fixture=spawn(contract.python,[fixturePath],{cwd:root,stdio:['ignore','pipe','pipe']});
+ fixture=spawn(python,[fixturePath],{cwd:root,stdio:['ignore','pipe','pipe']});
  stopFixture=ownFixture(fixture,{label:'Question transcript fade fixture'});
  report.fixture.started=true;
  fixture.on('close',(code,signal)=>{report.fixture.close={observed:true,code,signal}});
@@ -250,6 +235,7 @@ try{
   ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{}),
  });
  report.browser.started=true;
+ report.observedRuntime.chromium=browser.version();
  const context=await browser.newContext({
   viewport:{width:1280,height:900},deviceScaleFactor:1,colorScheme:'light',reducedMotion:'no-preference',
   extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'},
@@ -551,6 +537,7 @@ try{
  assert.equal(iframePointer.focus.transcriptIframeFocus,'true','Host active iframe identity protects the review independently of CSS :focus');
  assert.ok(iframePointer.geometry.remaining>1,'Iframe pointer focus check exercises actual bottom overflow');
  assert.equal(maskActive(iframePointer),false,'Interactive iframe pointer focus suppresses transcript masking');
+ await successShot('question-review-iframe-pointer');
  // Traverse out and back with the keyboard; host focus-visible alone cannot
  // describe focus on a control in an opaque-origin sandbox.
  await page.keyboard.press('Tab');await page.keyboard.press('Shift+Tab');
@@ -585,6 +572,7 @@ try{
  assert.ok(Math.abs(iframeBlurred.geometry.scrollTop-iframeScroll)<=1,'Leaving the iframe preserves the transcript position');
  assert.equal(iframeBlurred.overflow.below,'true');
  assertMasked(iframeBlurred,'Leaving the real iframe restores the shared overflow mask');
+ await successShot('question-review-iframe-blurred');
  await expect(inner.locator('#value')).toHaveText('1','The iframe retains its local state after focus traversal');
 
  const final=await fixtureCheck();
@@ -601,6 +589,7 @@ try{
  assert.deepEqual(report.externalRequests,[],'Fixture browser contacts no external origin');
  assert.deepEqual(report.instrumentationErrors,[],'Bounded evidence observers remain healthy');
  assert.equal(report.evidenceDropped,0,'No bounded evidence was dropped');
+ assert.equal(report.screenshots.filter(row=>row.kind==='success').length,6,'All six visual states were retained');
  assert.deepEqual(sourceHashes(),report.sourceSha256,'Authored source remains unchanged during the browser journey');
  const servedBuild=await page.request.get(ready.url+'/build.json');
  assert.equal(hash(await servedBuild.body()),report.build.servedSha256,'Served build identity remains stable');
