@@ -43,7 +43,10 @@ def live_plan(plan, background_delegate=True):
             if isinstance(value, str):
                 node['session'][key] = {'module': value}
         context = node.get("session", {}).get("context", {})
-        if context.get("module") == "context-managed" and context.get("config", {}).get("engine") == "boundary":
+        # Boundary is also the module's default when engine is omitted. Keep
+        # those sessions resumable without overriding an explicit opt-out or
+        # treating an invalid/legacy engine as a supported Boundary mount.
+        if context.get("module") == "context-managed" and context.get("config", {}).get("engine", "boundary") == "boundary":
             context.setdefault("config", {}).setdefault("durable_checkpoints", True)
             context["config"].setdefault("archive_recovery", True)
         loop = node.get("session", {}).get("orchestrator", {})
