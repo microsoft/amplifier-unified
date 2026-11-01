@@ -23,6 +23,11 @@ plus per-job checks preserves the same recovery result. Trace reads, copies,
 serialization, hashing and comparisons before filtering the final result. A small
 response, unchanged file or quiet UI does not prove that its construction was cheap.
 
+When a compatible file and immutable resource store the same presentation value,
+reuse one canonical encoding. Keep resource identity and transaction/rollback
+ownership unchanged. Qualify changed and unchanged saves, exact readback and
+borrowed nested edits; skipping writes alone must not conceal duplicate encoding.
+
 ## Separate current presentation from historical evidence
 
 Routine state carries the current fields its consumers need. Historical bodies
