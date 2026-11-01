@@ -41,6 +41,12 @@ explicit budget preparation stabilizes stale visual warnings before measurement.
 The loop validates the normal hard-fit decision and sends that newly measured
 request once, without repeating a tool, hook, input, turn or context compaction.
 
+Selected-model wrappers preserve this optional capability through the execution
+adapter. They retain the exact refused selected request and error for that adapter,
+including the measured model, effort and output reservation; a copied request or
+changed selection cannot stand in for it. Native regression coverage traverses
+the selected-model wrapper as well as the surface adapter and real loop boundary.
+
 The original native generation, complete inputs, Stop revision and required Work
 version must remain valid. Changed or unavailable authority, unknown/sent calls,
 ordinary provider errors, any stream event, an unavailable/oversized measurement

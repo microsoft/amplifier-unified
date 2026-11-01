@@ -17,11 +17,13 @@ from amplifier_web.coordination_delivery import CoordinationDelivery
 from amplifier_web.surface_delivery import SurfaceProvider
 from amplifier_web.voice_visual_delivery import VoiceVisualDelivery
 from amplifier_web.output_image_delivery import OutputImageDelivery, pair_retained
+from amplifier_web.host.session import SelectedProvider
 from test_coordination_delivery import Previous, available_requirements, empty_discovery
 from test_output_image_pairs import pair, identities, pixels, status
 
 
-async def native_case(mode='stale_visual', max_iterations=-1, legacy_budget=False, output_pair=None):
+async def native_case(mode='stale_visual', max_iterations=-1, legacy_budget=False, output_pair=None,
+                      selected=False):
     plan = {'session': {'orchestrator': {'module': 'loop-streaming', 'config': {
         'use_streaming': False, 'extended_thinking': True,
         'min_delay_between_calls_ms': 0, 'max_iterations': max_iterations,
@@ -179,7 +181,11 @@ async def native_case(mode='stale_visual', max_iterations=-1, legacy_budget=Fals
             state.bound.append(copy.deepcopy(data))
             return HookResult()
         session.coordinator.hooks.register('tool:post', bind_image_pair, name='fixture-image-pair-receipt')
-    await session.coordinator.mount('providers', SurfaceProvider(Provider(), visual), name='fixture')
+    original = Provider()
+    wrapped = SurfaceProvider(original, visual)
+    provider = SelectedProvider(original, {'model': 'selected-model', 'effort': 'high',
+        'max_output_tokens': 321}, lambda _: wrapped) if selected else wrapped
+    await session.coordinator.mount('providers', provider, name='fixture')
     return session, state
 
 
@@ -260,8 +266,9 @@ async def test_actual_loop_legacy_budget_keeps_its_kwargs_shape_during_refit():
 
 @pytest.mark.parametrize('mode', ['pair_timeout', 'pair_timeout_without_pixels',
                                   'pair_work_changed', 'pair_input_changed', 'pair_stop'])
-async def test_output_pair_deadline_refits_real_retained_selection_once(pair, mode):
-    session, state = await native_case(mode, output_pair=pair)
+@pytest.mark.parametrize('selected', [False, True])
+async def test_output_pair_deadline_refits_real_retained_selection_once(pair, mode, selected):
+    session, state = await native_case(mode, output_pair=pair, selected=selected)
     try:
         execution = session.execute('Compare the saved images once, then finish.')
         if mode in {'pair_work_changed', 'pair_input_changed', 'pair_stop'}:
@@ -274,6 +281,14 @@ async def test_output_pair_deadline_refits_real_retained_selection_once(pair, mo
             assert len(state.measurements) == 3 and len(state.transports) == 2
             assert state.transports[-1] == state.measurements[-1]
             sent = ChatRequest.model_validate_json(state.transports[-1])
+            if selected:
+                assert sent.model == 'selected-model'
+                assert sent.reasoning_effort == 'high'
+                assert sent.max_output_tokens == 321
+                assert state.budget_options == [dict(extended_thinking=True,
+                    model='selected-model', reasoning_effort='high')] * 3
+                assert state.dispatch_options == [dict(extended_thinking=True,
+                    model='selected-model', reasoning_effort='high')] * 2
             manifest = status(sent)
             assert manifest['toolCallId'] == 'read-once'
             assert manifest['requested'] == identities(pair.rows)
