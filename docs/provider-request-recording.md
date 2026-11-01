@@ -26,6 +26,23 @@ defaults from saved snapshots and resumed children. Explicit provider opt-ins
 continue to apply.
 
 Requests can include messages, instructions, tool arguments and attachments.
+New diagnostic copies replace typed inline image transport with a compact
+`__unified_image_transport__` fingerprint: media type when supplied, encoding,
+character or byte count, and SHA-256 of the omitted transport (UTF-8 for strings).
+This applies to event previews and larger downloads, before capture limits.
+Image blocks, text, model options, tool definitions and usage/cache metadata stay
+available within those limits. A fingerprint is diagnostic evidence, not a
+resolvable attachment reference or a promise that an image was saved.
+
+Image recognition follows provider message/content containers: OpenAI Responses
+and Chat Completions image blocks, Anthropic base64 image sources (including
+tool-result content), Gemini inline image parts, Ollama message images and OpenAI
+image-generation results. Remote URLs, ordinary text containing data URLs or
+base64, tool arguments and image-shaped schema examples are not reclassified as
+image transport. Unknown adapter shapes retain the existing bounded capture
+behavior. The actual provider request, attachments and canonical transcript are
+unchanged. Historical recordings are not rewritten.
+
 Unified scrubs recognizable credentials, including known credential environment
 values, before the community logging hook observes the diagnostic copy. It
 limits each captured raw field to approximately one million characters (plus
@@ -39,7 +56,8 @@ credential redaction is best effort, not a guarantee that a log is public-safe.
 
 The one-million-character event preview keeps activity and conversation state
 bounded. When that preview truncates an emitted request or response, the host
-also saves a separate redacted JSON copy beside that session's event log, in
+also saves a separate redacted JSON copy, with the same image fingerprints,
+beside that session's event log, in
 `provider-payloads/`. This copy permits up to 16 Mi characters (16,777,216),
 24 nesting levels and 64 MiB of encoded JSON. These are capture limits, not a
 promise that the provider exposes its complete wire payload.
@@ -48,7 +66,8 @@ Expand a model call to download the larger recorded request or response without
 loading it into the transcript or JSON viewer. Each download identifies the
 root session, actual calling session (including delegates), call, provider,
 model, redaction and truncation. A capped recording is explicitly labelled
-**partial** and has `-partial` in its filename. The smaller viewer and its copy
+**partial** and has `-partial` in its filename. Image fingerprinting is deliberate
+redaction, not size truncation; a **full** download still omits image transport. The smaller viewer and its copy
 button still show the event preview. Historical truncated events cannot gain a
 larger copy retroactively.
 

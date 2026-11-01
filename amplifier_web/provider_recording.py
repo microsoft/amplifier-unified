@@ -69,13 +69,17 @@ def apply_provider_recording(plan, *, enabled=None, home=None):
 def redact_request(value, *, limit=MAX_CAPTURE_CHARS):
     """Bound stored content and scrub recognizable secrets before CI sees it."""
     from .worker_diagnostics import redact_diagnostic
+    from .provider_recording_media import child_context, element_context, fingerprint
     remaining, truncated = limit, False
-    def visit(item, depth=0):
+    def visit(item, depth=0, context=None):
         nonlocal remaining, truncated
         if remaining <= 0 or depth > 24:
             truncated = True
             return '[capture limit]'
         remaining -= 16
+        image = fingerprint(item, context)
+        if image is not None:
+            return visit(image, depth + 1)
         if isinstance(item, str):
             # Scrub a bounded window, including a small lookahead for a token
             # spanning the cutoff. Never copy an unbounded inline image/audio.
@@ -96,7 +100,7 @@ def redact_request(value, *, limit=MAX_CAPTURE_CHARS):
                     break
                 name = redact_diagnostic(str(key)[:200])
                 remaining -= len(name)
-                result[name] = '[REDACTED]' if _SECRET_KEY.search(name) else visit(child, depth + 1)
+                result[name] = '[REDACTED]' if _SECRET_KEY.search(name) else visit(child, depth + 1, child_context(item, key, context))
             return result
         if isinstance(item, (list, tuple)):
             result = []
@@ -105,12 +109,12 @@ def redact_request(value, *, limit=MAX_CAPTURE_CHARS):
                     truncated = True
                     result.append('[capture limit]')
                     break
-                result.append(visit(child, depth + 1))
+                result.append(visit(child, depth + 1, element_context(context)))
             return result
         if item is None or isinstance(item, (bool, int, float)):
             return item
         return '[unsupported capture value]'
-    result = visit(value)
+    result = visit(value, context='root')
     return result, truncated
 
 
