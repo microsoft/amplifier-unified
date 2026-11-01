@@ -137,9 +137,7 @@ def snapshot(state, *, session_items=None):
         token = disposition_occurrence(items[-1]['id'], failure)
         if token:
             items[-1]['dispositionOccurrence'] = token
-    disposed_error = (updates.get('errorOccurrence') and
-                      updates.get('errorOccurrence') == updates.get('disposedErrorOccurrence'))
-    if updates.get('error') and not disposed_error and not any(group.get('displayError') == updates['error'] for group in failures.values()):
+    if updates.get('error') and not any(group.get('displayError') == updates['error'] for group in failures.values()):
         add('updates:error','Update needs attention','maintenance','updates',updates['error'],actionRequired=True)
         items.insert(0, items.pop())  # A distinct current check error precedes older incidents.
     if not preparing and (updates.get('pendingApp') or updates.get('pendingRelease')):add('updates:pending','Update ready; waiting for idle','maintenance','updates',version=updates.get('pendingRelease') or updates.get('pendingApp'))

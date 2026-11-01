@@ -462,11 +462,52 @@ async def test_disposition_preserves_error_owner_and_does_not_hide_next_identica
         assert len(active(app.state)) == 1
         await app.dispatch('updates.failureDisposition', {'id': item['id'],
             'expectedOccurrence': item['dispositionOccurrence'], 'disposition': 'acknowledged-uncertainty'}, origin='ui')
-        assert not active(app.state)
+        assert active(app.state)[0]['id'] == 'updates:error'
         assert app.state['updates']['error'] == 'Synthetic update error.'
         assert app.state['updates']['phase'] == 'error'  # Not a health/restart gate bypass.
+        app.state['updates']['error'] = 'Different direct startup error.'
+        assert active(app.state)[0]['id'] == 'updates:error'
         await app.update_manager.publish(error='Synthetic update error.')
         assert active(app.state)[0]['id'] == 'updates:error'
         assert not app.state['updates'].get('applicationResult')
     finally:
         await app.close()
+
+
+def test_disposition_legacy_idless_scope_and_bounded_sanitized_history(tmp_path):
+    from amplifier_web.update_report import disposition
+    legacy = {'kind': 'application', 'phase': 'candidate-install', 'status': 'failed',
+              'errorType': 'ValueError', 'at': 1}
+    state, diagnostics = fixture(tmp_path, {'diagnostics': {'lastFailure': legacy, 'events': [legacy]}})
+    old = active(state)[0]
+    receipt = diagnostics.dispose(old['id'], old['dispositionOccurrence'])
+    assert receipt['firstFailure']['status'] == 'failed'
+    assert not active(state) and diagnostics.state['lastFailure'] == legacy
+    for i in range(25):
+        diagnostics.begin('application', 'a'*40)
+        diagnostics.record('candidate-install', 'failed', errorType='ValueError')
+        item = active(state)[0]
+        diagnostics.dispose(item['id'], item['dispositionOccurrence'])
+    assert len(diagnostics.state['failureDispositions']) == 20
+    assert not active(state) and snapshot(state)['badgeUnread'] == 0
+    assert diagnostics.path.read_text().count('"status":"acknowledged-uncertainty"') == 26
+    clean = disposition({**receipt, 'credential': '/private/secret', 'target': '/private/secret',
+                         'firstFailure': {**legacy, 'secret': '/private/secret'}})
+    assert '/private/secret' not in str(clean)
+    assert clean['recoveryVerified'] is False
+
+
+def test_activity_projects_only_bounded_disposition_summaries():
+    from amplifier_web.browser_demand import project
+    diagnostics = {'events': [{'id': 'not-needed'}], 'failureDispositions': [
+        {'id': str(i), 'at': i, 'target': 'updates:failure-overflow',
+         'occurrences': 1, 'status': 'acknowledged-uncertainty',
+         'recoveryVerified': False, 'firstFailure': {'id': 'not-needed'}} for i in range(25)]}
+    state = {'view': {'panel': 'activity'}, 'updates': {'diagnostics': diagnostics}}
+    project(state)
+    rows = state['updates']['diagnostics']['failureDispositions']
+    assert len(rows) == 20 and rows[0]['id'] == '5'
+    assert 'firstFailure' not in rows[0] and 'events' not in state['updates']['diagnostics']
+    state = {'view': {'panel': None}, 'updates': {'diagnostics': diagnostics}}
+    project(state)
+    assert 'diagnostics' not in state['updates']

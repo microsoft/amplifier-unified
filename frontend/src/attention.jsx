@@ -68,7 +68,7 @@ export function FailureDisposition({item,act}){
  return <><button ref={trigger} type="button" className="a-soft" aria-expanded={!!review} disabled={busy} onClick={()=>{setError('');setReview({id:item.id,occurrence:item.dispositionOccurrence,title:item.title,detail:item.detail,occurrences:item.occurrences})}}>Close unresolved notice</button>
  {review&&<section className="a-failure-disposition" aria-label="Confirm uncertainty disposition" onKeyDown={e=>{if(e.key==='Escape'){e.stopPropagation();cancel()}}}>
   <strong>Close with recovery unverified?</strong><p>{review.title} · {review.occurrences} {review.occurrences===1?'occurrence':'occurrences'}</p><p className="a-caption">{review.detail}</p>
-  <p>This closes only this reviewed occurrence in Needs action. It does not verify recovery, retry an update, or remove diagnostic history. New failures still need attention.</p>
+  <p>This closes only this reviewed occurrence in Needs action. It does not verify recovery, retry an update, or remove diagnostic history. Current errors, safety gates, and new failures still need attention.</p>
   {review.occurrence!==item.dispositionOccurrence&&<p role="status">A newer occurrence arrived. Cancel and review the current notice.</p>}
   {error&&<p role="alert">{error}</p>}
   <div className="a-inbox-group-head"><button ref={confirm} type="button" className="a-soft" disabled={busy} data-action="updates.failureDisposition" onClick={close}>{busy?'Closing…':'Close with recovery unverified'}</button><button type="button" className="a-link" disabled={busy} onClick={cancel}>Cancel</button></div>

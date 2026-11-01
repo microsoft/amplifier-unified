@@ -233,9 +233,9 @@ class UpdateDiagnostics:
             previous.update(occurrences=previous['occurrences'] + 1, latest=event)
         else:
             if len(active) >= MAX_ACTIVE_FAILURES:
-                overflow = self.state.setdefault('failureOverflow', {'occurrences': 0, 'firstAt': event.get('at')})
+                overflow = self.state.setdefault('failureOverflow', {'occurrences': 0, 'firstAt': event.get('at'), 'first': event})
                 overflow.update(occurrences=overflow['occurrences'] + 1, latest=event)
-                self._pending_failure = 'overflow'
+                self._pending_failure = None
                 return  # Truthful unresolved overflow; never infer those causes recovered.
             identity = event.get('id') or hashlib.sha256(json.dumps(event, sort_keys=True).encode()).hexdigest()
             batch = self.state.get('batch', {})
@@ -277,16 +277,12 @@ class UpdateDiagnostics:
         receipt = {'id': uuid.uuid4().hex, 'at': time.time(), 'phase': 'failure-disposition',
                    'status': 'acknowledged-uncertainty', 'recoveryVerified': False,
                    'target': identity, 'occurrence': token, 'occurrences': group['occurrences'],
-                   'firstFailure': public_event(group.get('first', group['latest'])),
+                   'firstFailure': public_event(group.get('first', {})),
+                   'firstFailureAvailable': bool(group.get('first')),
                    'latestFailure': public_event(group['latest'])}
-        # Only the exact publisher-associated error can leave active attention.
-        # Keep its owner state and safety gates unchanged. A new publish replaces
-        # errorOccurrence even when the text is identical.
-        updates = self.manager.service.state['updates']
-        if (group.get('displayErrorOccurrence') and
-                group['displayErrorOccurrence'] == updates.get('errorOccurrence') and
-                group.get('displayError') == updates.get('error')):
-            updates['disposedErrorOccurrence'] = group['displayErrorOccurrence']
+        # Close only this retained episode. Current errors and installation
+        # safety gates have separate owners and remain actionable, even when
+        # their displayed text happened to match this episode.
         if overflow:
             del self.state['failureOverflow']
         else:

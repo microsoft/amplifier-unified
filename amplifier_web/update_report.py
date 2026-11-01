@@ -93,6 +93,7 @@ def disposition(row):
             'target': scalar(row.get('target'), r'updates:failure(?:-overflow|:application:[a-f0-9]{64})'),
             'occurrence': scalar(row.get('occurrence'), r'[a-f0-9]{64}'),
             'occurrences': row.get('occurrences') if type(row.get('occurrences')) is int else None,
+            'firstFailureAvailable': row.get('firstFailureAvailable') is True,
             'firstFailure': event(row.get('firstFailure', {})),
             'latestFailure': event(row.get('latestFailure', {}))}
 

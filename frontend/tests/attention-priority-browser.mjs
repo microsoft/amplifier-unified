@@ -90,6 +90,12 @@ try{
   await expect(needs.locator('.a-attention-item')).toHaveCount(1);
   await expect(needs).toContainText('amplifier-module-hooks-approval');
   await page.reload();
+  await page.locator('#amp-one').waitFor();
+  if(!await inbox.isVisible()){
+   if(!await activity.isVisible())await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+   await activity.click();
+  }
+  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().updates.diagnostics.failureDispositions.length)).toBeGreaterThanOrEqual(2);
   const closed=inbox.locator('summary').filter({hasText:'Closed notices · recovery unverified'});
   await closed.click();await expect(inbox).toContainText('Explicitly acknowledged uncertainty, not verified recovery.');
   await page.screenshot({path:`${artifacts}/disposition-${installed?'installed':'source'}-${narrow?'narrow':'desktop'}-closed.png`,fullPage:true});
