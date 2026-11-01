@@ -63,6 +63,7 @@
     {"id": "theme-definitions", "command": ["node", "tests/theme-definitions-browser.mjs"]},
     {"id": "appearance-startup", "command": ["node", "tests/appearance-startup-browser.mjs"]},
     {"id": "appearance-library", "command": ["node", "tests/appearance-library-browser.mjs"]},
+    {"id": "ready", "command": ["node", "tests/ready-browser.mjs"], "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/ready", "AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python"}},
     {"id": "review-during-send", "command": ["node", "tests/review-during-send-browser.mjs"]},
     {"id": "execution-observability", "command": ["node", "tests/execution-observability-browser.mjs"], "env": {"AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/execution-observability"}},
     {"id": "execution-inspection", "command": ["node", "tests/execution-inspection-browser.mjs"]},

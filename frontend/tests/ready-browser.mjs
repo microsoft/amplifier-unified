@@ -1,5 +1,5 @@
-// SOURCE-ONLY authored RC journey. Build production assets before running in the
-// prepared browser-test executionContract. Target: about one minute when warm.
+// Maintained source journey. Build production assets before the prepared managed
+// browser-test route or ordinary background runner. About one minute when warm.
 // Synthetic fixture only; no live provider, saved appearance edits or guest Git.
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
@@ -11,6 +11,7 @@ import {chromium,expect} from '@playwright/test';
 import './composer-test-helpers.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
+import {readyExecution} from './ready-runtime.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const python=process.env.AMPLIFIER_TEST_PYTHON,out=process.env.AMPLIFIER_TEST_ARTIFACTS;
@@ -77,13 +78,13 @@ const cssList=value=>{
 };
 
 try{
- const contract=JSON.parse(await readFile(process.env.AMPLIFIER_TEST_CONTRACT||
-  '/opt/unified-prepared/execution-contract.json','utf8'));
- assert.equal(contract.profileId,'browser-test');assert.equal(contract.python,python);
- assert.ok(contract.source&&typeof contract.source==='object','Prepared executionContract must retain the admitted source identity');
- report.executionContract={version:contract.version,profileId:contract.profileId,source:contract.source};
+ Object.assign(report,await readyExecution());
+ report.observedRuntime={node:process.version,platform:process.platform,arch:process.arch,
+  selectedPython:python,pythonIdentity:'selected executable only; not an installed-distribution attestation'};
+ // Background source/tree/plan provenance remains the canonical runner's
+ // results.json, not a synthesized managed execution contract.
  report.sourceSha256={};
- for(const file of ['frontend/tests/ready-browser.mjs','frontend/tests/fixture-lifecycle.mjs',
+ for(const file of ['frontend/tests/ready-browser.mjs','frontend/tests/ready-runtime.mjs','frontend/tests/fixture-lifecycle.mjs',
   'frontend/tests/browser-chat-pages.mjs','frontend/tests/composer-test-helpers.mjs',
   'tests/fixtures/empty_host_ui_server.py','frontend/src/chat-presentation.css',
   'frontend/src/conversation-rail.css','amplifier_web/appearances/ready.amplifier.css']){
@@ -120,6 +121,7 @@ try{
  browser=await chromium.launch({headless:true,
   args:JSON.parse(process.env.AMPLIFIER_CHROMIUM_ARGS||'[]'),
   ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{})});
+ report.observedRuntime.chromium=browser.version();
  page=await browser.newPage({viewport:{width:1600,height:1000},deviceScaleFactor:1,colorScheme:'light',
   reducedMotion:'no-preference',extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.setDefaultTimeout(6000);page.setDefaultNavigationTimeout(20000);
