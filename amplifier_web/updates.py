@@ -503,11 +503,16 @@ class UpdateManager:
 
     async def publish(self, **values):
         async with self.service.lock:
+            if 'error' in values:
+                values['errorOccurrence'] = uuid.uuid4().hex if values['error'] else None
             if values.get('error'):
                 group = self.diagnostics.state.get('activeFailures', {}).get(
                     getattr(self.diagnostics, '_pending_failure', None))
+                if self.diagnostics._pending_failure == 'overflow':
+                    group = self.diagnostics.state.get('failureOverflow')
                 if group:
                     group['displayError'] = values['error']
+                    group['displayErrorOccurrence'] = values['errorOccurrence']
                 self.diagnostics._pending_failure = None
             self.service.state['updates'].update(values)
             state = self.service.state['updates']

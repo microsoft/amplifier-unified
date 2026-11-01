@@ -181,6 +181,27 @@ async def main():
                     await service.update_manager.publish(phase='error', error='Component update preparation failed. Current components remain active.')
                 elif step == 'check':
                     updates.update(phase='checked', error=None)
+                elif step in {'uncertainty', 'unknown-repeat', 'overflow-repeat'}:
+                    if step == 'uncertainty':
+                        # Real owner events: fill the bounded summary then recover
+                        # its matched groups. Overflow remains, as does unknown scope.
+                        for i in range(33):
+                            diagnostics.begin('ecosystem', components=[f'amplifier-test-{i}'])
+                            diagnostics.record('ecosystem-validation', 'failed', component=f'amplifier-test-{i}')
+                        diagnostics.begin('ecosystem', components=[f'amplifier-test-{i}' for i in range(33)])
+                        diagnostics.record('ecosystem-activation', 'succeeded')
+                    if step == 'overflow-repeat':
+                        for i in range(33):
+                            diagnostics.begin('ecosystem', components=[f'amplifier-later-{i}'])
+                            diagnostics.record('ecosystem-validation', 'failed', component=f'amplifier-later-{i}')
+                        diagnostics.begin('ecosystem', components=[f'amplifier-later-{i}' for i in range(33)])
+                        diagnostics.record('ecosystem-activation', 'succeeded')
+                    else:
+                        diagnostics.begin('application', 'a'*40)
+                        diagnostics.record('candidate-install', 'failed', errorType='ValueError')
+                    diagnostics.begin('application', 'a'*40, application_extras=[])
+                    diagnostics.record('restart-ack', 'succeeded')
+                    updates.update(phase='installed', error=None)
                 elif step == 'recover':
                     diagnostics.begin('ecosystem', components=['amplifier-module-loop-live','amplifier-module-hooks-approval'])
                     diagnostics.clear_failure()

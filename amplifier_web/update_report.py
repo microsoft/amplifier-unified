@@ -84,6 +84,19 @@ def event(row):
     return result
 
 
+def disposition(row):
+    """Only fixed disposition facts and sanitized originals leave the owner."""
+    if row.get('status') != 'acknowledged-uncertainty':
+        return {}
+    return {**event(row), 'phase': 'failure-disposition',
+            'status': 'acknowledged-uncertainty', 'recoveryVerified': False,
+            'target': scalar(row.get('target'), r'updates:failure(?:-overflow|:application:[a-f0-9]{64})'),
+            'occurrence': scalar(row.get('occurrence'), r'[a-f0-9]{64}'),
+            'occurrences': row.get('occurrences') if type(row.get('occurrences')) is int else None,
+            'firstFailure': event(row.get('firstFailure', {})),
+            'latestFailure': event(row.get('latestFailure', {}))}
+
+
 def runtime_report(home):
     from .runtime_qualification import installed_graph
     from .runtime_environment import receipt_directory, project_path
@@ -134,6 +147,7 @@ async def collect(manager):
               'privacy': 'Excludes credentials, settings values, environment, local paths, host/account names and conversation content.',
               'events': [event(row) for row in diagnostics.get('events', [])[-50:]],
               'lastFailure': event(diagnostics.get('lastFailure', {})),
+              'failureDispositions': [disposition(row) for row in diagnostics.get('failureDispositions', [])[-20:]],
               'pending': {key: bool(state.get(key)) for key in ('pendingApp', 'pendingRelease', 'pendingRestart', 'pendingSmartTools')},
               'busy': manager.lock.locked()}
     # "busy" above is the updater lock, not the activation gate. Use the same

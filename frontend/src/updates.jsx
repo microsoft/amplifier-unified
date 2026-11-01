@@ -1,5 +1,5 @@
 import {AppReloadNotice} from './app-reload.jsx';
-import {AttentionReview,ReadWhenVisible,useReadVisible} from './attention';
+import {AttentionReview,ReadWhenVisible,useReadVisible,FailureDisposition,FailureDispositions} from './attention';
 import {updateOverview} from './update-overview';
 import {ActivityRegion} from './activity-region';
 import {useListFilter} from './list-filter.jsx';
@@ -74,7 +74,8 @@ export function UpdateSettings({state,act}){
   </div>
   <UpdateReleaseSummary updates={updates} application={application} overview={overview}/>
    {overview.waiting&&!overview.runnerOnlyPending&&!!updates.blockers?.length&&<details className="a-update-work" data-part="update-blockers"><summary>View active work ({updates.blockers.length})</summary><ul>{updates.blockers.map((item,index)=><li key={index}>{item.label}{item.sessionId&&<> — <button type="button" className="a-link" data-action="session.select" onClick={async()=>{const result=await act('session.select',{id:item.sessionId});if(result&&result.accepted!==false)await act('view.update',{patch:{panel:null,workSurface:'chat'}})}}>{item.title||'Open conversation'}</button></>}</li>)}</ul><p className="a-caption">Idle chats alone don’t hold up the update. Background workers, calls, and tools may still need to finish.</p><UpdateRestart updates={updates} act={act}/></details>}
-  {unresolved.map(item=><ReadWhenVisible key={item.id} item={item} act={act}><ResultNotice phase="error" message={`${item.title}: ${item.detail}${item.occurrences>1?` (${item.occurrences} occurrences)` :''}`}/><p className="a-caption">Reading this does not resolve it. Diagnostic history is retained below.</p></ReadWhenVisible>)}
+  {unresolved.map(item=><ReadWhenVisible key={item.id} item={item} act={act}><ResultNotice phase="error" message={`${item.title}: ${item.detail}${item.occurrences>1?` (${item.occurrences} occurrences)` :''}`}/><p className="a-caption">Reading this does not resolve it. Diagnostic history is retained below.</p><FailureDisposition item={item} act={act}/></ReadWhenVisible>)}
+  <FailureDispositions state={state}/>
   {!unresolved.length&&overview.tone!=='working'&&<ReadWhenVisible item={unread.find(item=>item.id==='updates:error')} act={act}><ResultNotice phase={resultPhase} message={resultPhase==='error'?resultMessage:''}/></ReadWhenVisible>}
   <AppReloadNotice/>
   <SmartToolUpdateResults updates={updates} act={act} busy={busy||!!updates.pendingRestart||!!updates.pendingReplacement}/>

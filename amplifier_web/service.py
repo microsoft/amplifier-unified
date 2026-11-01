@@ -226,6 +226,7 @@ ACTION_DEFINITIONS = {
     "updates.smartToolRetry": ("Retry one failed Smart Tool update using its current update resultId (or previous installation ID when no resultId is present). Healthy tools are not repeated.", schema({"id":string(200)},["id"])),
     "updates.smartToolSkip": ("Skip one failed Smart Tool revision using its current update resultId (or previous installation ID when no resultId is present). Retain the current installation; newer revisions remain eligible.", schema({"id":string(200)},["id"])),
     "updates.check": ("Check published application releases and ecosystem sources for updates", schema()),
+    "updates.failureDisposition": ("User-only: close one exact overflow or unknown-feature-scope failure as acknowledged uncertainty, not verified recovery. Use dispositionOccurrence from attention; reading alone never closes it.", schema({"id":string(300),"expectedOccurrence":{"type":"string","pattern":"^[a-f0-9]{64}$"},"disposition":{"enum":["acknowledged-uncertainty"]}},["id","expectedOccurrence","disposition"])),
     "updates.diagnostics": ("Collect a sanitized update support report, including source provenance, without credentials, chat content or private paths.", schema()),
     "updates.forceRestart": ("Explicitly confirm interrupting active work to restart into one staged qualified app. Saved history and unresolved checkout fences remain; no work is replayed.", schema({"confirm":{"enum":[True]},"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(200)}, ["confirm","hostInstanceId","revision","generation","attemptId"])),
     "updates.install": ("Stage and validate available application or ecosystem updates; activate when idle. Application updates restart the host.", schema()),
@@ -3641,6 +3642,14 @@ class AppService:
                         'generation': copy.deepcopy(target.get('collaborationGeneration')),
                         'target': self.management.configuration_target_binding(target)},)
                 pending.append((self.management.command, values))
+            elif action == "updates.failureDisposition":
+                if origin not in {'ui', 'user'}:
+                    raise AppError('Closing update uncertainty requires an explicit user action.', 403)
+                if not self.update_manager: raise AppError("Update service is unavailable.")
+                try:
+                    diagnostic_result = self.update_manager.diagnostics.dispose(args['id'], args['expectedOccurrence'])
+                except ValueError as error:
+                    raise AppError(str(error), 409) from None
             elif action.startswith("updates."):
                 if not self.update_manager: raise AppError("Update service is unavailable.")
                 if action == 'updates.forceRestart':

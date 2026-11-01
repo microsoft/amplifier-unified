@@ -38,6 +38,18 @@ def sanitized_application_extras(value):
         return None
 
 
+def disposition_occurrence(identity, group):
+    """Separate from read identity: every occurrence invalidates a close request."""
+    eligible = identity == 'updates:failure-overflow' or (
+        group.get('kind') == 'application' and
+        sanitized_application_extras(group.get('latest', {}).get('applicationExtras')) is None)
+    if not eligible:
+        return None
+    observed = [identity, group.get('id'), group.get('firstAt'), group.get('first'),
+                group.get('latest'), group.get('occurrences')]
+    return hashlib.sha256(json.dumps(observed, sort_keys=True).encode()).hexdigest()
+
+
 def exception_type(error):
     name=type(error).__name__
     return name if name in ERROR_TYPES else 'Exception'
@@ -223,7 +235,7 @@ class UpdateDiagnostics:
             if len(active) >= MAX_ACTIVE_FAILURES:
                 overflow = self.state.setdefault('failureOverflow', {'occurrences': 0, 'firstAt': event.get('at')})
                 overflow.update(occurrences=overflow['occurrences'] + 1, latest=event)
-                self._pending_failure = None
+                self._pending_failure = 'overflow'
                 return  # Truthful unresolved overflow; never infer those causes recovered.
             identity = event.get('id') or hashlib.sha256(json.dumps(event, sort_keys=True).encode()).hexdigest()
             batch = self.state.get('batch', {})
@@ -251,6 +263,37 @@ class UpdateDiagnostics:
             # occurrence invalidates that evidence, including an identical cause.
             if group and group['kind'] == kind and group['latest'].get('id') == observed:
                 del active[key]
+
+    def dispose(self, identity, expected_occurrence):
+        """Explicit uncertainty acknowledgement, never installation recovery."""
+        overflow = identity == 'updates:failure-overflow'
+        key = identity.removeprefix('updates:failure:')
+        active = self.state.get('activeFailures', {})
+        group = self.state.get('failureOverflow') if overflow else active.get(key)
+        token = disposition_occurrence(identity, group) if group else None
+        if token is None or token != expected_occurrence:
+            raise ValueError('Update failure changed or is not eligible; review the current occurrence before closing.')
+        from .update_report import event as public_event
+        receipt = {'id': uuid.uuid4().hex, 'at': time.time(), 'phase': 'failure-disposition',
+                   'status': 'acknowledged-uncertainty', 'recoveryVerified': False,
+                   'target': identity, 'occurrence': token, 'occurrences': group['occurrences'],
+                   'firstFailure': public_event(group.get('first', group['latest'])),
+                   'latestFailure': public_event(group['latest'])}
+        # Only the exact publisher-associated error can leave active attention.
+        # Keep its owner state and safety gates unchanged. A new publish replaces
+        # errorOccurrence even when the text is identical.
+        updates = self.manager.service.state['updates']
+        if (group.get('displayErrorOccurrence') and
+                group['displayErrorOccurrence'] == updates.get('errorOccurrence') and
+                group.get('displayError') == updates.get('error')):
+            updates['disposedErrorOccurrence'] = group['displayErrorOccurrence']
+        if overflow:
+            del self.state['failureOverflow']
+        else:
+            del active[key]
+        self.state['failureDispositions'] = (self.state.get('failureDispositions', []) + [receipt])[-20:]
+        self._retain(receipt)
+        return receipt
 
     def capture_activation_retry(self, target, *, rollback=False):
         """Snapshot failures for this validated promotion, before any new effects."""
@@ -356,10 +399,14 @@ class UpdateDiagnostics:
                 self._track_failure(event)
         elif status == 'succeeded':
             self._settle_failure(phase)
+        self._retain(event)
+        return event
+
+    def _retain(self, event):
         collector=getattr(self.manager.service,'diagnostics',None)
         if collector:
             try:
-                collector.record('updates',{'event':'update:'+phase,'data':event})
+                collector.record('updates',{'event':'update:'+event['phase'],'data':event})
             except Exception:pass
         # The general collector may be disabled or retain metadata only. Keep
         # the already-sanitized original in the existing bounded update journal.

@@ -63,8 +63,42 @@ try{
   assert.ok(recovered.state.updates.diagnostics.events.some(e=>e.status==='failed'));
   assert.equal(recovered.runtimeStarts,before.runtimeStarts);assert.equal(recovered.runtimeSends,before.runtimeSends);
   await control('distinct');await expect(needs.getByRole('button',{name:'Mark reviewed: Component update needs attention',exact:true})).toBeVisible();
+  await control('recover');await control('uncertainty');
+  await expect(needs.locator('.a-attention-item')).toHaveCount(2);
+  await inbox.getByRole('button',{name:'Mark all reviewed',exact:true}).click();
+  await expect(needs.getByText('Reviewed · still unresolved',{exact:true})).toHaveCount(2);
+  const unknown=needs.locator('.a-attention-item').filter({hasText:'Application update needs attention'});
+  const overflow=needs.locator('.a-attention-item').filter({hasText:'Additional update failures need review'});
+  const startClose=async row=>{const button=row.getByRole('button',{name:'Close unresolved notice',exact:true});if(narrow)await button.tap();else{await button.focus();await page.keyboard.press('Enter')}};
+  await startClose(unknown);
+  const confirmation=unknown.getByRole('region',{name:'Confirm uncertainty disposition',exact:true});
+  await expect(confirmation).toContainText('It does not verify recovery');
+  // Freeze the reviewed occurrence while another matching failure arrives.
+  await control('unknown-repeat');
+  await confirmation.getByRole('button',{name:'Close with recovery unverified',exact:true}).click();
+  await expect(confirmation.getByRole('alert')).toContainText('changed');
+  await expect(needs.locator('.a-attention-item')).toHaveCount(2);
+  await confirmation.getByRole('button',{name:'Cancel',exact:true}).click();
+  await startClose(unknown);
+  await page.screenshot({path:`${artifacts}/disposition-${installed?'installed':'source'}-${narrow?'narrow':'desktop'}-confirm.png`,fullPage:true});
+  await confirmation.getByRole('button',{name:'Close with recovery unverified',exact:true}).click();
+  await expect(needs.locator('.a-attention-item')).toHaveCount(1);
+  await startClose(overflow);
+  // A distinct failure after confirmation must survive closing the overflow.
+  await control('distinct');
+  await overflow.getByRole('button',{name:'Close with recovery unverified',exact:true}).click();
+  await expect(needs.locator('.a-attention-item')).toHaveCount(1);
+  await expect(needs).toContainText('amplifier-module-hooks-approval');
+  await page.reload();
+  const closed=inbox.locator('summary').filter({hasText:'Closed notices · recovery unverified'});
+  await closed.click();await expect(inbox).toContainText('Explicitly acknowledged uncertainty, not verified recovery.');
+  await page.screenshot({path:`${artifacts}/disposition-${installed?'installed':'source'}-${narrow?'narrow':'desktop'}-closed.png`,fullPage:true});
+  assert.ok(await inbox.evaluate(el=>el.scrollWidth<=el.clientWidth+1));
+  const after=await control('recover');
+  assert.equal(after.runtimeStarts,before.runtimeStarts);assert.equal(after.runtimeSends,before.runtimeSends);
+  assert.ok(after.state.updates.diagnostics.failureDispositions.every(r=>r.recoveryVerified===false&&r.status==='acknowledged-uncertainty'));
   await context.close();
  }
  assert.deepEqual(errors,[]);
- console.log('PASS attention priority: quiet 53 notices + 3 receipts; first/read/repeat/check/distinct/recovery/next; preferences; keyboard + touch; desktop + narrow; '+(installed?'installed':'source')+' boundary.');
+ console.log('PASS attention priority: quiet 53 notices + 3 receipts; first/read/repeat/check/distinct/recovery/next; preferences; explicit unknown/overflow disposition; stale confirmation refusal; concurrent failure preserved; closed-history reload; keyboard + touch; desktop + narrow; '+(installed?'installed':'source')+' boundary.');
 }finally{await browser?.close();await vite?.close();fixture.kill('SIGTERM');await new Promise(resolve=>fixture.exitCode!==null?resolve():fixture.once('exit',resolve));}

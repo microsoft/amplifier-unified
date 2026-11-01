@@ -345,3 +345,128 @@ async def test_real_attention_read_and_restart_preserve_unresolved_failure(tmp_p
         assert app.get_state()['attention']['badgeUnread'] == 1
     finally:
         await app.close()
+
+
+@pytest.mark.parametrize('overflow', [False, True])
+def test_explicit_disposition_closes_only_reviewed_uncertainty(tmp_path, overflow):
+    state, diagnostics = fixture(tmp_path)
+    if overflow:
+        for i in range(33):
+            fail(diagnostics, component=f'amplifier-component-{i}')
+        diagnostics.begin('ecosystem', components=[f'amplifier-component-{i}' for i in range(33)])
+        diagnostics.record('ecosystem-activation', 'succeeded')
+    else:
+        diagnostics.begin('application', 'a'*40)
+        diagnostics.record('candidate-install', 'failed', errorType='ValueError')
+        diagnostics.begin('application', 'a'*40, application_extras=[])
+        diagnostics.record('restart-ack', 'succeeded')
+    item = active(state)[0]
+    read_all(state)
+    assert active(state)[0]['read'] and snapshot(state)['badgeUnread'] == 1
+    before = copy.deepcopy(diagnostics.state['events'])
+    receipt = diagnostics.dispose(item['id'], item['dispositionOccurrence'])
+    assert receipt['status'] == 'acknowledged-uncertainty'
+    assert receipt['recoveryVerified'] is False
+    assert not active(state)
+    assert all(event in diagnostics.state['events'] for event in before)
+    assert diagnostics.state['failureDispositions'][-1] == receipt
+    assert 'acknowledged-uncertainty' in diagnostics.path.read_text()
+    # Recreated occurrences cannot inherit closure or read state.
+    if overflow:
+        for i in range(33):
+            fail(diagnostics, component=f'amplifier-component-{i}')
+    else:
+        diagnostics.begin('application', 'a'*40)
+        diagnostics.record('candidate-install', 'failed', errorType='ValueError')
+    newer = next(i for i in active(state) if i.get('dispositionOccurrence'))
+    assert newer['dispositionOccurrence'] != item['dispositionOccurrence']
+    with pytest.raises(ValueError, match='changed'):
+        diagnostics.dispose(newer['id'], item['dispositionOccurrence'])
+
+
+@pytest.mark.parametrize('overflow', [False, True])
+def test_disposition_rejects_repeat_during_confirmation_and_keeps_other_failures(tmp_path, overflow):
+    state, diagnostics = fixture(tmp_path)
+    if overflow:
+        for i in range(33):
+            fail(diagnostics, component=f'amplifier-component-{i}')
+    else:
+        diagnostics.begin('application', 'a'*40)
+        diagnostics.record('candidate-install', 'failed', errorType='ValueError')
+    item = next(i for i in active(state) if i.get('dispositionOccurrence'))
+    if overflow:
+        fail(diagnostics, component='amplifier-new-overflow')
+    else:
+        diagnostics.begin('application', 'a'*40)
+        diagnostics.record('candidate-install', 'failed', errorType='ValueError')
+    before = copy.deepcopy(diagnostics.state)
+    with pytest.raises(ValueError, match='changed'):
+        diagnostics.dispose(item['id'], item['dispositionOccurrence'])
+    assert diagnostics.state == before
+    current = next(i for i in active(state) if i['id'] == item['id'])
+    fail(diagnostics, component='amplifier-concurrent')
+    if overflow:  # This also changed overflow's reviewed occurrence.
+        current = next(i for i in active(state) if i['id'] == item['id'])
+    others = [i['id'] for i in active(state) if i['id'] != item['id']]
+    diagnostics.dispose(current['id'], current['dispositionOccurrence'])
+    assert [i['id'] for i in active(state)] == others
+
+
+async def test_disposition_action_is_user_only_exact_deduplicated_and_persisted(tmp_path):
+    from amplifier_web.service import AppService, AppError
+    from amplifier_web.updates import UpdateManager
+    app = AppService(tmp_path / 'app', workspace=tmp_path)
+    try:
+        app.update_manager = UpdateManager(app)
+        diagnostics = app.update_manager.diagnostics
+        diagnostics.begin('application', 'a'*40)
+        failure = diagnostics.record('candidate-install', 'failed', errorType='ValueError')
+        item = active(app.state)[0]
+        args = {'id': item['id'], 'expectedOccurrence': item['dispositionOccurrence'],
+                'disposition': 'acknowledged-uncertainty'}
+        with pytest.raises(AppError):
+            await app.dispatch('updates.failureDisposition', args, origin='agent')
+        result = await app.dispatch('updates.failureDisposition', args, origin='ui', command_id='dispose-one')
+        assert result['result']['recoveryVerified'] is False
+        assert (await app.dispatch('updates.failureDisposition', args, origin='ui',
+                                  command_id='dispose-one'))['duplicate']
+        assert not active(app.state)
+        assert diagnostics.state['lastFailure'] == failure
+        fail(diagnostics)  # Normal known-scope failures are not eligible.
+        item = active(app.state)[0]
+        assert 'dispositionOccurrence' not in item
+        with pytest.raises(AppError):
+            await app.dispatch('updates.failureDisposition', {**args, 'id': item['id']}, origin='ui')
+    finally:
+        await app.close()
+    app = AppService(tmp_path / 'app', workspace=tmp_path)
+    try:
+        assert len(app.state['updates']['diagnostics']['failureDispositions']) == 1
+        assert len(active(app.state)) == 1
+        assert active(app.state)[0]['updateKind'] == 'ecosystem'
+    finally:
+        await app.close()
+
+
+async def test_disposition_preserves_error_owner_and_does_not_hide_next_identical_error(tmp_path):
+    from amplifier_web.service import AppService
+    from amplifier_web.updates import UpdateManager
+    app = AppService(tmp_path / 'app', workspace=tmp_path)
+    try:
+        app.update_manager = UpdateManager(app)
+        diagnostics = app.update_manager.diagnostics
+        diagnostics.begin('application', 'a'*40)
+        diagnostics.record('candidate-install', 'failed', errorType='ValueError')
+        await app.update_manager.publish(phase='error', error='Synthetic update error.')
+        item = active(app.state)[0]
+        assert len(active(app.state)) == 1
+        await app.dispatch('updates.failureDisposition', {'id': item['id'],
+            'expectedOccurrence': item['dispositionOccurrence'], 'disposition': 'acknowledged-uncertainty'}, origin='ui')
+        assert not active(app.state)
+        assert app.state['updates']['error'] == 'Synthetic update error.'
+        assert app.state['updates']['phase'] == 'error'  # Not a health/restart gate bypass.
+        await app.update_manager.publish(error='Synthetic update error.')
+        assert active(app.state)[0]['id'] == 'updates:error'
+        assert not app.state['updates'].get('applicationResult')
+    finally:
+        await app.close()

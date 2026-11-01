@@ -6,7 +6,7 @@ import {create} from 'react-test-renderer';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {AttentionBadge,AttentionReview,ActivityPanel,readItems,reviewItems,completionToRead}=await server.ssrLoadModule('/src/attention.jsx');
+const {AttentionBadge,AttentionReview,ActivityPanel,FailureDisposition,FailureDispositions,readItems,reviewItems,completionToRead}=await server.ssrLoadModule('/src/attention.jsx');
 const {FeedbackNotice}=await server.ssrLoadModule('/src/feedback.jsx');
 const {browserPreviewPolicy,BrowserPreview}=await server.ssrLoadModule('/src/canvas-library.jsx');
 const {WorkspaceRail:Rail}=await server.ssrLoadModule('/src/shell-panels.jsx');
@@ -122,6 +122,23 @@ test('bulk review is bounded and snapshots exact fingerprints without opening ch
  assert.deepEqual(calls.map(c=>c.args.ids.length),[500,500,101]);
  assert.ok(calls.every(c=>c.name==='attention.read'));
  assert.equal(calls[2].args.fingerprints['completion:1100'],'v1');
+});
+test('explicit disposition freezes the reviewed occurrence; read and new arrivals cannot approve it',async()=>{
+ let root;const calls=[],item={id:'updates:failure-overflow',title:'Additional update failures need review',detail:'Recovery is unverified.',occurrences:2,dispositionOccurrence:'old'};
+ const act=async(name,args)=>{calls.push({name,args});throw Error('Update failure changed; review the current occurrence.')};
+ await renderAct(async()=>{root=create(React.createElement(FailureDisposition,{item,act}))});
+ const button=text=>root.root.findAllByType('button').find(n=>n.children.includes(text));
+ await renderAct(async()=>button('Close unresolved notice').props.onClick());
+ await renderAct(async()=>root.update(React.createElement(FailureDisposition,{item:{...item,occurrences:3,dispositionOccurrence:'new'},act})));
+ await renderAct(async()=>button('Close with recovery unverified').props.onClick());
+ assert.deepEqual(calls,[{name:'updates.failureDisposition',args:{id:item.id,expectedOccurrence:'old',disposition:'acknowledged-uncertainty'}}]);
+ assert.match(root.root.findByProps({role:'alert'}).children[0],/changed/);
+ await renderAct(async()=>button('Cancel').props.onClick());
+ assert.equal(root.root.findAllByProps({'aria-label':'Confirm uncertainty disposition'}).length,0);
+ await renderAct(async()=>root.unmount());
+ assert.equal(render(FailureDisposition,{item:{id:'ordinary'},act}),'');
+ const history=render(FailureDispositions,{state:{updates:{diagnostics:{failureDispositions:[{id:'receipt',at:1,target:item.id,occurrences:2}]}}}});
+ assert.match(history,/Closed with recovery unverified/);assert.doesNotMatch(history,/Succeeded/);
 });
 test('finished response review excludes questions and errors and failures can be retried',async()=>{
  const items=[{id:'completion:a',fingerprint:'a',label:'First',title:'Response ready'},{id:'question:q',fingerprint:'q',title:'Answer needed'},{id:'provider-auth:p',fingerprint:'p',title:'Sign in',reviewable:false}];
