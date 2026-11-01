@@ -117,7 +117,10 @@ card/state/geometry/focus/capture/cleanup gaps are inconclusive. A smaller
 reproduction is not cause; non-reproduction does not qualify the full product.
 
 --focus-contrast uses /workspace/output/files1318-focus-contrast-manifest.json
-and /artifacts/files1318-focus-contrast. Bind focusContrastReuse=REUSE_BINDING,
+or /workspace/output/files1318-focus-contrast-settled-v2-manifest.json,
+and /artifacts/files1318-focus-contrast. The latter is a fresh source-bound
+manifest; retain check 21's settled-manifest.json unchanged, not overwritten.
+Bind focusContrastReuse=REUSE_BINDING,
 the same 23 reuseEvidence files, and focusContrastBefore=FOCUS_CONTRAST_BEFORE
 (accepted failed check 19 plus its original geometry baseline). Product/CSS
 must be byte-identical to retained pre-gap source. Two fresh sequential
@@ -179,6 +182,7 @@ NATIVE_STATE_MANIFEST = ROOT / 'output/files1318-native-state-manifest.json'
 PORTAL_HOST_MANIFEST = ROOT / 'output/files1318-portal-host-manifest.json'
 STATE_REDUCTION_MANIFEST = ROOT / 'output/files1318-state-reduction-manifest.json'
 FOCUS_CONTRAST_MANIFEST = ROOT / 'output/files1318-focus-contrast-manifest.json'
+FOCUS_CONTRAST_SETTLED_MANIFEST = ROOT / 'output/files1318-focus-contrast-settled-v2-manifest.json'
 HARNESS = OUT / 'harness'
 VENV = OUT / 'installed'
 DRIVER = 'scripts/files1318_integrated_checks.py'
@@ -408,7 +412,8 @@ def frozen_inputs(frozen, *, built=False):
                 and str(Path(name)) == name
                 and path not in (MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST,
                                  COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST, PORTAL_HOST_MANIFEST,
-                                 STATE_REDUCTION_MANIFEST, FOCUS_CONTRAST_MANIFEST), 'Unsafe frozen path')
+                                 STATE_REDUCTION_MANIFEST, FOCUS_CONTRAST_MANIFEST,
+                                 FOCUS_CONTRAST_SETTLED_MANIFEST), 'Unsafe frozen path')
         require(path.parent.resolve().is_relative_to(ROOT), 'Frozen path escapes snapshot')
         require(expected['mode'] in ('100644', '100755', '120000')
                 and re.fullmatch('[a-f0-9]{64}', expected['sha256']), 'Invalid frozen identity')
@@ -2823,7 +2828,8 @@ def main():
     parser.add_argument('--manifest', required=True, type=Path,
                         choices=[MANIFEST, CORNER_MANIFEST, CONTOUR_MANIFEST, TOUCH_EVENT_MANIFEST,
                                  COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST, PORTAL_HOST_MANIFEST,
-                                 STATE_REDUCTION_MANIFEST, FOCUS_CONTRAST_MANIFEST])
+                                 STATE_REDUCTION_MANIFEST, FOCUS_CONTRAST_MANIFEST,
+                                 FOCUS_CONTRAST_SETTLED_MANIFEST])
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--corner-diagnostic', action='store_true')
     modes.add_argument('--contour-qualification', action='store_true')
@@ -2849,7 +2855,9 @@ def main():
                      else TOUCH_EVENT_MANIFEST if args.touch_event_diagnostic
                      else COARSE_TOOLBAR_MANIFEST if args.coarse_toolbar_qualification
                      else CONTOUR_MANIFEST if args.contour_qualification else MANIFEST)
-    if args.manifest != manifest_path:
+    manifest_paths = ((FOCUS_CONTRAST_MANIFEST, FOCUS_CONTRAST_SETTLED_MANIFEST)
+                      if args.focus_contrast else (manifest_path,))
+    if args.manifest not in manifest_paths:
         parser.error('The manifest must match the selected qualification mode')
     select_output(CORNER_OUT if args.corner_diagnostic
                   else FOCUS_CONTRAST_OUT if args.focus_contrast
@@ -2906,7 +2914,7 @@ def main():
                 'Card/state/geometry/focus/capture/cleanup gap is inconclusive; '
                 'smaller reproduction is not cause, non-reproduction is not product acceptance.')
         if args.focus_contrast:
-            report.update(priorChecksConsumed=20)
+            report.update(priorChecksConsumed=21)
             report['limits'].append(
                 'Fresh sequential contexts over one immutable fixture. Only outside uses normal Shift+Tab to the visible '
                 'header Canvas toggle. No activation/focus repair; one primary tap each, no pointer rehearsal. '
