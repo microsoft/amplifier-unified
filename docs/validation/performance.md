@@ -152,6 +152,15 @@ agent reads or model context. Measure those boundaries separately.
 
 ## Agent preparation and tool reads
 
+Native checkpoint persistence and host notification are separate work. Save each
+required transcript checkpoint, but publish its bounded collaboration anchors only
+when their message/index/generation values change. A failed notification must not
+be remembered as sent; a new worker must establish its own first notification.
+`tests/test_host_session_resume.py` grows consecutive tool results while assistant
+anchors stay fixed, checks exact saved results, changed generation/message anchors,
+and notification failure/cancellation. The notification count must remain constant
+for unchanged anchors rather than causing a full host save for every tool result.
+
 `tests/test_agent_state_read_cost.py` grows retained question metadata while
 holding the requested state fixed. Agent reads share the directory's existing
 synchronous read frame across navigation, attention and workspace projection;
