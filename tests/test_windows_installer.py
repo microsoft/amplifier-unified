@@ -481,6 +481,58 @@ class WindowsInstallerSourceTests(unittest.TestCase):
         self.assertNotIn("Write-Host $output", child)
         self.assertNotIn("AppendAllText($script:InstallLog, $output", child)
 
+    def test_positive_child_probe_uses_validated_host_and_native_crt_argv(self):
+        fixture = FIXTURE.read_text(encoding="utf-8")
+        self.assertIn("    $probeHost = (Get-Command ", fixture)
+        self.assertIn("    # Atomic creation/owner DACL", fixture)
+        probe = fixture.split("    $probeHost = (Get-Command ", 1)[1].split(
+            "    # Atomic creation/owner DACL", 1,
+        )[0]
+        for required in (
+            "'pwsh.exe' -CommandType Application -ErrorAction Stop).Source",
+            "$probeFile = Join-Path $script:InstallWork 'crt-probe.ps1'",
+            "DllImportSearchPath.System32", 'DllImport("msvcrt.dll"',
+            'EntryPoint="__wgetmainargs"', "CallingConvention.Cdecl",
+            "GetMainArgs(out count, out argv, out env, 0, ref startup)",
+            "count < 6 || count > 64 || argv == IntPtr.Zero",
+            "Marshal.PtrToStringUni(Marshal.ReadIntPtr(argv, i * IntPtr.Size))",
+            "$raw = [OfflineCrt]::Read()",
+            "$raw[4] -cne $PSCommandPath", "$raw[5] -cne '--fixture-values'",
+            "values = @($raw | Select-Object -Skip 6)",
+            "[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)",
+            "Write-PrivateInstallText $probeFile $probe", "Assert-PrivateFileAcl $probeFile",
+            "Assert-FileChecksum $probeFile $probeHash",
+            "$fixtureStorage.TrustExecutable($probeHost)", "$fixtureStorage.Validate()",
+            "$probeEnvironment = @{ PSModulePath = Join-Path ([IO.Path]::GetDirectoryName($probeHost)) 'Modules' }",
+            "Invoke-InstallChild $probeHost (@('-NoProfile', '-NonInteractive', '-File', $probeFile, '--fixture-values') + $values) $probeEnvironment",
+            "Assert-Equal $observed.parser 'msvcrt.__wgetmainargs'",
+            "cwd = [Environment]::CurrentDirectory",
+            "Assert-Equal $observed.cwd $script:InstallWork",
+            "Assert-Equal $observed.globalConfig 'NUL'",
+            "Assert-Equal $observed.anonymous 'anonymous'",
+            "Assert-Equal $observed.tokenAbsent $true",
+            "for ($i = 0; $i -lt $values.Count; $i++) { Assert-Equal $observed.values[$i] $values[$i] }",
+            "Assert-Equal $env:GH_TOKEN $beforeToken",
+            "Assert-Equal $env:GIT_CONFIG_GLOBAL $beforeConfig",
+            "Assert-Equal $env:PATH $beforePath",
+            "Assert-Equal $env:PSModulePath $beforeModules",
+        ):
+            self.assertIn(required, probe)
+        launch = probe.index("Invoke-InstallChild $probeHost")
+        for security in (
+            "Write-PrivateInstallText $probeFile", "Assert-PrivateFileAcl $probeFile",
+            "Assert-FileChecksum $probeFile", "$fixtureStorage.TrustExecutable($probeHost)",
+            "$fixtureStorage.Validate()",
+        ):
+            self.assertLess(probe.index(security), launch)
+        self.assertLess(launch, probe.rindex("Assert-FileChecksum $probeFile"))
+        self.assertLess(launch, probe.rindex("$fixtureStorage.Validate()"))
+        self.assertNotIn("$PythonExecutable", probe)
+        self.assertNotIn("$args", probe)  # the oracle must bypass PS argument binding
+        self.assertNotIn("GetCommandLineArgs", probe)  # not CLR's argv either
+        self.assertNotIn("-ExecutionPolicy", probe)
+        self.assertNotRegex(probe, r"\$env:PSModulePath\s*=")
+
     def test_install_selects_managed_ordinary_313_without_native_fallback(self):
         main = self.function("Invoke-UnifiedInstall")
         self.assertIn("'python', 'install', '3.13', '--no-bin', '--no-registry'", main)

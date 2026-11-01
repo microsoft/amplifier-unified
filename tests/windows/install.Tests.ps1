@@ -317,18 +317,73 @@ try {
     Set-Acl -LiteralPath $appendShadow -AclObject $acl
     Assert-Refused { Invoke-InstallChild $appendShadow @('--version') @{} } 'Foreign mutation'
     Assert-Equal ([IO.File]::ReadAllText($canary)) 'outside remains unchanged'
-    # Use the invoking test interpreter to test CRT argv directly. Invoking
-    # powershell.exe -File would add that command's separate argument parser.
-    $probe = 'import json,os,sys; print(json.dumps(dict(values=sys.argv[1:],globalConfig=os.getenv("GIT_CONFIG_GLOBAL"),anonymous=os.getenv("AMPLIFIER_GITHUB_ACCESS"),tokenAbsent="GH_TOKEN" not in os.environ)))'
+    # The CI interpreter's external tool-cache traversal need not satisfy the
+    # bootstrap execution policy. Do not weaken that policy or copy an untrusted
+    # runtime into private storage. Select the already-required installed PS7
+    # host, then require the SAME validator to accept its absolute path below:
+    # discovery is NOT trust. Do not assume component-store system executables
+    # meet the validator's single-link rule. The private script's oracle reads
+    # native CRT argv, NOT either PowerShell edition's parsed script arguments.
+    $probeHost = (Get-Command 'pwsh.exe' -CommandType Application -ErrorAction Stop).Source
+    $probeFile = Join-Path $script:InstallWork 'crt-probe.ps1'
+    $probe = @'
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version 2.0
+[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class OfflineCrt {
+    [StructLayout(LayoutKind.Sequential)] struct Startup { public int newmode; }
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("msvcrt.dll", EntryPoint="__wgetmainargs", ExactSpelling=true,
+        CallingConvention=CallingConvention.Cdecl)]
+    static extern int GetMainArgs(out int count, out IntPtr argv, out IntPtr env,
+        int expandWildcards, ref Startup startup);
+    public static string[] Read() {
+        int count; IntPtr argv, env; var startup = new Startup();
+        if (GetMainArgs(out count, out argv, out env, 0, ref startup) != 0 ||
+            count < 6 || count > 64 || argv == IntPtr.Zero)
+            throw new InvalidOperationException("Native CRT argv unavailable.");
+        var values = new string[count];
+        for (int i=0; i<count; i++)
+            values[i] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(argv, i * IntPtr.Size));
+        return values;
+    }
+}
+"@
+$raw = [OfflineCrt]::Read()
+if ($raw[1] -cne '-NoProfile' -or $raw[2] -cne '-NonInteractive' -or
+    $raw[3] -cne '-File' -or $raw[4] -cne $PSCommandPath -or
+    $raw[5] -cne '--fixture-values') { throw 'Native CRT probe prefix mismatch.' }
+ConvertTo-Json -Compress -InputObject @{
+    parser = 'msvcrt.__wgetmainargs'; values = @($raw | Select-Object -Skip 6)
+    cwd = [Environment]::CurrentDirectory
+    globalConfig = $env:GIT_CONFIG_GLOBAL; anonymous = $env:AMPLIFIER_GITHUB_ACCESS
+    tokenAbsent = -not (Test-Path Env:GH_TOKEN)
+}
+'@
+    Write-PrivateInstallText $probeFile $probe
+    Assert-PrivateFileAcl $probeFile
+    $probeHash = (Get-FileHash -LiteralPath $probeFile -Algorithm SHA256).Hash.ToLowerInvariant()
+    Assert-FileChecksum $probeFile $probeHash
+    $fixtureStorage.TrustExecutable($probeHost)
+    $fixtureStorage.Validate()
+    # Both outer editions launch this same installed PS7 host. Restrict only THAT
+    # child's module search to its own built-ins; never edit the parent's env.
+    $probeEnvironment = @{ PSModulePath = Join-Path ([IO.Path]::GetDirectoryName($probeHost)) 'Modules' }
     $beforePath = $env:PATH
+    $beforeModules = $env:PSModulePath
     $beforeToken = $env:GH_TOKEN
     $beforeConfig = $env:GIT_CONFIG_GLOBAL
     try {
         $env:GH_TOKEN = 'synthetic-fixture-token'
         $env:GIT_CONFIG_GLOBAL = 'synthetic-user-config'
         $values = @('space value', ('unicode ' + [char]0x03B2), 'quote"value', 'trailing\', '')
-        $result = Invoke-InstallChild $PythonExecutable (@('-I', '-S', '-c', $probe) + $values) @{}
+        $result = Invoke-InstallChild $probeHost (@('-NoProfile', '-NonInteractive', '-File', $probeFile, '--fixture-values') + $values) $probeEnvironment
         $observed = $result | ConvertFrom-Json
+        Assert-Equal $observed.parser 'msvcrt.__wgetmainargs'
+        Assert-Equal $observed.cwd $script:InstallWork
         Assert-Equal $observed.globalConfig 'NUL'
         Assert-Equal $observed.anonymous 'anonymous'
         Assert-Equal $observed.tokenAbsent $true
@@ -341,6 +396,12 @@ try {
         $env:GH_TOKEN = $beforeToken
         $env:GIT_CONFIG_GLOBAL = $beforeConfig
     }
+    Assert-Equal $env:GH_TOKEN $beforeToken
+    Assert-Equal $env:GIT_CONFIG_GLOBAL $beforeConfig
+    Assert-Equal $env:PATH $beforePath
+    Assert-Equal $env:PSModulePath $beforeModules
+    Assert-FileChecksum $probeFile $probeHash
+    $fixtureStorage.Validate()
     if ([IO.File]::ReadAllText($script:InstallLog) -match 'synthetic-fixture-token') {
         throw 'Child credential reached log.'
     }
