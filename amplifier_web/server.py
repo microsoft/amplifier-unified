@@ -18,6 +18,7 @@ from .live_clients import client_context
 from .setup_page import detect_platform, render_setup_page
 from .tls import ca_bytes
 from .request_timing import request_timing
+from .static_files import BundledFileResponse, BundledStaticResource
 
 
 # These exact actions only observe revisions; they never admit the work being
@@ -788,11 +789,11 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         file = static / "index.html"
         if not file.exists():
             raise AppError("Frontend assets are missing. Build frontend before packaging.", 503)
-        return web.FileResponse(file)
+        return BundledFileResponse(file)
 
     app.router.add_get("/", index)
     if static.exists():
-        app.router.add_static("/", static, show_index=False)
+        app.router.register_resource(BundledStaticResource("", static, show_index=False))
 
     async def shutdown(app):
         service.begin_shutdown()
