@@ -1074,8 +1074,9 @@ class Collaboration:
         self.draining.add(sid)
         freed_return = False
         try:
-            self.resume_outcomes(sid)
-            rows = self.fair_rows(sid, active=self.service._session(sid).get('status') in BUSY)
+            async with self.service.lock:
+                self.resume_outcomes(sid)
+                rows = self.fair_rows(sid, active=self.service._session(sid).get('status') in BUSY)
             for identity, encoded in rows:
                 async with self.service.lock:
                     receipt = self.receipt(identity)
@@ -1174,7 +1175,8 @@ class Collaboration:
         if freed_return:
             # The newest outcome may have been backpressured by the old queued
             # return. Reuse the released slot now; no unrelated event is needed.
-            self.resume_outcomes(sid)
+            async with self.service.lock:
+                self.resume_outcomes(sid)
 
     def admission(self, sid, args):
         receipt = self.receipt(args["inputId"])
@@ -1552,7 +1554,12 @@ class Collaboration:
             uuid.NAMESPACE_URL, wait['continuationId'] + ':' + str(revision)))
 
     def enqueue_continuation(self, request):
-        """Commit at most one guarded input for a meaningful outcome revision."""
+        """Commit one guarded input; live callers hold the service writer lock.
+
+        Synchronous startup also uses this before requests are served. Never
+        enter from an unlocked background task: commit affects other savepoints
+        on the shared connection, including an awaited retained file write.
+        """
         wait = request['subscription']
         versioned = wait.get('notificationVersion') == 2
         # Recover only receipts identifiable as these retired implementation
@@ -2277,61 +2284,71 @@ class Collaboration:
             return
         self.creating.add(identity)
         try:
-            receipt = self.receipt(identity)
-            if receipt.get('delivery') not in {'creation_pending', 'created_initial_pending'}:
-                return
-            reason = self.creation_guard(receipt)
-            if reason:
-                self.end_creation(receipt, 'suppressed', reason)
-                return
-            if receipt.get('phase') not in {'planned', 'creating_root', 'root_retained'}:
-                self.end_creation(receipt, 'unknown', 'The preparation phase is unsupported. Retained effects were not replayed.', notify=True)
-                return
-            row = self.service.db.execute('SELECT configuration FROM collaboration_preparations WHERE request_id=?', (identity,)).fetchone()
-            if not row:
-                self.end_creation(receipt, 'unknown', 'The captured preparation plan is unavailable. Retained effects were not replayed.', notify=True)
-                return
-            config = json.loads(row[0])
-            if fingerprint(config) != receipt['result']['configurationHash']:
-                self.end_creation(receipt, 'unknown', 'The captured preparation plan changed. Retained effects were not replayed.', notify=True)
-                return
-            source = self.service._session(receipt['senderSessionId'])
-            args = {'title': receipt['title'], 'text': receipt['result']['brief'], 'references': receipt['result']['references']}
+            async with self.service.lock:
+                receipt = self.receipt(identity)
+                if receipt.get('delivery') not in {'creation_pending', 'created_initial_pending'}:
+                    return
+                reason = self.creation_guard(receipt)
+                if reason:
+                    self.end_creation(receipt, 'suppressed', reason)
+                    return
+                if receipt.get('phase') not in {'planned', 'creating_root', 'root_retained'}:
+                    self.end_creation(receipt, 'unknown', 'The preparation phase is unsupported. Retained effects were not replayed.', notify=True)
+                    return
+                row = self.service.db.execute('SELECT configuration FROM collaboration_preparations WHERE request_id=?', (identity,)).fetchone()
+                if not row:
+                    self.end_creation(receipt, 'unknown', 'The captured preparation plan is unavailable. Retained effects were not replayed.', notify=True)
+                    return
+                config = json.loads(row[0])
+                if fingerprint(config) != receipt['result']['configurationHash']:
+                    self.end_creation(receipt, 'unknown', 'The captured preparation plan changed. Retained effects were not replayed.', notify=True)
+                    return
+                source = self.service._session(receipt['senderSessionId'])
+                args = {'title': receipt['title'], 'text': receipt['result']['brief'], 'references': receipt['result']['references']}
             await self._finish_create(source, config, args, receipt['origin'], identity, receipt['sessionId'], receipt['result'])
         except asyncio.CancelledError:
             # Phases already precede effects; orderly shutdown need not destroy
             # the evidence required to resume a still-unperformed step.
             raise
         except BaseException as exc:
-            receipt = self.receipt(identity)
-            # A lost acknowledgment after the input transaction is not a lost
-            # operation. Keep its exact admitted/queued receipt untouched.
-            if receipt.get('phase') != 'input_committed':
-                receipt['errorType'] = type(exc).__name__
-                reason = self.creation_guard(receipt)
-                if reason:
-                    self.end_creation(receipt, 'suppressed', reason)
-                else:
-                    self.end_creation(receipt, 'unknown', 'Preparation did not confirm all effects. Inspect the retained operation; no effects were replayed.', notify=True)
+            async with self.service.lock:
+                receipt = self.receipt(identity)
+                # A lost acknowledgment after the input transaction is not a lost
+                # operation. Keep its exact admitted/queued receipt untouched.
+                if receipt.get('phase') != 'input_committed':
+                    receipt['errorType'] = type(exc).__name__
+                    reason = self.creation_guard(receipt)
+                    if reason:
+                        self.end_creation(receipt, 'suppressed', reason)
+                    else:
+                        self.end_creation(receipt, 'unknown', 'Preparation did not confirm all effects. Inspect the retained operation; no effects were replayed.', notify=True)
         finally:
             self.creating.discard(identity)
 
     async def _finish_create(self, source, config, args, origin, identity, new_id, metadata):
         values = {"id": new_id, "title": args["title"], "workspace": source["workspace"],
                   "bundle": config["bundle"], "select": False}
-        receipt = self.receipt(identity)
-        if receipt['phase'] == 'creating_root':
-            # Only a committed subordinate receipt establishes root creation;
-            # partial files or a matching-looking title do not prove completion.
-            row = self.service.db.execute('SELECT receipt FROM commands WHERE id=?', (identity + ':create',)).fetchone()
-            created = json.loads(row[0]) if row else {}
-            if created.get('sessionId') != new_id or not created.get('accepted'):
-                self.end_creation(receipt, 'unknown', 'Root creation has no committed acknowledgment. Existing files and history were retained without replay.', notify=True)
+        async with self.service.lock:
+            receipt = self.receipt(identity)
+            reason = self.creation_guard(receipt)
+            if reason:
+                self.end_creation(receipt, 'suppressed', reason)
                 return
-        elif receipt['phase'] == 'planned':
-            receipt['phase'] = 'creating_root'
-            self.save(identity, receipt)
-            self.service.db.commit()
+            create_root = False
+            if receipt['phase'] == 'creating_root':
+                # Only a committed subordinate receipt establishes root creation;
+                # partial files or a matching-looking title do not prove completion.
+                row = self.service.db.execute('SELECT receipt FROM commands WHERE id=?', (identity + ':create',)).fetchone()
+                created = json.loads(row[0]) if row else {}
+                if created.get('sessionId') != new_id or not created.get('accepted'):
+                    self.end_creation(receipt, 'unknown', 'Root creation has no committed acknowledgment. Existing files and history were retained without replay.', notify=True)
+                    return
+            elif receipt['phase'] == 'planned':
+                receipt['phase'] = 'creating_root'
+                self.save(identity, receipt)
+                self.service.db.commit()
+                create_root = True
+        if create_root:
             token = CREATION.set((source["id"], fingerprint(values), None, config, metadata))
             try:
                 await self.service.dispatch("session.create", values, origin, identity + ":create",
@@ -2339,6 +2356,7 @@ class Collaboration:
             finally:
                 CREATION.reset(token)
         async with self.service.lock:
+            receipt = self.receipt(identity)
             target = self.service._session(new_id)
             if (target.get('collaboration') != metadata or target['workspace'] != receipt['workspace']
                     or (target.get('workingDirectory') or target['workspace']) != metadata['workingDirectory']):

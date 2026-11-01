@@ -197,6 +197,7 @@ class TestQueue:
         return row
 
     def save(self, receipt):
+        """Publish queue state while the caller holds the app writer lock."""
         receipt['job']['updatedAt'] = time.time()
         self.app.collaboration.save(receipt['requestId'], receipt)
         self.app.db.commit()
@@ -467,18 +468,19 @@ class TestQueue:
                 self.tasks.pop(identity, None)
         from . import test_runner_enrollment
         test_runner_enrollment.schedule(self)
-        notifications = self.app.db.execute("""SELECT rowid,receipt FROM commands
-                WHERE json_extract(receipt,'$.commandAction')='workspace.tests.submit'
-                AND json_extract(receipt,'$.terminalOutcome.status')='observed'
-                AND json_extract(receipt,'$.subscription.status') IN ('waiting','backpressured')
-                AND rowid>? ORDER BY rowid LIMIT 64""", (self.notification_cursor,)).fetchall()
-        self.notification_cursor = notifications[-1][0] if notifications else 0
-        for _, encoded in notifications:
-            try:
-                self.app.collaboration.enqueue_continuation(json.loads(encoded))
-            except Exception:
-                # The saved result survives a temporarily unavailable inbox.
-                pass
+        async with self.app.lock:
+            notifications = self.app.db.execute("""SELECT rowid,receipt FROM commands
+                    WHERE json_extract(receipt,'$.commandAction')='workspace.tests.submit'
+                    AND json_extract(receipt,'$.terminalOutcome.status')='observed'
+                    AND json_extract(receipt,'$.subscription.status') IN ('waiting','backpressured')
+                    AND rowid>? ORDER BY rowid LIMIT 64""", (self.notification_cursor,)).fetchall()
+            self.notification_cursor = notifications[-1][0] if notifications else 0
+            for _, encoded in notifications:
+                try:
+                    self.app.collaboration.enqueue_continuation(json.loads(encoded))
+                except Exception:
+                    # The saved result survives a temporarily unavailable inbox.
+                    pass
         from .test_runner_routing import RoutingPass
         starting = self.app.db.execute("""SELECT id,json_extract(receipt,'$.job.backendKey'),
             json_extract(receipt,'$.senderSessionId'),json_extract(receipt,'$.job.resourceId'),
@@ -510,16 +512,20 @@ class TestQueue:
             if receipt['job']['status'] != 'queued':
                 self.tasks[identity] = asyncio.create_task(self.recover(identity))
                 continue
-            try:
-                if receipt['job'].get('expiresAt') is not None and receipt['job']['expiresAt'] <= time.time():
-                    self.finish(receipt, 'expired', 'The saved check expired while waiting for capacity. No environment was started.')
+            async with self.app.lock:
+                receipt = self.get(identity)
+                if receipt['job']['status'] != 'queued':
                     continue
-                config = self.guard(receipt)
-            except Exception as exc:
-                self.finish(receipt, 'cancelled', str(exc))
-                continue
-            if not self.chat_available(receipt) or self.admission.locked():
-                continue
+                try:
+                    if receipt['job'].get('expiresAt') is not None and receipt['job']['expiresAt'] <= time.time():
+                        self.finish(receipt, 'expired', 'The saved check expired while waiting for capacity. No environment was started.')
+                        continue
+                    config = self.guard(receipt)
+                except Exception as exc:
+                    self.finish(receipt, 'cancelled', str(exc))
+                    continue
+                if not self.chat_available(receipt) or self.admission.locked():
+                    continue
             choosing = bool(receipt['job'].get('runnerCandidates') and not receipt['job'].get('targetBound'))
             if choosing:
                 selected = await asyncio.to_thread(registered_runners.select, self.app, receipt['job'], config, runner_observations, self.backoff, routing)
@@ -626,124 +632,143 @@ class TestQueue:
     async def run(self, identity, config):
         try:
             async with self.admission:
-                receipt = self.get(identity)
-                if receipt['job']['status'] != 'queued':
-                    return
-                config = self.guard(receipt)
-                if not self.chat_available(receipt):
-                    return
-                if receipt['job'].get('targetBound') and not receipt['job'].get('resourceId') and not registered_runners.enabled(self.app, config):
-                    receipt['job'].pop('targetBound', None)
-                    receipt['job'].pop('testMachine', None)
-                    receipt['job']['backendKey'] = receipt['job']['runnerCandidates'][0]
-                    receipt['job']['detail'] = 'Waiting for an enabled test machine.'
-                    self.save(receipt)
-                    return
-                # tick shares one physical observation across this FIFO batch.
-                # The backend rechecks atomically immediately before launch.
-                job = receipt['job']
-                row = await asyncio.to_thread(environments.prepare, self.app.data_dir,
-                    receipt['senderSessionId'], next(w['id'] for w in self.app.state['workspaces'] if w['path']==receipt['workspace']),
-                    job['actor'], job['source'], job['backendKey'], identity+':start:'+str(job.get('attempt', 0)), config.get('installationId'), config, job.get('profileId', environments.PROFILE), job.get('resourceRequest'), job.get('timingRequest'))
-                # Cancellation may arrive while local allocation is persisted.
-                # Never overwrite the newer cancellation/subscription record.
-                receipt = self.get(identity)
-                job = receipt['job']
-                try:
-                    self.guard(receipt)
-                except Exception:
-                    environments.save(self.app.data_dir, row, status='retired', environmentState='not-started')
-                    job['resourceId'] = row['id']
-                    self.finish(receipt, 'cancelled', 'Cancelled before launch. The unused allocation was retired and local evidence retained.')
-                    return
-                job.update(resourceId=row['id'], status='starting')
-                self.save(receipt)
-            launch = await self.effect(receipt, config, 'start')
-            receipt = self.get(identity)
-            receipt['job']['launch'] = self.summary(launch)
-            if launch['state'] != 'completed':
-                if (launch.get('result') or {}).get('admissionDenied'):
-                    # Proven refusal before launch is retryable. Retire only
-                    # the unused logical allocation; its source stays on disk.
-                    row = environments.get(self.app.data_dir, receipt['senderSessionId'], job['resourceId'])
-                    environments.save(self.app.data_dir, row, status='retired')
-                    receipt['job'].pop('resourceId', None)
-                    receipt['job']['attempt'] = receipt['job'].get('attempt', 0)+1
-                    receipt['job']['status'] = 'queued'
-                    if receipt['job'].get('runnerCandidates'):
+                async with self.app.lock:
+                    receipt = self.get(identity)
+                    if receipt['job']['status'] != 'queued':
+                        return
+                    config = self.guard(receipt)
+                    if not self.chat_available(receipt):
+                        return
+                    if receipt['job'].get('targetBound') and not receipt['job'].get('resourceId') and not registered_runners.enabled(self.app, config):
                         receipt['job'].pop('targetBound', None)
                         receipt['job'].pop('testMachine', None)
                         receipt['job']['backendKey'] = receipt['job']['runnerCandidates'][0]
-                    if launch['result'].get('machineResources'):
-                        receipt['job']['capacity'] = {'available': False, 'machineResources': launch['result']['machineResources']}
+                        receipt['job']['detail'] = 'Waiting for an enabled test machine.'
+                        self.save(receipt)
+                        return
+                    # Capture preparation inputs under the owner lock, then let
+                    # local allocation and backend work run without holding it.
+                    job = receipt['job']
+                    workspace = next(w['id'] for w in self.app.state['workspaces'] if w['path'] == receipt['workspace'])
+                row = await asyncio.to_thread(environments.prepare, self.app.data_dir,
+                    receipt['senderSessionId'], workspace,
+                    job['actor'], job['source'], job['backendKey'], identity+':start:'+str(job.get('attempt', 0)), config.get('installationId'), config, job.get('profileId', environments.PROFILE), job.get('resourceRequest'), job.get('timingRequest'))
+                async with self.app.lock:
+                    # Cancellation may arrive while local allocation is persisted.
+                    # Never overwrite the newer cancellation/subscription record.
+                    receipt = self.get(identity)
+                    job = receipt['job']
+                    try:
+                        self.guard(receipt)
+                    except Exception:
+                        environments.save(self.app.data_dir, row, status='retired', environmentState='not-started')
+                        job['resourceId'] = row['id']
+                        self.finish(receipt, 'cancelled', 'Cancelled before launch. The unused allocation was retired and local evidence retained.')
+                        return
+                    job.update(resourceId=row['id'], status='starting')
                     self.save(receipt)
-                    return
-                if launch['state'] == 'failed':
-                    row = environments.get(self.app.data_dir, receipt['senderSessionId'], job['resourceId'])
-                    if not row.get('backendAdmitted') and not row.get('preparationPending'):
+            launch = await self.effect(receipt, config, 'start')
+            async with self.app.lock:
+                receipt = self.get(identity)
+                receipt['job']['launch'] = self.summary(launch)
+                if launch['state'] != 'completed':
+                    if (launch.get('result') or {}).get('admissionDenied'):
+                        # Proven refusal before launch is retryable. Retire only
+                        # the unused logical allocation; its source stays on disk.
+                        row = environments.get(self.app.data_dir, receipt['senderSessionId'], receipt['job']['resourceId'])
                         environments.save(self.app.data_dir, row, status='retired')
-                elif launch['state'] == 'outcome_unknown':
-                    await self.recover(identity)
-                    return
-                self.finish(receipt, 'unknown' if launch['state']=='outcome_unknown' else 'cancelled' if receipt['job'].get('cancelRequested') else 'failed',
-                    'Environment admission did not complete. Inspect its exact saved receipt; it was not retried.')
+                        receipt['job'].pop('resourceId', None)
+                        receipt['job']['attempt'] = receipt['job'].get('attempt', 0)+1
+                        receipt['job']['status'] = 'queued'
+                        if receipt['job'].get('runnerCandidates'):
+                            receipt['job'].pop('targetBound', None)
+                            receipt['job'].pop('testMachine', None)
+                            receipt['job']['backendKey'] = receipt['job']['runnerCandidates'][0]
+                        if launch['result'].get('machineResources'):
+                            receipt['job']['capacity'] = {'available': False, 'machineResources': launch['result']['machineResources']}
+                        self.save(receipt)
+                        return
+                    if launch['state'] == 'failed':
+                        row = environments.get(self.app.data_dir, receipt['senderSessionId'], receipt['job']['resourceId'])
+                        if not row.get('backendAdmitted') and not row.get('preparationPending'):
+                            environments.save(self.app.data_dir, row, status='retired')
+                    if launch['state'] != 'outcome_unknown':
+                        self.finish(receipt, 'cancelled' if receipt['job'].get('cancelRequested') else 'failed',
+                            'Environment admission did not complete. Inspect its exact saved receipt; it was not retried.')
+                        return
+            if launch['state'] == 'outcome_unknown':
+                await self.recover(identity)
                 return
             try:
-                self.guard(receipt)
-                receipt['job']['status'] = 'checking'
-                self.save(receipt)
+                async with self.app.lock:
+                    receipt = self.get(identity)
+                    receipt['job']['launch'] = self.summary(launch)
+                    self.guard(receipt)
+                    receipt['job']['status'] = 'checking'
+                    self.save(receipt)
                 check = await self.effect(receipt, config, 'execute')
             except Exception as exc:
                 check = {'state': 'cancelled', 'message': str(exc)}
-            row = environments.get(self.app.data_dir, receipt['senderSessionId'], receipt['job']['resourceId'])
-            if receipt['job'].get('durableVersion') == 1 and row.get('durableJob'):
+            async with self.app.lock:
+                receipt = self.get(identity)
+                row = environments.get(self.app.data_dir, receipt['senderSessionId'], receipt['job']['resourceId'])
+                durable = receipt['job'].get('durableVersion') == 1 and row.get('durableJob')
+                if not durable:
+                    receipt['job'].update(check=self.summary(check), status='stopping')
+                    self.save(receipt)
+            if durable:
                 return await self.monitor(identity, config, check)
-            receipt = self.get(identity)
-            receipt['job'].update(check=self.summary(check), status='stopping')
-            self.save(receipt)
             await self.cleanup(receipt, config)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             log.exception('Queued check lifecycle interrupted; reconciling its recorded effects')
-            receipt = self.get(identity)
-            if receipt['job'].get('resourceId'):
-                # A failure between saving an effect and saving the queue's
-                # next phase must still reconcile the owned environment.
-                await self.recover(identity)
-                return
-            if receipt['job']['status'] == 'queued' and not self.chat_available(receipt):
-                return
-            status = 'failed' if receipt['job']['status'] == 'queued' else 'unknown'
-            self.finish(receipt, status, 'The test lifecycle did not complete: '+str(exc)[:500]+'. No uncertain effect will be replayed.')
+            async with self.app.lock:
+                receipt = self.get(identity)
+                if not receipt['job'].get('resourceId'):
+                    if receipt['job']['status'] == 'queued' and not self.chat_available(receipt):
+                        return
+                    status = 'failed' if receipt['job']['status'] == 'queued' else 'unknown'
+                    self.finish(receipt, status, 'The test lifecycle did not complete: '+str(exc)[:500]+'. No uncertain effect will be replayed.')
+                    return
+            # A failure between saving an effect and saving the queue's next
+            # phase must still reconcile the owned environment outside the lock.
+            await self.recover(identity)
 
     async def cleanup(self, receipt, config, *, recovery=False):
         identity = receipt['requestId']
-        row = environments.get(self.app.data_dir, receipt['senderSessionId'], receipt['job']['resourceId'])
+        async with self.app.lock:
+            receipt = self.get(identity)
+            row = environments.get(self.app.data_dir, receipt['senderSessionId'], receipt['job']['resourceId'])
         if not row.get('backendAdmitted') or row.get('guestRemoved') or row.get('environmentState') == 'stopped':
             cleanup = {'state': 'completed', 'message': 'Observed no running owned environment.'}
         else:
             cleanup = await self.effect(receipt, config, 'stop', cleanup=True,
                 suffix='recovery-stop' if recovery else None)
-        receipt = self.get(identity)
-        receipt['job']['cleanup'] = self.summary(cleanup)
-        if cleanup['state'] != 'completed':
-            self.finish(receipt, 'unknown', 'Check finished, but stopping its environment was not confirmed. Evidence and ownership are retained; inspect before further cleanup.')
-        else:
+        async with self.app.lock:
+            receipt = self.get(identity)
+            receipt['job']['cleanup'] = self.summary(cleanup)
+            if cleanup['state'] != 'completed':
+                self.finish(receipt, 'unknown', 'Check finished, but stopping its environment was not confirmed. Evidence and ownership are retained; inspect before further cleanup.')
+                return
             receipt['job']['status'] = 'removing'
             self.save(receipt)
-            removal = await self.effect(receipt, config, 'remove', cleanup=True)
+        removal = await self.effect(receipt, config, 'remove', cleanup=True)
+        async with self.app.lock:
             receipt = self.get(identity)
-            if (removal['state'] == 'failed' and removal.get('result', {}).get('effectAdmitted') is False
-                    and removal['result'].get('phase') in {'preserving', 'verifying'}
-                    and removal['result'].get('code') in {'preservation_failed', 'archive_verification_failed'}):
+            preserve = (removal['state'] == 'failed' and removal.get('result', {}).get('effectAdmitted') is False
+                        and removal['result'].get('phase') in {'preserving', 'verifying'}
+                        and removal['result'].get('code') in {'preservation_failed', 'archive_verification_failed'})
+            if preserve:
                 # A definitive pre-teardown failure permits the separately
                 # recorded preservation path, never replay of an unknown effect.
                 receipt['job']['previousRemoval'] = self.summary(removal)
                 self.save(receipt)
-                removal = await self.effect(receipt, config, 'finishCleanup', cleanup=True,
-                    previous_request=removal['requestId'])
-                receipt = self.get(identity)
+        if preserve:
+            removal = await self.effect(receipt, config, 'finishCleanup', cleanup=True,
+                previous_request=removal['requestId'])
+        async with self.app.lock:
+            receipt = self.get(identity)
             receipt['job']['removal'] = self.summary(removal)
             if removal['state'] != 'completed':
                 self.finish(receipt, 'unknown', 'The environment is stopped, but evidence export or removal was not confirmed. Its retained files and exact ownership remain available.')
@@ -770,9 +795,10 @@ class TestQueue:
     async def _monitor(self, identity, config, check, event):
         errors = 0
         while True:
-            receipt = self.get(identity)
-            row = environments.get(self.app.data_dir, receipt['senderSessionId'], receipt['job']['resourceId'])
-            observed = check is None or receipt['job'].get('cancelRequested')
+            async with self.app.lock:
+                receipt = self.get(identity)
+                row = environments.get(self.app.data_dir, receipt['senderSessionId'], receipt['job']['resourceId'])
+                observed = check is None or receipt['job'].get('cancelRequested')
             if observed:
                 try:
                     check = await asyncio.to_thread(environments.observe_job, self.app, row, config,
@@ -781,31 +807,35 @@ class TestQueue:
                 except Exception as exc:
                     errors += 1
                     if errors >= 3:
-                        self.finish(self.get(identity), 'unknown', 'The durable guest could not be observed: '+str(exc)[:300]+'. Its environment and evidence are preserved; no command or cleanup was replayed.')
+                        async with self.app.lock:
+                            self.finish(self.get(identity), 'unknown', 'The durable guest could not be observed: '+str(exc)[:300]+'. Its environment and evidence are preserved; no command or cleanup was replayed.')
                         return
                     await asyncio.sleep(1)
                     continue
             guest = check.get('result', {}).get('job', {})
             if observed and not guest:
-                self.finish(self.get(identity), 'unknown', 'The backend returned no durable guest receipt. The environment is preserved; no command or cleanup was repeated.')
+                async with self.app.lock:
+                    self.finish(self.get(identity), 'unknown', 'The backend returned no durable guest receipt. The environment is preserved; no command or cleanup was repeated.')
                 return
-            receipt = self.get(identity)
-            summary = self.summary(check)
-            changed = receipt['job'].get('check') != summary
-            receipt['job']['check'] = summary
-            if guest:
-                compact = {key: guest[key] for key in ('id', 'state', 'terminal', 'startedAt', 'finishedAt', 'cancelRequested', 'reason') if key in guest}
-                changed |= receipt['job'].get('guestJob') != compact
-                receipt['job']['guestJob'] = compact
-            if changed:
-                self.save(receipt)
+            async with self.app.lock:
+                receipt = self.get(identity)
+                summary = self.summary(check)
+                changed = receipt['job'].get('check') != summary
+                receipt['job']['check'] = summary
+                if guest:
+                    compact = {key: guest[key] for key in ('id', 'state', 'terminal', 'startedAt', 'finishedAt', 'cancelRequested', 'reason') if key in guest}
+                    changed |= receipt['job'].get('guestJob') != compact
+                    receipt['job']['guestJob'] = compact
+                if changed:
+                    self.save(receipt)
+                if guest.get('terminal') is True:
+                    receipt['job']['status'] = 'stopping'
+                    self.save(receipt)
+                elif guest.get('state') == 'unknown':
+                    self.finish(receipt, 'unknown', guest.get('reason', 'The exact guest job is unverified.')+' Its environment is preserved; the command and cleanup were not repeated.')
+                    return
             if guest.get('terminal') is True:
-                receipt['job']['status'] = 'stopping'
-                self.save(receipt)
                 await self.cleanup(receipt, config)
-                return
-            if guest.get('state') == 'unknown':
-                self.finish(receipt, 'unknown', guest.get('reason', 'The exact guest job is unverified.')+' Its environment is preserved; the command and cleanup were not repeated.')
                 return
             # The start acknowledgement may have been lost after guest commit.
             # Observe the exact reserved identity, never call execute again.
@@ -818,40 +848,50 @@ class TestQueue:
 
     async def recover(self, identity):
         """Reconcile the exact owner and complete cleanup; never rerun the check."""
-        receipt = self.get(identity)
         try:
-            active, _, _ = environments.configuration(self.app)
-            row = environments.get(self.app.data_dir, receipt['senderSessionId'], receipt['job']['resourceId'])
-            if row.get('guestRemoved') and row.get('preparationPending'):
-                retained = environments.resolve_configuration(self.app, row, active)
+            async with self.app.lock:
+                receipt = self.get(identity)
+                active, _, _ = environments.configuration(self.app)
+                row = environments.get(self.app.data_dir, receipt['senderSessionId'], receipt['job']['resourceId'])
+                preparing = row.get('guestRemoved') and row.get('preparationPending')
+                if preparing:
+                    retained = environments.resolve_configuration(self.app, row, active)
+            if preparing:
                 row = await asyncio.to_thread(environments.resume_preparation_removal, self.app, row, retained)
-            if row['status'] == 'retired':
-                self.restore_operations(receipt)
-                check = receipt['job'].get('check', {})
-                removal = receipt['job'].get('removal', {})
-                status = {'completed': 'passed', 'failed': 'failed'}.get(check.get('state'), 'unknown') if removal.get('state') == 'completed' else 'unknown'
-                self.finish(receipt, 'cancelled' if receipt['job'].get('cancelRequested') else status,
-                    'Recovered the recorded check and cleanup results. The owned environment is removed; no command was replayed.')
-                return
-            config = environments.resolve_configuration(self.app, row, active)
-            if (receipt['job'].get('durableVersion') == 1 and row.get('durableJob')
-                    and receipt['job']['status'] not in {'stopping', 'removing'}):
+            async with self.app.lock:
+                receipt = self.get(identity)
+                row = environments.get(self.app.data_dir, receipt['senderSessionId'], row['id'])
+                active, _, _ = environments.configuration(self.app)
+                if row['status'] == 'retired':
+                    self.restore_operations(receipt)
+                    check = receipt['job'].get('check', {})
+                    removal = receipt['job'].get('removal', {})
+                    status = {'completed': 'passed', 'failed': 'failed'}.get(check.get('state'), 'unknown') if removal.get('state') == 'completed' else 'unknown'
+                    self.finish(receipt, 'cancelled' if receipt['job'].get('cancelRequested') else status,
+                        'Recovered the recorded check and cleanup results. The owned environment is removed; no command was replayed.')
+                    return
+                config = environments.resolve_configuration(self.app, row, active)
+                durable = (receipt['job'].get('durableVersion') == 1 and row.get('durableJob')
+                           and receipt['job']['status'] not in {'stopping', 'removing'})
+            if durable:
                 await self.monitor(identity, config)
                 return
             # read reconciles any prior abandoned pendingRequest and physical
             # state. It never starts an environment or installs source again.
             await asyncio.to_thread(environments.read, self.app, receipt['senderSessionId'], active)
-            receipt = self.get(identity)
-            self.restore_operations(receipt)
-            row = environments.get(self.app.data_dir, receipt['senderSessionId'], row['id'])
-            if row.get('environmentState') not in {'running', 'stopped', 'unknown', 'not-started'}:
-                raise ValueError('The exact environment has not reached a cleanup boundary.')
-            receipt['job'].setdefault('check', {'state': 'outcome_unknown',
-                'message': 'The interrupted lifecycle has no recorded check result; no check command was replayed.'})
-            self.save(receipt)
+            async with self.app.lock:
+                receipt = self.get(identity)
+                self.restore_operations(receipt)
+                row = environments.get(self.app.data_dir, receipt['senderSessionId'], row['id'])
+                if row.get('environmentState') not in {'running', 'stopped', 'unknown', 'not-started'}:
+                    raise ValueError('The exact environment has not reached a cleanup boundary.')
+                receipt['job'].setdefault('check', {'state': 'outcome_unknown',
+                    'message': 'The interrupted lifecycle has no recorded check result; no check command was replayed.'})
+                self.save(receipt)
             await self.cleanup(receipt, config, recovery=True)
         except Exception as exc:
-            self.finish(self.get(identity), 'unknown', 'Recovery could not confirm cleanup: '+str(exc)[:500]+'. All evidence and ownership remain retained; no command was replayed.')
+            async with self.app.lock:
+                self.finish(self.get(identity), 'unknown', 'Recovery could not confirm cleanup: '+str(exc)[:500]+'. All evidence and ownership remain retained; no command was replayed.')
 
     def restore_operations(self, receipt):
         for phase, operation in (('check', 'execute'), ('cleanup', 'stop'), ('removal', 'remove'), ('removal', 'finishCleanup')):
