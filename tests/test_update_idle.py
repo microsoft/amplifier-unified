@@ -70,8 +70,16 @@ async def test_finished_configuration_inspection_does_not_block_staged_update(pr
 
 async def test_ready_during_cold_start_send_keeps_admitted_turn_protected(prepared, monkeypatch):
     service, manager = prepared
-    entered, deliver = asyncio.Event(), asyncio.Event()
+    entered, deliver, ready = asyncio.Event(), asyncio.Event(), asyncio.Event()
     original = service.runtime._request
+    original_emit = service.on_runtime_event
+
+    async def observe(kind, payload):
+        await original_emit(kind, payload)
+        if kind == 'runtime.status' and payload.get('status') == 'ready':
+            ready.set()
+
+    monkeypatch.setattr(service, 'on_runtime_event', observe)
 
     async def before_send(sid, op, **kwargs):
         # Background setup can also issue requests. Hold only the accepted
@@ -85,6 +93,9 @@ async def test_ready_during_cold_start_send_keeps_admitted_turn_protected(prepar
     send = asyncio.create_task(service.dispatch('conversation.send', {'text': 'Accepted work'}))
     try:
         await asyncio.wait_for(entered.wait(), 3)
+        # Worker readiness releases its future before publishing host status.
+        # Observe that publication explicitly instead of racing the scheduler.
+        await asyncio.wait_for(ready.wait(), 3)
         assert service._session()['status'] == 'ready'
         assert manager.busy()
         target = AsyncMock(side_effect=AssertionError('must not replace a busy host'))
