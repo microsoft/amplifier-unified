@@ -85,7 +85,7 @@ const report={
   actionRecords:80,
  },
  limitations:[
-  'One synthetic chat message uses the fixture runtime; no provider is configured or contacted.',
+  'One synthetic chat message uses the fixture runtime; no live provider is configured or contacted.',
   'The optional question is cancelled after inspection; no question answer is submitted.',
   'Saved screenshots require separate pixel review; this script records browser state and geometry.',
   'Chromium forced-colors is emulated and is not a native operating-system check.',
@@ -136,6 +136,7 @@ const inspect=async(pane,questionId)=>pane.evaluate((el,id)=>{
    activeFocusVisible:!!active?.matches?.(':focus-visible'),
    activeInsidePane:!!active&&el.contains(active),
    activeTextarea:active instanceof HTMLTextAreaElement,
+   activeIframe:active instanceof HTMLIFrameElement,
    activeEditable:!!active?.matches?.('input:focus, textarea:focus, select:focus, [contenteditable]:focus, iframe:focus'),
    paneFocused:document.activeElement===el,
    paneFocusVisible:el.matches(':focus-visible'),
@@ -470,12 +471,65 @@ try{
  assert.equal(historyFocus.focus.activeInsidePane,false,'History disclosure focus is outside the transcript scroller');
  assert.equal(historyFocus.mask.standard,historyMaskBefore.mask.standard,'History-summary focus does not alter transcript masking');
 
+ // Use the fixture's real saved HTML artifact and pinned question review, not
+ // an injected frame. Its sandbox has a single interactive button.
+ await page.locator('[data-part="dialog"]').getByRole('button',{name:'Close panel',exact:true}).click();
+ await expect(page.locator('[data-part="dialog"]')).toHaveCount(0);
+ const reviewResponse=await page.request.post(ready.url+'/fixture/reviews');
+ assert.equal(reviewResponse.status(),200,await reviewResponse.text());
+ const reviewFixture=await reviewResponse.json();
+ const reviewQuestion=pane.locator(`[data-question-id="${reviewFixture.question.id}"]`);
+ const htmlReview=reviewQuestion.locator('.a-compact-artifact').nth(1);
+ await htmlReview.getByRole('button',{name:/^Preview here:/}).click();
+ const iframe=htmlReview.locator('iframe'),inner=htmlReview.frameLocator('iframe');
+ await expect(iframe).toHaveAttribute('sandbox','allow-scripts');
+ await expect(inner.getByRole('heading',{name:'HTML mockup v1',exact:true})).toBeVisible();
+ const innerControl=inner.getByRole('button',{name:'Try mockup',exact:true});
+ await innerControl.click();
+ await expect(inner.locator('#value')).toHaveText('1');
+ const iframePointer=await record('question-review-iframe-pointer',pane,reviewFixture.question.id);
+ assert.equal(iframePointer.focus.activeIframe,true,'Inner pointer focus is represented by the real host iframe');
+ assert.equal(iframePointer.focus.activeInsidePane,true);
+ assert.equal(iframePointer.focus.activeEditable,true,'The shared editor guard includes focused review iframes');
+ assert.equal(maskActive(iframePointer),false,'Interactive iframe pointer focus suppresses transcript masking');
+ // Traverse out and back with the keyboard; host focus-visible alone cannot
+ // describe focus on a control in an opaque-origin sandbox.
+ await page.keyboard.press('Tab');await page.keyboard.press('Shift+Tab');
+ await expect(innerControl).toBeFocused();
+ const innerFocus=await innerControl.evaluate(element=>({
+  active:document.activeElement===element,focusVisible:element.matches(':focus-visible'),
+  outlineStyle:getComputedStyle(element).outlineStyle,
+  outlineWidth:parseFloat(getComputedStyle(element).outlineWidth),
+ }));
+ assert.equal(innerFocus.active,true);assert.equal(innerFocus.focusVisible,true);
+ assert.notEqual(innerFocus.outlineStyle,'none');assert.ok(innerFocus.outlineWidth>0);
+ // Retain actual overflow while the inner control remains focused, so an
+ // unmasked result cannot pass merely because the transcript reached its end.
+ for(let index=0;index<4&&(await readState()).geometry.remaining<=1;index++)await wheelAtPane(-400);
+ const iframeKeyboard=await record('question-review-iframe-keyboard',pane,reviewFixture.question.id);
+ report.focus.at(-1).inner=innerFocus;
+ assert.equal(iframeKeyboard.focus.activeIframe,true);
+ assert.equal(iframeKeyboard.focus.activeInsidePane,true);
+ assert.ok(iframeKeyboard.geometry.remaining>1,'Iframe focus check exercises actual bottom overflow');
+ assert.equal(iframeKeyboard.overflow.below,'true');
+ assert.equal(maskActive(iframeKeyboard),false,'Inner keyboard controls remain fully unmasked');
+ const iframeScroll=iframeKeyboard.geometry.scrollTop;
+ await composer.evaluate(element=>element.focus({preventScroll:true}));
+ await expect(composer).toBeFocused();await settled();
+ const iframeBlurred=await record('question-review-iframe-blurred',pane,reviewFixture.question.id);
+ assert.equal(iframeBlurred.focus.activeInsidePane,false);
+ assert.ok(Math.abs(iframeBlurred.geometry.scrollTop-iframeScroll)<=1,'Leaving the iframe preserves the transcript position');
+ assert.equal(iframeBlurred.overflow.below,'true');
+ assertMasked(iframeBlurred,'Leaving the real iframe restores the shared overflow mask');
+ await expect(inner.locator('#value')).toHaveText('1','The iframe retains its local state after focus traversal');
+
  const final=await fixtureCheck();
  report.question.answerSubmitted=report.question.answerRequests.length>0;
  assert.deepEqual(report.question.answerRequests,[],'The regression never submits a question answer');
  assert.equal(final.sent.length,1,'Only the synthetic ordinary chat message reaches the fixture runtime');
  assert.equal(final.sent[0].text,ordinaryText);
  assert.equal(final.retries.length,0,'The synthetic fixture performs no retries');
+ assert.equal(final.networkAttempts,0,'The real HTML review sandbox does not reach its network probe');
  assert.equal(final.questions.find(row=>row.id===created.id)?.status,'cancelled',
   'The optional synthetic question is cancelled without an answer');
  assert.deepEqual(report.browserErrors,[],'Production page has no uncaught errors');
@@ -529,6 +583,7 @@ try{
   checks:{questionPointerFocus:report.focus.some(row=>row.label==='after-pointer-review'),
    keyboardFocus:report.focus.some(row=>row.label==='after-keyboard-review'),
    editorFocus:report.focus.some(row=>row.label==='question-textarea-editing'),
+   iframeFocus:report.focus.some(row=>row.label==='question-review-iframe-keyboard'),
    historySummary:report.focus.some(row=>row.label==='question-history-summary-keyboard')},
   screenshots:report.screenshots.map(row=>row.file),
   fixtureClose:report.fixture.close,fixtureShutdown:report.fixture.shutdown,
