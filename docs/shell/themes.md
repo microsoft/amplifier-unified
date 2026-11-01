@@ -239,6 +239,14 @@ informed those materials, not sampled color values or copied imagery. Functional
 accent colors are readability adaptations. A reference does not replace contrast
 measurements and rendered review in either scheme.
 
+Breadbin is a static, home-computer-inspired appearance with warm ivory casing
+and deep violet accents in light mode, a blue-violet conversation screen and
+smoked casing in dark mode, and an optional four-color header edge. It uses
+system UI text and readable monospace conversation, not a bundled retro font.
+Keycap depth is paint only; pressed controls keep their dimensions. Message
+actions stay outside the bubble bodies, and transcript fades remain host-owned.
+Adding the bundled entry does not apply it or replace saved personal versions.
+
 For a bundled appearance change, keep qualification focused: confirm the packaged
 CSS and metadata load unchanged, preview the actual host in both schemes and a
 narrow layout, check decorations/reduced motion/forced colors and essential
