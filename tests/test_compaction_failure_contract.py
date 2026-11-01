@@ -13,6 +13,7 @@ from amplifier_web.session_health import generation_failure
     'request_context_unavailable', 'invalid_native_contract',
     'authoritative_measurement_unavailable', 'summary_output_limit', 'summary_empty',
     'previous_failure', 'summary_failed', 'native_failed',
+    'native_recovery_required_context_oversized', 'checkpoint_persist_failed',
 ])
 def test_real_compaction_error_reaches_app_without_private_payload(code):
     errors = pytest.importorskip('amplifier_module_context_managed.errors')
