@@ -179,7 +179,7 @@ test('overflow reporting leaves submitted anchors, call following and reading in
  h.controller.dispose();
 });
 
-test('shared mask uses bounded edge fades, focus/forced-color suppression and an additive measured gutter',()=>{
+test('shared mask uses bounded fades, modality-aware focus suppression and an additive measured gutter',()=>{
  assert.notEqual(maskStart,-1,'shared transcript mask block exists');
  assert.notEqual(maskEnd,-1,'mask block ends before navigator styling');
  assert.match(maskCss,/--a-transcript-fade-top,\s*18px/);
@@ -188,8 +188,17 @@ test('shared mask uses bounded edge fades, focus/forced-color suppression and an
  assert.match(maskCss,/min\(clamp\(0px,\s*var\(--a-transcript-fade-bottom,\s*24px\),\s*48px\),\s*50%\)/);
  assert.match(maskCss,/data-overflow-above=true\]\[data-overflow-below=true/);
  assert.match(maskCss,/data-overflow-above=true\]:not\(\[data-overflow-below=true\]\)\{\s*--_a-transcript-edge-mask:linear-gradient\(to bottom,\s*transparent 0,\s*black var\(--_a-transcript-fade-top\),\s*black 100%\)/);
- assert.match(maskCss,/not\(:focus-within\)/);
  assert.match(maskCss,/@media\(forced-colors:active\)/);
+ const normalFocusStart=maskCss.indexOf('/* Keep text readable for keyboard-visible controls');
+ const forcedColorsStart=maskCss.indexOf('@media(forced-colors:active)',normalFocusStart);
+ const selectors=section=>section.match(/^[ \t]*#amp-one \.a-messages\[data-overflow-(?:above|below)=true\].*$/gm)?.map(row=>row.trim())||[];
+ const normalFocusSelectors=selectors(maskCss.slice(normalFocusStart,forcedColorsStart));
+ const forcedFocusSelectors=selectors(maskCss.slice(forcedColorsStart));
+ assert.equal(normalFocusSelectors.length,2,'Both overflow edges use a focus guard');
+ assert.ok(normalFocusSelectors.every(selector=>/:not\(:focus-visible\):not\(:has\(:focus-visible,\s*input:focus,\s*textarea:focus,\s*select:focus,\s*\[contenteditable\]:focus,\s*iframe:focus\)\)/.test(selector)),
+  'Keyboard-visible descendants and active editors keep the transcript unmasked');
+ assert.deepEqual(forcedFocusSelectors,normalFocusSelectors,'Forced-colors suppression matches the mask selector specificity');
+ assert.doesNotMatch(maskCss,/:focus-within/,'Non-visible container focus alone does not suppress both fades');
  assert.match(maskCss,/mask-composite:add!important/);
  assert.match(maskCss,/linear-gradient\(to right,\s*black 0,\s*black var\(--_a-transcript-gutter-left,0px\)/);
  assert.match(maskCss,/Overlay scrollbars expose no layout gutter/);
