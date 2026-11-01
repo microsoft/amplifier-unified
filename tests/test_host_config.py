@@ -1,4 +1,5 @@
 """Standalone settings migration and loop policy contracts."""
+import copy
 import json
 import os
 from pathlib import Path
@@ -183,6 +184,33 @@ class HostSettingsTests(unittest.TestCase):
         self.assertTrue(config['archive_recovery'])
         self.assertTrue(config['durable_checkpoints'])
         self.assertNotIn('archive_recovery', original['session']['context']['config'])
+
+    def test_default_boundary_context_gets_host_checkpoint_policy(self):
+        for context in ('context-managed', {'module': 'context-managed'},
+                        {'module': 'context-managed', 'config': {}}):
+            with self.subTest(context=context):
+                original = {'session': {'orchestrator': 'loop-live', 'context': context},
+                    'agents': {'worker': {'session': {'orchestrator': 'loop-streaming',
+                        'context': context}}}}
+                before = copy.deepcopy(original)
+                adapted, _ = live_plan(original)
+                for session in (adapted['session'], adapted['agents']['worker']['session']):
+                    self.assertTrue(session['context']['config']['durable_checkpoints'])
+                    self.assertTrue(session['context']['config']['archive_recovery'])
+                    self.assertNotIn('engine', session['context']['config'])
+                self.assertEqual(original, before)
+
+    def test_boundary_policy_preserves_opt_out_and_invalid_engine(self):
+        for config in ({'durable_checkpoints': False, 'archive_recovery': False},
+                       {'engine': 'boundary', 'durable_checkpoints': False, 'archive_recovery': False}):
+            adapted, _ = live_plan({'session': {'orchestrator': 'loop-live',
+                'context': {'module': 'context-managed', 'config': config}}})
+            self.assertEqual(adapted['session']['context']['config'], config)
+        for engine in (None, False, '', 'legacy', 'unknown'):
+            original = {'session': {'orchestrator': 'loop-live',
+                'context': {'module': 'context-managed', 'config': {'engine': engine}}}}
+            adapted, _ = live_plan(original)
+            self.assertEqual(adapted['session']['context'], original['session']['context'])
 
     def test_imported_queued_receipt_is_history_not_replay(self):
         rows=[{'role':'tool','tool_call_id':'c','content':json.dumps({'status':'queued','call_id':'c','job_id':'j'})}]
