@@ -173,7 +173,7 @@ try{
   for(let node=el;node;node=node.parentElement){
    if(contexts.length>=24)throw Error('Paint ancestry exceeded bounded inspection');
    const v=getComputedStyle(node);
-   contexts.push({node:name(node),opacity:v.opacity,filter:v.filter,blend:v.mixBlendMode});
+   contexts.push({node:name(node),hover:node.matches(':hover'),opacity:v.opacity,filter:v.filter,blend:v.mixBlendMode});
    const box=node.getBoundingClientRect();
    const headerStripeClear=node.matches('[data-part="header"]')&&
     v.backgroundImage.startsWith('linear-gradient(')&&v.backgroundSize==='100% 3px'&&
@@ -185,18 +185,33 @@ try{
   }
   return {node:name(el),color:s.color,stroke:s.stroke,background:s.backgroundColor,font:s.fontFamily,fontSize:s.fontSize,
    outline:s.outlineColor,outlineWidth:parseFloat(s.outlineWidth),outlineOffset:parseFloat(s.outlineOffset),
-   outlineStyle:s.outlineStyle,focusVisible:el.matches(':focus-visible'),ancestors,contexts};
+   outlineStyle:s.outlineStyle,focusVisible:el.matches(':focus-visible'),
+   hoverWithin:el.matches(':hover')||!!el.querySelector(':hover'),ancestors,contexts};
  });
  const contrast=async(locator,label)=>{
-  const sample=await paint(locator);
-  for(const row of sample.contexts){
-   assert.equal(Number(row.opacity),1,label+': unqualified group opacity at '+row.node);
-   assert.equal(row.filter,'none',label+': unqualified filtered paint at '+row.node);
-   assert.equal(row.blend,'normal',label+': unqualified blended paint at '+row.node);
+  let sample,background,pointerParking;
+  try{
+   // click() leaves the real pointer over Brief (or a nested button leaf).
+   // Native button:hover applies brightness(.97) to the whole painted group,
+   // not the resolved color values. Measure the non-hover baseline instead.
+   pointerParking=await page.locator('[data-part="header"]').evaluate(el=>{
+    const box=el.getBoundingClientRect(),x=box.left+box.width/2,y=box.top+2;
+    return {x,y,safe:document.elementFromPoint(x,y)===el};
+   });
+   assert.ok(pointerParking.safe,label+': observed header padding must be clear of controls');
+   await page.mouse.move(pointerParking.x,pointerParking.y);await settled();
+   await expect.poll(async()=>{
+    sample=await paint(locator);
+    return !sample.hoverWithin&&sample.contexts.every(row=>row.filter==='none');
+   },{message:label+': non-hover subtree and unfiltered paint must settle'}).toBe(true);
+   for(const row of sample.contexts){
+    assert.equal(Number(row.opacity),1,label+': unqualified group opacity at '+row.node);
+    assert.equal(row.filter,'none',label+': unqualified filtered paint at '+row.node);
+    assert.equal(row.blend,'normal',label+': unqualified blended paint at '+row.node);
+   }
+   background=backing(sample.ancestors,label);
   }
-  let background;
-  try{background=backing(sample.ancestors,label)}
-  catch(error){check('unqualified-paint',{label,...sample});throw error}
+  catch(error){check('unqualified-paint',{label,pointerParking,...sample});throw error}
   const foreground=rgb(sample.color);
   const value=ratio(over(foreground,background),background);
   check('contrast',{label,ratio:value,minimum:4.5,resolvedBackground:background,...sample});
