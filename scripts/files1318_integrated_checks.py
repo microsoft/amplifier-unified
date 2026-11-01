@@ -122,6 +122,9 @@ the same 23 reuseEvidence files, and focusContrastBefore=FOCUS_CONTRAST_BEFORE
 (accepted failed check 19 plus its original geometry baseline). Product/CSS
 must be byte-identical to retained pre-gap source. Two fresh sequential
 browser contexts share only the immutable seeded v1/v2/deleted-source dataset.
+Both arms settle their real setup-input canvas.snapshot response and exact
+client/renderer document readback before the focus baseline; keyboard commands
+are still forbidden. This corrects check 20's unsettled setup report, not its verdict.
 Inside keeps iframe/input focus; outside reaches the existing header Canvas
 toggle by Shift+Tab only. No target activation/focus repair, extra tap, trace,
 build, wheel or installed run. Both misses show iframe focus was not necessary;
@@ -188,7 +191,7 @@ NATIVE_STATE_OUT = Path('/artifacts/files1318-native-state-diagnostic')
 PORTAL_HOST_OUT = Path('/artifacts/files1318-portal-host-experiment')
 STATE_REDUCTION_OUT = Path('/artifacts/files1318-state-reduction')
 FOCUS_CONTRAST_OUT = Path('/artifacts/files1318-focus-contrast')
-FOCUS_CONTRAST_PRODUCER_SHA = '6bf81451c8e49d58b66ccd93af337e16894d1e1600a0b0cfbfb46c5f87099b83'
+FOCUS_CONTRAST_PRODUCER_SHA = '69f74d7f44e1d8bfc77b84cb5183e8e3ee368f98f070dd253462c5e7e3955ddc'
 FOCUS_CONTRAST_BEFORE_ROOT = ROOT / 'output/files1318-state-reduction-v1-result'
 FOCUS_CONTRAST_BEFORE = {
     'sourceRevision': '0c497fe30eb7d7c174977ab82f8348d3d9ebfedb',
@@ -1952,21 +1955,31 @@ def focus_contrast_proof(exit_code):
         proof, baseline = read(path), read(OUT / 'focus-contrast-baseline.json')
         value, seed = proof['focusContrast'], proof['seed']
         result.update(path=str(path), sha256=sha(path), originalFailure=proof.get('failure'))
+        tap_count = len([g for g in proof['geometry'] if g['label'] == 'corner-tap-before'])
+        result['progress'] = {'primaryTapMeasurements': tap_count, 'arms': [
+            {'name': a.get('name'), 'tapAttempts': a.get('gesture', {}).get('tapAttempts', 0),
+             'setupSettled': a.get('setupSnapshot', {}).get('passed', False),
+             'setupError': a.get('setupSnapshot', {}).get('error'), 'error': a.get('error'),
+             'keyboardSteps': len(a.get('keyboard', []))} for a in value['arms']]}
         require(type(exit_code) is int and exit_code in (0, 1) and proof['mode'] == 'focus-contrast'
                 and proof['passed'] is (exit_code == 0) and proof['productAcceptance'] is False
                 and value['version'] == 'focus-contrast-v1' and value['baseline'] == baseline
                 and [arm['name'] for arm in value['arms']] == ['inside', 'outside'], 'Focus mode/arms/baseline missing')
         require(value['newer']['id'] == seed['artifacts']['html']['id'] and value['newer']['revision'] == 2
                 and value['deleted'] == {'sourceDeleted': True, 'sourceExists': False}, 'Focus immutable dataset setup differs')
-        require(Counter(c['check'] for c in proof['checks']) == Counter({
+        require(tap_count <= 2, f'Focus diagnostic has excess primary tap measurements: {tap_count}, expected 2')
+        require(tap_count == 2, f'Focus diagnostic did not reach both primary taps: {tap_count} of 2 measured; inspect arm/setup progress')
+        expected_checks = Counter({
                     'contour formula and unsupported geometry logic checks': 1,
                     'computed corner-shape exact-value predicate checks': 1,
                     'actual browser computed round accepted and noncircular corner rejected by same sampler': 2,
                     'deliberate saved-v1 preview setup, not a download': 2})
-                and len([g for g in proof['geometry'] if g['label'] == 'corner-tap-before']) == 2
-                and proof['fileFrameCaptures'] == []
+        actual_checks = Counter(c['check'] for c in proof['checks'])
+        require(actual_checks == expected_checks,
+                f'Focus setup checks differ: missing={dict(expected_checks - actual_checks)}, excess={dict(actual_checks - expected_checks)}')
+        require(proof['fileFrameCaptures'] == []
                 and not any(c.get('action') in ('canvas.copy', 'canvas.views.inline', 'conversation.send', 'session.send')
-                            for c in proof['commands']), 'Focus diagnostic exceeded its two primary taps')
+                            for c in proof['commands']), 'Focus diagnostic performed an excluded image/action')
 
         def structure(s):
             require(s['limits'] == {'descendants': 24, 'ancestors': 20} and s['truncations'] == []
@@ -2030,6 +2043,60 @@ def focus_contrast_proof(exit_code):
                         'launch': {'headless': True, 'timeout': 8000, 'args': []}}
                     and baseline['browser'] == read(OUT / 'browser-readiness.json')['browser']
                     and arm['client']['sessionId'] == seed['sessionId'], 'Focus owner/runtime differs or did not close')
+            setup = arm.get('setupSnapshot', {})
+            require(setup.get('version') == 'focus-setup-snapshot-v1' and setup.get('passed') is True
+                    and not setup.get('error') and setup['cleanup'] ==
+                        {'listenerRemoved': True, 'timerCleared': True, 'inputDisposed': True,
+                         'readbackDisposed': True, 'errors': []}
+                    and setup['limits'] == {'requestMs': 4000, 'responseMs': 3000, 'readbackMs': 3000,
+                                            'requests': 4, 'requestBytes': 32768, 'responseBytes': 1048576},
+                    f'{name}: setup snapshot settlement/cleanup missing or failed')
+            lease = {key: retained['state']['views'][0][key] for key in
+                     ('viewId', 'resourceId', 'resourceRevision', 'generation')}
+            require(setup['expected'] == {'client': arm['client'], 'lease': lease, 'unfinished': value['unfinished']}
+                    and 0 <= setup['matchedIndex'] < len(setup['requests']) <= 4, 'Setup request ownership/lease mismatch')
+            request = setup['requests'][setup['matchedIndex']]
+            command = request['command']
+            payload = request['payload']
+            unwrapped = payload.get('args', {}).get('command', payload.get('args')) if payload.get('action') == 'shell.command' else payload
+            require(command == unwrapped == proof['commands'][request['commandIndex']]
+                    and 0 <= request['commandIndex'] < arm['commandStart'] <= len(proof['commands'])
+                    and command['action'] == 'canvas.views.command'
+                    and all(command['args'][key] == val for key, val in lease.items())
+                    and command['args']['action'] == 'canvas.snapshot'
+                    and command['args']['args']['id'] == lease['resourceId']
+                    and request['clientId'] == arm['client']['clientId'] and 0 < request['bytes'] <= 32768,
+                    'Setup snapshot did not originate from this client and retained renderer')
+            document = command['args']['args']['document']
+            require(re.fullmatch(r'control-1-[a-z0-9]+', setup['controlId']) and document['controls'] == [{
+                'id': setup['controlId'], 'tag': 'input', 'type': 'text', 'label': 'Unfinished preview note',
+                'value': value['unfinished'], 'disabled': False}], 'Setup snapshot control/value mismatch')
+            native = {'connected': True, 'exactInput': True, 'onlyControl': True, 'tag': 'INPUT',
+                      'id': 'preview-note', 'type': 'text', 'label': 'Unfinished preview note', 'disabled': False}
+            require(all(setup['inputBefore'][key] == val for key, val in native.items())
+                    and setup['inputBefore']['value'] == ''
+                    and setup['inputAfter'] == {**setup['inputBefore'], 'value': value['unfinished'],
+                                               'focused': True, 'documentFocused': True},
+                    'Setup input detached/replaced or its native identity/focus changed')
+            response = setup['response']
+            require(response['httpStatus'] == 200 and response['finished'] is None
+                    and 0 < response['bytes'] <= 1048576 and response['body']['accepted'] is True
+                    and response['body']['result'] == {'status': 'updated'}
+                    and setup['readback'] == {'client': arm['client'], 'lease': lease,
+                                              'document': document, 'viewDocument': document}
+                    and setup['armedAt'] <= setup['fillStartedAt'] <= request['at'] <= setup['observerFinishedAt']
+                    <= response['at'] <= response['completedAt'] <= setup['readbackAt']
+                    <= setup['completedAt'] <= arm['baselineAt']
+                    and setup['fillStartedAt'] <= setup['fillCompletedAt'] <= setup['afterFill']['host']['at'],
+                    'Setup report response/readback was not settled before baseline')
+            boundary(setup['afterFill'], 'inside');boundary(setup['afterSettlement'], 'inside')
+            unchanged(setup['afterFill'], setup['afterSettlement'])
+            require(setup['afterFill']['host']['frame']['nodeId'] == setup['afterSettlement']['host']['frame']['nodeId']
+                    == arm['focusBefore']['host']['frame']['nodeId']
+                    and setup['afterSettlement']['host']['canvasDocument'] == document
+                    and setup['geometryAfterFill']['primary'] == setup['geometryAfterSettlement']['primary'],
+                    'Setup response changed the running frame, geometry or observed document unexpectedly')
+            structure(setup['geometryAfterSettlement']);preservation(setup['preservation'], retained)
             preflight = arm['preflight']
             p = preflight['result']
             require(preflight['passed'] is True and preflight['client'] == 'focus-' + name
@@ -2064,6 +2131,8 @@ def focus_contrast_proof(exit_code):
                     and u['iframeSightings'] == [], 'Fresh arm did not reconstruct unrelated historical state')
             structure(arm['geometryBeforeFocus']);boundary(arm['focusBefore'], 'inside')
             boundary(arm['focusAfter'], name);unchanged(arm['focusBefore'], arm['focusAfter'])
+            require(arm['focusBefore']['host']['canvasDocument'] == arm['focusAfter']['host']['canvasDocument'] == document,
+                    'Observed canvas.document changed after settled setup')
             require((name == 'inside' and arm['keyboard'] == []) or
                     (name == 'outside' and 0 < len(arm['keyboard']) <= 24
                      and all(k['key'] == 'Shift+Tab' for k in arm['keyboard'])
@@ -2072,9 +2141,12 @@ def focus_contrast_proof(exit_code):
             for k in arm['keyboard']:
                 unchanged(arm['focusBefore'], k['snapshot'])
                 structure(k['geometry']);preservation(k['preservation'], retained)
-                require(k['commands'] == [] and (k['snapshot']['host']['active']['inCanvas'] is True
+                require(k['commands'] == proof['commands'][arm['commandStart']:k['commandEnd']] == []
+                        and k['commandEnd'] == arm['commandStart']
+                        and k['snapshot']['host']['canvasDocument'] == document
+                        and (k['snapshot']['host']['active']['inCanvas'] is True
                         or k['snapshot']['host']['active']['nodeId'] == arm['focusAfter']['host']['toggle']['nodeId']),
-                        'Keyboard changed app state or used another outer control')
+                        'Command/document change during strict keyboard interval, or invalid outer control')
             require(g['focusContrastArm'] == name and g['reductionPhase'] == 'primary'
                     and g['reductionRequested'] is True and g['tapAttempts'] == 1 and g['preconditionsPassed'] is True
                     and g['captureValid'] is True and g['captureErrors'] == g['cleanupErrors'] == []
@@ -2085,6 +2157,10 @@ def focus_contrast_proof(exit_code):
             require(g['beforeStructure']['button']['nodeId'] == g['before']['nodeId']
                     == g['settlement']['retained']['nodeId'], 'Focus retained native identity changed')
             boundary(g['focus'], name);unchanged(arm['focusBefore'], g['focus'])
+            require(g['focusIntervalCommands'] == proof['commands'][arm['commandStart']:g['focusIntervalEnd']] == []
+                    and g['focusIntervalEnd'] == arm['commandStart']
+                    and g['focus']['host']['canvasDocument'] == document,
+                    'Command or observed document update arrived in the strict focus interval')
             require(g['focus']['expectedNodeId'] == g['focus']['host']['active']['nodeId']
                     == g['beforeStructure']['focus']['nodeId'], 'Focus evidence is not bound to actual pre-tap activeElement')
             require(retained['unfinished'] == value['unfinished'] and retained['marker']['count'] == 1
@@ -2830,7 +2906,7 @@ def main():
                 'Card/state/geometry/focus/capture/cleanup gap is inconclusive; '
                 'smaller reproduction is not cause, non-reproduction is not product acceptance.')
         if args.focus_contrast:
-            report.update(priorChecksConsumed=19)
+            report.update(priorChecksConsumed=20)
             report['limits'].append(
                 'Fresh sequential contexts over one immutable fixture. Only outside uses normal Shift+Tab to the visible '
                 'header Canvas toggle. No activation/focus repair; one primary tap each, no pointer rehearsal. '

@@ -1803,7 +1803,7 @@ const executionMarker=frame=>frame.evaluate(()=>({
  token:document.body.dataset.fileControlsToken
 }));
 
-async function startPreview(target,row,draft,label,unfinishedNote=null){
+async function startPreview(target,row,draft,label,unfinishedNote=null,focusSetup=null){
  // A separate, deliberate preview SETUP, after the card-only no-document oracle.
  // Never classify this canvas.select or its document request as a download.
  const before=documentRequests(target).length;
@@ -1820,7 +1820,8 @@ async function startPreview(target,row,draft,label,unfinishedNote=null){
   await frame.waitForFunction(()=>window.fileControlsExecutions===1&&document.body.dataset.fileControlsToken,undefined,{timeout:4000});
   const input=frame.getByRole('textbox',{name:'Unfinished preview note',exact:true});
   const unfinished=unfinishedNote??`Unsubmitted ${label} note — ${randomUUID()}`;
-  await input.fill(unfinished);
+  if(focusSetup)await settleFocusSetup({target,row,panel,locator,element,frame,input,unfinished},focusSetup);
+  else await input.fill(unfinished);
   const marker=await executionMarker(frame);
   assert.equal(marker.count,1);assert.equal(marker.executed,'1');
   assert.match(marker.token,/^\d+-\d+-\d+-\d+$/,'Fixture script must have generated a fresh execution token');
@@ -1835,7 +1836,13 @@ async function startPreview(target,row,draft,label,unfinishedNote=null){
   checks.push({check:'deliberate saved-v1 preview setup, not a download',label,marker,state,documents});
   await previewPreserved(retained);
   return retained;
- }catch(error){await element.dispose();throw error}
+ }catch(error){
+  if(focusSetup){
+   try{await tapOperation(focusSetup.lifecycle,'setup-preview-dispose',()=>element.dispose())}
+   catch(cleanupError){throw new AggregateError([error,cleanupError],'Preview setup failed; retained frame cleanup also failed')}
+  }else await element.dispose();
+  throw error;
+ }
 }
 async function previewPreserved(retained){
  const {target,row,locator,element,frame,input,unfinished,marker,state,documents}=retained;
@@ -2120,6 +2127,7 @@ async function focusBoundarySnapshot(retained){
     disabled:toggle.disabled,tabIndex:toggle.tabIndex,blocked:!!toggle.closest('[hidden],[inert],[aria-hidden="true"]'),
     pointerEvents:style.pointerEvents,inViewport:rect.left>=0&&rect.top>=0&&rect.right<=innerWidth&&rect.bottom<=innerHeight,
     point,hit:hit&&{nodeId:id(hit),tag:hit.tagName},reachable:!!hit&&toggle.contains(hit)},
+   canvasDocument:s.canvas.document??null,
    pane:{open:s.canvas.open,focused:!!s.view.canvasFocused,controls:!!s.view.canvasControlsExpanded,
     hidden:panel.hidden,inert:panel.inert,rect:panel.getBoundingClientRect().toJSON()},
    scroll:{x:scrollX,y:scrollY},selection:selected?{text:selected.toString(),anchorOffset:selected.anchorOffset,
@@ -2159,9 +2167,138 @@ function sameFocusContext(before,after){
  for(const key of ['pane','scroll','selection','toggle'])
   assert.deepEqual(after.host[key],before.host[key],`Keyboard traversal changed host ${key}`);
 }
+// The ordinary input bridge reports asynchronously (canvas_bridge.js). Observe
+// its real request before fill, then its retained response and applied document.
+// No postMessage, synthetic report, DOM listener, focus change or quiet-period sleep.
+async function settleFocusSetup(preview,{arm,lifecycle}){
+ const {target,row,element,frame,input,unfinished}=preview;
+ const record=arm.setupSnapshot={version:'focus-setup-snapshot-v1',passed:false,requests:[],cleanup:{},
+  limits:{requestMs:4000,responseMs:3000,readbackMs:3000,requests:4,requestBytes:32768,responseBytes:1048576}};
+ let native,stopObservation=()=>{},primaryError;const cleanupErrors=[];
+ try{
+  const state=await tapOperation(lifecycle,'setup-renderer-identity',()=>previewState(target,row));
+  assert.equal(state.views.length,1);
+  const {viewId,resourceId,resourceRevision,generation}=state.views[0];
+  const lease={viewId,resourceId,resourceRevision,generation};
+  record.expected={client:await tapOperation(lifecycle,'setup-client-identity',()=>identity(target)),lease,unfinished};
+  assert.deepEqual(record.expected.client,arm.client);
+  native=await tapOperation(lifecycle,'setup-retain-input',()=>input.elementHandle({timeout:1000}),1500);
+  assert.ok(native,'Setup input handle missing');
+  const nativeRead=()=>native.evaluate(node=>({connected:node.isConnected,exactInput:node===document.querySelector('#preview-note'),
+   onlyControl:document.querySelectorAll('button,input,select,textarea,[role="button"]').length===1,
+   tag:node.tagName,id:node.id,type:node.type,label:node.getAttribute('aria-label')||node.labels?.[0]?.textContent.trim(),
+   value:node.value,disabled:node.disabled,focused:document.activeElement===node,documentFocused:document.hasFocus()}));
+  record.inputBefore=await tapOperation(lifecycle,'setup-input-before',nativeRead);
+  assert.equal(record.inputBefore.exactInput,true);assert.equal(record.inputBefore.onlyControl,true);
+  assert.equal(record.inputBefore.connected,true);assert.equal(record.inputBefore.disabled,false);
+  assert.equal(record.inputBefore.tag,'INPUT');assert.equal(record.inputBefore.type,'text');
+  assert.equal(record.inputBefore.id,'preview-note');assert.equal(record.inputBefore.value,'');
+  assert.equal(record.inputBefore.label,'Unfinished preview note');
+  let resolveRequest,requestTimer,finished=false;
+  const observed=new Promise(resolve=>{resolveRequest=resolve});
+  const finish=outcome=>{
+   if(finished)return;finished=true;clearTimeout(requestTimer);target.off('request',onRequest);
+   record.cleanup.listenerRemoved=true;record.cleanup.timerCleared=true;record.observerFinishedAt=Date.now();
+   resolveRequest(outcome);
+  };
+  const onRequest=request=>{
+   if(request.method()!=='POST'||new URL(request.url()).pathname!=='/api/actions')return;
+   try{
+    const payload=request.postDataJSON(),command=payload?.action==='shell.command'?(payload.args.command||payload.args):payload;
+    if(command?.action!=='canvas.views.command'||command.args?.action!=='canvas.snapshot')return;
+    const bytes=Buffer.byteLength(request.postData()||'');
+    assert.ok(bytes<=record.limits.requestBytes&&record.requests.length<record.limits.requests,'Setup snapshot request evidence limit');
+    const requestRecord={at:Date.now(),clientId:request.headers()['x-amplifier-client'],payload,command,
+     commandIndex:commands.findLastIndex(c=>c.id===command.id),bytes};
+    record.requests.push(requestRecord);
+    const controls=command.args.args?.document?.controls;
+    if(!controls?.some(c=>c.value===unfinished))return; // Initial empty snapshot is retained, not mistaken for fill.
+    assert.equal(requestRecord.clientId,arm.client.clientId);
+    for(const key of Object.keys(lease))assert.equal(command.args[key],lease[key],`Setup snapshot ${key} changed`);
+    assert.equal(command.args.args.id,row.id);assert.equal(controls.length,1);
+    const control=controls[0];
+    assert.deepEqual({...control,id:null},{id:null,tag:'input',type:'text',label:'Unfinished preview note',value:unfinished,disabled:false});
+    assert.match(control.id,/^control-1-[a-z0-9]+$/);
+    assert.ok(requestRecord.commandIndex>=0);
+    record.matchedIndex=record.requests.length-1;record.controlId=control.id;
+    finish({request,requestRecord});
+   }catch(error){finish({error})}
+  };
+  stopObservation=()=>finish({cancelled:true});
+  record.armedAt=Date.now();target.on('request',onRequest);
+  requestTimer=setTimeout(()=>finish({error:Error('Current setup input snapshot request exceeded 4000ms')}),record.limits.requestMs);
+  record.fillStartedAt=Date.now();
+  await tapOperation(lifecycle,'setup-fill-input',()=>input.fill(unfinished),3000);
+  record.fillCompletedAt=Date.now();
+  record.afterFill=await tapOperation(lifecycle,'setup-after-fill',()=>focusBoundarySnapshot(preview),3000);
+  focusBoundaryOracle(record.afterFill,'inside');
+  const primary=()=>element.evaluate((node,expectedId)=>{
+   const button=node.closest('#workspace-canvas')?.querySelector('.a-canvas-primary-actions .a-saved-file-download > button');
+   if(!node.isConnected||!button?.isConnected||button.tagName!=='BUTTON'||
+    button.getAttribute('aria-label')!=='Download canvas source')
+    throw Error('Setup geometry requires the connected native primary Download button');
+   if(expectedId!==null&&window.__fileControlsNodeId(button)!==expectedId)
+    throw Error('Setup primary Download identity changed during snapshot settlement');
+   return window.__fileControlsReductionSnapshot(button);
+  },record.geometryAfterFill?.button.nodeId??null);
+  record.geometryAfterFill=await tapOperation(lifecycle,'setup-geometry-after-fill',primary);
+  const provisional={...preview,marker:await tapOperation(lifecycle,'setup-execution-marker',()=>executionMarker(frame)),
+   state,documents:documentRequests(target),commandStart:commands.length};
+  const match=await observed; // Resolver retains a match even if its response completed during fill/readbacks.
+  if(match.error)throw match.error;
+  assert.ok(match.request&&!match.cancelled,'Setup snapshot observation cancelled');
+  await tapOperation(lifecycle,'setup-snapshot-response',async()=>{
+   const response=await match.request.response();assert.ok(response,'Setup snapshot response missing');
+   record.response={httpStatus:response.status(),at:Date.now()};
+   const bytes=await response.body();record.response.bytes=bytes.length;
+   assert.ok(bytes.length<=record.limits.responseBytes,'Setup snapshot response evidence limit');
+   record.response.body=JSON.parse(bytes.toString('utf8'));
+   record.response.finished=await response.finished();record.response.completedAt=Date.now();
+   assert.equal(record.response.httpStatus,200);assert.equal(record.response.finished,null);
+   assert.equal(record.response.body.accepted,true);assert.deepEqual(record.response.body.result,{status:'updated'});
+  },record.limits.responseMs);
+  const document=match.requestRecord.command.args.args.document;
+  let readback;
+  try{
+   readback=await tapOperation(lifecycle,'setup-document-readback',()=>target.waitForFunction(({client,lease,document})=>{
+    const s=window.amplifier.getState(),v=s.canvasWorkspace?.views?.find(v=>v.viewId===lease.viewId);
+    const sameDocument=d=>d?.text===document.text&&d.controls?.length===document.controls.length&&
+     d.controls.every((c,i)=>Object.keys(c).length===Object.keys(document.controls[i]).length&&
+      Object.keys(document.controls[i]).every(k=>c[k]===document.controls[i][k]));
+    if(s.client.id!==client.clientId||s.selectedSessionId!==client.sessionId||s.canvas.id!==lease.resourceId||
+     !v||Object.keys(lease).some(k=>v[k]!==lease[k])||
+     !sameDocument(s.canvas.document)||!sameDocument(v.document))return false;
+    return {client:{clientId:s.client.id,sessionId:s.selectedSessionId},
+     lease:Object.fromEntries(Object.keys(lease).map(k=>[k,v[k]])),document:s.canvas.document,viewDocument:v.document};
+   },{client:arm.client,lease,document},{timeout:record.limits.readbackMs}),record.limits.readbackMs+500);
+   record.readback=await tapOperation(lifecycle,'setup-document-readback-value',()=>readback.jsonValue());
+  }finally{if(readback)try{
+   await tapOperation(lifecycle,'setup-document-readback-dispose',()=>readback.dispose());record.cleanup.readbackDisposed=true;
+  }catch(error){cleanupErrors.push(error)}}
+  record.readbackAt=Date.now();
+  record.inputAfter=await tapOperation(lifecycle,'setup-input-after',nativeRead);
+  assert.deepEqual(record.inputAfter,{...record.inputBefore,value:unfinished,focused:true,documentFocused:true});
+  record.afterSettlement=await tapOperation(lifecycle,'setup-after-settlement',()=>focusBoundarySnapshot(preview),3000);
+  focusBoundaryOracle(record.afterSettlement,'inside');sameFocusContext(record.afterFill,record.afterSettlement);
+  assert.equal(record.afterFill.host.frame.nodeId,record.afterSettlement.host.frame.nodeId);
+  assert.deepEqual(record.afterSettlement.host.canvasDocument,document); // Observed document DID update.
+  record.geometryAfterSettlement=await tapOperation(lifecycle,'setup-geometry-after-settlement',primary);
+  assert.deepEqual(record.geometryAfterSettlement.primary,record.geometryAfterFill.primary);
+  record.preservation=await tapOperation(lifecycle,'setup-preservation',()=>previewPreserved(provisional),3000);
+ }catch(error){primaryError=error;record.error=errorEvidence(error)}
+ finally{
+  stopObservation();
+  if(native)try{await tapOperation(lifecycle,'setup-input-dispose',()=>native.dispose());record.cleanup.inputDisposed=true}
+  catch(error){cleanupErrors.push(error)}
+  record.cleanup.errors=cleanupErrors.map(errorEvidence);
+ }
+ if(primaryError||cleanupErrors.length)throw new AggregateError([primaryError,...cleanupErrors].filter(Boolean),
+  primaryError?.message||'Setup snapshot cleanup failed');
+ record.passed=true;record.completedAt=Date.now();
+}
 function focusArmVerdict(arm){
  const g=arm.gesture,d=downloadSettlements.find(row=>row.label===`focus-${arm.name}-primary-v1`);
- if(!arm.focusEstablished||!g?.preconditionsPassed||!reductionEventsComplete(g)||
+ if(!arm.setupSnapshot?.passed||!arm.focusEstablished||!g?.preconditionsPassed||!reductionEventsComplete(g)||
   !g.postGesturePreservation||g.postErrors?.length||arm.gates.length!==3||!arm.gates.every(gate=>gate.passed)||
   !arm.closed||arm.closeError||arm.lifecycle.operations.some(op=>op.state!=='fulfilled')||
   !d?.settled||!d.observation.listenerRemoved||!d.observation.timerCleared||d.observation.error||
@@ -2209,7 +2346,7 @@ async function runFocusContrast(){
    await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.draft)).toBe(draft);
    arm.unrelatedPreservation=await preserved(page,draft);
    await reductionDataGate(page,'unrelated',arm.gates);
-   retained=await startPreview(page,html,draft,'touch',focusContrast.unfinished);
+   retained=await startPreview(page,html,draft,'touch',focusContrast.unfinished,{arm,lifecycle});
    arm.retained={marker:retained.marker,unfinished:retained.unfinished,state:retained.state,documents:retained.documents};
    const primary=retained.panel.locator('.a-canvas-primary-actions').getByRole('button',{name:'Download canvas source',exact:true});
    await expect(retained.panel.getByRole('region',{name:'Canvas details',exact:true})).toBeHidden();
@@ -2219,7 +2356,9 @@ async function runFocusContrast(){
    reductionSnapshotOracle(geometryBefore,true);arm.geometryBeforeFocus=geometryBefore;
    arm.focusBefore=await tapOperation(lifecycle,'focus-boundary-before',()=>focusBoundarySnapshot(retained),3000);
    focusBoundaryOracle(arm.focusBefore,'inside');
+   assert.deepEqual(arm.focusBefore.host.canvasDocument,arm.setupSnapshot.readback.document);
    const commandStart=commands.length;
+   arm.commandStart=commandStart;arm.baselineAt=Date.now();
    if(name==='outside'){
     for(let index=0;index<24;index++){
      // No click, Enter, Space, .focus() or fallback. Deadline closes the owner
@@ -2228,18 +2367,21 @@ async function runFocusContrast(){
      const snapshot=await tapOperation(lifecycle,'keyboard-focus-read',()=>focusBoundarySnapshot(retained),3000);
      const step={key:'Shift+Tab',snapshot};arm.keyboard.push(step);
      sameFocusContext(arm.focusBefore,snapshot);
+     assert.deepEqual(snapshot.host.canvasDocument,arm.focusBefore.host.canvasDocument);
      step.geometry=await tapOperation(lifecycle,'keyboard-geometry',()=>
       primary.evaluate(node=>window.__fileControlsReductionSnapshot(node)),2000);
      reductionSnapshotOracle(step.geometry,true);
      step.preservation=await tapOperation(lifecycle,'keyboard-preservation',()=>previewPreserved(retained),3000);
+     step.commandEnd=commands.length;
      step.commands=commands.slice(commandStart);
-     assert.deepEqual(step.commands,[],'Keyboard focus caused an application action');
+     assert.deepEqual(step.commands,[],'Application command arrived during strict keyboard interval');
      if(snapshot.host.active.nodeId===snapshot.host.toggle.nodeId)break;
      assert.ok(snapshot.host.active.inCanvas,'Design invalid: keyboard left Canvas somewhere other than its header toggle');
     }
    }
    arm.focusAfter=await tapOperation(lifecycle,'focus-boundary-after',()=>focusBoundarySnapshot(retained),3000);
    sameFocusContext(arm.focusBefore,arm.focusAfter);focusBoundaryOracle(arm.focusAfter,name);
+   assert.deepEqual(arm.focusAfter.host.canvasDocument,arm.focusBefore.host.canvasDocument);
    arm.focusEstablished=true;
    const g=arm.gesture={reductionRequested:true,reductionPhase:'primary',focusContrastArm:name,tapAttempts:0,
     preconditionsPassed:false,checkpointObserved:false,originalOraclePassed:false,strictEventsPassed:false};
@@ -2253,6 +2395,10 @@ async function runFocusContrast(){
       await reductionDataGate(page,'primary-before',arm.gates);
       const focus=await focusBoundarySnapshot(retained);
       sameFocusContext(arm.focusBefore,focus);focusBoundaryOracle(focus,name);
+      assert.deepEqual(focus.host.canvasDocument,arm.focusBefore.host.canvasDocument);
+      diagnostic.focusIntervalEnd=commands.length;
+      diagnostic.focusIntervalCommands=commands.slice(commandStart);
+      assert.deepEqual(diagnostic.focusIntervalCommands,[],'Application command arrived before the primary tap');
       diagnostic.focus={...focus,expectedNodeId:focus.host.active.nodeId};
       assert.equal(diagnostic.beforeStructure.focus.nodeId,diagnostic.focus.expectedNodeId);
      }),true);
