@@ -841,17 +841,30 @@ def native_ended(row):
     return current != row['processStartTicks']
 
 
-def adopted(rows, *, generation, revision, payload_hash, prefix, pid):
+def adopted(rows, *, generation, revision, payload_hash, prefix, pid, source_root, graph):
     selected = [row for row in rows if row.get('kind') == 'worker' and row.get('event') == 'mount' and row.get('pid') == pid]
     require({r['module'] for r in selected} == {name.replace('-', '_') for name in PACKAGES}, 'Worker did not mount every fixture module')
     for row in selected:
         require(row['generation'] == generation and row['revision'] == revision, 'Worker did not adopt the activated source revision')
         require(row['payloadSha256'] == payload_hash, 'Worker mounted stale same-version payload')
         require(Path(row['prefix']) == prefix and Path(row['executable']).parent == prefix / 'bin', 'Worker used a different interpreter')
+        name, (_, kind) = next((name, value) for name, value in PACKAGES.items()
+                              if name.replace('-', '_') == row['module'])
+        installed, = [item for item in graph if item['name'] == name]
+        source = source_root / 'modules' / kind
+        cache = installed.get('cacheSource', {})
+        require(Path(installed['path']).resolve() == source.resolve()
+                and cache.get('url') == URL and cache.get('revision') == revision
+                and cache.get('subdirectory') == 'modules/' + kind and cache.get('dirty') is False,
+                'Installed distribution is not bound to the verified source object')
         origin = Path(row['origin'])
-        require(origin.is_absolute() and origin.resolve(strict=True).is_relative_to(prefix.resolve(strict=True))
-                and origin.name == '__init__.py' and origin.parent.name == row['module'],
-                'Worker module origin is outside its qualified environment')
+        expected = source / row['module'] / '__init__.py'
+        packaged = prefix / 'lib/python3.13/site-packages' / row['module'] / '__init__.py'
+        require(origin.is_absolute() and origin.resolve(strict=True) in {
+                    expected.resolve(strict=True), packaged.resolve(strict=True)},
+                'Worker module origin is neither its verified source nor installed package')
+        require(origin.read_bytes() == expected.read_bytes() == packaged.read_bytes(),
+                'Worker module bytes differ from the qualified source and installation')
         require(digest(origin.with_name('_payload.py')) == payload_hash,
                 'Worker origin payload differs from its mount evidence')
     return selected
@@ -1040,11 +1053,15 @@ async def run(args, evidence):
             require(all(native_ended(r) for r in probe_mounts), 'Compatibility Python process did not exit')
 
             evidence.phase(f'cycle-{cycle}-worker-adoption')
+            from amplifier_foundation.sources.shared import SharedSourceStore
+            store = SharedSourceStore(home / 'source-store')
+            source_root = store.verify(URL, checked)
             command = runtime._command(home=home)
             require(Path(runtime.project_path(command)) == project and '--no-sync' in command and '--locked' in command,
                     'Production worker command does not select the frozen environment')
             negative = rejected(lambda: adopted(mounts(root), generation=generation, revision=checked,
-                payload_hash=payload_hash, prefix=project / '.venv', pid=retained[-1]['nativePid'] if retained else -1),
+                payload_hash=payload_hash, prefix=project / '.venv', pid=retained[-1]['nativePid'] if retained else -1,
+                source_root=source_root, graph=graph),
                 'Adoption verifier accepted an absent/previous worker')
             evidence.report['negativeControls'].append({'name': f'cycle-{cycle}-non-adoption', 'verifierOnly': True, **negative})
             worker_start = len(observations.owned)
@@ -1055,7 +1072,7 @@ async def run(args, evidence):
             require(row['generation'] == row['source_generation'] == generation
                     and row['ready'].done() and not row['ready'].cancelled(), 'Worker did not become ready in activated generation')
             actual = adopted(mounts(root), generation=generation, revision=checked, payload_hash=payload_hash,
-                             prefix=project / '.venv', pid=native_pid)
+                             prefix=project / '.venv', pid=native_pid, source_root=source_root, graph=graph)
             workers = [p for _, p in observations.owned[worker_start:] if p['kind'] == 'worker']
             require(len(workers) == 1 and len(workers[0]['ready']) == 1, 'Missing exact runtime.ready pipe evidence')
             require(workers[0]['ready'][0]['workerIdentity']['pid'] == native_pid, 'Mount and ready came from different workers')

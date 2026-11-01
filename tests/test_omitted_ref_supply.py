@@ -1,5 +1,6 @@
 """Synthetic supply guards only; no uv, runtime imports, or fixture main."""
 import importlib.util
+import hashlib
 from pathlib import Path
 import sys
 import tomllib
@@ -165,3 +166,43 @@ def test_plain_path_refuses_symlinks(tmp_path, probe, location):
         target, tree = (link if location == "leaf" else link / "lock"), False
     with pytest.raises(AssertionError, match="symlink"):
         probe.plain_path(target, tree=tree)
+
+
+@pytest.mark.parametrize("origin_kind", ["source", "installed", "unrelated", "wrong-source", "wrong-bytes"])
+def test_adoption_binds_both_valid_origins_to_installed_source(tmp_path, probe, origin_kind):
+    prefix, source_root = tmp_path / "project/.venv", tmp_path / "source"
+    prefix.mkdir(parents=True)
+    rows, graph = [], []
+    payload = b"PAYLOAD = 1\n"
+    payload_hash = hashlib.sha256(payload).hexdigest()
+    for name, kind in FIXTURES:
+        module = name.replace("-", "_")
+        source = source_root / "modules" / kind
+        package = source / module
+        installed = prefix / "lib/python3.13/site-packages" / module
+        for target in (package, installed):
+            target.mkdir(parents=True)
+            (target / "__init__.py").write_text("# synthetic module\n")
+            (target / "_payload.py").write_bytes(payload)
+        origin = installed if origin_kind == "installed" else package
+        if origin_kind == "unrelated":
+            origin = tmp_path / "unrelated" / module
+            origin.mkdir(parents=True)
+            (origin / "__init__.py").write_text("# synthetic module\n")
+            (origin / "_payload.py").write_bytes(payload)
+        if origin_kind == "wrong-bytes":
+            (installed / "__init__.py").write_text("# different bytes\n")
+        rows.append({"kind": "worker", "event": "mount", "pid": 123,
+                     "module": module, "generation": "g", "revision": REVISION,
+                     "payloadSha256": payload_hash, "prefix": str(prefix),
+                     "executable": str(prefix / "bin/python"), "origin": str(origin / "__init__.py")})
+        graph.append({"name": name, "path": str(source),
+                      "cacheSource": {"url": probe.URL, "revision": "b" * 40 if origin_kind == "wrong-source" else REVISION,
+                                      "subdirectory": "modules/" + kind, "dirty": False}})
+    kwargs = dict(generation="g", revision=REVISION, payload_hash=payload_hash,
+                  prefix=prefix, pid=123, source_root=source_root, graph=graph)
+    if origin_kind in ("source", "installed"):
+        assert probe.adopted(rows, **kwargs) == rows
+    else:
+        with pytest.raises(AssertionError):
+            probe.adopted(rows, **kwargs)
