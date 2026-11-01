@@ -132,18 +132,58 @@ class _NativeTranscriptGuard:
         self.companion_stamps = self._companions()
 
 
+@dataclass
+class _SelectedRequest:
+    original: object
+    snapshot: object
+    choices: dict
+    selected: object
+    refitted: bool = False
+
+
 class SelectedProvider:
     """Root-only model preference; worker routing remains bundle-owned."""
     def __init__(self, provider, selection, execution_adapter=None):
         self.original, self.selection = provider, selection
         self.execution_adapter = execution_adapter
         self._selected_requests = []
+        self._refused_requests = []
     def _execution_provider(self):
         return self.execution_adapter(self.original) if callable(self.execution_adapter) else self.original
     def __getattr__(self, name):
         if name == "default_model" and self.selection.get("model"):
             return self.selection["model"]
-        method = getattr(self._execution_provider() if name in {'stream','request_budget'} else self.original, name)
+        execution = self._execution_provider() if name in {'stream', 'request_budget', 'refit_request'} else self.original
+        method = getattr(execution, name)
+        if name == 'refit_request' and callable(method):
+            async def refit(request, *, error, request_options=None, **kwargs):
+                # The execution adapter owns the refusal. Forward its exact
+                # selected object and exception, never a newly copied request.
+                row = next((row for row in self._refused_requests
+                    if row[0] is request and row[1] is error), None)
+                if row is None:
+                    return None
+                updates, kwargs = self._selection_overrides(request, kwargs)
+                entry = self._cached_request(request, updates)
+                if (row[2] is not execution or self._execution_provider() is not execution
+                        or entry is None or entry.selected is not row[3]):
+                    self._forget_request(request)
+                    return None
+                self._refused_requests = [item for item in self._refused_requests if item is not row]
+                try:
+                    kwargs['request_options'] = request_options
+                    self._budget_options(kwargs)
+                    result = method(entry.selected, error=error, **kwargs)
+                    result = await result if inspect.isawaitable(result) else result
+                except BaseException:
+                    self._forget_request(request)
+                    raise
+                if result is None:
+                    self._forget_request(request)
+                else:
+                    entry.refitted = True
+                return result
+            return refit
         if name == "compact_context" and callable(method):
             async def compact(request, **kwargs):
                 selected, _ = self._selected_request(request, {}, consume=True)
@@ -158,27 +198,26 @@ class SelectedProvider:
                     return method(message, model=self.selection.get("model"))
                 return method(message)
             return validate
-        if name in {"stream", "request_budget"} and callable(method):
+        if name == "stream" and callable(method):
             # Keep feature detection honest: providers without stream still
             # raise AttributeError, while streaming providers receive the same
             # root-only overrides as complete().
             def selected_stream(request, **kwargs):
-                selected, kwargs = self._selected_request(request, kwargs, consume=name == "stream")
-                if name == "request_budget":
-                    # The budget protocol carries completion overrides in
-                    # request_options. Anthropic deliberately has no **kwargs.
-                    # Inspect the original provider, before surface adapters.
-                    parameters = inspect.signature(self.original.request_budget).parameters
-                    if "request_options" in parameters:
-                        options = dict(kwargs.get("request_options") or {})
-                        options.update({key: kwargs.pop(key) for key in ("model", "reasoning_effort") if key in kwargs})
-                        kwargs["request_options"] = options
+                return self._stream_selected(execution, method, request, kwargs)
+            return selected_stream
+        if name == "request_budget" and callable(method):
+            def selected_budget(request, *, request_options=None, **kwargs):
+                # Preserve named-option feature detection through this wrapper,
+                # translating to keywords only for a legacy provider budget.
+                kwargs['request_options'] = request_options
+                selected, kwargs = self._selected_request(request, kwargs)
                 try:
+                    self._budget_options(kwargs)
                     result = method(selected, **kwargs)
                 except BaseException:
                     self._forget_request(request)
                     raise
-                if name == "request_budget" and inspect.isawaitable(result):
+                if inspect.isawaitable(result):
                     async def budget():
                         try:
                             return await result
@@ -187,7 +226,7 @@ class SelectedProvider:
                             raise
                     return budget()
                 return result
-            return selected_stream
+            return selected_budget
         return method
     def get_info(self):
         info = self.original.get_info()
@@ -196,9 +235,21 @@ class SelectedProvider:
             overrides["reasoning_effort"] = self.selection["effort"]
         return info.model_copy(update={"defaults": {**info.defaults, **overrides}})
     def _forget_request(self, request):
-        self._selected_requests = [row for row in self._selected_requests if row[0] is not request]
+        self._selected_requests = [row for row in self._selected_requests if row.original is not request]
+        self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
 
-    def _selected_request(self, request, kwargs, *, consume=False):
+    def _budget_options(self, kwargs):
+        budget = getattr(self.original, 'request_budget', None)
+        parameters = inspect.signature(budget).parameters if callable(budget) else {}
+        if 'request_options' in parameters:
+            options = dict(kwargs.get('request_options') or {})
+            options.update({key: kwargs.pop(key) for key in ('model', 'reasoning_effort') if key in kwargs})
+            kwargs['request_options'] = options
+        else:
+            for key, value in (kwargs.pop('request_options', None) or {}).items():
+                kwargs.setdefault(key, value)
+
+    def _selection_overrides(self, request, kwargs):
         updates = {key:self.selection[key] for key in ("model", "max_output_tokens") if key in self.selection}
         # Community providers may read the model keyword rather than the
         # portable request field. Supply both without changing worker defaults.
@@ -215,25 +266,76 @@ class SelectedProvider:
         if effort is not None:
             updates["reasoning_effort"] = effort
             kwargs["reasoning_effort"] = effort
+        return updates, kwargs
+
+    def _cached_request(self, request, updates):
+        return next((row for row in self._selected_requests
+                     if row.original is request and row.choices == updates and row.snapshot == request), None)
+
+    def _selected_request(self, request, kwargs, *, consume=False):
+        updates, kwargs = self._selection_overrides(request, kwargs)
         # Budget and dispatch must share one selected request so the host's
         # surface adapter can reuse its prepared observation. Retain a bounded
-        # snapshot to reject in-place input/selection changes, then consume the
-        # identity on dispatch; retries and later calls prepare afresh.
-        selected = next((value for source, snapshot, choices, value in self._selected_requests
-                         if source is request and choices == updates and snapshot == request), None)
-        if selected is None:
+        # snapshot to reject in-place input/selection changes. Dispatch retires
+        # it unless the adapter can refit an exact local refusal.
+        entry = self._cached_request(request, updates)
+        selected = entry.selected if entry is not None else None
+        if entry is None:
             selected = request.model_copy(update=updates)
             self._forget_request(request)
             if not consume:
                 self._selected_requests = (self._selected_requests + [
-                    (request, copy.deepcopy(request), dict(updates), selected)])[-4:]
+                    _SelectedRequest(request, copy.deepcopy(request), dict(updates), selected)])[-4:]
+                self._refused_requests = [row for row in self._refused_requests
+                    if any(entry.original is row[0] for entry in self._selected_requests)]
         if consume:
             self._forget_request(request)
         return selected, kwargs
 
+    def _retain_refusal(self, request, selected, execution, error):
+        from ..request_refit import RequestFitChanged
+        if not isinstance(error, RequestFitChanged) or not callable(getattr(execution, 'refit_request', None)):
+            return False
+        entry = next((row for row in self._selected_requests
+                      if row.original is request and row.selected is selected), None)
+        if entry is None or entry.refitted:
+            return False
+        self._refused_requests = ([row for row in self._refused_requests if row[0] is not request]
+                                  + [(request, error, execution, selected)])[-4:]
+        return True
+
+    async def _stream_selected(self, execution, method, request, kwargs):
+        selected, kwargs = self._selected_request(request, kwargs)
+        self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
+        retained, emitted, iterator = False, False, None
+        try:
+            iterator = aiter(method(selected, **kwargs))
+            async for chunk in iterator:
+                emitted = True
+                yield chunk
+        except BaseException as error:
+            if not emitted:
+                retained = self._retain_refusal(request, selected, execution, error)
+            raise
+        finally:
+            if not retained:
+                self._forget_request(request)
+            if callable(getattr(iterator, 'aclose', None)):
+                await iterator.aclose()
+
     async def complete(self, request, **kwargs):
-        request, kwargs = self._selected_request(request, kwargs, consume=True)
-        return await self._execution_provider().complete(request, **kwargs)
+        selected, kwargs = self._selected_request(request, kwargs)
+        execution = self._execution_provider()
+        self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
+        retained = False
+        try:
+            return await execution.complete(selected, **kwargs)
+        except BaseException as error:
+            retained = self._retain_refusal(request, selected, execution, error)
+            raise
+        finally:
+            if not retained:
+                self._forget_request(request)
 
 
 _copilot_credential = None
