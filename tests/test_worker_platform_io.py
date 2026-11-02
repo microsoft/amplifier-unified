@@ -1,13 +1,14 @@
 """Real pipe/subprocess checks; forced threaded cases are not Windows evidence."""
 
 import asyncio
+import ctypes
 import json
 import os
 from pathlib import Path
 import sys
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from amplifier_web.runtime_protocol import MAX_MESSAGE_BYTES, encode_message
 from amplifier_web.worker_input import ThreadedPipeReader
@@ -57,8 +58,16 @@ class Probe(module.Worker):
             await super().command(data)
 async def main():
     worker = Probe()
+    if mode == 'cancel-read':
+        # This fixture deliberately bypasses Worker.run(), which owns the
+        # production identity announcement. Keep the same once-only pre-read
+        # announcement when testing read() in isolation.
+        module.publish_process_identity()
     worker.target = asyncio.create_task(
         worker.read() if mode == 'cancel-read' else worker.run())
+    # Worker.run emits its identity synchronously before its first await. Do
+    # not let the fixture-only ready marker overtake that production frame.
+    await asyncio.sleep(0)
     module.publish({'type': 'ready'})
     try:
         await worker.target
@@ -67,6 +76,115 @@ async def main():
     module.publish({'type': 'exited', 'shutdown': worker.shutdown.is_set()})
 asyncio.run(main())
 """
+
+
+def native_creation_time(pid):
+    """Passively inspect the direct interpreter PID; never signal a Windows PID."""
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    dword, handle = ctypes.c_uint32, ctypes.c_void_p
+    filetime = dword * 2
+    signatures = {
+        "OpenProcess": ([dword, ctypes.c_int32, dword], handle),
+        "WaitForSingleObject": ([handle, dword], dword),
+        "GetProcessTimes": ([handle] + [ctypes.POINTER(filetime)] * 4, ctypes.c_int32),
+        "CloseHandle": ([handle], ctypes.c_int32),
+    }
+    for name, (args, result) in signatures.items():
+        function = getattr(kernel, name)
+        function.argtypes, function.restype = args, result
+    process = kernel.OpenProcess(0x00101000, False, pid)  # QUERY_LIMITED_INFORMATION | SYNCHRONIZE
+    if not process:
+        raise OSError("cannot inspect fixture worker identity")
+    try:
+        if kernel.WaitForSingleObject(process, 0) != 258:  # live, without waiting or signaling
+            raise OSError("fixture worker already exited or liveness is unknown")
+        times = [filetime() for _ in range(4)]
+        if not kernel.GetProcessTimes(process, *(ctypes.byref(value) for value in times)):
+            raise OSError("cannot inspect fixture worker creation time")
+        return times[0][0] | (times[0][1] << 32)
+    finally:
+        if not kernel.CloseHandle(process):
+            raise OSError("fixture identity handle closure failed")
+
+
+class FixtureProtocol:
+    """Require exactly one native identity; never skip arbitrary wire messages."""
+    def __init__(self, identity=None):
+        self.identity, self.consumed = identity, False
+
+    def consume_identity(self, data):
+        if self.identity is None:
+            raise AssertionError("POSIX fixture must not announce a Windows identity")
+        if self.consumed:
+            raise AssertionError("duplicate fixture identity")
+        if (not isinstance(data, dict) or set(data) != {"type", "pid", "created"}
+                or data["type"] != "runtime.identity"
+                or type(data["pid"]) is not int or data["pid"] <= 0
+                or type(data["created"]) is not int or data["created"] <= 0
+                or (data["pid"], data["created"]) != self.identity):
+            raise AssertionError("missing or incorrect fixture identity")
+        self.consumed = True
+
+    def message(self, data):
+        if self.identity is not None and not self.consumed:
+            raise AssertionError("fixture identity was not validated before protocol messages")
+        if isinstance(data, dict) and data.get("type") == "runtime.identity":
+            raise AssertionError("unexpected or duplicate fixture identity")
+        return data
+
+
+class FixtureIdentityTests(unittest.TestCase):
+    def test_wrong_missing_duplicate_and_posix_identity_fail_closed(self):
+        identity = {"type": "runtime.identity", "pid": 123, "created": 456}
+        for invalid in ({"type": "ready"}, {}, None,
+                        {**identity, "pid": 124}, {**identity, "created": 457},
+                        {**identity, "pid": True}, {**identity, "created": True},
+                        {**identity, "created": 0}, {**identity, "extra": "not allowed"}):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(AssertionError, "identity"):
+                FixtureProtocol((123, 456)).consume_identity(invalid)
+        protocol = FixtureProtocol((123, 456))
+        with self.assertRaisesRegex(AssertionError, "not validated"):
+            protocol.message({"type": "ready"})
+        protocol.consume_identity(identity)
+        self.assertEqual(protocol.message({"type": "ready"}), {"type": "ready"})
+        with self.assertRaisesRegex(AssertionError, "duplicate"):
+            protocol.consume_identity(identity)
+        with self.assertRaisesRegex(AssertionError, "duplicate"):
+            protocol.message(identity)
+        posix = FixtureProtocol()
+        self.assertEqual(posix.message({"type": "ready"}), {"type": "ready"})
+        with self.assertRaisesRegex(AssertionError, "POSIX"):
+            posix.consume_identity(identity)
+        with self.assertRaisesRegex(AssertionError, "unexpected"):
+            posix.message(identity)
+
+    def test_creation_time_query_is_read_only_exact_and_closes_on_failure(self):
+        kernel = Mock()
+        kernel.OpenProcess.return_value = 0x100000001
+        kernel.WaitForSingleObject.return_value = 258
+        kernel.CloseHandle.return_value = 1
+        def times(handle, created, *others):
+            created._obj[0], created._obj[1] = 17, 2
+            return 1
+        kernel.GetProcessTimes.side_effect = times
+        with patch.object(ctypes, "WinDLL", return_value=kernel, create=True):
+            self.assertEqual(native_creation_time(123), 17 | (2 << 32))
+            kernel.OpenProcess.assert_called_once_with(0x00101000, False, 123)
+            kernel.CloseHandle.assert_called_once_with(0x100000001)
+            kernel.WaitForSingleObject.assert_called_once_with(0x100000001, 0)
+            kernel.CloseHandle.reset_mock()
+            kernel.GetProcessTimes.side_effect = lambda *args: 0
+            with self.assertRaisesRegex(OSError, "creation time"):
+                native_creation_time(123)
+            kernel.CloseHandle.assert_called_once_with(0x100000001)
+            kernel.CloseHandle.reset_mock()
+            kernel.WaitForSingleObject.return_value = 0
+            with self.assertRaisesRegex(OSError, "already exited"):
+                native_creation_time(123)
+            kernel.CloseHandle.assert_called_once_with(0x100000001)
+        # The sensor never asks for termination/quota access or calls a signal.
+        self.assertEqual({call[0] for call in kernel.method_calls},
+                         {"OpenProcess", "WaitForSingleObject", "GetProcessTimes", "CloseHandle"})
 
 
 class ThreadedReaderTests(unittest.IsolatedAsyncioTestCase):
@@ -153,6 +271,7 @@ class ThreadedReaderTests(unittest.IsolatedAsyncioTestCase):
 class WorkerSubprocessTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.processes = []
+        self.protocols = {}
 
     async def asyncTearDown(self):
         for proc in self.processes:
@@ -163,23 +282,54 @@ class WorkerSubprocessTests(unittest.IsolatedAsyncioTestCase):
             await proc.stdout.read()
             await proc.stderr.read()
 
-    async def spawn(self, backend, *, limit="default", mode="run", direct=False):
+    async def spawn(self, backend, *, limit="default", mode="run", direct=False, model_identity=False):
         # Force a non-UTF-8 text stdout. Protocol bytes must still round-trip.
         env = {**os.environ, "PYTHONIOENCODING": "ascii:strict", "PYTHONUTF8": "0"}
+        probe = PROBE
+        if model_identity:
+            self.assertNotEqual(os.name, "nt", "portable identity model is not native evidence")
+            # Fake only the unavailable kernel identity sensor on POSIX. Keep
+            # the real Worker.run/read, subprocess, payload and byte oracles.
+            probe = probe.replace(
+                "module.configure_protocol()\n",
+                "module.configure_protocol()\n"
+                "module.publish_process_identity = lambda: module.publish("
+                "{'type':'runtime.identity','pid':os.getpid(),'created':17})\n")
         proc = await asyncio.create_subprocess_exec(
-            sys.executable, "-I", "-S", "-B", "-c", PROBE, str(ROOT), backend, str(limit),
+            # A Windows venv executable is a redirector: use its explicit base
+            # interpreter so proc.pid is the actual stdlib-only Probe process.
+            sys._base_executable if os.name == "nt" else sys.executable,
+            "-I", "-S", "-B", "-c", probe, str(ROOT), backend, str(limit),
             mode, "yes" if direct else "no", cwd=ROOT, env=env,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE, limit=MAX_MESSAGE_BYTES)
         self.processes.append(proc)
+        identity = ((proc.pid, native_creation_time(proc.pid)) if os.name == "nt"
+                    else (proc.pid, 17) if model_identity else None)
+        self.protocols[proc] = FixtureProtocol(identity)
+        if identity is not None:
+            self.protocols[proc].consume_identity(await self.read_frame(proc))
         self.assertEqual(await self.receive(proc), {"type": "ready"})
         return proc
 
-    async def receive(self, proc):
+    async def test_modeled_windows_identity_keeps_payload_and_eof_oracles(self):
+        for backend in ("native", "threaded"):
+            for mode in ("run", "cancel-read", "cancel-run"):
+                with self.subTest(backend=backend, mode=mode):
+                    proc = await self.spawn(backend, mode=mode, model_identity=os.name != "nt")
+                    await self.send(proc, encode_message({"op": "echo", "payload": "identity café"}))
+                    self.assertEqual(await self.receive(proc), {"op": "reply", "payload": "identity café"})
+                    proc.stdin.close()
+                    await self.exited(proc)
+
+    async def read_frame(self, proc):
         line = await asyncio.wait_for(proc.stdout.readline(), TIMEOUT)
         self.assertTrue(line, "worker exited before sending a protocol line")
         self.assertNotIn(b"\r", line, "protocol must not translate LF to CRLF")
         return json.loads(line)
+
+    async def receive(self, proc):
+        return self.protocols[proc].message(await self.read_frame(proc))
 
     async def send(self, proc, data):
         proc.stdin.write(data)
