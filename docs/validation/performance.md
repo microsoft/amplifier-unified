@@ -144,7 +144,9 @@ Include retained live placements as well as retired accounting: their turn IDs
 must resolve and tool observations must use valid canonical identities. Assert
 that the expected rows survive durable readback. Otherwise a fixture can silently
 filter out its historical tools/model calls and measure a much cheaper save.
-The observation case changes a receipt on each save; unchanged-history reuse is
+The observation case changes a receipt before each of its four timed saves. The
+following profiled save leaves execution unchanged; label that profile separately
+from the changed-receipt timings. Unchanged-history reuse is
 not evidence for that path. `test_accounting_projection_copy.py` also grows plain
 historical receipts while checking independent copies and bounded generic
 recursive-copy work; custom and nested receipts keep their existing copy behavior.
