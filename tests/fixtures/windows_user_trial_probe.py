@@ -323,8 +323,10 @@ from amplifier_core.message_models import ChatResponse, TextBlock, ToolCall
 __amplifier_module_type__ = "provider"
 class Provider:
     name = "fixture"
-    def __init__(self, coordinator, config):
-        self.coordinator, self.config = coordinator, config
+    def __init__(self, config=None, *, coordinator=None):
+        # The host reads metadata before a coordinator exists. Only mount binds
+        # the real coordinator for access checks and deterministic turn effects.
+        self.coordinator, self.config = coordinator, config or {}
     def get_info(self):
         return ProviderInfo(id="fixture", display_name="Offline fixture", defaults={"model":"fixture"})
     async def list_models(self): return []
@@ -352,7 +354,7 @@ class Provider:
                 arguments={"file_path":self.config["output"], "content":"Windows trial café 日本語\n"})])
         return ChatResponse(content=[TextBlock(text="Windows trial café 日本語")])
 async def mount(coordinator, config=None):
-    await coordinator.mount("providers", Provider(coordinator, config or {}), name="fixture")
+    await coordinator.mount("providers", Provider(config, coordinator=coordinator), name="fixture")
 '''
 
 

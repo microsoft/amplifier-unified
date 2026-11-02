@@ -33,6 +33,119 @@ def test_fixture_and_embedded_provider_compile_and_require_maintained_modules():
     assert any(value.startswith("amplifier-module-context-simple @") for value in requirements)
 
 
+def test_scripted_provider_passes_real_metadata_constructor_before_mount(monkeypatch):
+    from amplifier_web.provider_environment import provider_class, provider_config_schema
+    module = types.ModuleType("amplifier_module_provider_fixture")
+    exec(compile(probe.PROVIDER, "<scripted-provider>", "exec"), module.__dict__)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    assert provider_class("provider-fixture") is module.Provider
+    # The real metadata path constructs with config={} and NO coordinator.
+    # Await-free: no loop, socket, mount, model call, filesystem write or secret.
+    assert immediate(provider_config_schema("provider-fixture", config={}, environment={})) == {"fields": []}
+
+
+def core_contract(coroutine):
+    """Run actual Core awaitables with a finite deadline, not a runtime probe."""
+    import asyncio
+    async def bounded():
+        return await asyncio.wait_for(coroutine, 5)
+    return asyncio.run(bounded())
+
+
+def test_scripted_provider_actual_core_validation_mount_and_metadata_are_effect_free(
+        tmp_path, monkeypatch):
+    from amplifier_core import ProviderInfo
+    from amplifier_core.testing import MockCoordinator
+    from amplifier_core.validation.provider import ProviderValidator
+    from amplifier_web.provider_environment import construct_schema_provider, construct_provider, config_schema
+    module = types.ModuleType("amplifier_module_provider_fixture")
+    exec(compile(probe.PROVIDER, "<scripted-provider>", "exec"), module.__dict__)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    config = {name: str(tmp_path / name) for name in ("output", "blocked", "calls")}
+    # Actual Core 2.0.2 validator: structural methods, real Rust-backed mount
+    # coordinator and ProviderInfo. No replacement validator/metadata seam.
+    result = core_contract(ProviderValidator().validate(module.__name__, config=config))
+    assert result.passed and result.checks and all(check.passed for check in result.checks)
+    assert {check.name for check in result.checks} >= {
+        "protocol_compliance", "provider_get_info", "provider_list_models", "provider_complete",
+        "provider_parse_tool_calls"}
+    schema_provider = construct_schema_provider(module.Provider, config, environment={})
+    setup_provider = construct_provider(module.Provider, config)
+    assert schema_provider.coordinator is None and schema_provider.config == {}
+    assert setup_provider.coordinator is None and setup_provider.config == config
+    assert isinstance(schema_provider.get_info(), ProviderInfo)
+    assert immediate(config_schema(schema_provider)) == {"fields": []}
+    coordinator = MockCoordinator()
+    core_contract(module.mount(coordinator, config))
+    provider = coordinator.get("providers")["fixture"]
+    assert provider.coordinator is coordinator and provider.config == config
+    from amplifier_web.provider_isolation import require_selected, UnavailableProvider
+    assert not isinstance(provider, UnavailableProvider)
+    require_selected(coordinator)
+    assert provider.get_info().defaults["model"] == "fixture"
+    assert immediate(provider.list_models()) == []
+    assert provider.parse_tool_calls(types.SimpleNamespace(tool_calls=[])) == []
+    assert not any((tmp_path / name).exists() for name in config)
+
+
+def test_legacy_provider_constructor_reproduces_real_schema_isolation_refusal(monkeypatch):
+    from amplifier_web.provider_environment import provider_config_schema
+    from amplifier_web.provider_isolation import ProviderIsolation, ProviderUnavailable, UnavailableProvider
+    from amplifier_core.testing import MockCoordinator
+    module = types.ModuleType("amplifier_module_provider_fixture")
+    exec(compile(probe.PROVIDER, "<scripted-provider>", "exec"), module.__dict__)
+    def legacy(self, coordinator, config):
+        self.coordinator, self.config = coordinator, config
+    module.Provider.__init__ = legacy
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    with pytest.raises(TypeError, match="coordinator") as caught:
+        immediate(provider_config_schema("provider-fixture", config={}, environment={}))
+    # Same real isolation classification as materialize_bundle_providers on this
+    # exception. The fallback stays unavailable; no require_selected bypass.
+    isolation = ProviderIsolation()
+    spec = {"module": "provider-fixture", "config": {}}
+    failure = isolation.record(spec, "provider_schema_failed", error=caught.value)
+    assert failure["reason_code"] == "provider_schema_failed"
+    assert failure["diagnostic"] == {"stage": "schema", "category": "schema", "errorType": "TypeError"}
+    unavailable = UnavailableProvider(spec, failure)
+    coordinator = MockCoordinator()
+    core_contract(coordinator.mount("providers", unavailable, name="fixture"))
+    from amplifier_web.provider_isolation import require_selected
+    with pytest.raises(ProviderUnavailable) as refused:
+        require_selected(coordinator)
+    assert refused.value.failures[0]["reason_code"] == "provider_schema_failed"
+    assert refused.value.failures[0]["diagnostic"] == failure["diagnostic"]
+
+
+def test_real_provider_contract_checks_remain_network_guarded_in_fresh_interpreter(tmp_path):
+    script = r'''
+import importlib.util, os, pathlib, sys
+from contextlib import nullcontext
+root, log = map(pathlib.Path, sys.argv[1:])
+spec = importlib.util.spec_from_file_location("guarded_provider_probe",
+    root / "tests/fixtures/windows_user_trial_probe.py")
+probe = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(probe)
+guard = probe.NetworkGuard(log)
+sys.addaudithook(guard.audit)
+sys.path.insert(0, str(root))
+os.environ["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+import pytest
+with probe.control_socketpairs(guard) if sys.platform == "win32" else nullcontext():
+    status = pytest.main(["-q", "-p", "no:cacheprovider",
+        str(root / "tests/test_windows_user_trial_probe.py"),
+        "-k", "scripted_provider or legacy_provider_constructor"])
+assert status == 0
+assert guard.verify()["unknownAttempts"] == 0
+assert not log.exists()
+'''
+    child = subprocess.run([sys.executable, "-I", "-B", "-c", script,
+        str(ROOT), str(tmp_path / "network.jsonl")], capture_output=True, text=True, timeout=20)
+    assert child.returncode == 0, child.stdout + child.stderr
+    assert "3 passed" in child.stdout
+    assert not (tmp_path / "network.jsonl").exists()
+
+
 def test_missing_module_cannot_silently_qualify(tmp_path):
     path = tmp_path / "pyproject.toml"
     path.write_text('[dependency-groups]\ndev=[]\n')
