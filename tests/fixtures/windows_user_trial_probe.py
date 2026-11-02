@@ -181,6 +181,33 @@ def requirements(path):
 
 
 INSTALLATION_STAGES = frozenset({"direct_url", "wheel_members", "imports", "graph", "complete"})
+INSTALLATION_CHECKS = frozenset({"module_import", "distribution_metadata", "import_origin",
+                                "core_version", "foundation_api"})
+# Exact public dependency labels only. Never copy arbitrary exception.name,
+# exception.path, messages, missing symbols or traceback frames into receipts.
+INSTALLATION_MISSING_MODULES = frozenset(IMPORTS) | frozenset({
+    "fcntl", "pwd", "grp", "resource", "termios", "pty", "msvcrt", "winreg",
+    "yaml", "filelock", "packaging", "cryptography", "aiohttp", "jsonschema",
+    "httpx", "six", "idna", "pathspec", "pydantic", "pydantic_core",
+    "amplifier_core._engine", "amplifier_foundation.session",
+    "amplifier_module_loop_live.job_store", "other",
+})
+INSTALLATION_IMPORT_FAILURES = frozenset({"module_not_found", "distribution_not_found",
+                                        "symbol_or_loader"})
+
+
+def installation_import_failure(exc, report):
+    if report is None:
+        return
+    if isinstance(exc, metadata.PackageNotFoundError):
+        report["installationImportFailure"] = "distribution_not_found"
+    elif isinstance(exc, ModuleNotFoundError):
+        report["installationImportFailure"] = "module_not_found"
+    else:
+        report["installationImportFailure"] = "symbol_or_loader"
+    missing = getattr(exc, "name", None)
+    report["installationMissingModule"] = (
+        missing if type(missing) is str and missing in INSTALLATION_MISSING_MODULES else "other")
 
 
 def record_rows(raw, record):
@@ -282,6 +309,15 @@ def installed(wheel, report=None):
         assert value in INSTALLATION_STAGES
         if report is not None:
             report["installationStage"] = value
+    def check(package, value):
+        assert package in IMPORTS and value in INSTALLATION_CHECKS
+        if report is not None:
+            report["installationImport"] = package
+            report["installationCheck"] = value
+    if report is not None:
+        for field in ("installationImport", "installationCheck",
+                      "installationImportFailure", "installationMissingModule"):
+            report.pop(field, None)
     stage("direct_url")
     dist = metadata.distribution("amplifier-unified")
     direct = json.loads(dist.read_text("direct_url.json") or "{}")
@@ -294,17 +330,41 @@ def installed(wheel, report=None):
     stage("imports")
     origins = {}
     for package, distribution in IMPORTS.items():
-        module = importlib.import_module(package)
+        check(package, "module_import")
+        try:
+            module = importlib.import_module(package)
+        except ImportError as exc:
+            installation_import_failure(exc, report)
+            raise
         path = Path(module.__file__).resolve()
-        owner = metadata.distribution(distribution)
+        check(package, "distribution_metadata")
+        try:
+            owner = metadata.distribution(distribution)
+        except metadata.PackageNotFoundError as exc:
+            installation_import_failure(exc, report)
+            raise
+        check(package, "import_origin")
         expected = {Path(owner.locate_file(f)).resolve() for f in owner.files or ()}
         assert path in expected and path.is_relative_to(Path(sys.prefix).resolve())
         origins[package] = {"origin": "installed", "sha256": digest(path.read_bytes())}
-    from packaging.version import Version
-    assert Version(metadata.version("amplifier-core")) >= Version("2.0.2")
-    from amplifier_foundation.session import prepare_session_directory
+    check("amplifier_core", "core_version")
+    try:
+        from packaging.version import Version
+        assert Version(metadata.version("amplifier-core")) >= Version("2.0.2")
+    except ImportError as exc:
+        installation_import_failure(exc, report)
+        raise
+    check("amplifier_foundation", "foundation_api")
+    try:
+        from amplifier_foundation.session import prepare_session_directory
+    except ImportError as exc:
+        installation_import_failure(exc, report)
+        raise
     assert callable(prepare_session_directory)
     stage("graph")
+    if report is not None:
+        report.pop("installationImport", None)
+        report.pop("installationCheck", None)
     graph = []
     for item in metadata.distributions():
         name, version = item.metadata["Name"], item.version
@@ -342,7 +402,8 @@ def validate_public(value):
             assert re.fullmatch(r"[A-Za-z0-9_.+!-]{1,100}", row["version"])
             if "commit" in row:
                 sha(row["commit"], (40, 64))
-    common = {"status", "stage", "checks", "failureKind", "errno", "winerror", "installationStage"}
+    common = {"status", "stage", "checks", "failureKind", "errno", "winerror", "installationStage",
+              "installationImport", "installationCheck", "installationImportFailure", "installationMissingModule"}
     def checks(item):
         assert item["status"] in {"PASS", "FAIL"} and item["stage"] in STAGES
         for key, value in item["checks"].items():
@@ -355,6 +416,14 @@ def validate_public(value):
             assert item["failureKind"] in {"assertion", "permission", "missing", "timeout", "import", "other"}
         if "installationStage" in item:
             assert item["installationStage"] in INSTALLATION_STAGES
+        if "installationImport" in item:
+            assert item.get("installationStage") == "imports" and item["installationImport"] in IMPORTS
+        if "installationCheck" in item:
+            assert "installationImport" in item and item["installationCheck"] in INSTALLATION_CHECKS
+        if "installationImportFailure" in item:
+            assert "installationImport" in item and item["installationImportFailure"] in INSTALLATION_IMPORT_FAILURES
+        if "installationMissingModule" in item:
+            assert "installationImportFailure" in item and item["installationMissingModule"] in INSTALLATION_MISSING_MODULES
         for key in {"errno", "winerror"} & item.keys():
             number(item[key])
     assert set(value) <= common | {"candidate", "qualification", "publicAcceptance", "runtimePreparation",

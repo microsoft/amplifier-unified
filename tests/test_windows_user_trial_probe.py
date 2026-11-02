@@ -825,7 +825,107 @@ def test_installed_audit_exposes_only_fixed_substage(candidate_record_model, mon
             probe.installed(model.wheel, report)
     else:
         assert probe.installed(model.wheel, report)["verifiedMembers"] > 100
-    assert report == {"installationStage": stage}
+    expected = {"installationStage": stage}
+    if fault == "origin":
+        expected.update(installationImport="amplifier_web", installationCheck="import_origin")
+    assert report == expected
+
+
+@pytest.mark.parametrize("package", list(probe.IMPORTS))
+@pytest.mark.parametrize("fault", ["missing-posix", "missing-private", "symbol", "distribution"])
+def test_installed_import_failure_identifies_exact_check_without_exception_prose(
+        candidate_record_model, monkeypatch, package, fault):
+    model = candidate_record_model
+    prior = list(probe.IMPORTS)[:list(probe.IMPORTS).index(package)]
+    seen = []
+    def distribution(name):
+        if fault == "distribution" and seen and seen[-1] == package:
+            raise probe.metadata.PackageNotFoundError("private-distribution")
+        return model.dist
+    monkeypatch.setattr(probe.metadata, "distribution", distribution)
+    def module(name):
+        seen.append(name)
+        if name == package:
+            if fault in {"missing-posix", "missing-private"}:
+                raise ModuleNotFoundError("private path, token, traceback",
+                    name="fcntl" if fault == "missing-posix" else "private_module_name")
+            if fault == "symbol":
+                raise ImportError("private missing symbol", name="amplifier_core", path="/private/file")
+        return types.SimpleNamespace(__file__=str(model.site / "amplifier_web/unit0.py"))
+    monkeypatch.setattr(probe.importlib, "import_module", module)
+    diagnostics = {}
+    with pytest.raises(ImportError):
+        probe.installed(model.wheel, diagnostics)
+    assert seen == [*prior, package]
+    assert diagnostics == {
+        "installationStage": "imports", "installationImport": package,
+        "installationCheck": "distribution_metadata" if fault == "distribution" else "module_import",
+        "installationImportFailure": {"distribution": "distribution_not_found",
+            "symbol": "symbol_or_loader"}.get(fault, "module_not_found"),
+        "installationMissingModule": {"missing-posix": "fcntl", "symbol": "amplifier_core"}.get(fault, "other")}
+    result = report()
+    result.update(diagnostics)
+    probe.validate_public(result)
+    serialized = json.dumps(result)
+    for forbidden in ("private-distribution", "private path", "private_module_name", "/private/file", "private missing"):
+        assert forbidden not in serialized
+
+
+@pytest.mark.parametrize("field,value", [
+    ("installationImport", "private.import"), ("installationCheck", "/private/path"),
+    ("installationImportFailure", "private error"), ("installationMissingModule", "private_module"),
+])
+def test_installed_import_diagnostic_fields_are_strictly_allowlisted(field, value):
+    result = report()
+    result.update(installationStage="imports", installationImport="amplifier_web.host.session",
+        installationCheck="module_import", installationImportFailure="module_not_found",
+        installationMissingModule="fcntl")
+    probe.validate_public(result)
+    result[field] = value
+    with pytest.raises(AssertionError):
+        probe.validate_public(result)
+
+
+def test_installed_foundation_api_failure_has_its_own_exact_label(candidate_record_model, monkeypatch):
+    model = candidate_record_model
+    monkeypatch.setattr(probe.metadata, "distribution", lambda name: model.dist)
+    monkeypatch.setattr(probe.metadata, "version", lambda name: "2.0.2")
+    monkeypatch.setattr(probe.importlib, "import_module", lambda name: types.SimpleNamespace(
+        __file__=str(model.site / "amplifier_web/unit0.py")))
+    session = types.ModuleType("amplifier_foundation.session")
+    def missing(name):
+        if name == "prepare_session_directory":
+            raise ImportError("private symbol diagnostics", name="amplifier_foundation.session")
+        raise AttributeError(name)
+    session.__getattr__ = missing
+    monkeypatch.setitem(sys.modules, "amplifier_foundation.session", session)
+    diagnostics = {}
+    with pytest.raises(ImportError):
+        probe.installed(model.wheel, diagnostics)
+    assert diagnostics == {
+        "installationStage": "imports", "installationImport": "amplifier_foundation",
+        "installationCheck": "foundation_api", "installationImportFailure": "symbol_or_loader",
+        "installationMissingModule": "amplifier_foundation.session"}
+    result = report()
+    result.update(diagnostics)
+    probe.validate_public(result)
+
+
+def test_installed_success_clears_prior_failure_diagnostics(candidate_record_model, monkeypatch):
+    model = candidate_record_model
+    monkeypatch.setattr(probe.metadata, "distribution", lambda name: model.dist)
+    monkeypatch.setattr(probe.metadata, "version", lambda name: "2.0.2")
+    monkeypatch.setattr(probe.metadata, "distributions", lambda: [model.dist])
+    monkeypatch.setattr(probe.importlib, "import_module", lambda name: types.SimpleNamespace(
+        __file__=str(model.site / "amplifier_web/unit0.py")))
+    session = types.ModuleType("amplifier_foundation.session")
+    session.prepare_session_directory = lambda: None
+    monkeypatch.setitem(sys.modules, "amplifier_foundation.session", session)
+    diagnostics = {"installationStage": "imports", "installationImport": "amplifier_module_loop_live",
+        "installationCheck": "module_import", "installationImportFailure": "module_not_found",
+        "installationMissingModule": "fcntl"}
+    probe.installed(model.wheel, diagnostics)
+    assert diagnostics == {"installationStage": "complete"}
 
 
 def test_public_audit_substage_has_no_freeform_escape():
