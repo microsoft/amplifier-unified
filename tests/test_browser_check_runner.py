@@ -1550,8 +1550,8 @@ def test_python_bounded_capture_pass_or_failure_keeps_root_cwd_and_exit(tmp_path
 
 
 def test_python_bounded_capture_flood_drains_binary_chunks_without_unbounded_log(tmp_path):
-    source = ('import os;os.write(1,b\"HEAD\\\\xff\"+b\"a\"*250000);'
-              'os.write(1,b\"z\"*250000+b\"TAIL\\\\xfe\")')
+    source = ('import os;os.write(1,b"HEAD"+bytes([255])+b"a"*250000);'
+              'os.write(1,b"z"*250000+b"TAIL"+bytes([254]))')
     code, report, output = bounded_execute(tmp_path, source)
     capture = report['scenarios'][0]['logCapture']
     assert code == 0 and capture['bytesObserved'] == 500010
@@ -1669,9 +1669,9 @@ def test_python_junit_is_bounded_observation_not_an_invented_pass(tmp_path, shap
     contents = {
         'malformed': b'<testsuite>', 'oversized': b'x'*1025,
         'entities': b'<!DOCTYPE testsuite [<!ENTITY x "value">]><testsuite/>',
-        'empty': b'<testsuite tests="999"/>',
-        'passed': b'<testsuite><testcase name="one"/></testsuite>',
-        'failed': b'<testsuite><testcase name="one"><failure/></testcase></testsuite>',
+        'empty': b'<testsuite tests="0" failures="0" errors="0" skipped="0"/>',
+        'passed': b'<testsuite tests="1" failures="0" errors="0" skipped="0"><testcase name="one"/></testsuite>',
+        'failed': b'<testsuite tests="1" failures="1" errors="0" skipped="0"><testcase name="one"><failure/></testcase></testsuite>',
     }
     if shape != 'missing':
         raw.write_bytes(contents[shape])
@@ -1688,7 +1688,7 @@ def test_python_junit_is_bounded_observation_not_an_invented_pass(tmp_path, shap
 
 @pytest.mark.parametrize('shape', ['missing', 'malformed', 'oversized', 'empty'])
 def test_python_exit_zero_cannot_invent_junit_success(tmp_path, monkeypatch, shape):
-    monkeypatch.setattr(runner, 'junit_evidence', lambda *args: {
+    monkeypatch.setattr(runner, 'junit_evidence', lambda *args, **kwargs: {
         'status': 'parsed' if shape == 'empty' else shape,
         'counts': {'testcases': 0, 'failure': 0, 'error': 0} if shape == 'empty' else None})
     report = {'passed': True, 'complete': True, 'scenarios': [
@@ -1751,10 +1751,11 @@ def test_python_full_mode_requires_original_source_deadline_and_no_replay(tmp_pa
 def test_python_profile_keeps_initial_deadline_and_independent_completion_fields(tmp_path, monkeypatch, exit_code):
     output = tmp_path / 'output'
     deadline = runner.time.monotonic() + 10
-    xml = '<testsuite><testcase name="one">' + ('<failure/>' if exit_code else '') + '</testcase></testsuite>'
-    command = [sys.executable, '-c', 'from pathlib import Path;'
-               f'Path({str(output / "junit.pending.xml")!r}).write_text({xml!r});'
-               f'print("one test finished",flush=True);raise SystemExit({exit_code})']
+    xml = f'<testsuite tests="1" failures="{exit_code}" errors="0" skipped="0"><testcase name="one">' + ('<failure/>' if exit_code else '') + '</testcase></testsuite>'
+    command = [sys.executable, '-c', 'import sys;from pathlib import Path;'
+               f'Path(sys.argv[1].split("=",1)[1]).write_text({xml!r});'
+               f'print("one test finished",flush=True);raise SystemExit({exit_code})',
+               '--junitxml=output/python-checks/junit.pending.xml']
     monkeypatch.setattr(runner, 'PYTHON_COMMAND', command)
     save = runner.save
     checkpoints = []
@@ -1772,6 +1773,9 @@ def test_python_profile_keeps_initial_deadline_and_independent_completion_fields
     assert report['passed'] is (exit_code == 0)
     assert report['junit']['counts'] == {'testcases': 1, 'failure': exit_code, 'error': 0, 'skipped': 0}
     assert report['scenarios'][0]['command'] == command
+    assert report['scenarios'][0]['executedCommand'][-1].startswith('--junitxml=/proc/self/fd/')
+    assert report['scenarios'][0]['junitFileIdentity'] == [
+        (output / 'junit.pending.xml').stat().st_dev, (output / 'junit.pending.xml').stat().st_ino]
     assert all(not r['passed'] for r in checkpoints if r['junit']['status'] == 'not_started')
     assert runner.python_suite(tmp_path, output, {}, deadline, finalize=True) == exit_code
     with pytest.raises(ValueError, match='no replay'):
@@ -1801,13 +1805,328 @@ def test_hangs():
 ''')
     output = tmp_path / 'results'
     row = {'id': 'pytest', 'command': [sys.executable, '-u', '-m', 'pytest', '-v', '--tb=short',
-           '-c', '/dev/null', str(tests), '--junitxml=' + str(output / 'junit.pending.xml')],
+           '-c', '/dev/null', str(tests), '--junitxml=output/python-checks/junit.pending.xml'],
            'env': {'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1'}}
     code, report, output = execute(tmp_path, [row], budget=30, case_timeout=30,
-                                  cwd=tmp_path, log_limit=16384, interrupt_grace=3)
+                                  cwd=tmp_path, log_limit=16384, interrupt_grace=3,
+                                  junit_output=output / 'junit.pending.xml')
     assert code == 1 and report['complete'] and report['scenarios'][0]['reason'] == 'timeout'
     assert runner.finish_python_report(output, report) == 1
     assert not report['pytestSessionComplete'] and not report['passed']
-    assert report['junit']['status'] == 'parsed' and report['junit']['counts']['testcases'] >= 1
+    # Pytest may retain the interrupted setup-only reporter without a name/count.
+    # Keep that bounded XML, but never turn partial coverage into invented counts.
+    assert report['junit']['status'] in {'parsed', 'invalid'}
+    if report['junit']['status'] == 'parsed':
+        assert report['junit']['counts']['testcases'] >= 1
+    else:
+        assert report['junit']['reason'] in {'case_identity_missing', 'counter_mismatch'}
+        assert report['junit']['counts'] is None
     assert report['pytestSessionStatus'] == 'incomplete'
     assert b'test_first PASSED' in (output / 'pytest.log').read_bytes()
+
+
+def plant_evidence_entry(path, shape, outside):
+    if shape == 'symlink':
+        path.symlink_to(outside)
+    elif shape == 'dangling':
+        path.symlink_to(outside.with_name('missing-target'))
+    elif shape == 'hardlink':
+        os.link(outside, path)
+    else:
+        assert shape == 'fifo'
+        os.mkfifo(path)
+
+
+@pytest.mark.parametrize('shape', ['symlink', 'dangling', 'hardlink', 'fifo'])
+@pytest.mark.parametrize('reader', ['junit', 'results'])
+def test_python_evidence_reads_refuse_special_entries_without_blocking(tmp_path, shape, reader):
+    output = tmp_path / 'evidence'
+    output.mkdir()
+    outside = tmp_path / 'outside'
+    outside.write_bytes(b'private bytes never read')
+    name = 'junit.pending.xml' if reader == 'junit' else 'results.json'
+    plant_evidence_entry(output / name, shape, outside)
+    if reader == 'junit':
+        result = runner.junit_evidence(output / name, output / 'junit.xml')
+        assert result['status'] == 'unreadable' and result['counts'] is None
+    else:
+        with pytest.raises(OSError):
+            runner.read_python_report(output)
+    assert outside.read_bytes() == b'private bytes never read'
+    assert not (tmp_path / 'missing-target').exists()
+
+
+@pytest.mark.parametrize('shape', ['symlink', 'dangling', 'hardlink', 'fifo'])
+@pytest.mark.parametrize('writer', ['results', 'junit', 'head', 'tail'])
+def test_python_evidence_writers_never_clobber_external_or_special_entries(tmp_path, shape, writer):
+    output = tmp_path / 'evidence'
+    output.mkdir()
+    outside = tmp_path / 'outside'
+    outside.write_bytes(b'untouched external bytes')
+    name = {'results': 'results.json', 'junit': 'junit.xml', 'head': 'pytest.log', 'tail': 'pytest.log.tail'}[writer]
+    plant_evidence_entry(output / name, shape, outside)
+    if writer == 'results':
+        with pytest.raises(OSError):
+            runner.save(output, {'passed': False})
+    elif writer == 'junit':
+        (output / 'junit.pending.xml').write_bytes(b'<testsuite tests="1" failures="0" errors="0" skipped="0"><testcase name="one"/></testsuite>')
+        result = runner.junit_evidence(output / 'junit.pending.xml', output / name)
+        assert result['status'] == 'retention_failed' and result['counts'] is None
+    else:
+        with pytest.raises(OSError):
+            runner.BoundedLog(output / 'pytest.log', 1024)
+    assert outside.read_bytes() == b'untouched external bytes'
+    assert not (tmp_path / 'missing-target').exists()
+    assert not list(output.glob('.*.tmp'))
+
+
+@pytest.mark.parametrize('shape', ['symlink', 'dangling', 'hardlink', 'fifo'])
+def test_python_report_does_not_use_predictable_temporary_entry(tmp_path, shape):
+    outside = tmp_path / 'outside'
+    outside.write_bytes(b'retained')
+    output = tmp_path / 'evidence'
+    output.mkdir()
+    plant_evidence_entry(output / 'results.tmp', shape, outside)
+    runner.save(output, {'passed': False})
+    assert json.loads((output / 'results.json').read_text()) == {'passed': False}
+    assert outside.read_bytes() == b'retained'
+    assert not (tmp_path / 'missing-target').exists()
+    assert not list(output.glob('.*.tmp'))
+
+
+@pytest.mark.parametrize('shape', ['symlink', 'hardlink'])
+def test_python_report_rechecks_destination_before_atomic_publish(tmp_path, monkeypatch, shape):
+    output = tmp_path / 'evidence'
+    output.mkdir()
+    outside = tmp_path / 'outside'
+    outside.write_bytes(b'retained')
+    runner.save(output, {'passed': False})
+    original = runner.EvidenceFile.write
+    def replace_after_open(file, data):
+        size = original(file, data)
+        (output / 'results.json').unlink()
+        plant_evidence_entry(output / 'results.json', shape, outside)
+        return size
+    monkeypatch.setattr(runner.EvidenceFile, 'write', replace_after_open)
+    with pytest.raises(OSError):
+        runner.save(output, {'passed': True})
+    assert outside.read_bytes() == b'retained'
+    assert not list(output.glob('.*.tmp'))
+
+
+def test_python_evidence_read_rechecks_identity_after_open(tmp_path, monkeypatch):
+    raw = tmp_path / 'junit.pending.xml'
+    raw.write_bytes(b'<testsuite tests="0" failures="0" errors="0" skipped="0"/>')
+    outside = tmp_path / 'outside'
+    outside.write_bytes(b'untouched')
+    read = runner.EvidenceFile.read
+    def replace_after_read(file, size):
+        data = read(file, size)
+        raw.unlink()
+        raw.symlink_to(outside)
+        return data
+    monkeypatch.setattr(runner.EvidenceFile, 'read', replace_after_read)
+    result = runner.junit_evidence(raw, tmp_path / 'junit.xml')
+    assert result['status'] == 'unreadable' and result['counts'] is None
+    assert outside.read_bytes() == b'untouched'
+    assert not (tmp_path / 'junit.xml').exists()
+
+
+def test_python_atomic_publication_refuses_exclusive_temp_collision(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(runner.uuid, 'uuid4', lambda: SimpleNamespace(hex='collision'))
+    outside = tmp_path / 'outside'
+    outside.write_bytes(b'untouched')
+    (tmp_path / '.results.json.collision.tmp').symlink_to(outside)
+    with pytest.raises(OSError):
+        runner.save(tmp_path, {'passed': False})
+    assert outside.read_bytes() == b'untouched'
+    assert not (tmp_path / 'results.json').exists()
+
+
+@pytest.mark.parametrize('name', ['results.json', 'pytest.log', 'pytest.log.tail', 'junit.pending.xml', 'junit.xml'])
+def test_python_initialize_rejects_dangling_evidence(tmp_path, name):
+    (tmp_path / name).symlink_to(tmp_path / 'missing')
+    with pytest.raises(ValueError, match='already exists'):
+        runner.python_suite(tmp_path, tmp_path, {}, runner.time.monotonic() + 10, initialize=True)
+    assert not (tmp_path / 'missing').exists()
+
+
+@pytest.mark.parametrize('name', ['results.json', 'pytest.log', 'pytest.log.tail', 'junit.pending.xml'])
+@pytest.mark.parametrize('shape', ['symlink', 'hardlink', 'fifo'])
+def test_python_replacement_after_initialization_refuses_before_launch(tmp_path, monkeypatch, name, shape):
+    output = tmp_path / 'evidence'
+    deadline = runner.time.monotonic() + 10
+    runner.python_suite(tmp_path, output, {}, deadline, initialize=True)
+    outside = tmp_path / 'outside'
+    outside.write_bytes(b'do not overwrite')
+    path = output / name
+    if path.exists():
+        path.unlink()
+    plant_evidence_entry(path, shape, outside)
+    monkeypatch.setattr(runner.subprocess, 'Popen', lambda *a, **k: pytest.fail('Unsafe evidence must not launch pytest'))
+    if name == 'results.json':
+        with pytest.raises(OSError):
+            runner.python_suite(tmp_path, output, {}, deadline)
+    else:
+        assert runner.python_suite(tmp_path, output, {}, deadline) == 1
+        assert not runner.read_python_report(output)['passed']
+    assert outside.read_bytes() == b'do not overwrite'
+
+
+def test_python_evidence_directory_symlink_cannot_redirect_creation(tmp_path):
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (tmp_path / 'redirect').symlink_to(outside, target_is_directory=True)
+    with pytest.raises(OSError):
+        runner.python_suite(tmp_path, tmp_path / 'redirect' / 'new', {},
+                            runner.time.monotonic() + 10, initialize=True)
+    assert list(outside.iterdir()) == []
+
+
+@pytest.mark.parametrize('entry', ['pytest.log', 'pytest.log.tail'])
+def test_python_open_log_identity_replacement_is_capture_failure_not_external_write(tmp_path, entry):
+    outside = tmp_path / 'outside'
+    outside.write_bytes(b'retained')
+    output = tmp_path / 'evidence'
+    output.mkdir()
+    log = runner.BoundedLog(output / 'pytest.log', 10)
+    try:
+        (output / entry).unlink()
+        (output / entry).symlink_to(outside)
+        with pytest.raises(OSError):
+            log.append(b'0123456789')
+        log.append(b'discarded now')
+        assert log.receipt()['captureError']
+        assert log.receipt()['bytesRetained'] is None
+    finally:
+        log.close()
+    assert outside.read_bytes() == b'retained'
+
+
+def test_python_junit_expected_writer_identity_cannot_be_replaced(tmp_path):
+    raw = tmp_path / 'junit.pending.xml'
+    owned = runner.EvidenceFile(raw, create=True)
+    expected = list(owned.identity)
+    try:
+        raw.unlink()
+        raw.write_bytes(b'<testsuite tests="1" failures="0" errors="0" skipped="0"><testcase name="other"/></testsuite>')
+        result = runner.junit_evidence(raw, tmp_path / 'junit.xml', expected=expected)
+        assert result['status'] == 'unreadable' and result['counts'] is None
+        assert not (tmp_path / 'junit.xml').exists()
+    finally:
+        owned.close()
+
+
+def test_python_junit_child_uses_owned_fd_after_path_replacement(tmp_path, monkeypatch):
+    output = tmp_path / 'evidence'
+    raw = output / 'junit.pending.xml'
+    outside = tmp_path / 'outside'
+    outside.write_bytes(b'external bytes')
+    xml = '<testsuite tests="1" failures="0" errors="0" skipped="0"><testcase name="one"/></testsuite>'
+    source = ('import sys;from pathlib import Path;'
+              f'p=Path({str(raw)!r});p.unlink();p.symlink_to({str(outside)!r});'
+              f'Path(sys.argv[1].split("=",1)[1]).write_text({xml!r})')
+    monkeypatch.setattr(runner, 'PYTHON_COMMAND', [sys.executable, '-c', source,
+        '--junitxml=output/python-checks/junit.pending.xml'])
+    deadline = runner.time.monotonic() + 10
+    runner.python_suite(tmp_path, output, {}, deadline, initialize=True)
+    assert runner.python_suite(tmp_path, output, {}, deadline) == 1
+    report = runner.read_python_report(output)
+    assert report['scenarios'][0]['exitCode'] == 0
+    assert report['scenarios'][0]['reason'] == 'junit_identity_changed'
+    assert report['junit']['status'] == 'unreadable' and report['junit']['counts'] is None
+    assert outside.read_bytes() == b'external bytes'
+
+
+@pytest.mark.parametrize('child_exits', [False, True])
+def test_python_capture_disk_error_still_drains_and_retires_owned_child(tmp_path, monkeypatch, child_exits):
+    pid = tmp_path / 'owned.pid'
+    write = runner.EvidenceFile.write
+    failed = []
+    def disk_full(file, data):
+        if file.name == 'pytest.log':
+            failed.append(True)
+            raise OSError('Synthetic ENOSPC')
+        return write(file, data)
+    monkeypatch.setattr(runner.EvidenceFile, 'write', disk_full)
+    source = f'''
+import os,signal,time
+from pathlib import Path
+signal.signal(signal.SIGINT,signal.SIG_IGN)
+Path({str(pid)!r}).write_text(str(os.getpid()))
+os.write(1,b"progress")
+{'raise SystemExit(0)' if child_exits else 'while True: os.write(1,b"x"*65536)'}
+'''
+    code, report, _ = bounded_execute(tmp_path, source, budget=5, case_timeout=5)
+    row, = report['scenarios']
+    assert code == 1 and row['status'] == 'failed'
+    assert row['reason'] == 'log_capture_failed'
+    assert row['logError'] == 'OSError' and row['logCapture']['captureError'] == 'OSError'
+    assert row['logCapture']['bytesRetained'] is None and len(failed) == 1
+    assert row['cleanup']['remaining'] == []
+    if child_exits:
+        assert row['exitCode'] == 0
+    child = Path('/proc') / pid.read_text() / 'stat'
+    assert not child.exists() or child.read_text().rsplit(')', 1)[1].split()[0] == 'Z'
+
+
+def test_python_cleanup_drain_error_does_not_skip_available_identity_inspection(monkeypatch):
+    inspections = []
+    monkeypatch.setattr(runner, 'owned_members', lambda *args: inspections.append(True) or {})
+    def failed_drain():
+        raise OSError('Capture failed')
+    cleanup = runner.retire_group(-1, 'synthetic', drain=failed_drain)
+    assert inspections
+    assert cleanup == {'remaining': [], 'terminated': 0, 'drainError': 'OSError'}
+
+
+@pytest.mark.parametrize('xml', [
+    '<testsuite tests="2" failures="1" errors="0" skipped="0"><testcase name="one"/></testsuite>',
+    '<testsuite tests="1" failures="0" errors="1" skipped="0"><testcase name="one"/></testsuite>',
+    '<testsuite tests="-1" failures="0" errors="0" skipped="0"><testcase name="one"/></testsuite>',
+    '<testsuite tests="1" failures="-1" errors="0" skipped="0"><testcase name="one"/></testsuite>',
+    '<testsuite tests="1" failures="nan" errors="0" skipped="0"><testcase name="one"/></testsuite>',
+    '<testsuite tests="1" failures="0" errors="0"><testcase name="one"/></testsuite>',
+    '<testsuite><testcase name="one"/></testsuite>',
+    '<testsuite tests="1" failures="0" errors="0" skipped="0"><testcase/></testsuite>',
+    '<testsuite tests="1" failures="0" errors="0" skipped="0"><testcase name="one"><failure/></testcase></testsuite>',
+    '<testsuite tests="1" failures="0" errors="0" skipped="1"><testcase name="one"/></testsuite>',
+    '<testsuite tests="1" failures="0" errors="0" skipped="0"><wrapper><testcase name="one"/></wrapper></testsuite>',
+    '<testsuite tests="1" failures="0" errors="0" skipped="0"><testcase name="one"><testcase name="nested"/></testcase></testsuite>',
+    '<testsuites tests="2"><testsuite tests="1" failures="0" errors="0" skipped="0"><testcase name="one"/></testsuite></testsuites>',
+    '<testsuites><testsuites/></testsuites>',
+])
+def test_python_exit_zero_with_contradictory_junit_cannot_pass(tmp_path, xml):
+    (tmp_path / 'junit.pending.xml').write_text(xml)
+    report = {'passed': True, 'complete': True, 'scenarios': [
+        {'status': 'passed', 'exitCode': 0, 'reason': None, 'cleanup': {'remaining': [], 'terminated': 0}}]}
+    assert runner.finish_python_report(tmp_path, report) == 1
+    assert report['junit']['status'] == 'invalid' and report['junit']['counts'] is None
+    assert report['pytestSessionComplete'] and not report['passed']
+    assert (tmp_path / 'junit.xml').read_text() == xml
+
+
+@pytest.mark.parametrize('outcomes,counts,exit_code', [
+    ('', {'testcases': 1, 'failure': 0, 'error': 0, 'skipped': 0}, 0),
+    ('<skipped type="pytest.skip"/>', {'testcases': 1, 'failure': 0, 'error': 0, 'skipped': 1}, 0),
+    ('<skipped type="pytest.xfail"/>', {'testcases': 1, 'failure': 0, 'error': 0, 'skipped': 1}, 0),
+    ('<error/><error/>', {'testcases': 1, 'failure': 0, 'error': 2, 'skipped': 0}, 1),
+    ('<skipped/><error/>', {'testcases': 1, 'failure': 0, 'error': 1, 'skipped': 1}, 1),
+])
+def test_python_junit_pytest_properties_skips_and_multiple_error_reports(tmp_path, outcomes, counts, exit_code):
+    # Matches pytest 9.1.1 LogXML's flat testsuites/testsuite/case form. Failure
+    # counts are outcome children, which can exceed testcase count on teardown.
+    xml = f'''<?xml version="1.0" encoding="utf-8"?>
+<testsuites name="pytest tests"><testsuite name="pytest" tests="1"
+ failures="{counts['failure']}" errors="{counts['error']}" skipped="{counts['skipped']}" time="0.1">
+ <properties><property name="platform" value="fixture"/></properties>
+ <testcase classname="test_example" name="one" time="0.1"><properties><property name="x" value="y"/></properties>{outcomes}<system-out>captured</system-out></testcase>
+</testsuite></testsuites>'''
+    (tmp_path / 'junit.pending.xml').write_text(xml)
+    report = {'passed': exit_code == 0, 'complete': True, 'scenarios': [
+        {'status': 'passed' if exit_code == 0 else 'failed', 'exitCode': exit_code,
+         'reason': None, 'cleanup': {'remaining': [], 'terminated': 0}}]}
+    assert runner.finish_python_report(tmp_path, report) == exit_code
+    assert report['junit']['status'] == 'parsed' and report['junit']['counts'] == counts
+    assert report['pytestSessionComplete'] and report['passed'] is (exit_code == 0)

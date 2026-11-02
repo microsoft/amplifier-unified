@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import stat
 import subprocess
 import time
 import uuid
@@ -24,10 +25,157 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def evidence_directory(path, *, create=False):
+    """Pin existing directories without following symlinks, including parents.
+
+    The evidence directory and its parents remain caller-owned during execution.
+    This rejects planted/replaced entries; it is not isolation from a hostile
+    same-UID writer renaming directories or hardlinking open inodes concurrently.
+    """
+    path = Path(os.path.abspath(path))
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        for name in path.parts[1:]:
+            if create:
+                try:
+                    os.mkdir(name, mode=0o700, dir_fd=fd)
+                except FileExistsError:
+                    pass
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                            dir_fd=fd)
+            os.close(fd)
+            fd = child
+        info = os.fstat(fd)
+        if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+            raise OSError('Evidence directory is not privately writable by this caller')
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def ensure_evidence_directory(path):
+    os.close(evidence_directory(path, create=True))
+
+
+def regular_evidence(info):
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.geteuid():
+        raise OSError('Evidence must be a caller-owned, single-link regular file')
+    return info
+
+
+def evidence_entry(directory, name):
+    try:
+        return regular_evidence(os.stat(name, dir_fd=directory, follow_symlinks=False))
+    except FileNotFoundError:
+        return None
+
+
+def file_identity(info):
+    return (info.st_dev, info.st_ino) if info is not None else None
+
+
+class EvidenceFile:
+    """Only this runner's evidence files; never truncate an existing entry."""
+    def __init__(self, path, *, create=False):
+        self.name = path.name
+        self.directory = evidence_directory(path.parent)
+        fd = None
+        try:
+            flags = os.O_RDWR | os.O_CREAT | os.O_EXCL if create else os.O_RDONLY
+            fd = os.open(self.name, flags | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+                         0o600, dir_fd=self.directory)
+            self.identity = file_identity(regular_evidence(os.fstat(fd)))
+            if file_identity(evidence_entry(self.directory, self.name)) != self.identity:
+                raise OSError('Evidence entry changed during open')
+            self.stream = os.fdopen(fd, 'r+b' if create else 'rb', buffering=0)
+        except BaseException:
+            if fd is not None:
+                os.close(fd)
+            os.close(self.directory)
+            raise
+
+    def check(self):
+        info = regular_evidence(os.fstat(self.stream.fileno()))
+        if (file_identity(info) != self.identity
+                or file_identity(evidence_entry(self.directory, self.name)) != self.identity):
+            raise OSError('Evidence identity changed')
+        return info
+
+    def write(self, data):
+        self.check()
+        return self.stream.write(data)
+
+    def read(self, size):
+        self.check()
+        return self.stream.read(size)
+
+    def seek(self, offset):
+        self.check()
+        return self.stream.seek(offset)
+
+    def unlink(self):
+        self.check()
+        os.unlink(self.name, dir_fd=self.directory)
+
+    def fileno(self):
+        self.check()
+        return self.stream.fileno()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    def close(self):
+        self.stream.close()
+        os.close(self.directory)
+
+
+def read_evidence(path, limit, *, expected=None):
+    file = EvidenceFile(path)
+    try:
+        before = file.check()
+        if expected is not None and list(file.identity) != expected:
+            raise OSError('Evidence does not match the owned writer')
+        data = file.read(limit + 1)
+        after = file.check()
+        if ((before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+            raise OSError('Evidence changed during bounded read')
+        return data
+    finally:
+        file.close()
+
+
+def publish_evidence(path, data):
+    # Random exclusive temp, verified destination, atomic rename; no write ever
+    # follows a link or truncates an existing inode (including results.tmp).
+    temporary = EvidenceFile(path.with_name('.' + path.name + '.' + uuid.uuid4().hex + '.tmp'), create=True)
+    try:
+        previous = evidence_entry(temporary.directory, path.name)
+        remaining = memoryview(data)
+        while remaining:
+            size = temporary.write(remaining[:65536])
+            if not size:
+                raise OSError('Short evidence write')
+            remaining = remaining[size:]
+        temporary.check()
+        if file_identity(evidence_entry(temporary.directory, path.name)) != file_identity(previous):
+            raise OSError('Evidence destination changed before publication')
+        os.replace(temporary.name, path.name, src_dir_fd=temporary.directory,
+                   dst_dir_fd=temporary.directory)
+    finally:
+        try:
+            if file_identity(evidence_entry(temporary.directory, temporary.name)) == temporary.identity:
+                temporary.unlink()
+        finally:
+            temporary.close()
+
+
 def save(output, report):
-    temporary = output / 'results.tmp'
-    temporary.write_text(json.dumps(report, indent=2) + '\n')
-    temporary.replace(output / 'results.json')
+    publish_evidence(output / 'results.json', (json.dumps(report, indent=2) + '\n').encode())
 
 
 OWNER_ENV = 'AMPLIFIER_BROWSER_CHECK_OWNER'
@@ -91,9 +239,14 @@ def owned_members(group, token, known, preexisting=None):
 
 def retire_group(group, token, preexisting=None, *, drain=None):
     known = {}
+    drain_error = None
     def inspect():
+        nonlocal drain_error
         if drain:
-            drain()
+            try:
+                drain()
+            except (OSError, RuntimeError) as exc:
+                drain_error = type(exc).__name__
         current = owned_members(group, token, known, preexisting)
         # Once ownership is proven, retain PID/start-time identity while the
         # process exits; Linux can revoke its environ before it becomes a zombie.
@@ -129,6 +282,8 @@ def retire_group(group, token, preexisting=None, *, drain=None):
 
     def receipt(remaining):
         result = {'remaining': remaining, 'terminated': len(initial)}
+        if drain_error:
+            result['drainError'] = drain_error
         if observed:
             # No arguments, environment, full paths or unproven process owners.
             result['observedBeforeTermination'] = observed
@@ -169,15 +324,17 @@ class BoundedLog:
             raise ValueError('Log bound must contain a head and tail')
         self.path, self.limit = path, limit
         self.head_limit, self.tail_limit = limit // 2, limit - limit // 2
-        self.head = path.open('wb', buffering=0)
+        self.head = EvidenceFile(path, create=True)
         try:
-            self.tail = path.with_suffix(path.suffix + '.tail').open('w+b', buffering=0)
+            self.tail = EvidenceFile(path.with_suffix(path.suffix + '.tail'), create=True)
         except BaseException:
             self.head.close()
             raise
         self.observed = self.head_bytes = self.tail_bytes = self.cursor = 0
         self.eof = self.finalized = False
         self.pipe = None
+        self.error = None
+        self.discarded = 0
 
     def attach(self, pipe):
         self.pipe = pipe
@@ -185,6 +342,19 @@ class BoundedLog:
 
     def append(self, data):
         self.observed += len(data)
+        if self.error:
+            self.discarded += len(data)
+            return
+        try:
+            self._append(data)
+        except OSError as exc:
+            self.error = type(exc).__name__
+            # The failing chunk may be partially written; do not claim an exact
+            # retained byte count after an I/O error.
+            self.discarded += len(data)
+            raise
+
+    def _append(self, data):
         head = min(len(data), self.head_limit - self.head_bytes)
         if self.head.write(data[:head]) != head:
             raise OSError('Short log head write')
@@ -208,14 +378,21 @@ class BoundedLog:
                 data = os.read(self.pipe.fileno(), 65536)
             except BlockingIOError:
                 return
+            except OSError as exc:
+                self.error = self.error or type(exc).__name__
+                return
             if not data:
                 self.eof = True
                 return
-            self.append(data)
+            try:
+                self.append(data)
+            except OSError:
+                pass  # Retain first error; drain/discard so cleanup can proceed.
 
     def receipt(self):
         return {'limitBytes': self.limit, 'bytesObserved': self.observed,
-                'bytesRetained': self.head_bytes + self.tail_bytes,
+                'bytesRetained': None if self.error else self.head_bytes + self.tail_bytes,
+                'captureError': self.error, 'discardedBytes': self.discarded,
                 'truncated': self.observed > self.limit, 'eof': self.eof,
                 'format': 'head-tail' if self.finalized else 'head-ring-tail',
                 'tailCheckpointMayLag': not self.finalized,
@@ -225,6 +402,8 @@ class BoundedLog:
     def close(self):
         try:
             self.drain()
+            if self.error:
+                return
             start = self.cursor if self.tail_bytes == self.tail_limit else 0
             for offset, size in ((start, self.tail_bytes - start), (0, start)):
                 self.tail.seek(offset)
@@ -236,13 +415,15 @@ class BoundedLog:
                         raise OSError('Short finalized log write')
                     size -= len(data)
             self.finalized = True
+            self.tail.unlink()
+        except OSError as exc:
+            self.error = self.error or type(exc).__name__
+            raise
         finally:
             self.head.close()
             self.tail.close()
             if self.pipe is not None:
                 self.pipe.close()
-        if self.finalized:
-            self.path.with_suffix(self.path.suffix + '.tail').unlink()
 
 
 def interrupt_owned(process, token, preexisting):
@@ -322,7 +503,7 @@ def initial_app004(provenance):
 
 def save_app004(output, report):
     folder = output / 'app004-qualification'
-    folder.mkdir(parents=True, exist_ok=True)
+    ensure_evidence_directory(folder)
     save(folder, report)
 
 
@@ -424,8 +605,8 @@ def app004_verdict(row, folder):
 
 def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenance=None,
                   app004_qualification=False, cwd=None, log_limit=None, interrupt_grace=0,
-                  deadline=None, report_fields=None):
-    output.mkdir(parents=True, exist_ok=True)
+                  deadline=None, report_fields=None, junit_output=None):
+    ensure_evidence_directory(output)
     report = initial_report(plan, provenance)
     report.update(report_fields or {})
     save(output, report)  # Even a killed job leaves its complete intended coverage.
@@ -471,6 +652,7 @@ def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenan
                 save_app004(output, qualification)
             preexisting = None
             capture = None
+            junit_file = None
             try:
                 env = {**os.environ, **{k: v.replace('{root}', str(root))
                                        for k, v in row.get('env', {}).items()}}
@@ -479,15 +661,33 @@ def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenan
                     env.update(CHAT_REFERENCE_NEGATIVE_RELOAD='1', APP004_QUALIFICATION_TOKEN=token,
                                CHAT_REFERENCE_EVIDENCE_DIR=str(folder / 'negative'))
                 preexisting = process_identities()
+                command = row['command']
+                inherited = {}
+                if junit_output is not None:
+                    # Pytest opens this owned descriptor, not a replaceable
+                    # pathname. Its existing JUnit plugin/selection is unchanged.
+                    junit_file = EvidenceFile(junit_output, create=True)
+                    option = '--junitxml=output/python-checks/junit.pending.xml'
+                    if command.count(option) != 1:
+                        raise RuntimeError('Expected the fixed JUnit output argument')
+                    command = [('--junitxml=/proc/self/fd/' + str(junit_file.fileno()))
+                               if part == option else part for part in command]
+                    inherited = {'pass_fds': (junit_file.fileno(),)}
+                    row['junitFileIdentity'] = list(junit_file.identity)
+                    row['executedCommand'] = command
+                    save(output, report)
                 if log_limit is not None:
                     capture = BoundedLog(folder / row['log'], log_limit)
-                    process = subprocess.Popen(row['command'], cwd=cwd or root / 'frontend', env=env,
+                    process = subprocess.Popen(command, cwd=cwd or root / 'frontend', env=env,
                                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                               start_new_session=True)
+                                               start_new_session=True, **inherited)
                     capture.attach(process.stdout)
                     checkpoint = time.monotonic()
                     while process.poll() is None and not stopped:
                         capture.drain()
+                        if capture.error:
+                            row['reason'] = 'log_capture_failed'
+                            break
                         now = time.monotonic()
                         if now >= min(deadline, started + case_timeout):
                             row['reason'] = 'timeout'
@@ -513,9 +713,9 @@ def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenan
                             time.sleep(.01)
                     row['exitCode'] = process.poll()
                 else:
-                    with (folder / row['log']).open('wb') as log:
-                        process = subprocess.Popen(row['command'], cwd=cwd or root / 'frontend', env=env,
-                                               stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                    with EvidenceFile(folder / row['log'], create=True) as log:
+                        process = subprocess.Popen(command, cwd=cwd or root / 'frontend', env=env,
+                                               stdout=log, stderr=subprocess.STDOUT, start_new_session=True, **inherited)
                         while process.poll() is None and not stopped:
                             limit = row['timeoutSeconds'] if extra else case_timeout
                             if time.monotonic() >= min(deadline, started + limit):
@@ -536,6 +736,8 @@ def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenan
                 except (OSError, RuntimeError) as exc:
                     cleanup = {'remaining': ['unknown'], 'terminated': 0, 'error': type(exc).__name__}
                 row['cleanup'] = cleanup
+                if cleanup.get('drainError'):
+                    row['reason'] = row['reason'] or 'log_capture_failed'
                 if process and not cleanup['remaining']:
                     try:
                         process.wait(timeout=2)
@@ -551,8 +753,19 @@ def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenan
                         row['reason'] = row['reason'] or 'log_capture_failed'
                         row['logError'] = type(exc).__name__
                     row['logCapture'] = capture.receipt()
+                    if capture.error:
+                        row['logError'] = capture.error
+                        row['reason'] = row['reason'] or 'log_capture_failed'
                     if not capture.eof:
                         row['reason'] = row['reason'] or 'log_incomplete'
+                if junit_file:
+                    try:
+                        junit_file.check()
+                    except OSError as exc:
+                        row['reason'] = row['reason'] or 'junit_identity_changed'
+                        row['junitError'] = type(exc).__name__
+                    finally:
+                        junit_file.close()
                 row['durationSeconds'] = round(time.monotonic() - started, 3)
                 row['reason'] = row['reason'] or stopped
                 row['status'] = ('passed' if row.get('exitCode') == 0 and not row['reason']
@@ -596,11 +809,70 @@ def python_plan():
     return {'schemaVersion': 1, 'scenarios': [{'id': 'pytest', 'command': PYTHON_COMMAND}]}
 
 
-def junit_evidence(path, retained, *, limit=PYTHON_JUNIT_BYTES):
+def junit_counts(root):
+    """Validate pytest's flat JUnit suites, not arbitrary nested XML summaries.
+
+    Pytest can emit multiple outcome children (e.g. setup/teardown errors) for
+    one case. Count those children, not truthiness; declared tests counts cases.
+    Properties and captured output are data, never extra testcases.
+    """
+    counter_names = {'tests': 'testcases', 'failures': 'failure', 'errors': 'error', 'skipped': 'skipped'}
+
+    def declared(element, counts, *, required):
+        for key, count in counter_names.items():
+            value = element.get(key)
+            if value is None and not required:
+                continue
+            if value is None or not re.fullmatch(r'[0-9]{1,10}', value):
+                raise ValueError('missing_or_invalid_counter')
+            if int(value) != counts[count]:
+                raise ValueError('counter_mismatch')
+
+    def auxiliary(element):
+        if element.tag == 'properties':
+            if any(child.tag != 'property' or len(child) for child in element):
+                raise ValueError('invalid_properties')
+        elif element.tag in {'system-out', 'system-err'}:
+            if len(element):
+                raise ValueError('nested_output')
+        else:
+            raise ValueError('unexpected_structure')
+
+    if root.tag == 'testsuite':
+        suites = [root]
+    elif root.tag == 'testsuites' and len(root) and all(child.tag == 'testsuite' for child in root):
+        suites = list(root)
+    else:
+        raise ValueError('unsupported_junit_root')
+    total = dict.fromkeys(counter_names.values(), 0)
+    for suite in suites:
+        counts = dict.fromkeys(total, 0)
+        for case in suite:
+            if case.tag != 'testcase':
+                auxiliary(case)
+                continue
+            if not case.get('name'):
+                raise ValueError('case_identity_missing')
+            counts['testcases'] += 1
+            for item in case:
+                if item.tag in {'failure', 'error', 'skipped'}:
+                    if len(item):
+                        raise ValueError('nested_outcome')
+                    counts[item.tag] += 1
+                else:
+                    auxiliary(item)
+        declared(suite, counts, required=True)
+        for key in total:
+            total[key] += counts[key]
+    if root.tag == 'testsuites':
+        declared(root, total, required=False)
+    return total
+
+
+def junit_evidence(path, retained, *, limit=PYTHON_JUNIT_BYTES, expected=None):
     """Bound input before parsing; counts describe observed XML, not completion."""
     try:
-        with path.open('rb') as stream:
-            data = stream.read(limit + 1)
+        data = read_evidence(path, limit, expected=expected)
     except FileNotFoundError:
         return {'status': 'missing', 'counts': None}
     except OSError as exc:
@@ -612,17 +884,19 @@ def junit_evidence(path, retained, *, limit=PYTHON_JUNIT_BYTES):
         return {'status': 'malformed', 'counts': None}
     try:
         root = ET.fromstring(data)
-        if root.tag not in {'testsuite', 'testsuites'}:
-            raise ValueError('Not JUnit')
-        rows = root.findall('.//testcase')
-        counts = {'testcases': len(rows),
-                  **{key: sum(row.find(key) is not None for row in rows)
-                     for key in ('failure', 'error', 'skipped')}}
-    except (ET.ParseError, ValueError):
+    except ET.ParseError:
         return {'status': 'malformed', 'counts': None}
-    retained.write_bytes(data)
-    return {'status': 'parsed', 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest(),
-            'counts': counts, 'coverage': 'observed testcases only; exit and interruption govern completion'}
+    try:
+        counts = junit_counts(root)
+        validation = {'status': 'parsed', 'counts': counts}
+    except ValueError as exc:
+        validation = {'status': 'invalid', 'reason': str(exc), 'counts': None}
+    try:
+        publish_evidence(retained, data)
+    except OSError as exc:
+        return {'status': 'retention_failed', 'error': type(exc).__name__, 'counts': None}
+    return {**validation, 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest(),
+            'coverage': 'validated declared/observed counts only; exit and interruption govern completion'}
 
 
 def finish_python_report(output, report):
@@ -634,7 +908,8 @@ def finish_python_report(output, report):
         and row.get('cleanup') == {'remaining': [], 'terminated': 0})
     report['pytestSessionStatus'] = ('not_started' if row['status'] == 'unrun' else
                                     'completed' if report['pytestSessionComplete'] else 'incomplete')
-    report['junit'] = junit_evidence(output / 'junit.pending.xml', output / 'junit.xml')
+    report['junit'] = junit_evidence(output / 'junit.pending.xml', output / 'junit.xml',
+                                   expected=row.get('junitFileIdentity'))
     counts = report['junit'].get('counts') or {}
     report['passed'] = (row['status'] == 'passed' and report['pytestSessionComplete']
         and report['junit']['status'] == 'parsed' and counts.get('testcases', 0) > 0
@@ -644,8 +919,7 @@ def finish_python_report(output, report):
 
 
 def read_python_report(output):
-    with (output / 'results.json').open('rb') as stream:
-        data = stream.read(1024 * 1024 + 1)
+    data = read_evidence(output / 'results.json', 1024 * 1024)
     if len(data) > 1024 * 1024:
         raise ValueError('Python execution receipt exceeds its bound')
     return json.loads(data)
@@ -655,7 +929,7 @@ def python_suite(root, output, provenance, deadline, *, initialize=False, finali
     """One full pytest invocation inside the existing scenario/process owner."""
     if not math.isfinite(deadline) or deadline <= 0:
         raise ValueError('A finite early-job monotonic deadline is required')
-    output.mkdir(parents=True, exist_ok=True)
+    ensure_evidence_directory(output)
     initial = initial_report(python_plan(), provenance)
     initial.update(deadlineMonotonic=deadline, budgetSeconds=PYTHON_BUDGET_SECONDS,
                    scenarioListComplete=False, pytestSessionComplete=False,
@@ -663,11 +937,18 @@ def python_suite(root, output, provenance, deadline, *, initialize=False, finali
                    junit={'status': 'not_started', 'counts': None},
                    retentionLimits={'logBytes': PYTHON_LOG_BYTES, 'junitBytes': PYTHON_JUNIT_BYTES,
                                     'interruptGraceSeconds': 30},
-                   limits='Runner loss, disk failure, stuck preparation or external hard kill can prevent finalization/upload.')
+                   limits='Runner loss, disk failure, stuck preparation or external hard kill can prevent finalization/upload. The remaining job time is a reserve, not an enforced upload timeout. Evidence paths require caller-owned directories without concurrent hostile same-UID mutation.')
     if initialize:
-        if any((output / name).exists() for name in
-               ('results.json', 'pytest.log', 'pytest.log.tail', 'junit.pending.xml', 'junit.xml')):
-            raise ValueError('Python receipt already exists; do not reset or replay it')
+        directory = evidence_directory(output)
+        try:
+            for name in ('results.json', 'pytest.log', 'pytest.log.tail', 'junit.pending.xml', 'junit.xml'):
+                try:
+                    os.stat(name, dir_fd=directory, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                raise ValueError('Python receipt already exists; do not reset or replay it')
+        finally:
+            os.close(directory)
         save(output, initial)
         return 0
     saved = read_python_report(output)
@@ -694,6 +975,7 @@ def python_suite(root, output, provenance, deadline, *, initialize=False, finali
     run_scenarios(root, python_plan(), output, provenance=provenance, cwd=root,
                   deadline=deadline, case_timeout=PYTHON_BUDGET_SECONDS,
                   log_limit=PYTHON_LOG_BYTES, interrupt_grace=30,
+                  junit_output=output / 'junit.pending.xml',
                   report_fields={key: value for key, value in initial.items()
                                  if key not in {'scenarios', 'source', 'complete', 'passed', 'schemaVersion'}})
     return finish_python_report(output, read_python_report(output))
@@ -742,7 +1024,7 @@ def main():
     build = root / 'amplifier_web/static/build.json'
     provenance['buildMetadataSha256'] = digest(build) if build.is_file() else None
     if args.python_suite:
-        return python_suite(root, args.output.resolve(), provenance,
+        return python_suite(root, args.output.absolute(), provenance,
                             float(os.environ['PYTHON_CHECK_DEADLINE']),
                             initialize=args.initialize, finalize=args.finalize)
     plan = json.loads(args.plan.read_text())
@@ -750,12 +1032,12 @@ def main():
         plan = attachment_consumption_plan(plan)
         provenance['selection'] = 'attachment-consumption-only'
     if args.initialize:
-        args.output.mkdir(parents=True, exist_ok=True)
+        ensure_evidence_directory(args.output)
         save(args.output, initial_report(plan, provenance))
         if args.app004_qualification:
             save_app004(args.output, initial_app004(provenance))
         return 0
-    return run_scenarios(root, plan, args.output.resolve(),
+    return run_scenarios(root, plan, args.output.absolute(),
                          budget=args.budget_seconds, provenance=provenance,
                          app004_qualification=args.app004_qualification)
 

@@ -494,6 +494,11 @@ def test_full_python_evidence_budget_precedes_setup_and_always_finalizes_before_
     assert 'log_limit=PYTHON_LOG_BYTES, interrupt_grace=30' in source
     assert 'PYTHON_LOG_BYTES = 16 * 1024 * 1024' in source
     assert 'PYTHON_JUNIT_BYTES = 8 * 1024 * 1024' in source
+    assert "junit_output=output / 'junit.pending.xml'" in source
+    assert "'--junitxml=/proc/self/fd/'" in source
+    assert "'pass_fds': (junit_file.fileno(),)" in source
+    assert 'not an enforced upload timeout' in source
+    assert 'timeout-minutes' not in steps[upload]
     assert "float(os.environ['PYTHON_CHECK_DEADLINE'])" in source
     assert 'no replay' in source and "'pytestSessionComplete'" in source
     lock = __import__('tomllib').loads((ROOT / 'uv.lock').read_text())

@@ -339,6 +339,8 @@ jobs:
         if: ${{ always() && env.CHECK_SUITE == 'full' }}
         run: python scripts/browser_check_runner.py --python-suite --finalize --output output/python-checks
       - name: Retain complete and partial Python results
+        # The early 75-minute deadline reserves job time for cleanup/upload.
+        # This is not a separate five-minute upload timeout or a runner-loss guarantee.
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
