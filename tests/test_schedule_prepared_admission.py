@@ -29,6 +29,7 @@ from pathlib import Path
 from amplifier_core import HookResult
 
 INVOCATION = contextvars.ContextVar('schedule_fixture_producer', default=None)
+VALIDATION = contextvars.ContextVar('schedule_fixture_validation', default=None)
 
 def record(kind, **values):
     row = {'kind':kind, 'at':time.time(), **values}
@@ -74,6 +75,18 @@ def install():
     from amplifier_module_loop_streaming import StreamingOrchestrator
     for method in ('_execute_one_turn', '_evaluate_goal', '_summarize_goal_run', '_judge_stall'):
         wrap(StreamingOrchestrator, method)
+    from amplifier_core.validation.provider import ProviderValidator
+    original = ProviderValidator._check_protocol_compliance
+    source_hash = hashlib.sha256(inspect.getsource(original).encode()).hexdigest()
+    @functools.wraps(original)
+    async def validate(self, *args, **kwargs):
+        token = VALIDATION.set({'id':str(uuid.uuid4()),
+            'producer':'ProviderValidator._check_protocol_compliance', 'sourceSha256':source_hash})
+        try:
+            return await original(self, *args, **kwargs)
+        finally:
+            VALIDATION.reset(token)
+    ProviderValidator._check_protocol_compliance = validate
 
 def attach(coordinator):
     async def resolved(event, data):
@@ -94,11 +107,11 @@ def attach(coordinator):
 
 
 PROVIDER = '''from pathlib import Path
-import hashlib, json, time, uuid
+import hashlib, json, os, time, uuid
 from amplifier_core import ProviderInfo
 from amplifier_core.message_models import ChatResponse, TextBlock, Usage
 from amplifier_web.execution_events import CALL_PURPOSE, CURRENT_CALL
-from schedule_observer import INVOCATION, attach
+from schedule_observer import INVOCATION, VALIDATION, attach
 __amplifier_module_type__ = 'provider'
 SOURCE_LABEL = 'default'
 class Provider:
@@ -162,13 +175,15 @@ class Provider:
             record('failed', errorType=type(exc).__name__)
             raise
 async def mount(coordinator, config=None):
+    attach(coordinator)
+    await coordinator.mount('providers', Provider(config, coordinator), name='fixture')
     if (config or {}).get('source_observations'):
         with Path(config['source_observations']).open('a') as stream:
             stream.write(json.dumps({'sessionId':coordinator.session_id, 'label':SOURCE_LABEL,
+                'pid':os.getpid(), 'validation':VALIDATION.get(),
+                'coordinatorType':type(coordinator).__module__+'.'+type(coordinator).__qualname__,
                 'moduleFile':str(Path(__file__).resolve()),
                 'sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest()})+'\\n')
-    attach(coordinator)
-    await coordinator.mount('providers', Provider(config, coordinator), name='fixture')
 '''
 
 
@@ -490,11 +505,24 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
         report['sourceMounts'] = decoded['sourceMounts']
         return decoded['calls']
 
-    def assert_sources():
-        import hashlib
-        mounted = report['sourceMounts']
+    def assert_sources(mounted=None):
+        import hashlib, inspect
+        from amplifier_core.testing import MockCoordinator
+        from amplifier_core.validation.provider import ProviderValidator
+        mounted = report['sourceMounts'] if mounted is None else mounted
         expected = [source_id, *(row['target'] for row in report['expected'])]
-        assert Counter(row['sessionId'] for row in mounted) == Counter(expected)
+        actual = [row for row in mounted if row['validation'] is None]
+        validated = [row for row in mounted if row['validation'] is not None]
+        assert Counter(row['sessionId'] for row in actual) == Counter(expected)
+        assert len({row['pid'] for row in actual}) == len(expected)
+        assert Counter(row['pid'] for row in actual) == Counter(row['pid'] for row in validated)
+        assert len({row['validation']['id'] for row in validated}) == len(expected)
+        validator_hash = hashlib.sha256(inspect.getsource(ProviderValidator._check_protocol_compliance).encode()).hexdigest()
+        for row in validated:
+            assert row['sessionId'] == 'test-session'
+            assert row['coordinatorType'] == MockCoordinator.__module__ + '.' + MockCoordinator.__qualname__
+            assert row['validation']['producer'] == 'ProviderValidator._check_protocol_compliance'
+            assert row['validation']['sourceSha256'] == validator_hash
         module = source_paths['B'] / 'amplifier_module_provider_fixture' / '__init__.py'
         for row in mounted:
             assert row['label'] == 'B', row
@@ -671,6 +699,17 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
                 assert_fault_controls(report)
                 if inherited_source:
                     assert_sources()
+                    for mutation in ('extra_validation_mount', 'missing_validation_binding', 'wrong_source'):
+                        bad = copy.deepcopy(report['sourceMounts'])
+                        if mutation == 'extra_validation_mount':
+                            bad.append(copy.deepcopy(next(row for row in bad if row['validation'])))
+                        elif mutation == 'missing_validation_binding':
+                            next(row for row in bad if row['validation'])['validation'] = None
+                        else:
+                            bad[-1]['label'] = 'A'
+                        with pytest.raises(AssertionError):
+                            assert_sources(bad)
+                        report['negativeControls'].append(mutation)
                 report['verified'] = True
         except BaseException as exc:
             report['shutdownOrFinalCheckFailure'] = {'type': type(exc).__name__, 'detail': str(exc)}
