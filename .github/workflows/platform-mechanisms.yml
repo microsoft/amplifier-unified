@@ -7,6 +7,18 @@ on:
       - amplifier_web/generation_leases.py
       - amplifier_web/reset.py
       - amplifier_web/runtime_worker.py
+      - amplifier_web/runtime.py
+      - amplifier_web/runtime_environment.py
+      - amplifier_web/ownership.py
+      - amplifier_web/host/storage.py
+      - amplifier_web/auth.py
+      - amplifier_web/browser_entry.py
+      - amplifier_web/server.py
+      - amplifier_web/static/browser-entry.js
+      - amplifier_web/static/windows-login.html
+      - frontend/public/browser-entry.js
+      - frontend/public/windows-login.html
+      - pyproject.toml
       - amplifier_web/runtime_protocol.py
       - amplifier_web/worker_input.py
       - amplifier_web/message_delivery.py
@@ -26,6 +38,11 @@ on:
       - amplifier_web/session_files.py
       - amplifier_web/runtime_retention.py
       - amplifier_web/shared_state.py
+      - amplifier_web/windows_read_files.py
+      - amplifier_web/resource_files.py
+      - amplifier_web/outputs.py
+      - amplifier_web/portability.py
+      - amplifier_web/publishing.py
       - tests/test_generation_leases.py
       - tests/test_installation_guidance.py
       - tests/test_repair_lock_platform.py
@@ -37,6 +54,16 @@ on:
       - tests/test_windows_tls.py
       - tests/test_windows_service.py
       - tests/test_cli_deployment.py
+      - tests/test_browser_entry.py
+      - tests/test_windows_auth.py
+      - tests/test_windows_user_trial_probe.py
+      - tests/fixtures/windows_user_trial_probe.py
+      - tests/test_runtime.py
+      - tests/test_runtime_updates.py
+      - tests/test_ownership_notices.py
+      - tests/test_optional_controller_availability.py
+      - tests/test_windows_read_files.py
+      - tests/test_service.py
       - tests/conftest.py
       - tests/windows/install.Tests.ps1
       - README.md
@@ -119,3 +146,68 @@ jobs:
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_cli_deployment.py::test_service_cli_binds_every_operation_to_selected_data_root tests/test_cli_deployment.py::test_background_launcher_uses_platform_neutral_owned_service_check tests/test_cli_deployment.py::test_windows_service_cli_real_chain_root_boundary tests/test_cli_deployment.py::test_windows_default_launcher_refuses_before_setup_or_browser
           if ($LASTEXITCODE -ne 0) { throw 'CLI service root binding checks failed.' }
+  windows-user-trial:
+    # Candidate-only combined boundary, not a universal suite/release gate.
+    # The existing 5-minute stdlib/PowerShell and private-config lanes are unchanged.
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+      UV_NO_BUILD_PACKAGE: amplifier-core
+      UV_PYTHON_DOWNLOADS: never
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: Record exact candidate and build a noneditable wheel
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = Join-Path $env:RUNNER_TEMP 'ut'
+          New-Item -ItemType Directory -Path "$base/evidence" -Force | Out-Null
+          "TRIAL_BASE=$base" >> $env:GITHUB_ENV
+          python -I -B tests/fixtures/windows_user_trial_probe.py --candidate . --receipt "$base/evidence/result.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate identity check failed.' }
+          python -I -S -B -c "import sys,sysconfig,struct; assert sys.platform=='win32'; assert sys.implementation.name=='cpython'; assert sys.version_info[:2]==(3,13); assert struct.calcsize('P')==8; assert not sysconfig.get_config_var('Py_GIL_DISABLED')"
+          if ($LASTEXITCODE -ne 0) { throw 'Native Python preflight failed.' }
+          uv build --wheel --out-dir "$base/wheels"
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate wheel build failed.' }
+      - name: Install candidate and maintained real worker modules (CI setup only)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          uv venv --python (Get-Command python).Source "$env:TRIAL_BASE/env"
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate environment creation failed.' }
+          $modules = @(python -I -B tests/fixtures/windows_user_trial_probe.py --requirements pyproject.toml)
+          if ($LASTEXITCODE -ne 0) { throw 'Maintained fixture dependency selection failed.' }
+          $wheel = @(Get-ChildItem "$env:TRIAL_BASE/wheels/*.whl")
+          if ($wheel.Count -ne 1) { throw 'Expected exactly one candidate wheel.' }
+          uv pip install --python "$env:TRIAL_BASE/env/Scripts/python.exe" --only-binary amplifier-core $wheel[0].FullName "pytest>=8,<10" "pytest-asyncio>=1.4,<2" "pytest-aiohttp>=1.1,<2" @modules
+          if ($LASTEXITCODE -ne 0) { throw 'Installed candidate graph preparation failed.' }
+      - name: Require native prerequisite cells then probe private auth, tool, Stop and host resume
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $wheel = @(Get-ChildItem "$env:TRIAL_BASE/wheels/*.whl")
+          $probe = Join-Path $env:GITHUB_WORKSPACE 'tests/fixtures/windows_user_trial_probe.py'
+          # -I removes checkout/PYTHONPATH shadowing; only the fixture is source.
+          # Only the journey TLS listener and the exact wrong-leaf/redirect
+          # fixtures' owned numeric endpoints are admitted; no blanket loopback.
+          & "$env:TRIAL_BASE/env/Scripts/python.exe" -I -B $probe --run $wheel[0].FullName --receipt "$env:TRIAL_BASE/evidence/result.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows candidate journey failed; inspect the safe JSON stage/check facts.' }
+      - name: Upload only allowlisted public facts, never scratch or raw diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-user-trial
+          path: ${{ runner.temp }}/ut/evidence/result.json
+          if-no-files-found: warn
+          retention-days: 7
