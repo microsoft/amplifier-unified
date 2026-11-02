@@ -198,6 +198,23 @@ without rewriting the original UNKNOWN. Another unresolved removal still blocks
 continuation. A passive read reports this qualification separately from current
 physical state and continuation availability; it performs no backend action.
 
+A genuinely interrupted local Docker removal can instead qualify a **new**
+cleanup attempt from current observations. The old receipt remains UNKNOWN.
+Under the existing exclusive environment lock, the host verifies the original
+resource, owner, backend daemon, retained installation and source snapshot; proves
+that no matching local helper or Docker child can still act; and observes every
+original container in native exited state with no live PID, restart or removal
+in progress. It repeats those checks at the effect boundary. Remote or otherwise
+uninspectable executors, ambiguous native state, and unbound or still-running
+removal requests remain held. Exact bound UNKNOWN receipts for this same owner
+and resource remain unchanged and do not block that freshly qualified attempt.
+
+The new request records its qualification and uses its own retention directory.
+It must export and verify the current workspace and artifacts again before
+teardown; an old export or missing helper file is not proof. A passive recovery
+read can advertise `finishCleanup` as the action that performs this inspection,
+but does not claim that the executor is settled or continuation is available.
+
 A separate case is a guest whose successful removal is already committed while
 only owned dependency preparation cleanup remains pending. The public `remove`
 or `finishCleanup` action can finish that preparation through the original
