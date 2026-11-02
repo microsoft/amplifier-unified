@@ -147,7 +147,7 @@ def definitions(schema, string):
         "coordination.artifact": ("Read an exact retained file as an original request participant or Full-access observer, even after its source disappears. Current delegated Full-access reviewers may use this passive read. Observers use workspace/all read scope. Bounded text and download identity; no peer output-library access or work admission. Retained bytes are not proof of correctness.", schema({**sid,
             "requestId": string(200), "reference": string(2000), "scope": {"enum": ["workspace", "all"]}, "responseRevision": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0},
             "limit": {"type": "integer", "minimum": 1, "maximum": 4000}}, ["sessionId", "requestId", "reference"])),
-        "coordination.reply": ("Record a typed reply to your exact delivered request. Optional messageIds name your current-generation assistant output, never the incoming request messageId; omit them when unknown. Retain files using path@sha256:<64 lowercase hex digits> in references. Before ending the turn, check artifactVerification and each artifacts[].status: bytes are saved before this reply is acknowledged; later terminal sealing only qualifies the report. Later current generations may reply with expectedResponseRevision from coordination.result. Questions/deferrals stay open; reports are unqualified until separately proven terminal. Exact command IDs deduplicate retries. Meaningful revisions retain the original request identity without a lifetime count limit.", schema({
+        "coordination.reply": ("Record a typed reply to your exact delivered request. Optional messageIds name your current-generation assistant output, never the incoming request messageId; omit them when unknown. Retain files using path@sha256:<64 lowercase hex digits> in references. Before ending the turn, check artifactVerification and each artifacts[].status: bytes are saved before this reply is acknowledged; later terminal sealing only qualifies the report. Correct a staged report in the same current generation, or reply from a later current generation after it settles, using expectedResponseRevision from coordination.result. Questions/deferrals stay open; reports are unqualified until separately proven terminal. Exact command IDs deduplicate retries. Meaningful revisions retain the original request identity without a lifetime count limit.", schema({
             "requestId": string(200), "kind": {"enum": ["result", "ack", "defer", "decline", "question", "conflict"]},
             "expectedResponseRevision": {"type": "integer", "minimum": 0},
             "outcome": {"enum": ["success", "failed", "deferred", "declined", "question", "conflict", "cancelled"]},
@@ -608,8 +608,9 @@ class Collaboration:
         revision = request.get('responseRevision', 1 if request.get('response') else 0)
         if args.get('expectedResponseRevision', 0) != revision:
             self.error('The response revision changed. Read the retained result and use its expectedResponseRevision.', 409)
-        if request.get('response', {}).get('status') == 'staged':
-            self.error('The previous report is awaiting terminal evidence. Inspect it before submitting another revision.', 409)
+        previous = request.get('response') or {}
+        if previous.get('status') == 'staged' and previous.get('generationId') != active['id']:
+            self.error('The previous report belongs to another generation awaiting terminal evidence. Inspect it before submitting another revision.', 409)
         if args['requestId'] not in delivered:
             if request.get('delivery') not in {'accepted', 'applied'}:
                 self.error('A later generation needs confirmed prior input admission.', 409)
@@ -1985,6 +1986,13 @@ class Collaboration:
                 original = copy.deepcopy(request)
                 try:
                     await store(self, source, request, response, prepared_artifacts, identity)
+                    if original.get('response', {}).get('status') == 'staged':
+                        # Corrections are new receipts, not edits to saved evidence.
+                        # Only the latest declaration can be sealed at this turn's end.
+                        prior = copy.deepcopy(original)
+                        prior['response'].update(status='superseded', qualified=False,
+                                                 supersededBy=identity)
+                        self.save_response(prior)
                     request['responseRevision'] = revision+1
                     request['response'] = response
                     if response_ready(response):

@@ -845,8 +845,12 @@ original delivered request using the observed `expectedResponseRevision`. The
 workspace, task, delivery and Stop boundary must still match. Each reply has a
 monotonic revision and stable operation identity; earlier full declarations and
 terminal evidence remain in existing reply command receipts. Questions, deferrals
-and conflicts remain open reports. Exact retries return their retained revision;
-new payloads cannot reuse the same command ID.
+and conflicts remain open reports. The same current generation may correct a staged
+report with the observed revision before finishing its turn. The earlier declaration
+and retained file versions remain inspectable as superseded; only the latest report
+can qualify when that generation ends. Another generation cannot replace an
+unsettled report. The correction and superseded marker commit atomically.
+Exact retries return their retained revision; new payloads cannot reuse the same command ID.
 
 Negative reports notify immediately as unqualified claims. Successful dependency
 acceptance still needs the exact checkpointed native terminal row, root,

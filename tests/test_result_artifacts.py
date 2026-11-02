@@ -455,3 +455,81 @@ async def test_reply_publishes_both_participants_and_no_unrelated_session(app, t
     await declare(app, peer, args)
     assert {source['id'], peer['id']} in calls
     assert all(scope <= {source['id'], peer['id']} for scope in calls)
+
+
+async def test_same_turn_correction_preserves_prior_report_and_only_seals_latest(app, tmp_path):
+    source, peer, file, args = await setup(app, tmp_path, b'First retained version')
+    first = (await declare(app, peer, args))['result']
+    file.write_bytes(b'Corrected retained version')
+    corrected = {**args, 'expectedResponseRevision': 1, 'text': 'Corrected report',
+                 'references': ['report.md@sha256:' + hashlib.sha256(file.read_bytes()).hexdigest()]}
+    second = (await agent_action(app, peer, 'coordination.reply', corrected, 'corrected-declaration'))['result']
+    assert second['status'] == 'staged' and not second['qualified']
+    prior = app.collaboration.receipt('artifact-declaration')['result']
+    assert prior['status'] == 'superseded' and not prior['qualified']
+    assert prior['supersededBy'] == 'corrected-declaration'
+    assert prior['text'] == first['text'] and prior['artifacts'] == first['artifacts']
+    with pytest.raises(AppError, match='response revision changed'):
+        await agent_action(app, peer, 'coordination.reply', corrected, 'stale-correction')
+    file.unlink()
+    await finish(app, peer, args['requestId'])
+    old = await read(app, source, args, responseRevision=1)
+    new = await read(app, source, corrected, responseRevision=2)
+    assert old['text'] == 'First retained version' and not old['qualified']
+    assert old['responseStatus'] == 'superseded'
+    assert new['text'] == 'Corrected retained version' and new['qualified']
+    retry = await agent_action(app, peer, 'coordination.reply', corrected, 'corrected-declaration')
+    assert retry['duplicate'] and retry['result']['status'] == 'sealed'
+    assert app.db.execute('SELECT count(*) FROM output_records').fetchone()[0] == 2
+
+
+async def test_staged_correction_cannot_take_over_another_generation(app, tmp_path):
+    _, peer, _, args = await setup(app, tmp_path)
+    await declare(app, peer, args)
+    await generation(app, peer, 'different-generation', ['fresh-input'])
+    with pytest.raises(AppError, match='previous report'):
+        await agent_action(app, peer, 'coordination.reply',
+                           {**args, 'expectedResponseRevision': 1}, 'different-generation-report')
+    assert app.collaboration.receipt(args['requestId'])['responseRevision'] == 1
+
+
+async def test_failed_staged_correction_keeps_original_current(app, tmp_path, monkeypatch):
+    _, peer, _, args = await setup(app, tmp_path)
+    first = (await declare(app, peer, args))['result']
+    insert = app.collaboration.insert
+    def failed(identity, *values):
+        if identity == 'failed-correction':
+            raise OSError('injected correction persistence failure')
+        return insert(identity, *values)
+    monkeypatch.setattr(app.collaboration, 'insert', failed)
+    with pytest.raises(OSError, match='correction persistence'):
+        await agent_action(app, peer, 'coordination.reply',
+                           {**args, 'expectedResponseRevision': 1, 'text': 'Correction'}, 'failed-correction')
+    assert app.collaboration.receipt(args['requestId'])['response'] == first
+    assert app.collaboration.receipt('artifact-declaration')['result'] == first
+    assert app.db.execute('SELECT count(*) FROM output_records').fetchone()[0] == 1
+
+
+async def test_incomplete_capture_can_be_corrected_to_failure_without_qualifying_work(app, tmp_path):
+    from test_coordination_revisions import subscribe
+    source, peer, _, args = await setup(app, tmp_path)
+    args['references'] = ['missing.txt@sha256:' + 'a' * 64]
+    first = (await declare(app, peer, args))['result']
+    assert first['artifactVerification'] == 'incomplete'
+    await subscribe(app, args['requestId'])
+    corrected = {**args, 'expectedResponseRevision': 1, 'outcome': 'failed',
+                 'text': 'Checks failed; the original partial evidence is retained.', 'references': []}
+    result = (await agent_action(app, peer, 'coordination.reply', corrected, 'failure-correction'))['result']
+    assert not result['qualified']
+    request = app.collaboration.receipt(args['requestId'])
+    continuation = request['subscription']['continuationId']
+    await settled(app, continuation, 'accepted')
+    await finish(app, peer, args['requestId'])
+    final = app.collaboration.receipt(args['requestId'])
+    assert final['response']['status'] == 'sealed' and not final['response']['qualified']
+    assert not app.collaboration.receipt(continuation)['dependencySatisfied']
+    assert app.collaboration.receipt('artifact-declaration')['result']['artifacts'] == first['artifacts']
+    assert app.db.execute(
+        "SELECT count(*) FROM commands WHERE json_extract(receipt,'$.dependencyRequestId')=?",
+        (args['requestId'],)).fetchone()[0] == 1
+    assert [row[1] for row in app.runtime.inputs] == [args['requestId'], continuation]
