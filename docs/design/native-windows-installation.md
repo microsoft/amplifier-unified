@@ -1,6 +1,68 @@
 # Native Windows installation
 
-Status: implementation design; **not a native Windows support claim**.
+Status: implementation design and trial preparation; **not a native Windows support claim**.
+
+## November 2 source trial — preparation only
+
+The `feat/windows-user-trial` branch starts from current Unified `main`
+(`41f6ba18a5aaeb2c97c5cee1cdcc2033291ac21f`) and integrates the reviewed
+Windows mechanisms from PR1431. Integration checkpoint
+`5f0d9be9a3d8afb327459dd4f6baa9f107080e76` preserves the current host changes;
+it is **not yet an authenticated native Windows conversation build**.
+
+Foundation PR456 is merged at `a49c22f0f2e7ad4cee954e3091cd115f7d25d41f`;
+its post-merge Windows/Linux matrix and installed-consumer jobs pass. That
+qualifies the upstream mechanisms, not the combined Unified app. Unified's
+credential/browser entry, first-worker lifecycle, optional-controller isolation
+and saved-output reads are being integrated separately.
+
+### Prepare a separate checkout
+
+Use an ordinary, non-administrator PowerShell window. Keep this checkout and
+its eventual trial state separate from an existing Unified installation.
+The following commands obtain source only. They do not install or launch it.
+
+```powershell
+git --version
+git clone --single-branch --branch feat/windows-user-trial `
+  https://github.com/microsoft/amplifier-unified.git amplifier-unified-windows
+Set-Location amplifier-unified-windows
+git rev-parse HEAD
+```
+
+Record the resulting commit when reporting a test. The branch will advance;
+its name alone does not identify tested bytes. Do not reset an existing checkout
+or overwrite personal changes to follow these instructions.
+
+### Do not launch this checkpoint yet
+
+There is no qualified native install/start command for this checkpoint.
+The PowerShell installer and owner-browser activation remain deliberately
+closed. Do not remove their checks, send the control token in a browser URL,
+relax ACLs, or disable ownership to get past a refusal. Choosing Python 3.13
+does not by itself repair these runtime boundaries.
+
+The intended first trial is a foreground host on Windows 11 x64, with ordinary
+non-free-threaded CPython 3.13, Git, uv, an **existing** local workspace, and
+Edge or Chrome. It will not require Task Scheduler registration. In-app workspace
+creation/starters, publishing and cross-host transfer are outside that initial
+trial; unsupported controls must report unavailability rather than abort startup
+or bypass a retained fence.
+
+Before launch guidance replaces this warning, the exact candidate must pass:
+
+1. Private credential/TLS initialization and owner grant-to-cookie authentication.
+2. Actual worker startup and a deterministic first response with inherited access.
+3. UTF-8 output attachment and readback under a space/Unicode workspace.
+4. Stop, owned-process cleanup, host restart and a second turn from saved history.
+
+Synthetic CI can qualify these code paths without a paid provider call.
+The Windows user's actual profile, AI-account connection, browser trust and
+live-provider response remain device observations, not inferred CI results.
+The full clean-machine bootstrap rubric below remains separate.
+
+## Original design assessment
+
 Source assessment: Unified `7b9358bf6443cc003edc1f3c380da8d01a8c2f5e`,
 October 31, 2026. Recheck source and resolved upstream revisions before implementation.
 The [current setup guide](../../README.md#set-up-unified-on-your-computer)
