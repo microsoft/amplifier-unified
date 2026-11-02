@@ -638,9 +638,12 @@ replayed. Restart recovery does not itself grant execution authority.
 Typed negative reports and questions can notify the requester immediately as
 unqualified agent claims. Exact successful root terminal evidence can qualify a
 result separately; unrelated background jobs do not erase that evidence. Only a
-qualified successful result satisfies the dependency. Each report revision
-produces at most one automatic continuation, while rejection or unknown terminal
-qualification remains inspectable. Every continuation retains the requester's
+qualified successful result satisfies the dependency. The current recipient
+generation may correct its staged report using the expected response revision. Earlier declarations
+and retained artifacts remain inspectable as superseded, never qualified by the
+later terminal event. A different generation cannot take over an unsettled report.
+Each report revision produces at most one automatic continuation, while rejection
+or unknown terminal qualification remains inspectable. Every continuation retains the requester's
 saved task and Stop boundary. A newer meaningful report supersedes an
 unsubmitted earlier success notification, preserving both receipts and preventing
 stale dependency success. Requests made under older single-notification
