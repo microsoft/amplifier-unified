@@ -105,7 +105,16 @@ assistant alongside Settings, or go straight to a new chat. Component preparatio
 continues there with expandable details; errors remain visible for review.
 
 To manage prerequisites and package installation yourself, use the instructions
-below. These use Python 3.13+ and [uv](https://docs.astral.sh/uv/).
+below with [uv](https://docs.astral.sh/uv/). Select Python **3.13** explicitly,
+as the installer does. A newer system Python can lack prebuilt dependency wheels
+and trigger compiler errors; you do not need to remove or downgrade it.
+`uv` can download the requested Python into its own managed installation.
+
+**Native Windows is not yet supported.** The Bash installer is for macOS,
+Linux and WSL, not PowerShell. Installing the Python package directly on Windows
+does not provide working sign-in, background startup or conversation ownership.
+The [native Windows setup design](docs/design/native-windows-installation.md)
+records the proposed turnkey path, implementation dependencies and acceptance checks.
 
 <details>
 <summary><strong>Linux</strong></summary>
@@ -113,7 +122,7 @@ below. These use Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 Install Unified, then set it up as a background service:
 
 ```sh
-uv tool install git+https://github.com/microsoft/amplifier-unified@v0.20.101
+uv tool install --python 3.13 git+https://github.com/microsoft/amplifier-unified@v0.20.101
 amplifier-unified
 ```
 
@@ -142,7 +151,7 @@ wsl --shutdown
 Open WSL again, then install Unified and set it up as a background service:
 
 ```sh
-uv tool install git+https://github.com/microsoft/amplifier-unified@v0.20.101
+uv tool install --python 3.13 git+https://github.com/microsoft/amplifier-unified@v0.20.101
 amplifier-unified
 ```
 
@@ -157,7 +166,7 @@ and sign in with the account that runs Unified.
 Install Unified, then set it up as a background service:
 
 ```sh
-uv tool install git+https://github.com/microsoft/amplifier-unified@v0.20.101
+uv tool install --python 3.13 git+https://github.com/microsoft/amplifier-unified@v0.20.101
 amplifier-unified
 ```
 
@@ -261,7 +270,7 @@ For the complete setup—including certificate transfer and trust, reverse-proxy
 First, get the latest recovery command:
 
 ```sh
-uv tool install --force git+https://github.com/microsoft/amplifier-unified@main
+uv tool install --force --python 3.13 git+https://github.com/microsoft/amplifier-unified@main
 ```
 
 Then preview the repair or run it:
