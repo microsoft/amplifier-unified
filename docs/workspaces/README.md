@@ -63,9 +63,11 @@ starter snapshot.
 Amplifier development revision 6 makes this choice when the plan is prepared.
 An inherited plan stays inherited if defaults later change; new chats use the
 then-current defaults. Already reviewed revision-5 plans keep their explicit
-bundle, as do saved custom starters. Duplicating a built-in copies its displayed
-choice, including inheritance. Explicit chat choices and existing conversations
-are unchanged; no workspace settings are migrated.
+bundle, as do saved custom starters. Duplicating a built-in copies its current
+choice when duplicated, including inheritance, from a fresh server snapshot.
+The returned copy is loaded into the editor; a previously displayed choice may
+be stale. Duplication does not create or change a workspace. Explicit chat choices
+and existing conversations are unchanged; no workspace settings are migrated.
 Bundle choices share the chat dropdown's catalog: the preconfigured `anchors`
 and `anchors-amp-dev` roots from Amplifier Foundation and `work` and `work-amp-dev` from
 amplifier-bundle-work, plus enabled standalone bundles added through Advanced

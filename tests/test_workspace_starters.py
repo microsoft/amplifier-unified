@@ -223,7 +223,7 @@ async def test_reviewed_revision_five_plan_keeps_its_explicit_bundle(
 
 
 @pytest.mark.parametrize('inherit', [False, True])
-def test_amplifier_duplicate_keeps_the_displayed_choice_after_defaults_change(tmp_path, inherit):
+def test_amplifier_duplicate_keeps_current_choice_when_duplicated(tmp_path, inherit):
     catalog = StarterCatalog(tmp_path, inherit_amplifier_default=inherit)
     saved = catalog.command('workspace.starters.duplicate', {'id': 'amplifier-development'}, 'duplicate')
     assert saved['bundle'] == ('' if inherit else 'anchors-amp-dev')
@@ -231,6 +231,44 @@ def test_amplifier_duplicate_keeps_the_displayed_choice_after_defaults_change(tm
     changed = StarterCatalog(tmp_path, inherit_amplifier_default=not inherit)
     assert changed.snapshot(saved['id']) == saved
     assert changed.path.read_bytes() == before
+
+
+@pytest.mark.parametrize('prepared_default_scope', [None, 'app', 'shared'])
+async def test_prepared_starter_keeps_pin_or_inheritance_when_defaults_appear_or_clear(
+        service, local_amplifier_repositories, prepared_default_scope):
+    from amplifier_web.shared_settings import read_yaml
+    await service.dispatch('bundle.default', {'scope': 'app', 'bundle': None})
+    await service.dispatch('bundle.default', {'scope': 'shared', 'bundle': None})
+    await service.dispatch('session.create', {'bundle': 'anchors'})
+    existing = service._session()['id']
+    if prepared_default_scope:
+        await service.dispatch('bundle.default', {
+            'scope': prepared_default_scope, 'bundle': 'work-amp-dev'})
+    plan = (await service.dispatch('workspace.prepare', {
+        'name': 'Default transition', 'starterId': 'amplifier-development'}))['result']
+    assert plan['starter']['revision'] == 6
+    assert plan['starter']['bundle'] == ('' if prepared_default_scope else 'anchors-amp-dev')
+    if prepared_default_scope:
+        await service.dispatch('bundle.default', {'scope': 'app', 'bundle': None})
+        await service.dispatch('bundle.default', {'scope': 'shared', 'bundle': None})
+    else:
+        await service.dispatch('bundle.default', {'scope': 'app', 'bundle': 'work-amp-dev'})
+    await service.dispatch('workspace.create', {'planId': plan['planId'], 'fromDraft': True},
+                           command_id='prepared-default-transition')
+    row = await settle(service)
+    assert row['setup']['status'] == 'ready'
+    assert row['setup']['starter'] == plan['starter']
+    folder = Path(row['path'])
+    settings = folder / '.amplifier/settings.yaml'
+    if prepared_default_scope:
+        assert not settings.exists()
+    else:
+        assert read_yaml(settings)['bundle']['active'] == 'anchors-amp-dev'
+    assert not (folder / '.amplifier/settings.local.yaml').exists()
+    await service.dispatch('session.create', {})
+    assert service._session()['workspace'] == row['path']
+    assert service._session()['bundle'] == ('work' if prepared_default_scope else 'anchors-amp-dev')
+    assert service._session(existing)['bundle'] == 'anchors'
 
 
 async def test_starters_and_chat_share_enabled_standalone_catalog(service):
