@@ -112,6 +112,10 @@ DIAGNOSTIC_FUNCTIONS = {
     "optional_app_init": ("amplifier_web.service", "AppService.__init__"),
     "pytest_unused_port": ("pytest_asyncio.plugin", "_unused_port"),
     "socketpair": ("socket", "_fallback_socketpair"),
+    "aiohttp_server_close": ("aiohttp.test_utils", "BaseTestServer.close"),
+    "aiohttp_client_close": ("aiohttp.test_utils", "TestClient.close"),
+    "asyncio_loop_check_closed": ("asyncio.base_events", "BaseEventLoop._check_closed"),
+    "asyncio_loop_run_until_complete": ("asyncio.base_events", "BaseEventLoop.run_until_complete"),
 }
 DIAGNOSTIC_SOURCES = frozenset(DIAGNOSTIC_FUNCTIONS) | {
     "selected_test", "tls_fixture_scope", "tls_fixture_reserve", "tls_fixture_call",
@@ -120,8 +124,9 @@ ERROR_CLASSES = {kind: kind.__name__ for kind in (
     AssertionError, OSError, PermissionError, FileNotFoundError, NotADirectoryError,
     IsADirectoryError, TimeoutError, ImportError, ModuleNotFoundError, ValueError,
     TypeError, AttributeError, KeyError, RuntimeError, UnicodeError,
-    UnicodeEncodeError, UnicodeDecodeError)}
+    UnicodeEncodeError, UnicodeDecodeError, ExceptionGroup, BaseExceptionGroup)}
 ERROR_LABELS = frozenset(ERROR_CLASSES.values()) | {"AppError", "Failed", "Skipped", "other"}
+EXCEPTION_RECORD_LIMIT = 6
 
 
 def diagnostic_codes():
@@ -149,9 +154,17 @@ def safe_frame(frame, codes, line=None):
 
 
 def safe_exception(exc, codes):
-    """Three bounded causes; exact classes and known code only, no repr/str."""
-    records, seen = [], set()
-    while isinstance(exc, BaseException) and id(exc) not in seen and len(records) < 3:
+    """Six flat bounded records: exact built-in groups/causes, no repr/str.
+
+    Expand children ONLY for the two exact built-in group classes. A private
+    subclass stays 'other', and its arbitrary attributes are never traversed.
+    This diagnostic never changes pytest's original failed teardown outcome.
+    """
+    records, seen, pending = [], set(), [exc]
+    while pending and len(records) < EXCEPTION_RECORD_LIMIT:
+        exc = pending.pop(0)
+        if not isinstance(exc, BaseException) or id(exc) in seen:
+            continue
         seen.add(id(exc))
         kind = type(exc)
         label = ERROR_CLASSES.get(kind, "other")
@@ -177,8 +190,14 @@ def safe_exception(exc, codes):
                 row["frames"] = row["frames"][-5:]
             tb = tb.tb_next
         records.append(row)
-        exc = exc.__cause__ if exc.__cause__ is not None else (
+        remaining = EXCEPTION_RECORD_LIMIT - len(records)
+        if kind in (ExceptionGroup, BaseExceptionGroup):
+            pending.extend(exc.exceptions[:remaining])
+        cause = exc.__cause__ if exc.__cause__ is not None else (
             None if exc.__suppress_context__ else exc.__context__)
+        if cause is not None:
+            pending.append(cause)
+        pending = pending[:remaining]
     return records
 MARKER = "Windows trial café 日本語"
 RESUMED = "Resumed café 日本語"
@@ -619,7 +638,7 @@ def validate_public(value):
                 for fact in selection["failureFacts"]:
                     assert set(fact) == {"case", "phase", "errors"}
                     assert fact["case"] in NATIVE_CONTROLS and fact["phase"] in PHASES - {"outside"}
-                    assert type(fact["errors"]) is list and 1 <= len(fact["errors"]) <= 3
+                    assert type(fact["errors"]) is list and 1 <= len(fact["errors"]) <= EXCEPTION_RECORD_LIMIT
                     for item_error in fact["errors"]:
                         error(item_error)
     return value

@@ -119,7 +119,7 @@ def test_relative_native_open_uses_parent_no_reparse_and_read_only_flags(directo
     api.create = create
     path = PureWindowsPath(r"C:\work\résumé.txt")
     assert api.open_read(path, 701, directory=directory) == 702
-    assert calls == [(0x100081 if directory else 0x80000000, 701, 0x1000,
+    assert calls == [(0x100081 if directory else 0x80100000, 701, 0x1000,
                       path.name, len(path.name.encode("utf-16-le")), len(path.name.encode("utf-16-le")) + 2,
                       48, None, None,
                       0, 1, 1, 0x200020 | (1 if directory else 0x40), None, None, 0)]
@@ -128,6 +128,45 @@ def test_relative_native_open_uses_parent_no_reparse_and_read_only_flags(directo
     with pytest.raises(PermissionError, match="reparse"):
         api.open_read(path, 701, directory=directory)
     assert closed == [702]
+
+
+def test_synchronous_leaf_open_supplies_explicit_synchronize_before_nt_validation(monkeypatch):
+    """Model raw synchronous-access validation, not generic-right expansion.
+
+    Native CI reached this leaf call after successful directory traversal and
+    returned ERROR_INVALID_PARAMETER. A portable model must reject the old
+    raw GENERIC_READ-only mask rather than silently accepting every NtCreateFile.
+    The unchanged native positive read remains the actual Windows oracle.
+    """
+    api = object.__new__(native._ReadAPI)
+    invalid_parameter = -1073741811  # STATUS_INVALID_PARAMETER (0xC000000D)
+    accesses, validated, closed = [], [], []
+    def create(handle, access, attributes, status, allocation, attributes_mask,
+               sharing, disposition, options, ea, ea_size):
+        attrs = C.cast(attributes, C.POINTER(native._Attributes)).contents
+        assert attrs.root == 701 and attrs.flags == 0x1000
+        assert sharing == 1 and disposition == 1 and options == 0x200060
+        accesses.append(access)
+        if options & 0x30 and not access & 0x100000:
+            return invalid_parameter
+        C.cast(handle, C.POINTER(native.HANDLE))[0] = 702
+        return 0
+    def dos_error(status):
+        assert status == invalid_parameter
+        return 87
+    def win_error(code):
+        error = OSError(22, "native synchronous-open access contract")
+        error.winerror = code
+        return error
+    api.create, api.dos_error = create, dos_error
+    api.info = lambda handle, path, **kwargs: validated.append(handle)
+    api.close = closed.append
+    monkeypatch.setattr(C, "WinError", win_error, raising=False)
+    assert api.open_read(PureWindowsPath(r"C:\work\report.txt"), 701, directory=False) == 702
+    assert len(accesses) == 1
+    assert accesses[0] & 0x80000000  # GENERIC_READ remains present
+    assert accesses[0] & 0x100000  # SYNCHRONIZE is present before the native call
+    assert validated == [702] and not closed
 
 
 def test_failed_nt_open_is_translated_without_using_an_unowned_handle(monkeypatch):

@@ -587,7 +587,7 @@ async def test_native_actual_app_tls_grant_cookie_and_replay(native_root, monkey
 @pytest.mark.parametrize("mode", ["wrong-leaf", "redirect"])
 async def test_native_unrelated_listener_and_proxy_never_receive_bearer(
         native_root, monkeypatch, aiohttp_client, aiohttp_server, unused_tcp_port, mode):
-    from aiohttp.test_utils import TestServer
+    from aiohttp.test_utils import TestClient, TestServer
     from amplifier_web import tls, update_readiness, windows_files
     home, other = native_root / "owner", native_root / "other"
     for path in (home, other):
@@ -605,28 +605,242 @@ async def test_native_unrelated_listener_and_proxy_never_receive_bearer(
         return web.json_response({"ok": True, "app": "unrelated"})
     sink = web.Application()
     sink.router.add_route("*", "/{path:.*}", catcher)
-    target = await aiohttp_server(sink)
+    # Keep the fixture parameters (and maintained pyloop node IDs), but own
+    # transport lifetime here. Legacy aiohttp fixtures finalize on a different
+    # loop after pytest-asyncio has closed this coroutine's loop.
+    target = TestServer(sink)
+    listener = client = None
     async def redirect(req):
         trusted_received.append(req.headers.get("Authorization"))
         raise web.HTTPFound(str(target.make_url("/api/health")))
-    listener_app = web.Application()
-    listener_app.router.add_get("/api/health", catcher if mode == "wrong-leaf" else redirect)
-    if mode == "wrong-leaf":
-        other_config = tls.setup_local_ca(other, load_server_config(other))
-        context = tls.ssl_context(other, other_config)
+    try:
+        await target.start_server()
+        listener_app = web.Application()
+        listener_app.router.add_get("/api/health", catcher if mode == "wrong-leaf" else redirect)
+        if mode == "wrong-leaf":
+            other_config = tls.setup_local_ca(other, load_server_config(other))
+            context = tls.ssl_context(other, other_config)
+        else:
+            context = tls.ssl_context(home, config)
+        listener = TestServer(listener_app, port=unused_tcp_port)
+        await listener.start_server(ssl=context)
+        # Retain before awaiting startup so partial client initialization also
+        # gets cleanup. Never send an unpinned request through this client.
+        client = TestClient(listener)
+        await client.start_server()
+        for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+            monkeypatch.setenv(name, str(target.make_url("/")))
+        monkeypatch.setenv("NO_PROXY", "")
+        monkeypatch.setenv("no_proxy", "")
+        with pytest.raises(entry.BrowserEntryUnavailable, match="identity"):
+            await entry.owner_browser_url(home, config)
+        assert received == []
+        assert trusted_received == (["Bearer " + token] if mode == "redirect" else [])
+    finally:
+        primary = sys.exception()
+        cleanup_errors = []
+        for resource in (client, listener, target):
+            if resource is not None:
+                try:
+                    await resource.close()
+                except BaseException as exc:
+                    cleanup_errors.append(exc)
+        if cleanup_errors:
+            # Attempt every owned close. Retain the body failure as the first
+            # child rather than replacing it with the last cleanup exception.
+            raise BaseExceptionGroup("TLS negative fixture cleanup failed",
+                                     ([primary] if primary is not None else []) + cleanup_errors)
+
+
+@pytest.mark.parametrize("scenario", [
+    "legacy", "fixed", "partial-sink", "partial-listener", "partial-client",
+    "cleanup-only", "body-and-cleanup",
+])
+def test_tls_negative_lifetime_on_actual_pytest_fixtures_without_listeners(scenario):
+    """Execute the maintained body on fake transports, not a duplicate cleanup."""
+    script = r'''
+import ast, asyncio, contextlib, os, pathlib, sys, types
+# Fail closed even when a dependency catches an unexpected effect.
+denied = []
+def audit(event, args):
+    if event == "open":
+        mode, flags = args[1:3]
+        if ((isinstance(mode, str) and any(c in mode for c in "wax+")) or
+            (isinstance(flags, int) and flags &
+             (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND))):
+            denied.append(event)
+            raise PermissionError("No model file writes")
+    if event in {"socket.bind", "socket.connect", "socket.getaddrinfo", "socket.sendto",
+                 "os.mkdir", "os.remove", "os.rename", "subprocess.Popen"}:
+        denied.append(event)
+        raise PermissionError("No model network or resource effects")
+sys.addaudithook(audit)
+import pytest
+from _pytest.config import _prepareconfig
+from _pytest.main import Session
+from _pytest.python import Module
+from aiohttp import web
+import aiohttp.pytest_plugin as plugin
+import aiohttp.test_utils as utilities
+# No real self-pipe socket on Windows either; only same-thread coroutine work.
+class InertLoop(asyncio.SelectorEventLoop):
+    def _make_self_pipe(self): pass
+    def _close_self_pipe(self): pass
+    def _write_to_self(self): pass
+class Policy(asyncio.DefaultEventLoopPolicy):
+    def new_event_loop(self): return InertLoop()
+asyncio.set_event_loop_policy(Policy())
+source, scenario = pathlib.Path(sys.argv[1]), sys.argv[2]
+events, reports, failures, servers = [], [], [], []
+class FakeServer(utilities.TestServer):
+    def __init__(self, app, **kwargs):
+        super().__init__(app, **kwargs)
+        self.kind = "listener" if any(r.resource.canonical == "/api/health"
+                                    for r in app.router.routes()) else "sink"
+        servers.append(self)
+    async def start_server(self, *args, **kwargs):
+        if self.runner is not None: return
+        self.owner = asyncio.get_running_loop()
+        self.runner = object()
+        if scenario == "partial-" + self.kind:
+            raise ValueError("partial-" + self.kind)
+    async def close(self):
+        if self.closed: return
+        events.append((self.kind, self.owner.is_closed(),
+                       asyncio.get_running_loop() is self.owner))
+        self.owner.call_soon(lambda: None)
+        self._closed = True
+        if scenario in {"cleanup-only", "body-and-cleanup"}: raise OSError("close-" + self.kind)
+    def make_url(self, path): return "http://127.0.0.1:25000" + path
+class FakeClient:
+    @classmethod
+    def __class_getitem__(cls, item): return cls
+    def __init__(self, server, **kwargs):
+        self.server, self.closed = server, False
+    async def start_server(self):
+        await self.server.start_server()
+        if scenario == "partial-client": raise ValueError("partial-client")
+    async def close(self):
+        if self.closed: return
+        events.append(("client", self.server.owner.is_closed(),
+                       asyncio.get_running_loop() is self.server.owner))
+        self.closed = True
+        if scenario in {"cleanup-only", "body-and-cleanup"}: raise OSError("close-client")
+        await self.server.close()
+utilities.TestServer = plugin.TestServer = FakeServer
+utilities.TestClient = plugin.TestClient = FakeClient
+class Unavailable(RuntimeError): pass
+async def owner_url(home, config):
+    if scenario == "body-and-cleanup": raise AssertionError("primary-body")
+    listener = servers[-1]
+    handler = next(iter(listener.app.router.routes())).handler
+    if handler.__name__ == "redirect":
+        try:
+            await handler(types.SimpleNamespace(headers={"Authorization": "Bearer synthetic"}))
+        except web.HTTPFound:
+            pass
+    raise Unavailable("identity mismatch")
+@contextlib.contextmanager
+def directory(*args, **kwargs): yield
+entry = types.SimpleNamespace(BrowserEntryUnavailable=Unavailable, owner_browser_url=owner_url,
+    read_owner_control_token=None, _read_private_owner_control_token=None)
+package = types.ModuleType("amplifier_web")
+package.tls = types.SimpleNamespace(setup_local_ca=lambda home, config: config,
+                                   ssl_context=lambda *args: object())
+package.update_readiness = types.SimpleNamespace(running_identity=None)
+package.windows_files = types.SimpleNamespace(directory=directory)
+sys.modules["amplifier_web"] = package
+tree = ast.parse(source.read_bytes())
+name = "test_native_unrelated_listener_and_proxy_never_receive_bearer"
+function = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == name)
+function.decorator_list = []  # portable fake branch; keep both exact mode values
+assert {n.name for n in function.body if isinstance(n, ast.AsyncFunctionDef)} == {"catcher", "redirect"}
+if scenario == "legacy":
+    # Reproduce only the prior fixture lifetime in memory; never edit source.
+    body = []
+    for statement in function.body:
+        if isinstance(statement, ast.Try) and statement.finalbody:
+            body.extend(statement.body)
+        elif (isinstance(statement, ast.Assign) and isinstance(statement.targets[0], ast.Name)
+              and statement.targets[0].id == "target"):
+            body.extend(ast.parse("target = await aiohttp_server(sink)").body)
+        else:
+            body.append(statement)
+    function.body = body
+    class LegacyClient(ast.NodeTransformer):
+        def visit_Assign(self, node):
+            if isinstance(node.targets[0], ast.Name) and node.targets[0].id == "client":
+                return ast.copy_location(ast.parse("client = await aiohttp_client(listener)").body[0], node)
+            return node
+    function = LegacyClient().visit(function)
+module = types.ModuleType("tls_lifetime_model")
+module.__file__ = str(source)
+module.__dict__.update(web=web, sys=sys, pytest=pytest, entry=entry, __version__="0.0.0",
+    REVISION="a"*40, auth=types.SimpleNamespace(session_secret=lambda *a: None,
+    control_token=lambda *a: "synthetic"), load_server_config=lambda *a, **kw: {})
+exec(compile(ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[])),
+             str(source), "exec"), module.__dict__)
+module.__dict__[name] = pytest.mark.parametrize("mode", ["wrong-leaf", "redirect"])(module.__dict__[name])
+module.native_root = pytest.fixture(lambda: source.parent)
+module.unused_tcp_port = pytest.fixture(lambda: 25000)
+sys.modules[module.__name__] = module
+class MemoryModule(Module):
+    def _getobj(self): return module
+def leaves(error):
+    if isinstance(error, BaseExceptionGroup):
+        return [leaf for child in error.exceptions for leaf in leaves(child)]
+    return [(type(error).__name__, str(error))]
+class Results:
+    def pytest_runtest_logreport(self, report):
+        reports.append((report.when, report.outcome))
+    def pytest_runtest_makereport(self, item, call):
+        if call.excinfo: failures.append((call.when, leaves(call.excinfo.value)))
+config = _prepareconfig(["-q", "-s", "--noconftest", "-p", "no:cacheprovider",
+    "-p", "no:faulthandler", "-p", "no:logging", "-o", "asyncio_mode=auto"],
+    plugins=["pytest_asyncio.plugin", "aiohttp.pytest_plugin", Results()])
+config._do_configure()
+session = Session.from_config(config)
+config.hook.pytest_sessionstart(session=session)
+try:
+    items = list(MemoryModule.from_parent(session, path=source).collect())
+    assert [item.name for item in items] == [
+        name + "[pyloop-wrong-leaf]", name + "[pyloop-redirect]"]
+    for index, item in enumerate(items):
+        item.ihook.pytest_runtest_protocol(item=item, nextitem=items[index+1] if index+1 < len(items) else None)
+    if scenario == "legacy":
+        assert reports == [("setup", "passed"), ("call", "passed"), ("teardown", "failed")]*2
+        assert all(phase == "teardown" and children == [
+            ("RuntimeError", "Event loop is closed")]*2 for phase, children in failures)
+        assert len([e for e in events if e[0] != "client"]) == 4
+        assert all(closed and not same for _, closed, same in events)
     else:
-        context = tls.ssl_context(home, config)
-    listener = TestServer(listener_app, port=unused_tcp_port)
-    await listener.start_server(ssl=context)
-    await aiohttp_client(listener)  # cleanup only, never send an unpinned request
-    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
-        monkeypatch.setenv(name, str(target.make_url("/")))
-    monkeypatch.setenv("NO_PROXY", "")
-    monkeypatch.setenv("no_proxy", "")
-    with pytest.raises(entry.BrowserEntryUnavailable, match="identity"):
-        await entry.owner_browser_url(home, config)
-    assert received == []
-    assert trusted_received == (["Bearer " + token] if mode == "redirect" else [])
+        assert all(not closed and same for _, closed, same in events)
+        assert all(server.closed for server in servers)
+        assert all(outcome == "passed" for phase, outcome in reports if phase != "call")
+        if scenario == "fixed":
+            assert reports == [("setup", "passed"), ("call", "passed"), ("teardown", "passed")]*2
+            assert [kind for kind, _, _ in events] == ["client", "listener", "sink"]*2
+        elif scenario in {"cleanup-only", "body-and-cleanup"}:
+            primary = [("AssertionError", "primary-body")] if scenario == "body-and-cleanup" else []
+            assert all(phase == "call" and children == primary + [("OSError", "close-client"),
+                ("OSError", "close-listener"), ("OSError", "close-sink")]
+                for phase, children in failures)
+            assert [kind for kind, _, _ in events] == ["client", "listener", "sink"]*2
+        else:
+            assert all(phase == "call" and children == [("ValueError", scenario)]
+                       for phase, children in failures)
+        assert len(failures) == (0 if scenario == "fixed" else 2)
+    assert not denied, denied
+finally:
+    config._ensure_unconfigure()
+print("LIFETIME_MODEL_PASS", scenario)
+'''
+    child = subprocess.run([sys.executable, "-I", "-B", "-c", script,
+                            str(Path(__file__).resolve()), scenario],
+                           env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+                           capture_output=True, text=True, timeout=30)
+    assert child.returncode == 0, child.stdout + child.stderr
+    assert "LIFETIME_MODEL_PASS " + scenario in child.stdout
 
 
 # Share only the native fixture definition, not any test's production overrides.

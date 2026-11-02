@@ -164,6 +164,67 @@ def test_exception_source_uses_exact_known_code_and_bounded_cause_chain():
     assert "PRIVATE" not in json.dumps(facts) and "boundary" not in json.dumps(facts)
 
 
+@pytest.mark.parametrize("fatal", [False, True])
+def test_builtin_exception_groups_expand_bounded_children_without_private_content(fatal):
+    child = KeyboardInterrupt("PRIVATE") if fatal else ValueError("PRIVATE")
+    group = BaseExceptionGroup("PRIVATE-GROUP", [
+        child, ExceptionGroup("PRIVATE-NESTED", [OSError(22, "PRIVATE", "/private/path")])])
+    facts = probe.safe_exception(group, {})
+    assert [row["class"] for row in facts] == [
+        "BaseExceptionGroup" if fatal else "ExceptionGroup",
+        "other" if fatal else "ValueError", "ExceptionGroup", "OSError"]
+    assert facts[-1]["errno"] == 22
+    assert all(not row["frames"] for row in facts)
+    serialized = json.dumps(facts)
+    assert "PRIVATE" not in serialized and "/private/path" not in serialized
+    value = diagnostic_public_model()
+    value["nativeControls"]["selection"]["failureFacts"][0]["errors"] = facts
+    probe.validate_public(value)
+
+
+def test_exception_group_budget_and_private_subclass_children_never_escape():
+    class PrivateGroup(ExceptionGroup):
+        @property
+        def exceptions(self):
+            raise AssertionError("Private group's attributes must not be inspected")
+        def __str__(self):
+            raise AssertionError("Diagnostic must not stringify")
+    private = PrivateGroup("PRIVATE", [TypeError("PRIVATE")])
+    assert probe.safe_exception(private, {}) == [{"class": "other", "frames": []}]
+    group = ExceptionGroup("PRIVATE", [private, *[ValueError("PRIVATE") for _ in range(100)]])
+    facts = probe.safe_exception(group, {})
+    assert len(facts) == probe.EXCEPTION_RECORD_LIMIT == 6
+    assert [row["class"] for row in facts] == ["ExceptionGroup", "other", *(["ValueError"] * 4)]
+    value = diagnostic_public_model()
+    errors = value["nativeControls"]["selection"]["failureFacts"][0]["errors"] = facts
+    probe.validate_public(value)
+    errors.append({"class": "ValueError", "frames": []})
+    with pytest.raises(AssertionError):
+        probe.validate_public(value)
+
+
+def test_real_aiohttp_close_failure_is_retained_with_known_code_without_loop_or_listener():
+    from aiohttp.test_utils import BaseTestServer
+    from asyncio.base_events import BaseEventLoop
+    async def cleanup():
+        # Execute the real closed-loop check against inert state, not an event
+        # loop or socket. This is a diagnostic model, not the measured CI cause.
+        BaseEventLoop._check_closed(types.SimpleNamespace(_closed=True))
+    server = types.SimpleNamespace(started=True, closed=False,
+                                  runner=types.SimpleNamespace(cleanup=cleanup))
+    try:
+        immediate(BaseTestServer.close(server))
+    except RuntimeError as exc:
+        facts = probe.safe_exception(ExceptionGroup("PRIVATE", [exc]), probe.diagnostic_codes())
+    else:
+        pytest.fail("Cleanup failure must propagate")
+    assert [row["class"] for row in facts] == ["ExceptionGroup", "RuntimeError"]
+    assert {frame["source"] for frame in facts[1]["frames"]} == {
+        "aiohttp_server_close", "asyncio_loop_check_closed"}
+    assert server.closed is False
+    assert "PRIVATE" not in json.dumps(facts) and "cleanup" not in json.dumps(facts)
+
+
 def test_only_one_owned_reservation_and_exact_port_connect_are_permitted(tmp_path):
     guard = probe.NetworkGuard(tmp_path / "network.jsonl")
     guard.reserving = True
@@ -733,6 +794,17 @@ def test_call():
     raise ValueError("PRIVATE-MESSAGE")
 def test_teardown(teardown_denied):
     attempt()
+@pytest.fixture
+def grouped_cleanup(request):
+    def first():
+        raise OSError(22, "PRIVATE-MESSAGE", "/private/path")
+    def second():
+        raise ExceptionGroup("PRIVATE-GROUP", [
+            ValueError("PRIVATE-MESSAGE"), RuntimeError("PRIVATE-MESSAGE")])
+    request.addfinalizer(first)
+    request.addfinalizer(second)
+def test_group(grouped_cleanup):
+    pass
 ''', encoding="utf-8")
     result_path = tmp_path / "safe.json"
     script = r'''
@@ -752,7 +824,7 @@ for phase in ("setup", "call", "teardown"):
 results = probe.NativeResults(guard)
 results.node_labels = {f"test_synthetic.py::test_{phase}": case for phase, case in (
     ("setup", "auth_converge"), ("call", "read_workspace_utf8"),
-    ("teardown", "resource_publish_overlap"))}
+    ("teardown", "resource_publish_overlap"), ("group", "auth_wrong_leaf_no_disclosure"))}
 code = pytest.main(["-q", "-p", "no:cacheprovider", "--rootdir", str(root),
     "--confcutdir", str(root), str(root / "test_synthetic.py")], plugins=[results])
 assert code == 1
@@ -761,9 +833,14 @@ assert selection["status"] == "FAIL"
 assert [(v["case"], v["phase"], v["errors"][0]["class"]) for v in selection["failureFacts"]] == [
     ("auth_converge", "setup", "PermissionError"),
     ("read_workspace_utf8", "call", "ValueError"),
-    ("resource_publish_overlap", "teardown", "OSError")]
+    ("resource_publish_overlap", "teardown", "OSError"),
+    ("auth_wrong_leaf_no_disclosure", "teardown", "ExceptionGroup")]
 assert selection["cases"]["read_workspace_utf8"]["callsPassed"] == 0
 assert selection["cases"]["resource_publish_overlap"]["callsPassed"] == 1
+assert selection["cases"]["auth_wrong_leaf_no_disclosure"]["callsPassed"] == 1
+assert selection["cases"]["auth_wrong_leaf_no_disclosure"]["status"] == "FAIL"
+assert [row["class"] for row in selection["failureFacts"][-1]["errors"]] == [
+    "ExceptionGroup", "OSError", "ExceptionGroup", "ValueError", "RuntimeError"]
 serialized = json.dumps(selection)
 assert "PRIVATE-MESSAGE" not in serialized and "/private/path" not in serialized
 assert "test_synthetic" not in serialized and "setup_denied" not in serialized

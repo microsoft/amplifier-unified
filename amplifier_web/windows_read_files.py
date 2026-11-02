@@ -56,7 +56,9 @@ class _ReadAPI(_API):
     def open_read(self, path, parent=None, *, directory):
         # FILE_LIST_DIRECTORY makes directory sharing effective; attributes-only
         # pins do not stop a rename. No ACL or security descriptor is changed.
-        access = 0x100081 if directory else 0x80000000
+        # Native synchronous opens require explicit SYNCHRONIZE in the raw
+        # desired-access mask, before GENERIC_READ is expanded.
+        access = 0x100081 if directory else 0x80100000
         if parent is None:
             handle = self.CreateFileW(str(path), access, 1, None, 3, 0x2200000, None)
             if handle == _INVALID:
