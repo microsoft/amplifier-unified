@@ -320,6 +320,20 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         record=service.outputs.store.read(request.match_info['identity'])
         if record.get('kind') == 'media':
             raise AppError('Use the exact client/session/message media route.',403)
+        from . import retained_files
+        if record.get('bodyFormat') == retained_files.FORMAT:
+            from .resource_files import settle_worker
+            filename=Path(record.get('filename','output')).name
+            async with retained_files.download(service,record) as stream:
+                response=web.StreamResponse(headers={
+                    'Content-Type':'application/octet-stream', 'Content-Length':str(record['bytes']),
+                    'Content-Disposition': "attachment; filename*=UTF-8''"+quote(filename,safe=''),
+                    'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; sandbox"})
+                await response.prepare(request)
+                while data := await settle_worker(stream.read,retained_files.CHUNK):
+                    await response.write(data)
+                await response.write_eof()
+                return response
         data=await service.outputs.content_async(record)
         if data is None:
             raise AppError('This output is an external reference without saved content.',404)

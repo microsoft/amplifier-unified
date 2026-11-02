@@ -73,7 +73,7 @@ async def test_malformed_local_reference_records_repair_without_read_or_success(
     source, peer, _, args = await setup(app, tmp_path)
     def forbidden(*_):
         pytest.fail('Malformed references must not acquire filesystem authority')
-    monkeypatch.setattr(result_artifacts, 'file_bytes', forbidden)
+    monkeypatch.setattr(result_artifacts.retained_files, 'capture', forbidden)
     args['references'] = [reference]
     result = (await declare(app, peer, args))['result']
     assert result['artifactVerification'] == 'incomplete'
@@ -98,7 +98,7 @@ async def test_malformed_local_reference_records_repair_without_read_or_success(
 async def test_opaque_citations_remain_valid_but_explicitly_do_not_save_files(app, tmp_path, monkeypatch, reference):
     from amplifier_web import result_artifacts
     _, peer, _, args = await setup(app, tmp_path)
-    monkeypatch.setattr(result_artifacts, 'file_bytes', lambda *_: pytest.fail('Opaque citation read a file'))
+    monkeypatch.setattr(result_artifacts.retained_files, 'capture', lambda *_: pytest.fail('Opaque citation read a file'))
     args['references'] = [reference]
     result = (await declare(app, peer, args))['result']
     assert result['artifacts'] == [] and result['artifactVerification'] == 'not_requested'
@@ -143,7 +143,7 @@ async def test_report_captures_before_first_open_and_survives_source_delete_and_
         await restarted.close()
 
 
-@pytest.mark.parametrize('failure', ['changed', 'missing', 'outside', 'symlink', 'oversize'])
+@pytest.mark.parametrize('failure', ['changed', 'missing', 'outside', 'symlink', 'changed_large'])
 async def test_invalid_exact_source_retains_report_without_accepting_dependency(app, tmp_path, failure):
     source, peer, file, args = await setup(app, tmp_path)
     if failure == 'changed':
@@ -161,7 +161,7 @@ async def test_invalid_exact_source_retains_report_without_accepting_dependency(
         file.write_bytes(b'x' * (8 * 1024 * 1024 + 1))
     declaration = (await declare(app, peer, args))['result']
     assert declaration['artifactVerification'] == 'incomplete'
-    assert declaration['artifacts'][0]['status'] == ('changed' if failure == 'changed' else 'unavailable')
+    assert declaration['artifacts'][0]['status'] == ('changed' if failure in {'changed', 'changed_large'} else 'unavailable')
     await finish(app, peer, args['requestId'])
     value = await read(app, source, args)
     assert not value['qualified'] and 'text' not in value
@@ -293,7 +293,7 @@ async def test_retained_resource_corruption_never_falls_back_to_source(app, tmp_
     assert file.read_bytes() == b'Original exact bytes'
 
 
-async def test_one_declaration_bounds_total_capture_and_deduplicates_references(app, tmp_path):
+async def test_one_declaration_retains_over_sixteen_mib_and_deduplicates_references(app, tmp_path):
     source, peer, file, args = await setup(app, tmp_path, b'x' * (6 * 1024 * 1024))
     references = args['references'][:]
     for name in ('second', 'third'):
@@ -302,9 +302,9 @@ async def test_one_declaration_bounds_total_capture_and_deduplicates_references(
         references.append(name + '.txt@sha256:' + args['references'][0].split('@sha256:')[1])
     args['references'] = [*references, references[0]]
     value = (await declare(app, peer, args))['result']
-    assert [item['status'] for item in value['artifacts']] == ['retained', 'retained', 'unavailable']
-    assert value['artifactVerification'] == 'incomplete'
-    assert app.db.execute('SELECT count(*) FROM output_records').fetchone()[0] == 2
+    assert [item['status'] for item in value['artifacts']] == ['retained', 'retained', 'retained']
+    assert value['artifactVerification'] == 'verified'
+    assert app.db.execute('SELECT count(*) FROM output_records').fetchone()[0] == 3
     assert (await read(app, source, args, limit=4))['text'] == 'xxxx'
 
 
