@@ -309,13 +309,16 @@ Previously recorded rejected revisions remain retained.
 A fresh response declaration snapshots supported local `path@sha256:<digest>`
 references before the reply is acknowledged. The existing output/resource owner
 retains matching bytes, their producing execution binding and the request
-relationship. File reads are bounded to 8 MiB per file and 16 MiB per declaration,
-inside the producer's execution folder. Reads happen outside the host lock;
+relationship. Files remain inside the producer's execution folder. Larger files
+use a flat manifest of bounded pieces in the existing resource store; there is no
+fixed byte ceiling per file or declaration. Current free disk space governs
+preparation, and text previews remain bounded. Complete saved bytes are verified
+before a download starts. Reads happen outside the host lock;
 generation, Stop, placement and response revision are rechecked before commit.
 Snapshot and reply records commit together. Exact command retries return the
 retained result without rereading mutable files, including after restart.
 
-Missing, changed, unsupported or over-limit sources remain explicit artifact
+Missing, changed, unsupported or resource-constrained sources remain explicit artifact
 states in the recorded report. An incomplete exact reference cannot satisfy a
 successful dependency. Retained bytes prove the referenced version, not semantic
 correctness, successful integration or independent review. Opaque references
