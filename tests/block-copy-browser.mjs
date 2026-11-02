@@ -263,7 +263,11 @@ try{
  const oldSourceRoute=await Promise.race([delayedRequest,new Promise((_,reject)=>{delayedTimer=setTimeout(()=>reject(Error('Delayed saved-source request did not arrive')),15000)})]).finally(()=>clearTimeout(delayedTimer));
  const newStoredSource='<p>New selected stored-source version</p>\n';
  await action('canvas.versions.revise',{id:storedArtifact.id,expectedRevision:1,content:newStoredSource});
- await action('canvas.select',{id:storedArtifact.id,version:2});
+ // Even inert saved HTML is an executable preview. Use the fixture's explicit
+ // version/reset controls while the old source response remains held.
+ await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('2');
+ await page.getByRole('group',{name:'Confirm saved preview version',exact:true}).getByRole('button',{name:'Load v2 — resets preview and runs its code',exact:true}).click();
+ await expect.poll(async()=>(await state()).canvas.selectedVersion).toBe(2);
  await action('canvas.view',{id:storedArtifact.id,patch:{source:true}});
  await oldSourceRoute.continue();
  await page.unroute('**/api/canvas/*/source?version=*');
@@ -272,7 +276,9 @@ try{
  await expect(canvas.locator('.a-block-copy-notice')).toHaveText('');
  await copy(canvas.getByRole('button',{name:'Copy canvas source',exact:true}),newStoredSource);
  assert.equal((await action('canvas.versions.inspect',{id:storedArtifact.id,version:1,includeSource:true})).result.source.content,savedSource);
- await action('canvas.select',{id:storedArtifact.id,version:1});
+ await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('1');
+ await page.getByRole('group',{name:'Confirm saved preview version',exact:true}).getByRole('button',{name:'Load v1 — resets preview and runs its code',exact:true}).click();
+ await expect.poll(async()=>(await state()).canvas.selectedVersion).toBe(1);
  // A failed saved-source read must not enable copying an empty/partial preview.
  await page.evaluate(()=>navigator.clipboard.writeText('retained on source failure'));
  await page.getByRole('button',{name:'Preview',exact:true}).click();
