@@ -936,8 +936,8 @@ class Collaboration:
             resuming = peer_resume.pending(receipt)
             if resuming and (reason := peer_resume.guard(self.service, receipt, source, target)):
                 return reason
-            if target.get("status") in {"stopping", "interrupted"} or (
-                    target.get("status") in {"stopped", "error", "cancelled", "failed"} and not resuming):
+            if target.get("status") == "stopping" or (
+                    target.get("status") in {"stopped", "interrupted", "error", "cancelled", "failed"} and not resuming):
                 return "The recipient is stopped or unavailable."
             task = target.get("task") or self.service.coordination.task(target["id"])
             from .completed_followup import matches_request
