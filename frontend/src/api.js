@@ -67,11 +67,12 @@ export async function request(path, options = {}) {
 async function measuredRequest(path, options, timing) {
   const authenticationAtStart=authenticationGeneration;
   const headers = { ...(path.startsWith('/api/')?{'X-Amplifier-Client':clientId,'X-Amplifier-State-Transport':'delta-v1'}:{}), ...options.headers };
+  const mutation=!['GET','HEAD'].includes((options.method||'GET').toUpperCase());
   let body = options.body;
   if (body && typeof body === 'object' && !(body instanceof FormData)) { headers['Content-Type']='application/json'; body=JSON.stringify(body); }
   const unavailable=error=>{
     if(error?.name==='AbortError')return error;
-    return Object.assign(new Error('The connection to Amplifier was interrupted.'),{code:'transport_unavailable',unconfirmed:!['GET','HEAD'].includes((options.method||'GET').toUpperCase()),cause:error});
+    return Object.assign(new Error('The connection to Amplifier was interrupted.'),{code:'transport_unavailable',unconfirmed:mutation,cause:error});
   };
   let res;
   try{res=await fetch(path,{...options,body,headers,credentials:'same-origin'})}catch(error){throw unavailable(error)}
@@ -83,10 +84,18 @@ async function measuredRequest(path, options, timing) {
   if(Number.isFinite(dated)&&(!hostClock||dated/1000>hostNow()))hostClock={seconds:dated/1000,received:performance.now()};
   let content;try{content=await res.text()}catch(error){throw unavailable(error)}
   let data;
-  try { data=content?JSON.parse(content):{}; } catch { throw new Error(`The server returned an unexpected response (${res.status}).`); }
+  const invalidResponse=()=>Object.assign(new Error(`The server returned an unexpected response (${res.status}).`),{code:'invalid_response',status:res.status,unconfirmed:mutation});
+  try { data=content?JSON.parse(content):{}; } catch { throw invalidResponse(); }
+  // An unreadable action acknowledgement proves neither acceptance nor refusal.
+  // Preserve structured server errors; don't infer nonexecution from proxy bytes.
+  const actionAck=mutation&&path.split('?')[0]==='/api/actions';
+  if(actionAck&&(!data||typeof data!=='object'||Array.isArray(data)))throw invalidResponse();
+  const readableError=[data?.error,data?.error?.message,data?.message].some(value=>typeof value==='string'&&value.trim());
+  if(actionAck&&!res.ok&&data.accepted!==false&&!readableError)throw invalidResponse();
   // A repeated command can return its original rejection inside an HTTP 200 receipt.
   const rejectionStatus=res.ok&&data.accepted===false?(Number.isInteger(data.status)&&data.status>=400&&data.status<600?data.status:400):res.status;
   if(!res.ok || data.accepted===false) throw Object.assign(new Error(typeof data.error==='string'?data.error:data.error?.message||data.message||`Request failed (${rejectionStatus})`),{code:data.code,state:data.state,receipt:data.receipt,status:rejectionStatus});
+  if(actionAck&&data.accepted!==true)throw invalidResponse();
   if(historyScope&&data.state?.client?.kind==='web')data.state={...data.state,client:{...data.state.client,historyScope}};
   return data;
 }
