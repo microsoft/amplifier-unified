@@ -535,7 +535,14 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
                 lambda settings: settings['sources']['modules'].update({'provider-fixture': str(source_paths['C'])}))
             report['materialChange'] = {'target': target['id'], 'before': before,
                 'after': template(app, target)[1], 'injectedAt': 'before_task_create'}
-        result = await original_dispatch(action, args, **kwargs)
+        try:
+            result = await original_dispatch(action, args, **kwargs)
+        except BaseException as exc:
+            if kwargs.get('origin') == 'scheduler' and action == 'task.create':
+                observations.append({'stage': action, 'sessionId': args['sessionId'],
+                    'error': {'type': type(exc).__name__, 'detail': str(exc)},
+                    'summary': template(app, app._session(args['sessionId']))[1]})
+            raise
         if kwargs.get('origin') == 'scheduler' and action in {'session.create', 'task.create'}:
             target = args['id'] if action == 'session.create' else args['sessionId']
             configuration, summary = template(app, app._session(target))

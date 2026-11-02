@@ -199,6 +199,7 @@ async def test_task_creation_guard_retains_only_actual_configuration_comparison(
     record, _ = await create(app, sid, now[0])
     original = app.dispatch
     compared = {}
+    destination_reads = []
     if mutation == 'configuration_without_parts':
         transition = app.schedules.store.transition
         def without_parts(*args, **kwargs):
@@ -222,6 +223,10 @@ async def test_task_creation_guard_retains_only_actual_configuration_comparison(
             if mutation == 'pending_access':
                 target['fileAccessPending'] = True
             compared['after'] = template(app, target)[1]
+            def observed_template(service, row):
+                destination_reads.append(row['id'])
+                return template(service, row)
+            monkeypatch.setattr('amplifier_web.scheduled_destinations.template', observed_template)
         return await original(action, args, **kwargs)
 
     app.dispatch = change
@@ -235,6 +240,7 @@ async def test_task_creation_guard_retains_only_actual_configuration_comparison(
         identities = {row['id'] for row in app.directory.select(limit=-1)}
         assert len(identities) == 2
         if mutation.startswith('configuration'):
+            assert destination_reads == [run['destinationSessionId']]
             comparison = run['destinationConfigurationComparison']
             assert comparison['before']['stage'] == 'destination_created'
             assert comparison['after']['stage'] == 'task_creation_admission'
@@ -251,6 +257,7 @@ async def test_task_creation_guard_retains_only_actual_configuration_comparison(
             public = (await app.dispatch('schedule.read', {'sessionId': sid, 'id': record['id']}))['result']['runs'][0]
             assert public['destinationConfigurationComparison'] == comparison
         else:
+            assert destination_reads == []
             assert 'destinationConfigurationComparison' not in run
             assert 'destination changed or stopped' in run['detail']
     finally:
