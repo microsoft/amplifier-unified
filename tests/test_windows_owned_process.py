@@ -89,6 +89,47 @@ class ABITests(unittest.TestCase):
             self.assertEqual(c.sizeof(jobs._ExtendedLimit), 144)
             self.assertEqual(jobs._ExtendedLimit.ProcessMemoryLimit.offset, 112)
 
+    def test_public_member_verification_is_exact_read_only_and_closes_handle(self):
+        native, k = self.native()
+        owner = jobs.WindowsOwnedProcess(native, 1, 1)
+        owner._job, owner.state = 41, "running"
+        def member(process, job, value):
+            value._obj.value = 1
+            return 1
+        k.IsProcessInJob.side_effect = member
+        created = 17 | (2 << 32)
+        owner.verify_member(123, created)
+        k.OpenProcess.assert_called_once_with(0x00101000, False, 123)
+        k.CloseHandle.assert_called_once_with(k.OpenProcess.return_value)
+        k.TerminateProcess.assert_not_called()
+        k.AssignProcessToJobObject.assert_not_called()
+        k.TerminateJobObject.assert_not_called()
+        k.CloseHandle.reset_mock()
+        with self.assertRaisesRegex(OSError, "identity"):
+            owner.verify_member(123, created + 1)
+        k.CloseHandle.assert_called_once()
+        k.IsProcessInJob.side_effect = lambda *args: 1  # leaves FALSE
+        with self.assertRaisesRegex(OSError, "not a member"):
+            owner.verify_member(123, created)
+        k.WaitForSingleObject.return_value = 0
+        with self.assertRaisesRegex(OSError, "exited"):
+            owner.verify_member(123, created)
+        for pid, timestamp in [(True, created), (0, created), (123, True), (123, 0)]:
+            with self.subTest(pid=pid, timestamp=timestamp), self.assertRaises(ValueError):
+                owner.verify_member(pid, timestamp)
+        owner.state = "closed"
+        with self.assertRaisesRegex(RuntimeError, "no longer running"):
+            owner.verify_member(123, created)
+
+    def test_public_member_failed_handle_close_remains_cleanup_counterevidence(self):
+        native, k = self.native()
+        owner = jobs.WindowsOwnedProcess(native, 1, 1)
+        owner._job, owner.state = 41, "running"
+        k.CloseHandle.return_value = 0
+        with self.assertRaises(OSError):
+            owner.verify_member(123, 18 | (2 << 32))
+        self.assertEqual(native.unclosed_handles, [k.OpenProcess.return_value])
+
     def test_job_checked_noninherit_and_no_breakaway(self):
         native, k = self.native()
         native.configure(0x100000001)
@@ -889,13 +930,26 @@ class NativeWindowsTests(unittest.IsolatedAsyncioTestCase):
                 handle = native.check(native.k.OpenProcess(0x1000, False, pid))
                 try:
                     self.assertTrue(native.member(owner._job, handle))
+                    created = guard.creation_time(native.k, handle)
                 finally:
                     native.check(native.k.CloseHandle(handle))
+                owner.verify_member(pid, created)
+                with self.assertRaisesRegex(OSError, "identity"):
+                    owner.verify_member(pid, created + 1)
+                foreign = native.check(native.k.OpenProcess(0x1000, False, os.getpid()))
+                try:
+                    foreign_created = guard.creation_time(native.k, foreign)
+                finally:
+                    native.check(native.k.CloseHandle(foreign))
+                with self.assertRaisesRegex(OSError, "not a member"):
+                    owner.verify_member(os.getpid(), foreign_created)
                 owner.stdin.write(b"release\n")
                 await owner.stdin.drain()
                 self.assertEqual((await asyncio.wait_for(owner.wait(), 10)).payload_returncode, 0)
             finally:
                 await owner.close()
+            with self.assertRaisesRegex(RuntimeError, "no longer running"):
+                owner.verify_member(pid, created)
             # Exercise sys._base_executable supplied by an actual venv HOST,
             # not only a venv used as the already-contained payload.
             host_probe = r"""

@@ -9,7 +9,7 @@ import re
 import shlex
 
 
-from ..deployment import write_private
+from ..deployment import write_private as _write_private
 from ..shared_settings import read_yaml, read_settings
 from ..session_files import amplifier_home
 
@@ -30,6 +30,18 @@ def app_home() -> Path:
         from ..windows_files import address
         return address(value)
     return Path(value).expanduser().resolve()
+
+
+def write_private(path, text, *, owned_root=None):
+    """Runtime writes are owned by the app data identity, never by their parent.
+
+    The Windows boundary validates containment and creates missing private
+    directories before payload. Existing unsafe directories remain refusals.
+    POSIX callers keep their existing writer and permission behavior.
+    """
+    if os.name == "nt":
+        return _write_private(path, text, owned_root=owned_root or app_home())
+    return _write_private(path, text, **({'owned_root': owned_root} if owned_root is not None else {}))
 
 
 def merge(base, overlay):
@@ -210,7 +222,12 @@ def prepare_registry(config):
     constructed per session from those settings, including on older installs
     whose owned directory still contains a former imported registry.
     """
-    config.registry_home.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.name == "nt":
+        from ..windows_files import directory
+        with directory(config.registry_home, owned_root=config.home, create=True):
+            pass
+    else:
+        config.registry_home.mkdir(parents=True, exist_ok=True, mode=0o700)
 
 
 def configure_skill_cache(bundle, registry_home):

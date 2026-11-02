@@ -35,6 +35,22 @@ def publish(data):
     _PROTOCOL.flush()
 
 
+def publish_process_identity():
+    """Identify this interpreter, not uv/the guard/a venv redirector."""
+    if os.name != "nt":
+        return
+    import ctypes
+    if __package__:
+        from .windows_launch_guard import creation_time
+    else:
+        from windows_launch_guard import creation_time
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetCurrentProcess.argtypes = []
+    kernel.GetCurrentProcess.restype = ctypes.c_void_p
+    publish({"type": "runtime.identity", "pid": os.getpid(),
+             "created": creation_time(kernel, kernel.GetCurrentProcess())})
+
+
 class Worker:
     def __init__(self):
         self.session = self.runtime = self.execution = None
@@ -973,6 +989,10 @@ class Worker:
             # gets a compact capability report, not credentials or config blobs.
             public = {key: report.get(key) for key in ("bundle", "root_bundle", "workspace", "session_id", "resumed", "providers",
                 "tools", "agents", "provider_choices", "selection", "effective_selection", "delegationRouting", "steering", "capabilities", "fork_context_messages", "standalone", "settings_file")}
+            if os.name == "nt":
+                public["capabilities"] = {**(public.get("capabilities") or {}),
+                    "session.handoff": False, "session.transfer_fence": False,
+                    "session.authoritative_checkpoint": False}
             if replacement:
                 await self.commit_replacement(replacement,
                     deferred=config.get('bundleReplacement', {}).get('deferred'), stop_revision=stop_revision)
@@ -1748,6 +1768,9 @@ class Worker:
             self.shutdown.set()
 
     async def run(self):
+        # The host verifies membership/creation time before sending even start.
+        # This carries no readiness or permission claim.
+        publish_process_identity()
         read = asyncio.create_task(self.read())
         try:
             await self.shutdown.wait()

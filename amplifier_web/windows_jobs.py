@@ -387,6 +387,36 @@ class WindowsOwnedProcess:
     def stderr(self):
         return self._process.stderr
 
+    def verify_member(self, pid, created):
+        """Verify a live descendant's exact kernel identity in THIS retained job.
+
+        Read-only inspection, never adoption or authority to signal a PID.
+        Useful when the payload is uv/a venv redirector rather than the worker.
+        No handles escape this call; failed closure enters the owner's existing
+        unclosed-inspection-handle policy, preventing successful cleanup.
+        """
+        if self.state != "running" or self._job is None or self._finalizer is not None:
+            raise RuntimeError("owned job is no longer running")
+        if type(created) is not int or created <= 0:
+            raise ValueError("invalid process creation time")
+        native = self._native
+        if type(pid) is not int or not 0 < pid <= 0xFFFFFFFF:
+            raise ValueError("invalid process PID")
+        # QUERY_LIMITED_INFORMATION | SYNCHRONIZE only. In particular this
+        # reported identity never obtains SET_QUOTA or TERMINATE authority.
+        handle = native.check(native.k.OpenProcess(0x00101000, False, pid))
+        try:
+            if guard.creation_time(native.k, handle) != created or native.exited(handle):
+                raise OSError("reported worker creation identity changed or exited")
+            if not native.member(self._job, handle):
+                raise OSError("reported worker is not a member of its owned job")
+        finally:
+            try:
+                native.check(native.k.CloseHandle(handle))
+            except BaseException:
+                native.unclosed_handles.append(handle)
+                raise
+
     def _poll_status(self):
         if b"\n" not in self._buffer:
             try:

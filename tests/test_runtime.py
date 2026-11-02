@@ -1067,3 +1067,396 @@ async def test_ready_worker_identity_is_private_and_bound_to_native_session(repo
         assert next(value['report'] for kind, value in events if value.get('status') == 'ready') == {'public': True}
     finally:
         await manager.close()
+
+
+@pytest.fixture
+async def windows_runtime_model(tmp_path, monkeypatch):
+    """Drive the real manager Windows branch; NOT native kernel evidence."""
+    from amplifier_web import runtime, windows_jobs
+    from unittest.mock import AsyncMock
+    class Job:
+        def __init__(self):
+            self.identity = SimpleNamespace(guard_pid=10, payload_pid=20)
+            self.stdin = self
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+            self.done = asyncio.Event()
+            self.tree_empty = self.io_finalized = False
+            self.output_discarded = False
+            self.writes, self.verified = [], []
+            self.ignore_stop = self.reject_identity = self.bad_ready = False
+            self.code = 0
+        def write(self, raw):
+            data = json.loads(raw)
+            self.writes.append(data)
+            if data['op'] == 'start':
+                identity = {'sessionId': data['session']['id'], 'pid': 999 if self.bad_ready else 30}
+                self.stdout.feed_data(runtime.encode_message(
+                    {'type': 'runtime.ready', 'workerIdentity': identity, 'report': {}}))
+            elif data['op'] == 'send':
+                self.stdout.feed_data(runtime.encode_message(
+                    {'type': 'input.delivered', 'input_id': data['input_id']}))
+                self.stdout.feed_data(runtime.encode_message(
+                    {'op': 'reply', 'id': data['id'], 'result': {'accepted': True}}))
+            elif data['op'] == 'stop' and not self.ignore_stop:
+                self.finish()
+        async def drain(self): pass
+        def verify_member(self, pid, created):
+            self.verified.append((pid, created))
+            if self.reject_identity or (pid, created) != (30, 300):
+                raise OSError('not in retained job')
+        def finish(self):
+            if not self.done.is_set():
+                self.tree_empty = self.io_finalized = True
+                self.stdout.feed_eof()
+                self.stderr.feed_eof()
+                self.done.set()
+        async def wait(self):
+            await self.done.wait()
+            return windows_jobs.ProcessResult(self.code, 0, 0, self.output_discarded)
+        async def close(self):
+            self.output_discarded = True
+            self.finish()
+            return await self.wait()
+    job = Job()
+    spawn = AsyncMock(return_value=job)
+    monkeypatch.setattr(windows_jobs.WindowsOwnedProcess, 'start', spawn)
+    monkeypatch.setattr(runtime, '_WINDOWS', True)
+    monkeypatch.setattr(runtime, '_WINDOWS_STOP_SECONDS', .03)
+    pids = []
+    from amplifier_web import generation_leases
+    real_acquire = generation_leases.acquire
+    monkeypatch.setattr('amplifier_web.generation_leases.acquire',
+                        lambda home, generation, pid: pids.append(pid))
+    manager = RuntimeManager(command=[sys.executable, '-c', 'unused'],
+                             startup_timeout=1, retention={'prewarm_on_select': False})
+    manager.home = tmp_path / 'app'
+    events = []
+    async def emit(kind, data): events.append((kind, data))
+    def identify():
+        job.stdout.feed_data(runtime.encode_message(
+            {'type': 'runtime.identity', 'pid': 30, 'created': 300}))
+    return SimpleNamespace(manager=manager, job=job, spawn=spawn, pids=pids,
+                           events=events, emit=emit, identify=identify, real_acquire=real_acquire)
+
+
+@pytest.mark.parametrize('forced', [False, True])
+async def test_windows_runtime_identity_transport_and_stop_model(windows_runtime_model, forced):
+    model = windows_runtime_model
+    model.identify()
+    model.job.stderr.feed_data(b'e' * 200_000)  # no newline, larger than pipe watermark
+    model.job.ignore_stop = forced
+    try:
+        await model.manager.start({'id': 'windows-model'}, model.emit)
+        row = model.manager.workers['windows-model']
+        assert row['process'].pid == row['native_worker_pid'] == 30
+        assert 20 not in model.pids and model.pids[-1] == 30  # never lease uv
+        assert model.job.verified == [(30, 300), (30, 300)]
+        assert not hasattr(row['process'], 'kill') and not hasattr(row['process'], 'wait')
+        model.spawn.assert_awaited_once()
+        assert model.spawn.call_args.kwargs['trusted_python'] == sys._base_executable
+        await model.manager.send({'id': 'windows-model'}, 'é' * 90_000, 'input', model.emit)
+        await asyncio.wait_for(model.manager.stop('windows-model'), 1)
+        assert model.job.done.is_set() and model.job.tree_empty and model.job.io_finalized
+        assert model.job.output_discarded == forced
+        assert not model.manager.workers
+        assert any(kind == 'runtime.ended' for kind, _ in model.events)
+        assert len(row['stderr']) <= 30
+    finally:
+        await model.manager.close()
+
+
+@pytest.mark.parametrize('failure', ['member', 'ready', 'missing', 'cancel', 'stop'])
+async def test_windows_runtime_identity_failure_never_admits_input(windows_runtime_model, failure):
+    model = windows_runtime_model
+    if failure not in {'missing', 'cancel', 'stop'}:
+        model.identify()
+    model.job.reject_identity = failure == 'member'
+    model.job.bad_ready = failure == 'ready'
+    task = asyncio.create_task(model.manager.start({'id': 'identity-failure'}, model.emit))
+    try:
+        if failure in {'cancel', 'stop'}:
+            while not model.spawn.await_count:
+                await asyncio.sleep(0)
+            while not model.manager._preparations['identity-failure'].get('task'):
+                await asyncio.sleep(0)
+            if failure == 'cancel':
+                task.cancel()
+            else:
+                await model.manager.stop('identity-failure')
+        with pytest.raises((RuntimeError, asyncio.CancelledError)):
+            await asyncio.wait_for(task, 2)
+        assert model.job.done.is_set()
+        assert not model.manager.workers and not model.manager._preparations
+        assert not any(kind == 'runtime.status' and data.get('status') == 'ready'
+                       for kind, data in model.events)
+        assert not any(data['op'] == 'send' for data in model.job.writes)
+        if failure != 'ready':
+            assert not model.job.writes and 30 not in model.pids
+    finally:
+        await model.manager.close()
+
+
+@pytest.mark.parametrize('stage', ['identity', 'spawn'])
+@pytest.mark.parametrize(('tree_empty', 'io_finalized'), [(False, False), (True, False), (False, True)])
+async def test_windows_failed_preparation_cleanup_retains_durable_generation_protection(
+        windows_runtime_model, monkeypatch, stage, tree_empty, io_finalized):
+    from unittest.mock import AsyncMock
+    import os
+    from amplifier_web import generation_leases, runtime_profiles, updates, windows_jobs
+    model = windows_runtime_model
+    monkeypatch.setattr(generation_leases, 'acquire', model.real_acquire)
+    monkeypatch.setattr(generation_leases, '_process_exists', lambda pid: pid == os.getpid())
+    monkeypatch.setattr(updates, 'active_release', lambda home: {'current': 'original-source'})
+    monkeypatch.setattr(runtime_profiles, 'ensure', AsyncMock(return_value='qualified-source'))
+    command = model.manager.command
+    model.manager.command = None
+    monkeypatch.setattr(model.manager, '_command', lambda *args, **kwargs: command)
+    model.job.tree_empty = tree_empty
+    model.job.io_finalized = io_finalized
+    cleanup_error = windows_jobs.CleanupError(model.job)
+    model.job.close = AsyncMock(side_effect=cleanup_error)
+    if stage == 'spawn':
+        model.spawn.side_effect = cleanup_error
+    else:
+        model.identify()
+        model.job.reject_identity = True
+    try:
+        with pytest.raises((RuntimeError, windows_jobs.CleanupError)):
+            await model.manager.start({'id': 'failed-cleanup'}, model.emit)
+        # These are real durable leases, not a call-count model. No generation
+        # deletion is attempted. Both host references must survive an unverified
+        # worker identity, even if the job reports tree-empty but not finalized I/O.
+        assert generation_leases.references(model.manager.home) == {'original-source', 'qualified-source'}
+        paths = list((model.manager.home / 'updates/worker-leases').glob('*.json'))
+        assert len(paths) == 2
+        assert all(json.loads(path.read_text())['pid'] == os.getpid() for path in paths)
+        retained = model.manager._preparations['failed-cleanup']
+        assert retained['windows_job'] is model.job and retained['cleanup_error'] is cleanup_error
+        assert set(retained['generation_reservations']) == set(paths)
+        assert not model.manager.workers
+        assert not model.job.writes
+        assert any(kind == 'runtime.error' and 'cleanup is unconfirmed' in data['error']
+                   for kind, data in model.events)
+        assert not any(kind == 'runtime.ended' for kind, _ in model.events)
+        for request in (model.manager.start({'id': 'failed-cleanup'}, model.emit),
+                        model.manager.stop('failed-cleanup')):
+            with pytest.raises(RuntimeError, match='cleanup is unconfirmed'):
+                await request
+        assert model.spawn.await_count == 1
+        assert model.job.close.await_count == (0 if stage == 'spawn' else 1)
+        await model.manager.close()
+        assert model.manager._preparations['failed-cleanup'] is retained
+        assert all(path.exists() for path in paths)
+        assert not any(kind == 'runtime.ended' for kind, _ in model.events)
+    finally:
+        # Only settle this fake's task, not production recovery. Real failed
+        # owners/leases deliberately require separate confirmed reconciliation.
+        model.job.finish()
+        await model.manager.close()
+
+
+@pytest.mark.parametrize('cleanup_fails', [False, True])
+@pytest.mark.parametrize('stopping', [False, True])
+async def test_windows_communication_error_settles_children_only_after_confirmed_cleanup(
+        windows_runtime_model, monkeypatch, cleanup_fails, stopping):
+    from unittest.mock import AsyncMock
+    from amplifier_web import runtime, windows_jobs
+    model = windows_runtime_model
+    original_lines = runtime._BoundedWorkerLines
+    monkeypatch.setattr(runtime, '_BoundedWorkerLines', lambda stream: original_lines(stream, limit=256))
+    model.identify()
+    await model.manager.start({'id': 'protocol-failure'}, model.emit)
+    row = model.manager.workers['protocol-failure']
+    row['backgroundCalls'] = {'background-2', 'background-1'}
+    children = {'native-child': 'working', 'background-1': 'working', 'background-2': 'working'}
+    original_emit = row['emit']
+    async def emit(kind, data):
+        if kind == 'runtime.ended':
+            assert model.job.tree_empty and model.job.io_finalized
+            assert data['runtimeOwnerId'] == row['runtimeOwnerId']
+            assert data['backgroundCallIds'] == ['background-1', 'background-2']
+            for identity in children:
+                children[identity] = data['status']
+        await original_emit(kind, data)
+    row['emit'] = emit
+    if stopping:
+        row['closing'] = True
+        row['stop_reason'] = 'stopped'
+    cleanup_error = windows_jobs.CleanupError(model.job)
+    if cleanup_fails:
+        model.job.close = AsyncMock(side_effect=cleanup_error)
+    model.job.stdout.feed_data(b'x' * 257)  # real bounded-line failure after readiness
+    try:
+        if cleanup_fails:
+            with pytest.raises(windows_jobs.CleanupError):
+                await asyncio.wait_for(asyncio.shield(row['reader']), 1)
+            assert row['process'].returncode is None
+            assert not row.get('executionEnded')
+            assert all(status == 'working' for status in children.values())
+            assert not any(kind == 'runtime.ended' for kind, _ in model.events)
+            assert model.manager.workers['protocol-failure'] is row
+        else:
+            await asyncio.wait_for(asyncio.shield(row['reader']), 1)
+            assert row['process'].returncode is not None and row['executionEnded']
+            assert all(status == ('stopped' if stopping else 'interrupted') for status in children.values())
+            ended = [data for kind, data in model.events if kind == 'runtime.ended']
+            assert len(ended) == 1
+            await model.manager.stop('protocol-failure')
+            assert len([kind for kind, _ in model.events if kind == 'runtime.ended']) == 1
+        if not stopping:
+            assert any(kind == 'runtime.error' for kind, _ in model.events)
+    finally:
+        if cleanup_fails:
+            # The fake remains retained until this test-only task teardown.
+            model.job.finish()
+            await row['windows_owner'].completion
+            # A failed reader remains diagnostic evidence, not a new test error.
+            row['closing'] = True
+        await model.manager.close()
+
+
+async def test_windows_protocol_lines_over_watermark_bounded_and_eof():
+    from amplifier_web.runtime import _BoundedWorkerLines
+    stream = asyncio.StreamReader(limit=64 * 1024)
+    stream.feed_data(b'x' * 160_000 + b'\nnext\n')
+    stream.feed_eof()
+    lines = _BoundedWorkerLines(stream, limit=200_000)
+    assert await lines.readline() == b'x' * 160_000 + b'\n'
+    assert await lines.readline() == b'next\n'
+    assert await lines.readline() == b''
+    for content in (b'x' * 11, b'x' * 10 + b'\n'):
+        source = asyncio.StreamReader()
+        source.feed_data(content)
+        source.feed_eof()
+        with pytest.raises(ValueError, match='transport limit'):
+            await _BoundedWorkerLines(source, limit=10).readline()
+
+
+@pytest.mark.parametrize('outcome', ['success', 'invalid', 'cancel'])
+async def test_windows_shared_probe_uses_owned_job_and_settles_pipes(windows_runtime_model, outcome):
+    from unittest.mock import AsyncMock
+    model = windows_runtime_model
+    written = []
+    model.job.stdin = SimpleNamespace(write=written.append, drain=AsyncMock(), close=lambda: None)
+    if outcome != 'cancel':
+        response = {'ok': True, 'result': {'status': 'read-only'}} if outcome == 'success' else []
+        model.job.stdout.feed_data(json.dumps(response).encode() + b'\n')
+        model.job.finish()
+    task = asyncio.create_task(model.manager.shared_state_probe({'operation': 'inspect'}))
+    try:
+        if outcome == 'cancel':
+            while not written:
+                await asyncio.sleep(0)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        elif outcome == 'invalid':
+            with pytest.raises(RuntimeError, match='invalid response'):
+                await task
+        else:
+            assert await task == {'status': 'read-only'}
+        assert model.job.tree_empty and model.job.io_finalized
+        assert json.loads(written[0]) == {'operation': 'inspect'}
+        assert model.spawn.call_args.args[0][-1].endswith('shared_state_probe.py')
+        assert model.spawn.call_args.kwargs['trusted_python'] == sys._base_executable
+    finally:
+        await model.manager.close()
+
+
+async def test_windows_owner_cannot_report_exit_without_zero_tree_and_io_proof(windows_runtime_model):
+    from amplifier_web.runtime import _WindowsWorkerOwner
+    model = windows_runtime_model
+    owner = _WindowsWorkerOwner(model.job)
+    model.job.done.set()  # A root-exit report alone is not successful cleanup.
+    with pytest.raises(RuntimeError, match='cleanup is unconfirmed'):
+        await owner.wait()
+    assert owner.process.returncode is None
+    assert owner.process.pid is None
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='native Windows runtime Job integration')
+@pytest.mark.parametrize('forced', [False, True])
+async def test_native_windows_runtime_worker_identity_pipes_and_job_cleanup(tmp_path, monkeypatch, forced):
+    from amplifier_web import runtime
+    # Exercise the actual Worker.run identity/ThreadedPipeReader/shutdown path,
+    # with only the provider/bundle-dependent command body replaced.
+    code = r'''
+import asyncio,json,os,sys,subprocess
+sys.path.insert(0, sys.argv[1])
+from amplifier_web.runtime_worker import Worker,configure_protocol,publish
+class Fixture(Worker):
+    async def command(self, data):
+        if data['op']=='start':
+            self.session_id=data['session']['id']
+            os.write(2,b'e'*200000)
+            publish({'type':'runtime.ready','workerIdentity':{'sessionId':self.session_id,'pid':os.getpid()},'report':{}})
+        elif data['op']=='send':
+            publish({'type':'input.delivered','input_id':data['input_id']})
+            publish({'type':'assistant.message','text':data['text']})
+            publish({'op':'reply','id':data['id'],'result':{'accepted':True}})
+        elif data['op']=='stop' and sys.argv[2]=='normal':
+            # A descendant keeps both output pipes open. Root exit must still
+            # settle the job rather than waiting indefinitely for pipe EOF.
+            subprocess.Popen([sys.executable,'-I','-S','-c','import time;time.sleep(30)'])
+            self.shutdown.set()
+configure_protocol()
+asyncio.run(Fixture().run())
+'''
+    manager = RuntimeManager(command=[sys.executable, '-I', '-c', code,
+        str(Path(__file__).resolve().parents[1]), 'forced' if forced else 'normal'],
+        startup_timeout=15, retention={'prewarm_on_select': False})
+    manager.home = tmp_path / 'native-app'
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(manager.home))
+    events = []
+    async def emit(kind, data): events.append((kind, data))
+    monkeypatch.setattr(runtime, '_WINDOWS_STOP_SECONDS', .2 if forced else 15)
+    try:
+        await manager.start({'id': 'native-job'}, emit)
+        row = manager.workers['native-job']
+        owner = row['windows_owner']
+        assert row['native_worker_pid'] == row['process'].pid
+        assert row['process'].pid != owner.job.identity.guard_pid
+        owner.job.verify_member(row['process'].pid, owner.created)
+        await manager.send({'id': 'native-job'}, 'Native UTF-8 é ' * 12000, 'native-input', emit)
+        await asyncio.wait_for(manager.stop('native-job'), 20)
+        assert owner.job.tree_empty and owner.job.io_finalized
+        assert owner.result.active_processes == 0
+        assert not manager.workers
+        assert any(kind == 'runtime.ended' for kind, _ in events)
+        assert not any(kind == 'runtime.error' for kind, _ in events)
+    finally:
+        await manager.close()
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='native Windows runtime startup cancellation')
+async def test_native_windows_runtime_cancel_before_identity_reaps_job(tmp_path, monkeypatch):
+    from amplifier_web import windows_jobs
+    manager = RuntimeManager(command=[sys.executable, '-I', '-S', '-c',
+        'import time;time.sleep(30)'], startup_timeout=15,
+        retention={'prewarm_on_select': False})
+    manager.home = tmp_path / 'cancel-app'
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(manager.home))
+    captured, events = [], []
+    original = windows_jobs.WindowsOwnedProcess.start
+    async def spawn(*args, **kwargs):
+        owner = await original(*args, **kwargs)
+        captured.append(owner)
+        return owner
+    monkeypatch.setattr(windows_jobs.WindowsOwnedProcess, 'start', spawn)
+    async def emit(kind, data): events.append((kind, data))
+    task = asyncio.create_task(manager.start({'id': 'cancel-native'}, emit))
+    try:
+        async with asyncio.timeout(15):
+            while not captured or not manager._preparations['cancel-native'].get('task'):
+                await asyncio.sleep(.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 15)
+        assert captured[0].tree_empty and captured[0].io_finalized
+        assert not manager.workers and not manager._preparations
+        assert not list((manager.home / 'updates/worker-leases').glob('*.json'))
+        assert not any(kind == 'runtime.status' and data.get('status') == 'ready'
+                       for kind, data in events)
+    finally:
+        await manager.close()

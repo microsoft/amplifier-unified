@@ -31,6 +31,31 @@ def isolated_read_config_collaborators(workspace, shared):
 
 
 class HostSettingsTests(unittest.TestCase):
+    def test_windows_runtime_writer_binds_app_home_not_destination_parent(self):
+        from amplifier_web.host import config
+        root, path = Path('app'), Path('outside/report.json')
+        with patch.object(config, 'os', SimpleNamespace(name='nt')), \
+                patch.object(config, 'app_home', return_value=root), \
+                patch.object(config, '_write_private') as write:
+            config.write_private(path, 'private')
+            write.assert_called_once_with(path, 'private', owned_root=root)
+
+    def test_windows_registry_creation_uses_private_boundary_before_mkdir(self):
+        from amplifier_web.host import config
+        from amplifier_web import windows_files
+        root = Path('app')
+        target = root / 'foundation'
+        seen = []
+        @contextmanager
+        def directory(path, **kwargs):
+            seen.append((path, kwargs))
+            yield
+        with patch.object(config, 'os', SimpleNamespace(name='nt')), \
+                patch.object(windows_files, 'directory', directory), \
+                patch.object(Path, 'mkdir', side_effect=AssertionError('ordinary mkdir')):
+            config.prepare_registry(SimpleNamespace(home=root, registry_home=target))
+        self.assertEqual(seen, [(target, {'owned_root': root, 'create': True})])
+
     def test_work_is_available_without_changing_default_or_overriding_user_sources(self):
         config = HostConfig(Path('/app'), Path('/workspace'), {}, Path('/registry'))
         self.assertEqual(config.active_bundle, 'work')
