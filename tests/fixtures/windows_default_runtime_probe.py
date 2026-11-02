@@ -42,8 +42,10 @@ from amplifier_core.message_models import ChatResponse, TextBlock
 __amplifier_module_type__ = "provider"
 class Provider:
     name = "fixture"
-    def __init__(self, coordinator, config):
-        self.coordinator, self.config = coordinator, config
+    def __init__(self, config=None, *, coordinator=None):
+        # Metadata is read before mount, without a coordinator or live config.
+        # Only mount binds the actual worker for the provenance-producing turn.
+        self.coordinator, self.config = coordinator, config or {}
     def get_info(self):
         return ProviderInfo(id="fixture", display_name="Scripted fixture", defaults={"model":"fixture"})
     async def list_models(self): return []
@@ -86,7 +88,7 @@ class Provider:
             json.dump(proof, stream)
         return ChatResponse(content=[TextBlock(text="Default command caf\u00e9 verified")])
 async def mount(coordinator, config=None):
-    await coordinator.mount("providers", Provider(coordinator, config or {}), name="fixture")
+    await coordinator.mount("providers", Provider(config, coordinator=coordinator), name="fixture")
 '''
 
 

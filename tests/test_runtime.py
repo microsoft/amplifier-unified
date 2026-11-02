@@ -1472,6 +1472,87 @@ def _default_runtime_probe_module():
     return module
 
 
+def _default_runtime_provider_module(monkeypatch):
+    from types import ModuleType
+    fixture = _default_runtime_probe_module()
+    module = ModuleType('amplifier_module_provider_default_fixture')
+    exec(compile(fixture.PROVIDER, '<scripted-default-provider>', 'exec'), module.__dict__)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    return module
+
+
+async def test_default_runtime_probe_provider_metadata_and_core_contract(tmp_path, monkeypatch):
+    from amplifier_core import ChatRequest, Message, ProviderInfo
+    from amplifier_core.testing import MockCoordinator
+    from amplifier_core.validation.provider import ProviderValidator
+    from amplifier_web.provider_environment import (
+        construct_provider, construct_schema_provider, provider_class, provider_config_schema)
+    from amplifier_web.provider_isolation import UnavailableProvider, require_selected
+    module = _default_runtime_provider_module(monkeypatch)
+    config = {'project': str(tmp_path / 'project'), 'app': str(tmp_path / 'app'),
+              'proof': str(tmp_path / 'proof.json'), 'appHashes': {}, 'imports': {}}
+    # Same prepare_manager metadata route as the cold worker: actual schema
+    # construction with config={} BEFORE a mount coordinator exists.
+    assert provider_class('provider-default-fixture') is module.Provider
+    assert await provider_config_schema(
+        'provider-default-fixture', config=config, environment={}) == {'fields': []}
+    metadata_provider = construct_schema_provider(module.Provider, config, environment={})
+    setup_provider = construct_provider(module.Provider, config)
+    assert metadata_provider.coordinator is None and metadata_provider.config == {}
+    assert setup_provider.coordinator is None and setup_provider.config == config
+    assert isinstance(metadata_provider.get_info(), ProviderInfo)
+    # Real Core validator/mount contract, not a signature-only or fake-Core pass.
+    result = await asyncio.wait_for(
+        ProviderValidator().validate(module.__name__, config=config), 5)
+    assert result.passed and result.checks and all(check.passed for check in result.checks)
+    assert {check.name for check in result.checks} >= {
+        'protocol_compliance', 'provider_get_info', 'provider_list_models',
+        'provider_complete', 'provider_parse_tool_calls'}
+    coordinator = MockCoordinator()
+    await module.mount(coordinator, config)
+    provider = coordinator.get('providers')['fixture']
+    assert provider.coordinator is coordinator and provider.config == config
+    assert not isinstance(provider, UnavailableProvider)
+    require_selected(coordinator)
+    assert provider.get_info().defaults['model'] == 'fixture'
+    assert await provider.list_models() == []
+    assert provider.parse_tool_calls(SimpleNamespace(tool_calls=[])) == []
+    # Core's test-session branch must not execute worker-provenance file I/O.
+    response = await provider.complete(ChatRequest(
+        messages=[Message(role='user', content='DEFAULT_COMMAND_TURN')]))
+    assert response.content[0].text == 'Fixture validation'
+    assert not tuple(tmp_path.iterdir())
+
+
+async def test_default_runtime_probe_legacy_provider_metadata_refuses_selection(monkeypatch):
+    from amplifier_core.testing import MockCoordinator
+    from amplifier_web.provider_environment import provider_config_schema
+    from amplifier_web.provider_isolation import (
+        ProviderIsolation, ProviderUnavailable, UnavailableProvider, require_selected)
+    module = _default_runtime_provider_module(monkeypatch)
+
+    def legacy(self, coordinator, config):
+        self.coordinator, self.config = coordinator, config
+
+    # Sensitivity control for the exact old constructor, without changing the
+    # maintained fixture or bypassing the real metadata/isolation boundary.
+    monkeypatch.setattr(module.Provider, '__init__', legacy)
+    with pytest.raises(TypeError, match='coordinator') as caught:
+        await provider_config_schema('provider-default-fixture', config={}, environment={})
+    isolation = ProviderIsolation()
+    spec = {'module': 'provider-default-fixture', 'config': {}}
+    failure = isolation.record(spec, 'provider_schema_failed', error=caught.value)
+    assert failure['diagnostic'] == {
+        'stage': 'schema', 'category': 'schema', 'errorType': 'TypeError'}
+    coordinator = MockCoordinator()
+    await coordinator.mount(
+        'providers', UnavailableProvider(spec, failure), name='default-fixture')
+    with pytest.raises(ProviderUnavailable) as refused:
+        require_selected(coordinator)
+    assert refused.value.failures[0]['reason_code'] == 'provider_schema_failed'
+    assert refused.value.failures[0]['diagnostic'] == failure['diagnostic']
+
+
 def test_default_runtime_probe_keeps_real_command_and_bounded_evidence():
     import ast
     fixture = _default_runtime_probe_module()
