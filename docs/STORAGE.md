@@ -268,11 +268,17 @@ The policy asks the existing ecosystem-generation and purpose-installed test
 runner and qualified dependency-layer owners to remove only copies they can still prove unused. Current and
 rollback versions, live generation leases, configurations, observed process
 references, local source edits/untracked files/unpublished commits, and uncertain
-operations protect a copy. Python import bytecode in `__pycache__` does not pin
-an otherwise unused generation when a bounded inspection reproduces its payload
-from regular, tracked source covered by the verified installed graph. Caches from
-other interpreters or producers, unknown files, packaging metadata and nested
-environments remain protected. Owners repeat their checks at removal admission;
+operations protect a copy. Conventional untracked Python import caches in
+`__pycache__` are disposable when their regular tracked source is unchanged:
+the verified installed graph or the cache's recorded, remotely retained Git
+commit must prove the complete tracked tree. This includes on-disk content that
+Git index flags could otherwise hide. Supported CPython 3.12–3.14 cache names
+must match their header, have a nonempty payload, and remain regular files beside
+the tracked module; symbolic links are never accepted. A cache payload can be
+stale, damaged or hand-edited and is still disposable under this rule. Inspection
+never imports source, starts its interpreter, or deserializes cached code.
+Unknown names/producers, files outside this convention, packaging metadata and
+nested environments remain protected. Owners repeat their checks at removal admission;
 links are not followed as cleanup targets. Ecosystem qualification is bound to
 a bounded inventory captured before its source checks; a changed inventory or
 runtime-sharing decision defers that candidate. The same inventory follows the

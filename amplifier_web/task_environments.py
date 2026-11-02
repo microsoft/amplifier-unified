@@ -284,14 +284,29 @@ def prepare(home, sid, workspace, actor, source, backend_key, request_id, instal
     return row
 
 
+def cleanup_not_started(row):
+    """Host preflight failed before launching any cleanup helper."""
+    return {'ok': False, 'effectAdmitted': False, 'status': 'stopped',
+            'universeId': row.get('universeId'), 'phase': 'preparing',
+            'code': 'cleanup_helper_not_started',
+            'message': 'Cleanup could not start. The stopped environment and its files are unchanged. Inspect the test machine configuration, then continue cleanup with a new request.'}
+
+
 def invoke(config, home, row, action, args, *, _qualification=False):
     """Bound helper output and lifetime; killing a helper is not command cancellation."""
-    if not _qualification and action not in {'capacity', 'read', 'reconcile', 'job_read'}:
-        from .managed_runner_updates import validate_execution
-        if config.get('originSnapshotVersion') == 1:
-            registered_runners.qualify_retained(None, config)
-        else:
-            validate_execution(home, config)
+    try:
+        if not _qualification and action not in {'capacity', 'read', 'reconcile', 'job_read'}:
+            from .managed_runner_updates import validate_execution
+            if config.get('originSnapshotVersion') == 1:
+                registered_runners.qualify_retained(None, config)
+            else:
+                validate_execution(home, config)
+    except (OSError, ValueError, KeyError, TypeError):
+        # This is local validation, before either the local helper or remote
+        # runner is invoked. It cannot establish an unknown removal effect.
+        if action in {'remove', 'finishCleanup'}:
+            return cleanup_not_started(row)
+        raise
     if action == 'execute' and args.get('durableJob') is True:
         action = 'job_start'
     folder = (home / 'workspace-resources' / 'backend-probes' / config_key(config)
@@ -316,21 +331,28 @@ def invoke(config, home, row, action, args, *, _qualification=False):
                **{key: config[key] for key in ('maxRunning', 'maxInstances', 'minFreeBytes', 'admissionRoot') if key in config}}
     if config.get('remoteRunner'):
         return registered_runners.invoke(config, folder, payload)
-    helper = Path(__file__).with_name('test_environment_worker.py')
-    if config.get('backend') == 'incus':
-        helper = Path(__file__).with_name('incus_environment_worker.py')
-        payload['incus'] = config['incus']
-    if row.get('preparedDependencies'):
-        prepared = dependencies.validate_receipt(row['preparedDependencies'], row['snapshot'], row['profileId'])
-        if prepared['backend'] != config.get('backend', 'docker'):
-            raise ValueError('The prepared dependencies belong to a different backend.')
-        if prepared['backend'] == 'incus':
-            payload['incus'] = {**config['incus'], 'image': prepared['image']}
-        else:
-            payload['image'] = prepared['image']
-    environment = {'PATH': os.defpath, 'HOME': str(folder), 'LANG': 'C.UTF-8'}
-    process = subprocess.Popen([config['python'], '-I', '-B', str(helper)], stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=folder, env=environment, start_new_session=True)
+    try:
+        helper = Path(__file__).with_name('test_environment_worker.py')
+        if config.get('backend') == 'incus':
+            helper = Path(__file__).with_name('incus_environment_worker.py')
+            payload['incus'] = config['incus']
+        if row.get('preparedDependencies'):
+            prepared = dependencies.validate_receipt(row['preparedDependencies'], row['snapshot'], row['profileId'])
+            if prepared['backend'] != config.get('backend', 'docker'):
+                raise ValueError('The prepared dependencies belong to a different backend.')
+            if prepared['backend'] == 'incus':
+                payload['incus'] = {**config['incus'], 'image': prepared['image']}
+            else:
+                payload['image'] = prepared['image']
+        environment = {'PATH': os.defpath, 'HOME': str(folder), 'LANG': 'C.UTF-8'}
+        process = subprocess.Popen([config['python'], '-I', '-B', str(helper)], stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=folder, env=environment, start_new_session=True)
+    except (OSError, ValueError, KeyError, TypeError):
+        # Popen raises only after its failed child was reaped; no helper ran.
+        # Once Popen returns, transport/process failures remain uncertain.
+        if action in {'remove', 'finishCleanup'}:
+            return cleanup_not_started(row)
+        raise
     output, errors = bytearray(), bytearray()
     drained = False
     deadline = time.monotonic() + (450 if action == 'exportArtifacts' else 650 if action == 'start' else 750 if action == 'finishCleanup' else 750 if action == 'remove' and row.get('preparedDependencies', {}).get('executionContract') else 650 if action == 'remove' and config.get('backend') == 'incus' else 300 if action == 'prepare' else 30 if action in {'read', 'capacity', 'reconcile', 'job_start', 'job_read', 'job_cancel'} else args.get('timeoutSeconds', 60) + 150)
@@ -657,9 +679,11 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
                     or prior.get('state') != 'failed'
                     or prior.get('resourceId') != row['id'] or prior.get('sessionId') != sid):
                 raise ValueError('Choose this environment’s confirmed pre-removal failure.')
-            if not legacy and (not isinstance(failure, dict) or failure.get('effectAdmitted') is not False
-                    or failure.get('phase') not in {'preserving', 'verifying'}
-                    or failure.get('code') not in {'preservation_failed', 'archive_verification_failed'}):
+            known_refusal = isinstance(failure, dict) and (
+                failure.get('phase') in {'preserving', 'verifying'}
+                and failure.get('code') in {'preservation_failed', 'archive_verification_failed'}
+                or failure.get('phase') == 'preparing' and failure.get('code') == 'cleanup_helper_not_started')
+            if not legacy and (not known_refusal or failure.get('effectAdmitted') is not False):
                 raise ValueError('The previous cleanup does not establish a safe pre-removal failure.')
             row = save(home, row, previousCleanup=row.get('previousCleanup') or prior)
         if row['status'] == 'retired':
@@ -796,6 +820,21 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
             except (OSError, ValueError, sqlite3.Error):
                 row = {**row, 'observation': {'status': 'unverified'},
                        'reason': 'The operation result is saved, but environment metadata could not be updated. Inspect again to repair the metadata; the operation will not replay.'}
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            return {'resource': public(home, row), 'request': request}
+        if (locked and action in {'remove', 'finishCleanup'} and isinstance(result, dict)
+                and result.get('effectAdmitted') is False):
+            # A returned helper/preflight refusal establishes that removal was
+            # not dispatched. A later journal/projection fault must not erase
+            # that evidence and manufacture a permanent unknown-effect hold.
+            request = app.operations.requests.finish(request, 'failed', resourceId=row['id'],
+                result=result, message=result.get('message'))
+            try:
+                row = project_result(home, get(home, sid, row['id']), request)
+            except (OSError, ValueError, sqlite3.Error):
+                row = {**row, 'observation': {'status': 'unverified'},
+                       'reason': 'Cleanup did not start. Its saved result is available; inspect again to repair the environment metadata.'}
             if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                 raise
             return {'resource': public(home, row), 'request': request}
