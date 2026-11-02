@@ -464,12 +464,12 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     selection = workflow['on']['workflow_dispatch']['inputs']['suite']
     assert selection['type'] == 'choice' and selection['default'] == 'full'
-    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'cold-control-restore', 'goal-peer-publisher-0410']
+    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'fresh-cleanup-native', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'cold-control-restore', 'goal-peer-publisher-0410']
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['on']['workflow_call']['secrets'] == {'LOOP_LIVE_CI_READ_KEY': {'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
     jobs = workflow['jobs']
-    assert jobs['python']['if'] == "${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' }}"
+    assert jobs['python']['if'] == "${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' && inputs.suite != 'fresh-cleanup-native' }}"
     assert jobs['python']['env']['CHECK_SUITE'] == "${{ inputs.suite || 'full' }}"
     assert jobs['core-wheels']['if'] == "${{ inputs.core_wheels && (!inputs.suite || inputs.suite == 'full') }}"
     remote = jobs['remote-test-origins']
@@ -670,7 +670,7 @@ def test_cold_control_restore_is_exclusive_manual_locked_and_bounded():
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
     jobs = workflow['jobs']
-    assert set(jobs) == {'python', 'core-wheels', 'remote-test-origins', 'incompatible-selection', 'cold-control-restore', 'goal-peer-publisher-0410'}
+    assert set(jobs) == {'python', 'core-wheels', 'remote-test-origins', 'incompatible-selection', 'cold-control-restore', 'goal-peer-publisher-0410', 'fresh-cleanup-native'}
     job = jobs['cold-control-restore']
     assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && inputs.suite == 'cold-control-restore' }}"
     assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '15'

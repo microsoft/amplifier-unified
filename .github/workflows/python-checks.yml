@@ -15,6 +15,7 @@ on:
           - patch-placement-recovery
           - patch-placement-native
           - managed-removal-recovery
+          - fresh-cleanup-native
           - shared-work-continuity
           - manager-exception-boundary
           - remote-test-origins
@@ -37,7 +38,7 @@ permissions:
   contents: read
 jobs:
   python:
-    if: ${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' }}
+    if: ${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' && inputs.suite != 'fresh-cleanup-native' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -477,5 +478,49 @@ jobs:
             output/cold-control-restore-inputs/
             output/cold-control-restore-run.log
             output/cold-control-restore/
+          if-no-files-found: error
+          retention-days: 14
+
+  fresh-cleanup-native:
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && inputs.suite == 'fresh-cleanup-native' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      CHECK_SUITE: fresh-cleanup-native
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13.17'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: '0.13.6'
+          enable-cache: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: microsoft/amplifier-smart-tool-digital-twin-universe
+          ref: 5235833098d9a630791452a46558d92f58af0389
+          path: .ci/dtu-core
+          persist-credentials: false
+      - name: Qualify only the native interrupted-cleanup journey
+        timeout-minutes: 22
+        env:
+          CLEANUP_NATIVE_ROOT: ${{ runner.temp }}/unified-cleanup-native
+          CLEANUP_NATIVE_OUTPUT: ${{ github.workspace }}/output/fresh-cleanup-native
+        run: |
+          set -o pipefail
+          mkdir -p output/fresh-cleanup-native
+          python -u scripts/fresh_cleanup_native_checks.py 2>&1 | tee output/fresh-cleanup-native/driver.log
+      - name: Retain native cleanup evidence including failed prerequisites
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fresh-cleanup-native-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/fresh-cleanup-native/
           if-no-files-found: error
           retention-days: 14
