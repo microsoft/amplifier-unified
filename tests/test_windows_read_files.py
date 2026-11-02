@@ -206,6 +206,30 @@ def test_change_time_not_creation_time_is_part_of_signature():
     assert api.signature(1, PureWindowsPath(r"C:\work\a"))[-1] == 10
 
 
+@pytest.mark.parametrize("attributes,links", [(0, 1), (0x400, 1), (0x10, 1), (0, 2)])
+def test_snapshot_signature_uses_retained_handle_and_refuses_unsafe_object(attributes, links):
+    api = object.__new__(native._ReadAPI)
+    api.info = lambda *args, **kwargs: pytest.fail("snapshot must not resolve a pathname")
+    queries = []
+    def info(handle, pointer):
+        queries.append(handle)
+        value = C.cast(pointer, C.POINTER(native.FILE_INFO)).contents
+        value.volume, value.index_low, value.size_low = 7, 11, 15
+        value.attributes, value.links = attributes, links
+        return True
+    def basic(handle, kind, pointer, size):
+        value = C.cast(pointer, C.POINTER(native._Basic)).contents
+        value.written, value.changed = 21, 22
+        return True
+    api.GetFileInformationByHandle, api.basic = info, basic
+    if attributes or links != 1:
+        with pytest.raises(PermissionError, match="reparse point, hardlink, or wrong type"):
+            api.signature(701)
+    else:
+        assert api.signature(701) == (7, 11, 15, 21, 22)
+    assert queries == [701]
+
+
 @pytest.fixture
 def native_model(tmp_path, monkeypatch):
     if os.name == "nt":
@@ -251,9 +275,13 @@ def native_model(tmp_path, monkeypatch):
                 raise PermissionError("reparse, hardlink or wrong type")
             return SimpleNamespace(volume=info.st_dev, index_high=0, index_low=info.st_ino)
 
-        def signature(self, handle, path):
-            self.info(handle, path, directory=False)
+        def signature(self, handle, path=None):
+            if path is not None:
+                self.info(handle, path, directory=False)
             info = os.fstat(handle)
+            import stat
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise PermissionError("unsafe snapshot type or hardlink")
             return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
         def close(self, handle):
@@ -277,7 +305,7 @@ def test_model_reads_the_opened_handle_and_closes_pins(native_model):
     assert outputs.file_bytes(r"C:\work space", path.name) == (
         "Hello 雪".encode(), r"C:\work space\雪 résumé.txt", path.name)
     for api in instances:
-        assert len(api.opened) == 4  # drive, parent, payload and post-read identity open
+        assert len(api.opened) == 4  # drive, parent, payload and pre-yield identity open
         assert len(api.closed) == 3  # stream owns and closes the payload's descriptor
         for _, fd, _, _ in api.opened:
             with pytest.raises(OSError):
@@ -306,7 +334,7 @@ def test_model_case_distinct_sibling_is_outside_configured_root(native_model):
     assert outside.read_bytes() == b"outside sibling bytes"
 
 
-@pytest.mark.parametrize("failure", ["conversion", "fdopen", "signature", "caller", "post-check"])
+@pytest.mark.parametrize("failure", ["conversion", "fdopen", "signature", "caller", "post-check", "pin-close"])
 def test_model_handle_ownership_closes_once_on_each_failure(native_model, monkeypatch, failure):
     root, instances = native_model
     (root / "work space" / "report.txt").write_bytes(b"complete")
@@ -339,12 +367,22 @@ def test_model_handle_ownership_closes_once_on_each_failure(native_model, monkey
             return stream
         monkeypatch.setattr(os, "fdopen", fdopen)
     api_type = native._ReadAPI
+    if failure == "pin-close":
+        real_api_close = api_type.close
+        failed = []
+        def api_close(self, fd):
+            real_api_close(self, fd)
+            if not failed and any(handle == fd and directory
+                                  for _, handle, _, directory in self.opened):
+                failed.append(fd)
+                raise OSError("pin-close")
+        monkeypatch.setattr(api_type, "close", api_close)
     if failure in {"signature", "post-check"}:
         real_signature = api_type.signature
         calls = []
         def signature(self, *args):
             calls.append(args)
-            if len(calls) == (1 if failure == "signature" else 2):
+            if len(calls) == (1 if failure == "signature" else 4):
                 raise OSError(failure)
             return real_signature(self, *args)
         monkeypatch.setattr(api_type, "signature", signature)
@@ -355,15 +393,15 @@ def test_model_handle_ownership_closes_once_on_each_failure(native_model, monkey
                 raise OSError("caller")
     assert len(instances) == 1
     api = instances[0]
-    assert len(api.opened) == 3  # drive, parent, leaf
+    assert len(api.opened) == (3 if failure in {"conversion", "fdopen", "signature"} else 4)
     assert sorted(closed_fds) == sorted(fd for _, fd, _, _ in api.opened)
-    assert len(set(closed_fds)) == 3
+    assert len(set(closed_fds)) == len(api.opened)
     for fd in closed_fds:
         with pytest.raises(OSError):
             os.fstat(fd)
 
 
-@pytest.mark.parametrize("change", ["data", "hardlink", "parent-reparse", "leaf-rebind"])
+@pytest.mark.parametrize("change", ["data", "hardlink", "leaf-rebind"])
 def test_model_refuses_changes_before_result_escapes(native_model, change):
     root, _ = native_model
     path = root / "work space" / "report.txt"
@@ -375,13 +413,119 @@ def test_model_refuses_changes_before_result_escapes(native_model, change):
                 path.write_bytes(b"modified!")
             elif change == "hardlink":
                 os.link(path, root / "alias.txt")
-            elif change == "parent-reparse":
-                parent = path.parent
-                parent.rename(root / "old")
-                parent.symlink_to(root / "old", target_is_directory=True)
             else:
                 path.rename(root / "old.txt")
                 path.write_bytes(b"original")
+
+
+@pytest.mark.parametrize("change", ["directory-reparse", "leaf-rebind", "leaf-volume"])
+def test_model_pre_yield_recheck_refuses_path_or_identity_change(native_model, monkeypatch, change):
+    root, instances = native_model
+    path = root / "work space" / "report.txt"
+    path.write_bytes(b"original")
+    api_type = native._ReadAPI
+    real_signature = api_type.signature
+    def signature(self, handle, selected=None):
+        value = real_signature(self, handle, selected)
+        if selected is not None and len(self.opened) == 3:
+            if change == "directory-reparse":
+                path.parent.rename(root / "old")
+                path.parent.symlink_to(root / "old", target_is_directory=True)
+            elif change == "leaf-rebind":
+                path.rename(root / "old.txt")
+                path.write_bytes(b"outside replacement")
+            else:
+                return (value[0] + 1, *value[1:])
+        return value
+    monkeypatch.setattr(api_type, "signature", signature)
+    with pytest.raises((OSError, ValueError)):
+        with native.open_file(r"C:\work space\report.txt"):
+            pytest.fail("unsafe path escaped pre-yield validation")
+    for api in instances:
+        for _, fd, _, _ in api.opened:
+            with pytest.raises(OSError):
+                os.fstat(fd)
+
+
+def test_model_snapshot_survives_parent_rebind_but_future_read_refuses(native_model):
+    root, instances = native_model
+    parent = root / "work space"
+    path = parent / "report.txt"
+    path.write_bytes(b"original snapshot")
+    outside = root / "outside"
+    outside.mkdir()
+    (outside / path.name).write_bytes(b"outside replacement")
+    with native.open_file(r"C:\work space\report.txt") as stream:
+        # No traversal handle survives into caller code, and no pathname open
+        # is needed for snapshot reads/signatures after a directory move.
+        for _, fd, _, directory in instances[0].opened:
+            if directory:
+                with pytest.raises(OSError):
+                    os.fstat(fd)
+        parent.rename(root / "moved")
+        parent.symlink_to(outside, target_is_directory=True)
+        assert stream.read(100) == b"original snapshot"
+        stream.seek(0)
+        assert stream.read(100) == b"original snapshot"
+        assert native.stream_signature(stream)[2] == len(b"original snapshot")
+        with pytest.raises((OSError, ValueError)):
+            outputs.file_bytes(r"C:\work space", "report.txt")
+    assert (outside / path.name).read_bytes() == b"outside replacement"
+    assert (root / "moved" / path.name).read_bytes() == b"original snapshot"
+
+
+def test_model_actual_resource_writer_runs_after_traversal_pins_close(native_model, monkeypatch):
+    from amplifier_web.host.storage import SessionStore
+    root, instances = native_model
+    directory = root / "work space"
+    first = resources.prepare({"text": "held A 雪"})
+    second = resources.prepare({"text": "independent B résumé"})
+    resources.write_prepared(directory, first)
+    source = resources.Detached(PureWindowsPath(r"C:\work space"), first.identity,
+                                json.dumps({"$blob": first.identity}))
+    real_replace = os.replace
+    publications = []
+    def replace(*args, **kwargs):
+        # Model the measured Windows conflict at the actual producer's replace,
+        # not a successful writer double. Lifetime matters, not a relaxed mask.
+        live_directories = [(path, fd) for api in instances
+                            for path, fd, _, directory in api.opened
+                            if directory and fd not in api.closed]
+        if live_directories:
+            raise PermissionError("atomic publication conflicts with retained traversal pin")
+        publications.append(args)
+        return real_replace(*args, **kwargs)
+    monkeypatch.setattr(SessionStore._atomic.__globals__["os"], "replace", replace)
+    def project(stream):
+        assert stream.read(first.size + 1) == first.text.encode()
+        resources.write_prepared(directory, second)
+        stream.seek(0)
+        return stream.read(first.size + 1)
+    value, signature = resources.project_detached(source, project)
+    assert value == first.text.encode() and signature[2] == first.size
+    assert len(publications) == 1
+    assert (directory / (second.identity + ".json")).read_bytes() == second.text.encode()
+    assert resources.read_detached(source) == json.loads(first.text)
+
+
+def test_model_resource_projection_still_refuses_changed_final_path(native_model):
+    root, _ = native_model
+    directory = root / "work space"
+    prepared = resources.prepare({"text": "original A"})
+    (directory / (prepared.identity + ".json")).write_bytes(prepared.text.encode())
+    source = resources.Detached(PureWindowsPath(r"C:\work space"), prepared.identity,
+                                json.dumps({"$blob": prepared.identity}))
+    replacement = root / "outside"
+    replacement.mkdir()
+    (replacement / (prepared.identity + ".json")).write_bytes(b"outside payload")
+    def project(stream):
+        directory.rename(root / "moved")
+        directory.symlink_to(replacement, target_is_directory=True)
+        assert stream.read(prepared.size + 1) == prepared.text.encode()
+        return "must not escape changed resource path"
+    with pytest.raises((OSError, ValueError)):
+        resources.project_detached(source, project)
+    assert (replacement / (prepared.identity + ".json")).read_bytes() == b"outside payload"
 
 
 def test_model_missing_oversize_and_bad_resource_preserve_files(native_model, monkeypatch):
@@ -489,21 +633,54 @@ def test_native_inherited_workspace_utf8_spaces_and_no_private_acl_requirement(t
 
 @native_only
 def test_native_held_handles_block_data_write_leaf_and_parent_rename_then_release(tmp_path):
+    """Leaf sharing stays strict; traversal lifetime is now snapshot-only.
+
+    Traversal pins no longer promise parent ownership. The unchanged leaf
+    sharing may still block its parent's move. If Windows permits that move,
+    it cannot redirect this stream and a later unsafe open must still refuse.
+    Independent B publication is unconditionally required by the overlap test.
+    """
     root = tmp_path.resolve() / "work"
     root.mkdir()
     path = root / "report.txt"
     path.write_bytes(b"complete")
-    with native.open_file(path) as stream:
-        for mutate in [lambda: path.write_bytes(b"partial"),
-                       lambda: path.rename(root / "moved.txt"),
-                       lambda: root.rename(root.with_name("moved"))]:
-            with pytest.raises(OSError):
-                mutate()
-        assert stream.read(100) == b"complete"
-    path.write_bytes(b"released")
-    path.rename(root / "moved.txt")
-    root.rename(root.with_name("moved"))
-    assert (root.with_name("moved") / "moved.txt").read_bytes() == b"released"
+    moved, outside = root.with_name("moved"), root.with_name("outside")
+    outside.mkdir()
+    (outside / path.name).write_bytes(b"outside replacement")
+    junction_created = False
+    try:
+        with native.open_file(path) as stream:
+            for mutate in [lambda: path.write_bytes(b"partial"),
+                           lambda: path.rename(root / "moved.txt")]:
+                with pytest.raises(OSError):
+                    mutate()
+            try:
+                root.rename(moved)
+            except PermissionError as exc:
+                assert exc.errno == 13 and exc.winerror in {5, 32}
+                assert root.is_dir() and not moved.exists()
+            else:
+                result = subprocess.run(["cmd", "/d", "/c", "mklink", "/J", str(root), str(outside)],
+                                        capture_output=True, timeout=10)
+                assert result.returncode == 0, result.stderr.decode(errors="replace")
+                junction_created = True
+            assert stream.read(100) == b"complete"
+            stream.seek(0)
+            assert stream.read(100) == b"complete"
+            assert native.stream_signature(stream)[2] == len(b"complete")
+            if junction_created:
+                with pytest.raises((OSError, ValueError)):
+                    outputs.file_bytes(root, path.name)
+    finally:
+        if junction_created:
+            root.rmdir()  # test-owned junction only, not its target
+    assert (outside / path.name).read_bytes() == b"outside replacement"
+    if not moved.exists():
+        root.rename(moved)  # the same move must succeed after the leaf closes
+    (moved / path.name).write_bytes(b"released")
+    (moved / path.name).rename(moved / "released.txt")
+    moved.rename(root)
+    assert (root / "released.txt").read_bytes() == b"released"
 
 
 @native_only

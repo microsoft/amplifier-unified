@@ -3,8 +3,10 @@
 Workspace files can have ordinary inherited ACLs. Open each lexical component
 relative to its retained parent handle, never resolve a junction before checking
 it. Deny data-write/delete sharing, reject reparses/hardlinks/namespace aliases,
-and keep the complete chain until descriptor and path evidence agree. Callers
-own their byte/projection limits and immutable-resource content hashes.
+and keep the complete chain until descriptor and path evidence agree. Release
+only traversal pins before yielding the same leaf handle: this is a read-only
+snapshot, not parent-directory ownership. Later opens repeat full validation.
+Callers own byte/projection limits and immutable-resource hashes/path rechecks.
 """
 from contextlib import contextmanager, ExitStack
 import ctypes as C
@@ -13,7 +15,7 @@ from pathlib import PureWindowsPath
 
 from .windows_files import (
     _API, _INVALID, _component, _identity, _local,
-    BOOL, DWORD, HANDLE, PVOID, WORD,
+    BOOL, DWORD, FILE_INFO, HANDLE, PVOID, WORD,
 )
 
 
@@ -84,8 +86,17 @@ class _ReadAPI(_API):
             self.close(handle)
             raise
 
-    def signature(self, handle, path):
-        info = self.info(handle, path, directory=False)
+    def signature(self, handle, path=None):
+        if path is not None:
+            info = self.info(handle, path, directory=False)
+        else:
+            # Snapshot evidence must come from the retained object, not a
+            # replacement pathname after a parent rename. Preserve the same
+            # type/reparse/single-link checks as the pre-yield path validation.
+            info = FILE_INFO()
+            self.ok(self.GetFileInformationByHandle(handle, C.byref(info)))
+            if info.attributes & (0x400 | 0x10) or info.links != 1:
+                raise PermissionError("read snapshot is a reparse point, hardlink, or wrong type")
         basic = _Basic()
         self.ok(self.basic(handle, 0, C.byref(basic), C.sizeof(basic)))
         # ChangeTime, unlike Windows st_ctime (creation time), detects metadata
@@ -129,7 +140,10 @@ def open_file(value):
     """Yield a seekable binary stream from the validated native handle.
 
     The returned stream owns the leaf handle; no second pathname content-open
-    occurs. Missing files raise without creating directories or payloads.
+    occurs. Traverse and recheck before yielding, then release directory pins so
+    an independent atomic writer can publish another file. A parent move cannot
+    redirect this stream. This does not authorize any future open through that
+    name: each open validates the full path again. Missing files create nothing.
     """
     import msvcrt
 
@@ -171,20 +185,25 @@ def open_file(value):
             before = api.signature(handle, path)
             if before[0] != volume:
                 raise PermissionError("Output file crosses volumes.")
-            stream._windows_read_signature = lambda: api.signature(handle, path)
-            yield stream
-            if api.signature(handle, path) != before:
-                raise ValueError("File changed while reading.")
+            # Pre-yield containment/identity proof while all traversal pins are
+            # still held. Attribute/reparse changes must refuse before delivery.
             for part, pin, identity in pins:
                 if _identity(api.info(pin, part, directory=True)) != identity:
-                    raise ValueError("Output directory changed while reading.")
+                    raise ValueError("Output directory changed before reading.")
             # Confirm the exact leaf is still named by its retained parent.
             check = api.open_read(path, parent, directory=False)
             try:
                 if api.signature(check, path) != before:
-                    raise ValueError("File path changed while reading.")
+                    raise ValueError("File path changed before reading.")
             finally:
                 api.close(check)
+            stack.close()  # only traversal handles; stream retains the same leaf
+            if api.signature(handle) != before:
+                raise ValueError("File changed before reading.")
+            stream._windows_read_signature = lambda: api.signature(handle)
+            yield stream
+            if api.signature(handle) != before:
+                raise ValueError("File changed while reading.")
 
 
 def stream_signature(stream):
