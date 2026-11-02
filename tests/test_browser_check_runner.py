@@ -1530,3 +1530,284 @@ def test_app004_extra_timeout_is_failure_not_expected_negative(tmp_path, monkeyp
     assert row['cleanup']['remaining'] == []
     other = next(row for row in qualification['checks'] if row['id'] != timeout_at)
     assert other['status'] == 'passed'
+
+
+def bounded_execute(tmp_path, source, **kwargs):
+    return execute(tmp_path, [scenario('pytest', source)], cwd=tmp_path,
+                   log_limit=1024, interrupt_grace=.3, **kwargs)
+
+
+@pytest.mark.parametrize('exit_code', [0, 1])
+def test_python_bounded_capture_pass_or_failure_keeps_root_cwd_and_exit(tmp_path, exit_code):
+    code, report, output = bounded_execute(tmp_path,
+        f'import os;print(os.getcwd(),flush=True);raise SystemExit({exit_code})')
+    row, = report['scenarios']
+    assert code == exit_code and row['exitCode'] == exit_code
+    assert row['status'] == ('passed' if exit_code == 0 else 'failed')
+    assert row['reason'] is None and row['cleanup'] == {'remaining': [], 'terminated': 0}
+    assert (output / 'pytest.log').read_text().strip() == str(tmp_path)
+    assert row['logCapture']['eof'] and not row['logCapture']['truncated']
+
+
+def test_python_bounded_capture_flood_drains_binary_chunks_without_unbounded_log(tmp_path):
+    source = ('import os;os.write(1,b\"HEAD\\\\xff\"+b\"a\"*250000);'
+              'os.write(1,b\"z\"*250000+b\"TAIL\\\\xfe\")')
+    code, report, output = bounded_execute(tmp_path, source)
+    capture = report['scenarios'][0]['logCapture']
+    assert code == 0 and capture['bytesObserved'] == 500010
+    assert capture['bytesRetained'] == 1024 and capture['truncated'] and capture['eof']
+    assert capture['format'] == 'head-tail' and not capture['tailCheckpointMayLag']
+    assert (output / 'pytest.log').read_bytes() == b'HEAD\xff' + b'a'*507 + b'z'*507 + b'TAIL\xfe'
+    assert not (output / 'pytest.log.tail').exists()
+
+
+def test_python_log_ring_retains_running_head_and_cursor_then_orders_tail(tmp_path):
+    path = tmp_path / 'pytest.log'
+    log = runner.BoundedLog(path, 10)
+    try:
+        log.append(b'0123456789AB')
+        evidence = log.receipt()
+        assert path.read_bytes() == b'01234'
+        assert path.with_suffix('.log.tail').read_bytes() == b'AB789'
+        assert evidence['bytesObserved'] == 12 and evidence['tailStart'] == 2
+        assert evidence['format'] == 'head-ring-tail' and evidence['tailCheckpointMayLag']
+    finally:
+        log.close()
+    assert path.read_bytes() == b'01234789AB'
+
+
+def expire_after_progress(monkeypatch, marker):
+    # No startup race: the child installs its handler before marking progress.
+    original = runner.time.monotonic
+    monkeypatch.setattr(runner.time, 'monotonic', lambda: original() + (100 if marker.exists() else 0))
+
+
+@pytest.mark.parametrize('cancelled', [False, True])
+def test_python_progress_then_interruption_preserves_timeout_even_exit_zero(tmp_path, monkeypatch, cancelled):
+    ready = tmp_path / 'ready'
+    if not cancelled:
+        expire_after_progress(monkeypatch, ready)
+    source = f'''
+import os,signal,time
+from pathlib import Path
+def finish(*args):
+    print("interrupt finalized",flush=True)
+    raise SystemExit(0)
+signal.signal(signal.SIGINT,finish)
+print("test_one PASSED",flush=True)
+Path({str(ready)!r}).touch()
+{'os.kill(os.getppid(),signal.SIGTERM)' if cancelled else ''}
+time.sleep(60)
+'''
+    code, report, output = bounded_execute(tmp_path, source, budget=10, case_timeout=10)
+    row, = report['scenarios']
+    assert code == 1 and report['complete'] and not report['passed']
+    assert row['reason'] == ('cancelled' if cancelled else 'timeout')
+    assert row['exitCode'] == 0 and row['interrupt']['sent']
+    assert row['cleanup'] == {'remaining': [], 'terminated': 0}
+    assert row['logCapture']['eof']
+    assert 'test_one PASSED' in (output / 'pytest.log').read_text()
+    assert 'interrupt finalized' in (output / 'pytest.log').read_text()
+
+
+def test_python_ignored_interrupt_cleans_owned_descendant_not_unrelated(tmp_path, monkeypatch):
+    ready = tmp_path / 'ready'
+    expire_after_progress(monkeypatch, ready)
+    unrelated = subprocess.Popen([sys.executable, '-c', 'import time;time.sleep(60)'],
+                                  start_new_session=True)
+    source = f'''
+import os,signal,subprocess,sys,time
+from pathlib import Path
+signal.signal(signal.SIGINT,signal.SIG_IGN)
+p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'],start_new_session=True)
+Path({str(ready)!r}).write_text(str(p.pid))
+print("before hang",flush=True)
+time.sleep(60)
+'''
+    try:
+        code, report, output = bounded_execute(tmp_path, source, budget=10, case_timeout=10)
+        row, = report['scenarios']
+        assert code == 1 and row['reason'] == 'timeout' and row['interrupt']['sent']
+        assert row['cleanup']['remaining'] == [] and row['cleanup']['terminated'] >= 1
+        assert unrelated.poll() is None
+        child = Path('/proc') / ready.read_text() / 'stat'
+        assert not child.exists() or child.read_text().rsplit(')', 1)[1].split()[0] == 'Z'
+        assert b'before hang' in (output / 'pytest.log').read_bytes()
+    finally:
+        unrelated.terminate()
+        unrelated.wait(timeout=2)
+
+
+def test_python_ownership_unreadable_remains_unknown_with_zero_exit(tmp_path, monkeypatch):
+    retire = runner.retire_group
+    def unavailable(*args, **kwargs):
+        assert retire(*args, **kwargs) == {'remaining': [], 'terminated': 0}
+        raise PermissionError('Synthetic unavailable ownership after child exit')
+    monkeypatch.setattr(runner, 'retire_group', unavailable)
+    code, report, _ = bounded_execute(tmp_path, 'print("finished")')
+    assert code == 1 and report['scenarios'][0]['exitCode'] == 0
+    assert report['scenarios'][0]['cleanup']['remaining'] == ['unknown']
+
+
+def test_python_interrupt_never_signals_unreadable_or_reused_identity(monkeypatch):
+    from types import SimpleNamespace
+    calls = []
+    monkeypatch.setattr(runner.os, 'pidfd_open', lambda pid: calls.append(pid))
+    def unavailable(*args):
+        raise PermissionError('No identity evidence')
+    monkeypatch.setattr(runner, 'owned_members', unavailable)
+    with pytest.raises(PermissionError):
+        runner.interrupt_owned(SimpleNamespace(pid=321), 'token', {})
+    monkeypatch.setattr(runner, 'owned_members', lambda *args: {})
+    assert not runner.interrupt_owned(SimpleNamespace(pid=321), 'token', {})
+    assert calls == []
+
+
+@pytest.mark.parametrize('shape', ['missing', 'malformed', 'oversized', 'entities', 'empty', 'passed', 'failed'])
+def test_python_junit_is_bounded_observation_not_an_invented_pass(tmp_path, shape):
+    raw, kept = tmp_path / 'junit.pending.xml', tmp_path / 'junit.xml'
+    contents = {
+        'malformed': b'<testsuite>', 'oversized': b'x'*1025,
+        'entities': b'<!DOCTYPE testsuite [<!ENTITY x "value">]><testsuite/>',
+        'empty': b'<testsuite tests="999"/>',
+        'passed': b'<testsuite><testcase name="one"/></testsuite>',
+        'failed': b'<testsuite><testcase name="one"><failure/></testcase></testsuite>',
+    }
+    if shape != 'missing':
+        raw.write_bytes(contents[shape])
+    result = runner.junit_evidence(raw, kept, limit=1024)
+    expected = {'entities': 'malformed', 'empty': 'parsed', 'passed': 'parsed', 'failed': 'parsed'}.get(shape, shape)
+    assert result['status'] == expected
+    if expected != 'parsed':
+        assert result['counts'] is None and not kept.exists()
+    else:
+        assert kept.read_bytes() == contents[shape]
+        assert result['counts']['testcases'] == (0 if shape == 'empty' else 1)
+        assert result['counts']['failure'] == int(shape == 'failed')
+
+
+@pytest.mark.parametrize('shape', ['missing', 'malformed', 'oversized', 'empty'])
+def test_python_exit_zero_cannot_invent_junit_success(tmp_path, monkeypatch, shape):
+    monkeypatch.setattr(runner, 'junit_evidence', lambda *args: {
+        'status': 'parsed' if shape == 'empty' else shape,
+        'counts': {'testcases': 0, 'failure': 0, 'error': 0} if shape == 'empty' else None})
+    report = {'passed': True, 'complete': True, 'scenarios': [
+        {'status': 'passed', 'exitCode': 0, 'reason': None, 'cleanup': {'remaining': [], 'terminated': 0}}]}
+    assert runner.finish_python_report(tmp_path, report) == 1
+    assert report['pytestSessionComplete'] and not report['passed']
+
+
+def test_python_early_preparation_budget_exhaustion_never_launches(tmp_path, monkeypatch):
+    output = tmp_path / 'output'
+    provenance = {'revision': 'a'*40}
+    deadline = runner.time.monotonic() + 10
+    assert runner.python_suite(tmp_path, output, provenance, deadline, initialize=True) == 0
+    monkeypatch.setattr(runner.time, 'monotonic', lambda: deadline + 1)
+    def forbidden(*args, **kwargs):
+        pytest.fail('Preparation consumed the original budget; no pytest launch')
+    monkeypatch.setattr(runner.subprocess, 'Popen', forbidden)
+    assert runner.python_suite(tmp_path, output, provenance, deadline) == 1
+    report = json.loads((output / 'results.json').read_text())
+    assert report['scenarios'][0]['status'] == 'unrun'
+    assert report['scenarios'][0]['reason'] == 'budget_exhausted_before_pytest'
+    assert report['pytestSessionStatus'] == 'not_started'
+    assert not report['complete'] and not report['pytestSessionComplete'] and not report['passed']
+    assert report['junit'] == {'status': 'missing', 'counts': None}
+    with pytest.raises(ValueError, match='no replay'):
+        # A future deadline must not be used to replay a settled preflight.
+        runner.python_suite(tmp_path, output, provenance, deadline)
+
+
+@pytest.mark.parametrize('state', ['unrun', 'running'])
+def test_python_finalize_preparation_failure_or_lost_runner_without_replay(tmp_path, monkeypatch, state):
+    output = tmp_path / 'output'
+    deadline = runner.time.monotonic() + 60
+    runner.python_suite(tmp_path, output, {}, deadline, initialize=True)
+    report = json.loads((output / 'results.json').read_text())
+    report['scenarios'][0]['status'] = state
+    runner.save(output, report)
+    monkeypatch.setattr(runner.subprocess, 'Popen', lambda *a, **k: pytest.fail('Finalize cannot execute'))
+    assert runner.python_suite(tmp_path, output, {}, deadline, finalize=True) == 1
+    report = json.loads((output / 'results.json').read_text())
+    assert report['scenarios'][0]['reason'] == ('preparation_not_completed' if state == 'unrun' else 'execution_outcome_unknown')
+    assert not report['pytestSessionComplete'] and not report['passed']
+    if state == 'running':
+        assert report['scenarios'][0]['cleanup']['remaining'] == ['unknown']
+
+
+def test_python_full_mode_requires_original_source_deadline_and_no_replay(tmp_path, monkeypatch):
+    output = tmp_path / 'output'
+    deadline = runner.time.monotonic() + 60
+    runner.python_suite(tmp_path, output, {'revision': 'original'}, deadline, initialize=True)
+    monkeypatch.setattr(runner.subprocess, 'Popen', lambda *a, **k: pytest.fail('No execution in refusal controls'))
+    with pytest.raises(ValueError, match='already exists'):
+        runner.python_suite(tmp_path, output, {'revision': 'original'}, deadline, initialize=True)
+    for source, changed_deadline in [({'revision': 'other'}, deadline), ({'revision': 'original'}, deadline + 1)]:
+        with pytest.raises(ValueError, match='changed'):
+            runner.python_suite(tmp_path, output, source, changed_deadline)
+
+
+@pytest.mark.parametrize('exit_code', [0, 1])
+def test_python_profile_keeps_initial_deadline_and_independent_completion_fields(tmp_path, monkeypatch, exit_code):
+    output = tmp_path / 'output'
+    deadline = runner.time.monotonic() + 10
+    xml = '<testsuite><testcase name="one">' + ('<failure/>' if exit_code else '') + '</testcase></testsuite>'
+    command = [sys.executable, '-c', 'from pathlib import Path;'
+               f'Path({str(output / "junit.pending.xml")!r}).write_text({xml!r});'
+               f'print("one test finished",flush=True);raise SystemExit({exit_code})']
+    monkeypatch.setattr(runner, 'PYTHON_COMMAND', command)
+    save = runner.save
+    checkpoints = []
+    def record(folder, report):
+        checkpoints.append(json.loads(json.dumps(report)))
+        save(folder, report)
+    monkeypatch.setattr(runner, 'save', record)
+    runner.python_suite(tmp_path, output, {}, deadline, initialize=True)
+    assert runner.python_suite(tmp_path, output, {}, deadline) == exit_code
+    report = json.loads((output / 'results.json').read_text())
+    assert report['deadlineMonotonic'] == deadline
+    assert report['complete'] and report['pytestSessionComplete']
+    assert report['pytestSessionStatus'] == 'completed'
+    assert report['scenarioListComplete']
+    assert report['passed'] is (exit_code == 0)
+    assert report['junit']['counts'] == {'testcases': 1, 'failure': exit_code, 'error': 0, 'skipped': 0}
+    assert report['scenarios'][0]['command'] == command
+    assert all(not r['passed'] for r in checkpoints if r['junit']['status'] == 'not_started')
+    assert runner.python_suite(tmp_path, output, {}, deadline, finalize=True) == exit_code
+    with pytest.raises(ValueError, match='no replay'):
+        runner.python_suite(tmp_path, output, {}, deadline)
+
+
+@pytest.mark.parametrize('name', ['pytest.log', 'pytest.log.tail', 'junit.pending.xml', 'junit.xml'])
+def test_python_initialize_refuses_stale_output_without_receipt(tmp_path, name):
+    (tmp_path / name).write_text('retained old evidence')
+    with pytest.raises(ValueError, match='already exists'):
+        runner.python_suite(tmp_path, tmp_path, {}, runner.time.monotonic() + 10, initialize=True)
+    assert (tmp_path / name).read_text() == 'retained old evidence'
+    assert not (tmp_path / 'results.json').exists()
+
+
+def test_python_tiny_real_pytest_interrupt_retains_partial_xml_not_session_completion(tmp_path, monkeypatch):
+    ready = tmp_path / 'ready'
+    expire_after_progress(monkeypatch, ready)
+    tests = tmp_path / 'test_tiny.py'
+    tests.write_text(f'''from pathlib import Path
+import time
+def test_first():
+    assert True
+def test_hangs():
+    Path({str(ready)!r}).touch()
+    time.sleep(60)
+''')
+    output = tmp_path / 'results'
+    row = {'id': 'pytest', 'command': [sys.executable, '-u', '-m', 'pytest', '-v', '--tb=short',
+           '-c', '/dev/null', str(tests), '--junitxml=' + str(output / 'junit.pending.xml')],
+           'env': {'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1'}}
+    code, report, output = execute(tmp_path, [row], budget=30, case_timeout=30,
+                                  cwd=tmp_path, log_limit=16384, interrupt_grace=3)
+    assert code == 1 and report['complete'] and report['scenarios'][0]['reason'] == 'timeout'
+    assert runner.finish_python_report(output, report) == 1
+    assert not report['pytestSessionComplete'] and not report['passed']
+    assert report['junit']['status'] == 'parsed' and report['junit']['counts']['testcases'] >= 1
+    assert report['pytestSessionStatus'] == 'incomplete'
+    assert b'test_first PASSED' in (output / 'pytest.log').read_bytes()
