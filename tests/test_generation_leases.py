@@ -1,16 +1,197 @@
-"""Passive lease checks; Win32 stubs are not native-platform qualification."""
+"""Lease/parent creation checks; Win32 stubs are not native qualification."""
 
+import ast
+import builtins
+from contextlib import contextmanager
 import ctypes
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
-from pathlib import Path
+import uuid
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from amplifier_web import generation_leases
+
+
+class _DirectoryPrepared(Exception):
+    """Stop the constructor at the next, unrelated update-cache boundary."""
+
+
+def _initialize_update_directory(home, *, native, directory=None):
+    # Execute the maintained constructor body, not a copy of its mkdir branch.
+    # Stop BEFORE cache/metadata/controller setup: no app, loop, Git or network.
+    source = Path(__file__).resolve().parents[1] / "amplifier_web/updates.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    owner = next(node for node in tree.body
+                 if isinstance(node, ast.ClassDef) and node.name == "UpdateManager")
+    initialize = next(node for node in owner.body
+                      if isinstance(node, ast.FunctionDef) and node.name == "__init__")
+    reached = []
+
+    def cache(path):
+        reached.append(path)
+        raise _DirectoryPrepared
+
+    def imports(name, *args, **kwargs):
+        if name == "windows_files":
+            return SimpleNamespace(directory=directory)
+        if name == "update_checks":
+            return SimpleNamespace(CheckCache=cache)
+        raise AssertionError("Unexpected constructor import: " + name)
+
+    namespace = {
+        "__builtins__": {**vars(builtins), "__import__": imports},
+        "os": SimpleNamespace(name="nt" if native else "posix"),
+        "asyncio": SimpleNamespace(Lock=lambda: None),
+    }
+    exec(compile(ast.Module(body=[initialize], type_ignores=[]), str(source), "exec"), namespace)
+    try:
+        namespace["__init__"](SimpleNamespace(), SimpleNamespace(data_dir=home))
+    except _DirectoryPrepared:
+        pass
+    else:
+        raise AssertionError("Constructor did not reach its next cache boundary")
+    if reached != [home / "updates"]:
+        raise AssertionError("Unexpected update-cache directory")
+
+
+def _native_lease_writer(home):
+    # Keep this file runnable in the -I -S stdlib lane. Recompile only the two
+    # maintained writer declarations; their actual native security/publication
+    # implementation is windows_files, not a test emulation. App-home is the
+    # same explicit home as the installed-journey fixture.
+    from amplifier_web import windows_files
+
+    root = Path(__file__).resolve().parents[1] / "amplifier_web"
+    private = None
+    for filename in ("deployment.py", "host/config.py"):
+        source = root / filename
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        function = next(node for node in tree.body
+                        if isinstance(node, ast.FunctionDef) and node.name == "write_private")
+        namespace = {
+            "Path": Path, "_WINDOWS": True, "windows_files": windows_files,
+            "os": SimpleNamespace(name="nt"), "_write_private": private,
+            "app_home": lambda: home,
+        }
+        exec(compile(ast.Module(body=[function], type_ignores=[]), str(source), "exec"), namespace)
+        private = namespace["write_private"]
+    return private
+
+
+class UpdateLeaseParentTests(unittest.TestCase):
+    def test_windows_uses_private_creation_before_cache_or_lease_payload(self):
+        # Model an elevated token whose default owner is Administrators rather
+        # than TokenUser. No kernel/ACL result is inferred from this model.
+        owners = {}
+        events = []
+
+        class ModelPath:
+            def __init__(self, path):
+                self.path = PureWindowsPath(path)
+
+            def __truediv__(self, part):
+                return ModelPath(self.path / part)
+
+            def __eq__(self, other):
+                return isinstance(other, ModelPath) and self.path == other.path
+
+            def mkdir(self, **kwargs):
+                events.append("ordinary-mkdir")
+                owners[self.path] = "token-default-owner"
+
+        @contextmanager
+        def private(path, *, owned_root, create):
+            self.assertEqual(owned_root, home)
+            self.assertEqual(path, home / "updates")
+            self.assertIs(create, True)
+            events.append("private-create")
+            owners[path.path] = "TokenUser"
+            yield
+            events.append("pins-closed")
+
+        home = ModelPath("C:/private/app")
+        _initialize_update_directory(home, native=True, directory=private)
+        self.assertEqual(events, ["private-create", "pins-closed"])
+        self.assertEqual(owners[(home / "updates").path], "TokenUser")
+
+    def test_windows_unsafe_existing_parent_refuses_before_cache_without_repair(self):
+        home, target = MagicMock(), Mock()
+        home.__truediv__.return_value = target
+        error = PermissionError("existing directory is not private")
+        events = []
+
+        @contextmanager
+        def private(path, *, owned_root, create):
+            events.append((path, owned_root, create))
+            raise error
+            yield  # pragma: no cover - contextmanager shape
+
+        with self.assertRaises(PermissionError) as caught:
+            _initialize_update_directory(home, native=True, directory=private)
+        self.assertIs(caught.exception, error)
+        self.assertEqual(events, [(home / "updates", home, True)])
+        target.mkdir.assert_not_called()
+
+    def test_windows_pin_close_failure_prevents_cache_or_lease_payload(self):
+        home, target = MagicMock(), Mock()
+        home.__truediv__.return_value = target
+        error = OSError("directory closure unconfirmed")
+
+        @contextmanager
+        def private(*args, **kwargs):
+            yield
+            raise error
+
+        with self.assertRaises(OSError) as caught:
+            _initialize_update_directory(home, native=True, directory=private)
+        self.assertIs(caught.exception, error)
+        target.mkdir.assert_not_called()
+
+    def test_posix_parent_creation_keeps_existing_mkdir_contract(self):
+        home, target = MagicMock(), Mock()
+        home.__truediv__.return_value = target
+        private = Mock(side_effect=AssertionError("Windows boundary on POSIX"))
+        _initialize_update_directory(home, native=False, directory=private)
+        target.mkdir.assert_called_once_with(parents=True, exist_ok=True, mode=0o700)
+        private.assert_not_called()
+
+    @unittest.skipUnless(os.name == "nt", "native Windows TokenUser/NTFS required")
+    def test_native_windows_update_parent_and_first_generation_lease(self):
+        from amplifier_web import windows_files
+
+        # Canonicalize ONLY the existing TEMP ancestor. The owned child does not
+        # exist until the private boundary creates it; never repair a temp DACL.
+        home = Path(tempfile.gettempdir()).resolve(strict=True) / ("lease-" + uuid.uuid4().hex)
+        self.addCleanup(lambda: shutil.rmtree(home) if home.exists() else None)
+        with windows_files.directory(home, owned_root=home, create=True):
+            pass
+        _initialize_update_directory(home, native=True, directory=windows_files.directory)
+        updates = home / "updates"
+        # The production boundary checks owner/DACL/namespace before any lease
+        # payload. This is a bounded native seam, not full app/worker startup.
+        with windows_files.directory(updates, owned_root=home) as pinned:
+            self.assertFalse((updates / "worker-leases").exists())
+        config = SimpleNamespace(write_private=_native_lease_writer(home))
+        generation = "a" * 32
+        with patch.dict(sys.modules, {"amplifier_web.host.config": config}):
+            lease = generation_leases.acquire(home, generation, os.getpid())
+        with windows_files.directory(lease.parent, owned_root=home) as pinned:
+            self.assertEqual(json.loads(pinned.read_private(lease.name, limit=1024)),
+                             {"schema": 1, "generation": generation, "pid": os.getpid()})
+        self.assertEqual(generation_leases.references(home), {generation})
+        self.assertTrue(lease.exists())
+        # Existing safe update state still opens without mutation/recreation.
+        _initialize_update_directory(home, native=True, directory=windows_files.directory)
+        self.assertEqual(generation_leases.references(home), {generation})
+        lease.unlink()
+        self.assertEqual(generation_leases.references(home), set())
 
 
 class GenerationLeaseTests(unittest.TestCase):
