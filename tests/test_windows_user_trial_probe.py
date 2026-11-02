@@ -81,6 +81,89 @@ def test_unknown_network_attempts_block_and_retain_no_arguments(tmp_path, event,
         guard.verify()
 
 
+def test_unknown_network_receipt_attributes_fixed_case_phase_and_known_code(tmp_path):
+    guard = probe.NetworkGuard(tmp_path / "network.jsonl")
+    guard.case, guard.phase = "read_workspace_utf8", "call"
+    def invoke():
+        with pytest.raises(PermissionError):
+            guard.audit("socket.gethostbyname", ("PRIVATE-HOST",))
+    guard.codes[invoke.__code__] = "selected_test"
+    invoke()
+    invoke()
+    result = guard.network_diagnostics()
+    assert result["overflow"] == 0 and len(result["attempts"]) == 1
+    entry = result["attempts"][0]
+    assert {key: entry[key] for key in ("case", "phase", "event", "count", "source")} == {
+        "case": "read_workspace_utf8", "phase": "call", "event": "socket.gethostbyname",
+        "count": 2, "source": "selected_test"}
+    assert len(entry["codeSha256"]) == 64 and type(entry["lineOffset"]) is int
+    assert "PRIVATE-HOST" not in json.dumps(result)
+    with pytest.raises(AssertionError):
+        guard.verify()
+
+
+def test_unknown_network_source_is_other_without_raw_name_or_fingerprint(tmp_path):
+    guard = probe.NetworkGuard(tmp_path / "network.jsonl")
+    def private_symbol():
+        with pytest.raises(PermissionError):
+            guard.audit("socket.getnameinfo", (("192.0.2.1", 12345), 0))
+    private_symbol()
+    assert guard.network_diagnostics() == {"attempts": [{
+        "case": "outside", "phase": "outside", "event": "socket.getnameinfo",
+        "source": "other", "count": 1}], "overflow": 0}
+
+
+def test_network_diagnostic_limit_retains_overflow_count_and_still_fails(tmp_path):
+    guard = probe.NetworkGuard(tmp_path / "network.jsonl")
+    attempts = 0
+    for case in probe.NATIVE_CONTROLS:
+        for phase in ("setup", "call", "teardown"):
+            guard.case, guard.phase = case, phase
+            with pytest.raises(PermissionError):
+                guard.audit("socket.gethostbyname", ("PRIVATE-HOST",))
+            attempts += 1
+    facts = guard.network_diagnostics()
+    assert len(facts["attempts"]) == 32 and facts["overflow"] == attempts - 32
+    assert sum(item["count"] for item in facts["attempts"]) + facts["overflow"] == guard.blocked
+    with pytest.raises(AssertionError):
+        guard.verify()
+
+
+def test_exception_facts_do_not_stringify_private_classes_names_or_paths():
+    class PrivateError(Exception):
+        def __str__(self):
+            raise AssertionError("diagnostic must not stringify")
+    def private_helper():
+        try:
+            raise PermissionError(13, "PRIVATE-CREDENTIAL", "/private/path")
+        except PermissionError as cause:
+            cause.winerror = 32
+            raise PrivateError("PRIVATE-CREDENTIAL") from cause
+    try:
+        private_helper()
+    except Exception as exc:
+        facts = probe.safe_exception(exc, {})
+    assert facts == [{"class": "other", "frames": []},
+                     {"class": "PermissionError", "frames": [], "errno": 13, "winerror": 32}]
+    for forbidden in ("PrivateError", "private_helper", "/private/path", "PRIVATE-CREDENTIAL"):
+        assert forbidden not in json.dumps(facts)
+
+
+def test_exception_source_uses_exact_known_code_and_bounded_cause_chain():
+    def boundary():
+        try:
+            raise ValueError("PRIVATE")
+        except ValueError as exc:
+            raise RuntimeError("PRIVATE") from exc
+    try:
+        boundary()
+    except Exception as exc:
+        facts = probe.safe_exception(exc, {boundary.__code__: "resource_read"})
+    assert [row["class"] for row in facts] == ["RuntimeError", "ValueError"]
+    assert all(row["frames"][0]["source"] == "resource_read" for row in facts)
+    assert "PRIVATE" not in json.dumps(facts) and "boundary" not in json.dumps(facts)
+
+
 def test_only_one_owned_reservation_and_exact_port_connect_are_permitted(tmp_path):
     guard = probe.NetworkGuard(tmp_path / "network.jsonl")
     guard.reserving = True
@@ -503,7 +586,7 @@ def test_native_control_staging_copies_tests_only_not_checkout_production(tmp_pa
         assert raw == (ROOT / "tests" / filename).read_bytes()
 
 
-@pytest.mark.parametrize("regression", [None, "legacy-ids", "legacy-mode"])
+@pytest.mark.parametrize("regression", [None, "legacy-ids", "legacy-mode", "legacy-plugin-order"])
 def test_actual_native_collection_with_declared_plugins_and_tls_mode_binding(tmp_path, monkeypatch, regression):
     """Collect real rewritten tests, but execute no test/fixture OS effects.
 
@@ -517,7 +600,7 @@ def test_actual_native_collection_with_declared_plugins_and_tls_mode_binding(tmp
     target, hashes = probe.stage_controls(tmp_path, ROOT / "tests")
     receipt = tmp_path / "collection.json"
     script = r'''
-import importlib.util, json, os, pathlib, socket, sys
+import importlib, importlib.util, json, os, pathlib, socket, sys
 root, target, receipt = map(pathlib.Path, sys.argv[1:4])
 regression = sys.argv[4]
 spec = importlib.util.spec_from_file_location("collection_probe",
@@ -561,6 +644,8 @@ class Collection:
         try:
             for item in session.items:
                 if item.nodeid in probe.TLS_NEGATIVE_MODES:
+                    chosen = item._fixtureinfo.name2fixturedefs["unused_tcp_port"][-1]
+                    assert getattr(chosen.func, "__self__", None) is controls, chosen.func.__module__
                     assert controls.reserve(item) == 25000
                     validated.append({"node": item.nodeid, "mode": item.callspec.params["mode"]})
         finally:
@@ -569,12 +654,14 @@ class Collection:
         raise AssertionError("Collection regression must never execute a test")
 with probe.native_tls_cases(guard, target,
     probe.digest((target / "tests/test_browser_entry.py").read_bytes())) as controls:
+    declared = [] if regression == "legacy-plugin-order" else [
+        importlib.import_module(name) for name in ("pytest_asyncio.plugin", "aiohttp.pytest_plugin")]
     result = pytest.main(["-q", "--collect-only", "-p", "no:cacheprovider",
         "-p", "pytest_asyncio.plugin", "-p", "aiohttp.pytest_plugin",
         "-o", "asyncio_mode=auto", "--rootdir", str(target),
         "--confcutdir", str(target),
         *[str(target / "tests" / node) for node in probe.NATIVE_CONTROLS.values()]],
-        plugins=[Collection(), controls])
+        plugins=[*declared, Collection(), controls])
 network = guard.verify()
 assert result == 0 and len(observed) == 18 and len(validated) == 2
 assert {row["node"]: row["mode"] for row in validated} == probe.TLS_NEGATIVE_MODES
@@ -618,6 +705,152 @@ def test_native_control_public_selection_and_source_hashes_are_allowlisted():
     changed["nativeControls"]["selection"]["cases"]["runtime_forced_cleanup"]["skips"] = 1
     with pytest.raises(AssertionError):
         probe.validate_public(changed)
+
+
+def test_actual_pytest_reports_capture_safe_failure_per_phase_without_replacing_outcome(tmp_path):
+    fixture = tmp_path / "test_synthetic.py"
+    fixture.write_text('''
+import pytest, sys
+def attempt():
+    # Synthetic audit event only: never invoke a DNS resolver or socket.
+    with pytest.raises(PermissionError):
+        sys.audit("socket.gethostbyname", "PRIVATE-HOST")
+@pytest.fixture
+def setup_denied(request):
+    request.addfinalizer(attempt)
+    attempt()
+    raise PermissionError(13, "PRIVATE-MESSAGE", "/private/path")
+@pytest.fixture
+def teardown_denied():
+    attempt()
+    yield
+    attempt()
+    raise OSError(22, "PRIVATE-MESSAGE", "/private/path")
+def test_setup(setup_denied):
+    pass
+def test_call():
+    attempt()
+    raise ValueError("PRIVATE-MESSAGE")
+def test_teardown(teardown_denied):
+    attempt()
+''', encoding="utf-8")
+    result_path = tmp_path / "safe.json"
+    script = r'''
+import importlib.util, json, os, pathlib, sys
+source, root, destination = map(pathlib.Path, sys.argv[1:])
+spec = importlib.util.spec_from_file_location("failure_probe", source)
+probe = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(probe)
+os.environ["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+guard = probe.NetworkGuard(root / "network.jsonl")
+sys.addaudithook(guard.audit)
+import pytest
+pytest.hookimpl(tryfirst=True)(probe.NativeResults.pytest_runtest_makereport)
+for phase in ("setup", "call", "teardown"):
+    pytest.hookimpl(hookwrapper=True, tryfirst=True)(
+        getattr(probe.NativeResults, "pytest_runtest_" + phase))
+results = probe.NativeResults(guard)
+results.node_labels = {f"test_synthetic.py::test_{phase}": case for phase, case in (
+    ("setup", "auth_converge"), ("call", "read_workspace_utf8"),
+    ("teardown", "resource_publish_overlap"))}
+code = pytest.main(["-q", "-p", "no:cacheprovider", "--rootdir", str(root),
+    "--confcutdir", str(root), str(root / "test_synthetic.py")], plugins=[results])
+assert code == 1
+selection = results.finish(code)
+assert selection["status"] == "FAIL"
+assert [(v["case"], v["phase"], v["errors"][0]["class"]) for v in selection["failureFacts"]] == [
+    ("auth_converge", "setup", "PermissionError"),
+    ("read_workspace_utf8", "call", "ValueError"),
+    ("resource_publish_overlap", "teardown", "OSError")]
+assert selection["cases"]["read_workspace_utf8"]["callsPassed"] == 0
+assert selection["cases"]["resource_publish_overlap"]["callsPassed"] == 1
+serialized = json.dumps(selection)
+assert "PRIVATE-MESSAGE" not in serialized and "/private/path" not in serialized
+assert "test_synthetic" not in serialized and "setup_denied" not in serialized
+network = guard.network_diagnostics()
+assert [(row["case"], row["phase"], row["count"]) for row in network["attempts"]] == [
+    ("auth_converge", "setup", 1), ("auth_converge", "teardown", 1),
+    ("read_workspace_utf8", "call", 1), ("resource_publish_overlap", "setup", 1),
+    ("resource_publish_overlap", "call", 1), ("resource_publish_overlap", "teardown", 1)]
+assert all(row["event"] == "socket.gethostbyname" for row in network["attempts"])
+assert guard.blocked == 6 and network["overflow"] == 0
+assert (guard.case, guard.phase) == ("outside", "outside")
+try:
+    guard.verify()
+except AssertionError:
+    pass
+else:
+    raise AssertionError("Caught synthetic attempts must still fail policy")
+assert "PRIVATE-HOST" not in json.dumps(network)
+destination.write_text(json.dumps({"selection": selection, "networkDiagnostics": network}),
+                       encoding="utf-8")
+'''
+    child = subprocess.run([sys.executable, "-I", "-B", "-c", script,
+        str(SPEC.origin), str(tmp_path), str(result_path)], capture_output=True, text=True, timeout=30)
+    assert child.returncode == 0, child.stdout + child.stderr
+    facts = json.loads(result_path.read_text(encoding="utf-8"))
+    value = report()
+    value["nativeControls"] = {"status": "FAIL", "stage": "native_prerequisites", "checks": {},
+        **facts, "network": {"blockedOptionalIpv6Probes": 0, "unknownAttempts": 6,
+                            "infrastructureSocketpairBinds": 0, "tlsNegativeReservations": 0,
+                            "tlsNegativeListeners": 0, "tlsNegativeConnects": 0}}
+    probe.validate_public(value)
+
+
+def diagnostic_public_model():
+    value = report()
+    selection = native_result("failed")
+    selection["failureFacts"] = [{"case": "read_workspace_utf8", "phase": "call", "errors": [{
+        "class": "PermissionError", "errno": 13, "winerror": 32, "frames": [{
+            "source": "native_read_open", "codeSha256": "e"*64, "lineOffset": 20}]}]}]
+    value["nativeControls"] = {"status": "FAIL", "stage": "native_prerequisites", "checks": {},
+        "selection": selection,
+        "network": {"blockedOptionalIpv6Probes": 0, "unknownAttempts": 1,
+                    "infrastructureSocketpairBinds": 6, "tlsNegativeReservations": 0,
+                    "tlsNegativeListeners": 0, "tlsNegativeConnects": 0},
+        "networkDiagnostics": {"attempts": [{
+            "case": "auth_wrong_leaf_no_disclosure", "phase": "setup",
+            "event": "socket.bind", "count": 1, "source": "pytest_unused_port",
+            "codeSha256": "f"*64, "lineOffset": 2}], "overflow": 0}}
+    return value
+
+
+@pytest.mark.parametrize("fault", ["message", "class", "case", "phase", "source", "path",
+                                  "fingerprint", "numeric", "network-host", "network-source",
+                                  "network-phase", "network-case", "network-count", "network-other-hash"])
+def test_failure_and_network_diagnostics_refuse_private_unbounded_or_inconsistent_fields(fault):
+    value = diagnostic_public_model()
+    probe.validate_public(value)
+    control = value["nativeControls"]
+    fact = control["selection"]["failureFacts"][0]
+    error = fact["errors"][0]
+    network = control["networkDiagnostics"]["attempts"][0]
+    if fault == "message":
+        error["message"] = "PRIVATE"
+    elif fault == "class":
+        error["class"] = "PrivateError"
+    elif fault == "case":
+        fact["case"] = "private_test"
+    elif fault == "phase":
+        fact["phase"] = "private_phase"
+    elif fault in {"source", "path", "fingerprint"}:
+        error["frames"][0][{"source": "source", "path": "path", "fingerprint": "codeSha256"}[fault]] = "PRIVATE"
+    elif fault == "numeric":
+        error["winerror"] = "PRIVATE"
+    elif fault == "network-host":
+        network["host"] = "PRIVATE"
+    elif fault == "network-source":
+        network["source"] = "private_symbol"
+    elif fault == "network-phase":
+        network["phase"] = "private_phase"
+    elif fault == "network-case":
+        network["case"] = "private_test"
+    elif fault == "network-count":
+        network["count"] = 2
+    elif fault == "network-other-hash":
+        network["source"] = "other"
+    with pytest.raises((AssertionError, KeyError, TypeError)):
+        probe.validate_public(value)
 
 
 @pytest.mark.parametrize("unknown", [False, True])

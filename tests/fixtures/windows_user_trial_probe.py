@@ -92,6 +92,94 @@ TLS_NEGATIVE_MODES = {
     "tests/" + NATIVE_CONTROLS["auth_redirect_proxy_no_disclosure"]: "redirect",
 }
 TLS_NEGATIVE_NODES = frozenset(TLS_NEGATIVE_MODES)
+PHASES = frozenset({"setup", "call", "teardown", "outside"})
+NETWORK_EVENTS = frozenset({"socket.bind", "socket.connect", "socket.getaddrinfo", "socket.sendto",
+                            "socket.gethostbyname", "socket.gethostbyaddr", "socket.getnameinfo"})
+# Public producer labels resolved to the *loaded function's exact code object*.
+# Unknown/private frames never contribute a name, path, line or fingerprint.
+DIAGNOSTIC_FUNCTIONS = {
+    "native_read_open": ("amplifier_web.windows_read_files", "_ReadAPI.open_read"),
+    "native_read_signature": ("amplifier_web.windows_read_files", "_ReadAPI.signature"),
+    "native_read_context": ("amplifier_web.windows_read_files", "open_file"),
+    "native_file_info": ("amplifier_web.windows_files", "_API.info"),
+    "native_file_check": ("amplifier_web.windows_files", "_API.ok"),
+    "output_workspace_file": ("amplifier_web.outputs", "workspace_file"),
+    "output_file_bytes": ("amplifier_web.outputs", "file_bytes"),
+    "resource_read": ("amplifier_web.resource_files", "read_detached"),
+    "resource_project": ("amplifier_web.resource_files", "project_detached"),
+    "resource_publish": ("amplifier_web.resource_files", "write_prepared"),
+    "resource_atomic": ("amplifier_web.host.storage", "SessionStore._atomic"),
+    "optional_app_init": ("amplifier_web.service", "AppService.__init__"),
+    "pytest_unused_port": ("pytest_asyncio.plugin", "_unused_port"),
+    "socketpair": ("socket", "_fallback_socketpair"),
+}
+DIAGNOSTIC_SOURCES = frozenset(DIAGNOSTIC_FUNCTIONS) | {
+    "selected_test", "tls_fixture_scope", "tls_fixture_reserve", "tls_fixture_call",
+    "tls_fixture_start", "tls_fixture_bound", "other"}
+ERROR_CLASSES = {kind: kind.__name__ for kind in (
+    AssertionError, OSError, PermissionError, FileNotFoundError, NotADirectoryError,
+    IsADirectoryError, TimeoutError, ImportError, ModuleNotFoundError, ValueError,
+    TypeError, AttributeError, KeyError, RuntimeError, UnicodeError,
+    UnicodeEncodeError, UnicodeDecodeError)}
+ERROR_LABELS = frozenset(ERROR_CLASSES.values()) | {"AppError", "Failed", "Skipped", "other"}
+
+
+def diagnostic_codes():
+    result = {}
+    for label, (module_name, qualname) in DIAGNOSTIC_FUNCTIONS.items():
+        value = sys.modules.get(module_name)
+        for part in qualname.split("."):
+            value = getattr(value, part, None) if value is not None else None
+        # contextmanager's generated wrapper is not the boundary implementation.
+        value = getattr(value, "__wrapped__", value)
+        code = getattr(value, "__code__", None)
+        if isinstance(code, types.CodeType):
+            result[code] = label
+    return result
+
+
+def safe_frame(frame, codes, line=None):
+    code = frame.f_code
+    label = next((label for known, label in codes.items() if known is code), "other")
+    if label == "other":
+        return {"source": "other"}
+    offset = (line if type(line) is int else getattr(frame, "f_lineno", code.co_firstlineno)) - code.co_firstlineno
+    return {"source": label, "codeSha256": digest(code.co_code),
+            "lineOffset": max(0, min(offset, 10**6))}
+
+
+def safe_exception(exc, codes):
+    """Three bounded causes; exact classes and known code only, no repr/str."""
+    records, seen = [], set()
+    while isinstance(exc, BaseException) and id(exc) not in seen and len(records) < 3:
+        seen.add(id(exc))
+        kind = type(exc)
+        label = ERROR_CLASSES.get(kind, "other")
+        for module_name, class_name in (
+                ("amplifier_web.service", "AppError"), ("_pytest.outcomes", "Failed"),
+                ("_pytest.outcomes", "Skipped")):
+            module = sys.modules.get(module_name)
+            if module is not None and kind is getattr(module, class_name, None):
+                label = class_name
+        row = {"class": label, "frames": []}
+        if kind in ERROR_CLASSES and isinstance(exc, OSError):
+            for key in ("errno", "winerror"):
+                number = getattr(exc, key, None)
+                if type(number) is int and -(2**31) <= number < 2**32:
+                    row[key] = number
+        tb = exc.__traceback__
+        scanned = 0
+        while tb is not None and scanned < 128:
+            scanned += 1
+            fact = safe_frame(tb.tb_frame, codes, tb.tb_lineno)
+            if fact["source"] != "other":
+                row["frames"].append(fact)
+                row["frames"] = row["frames"][-5:]
+            tb = tb.tb_next
+        records.append(row)
+        exc = exc.__cause__ if exc.__cause__ is not None else (
+            None if exc.__suppress_context__ else exc.__context__)
+    return records
 MARKER = "Windows trial café 日本語"
 RESUMED = "Resumed café 日本語"
 # Source-attested urllib3 2.x capability probe. We BLOCK its bind, never allow
@@ -389,6 +477,40 @@ def validate_public(value):
         assert type(value) is str and len(value) in lengths and re.fullmatch("[0-9a-f]+", value)
     def number(value):
         assert type(value) is int and 0 <= value <= 10**9
+    def frame(value):
+        assert value["source"] in DIAGNOSTIC_SOURCES
+        if value["source"] == "other":
+            assert set(value) == {"source"}
+        else:
+            assert set(value) == {"source", "codeSha256", "lineOffset"}
+            sha(value["codeSha256"])
+            assert type(value["lineOffset"]) is int and 0 <= value["lineOffset"] <= 10**6
+    def error(value):
+        assert {"class", "frames"} <= set(value) <= {"class", "frames", "errno", "winerror"}
+        assert value["class"] in ERROR_LABELS and type(value["frames"]) is list and len(value["frames"]) <= 5
+        for item in value["frames"]:
+            frame(item)
+            assert item["source"] != "other"
+        for field in ("errno", "winerror"):
+            if field in value:
+                assert type(value[field]) is int and -(2**31) <= value[field] < 2**32
+    def network_diagnostics(item):
+        if "networkDiagnostics" not in item:
+            return
+        diagnostics = item["networkDiagnostics"]
+        assert set(diagnostics) == {"attempts", "overflow"}
+        number(diagnostics["overflow"])
+        assert type(diagnostics["attempts"]) is list and len(diagnostics["attempts"]) <= 32
+        total = diagnostics["overflow"]
+        for attempt in diagnostics["attempts"]:
+            assert attempt["event"] in NETWORK_EVENTS
+            assert attempt["case"] in {*NATIVE_CONTROLS, "outside"} and attempt["phase"] in PHASES
+            number(attempt["count"])
+            assert attempt["count"] > 0
+            frame({key: val for key, val in attempt.items()
+                   if key not in {"event", "case", "phase", "count"}})
+            total += attempt["count"]
+        assert total == item["network"]["unknownAttempts"]
     def installation(item):
         assert set(item) == {"wheelSha256", "verifiedMembers", "imports", "graph"}
         sha(item["wheelSha256"]); number(item["verifiedMembers"])
@@ -442,7 +564,8 @@ def validate_public(value):
     for key in {"outerJobsSettled", "scratchRemoved"} & value.keys():
         assert type(value[key]) is bool
     for item in value.get("hosts", []):
-        assert set(item) <= common | {"installed", "innerJobsSettled", "publicGateClosed", "network"}
+        assert set(item) <= common | {"installed", "innerJobsSettled", "publicGateClosed", "network",
+                                      "networkDiagnostics"}
         checks(item)
         if "installed" in item:
             installation(item["installed"])
@@ -452,11 +575,12 @@ def validate_public(value):
             assert set(item["network"]) == {"blockedOptionalIpv6Probes", "unknownAttempts"}
             for count in item["network"].values():
                 number(count)
+        network_diagnostics(item)
     for item in value.get("workers", []):
         installation(item)
     if "nativeControls" in value:
         item = value["nativeControls"]
-        assert set(item) <= common | {"installed", "selection", "testSources", "network"}
+        assert set(item) <= common | {"installed", "selection", "testSources", "network", "networkDiagnostics"}
         checks(item)
         if "installed" in item:
             installation(item["installed"])
@@ -470,9 +594,11 @@ def validate_public(value):
                 "tlsNegativeReservations", "tlsNegativeListeners", "tlsNegativeConnects"}
             for count in item["network"].values():
                 number(count)
+        network_diagnostics(item)
         if "selection" in item:
             selection = item["selection"]
-            assert set(selection) == {"status", "exitCode", "collectionExact", "cases"}
+            assert {"status", "exitCode", "collectionExact", "cases"} <= set(selection) <= {
+                "status", "exitCode", "collectionExact", "cases", "failureFacts"}
             assert selection["status"] in {"PASS", "FAIL"}
             assert type(selection["collectionExact"]) is bool
             number(selection["exitCode"])
@@ -487,6 +613,15 @@ def validate_public(value):
             if selection["status"] == "PASS":
                 assert selection["collectionExact"] and selection["exitCode"] == 0
                 assert all(case["status"] == "PASS" for case in selection["cases"].values())
+                assert not selection.get("failureFacts")
+            if "failureFacts" in selection:
+                assert type(selection["failureFacts"]) is list and len(selection["failureFacts"]) <= 54
+                for fact in selection["failureFacts"]:
+                    assert set(fact) == {"case", "phase", "errors"}
+                    assert fact["case"] in NATIVE_CONTROLS and fact["phase"] in PHASES - {"outside"}
+                    assert type(fact["errors"]) is list and 1 <= len(fact["errors"]) <= 3
+                    for item_error in fact["errors"]:
+                        error(item_error)
     return value
 
 
@@ -507,6 +642,11 @@ class NetworkGuard:
         self.tls_binding = None
         self.tls_reservations = self.tls_connects = 0
         self.tls_endpoints = []
+        self.case = "outside"
+        self.phase = "outside"
+        self.codes = {}
+        self.network_facts = {}
+        self.network_overflow = 0
         # Read metadata/source WITHOUT importing urllib3 or any app module.
         self.probe_path = Path(metadata.distribution("urllib3").locate_file(
             "urllib3/util/connection.py")).resolve()
@@ -563,8 +703,7 @@ class NetworkGuard:
         return False
 
     def audit(self, event, args):
-        if event not in {"socket.bind", "socket.connect", "socket.getaddrinfo", "socket.sendto",
-                         "socket.gethostbyname", "socket.gethostbyaddr", "socket.getnameinfo"}:
+        if event not in NETWORK_EVENTS:
             return
         address = args[1] if event in {"socket.bind", "socket.connect"} else None
         if self.control_socketpair(event, args):
@@ -587,10 +726,32 @@ class NetworkGuard:
             if address[:2] == ("127.0.0.1", self.port):
                 return
         self.blocked += 1
+        codes = {**diagnostic_codes(), **self.codes}
+        frame = sys._getframe(1)
+        origin = {"source": "other"}
+        for _ in range(32):
+            if frame is None:
+                break
+            fact = safe_frame(frame, codes)
+            if fact["source"] != "other":
+                origin = fact
+                break
+            frame = getattr(frame, "f_back", None)
+        attribution = {"event": event, "case": self.case, "phase": self.phase, **origin}
+        key = json.dumps(attribution, sort_keys=True)
+        if key in self.network_facts:
+            self.network_facts[key]["count"] += 1
+        elif len(self.network_facts) < 32:
+            self.network_facts[key] = {**attribution, "count": 1}
+        else:
+            self.network_overflow += 1
         # Never retain host names, paths, arguments or exception prose.
         with self.log.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps({"event": event, "blocked": True}) + "\n")
         raise PermissionError("Offline trial network boundary")
+
+    def network_diagnostics(self):
+        return {"attempts": list(self.network_facts.values()), "overflow": self.network_overflow}
 
     def verify(self):
         if self.probes:
@@ -750,6 +911,10 @@ def native_tls_cases(guard, target, source_hash):
         finally:
             server.socket_factory = original_factory
     BaseTestServer.start_server = start
+    guard.codes.update({function.__code__: label for function, label in (
+        (scope_for, "tls_fixture_scope"), (bound, "tls_fixture_bound"),
+        (Controls.reserve, "tls_fixture_reserve"), (Controls.pytest_runtest_call, "tls_fixture_call"),
+        (start, "tls_fixture_start"))})
     try:
         yield Controls()
     finally:
@@ -1074,11 +1239,14 @@ def failure(report, exc):
 
 class NativeResults:
     """Retain only fixed labels/counts, never pytest error prose or locations."""
-    def __init__(self):
+    def __init__(self, guard=None):
         self.node_labels = {"tests/" + node: label for label, node in NATIVE_CONTROLS.items()}
         self.collected = {label: 0 for label in NATIVE_CONTROLS}
         self.phases = {label: [] for label in NATIVE_CONTROLS}
         self.unexpected = self.collection_errors = 0
+        self.guard = guard
+        self.codes = {}
+        self.failure_facts = []
 
     def pytest_collection_finish(self, session):
         for item in session.items:
@@ -1087,6 +1255,48 @@ class NativeResults:
                 self.unexpected += 1
             else:
                 self.collected[label] += 1
+                function = getattr(item, "obj", None)
+                code = getattr(function, "__code__", None)
+                if isinstance(code, types.CodeType):
+                    self.codes[code] = "selected_test"
+        if self.guard is not None:
+            self.guard.codes.update(self.codes)
+
+    @contextmanager
+    def _phase(self, item, phase):
+        if self.guard is not None:
+            self.guard.case = self.node_labels.get(item.nodeid, "outside")
+            self.guard.phase = phase
+        try:
+            yield
+        finally:
+            if self.guard is not None:
+                self.guard.case = self.guard.phase = "outside"
+
+    # Registered as tryfirst hookwrappers below: attribute actual phase entry
+    # before fixtures/finalizers run, including teardown after failed setup.
+    def pytest_runtest_setup(self, item):
+        with self._phase(item, "setup"):
+            yield
+
+    def pytest_runtest_call(self, item):
+        with self._phase(item, "call"):
+            yield
+
+    def pytest_runtest_teardown(self, item, nextitem):
+        with self._phase(item, "teardown"):
+            yield
+
+    def pytest_runtest_makereport(self, item, call):
+        label = self.node_labels.get(item.nodeid)
+        if label is not None and call.when in PHASES - {"outside"} and call.excinfo is not None:
+            if len(self.failure_facts) < 54:
+                codes = {**diagnostic_codes(), **self.codes,
+                         **(self.guard.codes if self.guard is not None else {})}
+                self.failure_facts.append({"case": label, "phase": call.when,
+                                          "errors": safe_exception(call.excinfo.value, codes)})
+        # Do not replace pytest's report or touch its exception/outcome.
+        return None
 
     def pytest_collectreport(self, report):
         if report.failed or report.skipped:
@@ -1114,9 +1324,12 @@ class NativeResults:
             }
         exact = not self.unexpected and not self.collection_errors and all(
             count == 1 for count in self.collected.values())
-        return {"status": "PASS" if int(exit_code) == 0 and exact and all(
+        result = {"status": "PASS" if int(exit_code) == 0 and exact and all(
                     row["status"] == "PASS" for row in cases.values()) else "FAIL",
                 "exitCode": int(exit_code), "collectionExact": exact, "cases": cases}
+        if self.failure_facts:
+            result["failureFacts"] = self.failure_facts
+        return result
 
 
 def stage_controls(root, source):
@@ -1151,7 +1364,16 @@ def native_controls(wheel):
                 report["installed"] = installed(wheel, report)
                 target, report["testSources"] = stage_controls(root, Path(__file__).parents[1])
                 import pytest
-                results = NativeResults()
+                pytest.hookimpl(tryfirst=True)(NativeResults.pytest_runtest_makereport)
+                for phase in ("setup", "call", "teardown"):
+                    pytest.hookimpl(hookwrapper=True, tryfirst=True)(
+                        getattr(NativeResults, "pytest_runtest_" + phase))
+                results = NativeResults(guard)
+                # Register declared plugins BEFORE our narrow fixture override.
+                # Passing them only via -p loads them after plugins=[...] and
+                # silently selects pytest-asyncio's unscoped port reservation.
+                declared_plugins = [importlib.import_module(name) for name in
+                                    ("pytest_asyncio.plugin", "aiohttp.pytest_plugin")]
                 with control_socketpairs(guard), native_tls_cases(
                         guard, target, report["testSources"]["test_browser_entry.py"]) as tls_controls:
                     result = pytest.main([
@@ -1160,7 +1382,7 @@ def native_controls(wheel):
                         "--rootdir", str(target), "--confcutdir", str(target),
                         "--basetemp", str(root / "native-test-tmp"),
                         *[str(target / "tests" / node) for node in NATIVE_CONTROLS.values()]],
-                        plugins=[results, tls_controls])
+                        plugins=[*declared_plugins, results, tls_controls])
                 report["selection"] = results.finish(result)
                 assert installed(wheel, report) == report["installed"]
                 guard.verify()
@@ -1180,6 +1402,7 @@ def native_controls(wheel):
                 "tlsNegativeReservations": guard.tls_reservations,
                 "tlsNegativeListeners": len(guard.tls_endpoints),
                 "tlsNegativeConnects": guard.tls_connects}
+            report["networkDiagnostics"] = guard.network_diagnostics()
     write_json(root / "controls.json", report)
     return 0 if report["status"] == "PASS" else 1
 
@@ -1208,6 +1431,7 @@ def host(wheel, phase):
     finally:
         if guard is not None:
             report["network"] = {"blockedOptionalIpv6Probes": guard.probes, "unknownAttempts": guard.blocked}
+            report["networkDiagnostics"] = guard.network_diagnostics()
     write_json(root / ("host-" + phase + ".json"), report)
     return 0 if report["status"] == "PASS" else 1
 
