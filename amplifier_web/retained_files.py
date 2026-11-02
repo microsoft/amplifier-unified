@@ -119,7 +119,8 @@ async def adopt(db, item):
     def verify(source, maximum):
         # Existing same-size files are preserved by put(). Establish the actual
         # adopted identity before a retained report can claim verification.
-        resource_files.read_detached(source, max_bytes=maximum)
+        # The same verifier also bounds the small {$blob: hash} index envelope.
+        resource_files.read_detached(source, max_bytes=max(128, maximum))
 
     async def store(value):
         reference = await resource_files.put_prepared_async(db, value)

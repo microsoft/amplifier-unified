@@ -13,6 +13,7 @@ import pytest
 
 from amplifier_web import retained_files, resource_files
 from amplifier_web.server import create_app
+from amplifier_web.service import AppError
 from test_collaborative_workspaces import app, Runtime, finish, agent_action
 from test_result_artifacts import setup, declare, read
 from test_integration_validation import project, validate, collect
@@ -264,11 +265,17 @@ async def test_preexisting_same_size_corruption_refuses_correction_and_preserves
             app.db.commit()
         artifact = resource_files.root(app.db) / (value.identity + '.json')
         artifact.write_bytes(damaged)
-    before = set(app.db.execute('SELECT id,value FROM state_resources'))
-    with pytest.raises(ValueError, match='identity'):
+        attempted = {item['resource'].identity, *(piece.identity for piece in item['pieces'])}
+    # Keep the conflicted source referenced: unrelated background collection
+    # must not legitimately remove an unreferenced fixture before adoption.
+    app._state['fixtureCorruption'] = {'$resource': value.identity}
+    before = {identity: encoded for identity, encoded in app.db.execute('SELECT id,value FROM state_resources')
+              if identity in attempted}
+    with pytest.raises(AppError, match='identity'):
         await agent_action(app, peer, 'coordination.reply', corrected, 'corrupt-correction')
     assert artifact.read_bytes() == damaged
-    assert set(app.db.execute('SELECT id,value FROM state_resources')) == before
+    assert {identity: encoded for identity, encoded in app.db.execute('SELECT id,value FROM state_resources')
+            if identity in attempted} == before
     assert app.collaboration.receipt(args['requestId'])['response'] == first
     assert app.collaboration.receipt('artifact-declaration')['result'] == first
     assert app.db.execute('SELECT count(*) FROM output_records').fetchone()[0] == 1
@@ -278,6 +285,19 @@ async def test_preexisting_same_size_corruption_refuses_correction_and_preserves
     assert not request['response']['qualified'] and request['responseRevision'] == 1
     assert not app.collaboration.receipt(request['subscription']['continuationId'])['dependencySatisfied']
     assert (await read(app, source, args))['text'] == 'Original exact bytes'
+
+
+@pytest.mark.parametrize('content', [b'', b'ok'])
+async def test_valid_empty_and_tiny_files_remain_verified_and_readable(app, tmp_path, content):
+    source, peer, path, args = await setup(app, tmp_path, content)
+    result = (await declare(app, peer, args))['result']
+    assert result['artifactVerification'] == 'verified'
+    assert result['artifacts'][0]['bytes'] == len(content)
+    assert not result['qualified']
+    path.unlink()
+    assert (await read(app, source, args))['text'] == content.decode()
+    await finish(app, peer, args['requestId'])
+    assert (await read(app, source, args))['qualified']
 
 
 async def test_disk_pressure_keeps_report_explicitly_incomplete(app, tmp_path, monkeypatch):
