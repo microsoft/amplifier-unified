@@ -25,13 +25,14 @@ _PROTOCOL = None
 
 def configure_protocol():
     global _PROTOCOL
-    _PROTOCOL = os.fdopen(os.dup(sys.stdout.fileno()), "w", buffering=1)
+    _PROTOCOL = os.fdopen(os.dup(sys.stdout.fileno()), "wb")
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
     sys.stdout = sys.stderr
 
 
 def publish(data):
-    _PROTOCOL.write(encode_message(data).decode("utf-8"))
+    _PROTOCOL.write(encode_message(data))
+    _PROTOCOL.flush()
 
 
 class Worker:
@@ -1708,11 +1709,24 @@ class Worker:
             publish({"op": "reply", "id": identity, "error": f"{type(exc).__name__}: {exc}"})
 
     async def read(self):
-        reader = asyncio.StreamReader(limit=MAX_MESSAGE_BYTES)
-        protocol = asyncio.StreamReaderProtocol(reader)
-        transport, _ = await asyncio.get_running_loop().connect_read_pipe(lambda: protocol, sys.stdin)
+        transport = None
+        threaded_reader = None
         try:
+            if sys.platform == "win32":
+                # Child stdin is an ordinary synchronous pipe, not an overlapped
+                # handle that the Windows Proactor loop can connect_read_pipe.
+                if __package__:
+                    from .worker_input import ThreadedPipeReader
+                else:
+                    from worker_input import ThreadedPipeReader
+                reader = threaded_reader = ThreadedPipeReader(sys.stdin, MAX_MESSAGE_BYTES)
+            else:
+                reader = asyncio.StreamReader(limit=MAX_MESSAGE_BYTES)
+                protocol = asyncio.StreamReaderProtocol(reader)
+                transport, _ = await asyncio.get_running_loop().connect_read_pipe(lambda: protocol, sys.stdin)
             while line := await reader.readline():
+                if len(line) > MAX_MESSAGE_BYTES:
+                    raise ValueError("Runtime message exceeds the transport limit.")
                 try:
                     data = json.loads(line)
                     if not isinstance(data, dict):
@@ -1727,7 +1741,10 @@ class Worker:
         except Exception as exc:
             publish({'type':'runtime.error','error':f'Amplifier worker communication failed ({type(exc).__name__}). A message could not be read; work was not replayed.'})
         finally:
-            transport.close()
+            if threaded_reader is not None:
+                threaded_reader.close()
+            if transport is not None:
+                transport.close()
             self.shutdown.set()
 
     async def run(self):

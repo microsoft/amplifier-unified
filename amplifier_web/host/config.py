@@ -25,7 +25,11 @@ _KEY_FILE_VALUES = {}
 
 
 def app_home() -> Path:
-    return Path(os.environ.get("AMPLIFIER_WEB_HOME", os.environ.get("AMPLIFIER_WEB_DATA_DIR", Path.home() / ".amplifier-unified"))).expanduser().resolve()
+    value = os.environ.get("AMPLIFIER_WEB_HOME", os.environ.get("AMPLIFIER_WEB_DATA_DIR", Path.home() / ".amplifier-unified"))
+    if os.name == "nt":
+        from ..windows_files import address
+        return address(value)
+    return Path(value).expanduser().resolve()
 
 
 def merge(base, overlay):
@@ -234,7 +238,12 @@ def load_config(workspace, *, home=None, legacy_home=None, session_id=None, glob
 
 def read_config(workspace, *, home=None, shared_home=None, session_id=None, global_only=False, settings_cache=None, registry_home=None, owner_session_id=None):
     """Read runtime settings without loading keys, preparing caches or writing."""
-    home = Path(home or app_home()).expanduser().resolve()
+    if os.name == "nt":
+        from ..windows_files import address
+        # Private IO must inspect the original path, not a resolved junction target.
+        home = address(home or app_home())
+    else:
+        home = Path(home or app_home()).expanduser().resolve()
     workspace = Path(workspace).expanduser().resolve(strict=True)
     shared = Path(shared_home or amplifier_home()).expanduser().resolve()
     settings = read_settings(workspace, shared_home=shared, session_id=session_id, global_only=global_only, cache=settings_cache)
