@@ -19,6 +19,7 @@ import pytest
 from amplifier_web import task_environments as owner
 from amplifier_web import test_environment_worker as worker
 from amplifier_web.service import AppError, AppService
+from amplifier_web.smart_tools import SmartToolsManager
 
 pytestmark = pytest.mark.skipif(
     os.environ.get('CHECK_SUITE') != 'fresh-cleanup-native',
@@ -86,6 +87,7 @@ async def test_native_unknown_cleanup_keeps_history_and_preserves_current_files(
     command('git', '-C', str(repository), 'commit', '-qm', 'native fixture')
     monkeypatch.setenv('AMPLIFIER_HOME', str(root / 'native-home'))
     app = AppService(root / 'app', NoModelRuntime(), workspace=repository)
+    app.smart_tools = SmartToolsManager(app)
     source = app._new_session({'title': 'Native cleanup fixture'})
     app.state['sessions'] = [source]
     app.state['selectedSessionId'] = source['id']
