@@ -2130,3 +2130,274 @@ def test_python_junit_pytest_properties_skips_and_multiple_error_reports(tmp_pat
     assert runner.finish_python_report(tmp_path, report) == exit_code
     assert report['junit']['status'] == 'parsed' and report['junit']['counts'] == counts
     assert report['pytestSessionComplete'] and report['passed'] is (exit_code == 0)
+
+
+def test_python_nested_owner_lineage_retains_ancestors_without_reusing_local_token():
+    outer = runner.child_ownership({}, '1' * 32)
+    inner = runner.child_ownership(outer, '2' * 32)
+    deepest = runner.child_ownership(inner, '3' * 32)
+    assert outer == {runner.OWNER_ENV: '1' * 32, runner.ANCESTOR_ENV: ''}
+    assert inner == {runner.OWNER_ENV: '2' * 32, runner.ANCESTOR_ENV: '1' * 32}
+    assert deepest == {runner.OWNER_ENV: '3' * 32,
+                       runner.ANCESTOR_ENV: '1' * 32 + ',' + '2' * 32}
+    encoded = lambda env: b'\0'.join((key + '=' + value).encode() for key, value in env.items())
+    assert runner.environment_owns(encoded(deepest), '1' * 32)
+    assert runner.environment_owns(encoded(deepest), '2' * 32)
+    assert runner.environment_owns(encoded(deepest), '3' * 32)
+    assert not runner.environment_owns(encoded(outer), '2' * 32)
+    assert not runner.environment_owns(encoded(inner), '3' * 32)
+    sibling = runner.child_ownership(outer, '4' * 32)
+    assert not runner.environment_owns(encoded(sibling), '2' * 32)
+    assert runner.owner_lineage({runner.OWNER_ENV: '1' * 32}) == ['1' * 32]  # Existing direct tag.
+    assert not runner.environment_owns(b'UNRELATED=value\0', '1' * 32)
+
+
+def test_python_nested_owner_limit_refuses_without_truncating_outer_owner():
+    environment = {}
+    for index in range(runner.MAX_OWNER_ANCESTORS + 1):
+        environment = runner.child_ownership(environment, f'{index:032x}')
+    assert len(environment[runner.ANCESTOR_ENV]) == runner.MAX_OWNER_ANCESTORS * 33 - 1
+    assert runner.owner_lineage(environment)[0] == '0' * 32
+    before = dict(environment)
+    with pytest.raises(OSError, match='limit reached'):
+        runner.child_ownership(environment, 'f' * 32)
+    assert environment == before
+    with pytest.raises(OSError, match='fresh local'):
+        runner.child_ownership({runner.OWNER_ENV: 'f' * 32}, 'f' * 32)
+
+
+@pytest.mark.parametrize('shape', [
+    'oversized', 'bad-token', 'empty-token', 'duplicate', 'self-ancestor',
+    'missing-owner', 'bad-owner', 'empty-owner', 'non-ascii',
+])
+def test_python_nested_owner_invalid_inheritance_refuses_before_launch(tmp_path, monkeypatch, shape):
+    fields = {runner.OWNER_ENV: 'a' * 32, runner.ANCESTOR_ENV: 'b' * 32}
+    if shape == 'oversized':
+        fields[runner.ANCESTOR_ENV] = 'b' * (runner.MAX_OWNER_ANCESTORS * 33)
+    elif shape == 'bad-token':
+        fields[runner.ANCESTOR_ENV] = '../not-an-owner'
+    elif shape == 'empty-token':
+        fields[runner.ANCESTOR_ENV] += ','
+    elif shape == 'duplicate':
+        fields[runner.ANCESTOR_ENV] += ',' + 'b' * 32
+    elif shape == 'self-ancestor':
+        fields[runner.ANCESTOR_ENV] = fields[runner.OWNER_ENV]
+    elif shape == 'missing-owner':
+        fields.pop(runner.OWNER_ENV)
+    elif shape == 'bad-owner':
+        fields[runner.OWNER_ENV] = 'not-an-owner'
+    elif shape == 'empty-owner':
+        fields[runner.OWNER_ENV] = ''
+    else:
+        fields[runner.ANCESTOR_ENV] = '\N{SNOWMAN}'
+    for name in (runner.OWNER_ENV, runner.ANCESTOR_ENV):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in fields.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(runner.subprocess, 'Popen', lambda *a, **k: pytest.fail('Invalid lineage cannot launch'))
+    # A scenario override cannot repair or hide invalid inherited ownership.
+    row = scenario('invalid-owner', 'pass')
+    row['env'] = {runner.OWNER_ENV: 'c' * 32, runner.ANCESTOR_ENV: ''}
+    code, report, _ = execute(tmp_path, [row])
+    assert code == 1 and not report['passed']
+    assert report['scenarios'][0]['executionError'] == 'OSError'
+    assert report['scenarios'][0]['cleanup'] == {'remaining': [], 'terminated': 0}
+
+
+@pytest.mark.parametrize('shape', ['duplicate-owner', 'duplicate-ancestors', 'non-ascii'])
+def test_python_nested_owner_inspection_rejects_ambiguous_fields(shape):
+    owner = (runner.OWNER_ENV + '=' + 'a' * 32).encode()
+    ancestor = (runner.ANCESTOR_ENV + '=' + 'b' * 32).encode()
+    data = {'duplicate-owner': owner + b'\0' + owner,
+            'duplicate-ancestors': owner + b'\0' + ancestor + b'\0' + ancestor,
+            'non-ascii': owner + b'\0' + runner.ANCESTOR_ENV.encode() + b'=\xff'}[shape]
+    with pytest.raises(OSError):
+        runner.environment_owns(data, 'a' * 32)
+
+
+def finish_nested_fixture_identities(paths):
+    """Fallback for these tests only: kill recorded PID/births, never token scans."""
+    identities = [json.loads(path.read_text()) for path in paths if path.exists()]
+    for identity in identities:
+        try:
+            handle = os.pidfd_open(identity['pid'])
+            try:
+                fields = Path(f'/proc/{identity["pid"]}/stat').read_text().rsplit(')', 1)[1].split()
+                if fields[19] == identity['birth'] and fields[0] != 'Z':
+                    signal.pidfd_send_signal(handle, signal.SIGKILL)
+            finally:
+                os.close(handle)
+        except (FileNotFoundError, ProcessLookupError):
+            pass
+    deadline = runner.time.monotonic() + 3
+    while True:
+        live = []
+        for identity in identities:
+            try:
+                fields = Path(f'/proc/{identity["pid"]}/stat').read_text().rsplit(')', 1)[1].split()
+                if fields[19] == identity['birth'] and fields[0] != 'Z':
+                    live.append(identity['pid'])
+            except (FileNotFoundError, ProcessLookupError):
+                pass
+        if not live:
+            return
+        assert runner.time.monotonic() < deadline, f'Fixture cleanup did not settle: {live}'
+        runner.time.sleep(.02)
+
+
+@pytest.mark.parametrize('mode', ['timeout', 'cancelled', 'unreadable'])
+def test_python_nested_detached_owner_survives_inner_loss_without_false_outer_clear(tmp_path, monkeypatch, mode):
+    leader, child, detached = [tmp_path / name for name in ('leader.json', 'child.json', 'detached.json')]
+    ready, held = tmp_path / 'ready', tmp_path / 'inner-cleanup-held'
+    record = '''
+def record(path):
+    pid = os.getpid()
+    fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')',1)[1].split()
+    temporary = Path(path).with_suffix('.pending')
+    temporary.write_text(json.dumps({'pid':pid,'birth':fields[19],
+        'group':os.getpgrp(),'owner':os.environ.get('AMPLIFIER_BROWSER_CHECK_OWNER'),
+        'ancestors':os.environ.get('AMPLIFIER_BROWSER_CHECK_ANCESTORS','')}))
+    temporary.replace(path)
+'''
+    grandchild_source = ('import os,json,signal,time;from pathlib import Path\n' + record +
+                         f'\nrecord({str(detached)!r})\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\ntime.sleep(60)')
+    child_source = f'''
+import os,json,subprocess,sys,time
+from pathlib import Path
+{record}
+record({str(child)!r})
+p = subprocess.Popen([sys.executable,'-c',{grandchild_source!r}],start_new_session=True)
+deadline = time.monotonic()+5
+while not Path({str(detached)!r}).exists():
+    assert time.monotonic()<deadline
+    time.sleep(.01)
+Path({str(ready)!r}).touch()
+time.sleep(60)
+'''
+    inner_source = f'''
+import importlib.util,os,json,signal,sys,time
+from pathlib import Path
+{record}
+record({str(leader)!r})
+spec=importlib.util.spec_from_file_location('inner_runner',{str(ROOT / 'scripts/browser_check_runner.py')!r})
+r=importlib.util.module_from_spec(spec);spec.loader.exec_module(r)
+def held_cleanup(*args,**kwargs):
+    signal.signal(signal.SIGINT,signal.SIG_IGN)
+    signal.signal(signal.SIGTERM,signal.SIG_IGN)
+    Path({str(held)!r}).touch()
+    time.sleep(60)
+    raise AssertionError('Inner cleanup must not finish before forced loss')
+r.retire_group=held_cleanup
+r.run_scenarios(Path({str(tmp_path)!r}),{{'schemaVersion':1,'scenarios':[
+    {{'id':'inner','command':[sys.executable,'-c',{child_source!r}]}}]}},
+    Path({str(tmp_path / 'inner-results')!r}),cwd=Path({str(tmp_path)!r}),budget=20,case_timeout=20)
+'''
+    original_clock, original_open = runner.time.monotonic, Path.open
+    retire, popen = runner.retire_group, runner.subprocess.Popen
+    spawned, sent = [], []
+    protected_path = None
+    def outer_clock():
+        if ready.exists():
+            if mode == 'cancelled' and not sent:
+                sent.append(True)
+                os.kill(os.getpid(), signal.SIGTERM)  # Current outer handler only.
+            elif mode != 'cancelled':
+                return original_clock() + 100
+        return original_clock()
+    def track(*args, **kwargs):
+        process = popen(*args, **kwargs)
+        spawned.append(process)
+        return process
+    def protected(path, *args, **kwargs):
+        if path == protected_path:
+            raise PermissionError('Nested descendant identity unavailable')
+        return original_open(path, *args, **kwargs)
+    def inspect_after_inner_stop(*args, **kwargs):
+        nonlocal protected_path
+        until = original_clock() + 5
+        while not held.exists() and original_clock() < until:
+            runner.time.sleep(.01)
+        assert held.exists(), 'Outer interruption must reach the inner runner before forced cleanup'
+        # Inject only at cleanup, after SIGINT used readable ownership.
+        if mode == 'unreadable':
+            protected_path = Path('/proc') / str(json.loads(detached.read_text())['pid']) / 'environ'
+            monkeypatch.setattr(Path, 'open', protected)
+        return retire(*args, **kwargs)
+    unrelated = popen([sys.executable, '-c', 'import time;time.sleep(60)'], start_new_session=True)
+    try:
+        monkeypatch.setattr(runner.time, 'monotonic', outer_clock)
+        monkeypatch.setattr(runner.subprocess, 'Popen', track)
+        monkeypatch.setattr(runner, 'retire_group', inspect_after_inner_stop)
+        code, report, _ = bounded_execute(tmp_path, inner_source, budget=15, case_timeout=15)
+        row, = report['scenarios']
+        assert code == 1 and not report['passed']
+        assert row['reason'] == ('cancelled' if mode == 'cancelled' else 'timeout')
+        assert row['interrupt']['sent'] and held.exists()
+        parent, nested, orphan = [json.loads(path.read_text()) for path in (leader, child, detached)]
+        assert parent['owner'] != nested['owner'] == orphan['owner']
+        assert parent['owner'] in nested['ancestors'].split(',') == orphan['ancestors'].split(',')
+        assert parent['group'] != nested['group'] != orphan['group']
+        assert unrelated.poll() is None
+        if mode == 'unreadable':
+            assert row['cleanup']['remaining'] == ['unknown']
+        else:
+            assert row['cleanup']['remaining'] == []
+            assert orphan['pid'] in [item['pid'] for item in row['cleanup']['observedBeforeTermination']]
+            for identity in (parent, nested, orphan):
+                path = Path(f'/proc/{identity["pid"]}/stat')
+                assert not path.exists() or path.read_text().rsplit(')', 1)[1].split()[0] == 'Z'
+    finally:
+        monkeypatch.setattr(Path, 'open', original_open)
+        monkeypatch.setattr(runner.time, 'monotonic', original_clock)
+        try:
+            finish_nested_fixture_identities((leader, child, detached))
+        finally:
+            try:
+                for process in spawned:
+                    if process.poll() is None:
+                        process.kill()  # Exact owned Popen, including failure before leader record.
+                    process.wait(timeout=3)
+            finally:
+                unrelated.terminate()
+                unrelated.wait(timeout=3)
+
+
+@pytest.mark.parametrize('bounded', [False, True])
+def test_python_inner_cleanup_preserves_outer_parent_and_sibling(tmp_path, bounded):
+    sibling = tmp_path / 'sibling.json'
+    source = f'''
+import importlib.util,json,os,subprocess,sys
+from pathlib import Path
+spec=importlib.util.spec_from_file_location('inner_runner',{str(ROOT / 'scripts/browser_check_runner.py')!r})
+r=importlib.util.module_from_spec(spec);spec.loader.exec_module(r)
+outer=os.environ[r.OWNER_ENV]
+p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'],start_new_session=True)
+birth=Path(f'/proc/{{p.pid}}/stat').read_text().rsplit(')',1)[1].split()[19]
+Path({str(sibling)!r}).write_text(json.dumps({{'pid':p.pid,'birth':birth}}))
+try:
+    command=[sys.executable,'-c','import os,json;print(json.dumps({{key:os.environ[key] for key in ("AMPLIFIER_BROWSER_CHECK_OWNER","AMPLIFIER_BROWSER_CHECK_ANCESTORS")}}))']
+    row={{'id':'inner','command':command,
+         'env':{{r.OWNER_ENV:'invalid-row-owner',r.ANCESTOR_ENV:''}}}}
+    output=Path({str(tmp_path / 'inner-isolation')!r})
+    code=r.run_scenarios(Path({str(tmp_path)!r}),{{'schemaVersion':1,'scenarios':[row]}},output,
+        cwd=Path({str(tmp_path)!r}),log_limit={65536 if bounded else None!r})
+    assert code==0 and p.poll() is None
+    receipt=json.loads((output/'results.json').read_text())
+    assert receipt['scenarios'][0]['cleanup']=={{'remaining':[],'terminated':0}}
+    inherited=json.loads((output/'inner.log').read_text())
+    assert inherited[r.OWNER_ENV]!=outer
+    assert inherited[r.ANCESTOR_ENV].split(',')[-1]==outer
+    baseline=r.process_identities()
+    baseline.pop(os.getpid());baseline.pop(p.pid)
+    # Also inspect these actual environments without their preexisting exemption.
+    members=r.owned_members(-1,inherited[r.OWNER_ENV],{{}},baseline)
+    assert os.getpid() not in members and p.pid not in members
+finally:
+    p.terminate();p.wait(timeout=3)
+'''
+    try:
+        code, report, _ = execute(tmp_path, [scenario('outer', source)], case_timeout=15)
+        assert code == 0 and report['passed']
+        assert report['scenarios'][0]['cleanup'] == {'remaining': [], 'terminated': 0}
+    finally:
+        finish_nested_fixture_identities((sibling,))

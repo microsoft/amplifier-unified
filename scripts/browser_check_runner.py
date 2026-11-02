@@ -179,6 +179,51 @@ def save(output, report):
 
 
 OWNER_ENV = 'AMPLIFIER_BROWSER_CHECK_OWNER'
+ANCESTOR_ENV = 'AMPLIFIER_BROWSER_CHECK_ANCESTORS'
+MAX_OWNER_ANCESTORS = 32
+
+
+def owner_lineage(environment):
+    """Bounded inherited cleanup lineage, not authority against same-UID forgery."""
+    owner = environment.get(OWNER_ENV)
+    encoded = environment.get(ANCESTOR_ENV, '')
+    if not isinstance(encoded, str) or len(encoded) > MAX_OWNER_ANCESTORS * 33 - 1:
+        raise OSError('Process ownership ancestry exceeds inspection bound')
+    ancestors = encoded.split(',') if encoded else []
+    if (len(ancestors) > MAX_OWNER_ANCESTORS
+            or any(not re.fullmatch(r'[0-9a-f]{32}', value) for value in ancestors)
+            or len(set(ancestors)) != len(ancestors)
+            or owner is not None and (not isinstance(owner, str) or not re.fullmatch(r'[0-9a-f]{32}', owner))
+            or (ancestors and owner is None) or owner in ancestors):
+        raise OSError('Invalid process ownership lineage')
+    return [*ancestors, *([owner] if owner is not None else [])]
+
+
+def child_ownership(environment, token):
+    lineage = owner_lineage(environment)
+    if len(lineage) > MAX_OWNER_ANCESTORS:
+        raise OSError('Nested process ownership limit reached; no child launched')
+    if not re.fullmatch(r'[0-9a-f]{32}', token) or token in lineage:
+        raise OSError('A child needs a fresh local owner')
+    # Never reuse a parent's local token: an inner cleanup searches only its own
+    # fresh token, while outer cleanup can still find detached nested children.
+    return {OWNER_ENV: token, ANCESTOR_ENV: ','.join(lineage)}
+
+
+def environment_owns(environment, token):
+    fields = {}
+    for entry in environment.split(b'\0'):
+        key, _, value = entry.partition(b'=')
+        if key not in (OWNER_ENV.encode(), ANCESTOR_ENV.encode()):
+            continue
+        name = key.decode('ascii')
+        if name in fields:
+            raise OSError('Duplicate process ownership field')
+        try:
+            fields[name] = value.decode('ascii')
+        except UnicodeDecodeError:
+            raise OSError('Invalid process ownership encoding') from None
+    return token in owner_lineage(fields)
 
 
 def process_identities():
@@ -197,9 +242,12 @@ def process_identities():
 
 
 def owned_members(group, token, known, preexisting=None):
-    """Return PID/start-time identities, including tagged detached descendants."""
+    """Return PID/start identities, including cooperatively tagged nested children.
+
+    Tokens supplement group/identity checks for new same-UID descendants. They
+    are not an antiforgery boundary against processes that copy or erase tags.
+    """
     members = {}
-    marker = (OWNER_ENV + '=' + token).encode()
     for entry in Path('/proc').iterdir():
         if not entry.name.isdigit():
             continue
@@ -230,7 +278,7 @@ def owned_members(group, token, known, preexisting=None):
                 raise
             if len(environment) > 1024 * 1024:
                 raise RuntimeError('Process ownership environment exceeds inspection bound')
-            if in_group or marker in environment.split(b'\0'):
+            if environment_owns(environment, token):
                 members[int(entry.name)] = fields[19]
         except (FileNotFoundError, ProcessLookupError):
             pass
@@ -656,7 +704,9 @@ def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenan
             try:
                 env = {**os.environ, **{k: v.replace('{root}', str(root))
                                        for k, v in row.get('env', {}).items()}}
-                env[OWNER_ENV] = token
+                # Read lineage from this runner, not row overrides: a scenario
+                # cannot drop the outer owner through its configured environment.
+                env.update(child_ownership(os.environ, token))
                 if extra and row['id'] == 'reload-negative':
                     env.update(CHAT_REFERENCE_NEGATIVE_RELOAD='1', APP004_QUALIFICATION_TOKEN=token,
                                CHAT_REFERENCE_EVIDENCE_DIR=str(folder / 'negative'))
