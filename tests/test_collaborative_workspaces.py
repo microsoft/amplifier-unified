@@ -672,9 +672,12 @@ async def test_agent_discovery_pages_roots_not_worker_families_or_transcripts(ap
     assert not app.runtime.inputs
 
 
-async def generation(app, session, identity, inputs):
+async def generation(app, session, identity, inputs, *, interruption_revision=None):
+    # Only intentionally fresh admissions supply their captured epoch. Omission
+    # keeps legacy epoch-zero behavior, including rejection after a Stop.
     await app.on_runtime_event("runtime.generation", {"sessionId": session["id"], "rootSessionId": session["id"],
-        "event": "generation.started", "generation_id": identity})
+        "event": "generation.started", "generation_id": identity,
+        **({} if interruption_revision is None else {"interruptionRevision": interruption_revision})})
     for input_id in inputs:
         await app.on_runtime_event("runtime.status", {"sessionId": session["id"], "status": "working",
             "event": "input.delivered", "inputId": input_id})
