@@ -162,6 +162,13 @@ removing those files in a worker. Cancellation settles the file worker before
 releasing exclusion. Later saves continue the backlog with a fresh proof.
 Explicit/offline collection keeps its complete proof and existing batch scope.
 The immutable-resource walk also runs outside the application and writer locks.
+It captures up to 64 immutable resource indexes per short owner-lock acquisition,
+then inspects those files in one settled worker call. This bounds metadata per
+handoff and avoids one executor round trip and lock acquisition per retained file;
+it does not limit retained files or their size. Each file still uses the existing
+verified-edge cache and the final proof rechecks every inspected index. Large
+individual files remain linear validation work, and continuous new roots can
+still defer a pass at the unchanged catch-up boundary.
 Cancellation before pruning does not delete anything; cancellation after pruning
 settles the bounded file removal before releasing exclusion. Missing bodies or
 an uncertain reference graph defer collection, and navigation need not wait for
