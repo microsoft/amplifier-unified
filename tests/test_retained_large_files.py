@@ -113,6 +113,30 @@ async def test_large_unicode_preview_is_bounded_and_keeps_character_offsets(app,
     assert own['text'] == expected
 
 
+async def test_retained_multi_piece_png_supports_existing_image_inspection(app, tmp_path):
+    import random
+    import struct
+    import zlib
+    source, peer, path, args = await setup(app, tmp_path)
+    path.unlink()
+    path = path.with_name('evidence.png')
+    pixels = random.Random(1234).randbytes(1024 * 1024 * 3)
+    rows = b''.join(b'\0' + pixels[offset:offset + 3072] for offset in range(0, len(pixels), 3072))
+    def chunk(kind, data):
+        return struct.pack('!I', len(data)) + kind + data + struct.pack('!I', zlib.crc32(kind + data))
+    path.write_bytes(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('!IIBBBBB', 1024, 1024, 8, 2, 0, 0, 0))
+                     + chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b''))
+    expected = digest(path)
+    args['references'] = ['evidence.png@sha256:' + expected]
+    result = (await declare(app, peer, args))['result']
+    record = app.outputs.store.read(result['artifacts'][0]['outputId'])
+    assert record['bodyFormat'] == retained_files.FORMAT
+    path.unlink()
+    image = await app.outputs.image_async(source['id'], record['id'], expected)
+    assert image['width'] == image['height'] == 1024
+    assert hashlib.sha256(base64.b64decode(image['_image'])).hexdigest() == expected
+
+
 @pytest.mark.parametrize('changed', ['chunk', 'manifest'])
 async def test_tampered_large_file_fails_before_download_and_never_reads_source(app, tmp_path, changed):
     source, peer, path, args = await large(app, tmp_path, 17)
