@@ -11,15 +11,19 @@ from __future__ import annotations
 import argparse
 import ast
 import asyncio
+import base64
+import configparser
+import csv
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from contextvars import ContextVar
 import ctypes
 import hashlib
 import importlib
 import importlib.metadata as metadata
+import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 import socket
@@ -176,21 +180,118 @@ def requirements(path):
     return selected
 
 
-def installed(wheel):
+INSTALLATION_STAGES = frozenset({"direct_url", "wheel_members", "imports", "graph", "complete"})
+
+
+def record_rows(raw, record):
+    """Require a unique registered name and complete SHA-256/size per file."""
+    rows = {}
+    for row in csv.reader(io.StringIO(raw.decode("utf-8")), strict=True):
+        assert len(row) == 3
+        name, fingerprint, size = row
+        assert name and "\\" not in name and "\x00" not in name
+        assert name not in rows and str(PurePosixPath(name)) == name
+        if name == record:
+            assert fingerprint == size == ""
+        else:
+            assert re.fullmatch(r"sha256=[A-Za-z0-9_-]{43}", fingerprint)
+            assert re.fullmatch(r"0|[1-9][0-9]*", size)
+        rows[name] = (fingerprint, size)
+    assert record in rows
+    return rows
+
+
+def record_matches(raw, row):
+    assert row == ("sha256=" + base64.urlsafe_b64encode(hashlib.sha256(raw).digest()).decode().rstrip("="),
+                   str(len(raw)))
+
+
+def candidate_members(archive, dist):
+    """Only candidate RECORD may differ; independently verify both inventories.
+
+    Wheel payload and shipped metadata remain byte-exact. Installed additions
+    are limited to uv's explicit metadata and the two generated console scripts.
+    They get their own required hash/size verification, never wheel provenance.
+    """
+    info = f"amplifier_unified-{dist.version}.dist-info"
+    record = info + "/RECORD"
+    names = [entry.filename for entry in archive.infolist() if not entry.is_dir()]
+    assert len(names) == len(set(names))
+    assert all(not PurePosixPath(name).is_absolute() and ".." not in PurePosixPath(name).parts
+               and "\\" not in name and str(PurePosixPath(name)) == name for name in names)
+    assert {name.split("/")[0] for name in names if ".dist-info/" in name} == {info}
+    wheel_rows = record_rows(archive.read(record), record)
+    assert set(wheel_rows) == set(names)
+    installed_rows = record_rows(dist.read_text("RECORD").encode("utf-8"), record)
+    assert set(wheel_rows) <= set(installed_rows)
+    for name in names:
+        if name == record:
+            continue  # The ONLY shipped member exempted from byte equality.
+        raw = archive.read(name)
+        record_matches(raw, wheel_rows[name])
+        actual = Path(dist.locate_file(name)).read_bytes()
+        assert actual == raw
+        record_matches(actual, installed_rows[name])
+
+    # PEP 610 + uv markers are installer-owned, not arbitrary extra metadata.
+    generated = {info + "/" + name for name in
+                 ("direct_url.json", "INSTALLER", "REQUESTED", "uv_cache.json", "uv_build.json")}
+    assert not generated & set(wheel_rows)
+    assert {info + "/direct_url.json", info + "/INSTALLER"} <= set(installed_rows)
+    scripts = configparser.ConfigParser(interpolation=None)
+    scripts.optionxform = str
+    scripts.read_string(archive.read(info + "/entry_points.txt").decode("utf-8"))
+    assert scripts.sections() == ["console_scripts"]
+    assert dict(scripts["console_scripts"]) == {
+        "amplifier-unified": "amplifier_web.cli:main",
+        "amplifier-unified-status": "amplifier_web.status_protocol.cli:main"}
+    script_root = Path(sysconfig.get_path("scripts")).resolve()
+    assert script_root.is_relative_to(Path(sys.prefix).resolve())
+    suffix = ".exe" if sys.platform == "win32" else ""
+    launchers = {os.path.relpath(script_root / (name + suffix), dist.locate_file("")).replace(os.sep, "/")
+                 for name in scripts["console_scripts"]}
+    assert launchers <= set(installed_rows)
+    assert set(installed_rows) - set(wheel_rows) <= generated | launchers
+    for name in set(installed_rows) - set(wheel_rows):
+        path = Path(dist.locate_file(name)).resolve()
+        assert path.is_relative_to(Path(sys.prefix).resolve())
+        raw = path.read_bytes()
+        record_matches(raw, installed_rows[name])
+        if name == info + "/INSTALLER":
+            assert raw in {b"uv", b"uv\n"}
+        elif name == info + "/REQUESTED":
+            assert raw == b""
+        elif name in {info + "/uv_cache.json", info + "/uv_build.json"}:
+            assert len(raw) <= 65536 and isinstance(json.loads(raw), dict)
+        elif name == info + "/direct_url.json":
+            assert len(raw) <= 65536 and isinstance(json.loads(raw), dict)
+        else:
+            assert name in launchers and path.parent == script_root
+    # Reject even an UNREGISTERED extra file in candidate metadata. Do not
+    # enumerate imported package caches: Python may create those independently.
+    metadata_root = Path(dist.locate_file(info))
+    actual_metadata = {info + "/" + path.relative_to(metadata_root).as_posix()
+                       for path in metadata_root.rglob("*") if path.is_file()}
+    assert actual_metadata == {name for name in installed_rows if name.startswith(info + "/")}
+    return len(names) - 1
+
+
+def installed(wheel, report=None):
     """Verify noneditable candidate bytes and import origins, never add checkout."""
+    def stage(value):
+        assert value in INSTALLATION_STAGES
+        if report is not None:
+            report["installationStage"] = value
+    stage("direct_url")
     dist = metadata.distribution("amplifier-unified")
     direct = json.loads(dist.read_text("direct_url.json") or "{}")
     assert not direct.get("dir_info", {}).get("editable")
     assert direct.get("url") == wheel.resolve().as_uri()
-    count = 0
+    stage("wheel_members")
     with zipfile.ZipFile(wheel) as archive:
-        for name in archive.namelist():
-            if name.endswith("/") or not name.startswith("amplifier_"):
-                continue
-            assert ".." not in Path(name).parts
-            assert Path(dist.locate_file(name)).read_bytes() == archive.read(name)
-            count += 1
+        count = candidate_members(archive, dist)
     assert count > 100
+    stage("imports")
     origins = {}
     for package, distribution in IMPORTS.items():
         module = importlib.import_module(package)
@@ -203,6 +304,7 @@ def installed(wheel):
     assert Version(metadata.version("amplifier-core")) >= Version("2.0.2")
     from amplifier_foundation.session import prepare_session_directory
     assert callable(prepare_session_directory)
+    stage("graph")
     graph = []
     for item in metadata.distributions():
         name, version = item.metadata["Name"], item.version
@@ -216,6 +318,7 @@ def installed(wheel):
             row["commit"] = commit
         assert not provenance.get("dir_info", {}).get("editable")
         graph.append(row)
+    stage("complete")
     return {"wheelSha256": digest(wheel.read_bytes()), "verifiedMembers": count,
             "imports": origins, "graph": sorted(graph, key=lambda row: row["name"].lower())}
 
@@ -239,7 +342,7 @@ def validate_public(value):
             assert re.fullmatch(r"[A-Za-z0-9_.+!-]{1,100}", row["version"])
             if "commit" in row:
                 sha(row["commit"], (40, 64))
-    common = {"status", "stage", "checks", "failureKind", "errno", "winerror"}
+    common = {"status", "stage", "checks", "failureKind", "errno", "winerror", "installationStage"}
     def checks(item):
         assert item["status"] in {"PASS", "FAIL"} and item["stage"] in STAGES
         for key, value in item["checks"].items():
@@ -250,6 +353,8 @@ def validate_public(value):
                 assert value in {"PASS", "FAIL"}
         if "failureKind" in item:
             assert item["failureKind"] in {"assertion", "permission", "missing", "timeout", "import", "other"}
+        if "installationStage" in item:
+            assert item["installationStage"] in INSTALLATION_STAGES
         for key in {"errno", "winerror"} & item.keys():
             number(item[key])
     assert set(value) <= common | {"candidate", "qualification", "publicAcceptance", "runtimePreparation",
@@ -974,7 +1079,7 @@ def native_controls(wheel):
             with redirect_stdout(log), redirect_stderr(log):
                 guard = NetworkGuard(root / "network-controls.jsonl")
                 sys.addaudithook(guard.audit)
-                report["installed"] = installed(wheel)
+                report["installed"] = installed(wheel, report)
                 target, report["testSources"] = stage_controls(root, Path(__file__).parents[1])
                 import pytest
                 results = NativeResults()
@@ -988,7 +1093,7 @@ def native_controls(wheel):
                         *[str(target / "tests" / node) for node in NATIVE_CONTROLS.values()]],
                         plugins=[results, tls_controls])
                 report["selection"] = results.finish(result)
-                assert installed(wheel) == report["installed"]
+                assert installed(wheel, report) == report["installed"]
                 guard.verify()
                 assert report["selection"]["status"] == "PASS"
                 assert guard.tls_reservations == 2 and len(guard.tls_endpoints) == 4
@@ -1022,7 +1127,7 @@ def host(wheel, phase):
             nonlocal guard
             guard = NetworkGuard(root / ("network-host-" + phase + ".jsonl"))
             sys.addaudithook(guard.audit)
-            report["installed"] = installed(wheel)
+            report["installed"] = installed(wheel, report)
             await journey(root, wheel, report, guard, phase)
             report["network"] = guard.verify()
         with (root / ("diagnostics-" + phase + ".log")).open("w", encoding="utf-8") as log:

@@ -58,6 +58,7 @@ on:
       - tests/test_windows_auth.py
       - tests/test_windows_user_trial_probe.py
       - tests/fixtures/windows_user_trial_probe.py
+      - tests/fixtures/windows_default_runtime_probe.py
       - tests/test_runtime.py
       - tests/test_runtime_updates.py
       - tests/test_ownership_notices.py
@@ -209,5 +210,139 @@ jobs:
         with:
           name: windows-user-trial
           path: ${{ runner.temp }}/ut/evidence/result.json
+          if-no-files-found: warn
+          retention-days: 7
+  windows-default-runtime:
+    # Public dependency setup is intentional ONLY here. Do not relax the
+    # separate offline qualifier or supply a preinstalled replacement command.
+    needs: windows-user-trial
+    runs-on: windows-latest
+    # 8-minute host setup + 21-minute test/evidence step + action overhead.
+    timeout-minutes: 30
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+      UV_NO_BUILD_PACKAGE: amplifier-core
+      UV_PYTHON_DOWNLOADS: never
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: Build and install candidate host for cold default-command setup
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = Join-Path $env:RUNNER_TEMP 'dr-ci'
+          New-Item -ItemType Directory -Path "$base/evidence" -ErrorAction Stop | Out-Null
+          "DEFAULT_TRIAL_BASE=$base" >> $env:GITHUB_ENV
+          python -I -B tests/fixtures/windows_user_trial_probe.py --candidate . --receipt "$base/candidate.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Default-command candidate identity check failed.' }
+          python -I -S -B -c "import sys,sysconfig,struct; assert sys.platform=='win32'; assert sys.implementation.name=='cpython'; assert sys.version_info[:2]==(3,13); assert struct.calcsize('P')==8; assert not sysconfig.get_config_var('Py_GIL_DISABLED')"
+          if ($LASTEXITCODE -ne 0) { throw 'Default-command Python preflight failed.' }
+          uv build --wheel --out-dir "$base/wheels"
+          if ($LASTEXITCODE -ne 0) { throw 'Default-command candidate wheel build failed.' }
+          uv venv --python (Get-Command python).Source "$base/env"
+          if ($LASTEXITCODE -ne 0) { throw 'Default-command host environment creation failed.' }
+          $modules = @(python -I -B tests/fixtures/windows_user_trial_probe.py --requirements pyproject.toml)
+          if ($LASTEXITCODE -ne 0) { throw 'Default-command host fixture dependency selection failed.' }
+          $wheel = @(Get-ChildItem "$base/wheels/*.whl")
+          if ($wheel.Count -ne 1) { throw 'Expected exactly one default-command candidate wheel.' }
+          uv pip install --python "$base/env/Scripts/python.exe" --only-binary amplifier-core $wheel[0].FullName "pytest>=8,<10" "pytest-asyncio>=1.4,<2" "pytest-aiohttp>=1.1,<2" @modules
+          if ($LASTEXITCODE -ne 0) { throw 'Default-command candidate host installation failed.' }
+      - name: Require one native cold default-command call PASS with no skip
+        # The maintained node has a finite 1200-second subprocess deadline.
+        # Leave one minute for collection, safe evidence and cleanup handling.
+        timeout-minutes: 21
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = $env:DEFAULT_TRIAL_BASE
+          $wheel = @(Get-ChildItem "$base/wheels/*.whl")
+          if ($wheel.Count -ne 1) { throw 'Expected exactly one installed candidate wheel.' }
+          $env:AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_PYTHON = "$base/env/Scripts/python.exe"
+          $env:AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_WHEEL = $wheel[0].FullName
+          $env:AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_REPORT = "$base/probe-result.json"
+          $check = @'
+          import contextlib, hashlib, importlib.util, json, os, pathlib, shutil, sys
+          source, base = map(pathlib.Path, sys.argv[1:])
+          node = "tests/test_runtime.py::test_native_windows_default_runtime_command_cold_prepare_turn_and_stop"
+          def load(name, path):
+              spec = importlib.util.spec_from_file_location(name, path)
+              module = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(module)
+              return module
+          class Results:
+              def __init__(self):
+                  self.collected, self.phases, self.invalid = [], [], False
+              def pytest_collection_finish(self, session):
+                  self.collected = [item.nodeid for item in session.items]
+              def pytest_collectreport(self, report):
+                  self.invalid |= report.failed or report.skipped
+              def pytest_runtest_logreport(self, report):
+                  if report.nodeid != node or hasattr(report, "wasxfail"):
+                      self.invalid = True
+                  self.phases.append((report.when, report.outcome))
+              def passed(self, code):
+                  return code == 0 and not self.invalid and self.collected == [node] and self.phases == [
+                      ("setup", "passed"), ("call", "passed"), ("teardown", "passed")]
+          result = {"schema": 1, "status": "FAIL", "publicAcceptance": False,
+                    "qualification": "cold-default-command-scripted-provider",
+                    "selection": {"collected": 0, "callPassed": False, "noSkips": False}}
+          try:
+              with (base / "private-check.log").open("x", encoding="utf-8") as logs:
+                  with contextlib.redirect_stdout(logs), contextlib.redirect_stderr(logs):
+                      audit = load("installed_candidate_audit", source / "tests/fixtures/windows_user_trial_probe.py")
+                      wheel = pathlib.Path(os.environ["AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_WHEEL"])
+                      assert pathlib.Path(sys.executable).samefile(os.environ["AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_PYTHON"])
+                      before = audit.installed(wheel, result)
+                      candidate = json.loads((base / "candidate.json").read_text(encoding="utf-8"))["candidate"]
+                      assert set(candidate) == {"head", "tree"} and all(
+                          audit.re.fullmatch(r"[0-9a-f]{40,64}", value) for value in candidate.values())
+                      result["candidate"] = candidate
+                      target = base / "selected-tests"
+                      files = ("tests/conftest.py", "tests/test_runtime.py", "tests/fixtures/windows_default_runtime_probe.py")
+                      for name in files:
+                          path = target / name
+                          path.parent.mkdir(parents=True, exist_ok=True)
+                          shutil.copyfile(source / name, path)
+                          assert path.read_bytes() == (source / name).read_bytes()
+                      assert {path.name for path in target.iterdir()} == {"tests"}
+                      import pytest
+                      selected = Results()
+                      code = pytest.main(["-q", "-p", "no:cacheprovider", "-p", "pytest_asyncio.plugin",
+                          "-p", "aiohttp.pytest_plugin", "-o", "asyncio_mode=auto",
+                          "--rootdir", str(target), "--confcutdir", str(target),
+                          "--basetemp", str(base / "pytest-temp"), str(target / node)], plugins=[selected])
+                      result["selection"] = {"collected": len(selected.collected),
+                          "callPassed": selected.phases.count(("call", "passed")) == 1,
+                          "noSkips": not any(outcome == "skipped" for _, outcome in selected.phases)}
+                      assert audit.installed(wheel, result) == before
+                      probe = load("default_command_report", target / "tests/fixtures/windows_default_runtime_probe.py")
+                      report = json.loads(pathlib.Path(os.environ["AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_REPORT"]).read_text(encoding="utf-8"))
+                      probe.validate_report(report)
+                      result["probe"] = report
+                      assert report["wheelSha256"] == hashlib.sha256(wheel.read_bytes()).hexdigest()
+                      assert selected.passed(code) and report["status"] == "PASS"
+                      result["status"] = "PASS"
+          except Exception:
+              pass  # Fixed FAIL facts only. Never publish exception or subprocess prose.
+          (base / "evidence/publicresult.json").write_text(json.dumps(result, sort_keys=True), encoding="utf-8")
+          raise SystemExit(0 if result["status"] == "PASS" else 1)
+          '@
+          & "$base/env/Scripts/python.exe" -I -B -c $check $env:GITHUB_WORKSPACE $base
+          if ($LASTEXITCODE -ne 0) { throw 'Native default-command check failed; inspect bounded publicresult.json.' }
+      - name: Upload only the bounded default-runtime result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-default-runtime
+          path: ${{ runner.temp }}/dr-ci/evidence/publicresult.json
           if-no-files-found: warn
           retention-days: 7

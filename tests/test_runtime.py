@@ -1460,3 +1460,239 @@ async def test_native_windows_runtime_cancel_before_identity_reaps_job(tmp_path,
                        for kind, data in events)
     finally:
         await manager.close()
+
+
+def _default_runtime_probe_module():
+    """Read the standalone fixture without importing the unfinished trial harness."""
+    import importlib.util
+    path = Path(__file__).parent / 'fixtures/windows_default_runtime_probe.py'
+    spec = importlib.util.spec_from_file_location('default_runtime_probe_contract', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_default_runtime_probe_keeps_real_command_and_bounded_evidence():
+    import ast
+    fixture = _default_runtime_probe_module()
+    tree = ast.parse(Path(fixture.__file__).read_text(encoding='utf-8'))
+    managers = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name) and node.func.id == 'RuntimeManager']
+    assert len(managers) == 1 and not managers[0].args
+    assert {keyword.arg for keyword in managers[0].keywords} == {'startup_timeout', 'retention'}
+    assert not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                   and node.func.attr in {'setattr', 'setitem', 'patch'} for node in ast.walk(tree))
+    compile(fixture.PROVIDER, '<scripted-default-provider>', 'exec')
+    empty = {'schema': 2, 'status': 'FAIL', 'stage': 'preflight',
+             'checks': dict.fromkeys(fixture.CHECKS, False), 'wheelSha256': None,
+             'manifestSha256': None, 'lockSha256': None, 'appHashes': {}, 'workerImports': {},
+             'outerJob': {'status': 'unknown', 'timedOut': False, 'activeProcesses': None,
+                          'treeEmpty': False, 'ioFinalized': False, 'outputDiscarded': False}}
+    fixture.validate_report(empty)
+    for patch in ({'status': 'PASS'}, {'error': 'private exception'},
+                  {'stage': 'private-path'}, {'lockSha256': 'not-a-sha256'},
+                  {'workerImports': {'unknown-package': {}}}):
+        with pytest.raises(AssertionError):
+            fixture.validate_report({**empty, **patch})
+
+
+def test_default_runtime_probe_native_parent_has_no_redirector_timeout_kill():
+    import ast
+    import inspect
+    assert inspect.iscoroutinefunction(test_native_windows_default_runtime_command_cold_prepare_turn_and_stop)
+    body = ast.parse(inspect.getsource(test_native_windows_default_runtime_command_cold_prepare_turn_and_stop))
+    assert not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                   and node.func.attr in {'run', 'communicate', 'kill', 'terminate'}
+                   for node in ast.walk(body))
+
+
+@pytest.mark.parametrize('mode', ['normal', 'timeout', 'cleanup-unknown', 'io-unknown', 'overflow'])
+async def test_default_runtime_probe_outer_job_deadline_and_cleanup(tmp_path, monkeypatch, mode):
+    from unittest.mock import AsyncMock
+    from amplifier_web import windows_jobs
+    fixture = _default_runtime_probe_module()
+    class Job:
+        def __init__(self):
+            self.stdout, self.stderr = asyncio.StreamReader(), asyncio.StreamReader()
+            self.stdin = SimpleNamespace(close=lambda: None)
+            self.done = asyncio.Event()
+            self.tree_empty = self.io_finalized = False
+            self.output_discarded = False
+            self.closes = 0
+            self.state = 'running'
+        def finish(self, forced=False):
+            self.tree_empty, self.io_finalized = True, mode != 'io-unknown'
+            self.output_discarded = forced
+            self.stdout.feed_eof()
+            self.stderr.feed_eof()
+            self.done.set()
+        async def wait(self):
+            await self.done.wait()
+            return windows_jobs.ProcessResult(0, 0, 0, self.output_discarded)
+        async def close(self):
+            self.closes += 1
+            if mode == 'cleanup-unknown':
+                self.state = 'cleanup_failed'
+                raise windows_jobs.CleanupError(self)
+            if not self.done.is_set():
+                self.finish(forced=True)
+            return await self.wait()
+    job = Job()
+    job.stdout.feed_data(b'x' * (129 if mode == 'overflow' else 100))
+    job.stderr.feed_data(b'private' * 50_000)  # drain, but retain only a bounded tail
+    if mode == 'normal':
+        job.finish()
+    spawn = AsyncMock(return_value=job)
+    monkeypatch.setattr(windows_jobs.WindowsOwnedProcess, 'start', spawn)
+    scratch = tmp_path / 'retained-scratch'
+    scratch.mkdir()
+    marker = scratch / 'private.log'
+    marker.write_bytes(b'preserve on failure')
+    outcome = await asyncio.wait_for(fixture.run_owned_probe(
+        ['C:/host/Scripts/python.exe', '-I', 'probe.py'], cwd=tmp_path, env={'SYNTHETIC': '1'},
+        scratch=scratch, timeout=.03, output_limit=128), 1)
+    assert spawn.await_args.kwargs['trusted_python'] == sys._base_executable
+    assert spawn.await_args.kwargs['cleanup_timeout'] == 5
+    assert job.closes == 1
+    assert len(outcome['stdout']) <= 128 and len(outcome['stderr']) <= 128
+    assert outcome['succeeded'] == (mode == 'normal')
+    assert outcome['outerJob']['timedOut'] == (mode in {'timeout', 'cleanup-unknown', 'io-unknown'})
+    confirmed = mode in {'normal', 'timeout', 'overflow'}
+    assert (outcome['outerJob']['status'] == 'confirmed') == confirmed
+    assert marker.read_bytes() == b'preserve on failure'
+    if confirmed:
+        assert outcome['outerJob']['activeProcesses'] == 0
+        assert outcome['outerJob']['treeEmpty'] and outcome['outerJob']['ioFinalized']
+        assert not fixture.FAILED_OUTER_OWNERS
+    else:
+        assert fixture.FAILED_OUTER_OWNERS == [{'owner': job, 'scratch': scratch}]
+        assert not outcome['succeeded']
+    # No pending wait/read task survives the finite parent operation, even when
+    # cleanup proof is absent. Retention above is evidence, not a retry.
+    assert outcome['tasksSettled']
+
+
+async def test_default_runtime_probe_retains_owner_when_start_cleanup_is_unknown(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    from amplifier_web import windows_jobs
+    fixture = _default_runtime_probe_module()
+    job = SimpleNamespace(state='cleanup_failed', tree_empty=False, io_finalized=False,
+                          output_discarded=False, close=AsyncMock())
+    spawn = AsyncMock(side_effect=windows_jobs.CleanupError(job))
+    monkeypatch.setattr(windows_jobs.WindowsOwnedProcess, 'start', spawn)
+    outcome = await fixture.run_owned_probe(['C:/python.exe', 'probe.py'],
+        cwd=tmp_path, env={}, scratch=tmp_path, timeout=.03)
+    assert not outcome['succeeded'] and outcome['tasksSettled']
+    assert outcome['outerJob'] == {
+        'status': 'unknown', 'timedOut': False, 'activeProcesses': None,
+        'treeEmpty': False, 'ioFinalized': False, 'outputDiscarded': False}
+    assert fixture.FAILED_OUTER_OWNERS == [{'owner': job, 'scratch': tmp_path}]
+    job.close.assert_not_awaited()  # A settled failed native start is not replayed.
+
+
+def test_default_runtime_probe_public_pass_requires_outer_cleanup_proof():
+    fixture = _default_runtime_probe_module()
+    inner = {'schema': 1, 'status': 'PASS', 'stage': 'complete',
+             'checks': dict.fromkeys(fixture.CHECKS, True), 'wheelSha256': 'a' * 64,
+             'manifestSha256': 'b' * 64, 'lockSha256': 'c' * 64,
+             'appHashes': dict.fromkeys(fixture.APP_FILES, 'd' * 64),
+             'workerImports': {name: {'version': '1.0', 'commit': None, 'sha256': 'e' * 64}
+                               for name in fixture.IMPORTS}}
+    fixture.validate_inner_report(inner)
+    with pytest.raises(AssertionError):
+        fixture.validate_report(inner)  # child report alone is not outer cleanup
+    outer = {'status': 'confirmed', 'timedOut': False, 'activeProcesses': 0,
+             'treeEmpty': True, 'ioFinalized': True, 'outputDiscarded': False}
+    public = {**inner, 'schema': 2, 'outerJob': outer}
+    fixture.validate_report(public)
+    for patch in ({'status': 'unknown'}, {'timedOut': True}, {'activeProcesses': 1},
+                  {'treeEmpty': False}, {'ioFinalized': False}, {'outputDiscarded': True}):
+        with pytest.raises(AssertionError):
+            fixture.validate_report({**public, 'outerJob': {**outer, **patch}})
+
+
+@pytest.mark.parametrize('mismatch', [None, 'version', 'commit'])
+def test_default_runtime_probe_binds_imports_to_real_lock(tmp_path, mismatch):
+    fixture = _default_runtime_probe_module()
+    rows, imports = [], {}
+    for package, distribution in fixture.IMPORTS.items():
+        source = 'registry = "https://pypi.org/simple"' if package == 'amplifier_core' else (
+            'git = "https://example.invalid/module#' + 'a' * 40 + '"')
+        rows.append('[[package]]\nname = "' + distribution + '"\nversion = "2.0.2"\nsource = {' + source + '}\n')
+        imports[package] = {'version': '2.0.2', 'commit': None if package == 'amplifier_core' else 'a' * 40}
+    (tmp_path / 'uv.lock').write_text('\n'.join(rows), encoding='utf-8')
+    if mismatch == 'version':
+        imports['amplifier_foundation']['version'] = '2.0.3'
+    elif mismatch == 'commit':
+        imports['amplifier_foundation']['commit'] = 'b' * 40
+    if mismatch:
+        with pytest.raises(AssertionError):
+            fixture.verify_worker_lock(tmp_path, imports)
+    else:
+        fixture.verify_worker_lock(tmp_path, imports)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='native installed default-command preparation')
+async def test_native_windows_default_runtime_command_cold_prepare_turn_and_stop(tmp_path):
+    """CI setup must provide the installed candidate Python+wheel, not a worker.
+
+    This opt-in node permits public dependency resolution/builds in the dedicated
+    GitHub setup job. It does not install anything on the local author host.
+    Never upload its private scratch/log files. The optional report is bounded.
+    """
+    import os
+    import shutil
+    import uuid
+    python = os.environ.get('AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_PYTHON')
+    wheel = os.environ.get('AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_WHEEL')
+    if not python or not wheel:
+        pytest.skip('dedicated installed candidate Python/wheel setup was not supplied')
+    assert os.environ.get('GITHUB_ACTIONS') == 'true', 'default graph installation is CI-only'
+    python, wheel = Path(python).resolve(strict=True), Path(wheel).resolve(strict=True)
+    assert python.is_file() and wheel.suffix == '.whl'
+    uv = shutil.which('uv')
+    assert uv, 'CI must provision uv before this node'
+    # Compact, canonical existing TEMP ancestor avoids accidental MAX_PATH
+    # failure from pytest's long test-name directory; no private tree is
+    # ordinary-mkdir'ed before the native creation boundary.
+    root = Path(tempfile.gettempdir()).resolve() / ('dr-' + uuid.uuid4().hex[:12])
+    # Explicitly do not forward provider/GitHub/CI secrets, user Amplifier state,
+    # PYTHONPATH, UV_* overrides, proxy values, or the pytest host's venv.
+    keep = {'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'PATH', 'TEMP', 'TMP'}
+    env = {key: value for key, value in os.environ.items() if key.upper() in keep}
+    env.update(GITHUB_ACTIONS='true', PYTHONIOENCODING='utf-8', PYTHONUTF8='1',
+               GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
+               UV_CACHE_DIR=str(root / 'uv-cache'), UV_NO_PROGRESS='1', UV_NO_CONFIG='1')
+    fixture = _default_runtime_probe_module()
+    outcome = await fixture.run_owned_probe(
+        [str(python), '-I', '-B', str(Path(fixture.__file__).resolve()),
+         '--root', str(root), '--wheel', str(wheel)], cwd=tmp_path.resolve(),
+        env=env, scratch=root, timeout=1200)
+    # Do not expose raw subprocess output or private logs in a pytest failure.
+    try:
+        report = json.loads(outcome['stdout'])
+        fixture.validate_inner_report(report)
+    except (ValueError, AssertionError):
+        report = fixture.empty_inner_report()
+    report = {**report, 'schema': 2, 'outerJob': outcome['outerJob']}
+    if not outcome['succeeded']:
+        report['status'] = 'FAIL'
+    fixture.validate_report(report)
+    # Keep any captured failure bytes private; never upload raw logs or remove
+    # scratch after uncertain cleanup. A failed writer does not imply cleanup
+    # and must not prevent publication of the parent's bounded unknown result.
+    if root.is_dir():
+        from amplifier_web.windows_files import directory
+        try:
+            with directory(root, owned_root=root) as pinned:
+                pinned.publish_private('outer-stderr.log', outcome['stderr'])
+        except OSError:
+            report['status'] = 'FAIL'  # No unsafe-file fallback or ACL repair.
+    destination = os.environ.get('AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_REPORT')
+    if destination:
+        # Explicit new report destination only; never replace an older result.
+        with Path(destination).open('x', encoding='utf-8') as stream:
+            json.dump(report, stream, sort_keys=True)
+    assert outcome['succeeded'] and report['status'] == 'PASS', (
+        'Native default-command preparation failed at bounded stage ' + report['stage'])
+    assert all(report['checks'].values())

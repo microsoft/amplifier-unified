@@ -1,14 +1,18 @@
 """Portable models of the CI fixture only: never launch the Windows journey."""
 import ast
+import base64
 import copy
+import csv
 import hashlib
 import importlib.util
 import json
+import io
 from pathlib import Path
 import socket
 import subprocess
 import sys
 import types
+import zipfile
 
 import pytest
 import yaml
@@ -655,6 +659,199 @@ def test_installed_graph_public_fields_are_validated(field, value):
         probe.validate_public(result)
 
 
+@pytest.fixture
+def candidate_record_model(tmp_path, monkeypatch):
+    """Wheel/install bytes only: no package build, installer or imports."""
+    prefix = tmp_path / "env"
+    site = prefix / "Lib/site-packages"
+    scripts = prefix / "Scripts"
+    site.mkdir(parents=True)
+    scripts.mkdir()
+    info = "amplifier_unified-0.46.2.dist-info"
+    record = info + "/RECORD"
+    payloads = {f"amplifier_web/unit{n}.py": f"value={n}\n".encode() for n in range(101)}
+    payloads.update({
+        info + "/METADATA": b"Name: amplifier-unified\nVersion: 0.46.2\n",
+        info + "/WHEEL": b"Wheel-Version: 1.0\nTag: py3-none-any\n",
+        info + "/entry_points.txt": b"[console_scripts]\namplifier-unified = amplifier_web.cli:main\n"
+                                   b"amplifier-unified-status = amplifier_web.status_protocol.cli:main\n",
+    })
+    def row(raw):
+        return ("sha256=" + base64.urlsafe_b64encode(hashlib.sha256(raw).digest()).decode().rstrip("="),
+                str(len(raw)))
+    def encoded(rows):
+        stream = io.StringIO(newline="")
+        csv.writer(stream, lineterminator="\n").writerows(
+            (name, *data) for name, data in rows.items())
+        return stream.getvalue().encode()
+    wheel_rows = {name: row(raw) for name, raw in payloads.items()}
+    wheel_rows[record] = ("", "")
+    payloads[record] = encoded(wheel_rows)
+    wheel = tmp_path / "amplifier_unified-0.46.2-py3-none-any.whl"
+    def save_wheel():
+        with zipfile.ZipFile(wheel, "w") as archive:
+            for name, raw in payloads.items():
+                archive.writestr(name, raw)
+    save_wheel()
+    for name, raw in payloads.items():
+        path = site / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+    installed_rows = dict(wheel_rows)
+    generated = {info + "/INSTALLER": b"uv\n", info + "/REQUESTED": b"",
+        info + "/direct_url.json": json.dumps({"url": wheel.as_uri(), "archive_info": {}}).encode(),
+        info + "/uv_build.json": b"{}", info + "/uv_cache.json": b'{"timestamp":null}'}
+    for script in ("amplifier-unified", "amplifier-unified-status"):
+        suffix = ".exe" if sys.platform == "win32" else ""
+        generated["../../Scripts/" + script + suffix] = b"synthetic installer launcher"
+    for name, raw in generated.items():
+        (site / name).write_bytes(raw)
+        installed_rows[name] = row(raw)
+    def save_record():
+        (site / record).write_bytes(encoded(installed_rows))
+    save_record()
+    dist = types.SimpleNamespace(
+        version="0.46.2", metadata={"Name": "amplifier-unified"},
+        locate_file=lambda name: site / name,
+        read_text=lambda name: (site / info / name).read_text(encoding="utf-8"),
+        files=[Path(name) for name in installed_rows])
+    monkeypatch.setattr(probe.sys, "prefix", str(prefix))
+    monkeypatch.setattr(probe.sysconfig, "get_path", lambda name: str(scripts) if name == "scripts" else "")
+    return types.SimpleNamespace(prefix=prefix, site=site, wheel=wheel, dist=dist,
+        info=info, record=record, payloads=payloads, installed_rows=installed_rows,
+        row=row, encoded=encoded, save_record=save_record, save_wheel=save_wheel)
+
+
+def test_installer_rewritten_record_passes_only_after_independent_hash_size_audit(candidate_record_model):
+    model = candidate_record_model
+    assert (model.site / model.record).read_bytes() != model.payloads[model.record]
+    with zipfile.ZipFile(model.wheel) as archive:
+        assert probe.candidate_members(archive, model.dist) == len(model.payloads) - 1
+
+
+def test_original_byte_loop_rejects_legitimate_record_rewrite(candidate_record_model):
+    model = candidate_record_model
+    with zipfile.ZipFile(model.wheel) as archive:
+        mismatch = [name for name in archive.namelist() if name.startswith("amplifier_")
+                    and (model.site / name).read_bytes() != archive.read(name)]
+    assert mismatch == [model.record]  # Retain the exact old before-failure discriminator.
+
+
+@pytest.mark.parametrize("fault", [
+    "payload", "metadata", "wheel-hash", "wheel-size", "installed-hash", "installed-size",
+    "missing-wheel-row", "extra-wheel-row", "duplicate-wheel-row", "missing-installed-row",
+    "missing-file", "extra-registered-metadata", "extra-unregistered-metadata",
+    "extra-registered-payload", "missing-direct-url", "missing-installer", "missing-launcher",
+    "changed-installer", "changed-launcher", "nonempty-requested", "record-self-hash",
+])
+def test_record_audit_rejects_payload_or_inventory_tampering(candidate_record_model, fault):
+    model = candidate_record_model
+    payload = "amplifier_web/unit0.py"
+    if fault in {"payload", "metadata"}:
+        name = payload if fault == "payload" else model.info + "/METADATA"
+        (model.site / name).write_bytes(b"changed")
+        # Even a self-consistent installed RECORD cannot conceal wheel mismatch.
+        model.installed_rows[name] = model.row(b"changed")
+    elif fault.startswith("wheel-") or fault in {"missing-wheel-row", "extra-wheel-row", "duplicate-wheel-row"}:
+        rows = probe.record_rows(model.payloads[model.record], model.record)
+        if fault == "wheel-hash":
+            rows[payload] = ("sha256=" + "A"*43, rows[payload][1])
+        elif fault == "wheel-size":
+            rows[payload] = (rows[payload][0], "999")
+        elif fault == "missing-wheel-row":
+            rows.pop(payload)
+        elif fault == "extra-wheel-row":
+            rows["amplifier_web/unregistered.py"] = model.row(b"unexpected")
+        raw = model.encoded(rows)
+        if fault == "duplicate-wheel-row":
+            raw += model.encoded({payload: rows[payload]})
+        model.payloads[model.record] = raw
+        model.save_wheel()
+    elif fault in {"installed-hash", "installed-size"}:
+        prior = model.installed_rows[payload]
+        model.installed_rows[payload] = ("sha256=" + "A"*43, prior[1]) if fault == "installed-hash" else (prior[0], "999")
+    elif fault == "missing-installed-row":
+        model.installed_rows.pop(payload)
+    elif fault == "missing-file":
+        (model.site / payload).unlink()
+    elif fault.startswith("extra-"):
+        name = model.info + "/unexpected.json" if "metadata" in fault else "amplifier_web/extra.py"
+        (model.site / name).write_bytes(b"unexpected")
+        if "unregistered" not in fault:
+            model.installed_rows[name] = model.row(b"unexpected")
+    elif fault in {"missing-direct-url", "missing-installer", "missing-launcher"}:
+        name = (model.info + ("/direct_url.json" if fault == "missing-direct-url" else "/INSTALLER")
+                if fault != "missing-launcher" else next(name for name in model.installed_rows if name.startswith("../")))
+        model.installed_rows.pop(name)
+        (model.site / name).unlink()
+    elif fault in {"changed-installer", "changed-launcher", "nonempty-requested"}:
+        name = (model.info + ("/INSTALLER" if fault == "changed-installer" else "/REQUESTED")
+                if fault != "changed-launcher" else next(name for name in model.installed_rows if name.startswith("../")))
+        (model.site / name).write_bytes(b"changed")
+        if fault != "changed-launcher":
+            model.installed_rows[name] = model.row(b"changed")
+    elif fault == "record-self-hash":
+        model.installed_rows[model.record] = model.row(b"not a legitimate self hash")
+    model.save_record()
+    with zipfile.ZipFile(model.wheel) as archive, pytest.raises((AssertionError, OSError)):
+        probe.candidate_members(archive, model.dist)
+
+
+@pytest.mark.parametrize("fault,stage", [
+    (None, "complete"), ("direct", "direct_url"), ("payload", "wheel_members"),
+    ("origin", "imports"), ("graph", "graph"),
+])
+def test_installed_audit_exposes_only_fixed_substage(candidate_record_model, monkeypatch, fault, stage):
+    model = candidate_record_model
+    original_read = model.dist.read_text
+    if fault == "direct":
+        model.dist.read_text = lambda name: ('{"url":"file:///wrong.whl"}' if name == "direct_url.json" else original_read(name))
+    elif fault == "payload":
+        (model.site / "amplifier_web/unit0.py").write_bytes(b"changed")
+    monkeypatch.setattr(probe.metadata, "distribution", lambda name: model.dist)
+    monkeypatch.setattr(probe.metadata, "version", lambda name: "2.0.2")
+    monkeypatch.setattr(probe.metadata, "distributions", lambda: [model.dist])
+    if fault == "graph":
+        model.dist.metadata["Name"] = "private/path"
+    origin = model.site / ("not-recorded.py" if fault == "origin" else "amplifier_web/unit0.py")
+    origin.write_bytes(origin.read_bytes() if origin.exists() else b"wrong origin")
+    monkeypatch.setattr(probe.importlib, "import_module", lambda name: types.SimpleNamespace(__file__=str(origin)))
+    session = types.ModuleType("amplifier_foundation.session")
+    session.prepare_session_directory = lambda: None
+    monkeypatch.setitem(sys.modules, "amplifier_foundation.session", session)
+    report = {}
+    if fault:
+        with pytest.raises(AssertionError):
+            probe.installed(model.wheel, report)
+    else:
+        assert probe.installed(model.wheel, report)["verifiedMembers"] > 100
+    assert report == {"installationStage": stage}
+
+
+def test_public_audit_substage_has_no_freeform_escape():
+    for stage in probe.INSTALLATION_STAGES:
+        result = report()
+        result["installationStage"] = stage
+        probe.validate_public(result)
+    result["installationStage"] = "/private/member.py"
+    with pytest.raises(AssertionError):
+        probe.validate_public(result)
+
+
+@pytest.mark.parametrize("rows", [
+    "file,sha256=bad,3\npkg.dist-info/RECORD,,\n",
+    "file,sha256=" + "A"*43 + ",-1\npkg.dist-info/RECORD,,\n",
+    "file,sha256=" + "A"*43 + ",00\npkg.dist-info/RECORD,,\n",
+    "file,sha256=" + "A"*43 + ",3\nfile,sha256=" + "A"*43 + ",3\npkg.dist-info/RECORD,,\n",
+    "file,,\npkg.dist-info/RECORD,,\n",
+    "file,sha256=" + "A"*43 + ",3\n",
+    "file,sha256=" + "A"*43 + ",3,extra\npkg.dist-info/RECORD,,\n",
+])
+def test_record_parser_requires_unique_complete_rows(rows):
+    with pytest.raises(AssertionError):
+        probe.record_rows(rows.encode(), "pkg.dist-info/RECORD")
+
+
 def test_workflow_keeps_old_lane_commands_and_bounded_installed_candidate_job():
     workflow = yaml.safe_load((ROOT / ".github/workflows/platform-mechanisms.yml").read_text())
     # Strip only EOF scalar newline; appending a new job adds one to the prior
@@ -676,3 +873,90 @@ def test_workflow_keeps_old_lane_commands_and_bounded_installed_candidate_job():
     upload = job["steps"][-1]["with"]
     assert upload["path"] == "${{ runner.temp }}/ut/evidence/result.json"
     assert "*" not in upload["path"]
+
+
+def cold_ci_runner():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/platform-mechanisms.yml").read_text())
+    job = workflow["jobs"]["windows-default-runtime"]
+    text = job["steps"][-2]["run"]
+    code = text.split("$check = @'\n", 1)[1].split("\n'@", 1)[0]
+    return workflow, job, ast.parse(code)
+
+
+def test_default_command_job_is_separate_finite_and_requires_real_native_node():
+    workflow, job, runner = cold_ci_runner()
+    assert job["needs"] == "windows-user-trial" and job["runs-on"] == "windows-latest"
+    assert job["timeout-minutes"] == 30
+    assert job["steps"][-3]["timeout-minutes"] + job["steps"][-2]["timeout-minutes"] < job["timeout-minutes"]
+    offline = workflow["jobs"]["windows-user-trial"]
+    assert hashlib.sha256(json.dumps(offline, sort_keys=True).encode()).hexdigest() == (
+        "63f6f5e0f127cad785dd9946d6d0558362fecf7f13f8afadf39c6853e6fc0eb8")
+    assert offline["timeout-minutes"] == 15
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    for forbidden in ("UV_OFFLINE", "prepare_project(", "NetworkGuard(", "runtime.command =", "--editable"):
+        assert forbidden not in commands and forbidden not in job["env"]
+    assert "uv build --wheel" in commands and "--only-binary amplifier-core" in commands
+    assert "& \"$base/env/Scripts/python.exe\" -I -B -c $check" in commands
+    assert '$env:AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_PYTHON = "$base/env/Scripts/python.exe"' in commands
+    assert '$env:AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_WHEEL = $wheel[0].FullName' in commands
+    assert '$env:AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_REPORT = "$base/probe-result.json"' in commands
+    assert job["env"]["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+    node = next(ast.literal_eval(part.value) for part in runner.body
+                if isinstance(part, ast.Assign) and any(isinstance(target, ast.Name)
+                    and target.id == "node" for target in part.targets))
+    assert node == "tests/test_runtime.py::test_native_windows_default_runtime_command_cold_prepare_turn_and_stop"
+    native_test = ast.parse((ROOT / "tests/test_runtime.py").read_text(encoding="utf-8"))
+    function = next(part for part in native_test.body if isinstance(part, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and part.name == node.split("::")[1])
+    timeouts = [ast.literal_eval(keyword.value) for call in ast.walk(function)
+                if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                and call.func.attr in {"run", "run_owned_probe"}
+                for keyword in call.keywords if keyword.arg == "timeout"]
+    assert timeouts == [1200]
+    assert job["steps"][-2]["timeout-minutes"] * 60 >= 1200 + 60
+    compile(runner, "<cold-ci-check>", "exec")
+    assert sum(isinstance(part, ast.Call) and isinstance(part.func, ast.Attribute)
+               and part.func.attr == "installed" for part in ast.walk(runner)) == 2
+    assert all(isinstance(part.args[1], ast.Name) and part.args[1].id == "result"
+               for part in ast.walk(runner) if isinstance(part, ast.Call)
+               and isinstance(part.func, ast.Attribute) and part.func.attr == "installed")
+    assert any(isinstance(part, ast.Assert) and "selected.passed(code)" in ast.unparse(part)
+               for part in ast.walk(runner))
+    assert any(isinstance(part, ast.Call) and isinstance(part.func, ast.Attribute)
+               and part.func.attr == "validate_report" for part in ast.walk(runner))
+    upload = job["steps"][-1]
+    assert upload["if"] == "always()" and upload["with"]["name"] == "windows-default-runtime"
+    assert upload["with"]["path"] == "${{ runner.temp }}/dr-ci/evidence/publicresult.json"
+    assert "*" not in upload["with"]["path"] and "private" not in upload["with"]["path"]
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "wrong-node", "duplicate", "skip", "failed",
+                                  "setup-failed", "teardown-failed", "no-call", "xfail", "exit-code"])
+def test_default_command_ci_result_requires_exact_real_call_pass(fault):
+    _, _, tree = cold_ci_runner()
+    selected_class = next(part for part in tree.body if isinstance(part, ast.ClassDef) and part.name == "Results")
+    namespace = {"node": "tests/test_runtime.py::test_native_windows_default_runtime_command_cold_prepare_turn_and_stop"}
+    exec(compile(ast.Module(body=[selected_class], type_ignores=[]), "<ci-results-model>", "exec"), namespace)
+    result = namespace["Results"]()
+    nodes = [namespace["node"]]
+    if fault == "missing":
+        nodes = []
+    elif fault == "wrong-node":
+        nodes = ["tests/test_runtime.py::unrelated"]
+    elif fault == "duplicate":
+        nodes *= 2
+    result.pytest_collection_finish(types.SimpleNamespace(items=[
+        types.SimpleNamespace(nodeid=node) for node in nodes]))
+    for phase in ("setup", "call", "teardown"):
+        if fault == "no-call" and phase == "call":
+            continue
+        outcome = "passed"
+        if phase == "call" and fault in {"failed", "skip"}:
+            outcome = "failed" if fault == "failed" else "skipped"
+        if fault == phase + "-failed":
+            outcome = "failed"
+        row = types.SimpleNamespace(nodeid=namespace["node"], when=phase, outcome=outcome)
+        if fault == "xfail" and phase == "call":
+            row.wasxfail = "not acceptance"
+        result.pytest_runtest_logreport(row)
+    assert result.passed(1 if fault == "exit-code" else 0) is (fault is None)
