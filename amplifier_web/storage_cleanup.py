@@ -49,7 +49,7 @@ def policy(app):
 
 
 def public(value):
-    return {key: item for key, item in value.items() if key != '_authority'} if value is not None else None
+    return {key: item for key, item in value.items() if key not in {'_authority', '_observations'}} if value is not None else None
 
 
 def read(app):
@@ -115,15 +115,42 @@ def saved_command(app, identity, digest):
         return {**public(json.loads(saved[1])), 'duplicate': True}
 
 
+def observed_since(value, default):
+    return value.get('unusedSince', default) if isinstance(value, dict) else value
+
+
+def observations(seen, candidates, now, *, protected=(), present=None):
+    """Reuse the existing ledger, not an unbounded fresh filesystem scan.
+
+    Legacy timestamps retain their age but contribute no invented size.
+    Unseen observations survive bounded passes; known protected/absent
+    copies do not contribute pressure. Measurements never authorize removal.
+    """
+    protected = set(protected)
+    present = present or {}
+    result = {key: value for key, value in seen.items() if key not in protected
+              and (key.split(':', 1)[0] not in present or key in present[key.split(':', 1)[0]])}
+    for row in candidates:
+        key = row['kind'] + ':' + row['id']
+        result[key] = {'unusedSince': max(observed_since(result.get(key, now), now), row.get('lastUsedAt', 0)),
+                       'fileBytes': row['fileBytes'], 'measuredAt': now}
+    return result
+
+
+def observed_bytes(seen):
+    return sum(row.get('fileBytes', 0) for row in seen.values() if isinstance(row, dict))
+
+
 def plan(candidates, settings, seen, now):
-    rows = [{**item, 'unusedSince': max(seen.get(item['kind'] + ':' + item['id'], now), item.get('lastUsedAt', 0))} for item in candidates]
-    total = sum(item['fileBytes'] for item in rows)
+    rows = [{**item, 'unusedSince': max(observed_since(seen.get(item['kind'] + ':' + item['id'], now), now), item.get('lastUsedAt', 0))} for item in candidates]
+    measured = {row['kind'] + ':' + row['id'] for row in rows}
+    total = sum(item['fileBytes'] for item in rows) + observed_bytes({key: value for key, value in seen.items() if key not in measured})
     remaining = total
     for row in sorted(rows, key=lambda item: (item['unusedSince'], item['kind'], item['id'])):
         expired = now - row['unusedSince'] >= settings['keepDays'] * 86400
         pressure = bool(settings['maxUnusedBytes'] and remaining > settings['maxUnusedBytes'])
         row['selected'] = expired or pressure
-        row['reason'] = ('Retention time reached' if expired else 'Unused copies exceed the saved size target') if row['selected'] else 'Kept by your retention settings'
+        row['reason'] = ('Retention time reached' if expired else 'Unused copies measured across cleanup batches exceed the saved size target') if row['selected'] else 'Kept by your retention settings'
         if row['selected']:
             remaining -= row['fileBytes']
     return rows
@@ -155,12 +182,24 @@ async def preview(app):
         dependencies = {'candidates': [], 'protectedIds': [], 'complete': False}
     held = unresolved(app)
     candidates = [row for row in generations.get('candidates', []) + (runners or []) + dependencies['candidates'] if (row['kind'], row['id']) not in held]
-    seen = record(app, OBSERVATION, {}) or {}
-    rows = plan(candidates, settings, seen, time.time())
+    now = time.time()
+    observed_protected = (['ecosystem:' + key for key in generations.get('protectedIds', [])]
+        + ['runner:' + key for key in runner_inspection['protectedIds']]
+        + ['test-dependencies:' + key for key in dependencies['protectedIds']]
+        + [kind + ':' + identity for kind, identity in held])
+    folders = update_retention._folders(manager)
+    present = {'ecosystem': {'ecosystem:' + row.name for row in folders},
+               'runner': {'runner:' + row['id'] for row in app.smart_tools.state.get('installations', [])}}
+    if dependencies['complete']:
+        present['test-dependencies'] = {'test-dependencies:' + row['id'] for row in dependencies['candidates']} | {
+            'test-dependencies:' + key for key in dependencies['protectedIds']}
+    seen = observations(record(app, OBSERVATION, {}) or {}, candidates, now,
+                        protected=observed_protected, present=present)
+    rows = plan(candidates, settings, seen, now)
     protected = []
     eligible = {(row['kind'], row['id']) for row in rows}
     # This is metadata enumeration, not a scan of workspaces or chat history.
-    for folder in update_retention._folders(manager):
+    for folder in folders:
         if ('ecosystem', folder.name) not in eligible:
             protected.append({'kind': 'ecosystem', 'id': folder.name, 'label': 'Component version kept',
                               'reason': 'Current, rollback, referenced, changed, or not fully verified'})
@@ -201,9 +240,11 @@ async def preview(app):
     complete = generations.get('complete', False) and runner_complete and dependencies['complete']
     return {'policy': settings, 'rows': [{k: v for k, v in row.items() if k not in {'paths', 'stamp'}} for row in rows],
             'protected': protected[:128], 'protectedCount': len(protected),
-            'observedProtected': ['ecosystem:' + key for key in generations.get('protectedIds', [])]
-                + ['runner:' + key for key in runner_inspection['protectedIds']]
-                + ['test-dependencies:' + key for key in dependencies['protectedIds']],
+            'observedProtected': observed_protected,
+            '_observations': seen,
+            'observedUnusedFileBytes': observed_bytes(seen),
+            'observedUnusedCount': sum(isinstance(row, dict) for row in seen.values()),
+            'observationNote': 'Earlier measurements can be out of date; this is not a complete inventory. Each selected copy is checked again before removal.',
             'protectedFileBytes': protected_measured, 'protectedMeasurementComplete': protected_complete,
             'unusedFileBytes': sum(row['fileBytes'] for row in rows),
             'selectedFileBytes': sum(row['fileBytes'] for row in rows if row['selected']),
@@ -229,14 +270,11 @@ async def run(app, identity, *, expected_revision=None, automatic=False, authori
         check(app, authority)
         if policy(app) != settings or update_retention.maintenance_blocked(app.update_manager):
             return {'status': 'deferred', 'removedFileBytes': 0, 'detail': 'Settings or update activity changed. Existing files were kept.'}
-        seen = record(app, OBSERVATION, {}) or {}
         now = time.time()
-        observed = {row['kind'] + ':' + row['id'] for row in report['rows']}
-        protected = set(report.get('observedProtected', []))
-        # Do not reset unseen rows just because the bounded inspection yielded.
-        seen = {key: value for key, value in seen.items() if key not in protected}
-        for name in observed:
-            seen.setdefault(name, now)
+        seen = report.get('_observations')
+        if seen is None:
+            seen = observations(record(app, OBSERVATION, {}) or {}, report['rows'], now,
+                                protected=report.get('observedProtected', []))
         store(app, OBSERVATION, seen)
         result = {'id': identity, 'expectedRevision': expected_revision, 'status': 'running', 'startedAt': now, 'policy': settings,
                   'selectedFileBytes': report['selectedFileBytes'], 'removedFileBytes': 0,
@@ -260,6 +298,9 @@ async def run(app, identity, *, expected_revision=None, automatic=False, authori
                 effect = {**item, 'fileBytes': item.get('fileBytes', chosen[(item['kind'], item['id'])]['fileBytes'])}
                 result['effects'].append(effect)
             effect['status'] = status
+            if status == 'completed':
+                seen.pop(item['kind'] + ':' + item['id'], None)
+                store(app, OBSERVATION, seen)
             result['removedFileBytes'] = sum(row['fileBytes'] for row in result['effects'] if row['status'] == 'completed')
             store(app, key, result)
             store(app, LATEST, result)
@@ -301,7 +342,7 @@ async def dispatch(app, action, args, origin, command_id, caller_session_id=None
             raise AppError(str(exc), 400) from None
     if action == 'storage.cleanup.preview':
         async with lock(app):
-            return {'accepted': True, 'result': await preview(app)}
+            return {'accepted': True, 'result': public(await preview(app))}
     source = None
     if origin not in {'ui', 'user'}:
         if origin not in {'agent', 'system'} or not caller_session_id:
