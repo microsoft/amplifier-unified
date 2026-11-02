@@ -1925,7 +1925,8 @@ class Collaboration:
             prepared_artifacts = await prepare(self, source, args, origin, identity, digest)
             if prepared_artifacts.get('duplicate'):
                 return prepared_artifacts['duplicate']
-        async with (self.service.lock,
+        async with ((prepared_artifacts['items'] if prepared_artifacts else AsyncExitStack()),
+                    self.service.lock,
                     self.service.work_invocation.initial_transaction(action, identity),
                     AsyncExitStack() as recovery_boundary):
             duplicate = self.duplicate(identity, digest)

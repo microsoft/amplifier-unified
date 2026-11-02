@@ -180,7 +180,11 @@ browser tests and real Docker qualification remain separate evidence.
 not a retry of the test. It takes the resource identity and revision, a new stable
 request identity, and `previousRequestId` naming this owner's confirmed failure
 before teardown. The prior receipt must explicitly record no removal effect,
-the preservation or verification phase, and a safe preservation failure code.
+and either the preservation or verification phase with a safe failure code, or
+the `preparing` phase and `cleanup_helper_not_started` code proving that no
+cleanup helper started. Once `Popen` returns, a lost response or helper process
+failure remains uncertain; it is not covered by this preflight exception.
+This adds no automatic replay or new automatic continuation.
 Stopped inventory alone does not qualify. An unresolved removal or cleanup
 executor, including an unbound journal entry, blocks a new destructive identity.
 It uses the retained original backend configuration. The failed operation receipt,
