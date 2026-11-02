@@ -130,6 +130,14 @@ DIAGNOSTIC_FUNCTIONS = {
     "private_file_write": ("amplifier_web.deployment", "write_private"),
     "private_file_read": ("amplifier_web.deployment", "read_private"),
     "private_directory": ("amplifier_web.windows_files", "directory"),
+    "private_directory_init": ("amplifier_web.windows_files", "PinnedDirectory.__init__"),
+    "private_directory_check": ("amplifier_web.windows_files", "PinnedDirectory._check"),
+    "private_api_init": ("amplifier_web.windows_files", "_API.__init__"),
+    "private_api_open": ("amplifier_web.windows_files", "_API.open"),
+    "private_acl_validate": ("amplifier_web.windows_files", "_API.validate_acl"),
+    "private_ace_check": ("amplifier_web.windows_files", "_check_ace"),
+    "private_path_local": ("amplifier_web.windows_files", "_local"),
+    "private_path_address": ("amplifier_web.windows_files", "address"),
 }
 DIAGNOSTIC_SOURCES = frozenset(DIAGNOSTIC_FUNCTIONS) | {
     "selected_test", "tls_fixture_scope", "tls_fixture_reserve", "tls_fixture_call",

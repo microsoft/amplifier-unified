@@ -164,6 +164,96 @@ def test_exception_source_uses_exact_known_code_and_bounded_cause_chain():
     assert "PRIVATE" not in json.dumps(facts) and "boundary" not in json.dumps(facts)
 
 
+@pytest.mark.parametrize("label,qualname", [
+    ("private_directory_init", "PinnedDirectory.__init__"),
+    ("private_directory_check", "PinnedDirectory._check"),
+    ("private_api_init", "_API.__init__"),
+    ("private_api_open", "_API.open"),
+    ("private_acl_validate", "_API.validate_acl"),
+    ("private_ace_check", "_check_ace"),
+    ("private_path_local", "_local"),
+    ("private_path_address", "address"),
+])
+def test_private_refusal_labels_bind_only_exact_loaded_code(label, qualname):
+    from amplifier_web import windows_files as native
+    function = native
+    for part in qualname.split("."):
+        function = getattr(function, part)
+    codes = probe.diagnostic_codes()
+    assert any(code is function.__code__ and name == label for code, name in codes.items())
+    fact = probe.safe_frame(types.SimpleNamespace(f_code=function.__code__, f_lineno=10**8), codes)
+    assert fact == {"source": label, "codeSha256": probe.digest(function.__code__.co_code),
+                    "lineOffset": 10**6}
+    # Even an equal code object with an unknown filename must not be disclosed.
+    clone = function.__code__.replace(co_filename="/PRIVATE/unknown.py")
+    assert probe.safe_frame(types.SimpleNamespace(f_code=clone), codes) == {"source": "other"}
+
+
+@pytest.mark.parametrize("fault", ["drive", "filesystem", "volume", "foreign_ace"])
+def test_actual_private_constructor_refusal_offsets_are_safe_with_inert_api(monkeypatch, fault):
+    from amplifier_web import windows_files as native
+    codes = probe.diagnostic_codes()  # Attest real loaded code before the API double.
+    closed = []
+    class API:
+        def GetDriveTypeW(self, path):
+            return 2 if fault == "drive" else 3
+        def open(self, path, *, directory):
+            return path
+        def info(self, handle, path, *, directory):
+            return types.SimpleNamespace(volume=2 if fault == "volume" and
+                path != Path(path.anchor) else 1, index_high=0, index_low=1)
+        def GetVolumeInformationByHandleW(self, handle, a, b, c, d, e, filesystem, size):
+            filesystem.value = "FAT32" if fault == "filesystem" else "NTFS"
+            return True
+        def ok(self, value):
+            assert value
+        def validate_acl(self, handle, *, private):
+            if fault == "foreign_ace":
+                native._check_ace(0, 0, 0x100, "PRIVATE-SID", private=private)
+        def close(self, handle):
+            closed.append(handle)
+    monkeypatch.setattr(native, "_API", API)
+    with pytest.raises(PermissionError) as caught:
+        native.PinnedDirectory(Path("/PRIVATE/state/updates"), owned_root=Path("/PRIVATE/state"), create=True)
+    facts = probe.safe_exception(caught.value, codes)
+    sources = [row["source"] for row in facts[0]["frames"]]
+    assert sources == (["private_directory_init", "private_ace_check"] if fault == "foreign_ace"
+                       else ["private_directory_init"])
+    assert all(0 < row["lineOffset"] < 100 for row in facts[0]["frames"])
+    assert bool(closed) == (fault != "drive")
+    assert "PRIVATE" not in json.dumps(facts)
+    value = diagnostic_public_model()
+    value["nativeControls"]["selection"]["failureFacts"][0]["errors"] = facts
+    probe.validate_public(value)
+
+
+@pytest.mark.parametrize("fault", ["owner", "null_dacl"])
+def test_actual_acl_refusal_offset_without_native_io_or_private_owner_output(fault):
+    from amplifier_web import windows_files as native
+    C = native.C
+    api = native._API.__new__(native._API)
+    api.sid = "PRIVATE-TOKEN-SID"
+    released = []
+    def security(handle, kind, fields, owner, group, dacl, sacl, descriptor):
+        C.cast(owner, C.POINTER(native.PVOID))[0] = 1
+        C.cast(dacl, C.POINTER(native.PVOID))[0] = 2 if fault == "owner" else None
+        return 0
+    def control(descriptor, output, revision):
+        C.cast(output, C.POINTER(native.WORD))[0] = 4
+        return True
+    api.GetSecurityInfo, api.GetSecurityDescriptorControl = security, control
+    api.sid_text = lambda pointer: "PRIVATE-FOREIGN-SID" if fault == "owner" else api.sid
+    api.LocalFree = released.append
+    with pytest.raises(PermissionError) as caught:
+        api.validate_acl(1, private=True)
+    facts = probe.safe_exception(caught.value, probe.diagnostic_codes())
+    assert len(released) == 1
+    assert facts == [{"class": "PermissionError", "frames": [{
+        "source": "private_acl_validate",
+        "codeSha256": probe.digest(native._API.validate_acl.__code__.co_code), "lineOffset": 11}]}]
+    assert "PRIVATE" not in json.dumps(facts)
+
+
 @pytest.mark.parametrize("fatal", [False, True])
 def test_builtin_exception_groups_expand_bounded_children_without_private_content(fatal):
     child = KeyboardInterrupt("PRIVATE") if fatal else ValueError("PRIVATE")
