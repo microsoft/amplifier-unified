@@ -489,8 +489,6 @@ jobs:
       contents: read
     env:
       CHECK_SUITE: fresh-cleanup-native
-      CLEANUP_NATIVE_ROOT: ${{ runner.temp }}/unified-cleanup-native
-      CLEANUP_NATIVE_OUTPUT: ${{ github.workspace }}/output/fresh-cleanup-native
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -511,6 +509,9 @@ jobs:
           persist-credentials: false
       - name: Qualify only the native interrupted-cleanup journey
         timeout-minutes: 22
+        env:
+          CLEANUP_NATIVE_ROOT: ${{ runner.temp }}/unified-cleanup-native
+          CLEANUP_NATIVE_OUTPUT: ${{ github.workspace }}/output/fresh-cleanup-native
         run: |
           set -o pipefail
           mkdir -p output/fresh-cleanup-native
