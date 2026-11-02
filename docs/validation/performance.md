@@ -140,6 +140,15 @@ without starting execution. Run it inside an owned DTU, with that checkout's nor
 dependencies, using `python tests/fixtures/session_history_scaling.py --output DIR`.
 It is a diagnostic fixture, not a passing latency gate or live-host forecast.
 
+Include retained live placements as well as retired accounting: their turn IDs
+must resolve and tool observations must use valid canonical identities. Assert
+that the expected rows survive durable readback. Otherwise a fixture can silently
+filter out its historical tools/model calls and measure a much cheaper save.
+The observation case changes a receipt on each save; unchanged-history reuse is
+not evidence for that path. `test_accounting_projection_copy.py` also grows plain
+historical receipts while checking independent copies and bounded generic
+recursive-copy work; custom and nested receipts keep their existing copy behavior.
+
 Use the measured dominant work to choose a change. Current caches may make moderate
 unchanged histories cheap while larger bodies fall back to full preparation; measure
 both sides rather than increasing cache limits as the default fix. For each implemented

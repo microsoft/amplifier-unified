@@ -90,6 +90,29 @@ def _accounting_copy(value):
     return copy.deepcopy(value)
 
 
+def _receipt_copy(receipt):
+    """Copy ordinary flat receipt fields without recursively copying scalars.
+
+    Keep one memo for shared child dictionaries. Unusual keys/values use the
+    original deepcopy contract, including hooks and deeper/cyclic structures.
+    """
+    scalar_types = (str, int, float, bool, type(None))
+    result, children = {}, {}
+    for key, value in receipt.items():
+        if type(key) is not str:
+            return copy.deepcopy(receipt)
+        if type(value) in scalar_types:
+            result[key] = value
+        elif type(value) is dict and all(type(k) is str and type(v) in scalar_types
+                                        for k, v in value.items()):
+            if id(value) not in children:
+                children[id(value)] = value.copy()
+            result[key] = children[id(value)]
+        else:
+            return copy.deepcopy(receipt)
+    return result
+
+
 def accounting_projection(tree, *, _retired=None):
     scalar_types = (str, int, float, bool, type(None))
     rows = [(row, False) for row in tree.get('retiredUsageNodes', [])]
@@ -185,7 +208,7 @@ def _observed_work(row, turns, accounting):
         receipt = accounting.get((row['sessionId'], row['id']))
         if not receipt or not receipt.get('producerId'):
             return None
-        result = copy.deepcopy(receipt)
+        result = _receipt_copy(receipt)
     else:
         return None
     fields = {'id', 'parentId', 'turnId', 'sessionId', 'rootSessionId', 'kind',
