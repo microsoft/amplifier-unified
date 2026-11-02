@@ -38,7 +38,9 @@ async function pendingReceipt(connection){
  return durable||transient;
 }
 async function clearReceipt(receipt){
- await chrome.storage[receipt.retention==='transient'?'session':'local'].remove('pendingReceipt');
+ const area=chrome.storage[receipt.retention==='transient'?'session':'local'];
+ const saved=(await area.get('pendingReceipt')).pendingReceipt;
+ if(saved&&['host','deviceID','id','lease'].every(key=>saved[key]===receipt[key]))await area.remove('pendingReceipt');
 }
 async function api(connection,path,payload,anonymous=false){
  return connectionRequest(connection.host,path,payload,anonymous?undefined:connection.token);
@@ -126,9 +128,8 @@ async function execute(connection,operation){
  if(result.length!==1||result[0].documentId!==target.documentId||!result[0].result)throw Error('No confirmed result from the selected document.');
  return result[0].result;
 }
-async function tick(){
- if(busy)return;
- busy=true;clearTimeout(timer);
+async function poll(){
+ clearTimeout(timer);
  try{
   let connection=await state();
   if(!connection?.token||connection.revoked){await clearTransientReceipt();await detachTask();return;}
@@ -183,13 +184,15 @@ async function tick(){
    await chrome.action.setBadgeText({text:revoked?'OFF':'…'});
   }
  }finally{
-  busy=false;
   const current=await state();
   if(current?.token&&!current.revoked)timer=setTimeout(resume,1000);
  }
 }
 async function resume(){
  if(busy)return;
+ // Claim recovery and polling together, before the first asynchronous read.
+ busy=true;
+ try{
  const connection=await state(),pending=await pendingReceipt(connection);
  if(connection?.token&&!connection.revoked&&pending){
   if(pending.host!==connection.host||pending.deviceID!==connection.deviceID){
@@ -205,7 +208,8 @@ async function resume(){
    }
   }
  }
- return tick();
+ return await poll();
+ }finally{busy=false}
 }
 async function useTab(tabId,taskMode=false){
  const stopVersion=localStopVersion;

@@ -104,7 +104,7 @@ for(const retention of retentionKinds)test(`Lost acknowledgement retries only th
   assert.equal(w.values.pendingReceipt,undefined);assert.equal(w.session.pendingReceipt,undefined);
   executed.push(operation.id);return {message:'Executed '+operation.id};
  };
- await w.run('tick()');
+ await w.run('resume()');
  const pendingArea=retention==='transient'?w.session:w.values;
  assert.equal(pendingArea.pendingReceipt.id,'first');
  assert.deepEqual(executed,['first']);
@@ -121,4 +121,32 @@ for(const retention of retentionKinds)test(`Lost acknowledgement retries only th
  assert.deepEqual(w.resultPosts.map(receipt=>receipt.id),['first','first','second']);
  assert.equal(w.calls.filter(path=>path==='/self/poll').length,2);
  assert.equal(w.values.pendingReceipt,undefined);assert.equal(w.session.pendingReceipt,undefined);
+});
+
+function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no});return {promise,resolve,reject}}
+for(const retention of ['durable','transient'])test(`Overlapping reconnects retain the next ${retention} receipt after a lost acknowledgement`,async()=>{
+ const oldPost=deferred(),newPost=deferred(),oldStarted=deferred(),newStarted=deferred(),executed=[];
+ const w=worker(retention,undefined,{deliveries:[{id:'new-effect',lease:'new-lease',action:'browser.click',retention,deadline:1700000015}],resultResponse:payload=>{
+  if(payload.id==='receipt'){oldStarted.resolve();return oldPost.promise}
+  newStarted.resolve();return newPost.promise;
+ }});
+ w.context.execute=async(connection,operation)=>{executed.push(operation.id);return {message:'Effect executed'}};
+ const first=w.run('resume()');await oldStarted.promise;
+ await w.run('resume()');await w.alarm('connect');
+ assert.deepEqual(w.resultPosts.map(row=>row.id),['receipt']);
+ assert.equal(w.calls.includes('/self/poll'),false);
+ oldPost.resolve({status:'completed'});await newStarted.promise;
+ const area=retention==='transient'?w.session:w.values;
+ assert.equal(area.pendingReceipt.id,'new-effect');
+ await w.run('resume()');
+ newPost.reject(new TypeError('Lost acknowledgement'));await first;
+ assert.deepEqual(executed,['new-effect']);
+ assert.deepEqual(w.resultPosts.map(row=>row.id),['receipt','new-effect']);
+ assert.equal(area.pendingReceipt.id,'new-effect');
+});
+for(const retention of ['durable','transient'])test(`An older acknowledgement cannot clear another ${retention} receipt`,async()=>{
+ const w=worker(retention,500);const area=retention==='transient'?w.session:w.values;
+ w.context.older={...area.pendingReceipt};area.pendingReceipt={...area.pendingReceipt,id:'new-effect',lease:'new-lease'};
+ await w.run('clearReceipt(older)');
+ assert.equal(area.pendingReceipt.id,'new-effect');
 });

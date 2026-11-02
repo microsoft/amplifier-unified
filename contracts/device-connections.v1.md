@@ -119,6 +119,10 @@ existing ten-operation total; effectful delivery has priority over observations.
 No pending delivery is evicted for capacity. A missing or expired receipt
 returns 404; a caller may request a new observation, never infer an input effect.
 
+Reconnect callbacks serialize result recovery and polling as one operation.
+An acknowledgement removes only its matching connection, operation and lease
+receipt; it cannot erase a newer receipt or start another execution in parallel.
+
 Clients preserve the delivered `retention` beside any locally pending result.
 The Chromium extension stores transient results only in trusted-context
 `chrome.storage.session`, never `storage.local`. Each result carries local
@@ -190,6 +194,11 @@ The extension is a development artifact; it must be described that way.
 ## Optional full-tab execution (extension 0.2)
 
 A new `browser.task` grant permits observation and bounded control across HTTP(S) navigation in one tab explicitly selected on the device. Existing document grants never activate this mode. Adding the grant requires proof-bound owner approval; selecting the tab is still local. Stop detaches debugger access. The extension exposes only fixed observe/open/act/screenshot operations, never arbitrary scripts or CDP commands. Observed actions carry a short-lived, exact-document revision; input is checked atomically against current DOM state. The tab grant survives navigation, but an observation does not. Unknown effects are not replayed.
+
+Screenshot capture checks the selected attachment and document before capture
+and again before returning pixels, including the current URL exclusion check.
+Navigation or Stop during capture discards the result. A later observation must
+start from the current permitted document.
 
 The Chromium debugger permission is an installation permission (Chrome does not allow it to be optional). Upgrading this development extension requires accepting the browser's permission change. The debugger is attached only when full-tab access is separately granted and selected locally. Existing 0.1 clients continue to use exact-document operations. Protected browser pages and this service's administrative pages are excluded. Full-tab screenshots are bounded; result bodies are limited to 256 KiB and total request bodies to 512 KiB.
 

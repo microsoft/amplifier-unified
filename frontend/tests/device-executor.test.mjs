@@ -41,7 +41,7 @@ for(const [name,result,expected] of [['oversized',{text:'x'.repeat(262144)},'fai
  test(`Result preflight delivers a bounded ${name} receipt without repeating execution`,async()=>{
   const {context,values,session,calls,writes,alarms}=worker();let executions=0;
   context.execute=async()=>{executions++;return result};
-  await vm.runInContext('tick()',context);
+  await vm.runInContext('resume()',context);
   const sent=calls.find(row=>row.path==='/self/result').payload;
   assert.equal(sent.status,expected);assert.equal(executions,1);assert.equal(values.pendingReceipt,undefined);
   assert.equal(session.pendingReceipt,undefined);
@@ -56,7 +56,7 @@ for(const [name,result,expected] of [['oversized',{text:'x'.repeat(262144)},'fai
 test('Stop during capture does not retain or deliver its transient result',async()=>{
  const {context,calls,writes}=worker();
  context.execute=async()=>{await vm.runInContext('stop()',context);return {image:'fixture-image'}};
- await vm.runInContext('tick()',context);
+ await vm.runInContext('resume()',context);
  assert.equal(writes.some(row=>row.patch.pendingReceipt),false);
  assert.equal(calls.some(row=>row.path==='/self/result'),false);
 });
@@ -91,3 +91,26 @@ test('Three oversized captures return explicit recovery without an oversized res
 test('Local Stop prevents another screenshot retry',async()=>{
  await assert.rejects(screenshot([240001],{stopAfterFirst:true}),/stopped/);
 });
+
+for(const phase of ['layout','capture'])for(const change of ['excluded','other-document','same-document-excluded','reattach'])
+ test(`Screenshot discards ${change} during ${phase}`,async()=>{
+  let url='https://fixture.example/',loader='document';const calls=[];
+  const context=vm.createContext({URL,Date,Number,Error,pausedLocally:false,stop:async()=>{},
+   chrome:{debugger:{onDetach:{addListener(){}},sendCommand:async(target,method,args)=>{
+    calls.push(method);
+    if(method==='Page.getFrameTree')return {frameTree:{frame:{id:'frame',loaderId:loader,url}}};
+    if(method==='Page.createIsolatedWorld')return {executionContextId:1};
+    if(method===(phase==='layout'?'Page.getLayoutMetrics':'Page.captureScreenshot')){
+     if(change==='reattach')vm.runInContext('attachmentVersion++',context);
+     else{url=change==='other-document'?'https://other.example/':'https://service.example/settings';if(change!=='same-document-excluded')loader='new-document';}
+    }
+    if(method==='Page.getLayoutMetrics')return {cssVisualViewport:{clientWidth:1280,clientHeight:900,pageX:0,pageY:0}};
+    if(method==='Page.captureScreenshot')return {data:'EXCLUDED-PIXELS'};
+    throw Error('Unexpected debugger command '+method);
+   }}}});
+  vm.runInContext(executor,context);vm.runInContext('attachedTab=42',context);
+  context.connection={host:'https://service.example',grants:['browser.task']};
+  context.operation={action:'browser.task.screenshot',deadline:Date.now()/1000+15,args:{}};
+  await assert.rejects(vm.runInContext('executeTask(connection,operation,{tabId:42})',context),/excluded|changed|stopped/);
+  assert.equal(calls.filter(method=>method==='Page.captureScreenshot').length,phase==='layout'?0:1);
+ });

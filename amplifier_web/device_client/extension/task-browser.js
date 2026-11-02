@@ -1,9 +1,9 @@
 // Fixed executor over Chrome's debugger transport. No remote script/CDP endpoint.
-let attachedTab=null, taskWorld=null;
+let attachedTab=null, taskWorld=null, attachmentVersion=0;
 const taskSnapshots=new Map();
 const taskCommand=(tabId,method,params={})=>chrome.debugger.sendCommand({tabId},method,params);
 function taskURL(value,host){const url=new URL(value);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)throw Error('Choose an ordinary website.');if(url.origin===host&&url.pathname!=='/connect/sample')throw Error('Amplifier administration pages are excluded.');return url.href}
-async function detachTask(){const tabId=attachedTab;attachedTab=null;taskWorld=null;taskSnapshots.clear();if(tabId!==null)await chrome.debugger.detach({tabId}).catch(()=>{})}
+async function detachTask(){attachmentVersion++;const tabId=attachedTab;attachedTab=null;taskWorld=null;taskSnapshots.clear();if(tabId!==null)await chrome.debugger.detach({tabId}).catch(()=>{})}
 async function attachTask(tabId,connection){
  if(!connection.grants.includes('browser.task'))throw Error('Enable tasks across pages from the extension connection page first.');
  const tab=await chrome.tabs.get(tabId);taskURL(tab.url,connection.host);
@@ -27,8 +27,8 @@ async function taskEvaluate(target,frame,expression){
 }
 async function executeTask(connection,operation,target){
  if(!connection.grants.includes('browser.task')||attachedTab!==target.tabId)throw Error('Full-tab access is unavailable.');
- const action=operation.action;
- const current=()=>{if(pausedLocally||attachedTab!==target.tabId||operation.deadline*1000<=Date.now())throw Error('The tab was stopped or delivery expired.');};
+ const action=operation.action, version=attachmentVersion;
+ const current=()=>{if(pausedLocally||attachmentVersion!==version||attachedTab!==target.tabId||operation.deadline*1000<=Date.now())throw Error('The tab was stopped or delivery expired.');};
  current();
  if(action==='browser.task.open'){
   const url=taskURL(operation.args.url,connection.host);taskSnapshots.clear();
@@ -39,12 +39,21 @@ async function executeTask(connection,operation,target){
  }
  const frame=await taskFrame(target,connection);
  if(action==='browser.task.screenshot'){
+  const sameDocument=async()=>{
+   current();
+   const latest=await taskFrame(target,connection);
+   current();
+   if(latest.document!==frame.document)throw Error('The document changed during screenshot capture. Observe it again.');
+  };
   const metrics=await taskCommand(target.tabId,'Page.getLayoutMetrics'),v=metrics.cssVisualViewport;
   if(!Number.isFinite(v.clientWidth)||!Number.isFinite(v.clientHeight)||v.clientWidth<=0||v.clientHeight<=0)throw Error('The selected tab has no visible screenshot area.');
   const baseScale=Math.min(1,1280/v.clientWidth,900/v.clientHeight);
   for(const [quality,factor] of [[55,1],[40,.75],[25,.5]]){
-   current();const scale=baseScale*factor;
+   await sameDocument();const scale=baseScale*factor;
    const result=await taskCommand(target.tabId,'Page.captureScreenshot',{format:'jpeg',quality,clip:{x:v.pageX,y:v.pageY,width:v.clientWidth,height:v.clientHeight,scale},captureBeyondViewport:false});
+   // Pixels are not bound to a CDP execution context. Discard them if the
+   // selected document, URL permission, attachment or Stop changed in flight.
+   await sameDocument();
    if(result.data.length<=240000)return {image:result.data,mimeType:'image/jpeg',width:Math.round(v.clientWidth*scale),height:Math.round(v.clientHeight*scale)};
   }
   return {status:'blocked',reason:'screenshot_size_limit',recovery:'This page could not fit in a bounded live image. View it directly on the connected device or retry after simplifying the page.'};
@@ -83,4 +92,4 @@ async function executeTask(connection,operation,target){
  };
  current();return taskEvaluate(target,frame,'('+execute.toString()+')('+[JSON.stringify(saved.state),JSON.stringify(candidate),JSON.stringify(text)].join(',')+')');
 }
-chrome.debugger.onDetach.addListener(source=>{if(source.tabId===attachedTab){attachedTab=null;taskWorld=null;taskSnapshots.clear();stop()}});
+chrome.debugger.onDetach.addListener(source=>{if(source.tabId===attachedTab){attachmentVersion++;attachedTab=null;taskWorld=null;taskSnapshots.clear();stop()}});
