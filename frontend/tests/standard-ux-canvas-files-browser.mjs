@@ -12,8 +12,9 @@ if(!out)throw Error('Owned artifact directory is required');
 await mkdir(out,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/outputs_ui_server.py','--canvas-reading'],{stdio:['ignore','pipe','pipe']});
 const stopFixture=ownFixture(fixture,{label:'Canvas files fixture',timeoutMs:5000});
-let browser,page,ready,logs='',failure,uiFailure,uiPassed=false,browserClosed=null,fixtureExit=null,fixtureCleanup=null,homeRemoved=null,fixtureStopSucceeded=false;
+let browser,page,ready,focusScope,logs='',failure,uiFailure,uiPassed=false,browserClosed=null,fixtureExit=null,fixtureCleanup=null,homeRemoved=null,fixtureStopSucceeded=false;
 const errors=[],checks=[],cleanupFailures=[];
+const focusTraversal={complete:false,initial:null,steps:[]};
 const errorRecord=error=>({name:error?.name||'Error',message:String(error?.message||error),...(error instanceof AggregateError?{errors:error.errors.map(errorRecord)}:{})});
 fixture.once('close',(code,signal)=>{fixtureExit={pid:fixture.pid,code,signal,settled:true}});
 let fixtureLines='';
@@ -48,9 +49,35 @@ try{
  checks.push('Public file form opens exact text bytes and the named server path; both copies match fixture ownership; missing server file manager is explicit.');
  await inspector.getByRole('button',{name:'Close canvas details',exact:true}).click();await expect(inspector).toBeHidden();
  await canvas.getByRole('button',{name:'Focus canvas',exact:true}).click();await expect(canvas).toHaveAttribute('role','dialog');await expect(canvas.getByRole('button',{name:'Exit canvas focus',exact:true})).toBeFocused();
- const focusables=canvas.locator('button:visible:not([disabled]),a[href]:visible,input:visible:not([disabled]),select:visible:not([disabled]),textarea:visible:not([disabled]),[tabindex="0"]:visible');
- await focusables.last().focus();await page.keyboard.press('Tab');await expect(focusables.first()).toBeFocused();
- await page.keyboard.press('Shift+Tab');await expect(focusables.last()).toBeFocused();
+ // useModalFocus includes the container-header toggle before the panel, and
+ // CanvasTabs uses roving tabindex. Neither negative tabs nor inert controls
+ // belong to sequential focus. Retain nodes; only real keyboard input moves focus.
+ focusScope=await canvas.evaluateHandle(panel=>[document.getElementById('canvas-toggle'),
+  ...panel.querySelectorAll('button,input,textarea,select,summary,a[href],[tabindex]')]
+  .filter(el=>el&&el.tabIndex>=0&&!el.matches(':disabled')&&!el.closest('[inert],[hidden]')
+   &&el.getClientRects().length&&getComputedStyle(el).visibility==='visible'));
+ const focusState=()=>focusScope.evaluate(nodes=>{
+  const describe=el=>el?{tag:el.tagName,id:el.id,label:el.getAttribute('aria-label')||el.textContent.trim().slice(0,120),
+   role:el.getAttribute('role'),tabIndex:el.tabIndex,connected:el.isConnected,disabled:el.matches(':disabled'),
+   inert:!!el.closest('[inert]'),visible:!!el.getClientRects().length&&!el.closest('[hidden]')&&getComputedStyle(el).visibility==='visible'}:null;
+  return {nodes:nodes.map(describe),activeIndex:nodes.indexOf(document.activeElement),active:describe(document.activeElement)};
+ });
+ focusTraversal.initial=await focusState();
+ const initial=focusTraversal.initial,count=initial.nodes.length,start=initial.activeIndex;
+ assert.ok(count>1&&count<=64,'Unexpected focused Canvas scope size');
+ assert.equal(initial.nodes[0].id,'canvas-toggle');
+ assert.ok(start>0);assert.equal(initial.active.label,'Exit canvas focus');
+ assert.ok(initial.nodes.every(node=>node.tabIndex===0),'Fixture expects ordinary sequential tab order, not positive tabindex');
+ const pressTab=async(key,expectedIndex)=>{
+  const step={key,expectedIndex,before:await focusState(),after:null};focusTraversal.steps.push(step);
+  await page.keyboard.press(key);step.after=await focusState();
+  assert.deepEqual(step.after.nodes,initial.nodes,'Focus-scope node identity/state changed during keyboard traversal');
+  assert.equal(step.after.activeIndex,expectedIndex,'Native sequential focus did not reach the expected scoped control');
+ };
+ // Walk to the boundary without locator.focus(), then exercise both wraps.
+ for(let index=start+1;index<count;index++)await pressTab('Tab',index);
+ await pressTab('Tab',0);await pressTab('Shift+Tab',count-1);
+ focusTraversal.complete=true;
  await page.keyboard.press('Escape');await expect(canvas).not.toHaveAttribute('role','dialog');await expect(canvas.getByRole('button',{name:'Focus canvas',exact:true})).toBeFocused();
  const anchor=page.locator('.a-messages [data-message-id]').filter({hasText:'Canvas reading marker 55'});await anchor.scrollIntoViewIfNeeded();
  const anchorTop=()=>anchor.evaluate(el=>el.getBoundingClientRect().top-el.closest('.a-messages').getBoundingClientRect().top);
@@ -70,6 +97,7 @@ finally{
  try{
   await finishFixture({label:'Canvas files fixture',close:[
    ...(uiFailure&&page?[['Canvas files failure screenshot',()=>page.screenshot({path:out+'/failure.png'})]]:[]),
+   ...(focusScope?[['Canvas files retained focus scope',()=>focusScope.dispose()]]:[]),
    ['Canvas files browser',async()=>{if(browser){try{await browser.close()}finally{browserClosed=!browser.isConnected()}assert.equal(browserClosed,true)}}]
   ],stop:async()=>{await stopFixture();fixtureStopSucceeded=true}});
  }catch(error){cleanupFailures.push(error)}
@@ -87,7 +115,7 @@ finally{
  try{await writeFile(out+'/fixture.log',logs)}catch(error){cleanupFailures.push(error)}
  const failures=[...(uiFailure?[uiFailure]:[]),...cleanupFailures];
  failure=failures.length>1?new AggregateError(failures,'Canvas files UI and/or cleanup failed'):failures[0];
- const observations={schemaVersion:1,passed:uiPassed&&!failure,uiPassed,checks,browserClosed,fixtureExit,fixtureStopSucceeded,fixtureCleanup,homeRemoved,uiFailure:uiFailure?errorRecord(uiFailure):null,cleanupFailures:cleanupFailures.map(errorRecord),failure:failure?errorRecord(failure):null,limits:['Synthetic local Linux host with no file manager; no actual OS reveal action or remote browser/server pair.','Native selectOption exercises form state, not native picker gesture.','Desktop ordinary path plus keyboard focus/Escape and narrow Back; not complete four-mode repetition.','No Canvas resize or physical user-scroll gesture claim; anchor positioned through locator before public close/reopen.']};
+ const observations={schemaVersion:1,passed:uiPassed&&!failure,uiPassed,checks,focusTraversal,browserClosed,fixtureExit,fixtureStopSucceeded,fixtureCleanup,homeRemoved,uiFailure:uiFailure?errorRecord(uiFailure):null,cleanupFailures:cleanupFailures.map(errorRecord),failure:failure?errorRecord(failure):null,limits:['Synthetic local Linux host with no file manager; no actual OS reveal action or remote browser/server pair.','Native selectOption exercises form state, not native picker gesture.','Desktop ordinary path plus keyboard focus/Escape and narrow Back; not complete four-mode repetition.','No Canvas resize or physical user-scroll gesture claim; anchor positioned through locator before public close/reopen.']};
  try{await writeFile(out+'/observations.json',JSON.stringify(observations,null,2)+'\n')}
  catch(error){
   failure=failure?new AggregateError([failure,error],'Canvas files observations could not be saved'):error;
