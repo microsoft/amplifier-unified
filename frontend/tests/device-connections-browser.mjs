@@ -1,4 +1,5 @@
 // Runs only against the task-owned DTU service, with its synthetic account.
+import {fixturePython} from './fixture-python.mjs';
 import {chromium} from 'playwright';
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,mkdtempSync,rmSync,mkdirSync} from 'node:fs';
@@ -202,7 +203,7 @@ try{
  // The live-model harness is supplied by the owned qualification environment.
  // Protocol acceptance alone must not be reported as a successful model chat.
  if(process.env.UI_USE_LIVE_CASE){
- const chat=spawn(process.env.UI_USE_TEST_PYTHON||join(source,'.venv/bin/python'),[process.env.UI_USE_LIVE_CASE,'--name','connected-browser-chat',
+ const chat=spawn(fixturePython(process.env.UI_USE_TEST_PYTHON||join(source,'.venv/bin/python')),[process.env.UI_USE_LIVE_CASE,'--name','connected-browser-chat',
   '--target',device.id+':'+taskTarget.id,'--expect-text','Navigation verified',
   '--prompt','Use the connected browser selected for this chat. Open http://127.0.0.1:8962/ . Set Name to Ada, choose Team Blue, save and verify Saved Ada blue. Then click Continue and verify Navigation verified. Use UI use with its configured decision selection.'],{stdio:['ignore','pipe','pipe']});
  let chatLog='';chat.stdout.on('data',chunk=>chatLog+=chunk);chat.stderr.on('data',chunk=>chatLog+=chunk);
@@ -229,7 +230,7 @@ try{
  check('Browser restart reconnects with stored enrollment and no new approval');
  // A separately implemented process uses no host imports or browser extension.
  const referenceState=join(profile,'reference.json');
- ref=spawn(join(source,'.venv/bin/python'),[join(source,'amplifier_web/device_client/reference_client.py'),'--host',origin,
+ ref=spawn(fixturePython(join(source,'.venv/bin/python')),[join(source,'amplifier_web/device_client/reference_client.py'),'--host',origin,
   '--ca',base+'/app/config/tls/ca.crt','--state',referenceState,'--no-browser','--name','Independent acceptance client'],
   {stdio:['ignore','pipe','pipe']});
  let output='',errors='';ref.stdout.on('data',chunk=>output+=chunk);ref.stderr.on('data',chunk=>errors+=chunk);
