@@ -320,12 +320,21 @@ def test_windows_service_cli_real_chain_root_boundary(windows_cli_transport, mon
             assert 'not readiness' in capsys.readouterr().out
 
 
-def test_windows_default_launcher_refuses_before_setup_or_browser(tmp_path, monkeypatch):
+@pytest.mark.parametrize('ambient_argv', [
+    pytest.param(['pytest'], id='empty-runner-args'),
+    pytest.param(['pytest', '-q', '-p', 'no:cacheprovider'], id='pytest-plugin-args'),
+    pytest.param(['pytest', '--unexpected-runner-option'], id='unknown-runner-option'),
+])
+def test_windows_default_launcher_refuses_before_setup_or_browser(tmp_path, monkeypatch, ambient_argv):
     from amplifier_web import application_generations, deployment, deployment_service, host_dependencies
     monkeypatch.setattr(application_generations, 'delegate', lambda: None)
     monkeypatch.setattr(host_dependencies, 'prepare_environment', lambda: None)
+    # Exercise the actual test body independently of the runner/conftest's argv.
+    monkeypatch.setattr(sys, 'argv', ambient_argv)
     monkeypatch.setattr(cli, 'sys', SimpleNamespace(
         platform='win32', argv=['amplifier-unified', '--data-dir', str(tmp_path)]))
+    # argparse defaults to its own global sys.argv, not the CLI's platform model.
+    monkeypatch.setattr(sys, 'argv', cli.sys.argv)
     monkeypatch.setattr(deployment, 'load_server_config',
                         lambda *a, **kw: pytest.fail('Default launcher must refuse before configuration creation'))
     monkeypatch.setattr(deployment_service, 'install', lambda *a: pytest.fail('No automatic Windows setup'))
