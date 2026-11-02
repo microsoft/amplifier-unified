@@ -1,8 +1,17 @@
-Amplifier Connect — optional browser access preview (0.2.1)
+Amplifier Connect — optional browser access preview (0.2.2)
 
 Unzip this folder. In Chrome or Edge, open Extensions, enable Developer mode,
 choose Load unpacked and select this folder. From your Amplifier service,
 open Devices & apps and choose Open and connect.
+
+Updating an existing 0.2.1 installation: choose Stop browser access, replace
+the files in its existing unpacked directory, then Reload that same extension in Chrome or Edge's
+Extensions page. Verify version 0.2.2 and extension ID
+hihclhdmelacndmdafanjafjbmaobgeo. Keep the supplied manifest key unchanged.
+This patch fixes screenshot boundaries and pending-receipt recovery. It adds
+no permissions or grants and preserves enrollment; do not remove/reinstall or
+pair again for this update. Stop clears the selected tab; reload drops pending
+observations. Select the intended tab again explicitly when ready to resume.
 
 This is an unpacked development extension, not a browser-store release.
 It connects directly to your Amplifier service; a native companion is optional.

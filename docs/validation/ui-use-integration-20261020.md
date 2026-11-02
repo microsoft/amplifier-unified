@@ -69,12 +69,19 @@ apply to new conversations; per-chat ordinary-model preference can change live.
 
 ## Updating an existing browser connection
 
-An existing enrollment can be preserved during an extension update. To navigate across pages, download
-**extension preview 0.2.1** from `/connect`, replace the files in its existing
-unpacked directory, and Reload it in Edge's Extensions page. Keep the same
-extension identity and trusted preview CA.
+For the screenshot-boundary and receipt-recovery fixes, download **extension
+preview 0.2.2** from `/connect`, choose **Stop browser access**, replace the files
+in the existing unpacked directory, and Reload that same extension in Chrome or
+Edge's Extensions page.
+Verify version **0.2.2** and ID `hihclhdmelacndmdafanjafjbmaobgeo`; retain the
+supplied manifest key and trusted service CA. Updating from 0.2.1 adds no
+permissions or grants and preserves enrollment. Do not remove/reinstall or pair
+again. Stop clears the selected tab; reload drops pending observations.
+Explicitly select the intended tab again when ready. Qualify this version separately from the
+historical 0.2.1 physical-browser evidence below.
 
-Open its connection page, choose **Enable tasks across pages**, and approve the
+Adding across-pages access is a separate, optional change. Open the connection
+page, choose **Enable tasks across pages**, and approve the
 additional access once. Then open the intended tab and choose **Use this tab
 across pages** in the toolbar popup. Select that ready target under the chat's
 Browser & computer controls. Later chat requests may originate from a mobile
