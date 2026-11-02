@@ -203,6 +203,246 @@ def test_exception_group_budget_and_private_subclass_children_never_escape():
         probe.validate_public(value)
 
 
+@pytest.mark.parametrize("status,result,expected", [
+    (503, {"code": "worker_startup_failed", "error": "PRIVATE"}, ("worker_startup_failed", True)),
+    (504, {"code": "runtime_pending", "error": "PRIVATE"}, ("runtime_pending", True)),
+    (400, {"code": "PRIVATE-CODE", "error": "PRIVATE", "state": "/private"}, ("other", True)),
+    (200, {"result": {"text": "PRIVATE", "id": "PRIVATE"}}, ("none", False)),
+    (200, {"error": "PRIVATE"}, ("none", True)),
+])
+def test_action_facts_retain_fixed_status_without_private_response(status, result, expected):
+    facts = probe.action_fact("conversation.send", status, result)
+    assert facts == {"action": "conversation.send", "httpStatus": status,
+                     "hasError": expected[1], "code": expected[0]}
+    assert "PRIVATE" not in json.dumps(facts) and "/private" not in json.dumps(facts)
+    # The original error/status assertion remains decisive, including HTTP 200 errors.
+    assert (status == 200 and not result.get("error")) == (status == 200 and not facts["hasError"])
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_worker_event_observer_preserves_protocol_and_error_outcome(tmp_path, monkeypatch, failed):
+    import amplifier_web
+    implementation = types.ModuleType("amplifier_web.runtime_worker")
+    forwarded, events = [], []
+    original_publish = forwarded.append
+    implementation.publish = original_publish
+    implementation.configure_protocol = lambda: events.append("configured")
+    body = {"type": "runtime.ready", "report": {"secret": "PRIVATE", "path": "/private"}}
+    error = {"type": "runtime.error", "error": "PRIVATE", "errorType": "PrivateError"}
+    class Worker:
+        async def start(self):
+            pass
+        async def run(self):
+            implementation.publish(body)
+            if failed:
+                try:
+                    raise PermissionError(13, "PRIVATE", "/private")
+                except PermissionError:
+                    implementation.publish(error)
+                    raise
+    implementation.Worker = Worker
+    monkeypatch.setitem(sys.modules, implementation.__name__, implementation)
+    monkeypatch.setattr(amplifier_web, "runtime_worker", implementation, raising=False)
+    monkeypatch.setattr(probe, "require_ci", lambda: None)
+    monkeypatch.setattr(probe.sys, "addaudithook", lambda hook: None)
+    monkeypatch.setattr(probe, "NetworkGuard", lambda log: types.SimpleNamespace(
+        verify=lambda: {}, audit=lambda event, args: None))
+    monkeypatch.setenv("WINDOWS_TRIAL_ROOT", str(tmp_path))
+    if failed:
+        with pytest.raises(PermissionError, match="PRIVATE"):
+            immediate(probe.worker(tmp_path / "candidate.whl"))
+    else:
+        immediate(probe.worker(tmp_path / "candidate.whl"))
+    assert events == ["configured"] and forwarded[0] is body
+    assert implementation.publish is original_publish
+    if failed:
+        assert forwarded[1] is error
+    facts = json.loads((tmp_path / "worker-facts.json").read_text(encoding="utf-8"))
+    assert facts["events"] == ({"runtime.ready": 1, "runtime.error": 1} if failed else {"runtime.ready": 1})
+    assert facts["errors"] == ([{"class": "PermissionError", "errno": 13, "frames": []}] if failed else [])
+    assert facts["diagnosticStatus"] == "PASS"
+    assert "PRIVATE" not in json.dumps(facts) and "/private" not in json.dumps(facts)
+    value = report()
+    value["hosts"] = [{"status": "FAIL" if failed else "PASS", "stage": "first_worker_turn",
+                      "checks": {}, "workerFacts": facts}]
+    probe.validate_public(value)
+
+
+def test_unknown_worker_events_and_payload_symbols_do_not_enter_facts():
+    facts = {"events": {}, "errors": []}
+    probe.worker_event(facts, {"type": "PRIVATE", "error": "PRIVATE"})
+    probe.worker_event(facts, {"type": "runtime.error", "error": "PRIVATE", "errorType": "PrivateError"})
+    assert facts == {"events": {"runtime.error": 1}, "errors": []}
+
+
+@pytest.mark.parametrize("fault", ["step", "action", "code", "status", "message", "event",
+                                  "worker-message", "worker-error", "host-error"])
+def test_first_turn_diagnostics_reject_unknown_or_private_fields(fault):
+    value = report()
+    host = {"status": "FAIL", "stage": "first_worker_turn", "checks": {},
+            "turnStep": "conversation_send",
+            "lastAction": probe.action_fact("conversation.send", 503, {"code": "worker_startup_failed"}),
+            "errors": [{"class": "AssertionError", "frames": []}],
+            "workerFacts": {"events": {"runtime.error": 1}, "errors": [{"class": "other", "frames": []}],
+                            "diagnosticStatus": "PASS"}}
+    value["hosts"] = [host]
+    probe.validate_public(value)
+    if fault == "step":
+        host["turnStep"] = "PRIVATE"
+    elif fault in {"action", "code", "status", "message"}:
+        host["lastAction"][{"status": "httpStatus"}.get(fault, fault)] = "PRIVATE"
+    elif fault == "event":
+        host["workerFacts"]["events"]["PRIVATE"] = 1
+    elif fault == "worker-message":
+        host["workerFacts"]["message"] = "PRIVATE"
+    elif fault == "worker-error":
+        host["workerFacts"]["errors"][0]["frames"] = [{"source": "private_symbol"}]
+    elif fault == "host-error":
+        host["errors"][0]["message"] = "PRIVATE"
+    with pytest.raises((AssertionError, KeyError, TypeError)):
+        probe.validate_public(value)
+
+
+@pytest.mark.parametrize("kind", ["runtime.ready", "runtime.error"])
+@pytest.mark.parametrize("diagnostic_fault", ["observe", "write", "final_write"])
+@pytest.mark.parametrize("publisher_outcome", ["return", "permission", "cancel",
+                                              "worker_permission", "worker_cancel"])
+def test_actual_worker_observer_fault_preserves_publisher_and_defers_failure_until_cleanup(
+        tmp_path, monkeypatch, kind, diagnostic_fault, publisher_outcome):
+    import asyncio
+    import amplifier_web
+    implementation = types.ModuleType("amplifier_web.runtime_worker")
+    marker, forwarded, returns, cleaned, writes = object(), [], [], [], []
+    original_error = (asyncio.CancelledError("PRIVATE-CANCEL") if publisher_outcome == "cancel"
+                      else PermissionError(13, "PRIVATE-PUBLISHER", "/private"))
+    original_worker_error = (asyncio.CancelledError("PRIVATE-WORKER-CANCEL")
+                             if publisher_outcome == "worker_cancel" else
+                             PermissionError(13, "PRIVATE-WORKER", "/private"))
+    event = {"type": kind, "error": "PRIVATE", "report": {"secret": "PRIVATE"}}
+    def original_publish(received):
+        forwarded.append(received)
+        if publisher_outcome in {"permission", "cancel"}:
+            raise original_error
+        return marker
+    implementation.publish = original_publish
+    implementation.configure_protocol = lambda: None
+    class Worker:
+        async def start(self):
+            pass
+        async def run(self):
+            try:
+                if kind == "runtime.error":
+                    try:
+                        raise original_worker_error
+                    except BaseException:
+                        returns.append(implementation.publish(event))
+                else:
+                    returns.append(implementation.publish(event))
+                if publisher_outcome.startswith("worker_"):
+                    raise original_worker_error
+            finally:
+                cleaned.append(True)
+    implementation.Worker = Worker
+    monkeypatch.setitem(sys.modules, implementation.__name__, implementation)
+    monkeypatch.setattr(amplifier_web, "runtime_worker", implementation, raising=False)
+    monkeypatch.setattr(probe, "require_ci", lambda: None)
+    monkeypatch.setattr(probe.sys, "addaudithook", lambda hook: None)
+    monkeypatch.setattr(probe, "NetworkGuard", lambda log: types.SimpleNamespace(
+        verify=lambda: {}, audit=lambda event, args: None))
+    monkeypatch.setenv("WINDOWS_TRIAL_ROOT", str(tmp_path))
+    real_write = probe.write_json
+    def write(path, facts):
+        writes.append(facts["diagnosticStatus"])
+        if diagnostic_fault == "write" or diagnostic_fault == "final_write" and cleaned:
+            raise OSError(28, "PRIVATE-DIAGNOSTIC", "/private")
+        real_write(path, facts)
+    monkeypatch.setattr(probe, "write_json", write)
+    if diagnostic_fault == "observe":
+        def observe(*args):
+            raise OSError(28, "PRIVATE-DIAGNOSTIC", "/private")
+        monkeypatch.setattr(probe, "worker_event", observe)
+    expected_error = original_worker_error if publisher_outcome.startswith("worker_") else original_error
+    expected = AssertionError if publisher_outcome == "return" else type(expected_error)
+    with pytest.raises(expected) as caught:
+        immediate(probe.worker(tmp_path / "candidate.whl"))
+    assert cleaned == [True] and len(forwarded) == 1 and forwarded[0] is event
+    assert implementation.publish is original_publish
+    if publisher_outcome == "return" or publisher_outcome.startswith("worker_"):
+        assert returns == [marker]  # observer did not introduce a publish error
+    if publisher_outcome != "return":
+        assert caught.value is expected_error  # not the diagnostic OSError(28)
+    if diagnostic_fault == "observe":
+        assert writes == ["FAIL"]
+    else:
+        assert writes == ["PENDING", "FAIL" if diagnostic_fault == "write" else "PASS"]
+    path = tmp_path / "worker-facts.json"
+    if path.exists():
+        facts = json.loads(path.read_text(encoding="utf-8"))
+        assert facts["diagnosticStatus"] == ("FAIL" if diagnostic_fault == "observe" else "PENDING")
+        assert "PRIVATE" not in json.dumps(facts)
+        value = report()
+        value["hosts"] = [{"status": "FAIL", "stage": "first_worker_turn", "checks": {},
+                          "workerFacts": facts}]
+        probe.validate_public(value)
+        value["hosts"][0]["status"] = "PASS"
+        with pytest.raises(AssertionError):
+            probe.validate_public(value)
+    else:
+        assert diagnostic_fault == "write"
+    completed = probe.completed_worker_facts(path)
+    assert completed["diagnosticStatus"] == "FAIL"
+    assert "PRIVATE" not in json.dumps(completed)
+
+
+@pytest.mark.parametrize("status", ["PENDING", "FAIL", None, "PRIVATE"])
+def test_missing_or_failed_worker_diagnostics_cannot_qualify(status):
+    facts = {"events": {}, "errors": []}
+    if status is not None:
+        facts["diagnosticStatus"] = status
+    value = report()
+    value["hosts"] = [{"status": "PASS", "stage": "complete", "checks": {}, "workerFacts": facts}]
+    with pytest.raises((AssertionError, KeyError)):
+        probe.validate_public(value)
+    journey = next(node for node in ast.parse(Path(SPEC.origin).read_text(encoding="utf-8")).body
+                   if isinstance(node, ast.AsyncFunctionDef) and node.name == "journey")
+    source = ast.unparse(journey)
+    assert "assert report['workerFacts']['diagnosticStatus'] == 'PASS'" in source
+
+
+@pytest.mark.parametrize("raw", [None, b"{", b"\xff", b"[]",
+                                  b'{"diagnosticStatus":[]}', b'{"diagnosticStatus":"PRIVATE"}'])
+def test_completed_missing_or_malformed_worker_facts_are_fixed_failure(tmp_path, raw):
+    path = tmp_path / "worker-facts.json"
+    if raw is not None:
+        path.write_bytes(raw)
+    assert probe.completed_worker_facts(path) == {
+        "events": {}, "errors": [], "diagnosticStatus": "FAIL"}
+
+
+def test_first_turn_discriminators_keep_real_send_and_outcome_assertions():
+    tree = ast.parse(Path(SPEC.origin).read_text(encoding="utf-8"))
+    journey = next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)
+                   and node.name == "journey")
+    steps = [ast.literal_eval(node.value) for node in ast.walk(journey)
+             if isinstance(node, ast.Assign) and any(isinstance(target, ast.Subscript)
+                and isinstance(target.value, ast.Name) and target.value.id == "report"
+                and isinstance(target.slice, ast.Constant) and target.slice.value == "turnStep"
+                for target in node.targets)]
+    assert set(steps) == probe.TURN_STEPS and len(steps) == len(probe.TURN_STEPS)
+    source = ast.unparse(journey)
+    for required in (
+        "await action('conversation.send'",
+        "await until(completed)",
+        "assert calls[-1] == {'pid': row['process'].pid, 'access': 'full'}",
+        "assert row['process'].pid != row['windows_owner'].job.identity.guard_pid",
+        "assert output.read_text(encoding='utf-8') == MARKER + '\\n'",
+        "assert any((m['role'] == 'tool' for m in history))",
+        "assert report['innerJobsSettled']",
+    ):
+        assert required in source
+    assert "assert response.status == 200 and (not result.get('error'))" in source
+
+
 def test_real_aiohttp_close_failure_is_retained_with_known_code_without_loop_or_listener():
     from aiohttp.test_utils import BaseTestServer
     from asyncio.base_events import BaseEventLoop

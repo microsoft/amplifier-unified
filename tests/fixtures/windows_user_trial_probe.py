@@ -116,10 +116,13 @@ DIAGNOSTIC_FUNCTIONS = {
     "aiohttp_client_close": ("aiohttp.test_utils", "TestClient.close"),
     "asyncio_loop_check_closed": ("asyncio.base_events", "BaseEventLoop._check_closed"),
     "asyncio_loop_run_until_complete": ("asyncio.base_events", "BaseEventLoop.run_until_complete"),
+    "worker_start": ("amplifier_web.runtime_worker", "Worker.start"),
+    "manager_prepare": ("amplifier_web.host.session", "prepare_manager"),
+    "manager_dependencies": ("amplifier_web.host.session", "prepare_dependencies"),
 }
 DIAGNOSTIC_SOURCES = frozenset(DIAGNOSTIC_FUNCTIONS) | {
     "selected_test", "tls_fixture_scope", "tls_fixture_reserve", "tls_fixture_call",
-    "tls_fixture_start", "tls_fixture_bound", "other"}
+    "tls_fixture_start", "tls_fixture_bound", "trial_journey", "trial_action", "other"}
 ERROR_CLASSES = {kind: kind.__name__ for kind in (
     AssertionError, OSError, PermissionError, FileNotFoundError, NotADirectoryError,
     IsADirectoryError, TimeoutError, ImportError, ModuleNotFoundError, ValueError,
@@ -127,6 +130,50 @@ ERROR_CLASSES = {kind: kind.__name__ for kind in (
     UnicodeEncodeError, UnicodeDecodeError, ExceptionGroup, BaseExceptionGroup)}
 ERROR_LABELS = frozenset(ERROR_CLASSES.values()) | {"AppError", "Failed", "Skipped", "other"}
 EXCEPTION_RECORD_LIMIT = 6
+TURN_STEPS = frozenset({
+    "session_create", "access_read", "access_save", "inherited_access", "conversation_send",
+    "wait_parked_history", "provider_identity", "guard_identity", "output_utf8",
+    "history_assistant", "history_tool"})
+TRIAL_ACTIONS = frozenset({"session.create", "access.get", "access.set", "conversation.send",
+                          "outputs.attach", "outputs.read"})
+TRIAL_ACTION_CODES = frozenset({"worker_startup_failed", "runtime_pending", "session_busy",
+                               "host_shutdown", "other", "none"})
+WORKER_EVENTS = frozenset({"runtime.identity", "runtime.ready", "runtime.error", "runtime.parked",
+                          "input.delivered", "generation.started", "generation.finished"})
+
+
+def action_fact(name, status, result):
+    """Only fixed response facts, never error prose, IDs or response state."""
+    assert name in TRIAL_ACTIONS and type(status) is int and 100 <= status <= 599
+    code = result.get("code")
+    return {"action": name, "httpStatus": status, "hasError": bool(result.get("error")),
+            "code": code if type(code) is str and code in TRIAL_ACTION_CODES else
+                    "none" if code is None else "other"}
+
+
+def worker_event(facts, event):
+    """Observe the real publisher, never replace or filter its protocol event."""
+    kind = event.get("type")
+    if type(kind) is str and kind in WORKER_EVENTS:
+        facts["events"][kind] = min(facts["events"].get(kind, 0) + 1, 10**9)
+        if kind == "runtime.error" and isinstance(sys.exception(), BaseException):
+            facts["errors"] = safe_exception(sys.exception(), diagnostic_codes())
+        return True
+    return False
+
+
+def completed_worker_facts(path):
+    """Read ONLY after retained job cleanup; absence/incomplete I/O is failure."""
+    try:
+        facts = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        facts = None
+    if (type(facts) is not dict or type(facts.get("diagnosticStatus")) is not str
+            or facts["diagnosticStatus"] not in {"PENDING", "PASS", "FAIL"}):
+        return {"events": {}, "errors": [], "diagnosticStatus": "FAIL"}
+    if facts["diagnosticStatus"] == "PENDING":
+        facts["diagnosticStatus"] = "FAIL"
+    return facts  # The existing public validator still rejects any extra fields.
 
 
 def diagnostic_codes():
@@ -584,8 +631,32 @@ def validate_public(value):
         assert type(value[key]) is bool
     for item in value.get("hosts", []):
         assert set(item) <= common | {"installed", "innerJobsSettled", "publicGateClosed", "network",
-                                      "networkDiagnostics"}
+                                      "networkDiagnostics", "turnStep", "lastAction", "errors", "workerFacts"}
         checks(item)
+        if "turnStep" in item:
+            assert item["turnStep"] in TURN_STEPS
+        if "lastAction" in item:
+            fact = item["lastAction"]
+            assert set(fact) == {"action", "httpStatus", "hasError", "code"}
+            assert fact["action"] in TRIAL_ACTIONS and fact["code"] in TRIAL_ACTION_CODES
+            assert type(fact["httpStatus"]) is int and 100 <= fact["httpStatus"] <= 599
+            assert type(fact["hasError"]) is bool
+        if "errors" in item:
+            assert type(item["errors"]) is list and 1 <= len(item["errors"]) <= EXCEPTION_RECORD_LIMIT
+            for row in item["errors"]:
+                error(row)
+        if "workerFacts" in item:
+            facts = item["workerFacts"]
+            assert set(facts) == {"events", "errors", "diagnosticStatus"}
+            assert facts["diagnosticStatus"] in {"PENDING", "PASS", "FAIL"}
+            if item["status"] == "PASS":
+                assert facts["diagnosticStatus"] == "PASS"
+            assert set(facts["events"]) <= WORKER_EVENTS
+            for count in facts["events"].values():
+                number(count)
+            assert type(facts["errors"]) is list and len(facts["errors"]) <= EXCEPTION_RECORD_LIMIT
+            for row in facts["errors"]:
+                error(row)
         if "installed" in item:
             installation(item["installed"])
         for key in {"innerJobsSettled", "publicGateClosed"} & item.keys():
@@ -1009,8 +1080,25 @@ async def worker(wheel):
     root = Path(os.environ["WINDOWS_TRIAL_ROOT"])
     guard = NetworkGuard(root / ("network-worker-" + str(os.getpid()) + ".jsonl"))
     sys.addaudithook(guard.audit)
+    from amplifier_web import runtime_worker as implementation
     from amplifier_web.runtime_worker import Worker, configure_protocol
     configure_protocol()
+    # Per-event snapshots stay PENDING until ordinary Worker.run cleanup ends.
+    # A missing/truncated final write therefore cannot look like completed proof.
+    facts = {"events": {}, "errors": [], "diagnosticStatus": "PENDING"}
+    diagnostic_failed = False
+    original_publish = implementation.publish
+    def observed_publish(event):
+        nonlocal diagnostic_failed
+        try:
+            if worker_event(facts, event):
+                write_json(root / "worker-facts.json", facts)
+        except BaseException:
+            # Observation has no authority to change publisher behavior. Keep
+            # original cancellation/errors outside this diagnostic-only catch.
+            diagnostic_failed = True
+        return original_publish(event)
+    implementation.publish = observed_publish
     # Record again AFTER the real mount, not only before Foundation source loading.
     owner = Worker()
     original_start = owner.start
@@ -1021,8 +1109,19 @@ async def worker(wheel):
             guard.verify()
             write_json(root / ("installed-worker-" + str(os.getpid()) + ".json"), evidence)
     owner.start = observed_start
-    await owner.run()
-    guard.verify()
+    try:
+        await owner.run()
+        guard.verify()
+    finally:
+        implementation.publish = original_publish
+        facts["diagnosticStatus"] = "FAIL" if diagnostic_failed else "PASS"
+        try:
+            write_json(root / "worker-facts.json", facts)
+        except BaseException:
+            diagnostic_failed = True
+        # Never raise from finally: preserve the exact original run/publisher
+        # exception (including cancellation). Normal returns still fail below.
+    assert not diagnostic_failed
 
 
 async def journey(root, wheel, report, guard, phase):
@@ -1065,6 +1164,10 @@ async def journey(root, wheel, report, guard, phase):
     runner = app = reservation = None
     original_reader = entry.read_owner_control_token
     owners = []
+    worker_facts_path = root / "worker-facts.json"
+    # Reset only this bounded observation before a fresh host can start a worker.
+    # No worker from the preceding host is alive here (outer owned-job proof).
+    write_json(worker_facts_path, {"events": {}, "errors": [], "diagnosticStatus": "PENDING"})
     try:
         if phase == "first":
             report["stage"] = "private_runtime_project_api"
@@ -1143,15 +1246,20 @@ async def journey(root, wheel, report, guard, phase):
                 response = await client.post(origin + "/api/actions", headers=headers,
                     json={"action": name, "args": args, "id": identity})
                 result = await response.json()
+                report["lastAction"] = action_fact(name, response.status, result)
                 assert response.status == 200 and not result.get("error")
                 return result
+            guard.codes.update({action.__code__: "trial_action", journey.__code__: "trial_journey"})
 
             service = app["service"]
             if phase == "first":
                 report["stage"] = "first_worker_turn"
+                report["turnStep"] = "session_create"
                 await action("session.create", {"bundle": str(bundle)}, "trial-create")
                 sid = service._session()["id"]
+                report["turnStep"] = "access_read"
                 current = (await action("access.get", {"sessionId": sid}, "access-read"))["result"]
+                report["turnStep"] = "access_save"
                 await action("access.set", {"sessionId": sid, "scope": "workspace", "mode": "full",
                     "expectedRevision": current["revision"]}, "access-save")
             else:
@@ -1165,10 +1273,12 @@ async def journey(root, wheel, report, guard, phase):
                                            "read-after-host-restart"))["result"]
                 assert output_read["sha256"] == digest((MARKER + "\n").encode())
                 assert output_read["text"] == MARKER + "\n"
+            report["turnStep"] = "inherited_access"
             inherited = (await action("access.get", {"sessionId": sid}, "access-inherited-" + phase))["result"]
             assert inherited["mode"] == "full" and inherited["source"] == "workspace"
             assert inherited["overrides"]["session"]["mode"] == "inherit"
             report["checks"]["inheritedAccessLookup"] = "PASS"
+            report["turnStep"] = "conversation_send"
             await action("conversation.send", {"sessionId": sid,
                 "text": "FIRST_TRIAL café 日本語" if phase == "first" else "RESUME_TRIAL"}, "trial-" + phase)
             directory = sessions_dir(workspace) / sid
@@ -1178,12 +1288,16 @@ async def journey(root, wheel, report, guard, phase):
                     return False
                 return any(m["role"] == "assistant" and expected in str(m.get("content"))
                            for m in SessionHistoryStore(directory).load_messages())
+            report["turnStep"] = "wait_parked_history"
             await until(completed)
             row = runtime.workers[sid]
             owners.append(row["windows_owner"])
             calls = [json.loads(line) for line in (root / "provider-calls.jsonl").read_text(encoding="utf-8").splitlines()]
+            report["turnStep"] = "provider_identity"
             assert calls[-1] == {"pid": row["process"].pid, "access": "full"}
+            report["turnStep"] = "guard_identity"
             assert row["process"].pid != row["windows_owner"].job.identity.guard_pid
+            report["turnStep"] = "output_utf8"
             assert output.read_text(encoding="utf-8") == MARKER + "\n"
             history = SessionHistoryStore(directory).load_messages()
             if phase == "resume":
@@ -1191,7 +1305,9 @@ async def journey(root, wheel, report, guard, phase):
                 assert sum(m["role"] == "user" and "FIRST_TRIAL" in str(m.get("content")) for m in history) == 1
                 report["checks"]["hostRestartResumeWithoutReplay"] = "PASS"
                 return
+            report["turnStep"] = "history_assistant"
             assert any(m["role"] == "assistant" and MARKER in str(m.get("content")) for m in history)
+            report["turnStep"] = "history_tool"
             assert any(m["role"] == "tool" for m in history)
             report["checks"]["realWorkerToolUtf8History"] = "PASS"
             report["stage"] = "output_snapshot"
@@ -1233,6 +1349,9 @@ async def journey(root, wheel, report, guard, phase):
         # RuntimeManager.close gathers exceptions; do not mistake that for proof.
         report["innerJobsSettled"] = settled(owners)
         assert report["innerJobsSettled"]
+        report["workerFacts"] = completed_worker_facts(worker_facts_path)
+        if sys.exception() is None:
+            assert report["workerFacts"]["diagnosticStatus"] == "PASS"
 
 
 def require_ci():
@@ -1447,6 +1566,8 @@ def host(wheel, phase):
         report.update(status="PASS", stage="complete")
     except BaseException as exc:
         failure(report, exc)
+        report["errors"] = safe_exception(exc, {**diagnostic_codes(),
+            **(guard.codes if guard is not None else {}), journey.__code__: "trial_journey"})
     finally:
         if guard is not None:
             report["network"] = {"blockedOptionalIpv6Probes": guard.probes, "unknownAttempts": guard.blocked}
