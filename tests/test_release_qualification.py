@@ -979,7 +979,9 @@ def test_offline_preflight_does_not_run_import_or_independent_install_probes():
 def test_python_selection_records_exact_source_and_refuses_missing_files(tmp_path, monkeypatch, suite, targets, missing):
     import subprocess
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
-    run = workflow['jobs']['python']['steps'][1]['run']
+    selection, = (step for step in workflow['jobs']['python']['steps']
+                  if step.get('name') == 'Record and validate the fixed Python selection')
+    run = selection['run']
     lines = run.splitlines()
     assert lines[0] == "python - <<'PY'" and lines[-1] == 'PY'
     script = compile('\n'.join(lines[1:-1]), 'workflow-python-selection', 'exec')
@@ -1012,7 +1014,9 @@ def test_python_selection_records_exact_source_and_refuses_missing_files(tmp_pat
 def test_python_selection_rejects_arbitrary_input_before_commands(tmp_path, monkeypatch, suite):
     import subprocess
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
-    script = '\n'.join(workflow['jobs']['python']['steps'][1]['run'].splitlines()[1:-1])
+    selection, = (step for step in workflow['jobs']['python']['steps']
+                  if step.get('name') == 'Record and validate the fixed Python selection')
+    script = '\n'.join(selection['run'].splitlines()[1:-1])
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv('CHECK_SUITE', suite)
     monkeypatch.setattr(subprocess, 'check_output', lambda *a, **kw: pytest.fail('Invalid selection ran a command'))
