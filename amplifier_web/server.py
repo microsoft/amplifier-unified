@@ -329,6 +329,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                     'Content-Type':'application/octet-stream', 'Content-Length':str(record['bytes']),
                     'Content-Disposition': "attachment; filename*=UTF-8''"+quote(filename,safe=''),
                     'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; sandbox"})
+                _set_response_headers(response, request)
                 await response.prepare(request)
                 while data := await settle_worker(stream.read,retained_files.CHUNK):
                     await response.write(data)

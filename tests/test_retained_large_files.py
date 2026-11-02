@@ -76,6 +76,13 @@ async def test_large_wheel_and_png_survive_gc_restart_and_verified_http_download
     reopened = runtime.app = server['service']
     assert (await read(reopened, reopened._session(source['id']), args))['qualified']
     client = await authenticated_client(server)
+    token = client.session.headers.pop('Authorization')
+    try:
+        refused = await client.get(value['downloadUrl'])
+        assert refused.status == 401
+        await refused.read()
+    finally:
+        client.session.headers['Authorization'] = token
     tracemalloc.start()
     started = time.perf_counter()
     try:
@@ -91,6 +98,9 @@ async def test_large_wheel_and_png_survive_gc_restart_and_verified_http_download
         tracemalloc.stop()
     assert download_peak < 32 * 1024 * 1024, download_peak
     assert actual.hexdigest() == expected and received == size
+    assert response.headers.get('Cache-Control') == 'no-store'
+    assert response.headers.get('X-Content-Type-Options') == 'nosniff'
+    assert response.headers.get('Referrer-Policy') == 'no-referrer'
     print(json.dumps({'fileBytes': size, 'captureAndPreviewPeakBytes': peak,
         'captureAndPreviewSeconds': capture_seconds, 'downloadPeakBytes': download_peak,
         'downloadSeconds': download_seconds, 'sha256': expected}))
@@ -217,6 +227,57 @@ async def test_large_save_failure_rolls_back_manifest_chunks_and_current_report(
     assert not app.collaboration.receipt(args['requestId']).get('response')
     monkeypatch.setattr(app.outputs.store, 'create', original)
     assert (await declare(app, peer, args))['result']['artifactVerification'] == 'verified'
+
+
+@pytest.mark.parametrize('corrupted', ['chunk', 'manifest', 'small_body'])
+@pytest.mark.parametrize('indexed', [False, True])
+async def test_preexisting_same_size_corruption_refuses_correction_and_preserves_prior_report(app, tmp_path, corrupted, indexed):
+    from amplifier_web import result_artifacts
+    from test_coordination_revisions import subscribe
+    source, peer, path, args = await setup(app, tmp_path)
+    args['outcome'] = 'failed'
+    first = (await declare(app, peer, args))['result']
+    await subscribe(app, args['requestId'])
+    if corrupted == 'small_body':
+        path.write_text('Corrected result with different content')
+    else:
+        path = path.with_name('corrected.whl')
+        wheel(path, 2)
+    corrected = {**args, 'expectedResponseRevision': 1, 'outcome': 'success',
+                 'text': 'Correction', 'references': [path.name + '@sha256:' + digest(path)]}
+    async with result_artifacts.prepare_files(path.parent, corrected['references']) as prepared:
+        item, = prepared
+        value = item['pieces'][0].load() if corrupted == 'chunk' else item['resource']
+        encoded = value.text.encode()
+        # Change valid JSON without changing its length, so size-only adoption
+        # incorrectly accepts it. The immutable hash must catch the conflict.
+        damaged = encoded.replace(b'base64', b'base63', 1) if corrupted == 'chunk' else encoded
+        if corrupted == 'manifest':
+            body = json.loads(encoded)
+            body['sha256'] = 'f' * 64 if body['sha256'] != 'f' * 64 else 'e' * 64
+            damaged = resource_files.prepare(body).text.encode()
+        elif corrupted == 'small_body':
+            damaged = encoded.replace(b'Corrected', b'Corrupted', 1)
+        assert len(damaged) == len(encoded) and damaged != encoded
+        if indexed:
+            resource_files.put_prepared(app.db, value)
+            app.db.commit()
+        artifact = resource_files.root(app.db) / (value.identity + '.json')
+        artifact.write_bytes(damaged)
+    before = set(app.db.execute('SELECT id,value FROM state_resources'))
+    with pytest.raises(ValueError, match='identity'):
+        await agent_action(app, peer, 'coordination.reply', corrected, 'corrupt-correction')
+    assert artifact.read_bytes() == damaged
+    assert set(app.db.execute('SELECT id,value FROM state_resources')) == before
+    assert app.collaboration.receipt(args['requestId'])['response'] == first
+    assert app.collaboration.receipt('artifact-declaration')['result'] == first
+    assert app.db.execute('SELECT count(*) FROM output_records').fetchone()[0] == 1
+    assert not app.db.execute('SELECT 1 FROM commands WHERE id=?', ('corrupt-correction',)).fetchone()
+    await finish(app, peer, args['requestId'])
+    request = app.collaboration.receipt(args['requestId'])
+    assert not request['response']['qualified'] and request['responseRevision'] == 1
+    assert not app.collaboration.receipt(request['subscription']['continuationId'])['dependencySatisfied']
+    assert (await read(app, source, args))['text'] == 'Original exact bytes'
 
 
 async def test_disk_pressure_keeps_report_explicitly_incomplete(app, tmp_path, monkeypatch):

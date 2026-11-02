@@ -116,14 +116,25 @@ async def prepared(function, *args):
 
 
 async def adopt(db, item):
+    def verify(source, maximum):
+        # Existing same-size files are preserved by put(). Establish the actual
+        # adopted identity before a retained report can claim verification.
+        resource_files.read_detached(source, max_bytes=maximum)
+
+    async def store(value):
+        reference = await resource_files.put_prepared_async(db, value)
+        source = resource_files.detach(db, reference['$resource'])
+        await resource_files.settle_worker(verify, source, value.size)
+        return reference
+
     directory = resource_files.root(db)
     pieces = item.get('pieces', [])
     if directory and pieces and sum(piece.size for piece in pieces) > shutil.disk_usage(directory.parent).free:
         raise OSError('Not enough free disk for retained file chunks.')
     for piece in pieces:
         value = await resource_files.settle_worker(piece.load)
-        await resource_files.put_prepared_async(db, value)
-    return await resource_files.put_prepared_async(db, item['resource'])
+        await store(value)
+    return await store(item['resource'])
 
 
 def manifest(source, record):
