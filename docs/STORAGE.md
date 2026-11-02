@@ -162,6 +162,13 @@ removing those files in a worker. Cancellation settles the file worker before
 releasing exclusion. Later saves continue the backlog with a fresh proof.
 Explicit/offline collection keeps its complete proof and existing batch scope.
 The immutable-resource walk also runs outside the application and writer locks.
+It captures up to 64 immutable resource indexes per short owner-lock acquisition,
+then inspects those files in one settled worker call. This bounds metadata per
+handoff and avoids one executor round trip and lock acquisition per retained file;
+it does not limit retained files or their size. Each file still uses the existing
+verified-edge cache and the final proof rechecks every inspected index. Large
+individual files remain linear validation work, and continuous new roots can
+still defer a pass at the unchanged catch-up boundary.
 Cancellation before pruning does not delete anything; cancellation after pruning
 settles the bounded file removal before releasing exclusion. Missing bodies or
 an uncertain reference graph defer collection, and navigation need not wait for
@@ -292,9 +299,15 @@ qualified dependency layers, with time
 limits and a retained cursor. Incomplete inspection is labeled; uninspected
 copies stay put. File-content measurements are not physical disk-allocation
 promises: hard links, shared runtimes and copy-on-write blocks can retain storage.
-The size target currently applies to the fully measured eligible batch, not a
-hard ceiling on all host storage. The age policy reaches other candidates in
-later batches. Automatic checks run hourly while the app is open and after
+The size target uses the existing observation ledger's latest measured sizes
+across bounded batches. Timestamp-only legacy observations retain their age but
+contribute no invented size until measured. Newly protected, absent or removed
+copies stop contributing; unvisited observations survive a partial pass.
+The preview distinguishes this rolling estimate from the current freshly
+verified batch and does not claim a complete inventory or hard disk ceiling.
+Only candidates freshly verified by their existing owner can be selected and
+removed; an earlier observation is never deletion authority. The age policy
+continues to apply independently. Automatic checks run hourly while the app is open and after
 existing updater maintenance triggers; update/activation work takes priority.
 Successful runner selection only wakes this policy owner; it cannot bypass the
 global off setting or retention grace. Explicit user uninstall and Skip actions
