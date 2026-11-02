@@ -41,8 +41,11 @@ def _sid(value: str) -> str:
 def _owner() -> str:
     if sys.platform != "win32":
         raise WindowsServiceError("This command requires native Windows Task Scheduler.")
-    from .browser_entry import current_owner_sid
-    return _sid(current_owner_sid())
+    from .windows_files import current_process_sid
+    try:
+        return _sid(current_process_sid())
+    except (OSError, ValueError, RuntimeError):
+        raise WindowsServiceError("Cannot verify the Windows owner process-token SID.") from None
 
 
 def task_name(sid: str) -> str:
@@ -397,6 +400,8 @@ def install(data_dir, workspace=None, *, replace=False) -> dict:
 def command(name: str, data_dir=None):
     if name not in {"start", "stop", "restart", "status", "logs"}:
         raise ValueError(f"Unknown service command: {name}")
+    if data_dir is None:
+        raise WindowsServiceError("Windows service commands require an explicit data directory.")
     if name == "status":
         value = task_state(data_dir)
         print(json.dumps(value))
@@ -414,6 +419,8 @@ def command(name: str, data_dir=None):
 
 
 def uninstall(data_dir=None) -> None:
+    if data_dir is None:
+        raise WindowsServiceError("Windows service removal requires an explicit data directory.")
     value, spec = _read(data_dir)
     if spec is not None:
         result = _scheduler("remove", spec.sid, previous=value["xml"])

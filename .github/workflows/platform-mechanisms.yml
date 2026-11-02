@@ -17,6 +17,9 @@ on:
       - amplifier_web/tls.py
       - amplifier_web/windows_tls.py
       - amplifier_web/windows_service.py
+      - amplifier_web/cli.py
+      - amplifier_web/deployment_service.py
+      - amplifier_web/installation_health.py
       - amplifier_web/host/config.py
       - amplifier_web/host_dependencies.py
       - amplifier_web/shared_settings.py
@@ -33,6 +36,7 @@ on:
       - tests/test_deployment.py
       - tests/test_windows_tls.py
       - tests/test_windows_service.py
+      - tests/test_cli_deployment.py
       - tests/conftest.py
       - tests/windows/install.Tests.ps1
       - README.md
@@ -101,12 +105,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows Python preflight failed.' }
           python -m venv .native-test-venv
           if ($LASTEXITCODE -ne 0) { throw 'Test environment creation failed.' }
-          .\.native-test-venv\Scripts\python.exe -m pip install --index-url https://pypi.org/simple --only-binary=:all: "pytest>=8,<10" "cryptography>=44,<51" "PyYAML>=6.0.3,<7" "filelock>=3.20,<4"
+          .\.native-test-venv\Scripts\python.exe -m pip install --index-url https://pypi.org/simple --only-binary=:all: "pytest>=8,<10" "cryptography>=44,<51" "PyYAML>=6.0.3,<7" "filelock>=3.20,<4" "aiohttp==3.14.4"
           if ($LASTEXITCODE -ne 0) { throw 'Focused test dependency installation failed.' }
-          .\.native-test-venv\Scripts\python.exe -I -B -c "import importlib.metadata as m; print({name:m.version(name) for name in ('pytest','cryptography','PyYAML','filelock')})"
+          .\.native-test-venv\Scripts\python.exe -I -B -c "import importlib.metadata as m; print({name:m.version(name) for name in ('pytest','cryptography','PyYAML','filelock','aiohttp')})"
           if ($LASTEXITCODE -ne 0) { throw 'Dependency readback failed.' }
       - name: Check private configuration, TLS and service policy without task registration
         shell: pwsh
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_deployment.py tests/test_windows_tls.py tests/test_windows_service.py -k "not native_synthetic_task_create_run_stop_remove"
           if ($LASTEXITCODE -ne 0) { throw 'Windows configuration, TLS or service policy checks failed.' }
+      - name: Check actual CLI service root binding without tasks or health HTTP
+        shell: pwsh
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_cli_deployment.py::test_service_cli_binds_every_operation_to_selected_data_root tests/test_cli_deployment.py::test_background_launcher_uses_platform_neutral_owned_service_check tests/test_cli_deployment.py::test_windows_service_cli_real_chain_root_boundary tests/test_cli_deployment.py::test_windows_default_launcher_refuses_before_setup_or_browser
+          if ($LASTEXITCODE -ne 0) { throw 'CLI service root binding checks failed.' }

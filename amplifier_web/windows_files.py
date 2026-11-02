@@ -352,6 +352,16 @@ class _API:
         self.ok(self.SetFileInformationByHandle(handle, 4, C.byref(delete), C.sizeof(delete)))
 
 
+def current_process_sid() -> str:
+    """Read the process TokenUser through the existing Win64 API.
+
+    Initialization binds native functions and queries/closes the process token;
+    it does not open paths, create private storage or alter security descriptors.
+    Account-policy validation belongs to the caller.
+    """
+    return _API().sid
+
+
 class PinnedDirectory:
     """Only live inside directory(); no independent access after pins close."""
 

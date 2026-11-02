@@ -359,10 +359,9 @@ def _open_background_service(args, data_dir):
     from .installation_health import status, display
     import subprocess
     try:
-        managed = service.managed_launchd if sys.platform == 'darwin' else service.managed_unit
         print('Starting Amplifier Unified in the background…', flush=True)
-        if managed(data_dir):
-            service.command('start')
+        if service.managed(data_dir):
+            service.command('start', data_dir)
         else:
             service.install(data_dir, args.workspace)
         result = asyncio.run(status(data_dir, wait=60))
@@ -441,13 +440,13 @@ def main():
                 result = asyncio.run(status(data_dir, wait=args.wait))
                 display(result, as_json=args.json, verbose=args.verbose)
                 if args.verbose and not args.json:
-                    deployment_service.command("status")
+                    deployment_service.command("status", data_dir)
                 if not result['ok']:
                     raise SystemExit(1)
             elif args.service_command == "uninstall":
-                deployment_service.uninstall()
+                deployment_service.uninstall(data_dir)
             else:
-                deployment_service.command(args.service_command)
+                deployment_service.command(args.service_command, data_dir)
                 if args.service_command in {'start', 'restart'}:
                     from .installation_health import status, display
                     result = asyncio.run(status(data_dir, wait=60))
@@ -458,6 +457,10 @@ def main():
             raise SystemExit(f"Service {args.service_command} did not complete: {exc}") from None
         return
     background_launch = args.command is None and not _server_overrides(args)
+    if background_launch and sys.platform == 'win32':
+        raise SystemExit(
+            "Windows default launcher remains unavailable pending native owner-browser and "
+            "task/host qualification. No service was installed or started.")
     config = load_server_config(data_dir, overrides=_server_overrides(args))
     args.port, args.data_dir = config["port"], str(data_dir)
     if args.command in {"run", "continue", "tool", "access"}:

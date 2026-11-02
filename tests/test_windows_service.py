@@ -31,6 +31,98 @@ def spec(**overrides):
     return service.TaskSpec(**{**values, **overrides})
 
 
+def test_owner_uses_public_token_query_without_browser_or_filesystem(monkeypatch):
+    import builtins
+    from amplifier_web import windows_files
+    calls = []
+    monkeypatch.setattr(service, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(windows_files, "_API",
+                        lambda: calls.append("TokenUser") or SimpleNamespace(sid=SID))
+    monkeypatch.setattr(windows_files, "PinnedDirectory",
+                        lambda *a, **kw: pytest.fail("SID lookup must not open the filesystem"))
+    original_import = builtins.__import__
+    def guard(name, *args, **kwargs):
+        if "browser_entry" in name or "browser_entry" in (kwargs.get("fromlist") or ()):
+            pytest.fail("Lifecycle must not depend on unpublished browser entry")
+        if len(args) >= 3 and "browser_entry" in (args[2] or ()):
+            pytest.fail("Lifecycle must not depend on unpublished browser entry")
+        return original_import(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, "__import__", guard)
+    assert service._owner() == SID
+    assert calls == ["TokenUser"]
+
+
+@pytest.mark.parametrize("sid", ["S-1-5-18", "S-1-5-19", "S-1-5-20", "display-name", None])
+def test_owner_refuses_system_or_invalid_token_identity(monkeypatch, sid):
+    from amplifier_web import windows_files
+    monkeypatch.setattr(service, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(windows_files, "_API", lambda: SimpleNamespace(sid=sid))
+    with pytest.raises(service.WindowsServiceError, match="process-token SID"):
+        service._owner()
+
+
+def test_owner_token_query_failure_refuses_before_scheduler_transport(monkeypatch):
+    from amplifier_web import windows_files
+    monkeypatch.setattr(service, "sys", SimpleNamespace(platform="win32"))
+    def fail():
+        raise OSError("synthetic TokenUser failure")
+    monkeypatch.setattr(windows_files, "_API", fail)
+    monkeypatch.setattr(service.subprocess, "run",
+                        lambda *a, **kw: pytest.fail("Failed token lookup must not reach COM"))
+    with pytest.raises(service.WindowsServiceError, match="process-token SID"):
+        service.task_state(spec().data_dir)
+
+
+@pytest.mark.parametrize("operation", ["start", "stop", "restart", "status", "logs", "uninstall"])
+def test_missing_data_root_refused_before_any_scheduler_query(monkeypatch, operation):
+    monkeypatch.setattr(service, "_scheduler",
+                        lambda *a, **kw: pytest.fail("Missing root must fail before scheduler query"))
+    monkeypatch.setattr(service, "_owner", lambda: SID)
+    with pytest.raises(service.WindowsServiceError, match="explicit data directory"):
+        if operation == "uninstall":
+            service.uninstall()
+        else:
+            service.command(operation)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Read-only native Windows TokenUser oracle required")
+def test_native_owner_sid_matches_independent_process_token():
+    # Query only: no files, task registration, PowerShell, credentials or SID logs.
+    import ctypes as C
+    kernel = C.WinDLL("kernel32", use_last_error=True)
+    security = C.WinDLL("advapi32", use_last_error=True)
+    kernel.GetCurrentProcess.argtypes, kernel.GetCurrentProcess.restype = [], C.c_void_p
+    kernel.CloseHandle.argtypes, kernel.CloseHandle.restype = [C.c_void_p], C.c_int32
+    kernel.LocalFree.argtypes, kernel.LocalFree.restype = [C.c_void_p], C.c_void_p
+    security.OpenProcessToken.argtypes = [C.c_void_p, C.c_uint32, C.POINTER(C.c_void_p)]
+    security.OpenProcessToken.restype = C.c_int32
+    security.GetTokenInformation.argtypes = [
+        C.c_void_p, C.c_int32, C.c_void_p, C.c_uint32, C.POINTER(C.c_uint32)]
+    security.GetTokenInformation.restype = C.c_int32
+    security.ConvertStringSidToSidW.argtypes = [C.c_wchar_p, C.POINTER(C.c_void_p)]
+    security.ConvertStringSidToSidW.restype = C.c_int32
+    security.EqualSid.argtypes, security.EqualSid.restype = [C.c_void_p, C.c_void_p], C.c_int32
+    token = C.c_void_p()
+    assert security.OpenProcessToken(kernel.GetCurrentProcess(), 8, C.byref(token)), "Token query failed"
+    try:
+        size = C.c_uint32()
+        assert not security.GetTokenInformation(token, 1, None, 0, C.byref(size)), "Unexpected sizing result"
+        assert C.get_last_error() == 122 and 0 < size.value <= 65536, "Invalid TokenUser size"
+        buffer = C.create_string_buffer(size.value)
+        assert security.GetTokenInformation(token, 1, buffer, size, C.byref(size)), "TokenUser read failed"
+        actual = C.c_void_p()
+        converted = bool(security.ConvertStringSidToSidW(service._owner(), C.byref(actual)))
+        if not converted:
+            pytest.fail("SID conversion failed")  # Do not expose the SID in rewritten assertions.
+        try:
+            token_sid = C.cast(buffer, C.POINTER(C.c_void_p))[0]
+            assert bool(security.EqualSid(token_sid, actual)), "Process-token SID mismatch"
+        finally:
+            kernel.LocalFree(actual)
+    finally:
+        assert kernel.CloseHandle(token), "Token handle close failed"
+
+
 @pytest.fixture
 def backend(monkeypatch):
     state = {"xml": None, "running": False, "calls": [], "backups": []}
@@ -142,9 +234,9 @@ def test_scheduler_expansion_existing_task_refused_before_mutation(backend, fiel
         if operation in {"install", "replace"}:
             service.install(spec().data_dir, replace=operation == "replace")
         elif operation == "uninstall":
-            service.uninstall()
+            service.uninstall(spec().data_dir)
         else:
-            service.command(operation)
+            service.command(operation, spec().data_dir)
     assert backend["calls"] == ["query"]
     assert backend["xml"] == original and not backend["backups"]
 
@@ -248,9 +340,9 @@ def test_foreign_or_tampered_task_is_never_stopped_or_overwritten(backend, opera
         if operation in {"install", "replace"}:
             service.install(spec().data_dir, replace=operation == "replace")
         elif operation == "uninstall":
-            service.uninstall()
+            service.uninstall(spec().data_dir)
         else:
-            service.command(operation)
+            service.command(operation, spec().data_dir)
     assert backend["calls"] == ["query"] and not backend["backups"]
 
 
@@ -272,16 +364,16 @@ def test_status_and_managed_are_passive_and_logs_are_truthful(backend):
     backend["calls"].clear()
     assert service.managed(spec().data_dir)
     assert not service.managed(r"C:\Other")
-    state = service.command("status")
+    state = service.command("status", spec().data_dir)
     assert state["state"] == "running" and not state["healthy"]
     assert not state["processVerified"] and not state["logsAvailable"]
     with pytest.raises(service.WindowsServiceError, match="not wired"):
-        service.command("logs")
+        service.command("logs", spec().data_dir)
     assert set(backend["calls"]) == {"query"}
 
 
 def test_command_restart_stop_remove_only_exact_owned_definition(backend):
-    service.uninstall()
+    service.uninstall(spec().data_dir)
     assert backend["calls"] == ["query"]
     service.install(spec().data_dir)
     backend["calls"].clear()
@@ -458,7 +550,7 @@ def test_failed_stop_cannot_start_successor_or_remove_task(backend, monkeypatch)
     monkeypatch.setattr(service, "_scheduler", fail)
     backend["calls"].clear()
     with pytest.raises(service.WindowsServiceError, match="unknown"):
-        service.command("restart")
+        service.command("restart", spec().data_dir)
     assert backend["calls"] == ["query"] and backend["xml"] is not None
 
 
