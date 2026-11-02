@@ -119,16 +119,29 @@ DIAGNOSTIC_FUNCTIONS = {
     "worker_start": ("amplifier_web.runtime_worker", "Worker.start"),
     "manager_prepare": ("amplifier_web.host.session", "prepare_manager"),
     "manager_dependencies": ("amplifier_web.host.session", "prepare_dependencies"),
+    "runtime_start_locked": ("amplifier_web.runtime", "RuntimeManager._start_locked"),
+    "runtime_identify": ("amplifier_web.runtime", "_WindowsWorkerOwner.identify"),
+    "windows_owned_start": ("amplifier_web.windows_jobs", "WindowsOwnedProcess.start"),
+    "windows_owned_spawn": ("amplifier_web.windows_jobs", "WindowsOwnedProcess._start"),
+    "generation_acquire": ("amplifier_web.generation_leases", "acquire"),
+    "runtime_active_release": ("amplifier_web.updates", "active_release"),
+    "runtime_worker_environment": ("amplifier_web.host.config", "worker_environment"),
+    "runtime_private_write": ("amplifier_web.host.config", "write_private"),
+    "private_file_write": ("amplifier_web.deployment", "write_private"),
+    "private_file_read": ("amplifier_web.deployment", "read_private"),
+    "private_directory": ("amplifier_web.windows_files", "directory"),
 }
 DIAGNOSTIC_SOURCES = frozenset(DIAGNOSTIC_FUNCTIONS) | {
     "selected_test", "tls_fixture_scope", "tls_fixture_reserve", "tls_fixture_call",
-    "tls_fixture_start", "tls_fixture_bound", "trial_journey", "trial_action", "other"}
+    "tls_fixture_start", "tls_fixture_bound", "trial_journey", "trial_action",
+    "trial_worker", "trial_require_ci", "trial_network_guard", "other"}
 ERROR_CLASSES = {kind: kind.__name__ for kind in (
     AssertionError, OSError, PermissionError, FileNotFoundError, NotADirectoryError,
     IsADirectoryError, TimeoutError, ImportError, ModuleNotFoundError, ValueError,
     TypeError, AttributeError, KeyError, RuntimeError, UnicodeError,
-    UnicodeEncodeError, UnicodeDecodeError, ExceptionGroup, BaseExceptionGroup)}
-ERROR_LABELS = frozenset(ERROR_CLASSES.values()) | {"AppError", "Failed", "Skipped", "other"}
+    UnicodeEncodeError, UnicodeDecodeError, ExceptionGroup, BaseExceptionGroup, json.JSONDecodeError)}
+ERROR_LABELS = frozenset(ERROR_CLASSES.values()) | {
+    "AppError", "RuntimeStartupError", "CleanupError", "Failed", "Skipped", "other"}
 EXCEPTION_RECORD_LIMIT = 6
 TURN_STEPS = frozenset({
     "session_create", "access_read", "access_save", "inherited_access", "conversation_send",
@@ -176,6 +189,33 @@ def completed_worker_facts(path):
     return facts  # The existing public validator still rejects any extra fields.
 
 
+def observed_runtime_type(base):
+    """Observe the startup boundary after its real cleanup, only in memory.
+
+    No replacement start/identify/spawn path, exception rewriting, I/O or await
+    is added to the exception handler. An observer fault cannot replace the
+    original startup exception or cancellation.
+    """
+    class ObservedRuntime(base):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.trial_startup = {"status": "NOT_OBSERVED", "errors": []}
+
+        async def _start_locked(self, *args, **kwargs):
+            try:
+                result = await super()._start_locked(*args, **kwargs)
+            except BaseException as exc:
+                try:
+                    self.trial_startup = {"status": "RECORDED",
+                                          "errors": safe_exception(exc, diagnostic_codes())}
+                except BaseException:
+                    self.trial_startup = {"status": "FAIL", "errors": []}
+                raise
+            self.trial_startup = {"status": "PASS", "errors": []}
+            return result
+    return ObservedRuntime
+
+
 def diagnostic_codes():
     result = {}
     for label, (module_name, qualname) in DIAGNOSTIC_FUNCTIONS.items():
@@ -217,7 +257,8 @@ def safe_exception(exc, codes):
         label = ERROR_CLASSES.get(kind, "other")
         for module_name, class_name in (
                 ("amplifier_web.service", "AppError"), ("_pytest.outcomes", "Failed"),
-                ("_pytest.outcomes", "Skipped")):
+                ("_pytest.outcomes", "Skipped"), ("amplifier_web.runtime", "RuntimeStartupError"),
+                ("amplifier_web.windows_jobs", "CleanupError")):
             module = sys.modules.get(module_name)
             if module is not None and kind is getattr(module, class_name, None):
                 label = class_name
@@ -631,7 +672,8 @@ def validate_public(value):
         assert type(value[key]) is bool
     for item in value.get("hosts", []):
         assert set(item) <= common | {"installed", "innerJobsSettled", "publicGateClosed", "network",
-                                      "networkDiagnostics", "turnStep", "lastAction", "errors", "workerFacts"}
+                                      "networkDiagnostics", "turnStep", "lastAction", "errors", "workerFacts",
+                                      "runtimeStartup"}
         checks(item)
         if "turnStep" in item:
             assert item["turnStep"] in TURN_STEPS
@@ -657,6 +699,16 @@ def validate_public(value):
             assert type(facts["errors"]) is list and len(facts["errors"]) <= EXCEPTION_RECORD_LIMIT
             for row in facts["errors"]:
                 error(row)
+        if "runtimeStartup" in item:
+            facts = item["runtimeStartup"]
+            assert set(facts) == {"status", "errors"}
+            assert facts["status"] in {"NOT_OBSERVED", "RECORDED", "PASS", "FAIL"}
+            assert type(facts["errors"]) is list and len(facts["errors"]) <= EXCEPTION_RECORD_LIMIT
+            assert bool(facts["errors"]) == (facts["status"] == "RECORDED")
+            for row in facts["errors"]:
+                error(row)
+            if item["status"] == "PASS":
+                assert facts["status"] == "PASS"
         if "installed" in item:
             installation(item["installed"])
         for key in {"innerJobsSettled", "publicGateClosed"} & item.keys():
@@ -1124,6 +1176,26 @@ async def worker(wheel):
     assert not diagnostic_failed
 
 
+async def worker_entry(wheel):
+    """Retain early bootstrap errors too; never replace run/cancellation failure."""
+    try:
+        return await worker(wheel)
+    except BaseException as exc:
+        try:
+            path = Path(os.environ["WINDOWS_TRIAL_ROOT"]) / "worker-facts.json"
+            facts = completed_worker_facts(path)
+            facts["diagnosticStatus"] = "FAIL"
+            if not facts["errors"]:
+                facts["errors"] = safe_exception(exc, {
+                    **diagnostic_codes(), worker.__code__: "trial_worker",
+                    require_ci.__code__: "trial_require_ci",
+                    NetworkGuard.__init__.__code__: "trial_network_guard"})
+            write_json(path, facts)
+        except BaseException:
+            pass  # Missing final diagnostics remains a failed qualification.
+        raise
+
+
 async def journey(root, wheel, report, guard, phase):
     from aiohttp import web, ClientSession, TCPConnector, DummyCookieJar
     from amplifier_web import auth, browser_entry as entry, server, tls
@@ -1159,7 +1231,8 @@ async def journey(root, wheel, report, guard, phase):
                    "config": {"allowed_write_paths": [str(workspace)]}}],
     })
     command = [sys.executable, "-I", "-B", str(Path(__file__).resolve()), "--worker", str(wheel)]
-    runtime = RuntimeManager(command=command, startup_timeout=90, retention={"prewarm_on_select": False})
+    runtime = observed_runtime_type(RuntimeManager)(
+        command=command, startup_timeout=90, retention={"prewarm_on_select": False})
     runtime.home = home
     runner = app = reservation = None
     original_reader = entry.read_owner_control_token
@@ -1349,8 +1422,10 @@ async def journey(root, wheel, report, guard, phase):
         # RuntimeManager.close gathers exceptions; do not mistake that for proof.
         report["innerJobsSettled"] = settled(owners)
         assert report["innerJobsSettled"]
+        report["runtimeStartup"] = runtime.trial_startup
         report["workerFacts"] = completed_worker_facts(worker_facts_path)
         if sys.exception() is None:
+            assert report["runtimeStartup"]["status"] == "PASS"
             assert report["workerFacts"]["diagnosticStatus"] == "PASS"
 
 
@@ -1693,7 +1768,7 @@ def main():
     elif args.requirements:
         print("\n".join(requirements(args.requirements)))
     elif args.worker:
-        asyncio.run(worker(args.worker.resolve()))
+        asyncio.run(worker_entry(args.worker.resolve()))
     elif args.run:
         return run(args.run.resolve(), args.receipt.resolve())
     elif args.host:

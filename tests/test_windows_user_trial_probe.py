@@ -275,6 +275,154 @@ def test_unknown_worker_events_and_payload_symbols_do_not_enter_facts():
     assert facts == {"events": {"runtime.error": 1}, "errors": []}
 
 
+@pytest.mark.parametrize("outcome", ["return", "wrapped", "cancel"])
+@pytest.mark.parametrize("diagnostic_fault", [None, "codes", "facts"])
+def test_runtime_startup_observer_preserves_arguments_return_exception_and_cleanup(
+        monkeypatch, outcome, diagnostic_fault):
+    import asyncio
+    from amplifier_web.runtime import RuntimeStartupError
+    marker, session, emit, guard = object(), {"id": "PRIVATE"}, object(), object()
+    seen, cleaned, observed_after_cleanup = [], [], []
+    original = asyncio.CancelledError("PRIVATE") if outcome == "cancel" else RuntimeStartupError("PRIVATE")
+    cause = PermissionError(13, "PRIVATE", "/private")
+    class Base:
+        def __init__(self, *args, **kwargs):
+            seen.append(("init", args, kwargs))
+        async def _start_locked(self, *args, **kwargs):
+            seen.append(("start", args, kwargs))
+            try:
+                if outcome == "wrapped":
+                    raise original from cause
+                if outcome == "cancel":
+                    raise original
+                return marker
+            finally:
+                cleaned.append(True)
+    runtime = probe.observed_runtime_type(Base)("PRIVATE", startup_timeout=90)
+    real_codes, real_facts = probe.diagnostic_codes, probe.safe_exception
+    def codes():
+        observed_after_cleanup.append(bool(cleaned))
+        if diagnostic_fault == "codes":
+            raise OSError(28, "PRIVATE")
+        return real_codes()
+    def facts(exc, known):
+        observed_after_cleanup.append(bool(cleaned))
+        if diagnostic_fault == "facts":
+            raise OSError(28, "PRIVATE")
+        return real_facts(exc, known)
+    monkeypatch.setattr(probe, "diagnostic_codes", codes)
+    monkeypatch.setattr(probe, "safe_exception", facts)
+    if outcome == "return":
+        assert immediate(runtime._start_locked(session, emit, guard=guard, preserve_emit=True)) is marker
+        assert runtime.trial_startup == {"status": "PASS", "errors": []}
+    else:
+        with pytest.raises(type(original)) as caught:
+            immediate(runtime._start_locked(session, emit, guard=guard, preserve_emit=True))
+        assert caught.value is original
+        if diagnostic_fault:
+            assert runtime.trial_startup == {"status": "FAIL", "errors": []}
+        else:
+            assert runtime.trial_startup["status"] == "RECORDED"
+            assert [row["class"] for row in runtime.trial_startup["errors"]] == (
+                ["RuntimeStartupError", "PermissionError"] if outcome == "wrapped" else ["other"])
+        assert observed_after_cleanup and all(observed_after_cleanup)
+    assert cleaned == [True]
+    assert seen == [("init", ("PRIVATE",), {"startup_timeout": 90}),
+                    ("start", (session, emit), {"guard": guard, "preserve_emit": True})]
+    assert "PRIVATE" not in json.dumps(runtime.trial_startup)
+    value = report()
+    value["hosts"] = [{"status": "PASS" if outcome == "return" else "FAIL",
+                      "stage": "first_worker_turn", "checks": {}, "runtimeStartup": runtime.trial_startup}]
+    probe.validate_public(value)
+
+
+def test_runtime_observer_uses_real_start_boundary_and_fixed_code_labels_without_io():
+    from amplifier_web.runtime import RuntimeManager, RuntimeStartupError
+    runtime = probe.observed_runtime_type(RuntimeManager)(command=["PRIVATE"])
+    # This actual source branch refuses BEFORE any task, disk, process or loop.
+    with pytest.raises(RuntimeStartupError) as caught:
+        immediate(runtime._start_locked({"bundleReplacement": {"deferred": True}}, None))
+    assert runtime.workers == {} and runtime._preparations == {}
+    assert runtime.trial_startup["status"] == "RECORDED"
+    assert [row["class"] for row in runtime.trial_startup["errors"]] == ["RuntimeStartupError"]
+    assert [frame["source"] for frame in runtime.trial_startup["errors"][0]["frames"]] == ["runtime_start_locked"]
+    assert caught.value.__cause__ is None
+
+
+@pytest.mark.parametrize("outcome", ["return", "permission", "cancel"])
+@pytest.mark.parametrize("diagnostic_fault", [None, "observe", "write"])
+def test_worker_bootstrap_boundary_retains_failure_without_replacing_original(
+        tmp_path, monkeypatch, outcome, diagnostic_fault):
+    import asyncio
+    marker = object()
+    original = asyncio.CancelledError("PRIVATE") if outcome == "cancel" else PermissionError(13, "PRIVATE", "/private")
+    cleaned = []
+    async def bootstrap(wheel):
+        assert wheel is marker
+        try:
+            if outcome != "return":
+                raise original
+            return marker
+        finally:
+            cleaned.append(True)
+    monkeypatch.setattr(probe, "worker", bootstrap)
+    monkeypatch.setenv("WINDOWS_TRIAL_ROOT", str(tmp_path))
+    if diagnostic_fault:
+        def fail(*args):
+            assert cleaned == [True]
+            raise OSError(28, "PRIVATE-DIAGNOSTIC", "/private")
+        monkeypatch.setattr(probe, "safe_exception" if diagnostic_fault == "observe" else "write_json", fail)
+    if outcome == "return":
+        assert immediate(probe.worker_entry(marker)) is marker
+    else:
+        with pytest.raises(type(original)) as caught:
+            immediate(probe.worker_entry(marker))
+        assert caught.value is original
+    assert cleaned == [True]
+    path = tmp_path / "worker-facts.json"
+    if outcome != "return" and diagnostic_fault is None:
+        facts = json.loads(path.read_text(encoding="utf-8"))
+        assert facts["diagnosticStatus"] == "FAIL" and facts["events"] == {}
+        assert facts["errors"][0]["class"] == ("other" if outcome == "cancel" else "PermissionError")
+        assert facts["errors"][0]["frames"][0]["source"] == "trial_worker"
+        assert "PRIVATE" not in json.dumps(facts)
+    else:
+        assert not path.exists()
+
+
+@pytest.mark.parametrize("fault", ["status", "message", "class", "frame", "extra", "empty",
+                                  "pass-recorded", "pass-unobserved", "pass-failed"])
+def test_runtime_startup_facts_reject_private_or_false_pass(fault):
+    value = report()
+    startup = {"status": "RECORDED", "errors": [{"class": "RuntimeStartupError", "frames": []}]}
+    host = {"status": "FAIL", "stage": "first_worker_turn", "checks": {}, "runtimeStartup": startup}
+    value["hosts"] = [host]
+    probe.validate_public(value)
+    if fault == "status":
+        startup["status"] = "PRIVATE"
+    elif fault == "message":
+        startup["errors"][0]["message"] = "PRIVATE"
+    elif fault == "class":
+        startup["errors"][0]["class"] = "PrivateError"
+    elif fault == "frame":
+        startup["errors"][0]["frames"] = [{"source": "private_symbol"}]
+    elif fault == "extra":
+        startup["path"] = "/private"
+    elif fault == "empty":
+        startup["errors"] = []
+    else:
+        host["status"] = "PASS"
+        if fault == "pass-unobserved":
+            startup.update(status="NOT_OBSERVED", errors=[])
+        elif fault == "pass-failed":
+            startup.update(status="FAIL", errors=[])
+    with pytest.raises((AssertionError, KeyError, TypeError)):
+        probe.validate_public(value)
+    source = ast.unparse(next(node for node in ast.parse(Path(SPEC.origin).read_text()).body
+                             if isinstance(node, ast.AsyncFunctionDef) and node.name == "journey"))
+    assert "assert report['runtimeStartup']['status'] == 'PASS'" in source
+
+
 @pytest.mark.parametrize("fault", ["step", "action", "code", "status", "message", "event",
                                   "worker-message", "worker-error", "host-error"])
 def test_first_turn_diagnostics_reject_unknown_or_private_fields(fault):
