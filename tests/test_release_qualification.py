@@ -670,7 +670,7 @@ def test_cold_control_restore_is_exclusive_manual_locked_and_bounded():
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
     jobs = workflow['jobs']
-    assert set(jobs) == {'python', 'core-wheels', 'remote-test-origins', 'incompatible-selection', 'cold-control-restore', 'goal-peer-publisher-0410'}
+    assert set(jobs) == {'python', 'core-wheels', 'remote-test-origins', 'incompatible-selection', 'cold-control-restore', 'goal-peer-publisher-0410', 'fresh-cleanup-native'}
     job = jobs['cold-control-restore']
     assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && inputs.suite == 'cold-control-restore' }}"
     assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '15'
