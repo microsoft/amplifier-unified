@@ -603,6 +603,8 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
         pids = {sid: {row['pid'] for row in rows if row['sessionId'] == sid} for sid in sessions}
         assert all(len(values) == 1 for values in pids.values())
         assert len(set.union(*pids.values())) == len(sessions)
+        assert pids == {row['sessionId']: {row['pid']} for row in report['sourceMounts']
+                        if row['validation'] is None}
         assert Counter(row['sessionId'] for row in rows if row['stage'] == 'initialized') == Counter(sessions)
         expected = {row['target']: row for row in report['expected']}
         for stage in ('restore_begin', 'restore_end', 'execution_begin', 'execution_end'):
@@ -610,10 +612,11 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
         for row in rows:
             assert row['stage'] in {'initialized', 'restore_begin', 'restore_end', 'execution_begin', 'execution_end',
                 'control:task.get', 'control:task.create', 'control:catalog.inspect',
-                'control:configuration.toggle', 'control:schedule.submit'}, row
+                'control:configuration.toggle'}, row
             assert row['definitionHashes'] == [agent_digest(AGENT_DEFINITION)], row
             assert row['disabledHash'] == agent_digest(row['disabled'])
-            if row['stage'] in {'restore_end', 'execution_begin', 'execution_end', 'control:schedule.submit'}:
+            if (row['stage'] in {'restore_end', 'execution_begin', 'execution_end'}
+                    or row['sessionId'] in expected and row['stage'] in {'control:task.create', 'control:task.get'}):
                 assert row['disabled'] == [AGENT_NAME] and not row['available'], row
             if row['stage'].startswith('execution_'):
                 run = expected[row['sessionId']]
@@ -869,15 +872,23 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
                 assert_fault_controls(report)
                 if disabled_agent:
                     assert_agent_states()
-                    for mutation in ('lost_definition', 'enabled_during_execution', 'extra_execution_witness', 'wrong_worker_pid'):
+                    for mutation in ('lost_definition', 'enabled_during_execution', 'enabled_after_task_creation',
+                                     'extra_execution_witness', 'wrong_worker_pid', 'misbound_worker_pid'):
                         bad = copy.deepcopy(report['agentStates'])
                         row = next(row for row in bad if row['stage'] == 'execution_begin')
                         if mutation == 'lost_definition':
                             row['definitionHashes'] = []
                         elif mutation == 'enabled_during_execution':
                             row['available'] = True
+                        elif mutation == 'enabled_after_task_creation':
+                            row = next(row for row in bad if row['stage'] == 'control:task.create')
+                            row.update(available=True, disabled=[], disabledHash=agent_digest([]))
                         elif mutation == 'extra_execution_witness':
                             bad.append(copy.deepcopy(row))
+                        elif mutation == 'misbound_worker_pid':
+                            for item in bad:
+                                if item['sessionId'] == row['sessionId']:
+                                    item['pid'] = -1
                         else:
                             row['pid'] = -1
                         with pytest.raises(AssertionError):
