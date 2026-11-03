@@ -1,5 +1,14 @@
 """ONE Files1318 cycle in the prepared browser-test runner; never run on the host.
 
+Check-28 installed-only continuation: files1318-check28-installed-manifest.json.
+The sole source change is this driver. Revalidate the existing check-26/27 chain
+and check-28 completed source/package phases. Supply the exact retained wheel at
+output/files1318-check28-wheel/amplifier_unified-0.48.2-py3-none-any.whl.
+Regenerate only the fresh installation/harness, copy the prepared Node tree into
+real node_modules (as canonical guest initialization does), verify real package
+resolution/bytes, then installed topology, full installed journey and integrity.
+No source journey, application build or wheel build is replayed.
+
 Check-27 remaining tail: files1318-check27-tail-manifest.json admits only the
 canonical narrow Close Canvas oracle correction and this driver. Supply the
 immutable selected packet at output/files1318-check27-9853 and its exact built
@@ -235,6 +244,7 @@ import time
 import tomllib
 from urllib.parse import parse_qs, urlsplit
 import xml.etree.ElementTree as ET
+import zipfile
 
 # -I deliberately removes the script directory as well as PYTHONPATH. Restore
 # only this frozen helper directory, never the checkout in an installed child.
@@ -394,6 +404,22 @@ CHECK27_CLOSURE_SHA = '568702b8b55c1b8388ce067717b133fb00618ee6fd7c41c3c400cb292
 CHECK27_V2_CLOSURE_SHA = 'a07c08ade5a75dfa2d1140ef9410146cc3ecb9f4d69a9491af7102f5af355385'
 CHECK27_REUSED_PHASES = ('frontend-build', 'frontend-build-parity', 'topology-source', 'generated-source',
                          'canvas-renderers', 'renderer-stalled-response', 'canvas-usability')
+CHECK28_MANIFEST = ROOT / 'output/files1318-check28-installed-manifest.json'
+CHECK28_ROOT = ROOT / 'output/files1318-check28-a225'
+CHECK28_WHEEL = ROOT / 'output/files1318-check28-wheel/amplifier_unified-0.48.2-py3-none-any.whl'
+CHECK28_BEFORE = {
+    'revision': 'a22574f0bbf892f3e1e3b9d7836548ed28cef7a8',
+    'tree': '29ef3caf9f4d656b62ce69e00c831c83e5dec9a4',
+    'indexSha256': '48e668ce926e8b8134a4b23f663b6e779094d931f01809bc914bc144a8a2570d',
+    'reportSha256': 'de6009dc70eb77f4872c9a2299497c3b0fdb8e7d664fac45489d285c61ce1048',
+    'manifestSha256': '76d21182f25d04440e106f25cd3b8f2bb97f0d574212e62128dfa6d9924ec2a4',
+    'evidenceSha256': 'c6acee6df589688e59464ae1c23cb76f9a099e600bbfe1a439c413b03fbfe216',
+    'originalContractSha256': '992ed7b90e7153083a2539211208fddb9cc2c9456372e9f516cd7702cc5acbdb',
+    'wheelSha256': '97d17088243b02c190f96c8c077c3d100fa3fc0a8d46a860d11210b05e7d607a',
+    'wheelBytes': 10107923,
+}
+CHECK28_REUSED_PHASES = ('standard-ux-canvas-files', 'mobile-navigation-focus', 'peer-preview-focus',
+                         'canvas-refresh-catchup', 'reader-example-build', 'wheel-build')
 HARNESS = OUT / 'harness'
 VENV = OUT / 'installed'
 DRIVER = 'scripts/files1318_integrated_checks.py'
@@ -647,7 +673,8 @@ def frozen_inputs(frozen, *, built=False):
                                  FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST,
                                  COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST,
                                  CURRENT0481_MANIFEST, CURRENT0482_MANIFEST, FOCUS_RETURN_MANIFEST,
-                                 FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST, CHECK27_V2_MANIFEST), 'Unsafe frozen path')
+                                 FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST, CHECK27_V2_MANIFEST,
+                                 CHECK28_MANIFEST), 'Unsafe frozen path')
         require(path.parent.resolve().is_relative_to(ROOT), 'Frozen path escapes snapshot')
         require(expected['mode'] in ('100644', '100755', '120000')
                 and re.fullmatch('[a-f0-9]{64}', expected['sha256']), 'Invalid frozen identity')
@@ -722,6 +749,129 @@ def check27_snapshot(frozen, *, settled_host=False):
     require(hashlib.sha256(json.dumps(closure, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
             == (CHECK27_V2_CLOSURE_SHA if settled_host else CHECK27_CLOSURE_SHA),
             'Check-27 tail changed outside its exact harness correction')
+
+
+def check28_snapshot(frozen):
+    require(frozen.get('check28Before') == CHECK28_BEFORE, 'Missing exact check-28 continuation')
+    # All non-driver inputs equal a225, including the producer, assets, fixtures,
+    # locks and the current narrow-dismissal oracle. Never import old driver bytes.
+    check27_snapshot({k: v for k, v in frozen.items() if k != 'check28Before'}, settled_host=True)
+
+
+def check28_processes(prior, old, previous):
+    provenance = {'manifestSha256': CHECK28_BEFORE['manifestSha256'],
+                  'revision': previous['revision'], 'tree': previous['tree'],
+                  'baselineRevision': previous['baselineRevision'], 'baselineTree': previous['baselineTree'],
+                  'contractSha256': CHECK28_BEFORE['originalContractSha256']}
+    commands = {
+        'standard-ux-canvas-files': [str(NODE), 'tests/standard-ux-canvas-files-browser.mjs'],
+        'mobile-navigation-focus': [str(NODE), 'tests/mobile-navigation-browser.mjs'],
+        'peer-preview-focus': [str(NODE), 'tests/peer-preview-focus-browser.mjs'],
+        'canvas-refresh-catchup': [str(NODE), 'tests/canvas-refresh-catchup-browser.mjs'],
+        'reader-example-build': [str(NODE), 'scripts/build-reader-example.mjs'],
+        'wheel-build': [str(BUILD_PYTHON), '-m', 'build', '--wheel', '--no-isolation', '--outdir', '/artifacts/dist', '/workspace'],
+        'fresh-venv': [str(PYTHON), '-I', '-B', '-m', 'venv', '--without-pip', str(VENV)],
+        'install-wheel': [str(UV), 'pip', 'install', '--python', str(VENV / 'bin/python'), '--no-deps',
+                          '--no-index', '/artifacts/dist/' + CHECK28_WHEEL.name],
+        'installed-readiness': [str(VENV / 'bin/python'), '-I', '-B', str(HARNESS / DRIVER), '--installed-ready'],
+        'topology-installed': [str(NODE), 'tests/file-controls-topology-preflight.mjs'],
+    }
+    for name, command in commands.items():
+        result, row = read(prior / name / 'results.json'), old['phases'][name]
+        raw, = result['scenarios']
+        passed = name != 'topology-installed'
+        require(result['source'] == provenance and result['complete'] is True and result['passed'] is passed
+                and row['process'] == raw and row['executed'] is True
+                and raw['status'] == row['status'] == ('passed' if passed else 'failed')
+                and raw['id'] == name and raw['command'] == row['command'] == command
+                and row['cwd'] == str((HARNESS if name in ('fresh-venv', 'install-wheel', 'installed-readiness',
+                                                          'topology-installed') else ROOT) / 'frontend')
+                and row['env'] == raw['env'] and raw['reason'] is None and raw['cleanup'] == CLEAN
+                and type(raw['exitCode']) is int and raw['exitCode'] == (0 if passed else 1)
+                and (not passed or row['reason'] is None and row['verdict'] == 'passed'),
+                f'Check-28 {name} process provenance/cleanup differs')
+
+
+def check28_reuse(frozen, units, earlier):
+    require(sha(CHECK28_ROOT / 'INDEX.json') == CHECK28_BEFORE['indexSha256'], 'Check-28 index changed')
+    index = read(CHECK28_ROOT / 'INDEX.json')
+    require(index['selectedOnly'] is True and len(index['files']) == 87, 'Unexpected check-28 selected packet')
+    bindings = {'INDEX.json': CHECK28_BEFORE['indexSha256'], **{n: r['sha256'] for n, r in index['files'].items()}}
+    require(bindings['report.json'] == CHECK28_BEFORE['reportSha256']
+            and bindings['parent-manifest.json'] == CHECK28_BEFORE['manifestSha256']
+            and bindings['evidence-manifest.json'] == CHECK28_BEFORE['evidenceSha256'], 'Check-28 anchors changed')
+    prior = OUT / 'prior-check28'
+    prior.mkdir()
+    for name, digest in bindings.items():
+        source, target = CHECK28_ROOT / name, prior / name
+        require(not Path(name).is_absolute() and '..' not in Path(name).parts and str(Path(name)) == name
+                and source.resolve() == source and stat.S_ISREG(source.lstat().st_mode) and sha(source) == digest,
+                f'Check-28 proof changed: {name}')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        require(sha(target) == digest, 'Check-28 proof copy differs')
+    old, previous, evidence = read(prior / 'report.json'), read(prior / 'parent-manifest.json'), read(prior / 'evidence-manifest.json')
+    require(previous['revision'] == CHECK28_BEFORE['revision'] and previous['tree'] == CHECK28_BEFORE['tree']
+            and previous['files'].keys() == frozen['files'].keys()
+            and {n for n in frozen['files'] if frozen['files'][n] != previous['files'][n]} == {DRIVER},
+            'Installed-only continuation may change the driver only')
+    require(old['passed'] is False and old['complete'] is False and old['finalization'] == {'status': 'passed'}
+            and old['qualification'] == 'check27-remaining-tail'
+            and old['manifestSha256'] == CHECK28_BEFORE['manifestSha256']
+            and old['evidenceManifestSha256'] == CHECK28_BEFORE['evidenceSha256']
+            and old['phases']['topology-installed']['status'] == 'failed'
+            and all(old['phases'][n]['status'] == 'unrun' for n in ('generated-installed', 'final-integrity')),
+            'Check 28 must remain its original installed-topology failure')
+    for name, digest in bindings.items():
+        if name not in ('INDEX.json', 'report.json', 'evidence-manifest.json') and not name.startswith('host-'):
+            require(evidence[name] == digest, 'Check-28 evidence binding differs')
+    require(read(prior / 'check26-unit-reuse.json') == units and read(prior / 'check27-reuse.json') == earlier
+            and all(old['phases'][n]['status'] == 'REUSED' and old['phases'][n]['executed'] is False
+                    for n in (*CHECK26_UNIT_PHASES, *CHECK27_REUSED_PHASES)), 'Chained reuse differs')
+    require("Cannot find package 'playwright' imported from /opt/unified-prepared/node/frontend/@playwright/test/index.mjs"
+            in (prior / 'topology-installed/topology-installed.log').read_text(), 'Wrong original installed failure')
+    check28_processes(prior, old, previous)
+    retained_environment(prior)
+    standard_files_proof(sequential_focus=True, focus_return=True, bounded_focus=True, narrow_dismiss=True, evidence_root=prior)
+    shared_focus_proof('mobile-navigation-focus', evidence_root=prior)
+    shared_focus_proof('peer-preview-focus', evidence_root=prior)
+    catchup_proof(evidence_root=prior)
+    expected, build = read(prior / 'candidate.json'), read(prior / 'frontend-build-identity.json')
+    require(expected['static'] == read(prior / 'static.json') == build['static'] == earlier['static']
+            and build['build'] == earlier['build'] and build['reusedBuild'] is False
+            and read(prior / 'execution-contract.json')['source']['sourceHead'] == previous['revision']
+            and old['phases']['wheel-verify']['status'] == old['phases']['dependency-link']['status'] == 'passed'
+            and CHECK28_WHEEL.resolve() == CHECK28_WHEEL and stat.S_ISREG(CHECK28_WHEEL.lstat().st_mode)
+            and CHECK28_WHEEL.stat().st_size == CHECK28_BEFORE['wheelBytes']
+            and sha(CHECK28_WHEEL) == CHECK28_BEFORE['wheelSha256'] == expected['wheelSha256'],
+            'Exact retained check-28 wheel/assets required; no rebuild fallback')
+    from cold_restore_checks import verify_wheel
+    verified = verify_wheel(CHECK28_WHEEL, expected)
+    require({k: v for k, v in verified.items() if k != 'path'} ==
+            {k: v for k, v in read(prior / 'wheel.json').items() if k != 'path'}, 'Retained wheel RECORD/payload differs')
+    # Restore only the two already-built, forced-included reader files from the
+    # verified wheel; no browser or example build is needed to recreate them.
+    example = read(prior / 'reader-example-build.json')['files']
+    require(example == read(prior / 'reader-example-build/outputs.json')
+            and set(example) == {'module.mjs', 'manifest.json'}, 'Reader build evidence incomplete')
+    with zipfile.ZipFile(CHECK28_WHEEL) as archive:
+        for name, digest in example.items():
+            content = archive.read('amplifier_web/bundle_data/examples/shell-reader/dist/' + name)
+            require(hashlib.sha256(content).hexdigest() == digest == expected['files']['examples/shell-reader/dist/' + name],
+                    'Reader bytes differ from verified build')
+            destination = ROOT / 'examples/shell-reader/dist' / name
+            require(not destination.exists() and not destination.is_symlink(), 'Reader restore must be fresh')
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(content)
+    Path('/artifacts/dist').mkdir()
+    shutil.copyfile(CHECK28_WHEEL, Path('/artifacts/dist') / CHECK28_WHEEL.name)
+    require(sha(Path('/artifacts/dist') / CHECK28_WHEEL.name) == CHECK28_BEFORE['wheelSha256'], 'Wheel copy differs')
+    save('reader-example-build.json', {**read(prior / 'reader-example-build.json'), 'reusedFrom': CHECK28_BEFORE['revision']})
+    value = {'source': CHECK28_BEFORE, 'priorPassed': False, 'priorComplete': False,
+             'proofFiles': bindings, 'reusedPhases': list(CHECK28_REUSED_PHASES),
+             'wheelSha256': verified['sha256'], 'readerFiles': example}
+    save('check28-reuse.json', value)
+    return value
 
 
 def check27_processes(prior, old, previous):
@@ -3830,8 +3980,8 @@ def usability_proof(evidence_root=None):
             [{**expected, 'browserErrors': 0}], 'Canvas usability completion report missing/changed')
 
 
-def standard_files_proof(*, sequential_focus=False, focus_return=False, bounded_focus=False, narrow_dismiss=False):
-    proof = read(OUT / 'standard-ux-canvas-files/evidence/observations.json')
+def standard_files_proof(*, sequential_focus=False, focus_return=False, bounded_focus=False, narrow_dismiss=False, evidence_root=None):
+    proof = read((evidence_root or OUT) / 'standard-ux-canvas-files/evidence/observations.json')
     source = (ROOT / 'frontend/tests/standard-ux-canvas-files-browser.mjs').read_text()
     expected = re.findall(r"checks\.push\('([^']+)'\)", source)
     require(proof['schemaVersion'] == 1 and len(expected) == 4 and proof['checks'] == expected
@@ -3915,7 +4065,7 @@ def standard_files_proof(*, sequential_focus=False, focus_return=False, bounded_
             'Standard canvas/files fixture cleanup identity/removal mismatch')
 
 
-def shared_focus_proof(name):
+def shared_focus_proof(name, *, evidence_root=None):
     """The maintained shared-hook seams, not a new browser matrix."""
     def clean(row):
         exit_state = row['fixtureExit']
@@ -3924,7 +4074,7 @@ def shared_focus_proof(name):
                 and type(exit_state['code']) is int and exit_state['code'] == 0 and exit_state['signal'] is None,
                 'Shared-focus browser/fixture cleanup did not settle normally')
     if name == 'mobile-navigation-focus':
-        folder = OUT / name / 'evidence'
+        folder = (evidence_root or OUT) / name / 'evidence'
         proof = read(folder / 'results.json')
         require(proof == read(folder / 'results-partial.json') and proof['passed'] is True
                 and proof['selection'] == 'focus-only' and proof['results'] == [] and proof['errors'] == []
@@ -3946,7 +4096,7 @@ def shared_focus_proof(name):
                     for c in checks[1:]), 'Parent Escape/close did not restore its opener')
         clean(proof['cleanup'])
     elif name == 'peer-preview-focus':
-        proof = read(OUT / name / 'evidence/focus-result.json')
+        proof = read((evidence_root or OUT) / name / 'evidence/focus-result.json')
         require(proof['passed'] is True and not proof.get('error')
                 and [(r['width'], r['dismiss']) for r in proof['evidence']] == [(390, 'Escape'), (320, 'Close')]
                 and [(r['width'], r['dismiss']) for r in proof['cleanup']] == [(390, 'Escape'), (320, 'Close')],
@@ -4011,9 +4161,9 @@ def evidence_manifest(deadline):
     return result
 
 
-def catchup_proof():
+def catchup_proof(*, evidence_root=None):
     """Read the maintained catch-up report and bytes; never substitute pass prose."""
-    folder, = (OUT / 'canvas-refresh-catchup/evidence').glob('canvas-catchup-*')
+    folder, = ((evidence_root or OUT) / 'canvas-refresh-catchup/evidence').glob('canvas-catchup-*')
     proof = read(folder / 'report.json')
     names = [
         'Markdown Latest catches first and adjacent missed updates via Refresh',
@@ -4109,8 +4259,132 @@ def catchup_proof():
     require(all((folder / (n + '.png')).is_file() and not (folder / (n + '.png')).is_symlink()
                 and (folder / (n + '.png')).read_bytes()[:8] == b'\x89PNG\r\n\x1a\n' for n in pngs),
             'Catch-up rendered evidence missing')
-    save('canvas-refresh-catchup/accepted-report.json', {'path': str(folder / 'report.json'),
+    save(('check28-validation' if evidence_root else 'canvas-refresh-catchup') + '/accepted-report.json', {'path': str(folder / 'report.json'),
         'sha256': sha(folder / 'report.json'), 'checks': len(names), 'pngCount': len(pngs), 'visualJudgment': 'pending'})
+
+
+def installed_node_copy():
+    """Same physical node_modules placement as initialize_guest, never a source-product import."""
+    plan, inventory = read(PREPARED / 'plan.json'), read(PREPARED / 'inventory.json')
+    require(plan['nodeKey'] == plan['nodeDirectory'] == 'frontend', 'Unexpected prepared Node directory')
+    source = PREPARED / 'node/frontend'
+    target = HARNESS / 'frontend/node_modules'
+    require(source.resolve() == source and source.is_dir() and not target.exists() and not target.is_symlink(),
+            'Prepared dependency source or fresh node_modules destination differs')
+    # Verify the same path/content/link digest the preparation owner records.
+    digest = hashlib.sha256()
+    for path in sorted((PREPARED / 'node').rglob('*')):
+        digest.update(str(path.relative_to(PREPARED)).encode())
+        if path.is_symlink():
+            require(path.resolve().is_relative_to(source), 'Prepared dependency link escapes its tree')
+            digest.update(os.readlink(path).encode())
+        elif path.is_file():
+            with path.open('rb') as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                    digest.update(chunk)
+        else:
+            require(path.is_dir(), 'Unsupported prepared dependency type')
+    require(digest.hexdigest() == inventory['preparedFiles']['node'], 'Prepared Node bytes differ from inventory')
+    shutil.copytree(source, target, symlinks=True)
+    def identities(root):
+        return {p.relative_to(root).as_posix(): file_identity(p) for p in sorted(root.rglob('*'))
+                if p.is_file() or p.is_symlink()}
+    before, after = identities(source), identities(target)
+    require(before == after and target.resolve() == target and target.name == 'node_modules',
+            'Copied Node dependency bytes/link text/modes differ')
+    require(all(p.resolve().is_relative_to(target) for p in target.rglob('*') if p.is_symlink()),
+            'Copied dependency link escapes node_modules')
+    receipt = {'source': str(source), 'target': str(target), 'fileCount': len(after),
+               'preparedNodeSha256': digest.hexdigest(),
+               'copiedTreeSha256': hashlib.sha256(json.dumps(after, sort_keys=True, separators=(',', ':')).encode()).hexdigest()}
+    save('installed-node-copy.json', receipt)
+    return receipt
+
+
+INSTALLED_NODE_READY = r"""
+import assert from 'node:assert/strict';
+import {readFile,realpath,writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {createRequire} from 'node:module';
+import {pathToFileURL,fileURLToPath} from 'node:url';
+const root='/artifacts/files1318-qualified/harness/frontend';
+const prepared='/opt/unified-prepared/node/frontend';
+const base=root+'/node_modules/';
+assert.equal(process.cwd(),root);assert.equal(await realpath(root+'/node_modules'),root+'/node_modules');
+const require=createRequire(pathToFileURL(root+'/package.json'));
+const lock=JSON.parse(await readFile('/workspace/frontend/package-lock.json'));
+const inventory=JSON.parse(await readFile('/opt/unified-prepared/inventory.json'));
+assert.equal(process.version,inventory.node.version);
+const rows=[];
+for(const name of ['@playwright/test','playwright','playwright-core']){
+ const manifest=await realpath(require.resolve(name+'/package.json'));
+ const entry=await realpath(require.resolve(name));
+ const esm=await realpath(fileURLToPath(import.meta.resolve(name)));
+ assert.ok([manifest,entry,esm].every(path=>path.startsWith(base+name+'/')));
+ const meta=JSON.parse(await readFile(manifest));
+ assert.equal(meta.name,name);assert.equal(meta.version,lock.packages['node_modules/'+name].version);
+ assert.equal(meta.version,inventory.node.playwright);
+ const files=[];
+ for(const path of [...new Set([manifest,entry,esm])]){
+  const data=await readFile(path),old=await readFile(prepared+'/'+path.slice(base.length));
+  assert.deepEqual(data,old);
+  files.push({path,sha256:createHash('sha256').update(data).digest('hex')});
+ }
+ rows.push({name,version:meta.version,manifest,entry,esm,files});
+}
+const fromTest=createRequire(rows[0].manifest),fromPlaywright=createRequire(rows[1].manifest);
+assert.equal(await realpath(fromTest.resolve('playwright/package.json')),rows[1].manifest);
+assert.equal(await realpath(fromPlaywright.resolve('playwright-core/package.json')),rows[2].manifest);
+// Exercise the actual ESM graph that previously failed, without launching a browser.
+const test=await import('@playwright/test'),pw=await import('playwright'),core=await import('playwright-core');
+assert.equal(test.chromium,pw.chromium);assert.equal(pw.chromium,core.chromium);
+const helperPath=root+'/tests/file-controls-browser-topology.mjs';
+const helper=await import(pathToFileURL(helperPath));
+for(const key of ['launchOwner','ownerPage','closeOwner'])assert.equal(typeof helper[key],'function');
+const helperSha256=createHash('sha256').update(await readFile(helperPath)).digest('hex');
+const harness=JSON.parse(await readFile('/artifacts/files1318-qualified/harness.json'));
+assert.equal(helperSha256,harness['frontend/tests/file-controls-browser-topology.mjs'].sha256);
+const executable=test.chromium.executablePath();
+const ready=JSON.parse(await readFile('/artifacts/files1318-qualified/browser-readiness.json'));
+assert.equal(executable,ready.executable);assert.ok(executable.startsWith('/opt/unified-prepared/browsers/'));
+await writeFile('/artifacts/files1318-qualified/installed-node-readiness.json',
+ JSON.stringify({passed:true,cwd:process.cwd(),node:process.execPath,version:process.version,packages:rows,
+  transitiveResolution:true,actualEsmImports:true,helper:{path:helperPath,sha256:helperSha256},
+  executable,browserLaunched:false}));
+"""
+
+
+def installed_node_proof():
+    copied, ready = read(OUT / 'installed-node-copy.json'), read(OUT / 'installed-node-readiness.json')
+    require(ready['passed'] is True and ready['transitiveResolution'] is True and ready['actualEsmImports'] is True
+            and ready['browserLaunched'] is False and ready['cwd'] == str(HARNESS / 'frontend')
+            and ready['node'] == str(NODE) and ready['version'] == read(OUT / 'browser-readiness.json')['version']
+            and ready['executable'] == read(OUT / 'browser-readiness.json')['executable']
+            and copied['source'] == str(PREPARED / 'node/frontend')
+            and copied['target'] == str(HARNESS / 'frontend/node_modules')
+            and copied['preparedNodeSha256'] == read(PREPARED / 'inventory.json')['preparedFiles']['node'],
+            'Installed harness resolver did not use exact prepared dependencies/executable')
+    require([r['name'] for r in ready['packages']] == ['@playwright/test', 'playwright', 'playwright-core'],
+            'Missing actual Playwright package identity')
+    target = HARNESS / 'frontend/node_modules'
+    identities = {p.relative_to(target).as_posix(): file_identity(p) for p in sorted(target.rglob('*'))
+                  if p.is_file() or p.is_symlink()}
+    require(target.resolve() == target and len(identities) == copied['fileCount']
+            and hashlib.sha256(json.dumps(identities, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+                == copied['copiedTreeSha256'], 'Installed dependency tree changed after its verified copy')
+    helper = 'frontend/tests/file-controls-browser-topology.mjs'
+    require(ready['helper'] == {'path': str(HARNESS / helper), 'sha256': sha(HARNESS / helper)}
+            and file_identity(HARNESS / helper) == read(OUT / 'harness.json')[helper],
+            'Topology helper did not resolve from the exact copied harness')
+    for row in ready['packages']:
+        require(row['version'] == read(PREPARED / 'inventory.json')['node']['playwright'], 'Wrong Playwright version')
+        require({r['path'] for r in row['files']} == {row['manifest'], row['entry'], row['esm']}
+                and len(row['files']) == len({r['path'] for r in row['files']}), 'Missing resolved entrypoint bytes')
+        for entry in row['files']:
+            path = Path(entry['path'])
+            require(path.resolve() == path and path.is_relative_to(HARNESS / 'frontend/node_modules' / row['name'])
+                    and sha(path) == entry['sha256'] == sha(PREPARED / 'node/frontend' /
+                            path.relative_to(HARNESS / 'frontend/node_modules')), 'Resolved package bytes changed')
 
 
 def main():
@@ -4126,7 +4400,7 @@ def main():
                                  FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST,
                                  COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST,
                                  CURRENT0481_MANIFEST, CURRENT0482_MANIFEST, FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST,
-                                 CHECK27_MANIFEST, CHECK27_V2_MANIFEST])
+                                 CHECK27_MANIFEST, CHECK27_V2_MANIFEST, CHECK28_MANIFEST])
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--corner-diagnostic', action='store_true')
     modes.add_argument('--contour-qualification', action='store_true')
@@ -4155,17 +4429,19 @@ def main():
     manifest_paths = ((FOCUS_CONTRAST_MANIFEST, FOCUS_CONTRAST_SETTLED_MANIFEST)
                       if args.focus_contrast else (MANIFEST, COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST,
                           COMPACT24_MANIFEST, COMPACT25_MANIFEST, CURRENT0481_MANIFEST, CURRENT0482_MANIFEST,
-                          FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST, CHECK27_V2_MANIFEST)
+                          FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST, CHECK27_V2_MANIFEST,
+                          CHECK28_MANIFEST)
                       if manifest_path == MANIFEST else (manifest_path,))
     if args.manifest not in manifest_paths:
         parser.error('The manifest must match the selected qualification mode')
     compact25 = args.manifest == COMPACT25_MANIFEST
     current0481 = args.manifest == CURRENT0481_MANIFEST
     current0482 = args.manifest == CURRENT0482_MANIFEST
-    settled_host = args.manifest == CHECK27_V2_MANIFEST
-    check27_tail = args.manifest in (CHECK27_MANIFEST, CHECK27_V2_MANIFEST)
-    shared_focus = args.manifest in (FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST, CHECK27_V2_MANIFEST)
-    focus_return = args.manifest in (FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST, CHECK27_V2_MANIFEST)
+    installed_tail = args.manifest == CHECK28_MANIFEST
+    settled_host = args.manifest in (CHECK27_V2_MANIFEST, CHECK28_MANIFEST)
+    check27_tail = args.manifest in (CHECK27_MANIFEST, CHECK27_V2_MANIFEST, CHECK28_MANIFEST)
+    shared_focus = args.manifest in (FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST, CHECK27_V2_MANIFEST, CHECK28_MANIFEST)
+    focus_return = args.manifest in (FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST, CHECK27_V2_MANIFEST, CHECK28_MANIFEST)
     current_full = current0481 or current0482 or focus_return
     compact24 = args.manifest in (COMPACT24_MANIFEST, COMPACT25_MANIFEST)
     compact23 = args.manifest in (COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST)
@@ -4234,6 +4510,18 @@ def main():
         report['limits'][-2] = ('Check 27 remains failed at obsolete Back to chat. Exact product/build/browser inputs '
                                'are unchanged; seven completed phases and guarded 84/19 units are reused only after '
                                'current readiness and retained-proof validation. All unfinished phases execute.')
+    if installed_tail:
+        report.update(qualification='check28-installed-tail', priorChecksConsumed=28, continuationOf=CHECK28_BEFORE,
+                      historicalProofReuse='exact-check26-27-28-chain', currentSource={
+                          'baselineRevision': CURRENT0482_BINDING['baselineRevision'],
+                          'nonDriverClosureSha256': CHECK27_V2_CLOSURE_SHA})
+        for name in ('check28-reuse', 'installed-node-readiness'):
+            report['phases'][name] = {'status': 'unrun', 'reason': 'not_started'}
+        for name in CHECK28_REUSED_PHASES:
+            report['phases'][name]['reason'] = 'reuse_pending_exact_check28_proof'
+        report['limits'].append('Check 28 remains failed before installed topology. Completed source and wheel phases '
+                                'are revalidated, never replayed. A fresh wheel installation and real copied-node_modules '
+                                'resolver check precede installed topology/full journey/final integrity.')
     if compact23:
         report.update(continuationOf=COMPACT23_BEFORE, priorPrelaunchNotRunsRetained=2)
         report['phases']['compact23-reuse'] = {'status': 'unrun', 'reason': 'not_started'}
@@ -4357,7 +4645,9 @@ def main():
         def snapshot():
             frozen = read(args.manifest)
             require(frozen['schemaVersion'] == 2, 'Wrong manifest schema')
-            if check27_tail:
+            if installed_tail:
+                check28_snapshot(frozen)
+            elif check27_tail:
                 check27_snapshot(frozen, settled_host=settled_host)
             elif focus_return:
                 focus_return_snapshot(frozen, shared_focus=shared_focus)
@@ -4638,6 +4928,15 @@ def main():
                     priorEvidenceSha256=reused27['proofFiles'][f'{name}/results.json'],
                     verdict='expected_stalled_response_failure' if name == 'renderer-stalled-response' else 'passed')
             save('report.json', report)
+        if installed_tail:
+            reused28 = step('check28-reuse', lambda: check28_reuse(frozen, reused26, reused27))
+            for name in CHECK28_REUSED_PHASES:
+                report['phases'][name].update(status='REUSED', executed=False,
+                    reason='exact_check28_source_environment_receipts_bytes_and_oracles_verified',
+                    sourceRevision=CHECK28_BEFORE['revision'], sourceTree=CHECK28_BEFORE['tree'],
+                    priorEvidence=f'prior-check28/{name}/results.json',
+                    priorEvidenceSha256=reused28['proofFiles'][f'{name}/results.json'])
+            save('report.json', report)
         if compact23:
             reused = step('compact23-reuse', lambda: compact23_reuse(frozen, standard_focus=compact25))
             for name in COMPACT23_REUSED_PHASES:
@@ -4768,6 +5067,8 @@ def main():
             if mode == 'installed':
                 extra.update(AMPLIFIER_TEST_PYTHON=str(VENV / 'bin/python'), AMPLIFIER_TEST_INSTALLED='1',
                              AMPLIFIER_TEST_PACKAGE_ROOT=read(OUT / 'installed-identity.json')['packageRoot'])
+                if installed_tail:
+                    extra['AMPLIFIER_SHELL_NODE_MODULES'] = str(HARNESS / 'frontend/node_modules')
             if args.corner_diagnostic:
                 require(mode == 'source', 'Diagnostic cannot exercise installed mode')
                 extra['FILE_CONTROLS_CORNER_DIAGNOSTIC'] = '1'
@@ -4808,11 +5109,12 @@ def main():
                     extra={'CANVAS_RENDERER_STALLED_BODY': '1'}, cap=120,
                     verify=lambda: renderer_proof(True, startup=compact23 or current_full, live_route_cleanup=compact24 or current_full), negative=True)
                 run('canvas-usability', [NODE, 'tests/canvas-usability-browser.mjs'], verify=usability_proof)
-            run('standard-ux-canvas-files', [NODE, 'tests/standard-ux-canvas-files-browser.mjs'],
-                verify=lambda: standard_files_proof(sequential_focus=compact25 or current_full,
-                                                    focus_return=focus_return, bounded_focus=shared_focus,
-                                                    narrow_dismiss=check27_tail))
-            if shared_focus:
+            if not installed_tail:
+                run('standard-ux-canvas-files', [NODE, 'tests/standard-ux-canvas-files-browser.mjs'],
+                    verify=lambda: standard_files_proof(sequential_focus=compact25 or current_full,
+                                                        focus_return=focus_return, bounded_focus=shared_focus,
+                                                        narrow_dismiss=check27_tail))
+            if shared_focus and not installed_tail:
                 run('mobile-navigation-focus', [NODE, 'tests/mobile-navigation-browser.mjs'], cap=90,
                     extra={'MOBILE_NAVIGATION_FOCUS_ONLY': '1',
                            'AMPLIFIER_TEST_OUTPUT': str(OUT / 'mobile-navigation-focus/evidence')},
@@ -4820,7 +5122,7 @@ def main():
                 run('peer-preview-focus', [NODE, 'tests/peer-preview-focus-browser.mjs'], cap=150,
                     extra={'AMPLIFIER_PROOF_DIR': str(OUT / 'peer-preview-focus/evidence')},
                     verify=lambda: shared_focus_proof('peer-preview-focus'))
-            if current_full:
+            if current_full and not installed_tail:
                 run('canvas-refresh-catchup', [NODE, 'tests/canvas-refresh-catchup-browser.mjs'],
                     cap=180, verify=catchup_proof)
                 if not check27_tail:
@@ -4829,7 +5131,7 @@ def main():
                             example['manifest.json'] == frozen['files']['examples/shell-reader/manifest.json']['sha256'],
                             'Normal renderer did not produce the canonical reader example for the wheel')
                     save('reader-example-build.json', {'executedBy': 'canvas-renderers', 'files': example})
-            if compact25 or check27_tail:
+            if (compact25 or check27_tail) and not installed_tail:
                 # Skipping the renderer browser must not silently drop its build
                 # side effect: these two files are forced into the wheel.
                 def reader_example_proof():
@@ -4850,7 +5152,8 @@ def main():
             final_source = candidate(frozen)
             require(final_source['static'] == built['static'], 'Source journeys changed static')
             save('candidate.json', final_source)
-            run('wheel-build', wheel_command, cap=120)
+            if not installed_tail:
+                run('wheel-build', wheel_command, cap=120)
 
             def verify_package():
                 wheel, = Path('/artifacts/dist').glob('*.whl')
@@ -4865,9 +5168,12 @@ def main():
                     require(file_identity(destination) == frozen['files'][name], f'Copied harness differs: {name}')
                 save('harness.json', {name: file_identity(HARNESS / name) for name in COPY})
                 plan = read(PREPARED / 'plan.json')
-                dependency = (PREPARED / 'node' / plan['nodeKey']).resolve()
-                require(dependency.is_relative_to(PREPARED / 'node') and dependency.is_dir(), 'Missing locked Node tree')
-                (HARNESS / 'frontend/node_modules').symlink_to(dependency, target_is_directory=True)
+                if installed_tail:
+                    installed_node_copy()
+                else:
+                    dependency = (PREPARED / 'node' / plan['nodeKey']).resolve()
+                    require(dependency.is_relative_to(PREPARED / 'node') and dependency.is_dir(), 'Missing locked Node tree')
+                    (HARNESS / 'frontend/node_modules').symlink_to(dependency, target_is_directory=True)
             step('wheel-verify', verify_package)
             run('fresh-venv', [PYTHON, '-I', '-B', '-m', 'venv', '--without-pip', VENV], root=HARNESS, cap=30)
             run('install-wheel', [UV, 'pip', 'install', '--python', VENV / 'bin/python',
@@ -4887,6 +5193,9 @@ def main():
             step('dependency-link', link_dependencies)
             run('installed-readiness', [VENV / 'bin/python', '-I', '-B', HARNESS / DRIVER, '--installed-ready'],
                 root=HARNESS, cap=45)
+            if installed_tail:
+                run('installed-node-readiness', [NODE, '--input-type=module', '-e', INSTALLED_NODE_READY],
+                    root=HARNESS, cap=30, verify=installed_node_proof)
             generated('installed')
 
             def final_integrity():
@@ -4911,7 +5220,8 @@ def main():
                             and report['phases']['frontend-build']['status'] == ('REUSED' if compact23 or check27_tail else 'passed')
                             and report['phases']['frontend-build']['executed'] is (not (compact23 or check27_tail))
                             and {name for name, row in report['phases'].items() if row['status'] == 'REUSED'} ==
-                                (set(CHECK26_UNIT_PHASES) | (set(CHECK27_REUSED_PHASES) if check27_tail else set()) if focus_return else
+                                (set(CHECK26_UNIT_PHASES) | (set(CHECK27_REUSED_PHASES) if check27_tail else set()) |
+                                 (set(CHECK28_REUSED_PHASES) if installed_tail else set()) if focus_return else
                                  set(COMPACT23_REUSED_PHASES) | (set(COMPACT25_REUSED_PHASES) if compact25 else set())
                                  if compact23 else set()),
                             'Compact full qualification lost fresh-build/source/installed identity')
@@ -4920,24 +5230,35 @@ def main():
                         {'check26-unit-reuse'} if focus_return else set())
                     if shared_focus:
                         phases |= {'mobile-navigation-focus', 'peer-preview-focus'}
-                        require(all(report['phases'][name]['status'] == 'passed'
-                                    and report['phases'][name]['executed'] is True
+                        require(all(report['phases'][name]['status'] == ('REUSED' if installed_tail else 'passed')
+                                    and report['phases'][name]['executed'] is (not installed_tail)
                                     for name in ('mobile-navigation-focus', 'peer-preview-focus')),
                                 'Shared modal-focus seams were not freshly qualified')
                     if check27_tail:
                         phases |= {'check27-reuse', 'reader-example-build'}
-                        require(report['phases']['reader-example-build']['status'] == 'passed'
-                                and report['phases']['reader-example-build']['executed'] is True
+                        require(report['phases']['reader-example-build']['status'] == ('REUSED' if installed_tail else 'passed')
+                                and report['phases']['reader-example-build']['executed'] is (not installed_tail)
                                 and all(report['phases'][n]['executed'] is False for n in CHECK27_REUSED_PHASES)
                                 and all(sha(folder / name) == digest
                                     for folder in (CHECK27_ROOT, OUT / 'prior-check27')
                                     for name, digest in reused27['proofFiles'].items())
                                 and tree(CHECK27_STATIC) == {n.removeprefix('amplifier_web/static/'): h
                                     for n, h in expected['static'].items()}, 'Check-27 reuse changed or phases replayed')
+                    if installed_tail:
+                        phases |= {'check28-reuse', 'installed-node-readiness'}
+                        require(report['phases']['installed-node-readiness']['status'] == 'passed'
+                                and report['phases']['installed-node-readiness']['executed'] is True
+                                and all(report['phases'][n]['executed'] is False for n in CHECK28_REUSED_PHASES)
+                                and all(sha(folder / name) == digest for folder in (CHECK28_ROOT, OUT / 'prior-check28')
+                                        for name, digest in reused28['proofFiles'].items())
+                                and sha(Path(expected['wheel'])) == sha(CHECK28_WHEEL) == CHECK28_BEFORE['wheelSha256'],
+                                'Check-28 reuse/wheel changed or completed phases replayed')
+                        installed_node_proof()
                     require(set(report['phases']) == phases and all(
                         row['status'] == ('running' if name == 'final-integrity' else
                                          'REUSED' if (focus_return and name in CHECK26_UNIT_PHASES
-                                                      or check27_tail and name in CHECK27_REUSED_PHASES) else 'passed')
+                                                      or check27_tail and name in CHECK27_REUSED_PHASES
+                                                      or installed_tail and name in CHECK28_REUSED_PHASES) else 'passed')
                         for name, row in report['phases'].items())
                         and all(report['phases'][name]['executed'] is True for name in (
                             'frontend-build', 'frontend-build-parity', 'python-tests', 'frontend-units',
@@ -4946,7 +5267,8 @@ def main():
                             'wheel-build', 'fresh-venv', 'install-wheel', 'installed-readiness',
                             'topology-installed', 'generated-installed')
                             if not (focus_return and name in CHECK26_UNIT_PHASES
-                                    or check27_tail and name in CHECK27_REUSED_PHASES))
+                                    or check27_tail and name in CHECK27_REUSED_PHASES
+                                    or installed_tail and name in CHECK28_REUSED_PHASES))
                         and read(OUT / 'frontend-build/first-static.json') ==
                             {n.removeprefix('amplifier_web/static/'): h for n, h in expected['static'].items()}
                         and tree(ROOT / 'examples/shell-reader/dist') == read(OUT / 'reader-example-build.json')['files'],
