@@ -27,9 +27,12 @@ class UIUse:
 
     def stop(self, sid, stopped):
         values = self.stopped | {sid} if stopped else self.stopped - {sid}
-        write_private(self.stop_path, json.dumps(sorted(values))); self.stopped=values
         if stopped:
+            # A storage refusal must not leave this process accepting more input.
+            self.stopped = values
             for operation_id in tuple(self.pending.get(sid,())):self.connections.cancel(operation_id)
+        write_private(self.stop_path, json.dumps(sorted(values)), owned_root=self.service.data_dir)
+        self.stopped = values
 
     def workspace(self, sid):
         return self.service._session(sid).get('workspace') if sid else None
@@ -105,7 +108,7 @@ class UIUse:
         updated = dict(self.preferences)
         if args.get('reset'):updated.pop(key,None)
         else:updated[key]={**self.preferences.get(key,{}),**patch}
-        write_private(self.path,json.dumps(updated)); self.preferences=updated
+        write_private(self.path,json.dumps(updated),owned_root=self.service.data_dir); self.preferences=updated
         if target or args.get('reset'): self.active.pop(sid,None)
         return self.status(sid)
 

@@ -88,8 +88,9 @@ def label(value, limit=160):
 
 
 class Connections:
-    def __init__(self, devices, pairings, secret):
+    def __init__(self, devices, pairings, secret, *, owned_root):
         self.devices, self.pairings, self.secret = devices, pairings, secret
+        self.owned_root = owned_root
         self.presence = {}
         self.setups = {}
         self.events = {}
@@ -106,8 +107,8 @@ class Connections:
 
     def save(self):
         try:
-            write_private(self.path, json.dumps(self.operations, separators=(',', ':')))
-        except OSError:
+            write_private(self.path, json.dumps(self.operations, separators=(',', ':')), owned_root=self.owned_root)
+        except (OSError, ValueError, RuntimeError):
             # A failed durable write cannot leave an uncommitted acceptance
             # available to subsequent requests in this process.
             self.operations = json.loads(self.path.read_text()) if self.path.exists() else {}
@@ -434,7 +435,8 @@ def owner(request, *, mutation=False):
 
 
 def setup_routes(app):
-    manager = Connections(app['terminal_setup'].devices, app['device_pairing'], app['session_secret'])
+    manager = Connections(app['terminal_setup'].devices, app['device_pairing'], app['session_secret'],
+                          owned_root=app['service'].data_dir)
     app['device_connections'] = manager
 
     async def discover(request):
