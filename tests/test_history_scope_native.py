@@ -2,6 +2,7 @@
 import importlib.util
 from pathlib import Path
 import sys
+import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -17,6 +18,8 @@ async def test_native_root_and_child_history_scope(tmp_path,monkeypatch,mode):
     from amplifier_module_loop_live.runtime import Runtime
     from amplifier_web.app_guidance import install_app_access
     from amplifier_web.runtime_worker import Worker
+    from amplifier_web.runtime import RuntimeManager
+    from amplifier_web.shared_state import ActivationGate
     from amplifier_web.host.children import install_children,_PERSISTENT
     from amplifier_web.host.storage import SessionStore
     from amplifier_web.host.approvals import Approvals
@@ -34,6 +37,8 @@ async def test_native_root_and_child_history_scope(tmp_path,monkeypatch,mode):
     parent=await prepared.create_session(session_id='root',approval_system=approvals)
     app=AppService(tmp_path/'app',workspace=tmp_path)
     root=app._new_session({'title':'Root'})
+    root.update(runtimeSessionId='root',collaborationGeneration={
+        'id':'generation','inputIds':['history-input'],'interruptionRevision':0,'terminal':False})
     (tmp_path/'other').mkdir()
     other=app._new_session({'title':'Other','workspace':str(tmp_path/'other')})
     other['messages']=[{'id':'retained','role':'assistant','text':'Other own-history'}]
@@ -42,13 +47,41 @@ async def test_native_root_and_child_history_scope(tmp_path,monkeypatch,mode):
     app._publish()
     worker=Worker()
     worker.session=parent
-    worker.runtime=SimpleNamespace(generation={'id':'generation'})
+    worker.runtime=SimpleNamespace(generation={'id':'generation','input_ids':['history-input']},
+                                   closed=False,stop_requested=False)
+    worker.activation_gate=ActivationGate()
+    worker.activation_gate.activate()
+    worker.start_config={key:root.get(key,0) for key in
+        ('interruptionRevision','executionRevision','configurationPendingRevision')}
+    worker.context_inputs=['history-input']
+    worker.context_bindings={'history-input':{'clientId':None,'targets':[]}}
+    manager=RuntimeManager()
+    owner={'process':SimpleNamespace(returncode=None),'runtimeOwnerId':uuid.uuid4().hex}
+    manager.workers[root['id']]=owner
+    monkeypatch.setattr(app.runtime,'workers',manager.workers)
+    replies,actors={},[]
+
+    async def host_bridge(operation,args,sid):
+        assert sid==root['id'] and args['_runtimeOwnerId']==owner['runtimeOwnerId']
+        actors.append(args['_runtimeSessionId'])
+        return await app.app_bridge(operation,args,sid)
+
+    manager.app_bridge=host_bridge
+    async def write(row,reply):
+        assert row is owner
+        replies[reply['id']]=reply
+    manager._write=write
     async def bridge(operation,args):
-        return await app.app_bridge(operation,args,root['id'])
+        identity=str(uuid.uuid4())
+        await manager._bridge(root['id'],owner,{'id':identity,'operation':operation,'args':args})
+        reply=replies.pop(identity)
+        if reply.get('error'):
+            raise RuntimeError(reply['error'])
+        return reply['result']
     worker.bridge=bridge
     await install_app_access(parent.coordinator,worker.app_access_bridge(parent.coordinator))
     registry=await install_children(parent,prepared,Runtime('root'),SessionStore(tmp_path/'children'),approvals)
-    seen=[]
+    seen,failures=[],[]
     async def inspect(control):
         denied=await control.execute({'operation':'history','args':{'action':'read','session_id':other['id']}})
         assert not denied.success and 'scope' in str(denied.error)
@@ -67,7 +100,13 @@ async def test_native_root_and_child_history_scope(tmp_path,monkeypatch,mode):
         if mode=='nested' and coordinator.session_id=='child':
             await registry.spawn('worker','nested',registry.sessions['child'],sub_session_id='grandchild')
         return 'done'
-    monkeypatch.setattr(fixture.FiniteOrchestrator,'execute',execute)
+    async def checked(*args,**kwargs):
+        try:
+            return await execute(*args,**kwargs)
+        except AssertionError as exc:
+            failures.append(exc)
+            raise
+    monkeypatch.setattr(fixture.FiniteOrchestrator,'execute',checked)
     token=_PERSISTENT.set(mode=='persistent')
     try:
         await inspect(parent.coordinator.get('tools')['app_control'])
@@ -75,8 +114,16 @@ async def test_native_root_and_child_history_scope(tmp_path,monkeypatch,mode):
         if mode=='resumed':
             await registry.resume('child','read again',parent)
         assert len(seen)==(2 if mode in {'resumed','nested'} else 1)
+        assert actors==['root']*4+(['child']*4+['grandchild']*4 if mode=='nested'
+                                  else ['child']*(8 if mode=='resumed' else 4))
+        assert not replies
         assert app.state['selectedSessionId']==root['id']
+    except Exception:
+        if failures:
+            raise failures[0] from None
+        raise
     finally:
         _PERSISTENT.reset(token)
         await parent.cleanup()
+        manager.workers.pop(root['id'],None)  # Synthetic process row is not a real child to stop.
         await app.close()
