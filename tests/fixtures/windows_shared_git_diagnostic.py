@@ -3,9 +3,9 @@
 No installs, source substitutions, worker hooks or production mutations. Raw
 captures remain private. Unknown owners stay alive until the five-minute CI job
 terminates their owner; a cancelled/timed-out job is never diagnostic success.
-Only two split-stream public-async cases run, using context-simple: exact protocol
-setup alone, then the real pending reader alone. No no-stream or combined case
-is repeated. Successful helper calls expose no operation cleanup object.
+One source-attested private-control case runs, using context-simple. The real
+reader remains pending on its private pipe while CRT/Win32 default stdin share
+an independent EOF object. Successful helper calls expose no cleanup object.
 """
 import ast
 import asyncio
@@ -30,7 +30,7 @@ SHA = "11f47553e965956a99c1fed0bd1305aa8f75163206f6c2c51c75b97ad1e32dc4"
 URL = ("https://raw.githubusercontent.com/microsoft/amplifier-foundation/"
        "c716df3cea84b2539aabdfea58a69ae676a1e853/amplifier_foundation/sources/_windows_git.py")
 REPOS = {"context-simple": "amplifier-module-context-simple"}
-VARIANTS = ("protocol-only", "reader-only")
+VARIANTS = ("private-control",)
 ERRORS = {None, "other", "HelperCleanupError", "CleanupError", "TimeoutExpired",
           "CalledProcessError", "TimeoutError", "OSError", "PermissionError",
           "FileNotFoundError", "AssertionError", "ValueError", "TypeError",
@@ -45,7 +45,8 @@ JOB_FIELDS = ("exception", "timedOut", "overflow", "returncode", "activeProcesse
               "treeEmpty", "ioFinalized", "discarded", "tasksSettled", "cleanupConfirmed")
 STREAM_SOURCES = {
     "configureBodySha256": "c180a6bf2f92065709ec7f3dc76b6142dcc231c5c7d5fd159c7ff6435130d3a1",
-    "readerSourceSha256": "9912b288c98166658c6c3ead02fbd6d8dc7db39e3ad518733be461fa165851bc",
+    "readerSourceSha256": "d0c8fefbf3a4c772d294e824e2298c74e2d2742f3634afab2985982dbd0f80c0",
+    "isolationBodySha256": "e2aed67ec195749455aa44eb664ee0ad6a1312a3ccf9e3b83e0b44e4ea6c4721",
     "protocolSourceSha256": "0316c164a342ab4d7fc58ce4d62070293ce09fb5c35fa169a37ccc37c1390d06",
 }
 
@@ -69,27 +70,40 @@ def worker_streams(variant):
                           ("runtime_protocol.py", "protocolSourceSha256")):
         raw = (app / filename).read_bytes().replace(b"\r\n", b"\n")
         assert hashlib.sha256(raw).hexdigest() == STREAM_SOURCES[key]
+        if filename == "worker_input.py":
+            isolate = [n for n in ast.parse(raw).body
+                       if isinstance(n, ast.FunctionDef) and n.name == "isolate_control_input"]
+            assert len(isolate) == 1
+            assert hashlib.sha256(ast.dump(isolate[0], include_attributes=False).encode()).hexdigest() == STREAM_SOURCES["isolationBodySha256"]
         inputs.append((filename, raw))
-    # All source identities are attested; only the chosen variant executes.
+    # All production source identities are attested before executing either.
     protocol = reader = None
     try:
-        if variant == "protocol-only":
-            scope = {"os": os, "sys": sys, "_PROTOCOL": None}
-            # Exact AST, no rewritten calls, globals or body; no input reader.
-            exec(compile(ast.Module(body=[function], type_ignores=[]),
-                         str(app / "runtime_worker.py"), "exec"), scope)
-            scope["configure_protocol"]()
-            protocol = scope["_PROTOCOL"]
-        else:
-            modules = []
-            for filename, raw in inputs:
-                spec = importlib.util.spec_from_file_location("diagnostic_" + filename[:-3], app / filename)
-                module = importlib.util.module_from_spec(spec)
-                sys.modules[spec.name] = module
-                exec(compile(raw, str(app / filename), "exec"), module.__dict__)
-                modules.append(module)
-            reader = modules[0].ThreadedPipeReader(sys.stdin, modules[1].MAX_MESSAGE_BYTES)
+        scope = {"os": os, "sys": sys, "_PROTOCOL": None}
+        exec(compile(ast.Module(body=[function], type_ignores=[]),
+                     str(app / "runtime_worker.py"), "exec"), scope)
+        scope["configure_protocol"]()
+        protocol = scope["_PROTOCOL"]
+        modules = []
+        for filename, raw in inputs:
+            spec = importlib.util.spec_from_file_location("diagnostic_" + filename[:-3], app / filename)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            exec(compile(raw, str(app / filename), "exec"), module.__dict__)
+            modules.append(module)
+        # Exact new production factory; no stdin swap around individual Git calls.
+        reader = modules[0].ThreadedPipeReader.for_worker(sys.stdin, modules[1].MAX_MESSAGE_BYTES)
+        import ctypes
+        import msvcrt
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetStdHandle.argtypes, kernel.GetStdHandle.restype = [ctypes.c_uint32], ctypes.c_void_p
+        assert kernel.GetStdHandle(0xfffffff6) == msvcrt.get_osfhandle(0)
+        assert not os.get_inheritable(reader._stream.fileno())
+        assert reader._stream is modules[0].isolate_control_input(sys.stdin)
+        assert os.read(0, 1) == b""  # Independent default stdin, not control input.
     except BaseException:
+        if reader is not None:
+            reader.close()  # Delivery cancellation only; never close buffered read.
         if protocol is not None:
             protocol.close()
         raise
@@ -142,8 +156,7 @@ async def child(root, repo, variant):
     protocol, reader = worker_streams(variant)
     request = None
     try:
-        assert (protocol is not None) == (variant == "protocol-only")
-        assert (reader is not None) == (variant == "reader-only")
+        assert protocol is not None and reader is not None
         if reader is not None:
             request = asyncio.create_task(reader.readline())
             # No new deadline: the unchanged outer owned operation bounds setup.
@@ -155,7 +168,8 @@ async def child(root, repo, variant):
                 await asyncio.sleep(.01)
         facts = {**STREAM_SOURCES, "variant": variant,
                  "protocolConfigured": protocol is not None, "readerActive": reader is not None,
-                 "pendingReadDequeued": reader is not None, "pendingAfterHelper": False}
+                 "pendingReadDequeued": reader is not None, "pendingAfterHelper": False,
+                 "controlNonInheritable": True, "defaultHandlesAgree": True, "defaultEof": True}
         output = protocol if protocol is not None else sys.stdout.buffer
         return await helper_child(root, repo, output, reader, request, facts)
     finally:
@@ -196,8 +210,8 @@ async def helper_child(root, repo, protocol, reader, request, stream_facts):
             code, output = exc.returncode, exc.output or ""
     raw = output.encode("utf-8" if sys.flags.utf8_mode else locale.getencoding())
     try:
-        # Exact configure_protocol's descriptor only in protocol-only. Reader-only
-        # writes ordinary stdout unchanged, so each variant isolates one delta.
+        # Keep refs on the actual retained protocol descriptor, never redirected
+        # stdout. Private control input remains pending throughout this operation.
         protocol.write(raw)
         protocol.flush()
         stream_facts["pendingAfterHelper"] = reader is not None and reader_pending(reader, request)
@@ -361,9 +375,9 @@ def successful(row, *, inner=False):
         and helper["exception"] is None and helper["returncode"] == 0 and helper["outputComplete"]
         and helper["pendingEmpty"] and helper["errorCleanup"] is None
         and helper["streamContext"]["variant"] == row["route"]
-        and helper["streamContext"]["protocolConfigured"] == (row["route"] == "protocol-only")
-        and all(helper["streamContext"][key] == (row["route"] == "reader-only")
-                for key in ("readerActive", "pendingReadDequeued", "pendingAfterHelper"))
+        and all(helper["streamContext"][key] is True for key in
+                ("protocolConfigured", "readerActive", "pendingReadDequeued", "pendingAfterHelper",
+                 "controlNonInheritable", "defaultHandlesAgree", "defaultEof"))
         and (row["innerJob"] is None if inner else row["innerJob"] is not None and job_success(row["innerJob"])))
 
 
@@ -452,17 +466,19 @@ def validate_case(row):
 
 def validate_stream_context(value):
     assert type(value) is dict and set(value) == {
-        *STREAM_SOURCES, "variant", "protocolConfigured", "readerActive", "pendingReadDequeued", "pendingAfterHelper"}
+        *STREAM_SOURCES, "variant", "protocolConfigured", "readerActive", "pendingReadDequeued", "pendingAfterHelper",
+        "controlNonInheritable", "defaultHandlesAgree", "defaultEof"}
     assert value["variant"] in VARIANTS
     assert all(value[key] == digest for key, digest in STREAM_SOURCES.items())
     assert all(type(value[key]) is bool for key in
-               ("protocolConfigured", "readerActive", "pendingReadDequeued", "pendingAfterHelper"))
+               ("protocolConfigured", "readerActive", "pendingReadDequeued", "pendingAfterHelper",
+                "controlNonInheritable", "defaultHandlesAgree", "defaultEof"))
 
 
 def validate(report):
     assert set(report) == {"schema", "qualification", "diagnosticOnly", "status", "stage", "python", "windowsBuild",
                            "helperSha256", "gitWhichSha256", "cases", "exception"}
-    assert report["schema"] == 5 and report["qualification"] == "nested-split-stream-public-check-output-async"
+    assert report["schema"] == 6 and report["qualification"] == "nested-private-control-public-check-output-async"
     assert report["diagnosticOnly"] is True
     assert report["status"] in {"PASS", "FAIL"}
     assert report["stage"] in {"preflight", "helper-download", "comparison", "completed", "retained-unknown"}
@@ -471,12 +487,12 @@ def validate(report):
     assert report["helperSha256"] == SHA
     assert report["gitWhichSha256"] is None or re.fullmatch("[a-f0-9]{64}", report["gitWhichSha256"])
     assert report["exception"] is None or type(report["exception"]) is str and report["exception"] in ERRORS
-    assert type(report["cases"]) is list and len(report["cases"]) <= 2
+    assert type(report["cases"]) is list and len(report["cases"]) <= 1
     for index, row in enumerate(report["cases"]):
         validate_case(row)
         assert row["repo"] == "context-simple" and row["route"] == VARIANTS[index]
     if report["status"] == "PASS":
-        assert report["stage"] == "completed" and len(report["cases"]) == 2
+        assert report["stage"] == "completed" and len(report["cases"]) == 1
         assert report["exception"] is None and all(successful(row) for row in report["cases"])
 
 
@@ -492,7 +508,7 @@ if __name__ == "__main__":
     if len(sys.argv) == 5 and sys.argv[1] == "--nested" and sys.argv[3] in REPOS and sys.argv[4] in VARIANTS:
         raise SystemExit(asyncio.run(nested(Path(sys.argv[2]), sys.argv[3], sys.argv[4])))
     assert len(sys.argv) == 1 and os.environ.get("GITHUB_ACTIONS") == "true"
-    report = {"schema": 5, "qualification": "nested-split-stream-public-check-output-async",
+    report = {"schema": 6, "qualification": "nested-private-control-public-check-output-async",
         "diagnosticOnly": True, "status": "FAIL", "stage": "preflight",
         "python": ".".join(map(str, sys.version_info[:3])), "windowsBuild": sys.getwindowsversion().build,
         "helperSha256": SHA, "gitWhichSha256": None, "cases": [], "exception": None}

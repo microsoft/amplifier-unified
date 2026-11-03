@@ -22,6 +22,11 @@ jobs:
         run: |
           python -I -S -B tests/fixtures/windows_shared_git_diagnostic.py
           if ($LASTEXITCODE -ne 0) { throw 'Bounded Git diagnostic failed; inspect the safe artifact.' }
+      - name: Require private native control commands and ordinary child EOF
+        shell: pwsh
+        run: |
+          python -I -S -B -c "import sys,unittest; sys.path.insert(0,'.'); suite=unittest.defaultTestLoader.discover('tests',pattern='test_worker_platform_io.py'); selected=unittest.TestSuite(test for group in suite for case in group for test in case if test.id().endswith('NativeControlInputTests.test_private_commands_survive_while_ordinary_child_sees_eof')); assert selected.countTestCases()==1; result=unittest.TextTestRunner(verbosity=2).run(selected); assert result.testsRun==1 and not result.skipped; sys.exit(not result.wasSuccessful())"
+          if ($LASTEXITCODE -ne 0) { throw 'Native private-control command/child-EOF contract failed.' }
       - name: Upload only the closed safe result
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
