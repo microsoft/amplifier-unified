@@ -85,6 +85,128 @@ const boundedPush=(array,value,limit=report.limits.retainedEntriesPerArray)=>{
 let fixture,stopFixture,browser,page,pane,failure,stderr='',stderrCharacters=0;
 let failureScreenshotAttempted=false;
 
+// One exact second-review attempt, following questions-browser's request-object
+// correlation. Diagnostic failures never replace the journey's original error.
+async function observeReviewBoundary(page,target,artifactReceipt){
+ const data={target,stage:'setup',snapshots:[],network:[],errors:[],omitted:0,
+  limits:{requests:12,snapshots:6,responseBytes:131072},
+  limitation:'Passive state reads can affect timing; response bodies are Playwright observations, not independent wire captures.'};
+ report.reviewBoundary=data;
+ let active=false,closed=false,sequence=0,finished;
+ const requests=new WeakMap();
+ const id=value=>typeof value==='string'&&/^[a-zA-Z0-9:_-]{1,200}$/.test(value)?value:null;
+ const number=value=>Number.isSafeInteger(value)&&value>=0?value:null;
+ const pick=row=>{
+  if(!row||typeof row!=='object')return null;
+  const result={};
+  for(const key of ['id','viewId','resourceId','resourceRevision','previewId','sessionId','questionId','hostInstanceId'])
+   if(Object.hasOwn(row,key))result[key]=id(row[key]);
+  for(const key of ['version','selectedVersion','questionContentRevision','revision','stateRevision','generation','status'])
+   if(Object.hasOwn(row,key))result[key]=number(row[key]);
+  for(const key of ['accepted','resetPreview','presentationRequest'])
+   if(Object.hasOwn(row,key))result[key]=typeof row[key]==='boolean'?row[key]:null;
+  if(Object.hasOwn(row,'presentation'))result.presentation=['canvas','inline','saved'].includes(row.presentation)?row.presentation:'other';
+  if(Object.hasOwn(row,'code'))result.code=['canvas_preview_reset_required','canvas_preview_dirty','invalid_response','stale_revision','canvas_view_stale'].includes(row.code)?row.code:'other';
+  result.errorPresent=!!row.error;
+  return result;
+ };
+ const fault=phase=>{if(data.errors.length<8)data.errors.push(phase);else data.omitted++};
+ data.fixtureArtifactReceipt=pick(artifactReceipt);
+ const onRequest=request=>{
+  if(!active||closed)return;
+  try{
+   const url=new URL(request.url());if(url.origin!==new URL(page.url()).origin)return;
+   let action,args,commandId=null;
+   if(request.method()==='POST'&&url.pathname==='/api/actions'){
+    const text=request.postData();if(!text||text.length>32768){fault('action-body-unavailable');return}
+    const raw=JSON.parse(text),body=raw?.action==='shell.command'?raw.args:raw;
+    action=body?.action;args=body?.args;
+    if(!['canvas.select','canvas.views.inline'].includes(action))return;
+    if((args?.id??args?.resourceId)!==target.resourceId||args?.version!==target.version
+     ||args?.questionId!==target.questionId||args?.questionContentRevision!==target.questionContentRevision)return;
+    commandId=id(raw.id??body.id);
+   }else if(request.method()==='GET'&&/^\/api\/canvas\/views\/[^/]+\/resource$/.test(url.pathname)
+    &&url.searchParams.get('resourceId')===target.resourceId){
+    action='inline-resource';args={viewId:url.pathname.split('/')[4],resourceId:target.resourceId,
+     resourceRevision:url.searchParams.get('resourceRevision'),generation:Number(url.searchParams.get('generation'))};
+   }else return;
+   if(data.network.length>=data.limits.requests){data.omitted++;return}
+   const row={sequence:++sequence,stage:data.stage,action,commandId,args:pick(args),responseState:'not-observed'};
+   data.network.push(row);requests.set(request,row);
+  }catch{fault('request-observation-unavailable')}
+ };
+ const onResponse=response=>{
+  try{
+  const row=requests.get(response.request());if(!row||closed)return;
+  row.status=response.status();row.responseSequence=++sequence;
+  if(row.action==='inline-resource'){row.responseState='headers-observed';return}
+  const length=response.headers()['content-length'];
+  if(!/^\d+$/.test(length??'')||Number(length)>data.limits.responseBytes){row.responseState='body-size-unavailable-or-over-limit';return}
+  row.responseState='body-pending';
+  void response.body().then(bytes=>{
+   if(closed)return;
+   if(bytes.length>data.limits.responseBytes){row.responseState='body-over-limit';return}
+   const body=JSON.parse(bytes.toString('utf8'));
+   row.response={...pick(body),result:pick(body?.result),receipt:pick(body?.receipt)};
+   row.responseState='observed';row.bodySequence=++sequence;
+  }).catch(()=>{if(!closed){row.responseState='body-unreadable';fault('response-body-unavailable')}});
+  }catch{fault('response-observation-unavailable')}
+ };
+ const onFailed=request=>{const row=requests.get(request);if(row&&!closed){row.responseState='request-failed';row.failureSequence=++sequence}};
+ const snapshot=async stage=>{
+  data.stage=stage;
+  try{
+   const facts=await page.evaluate(target=>{
+    const id=value=>typeof value==='string'&&/^[a-zA-Z0-9:_-]{1,200}$/.test(value)?value:null;
+    const scalar=(row,keys)=>row?Object.fromEntries(keys.map(key=>[key,
+     typeof row[key]==='boolean'||Number.isSafeInteger(row[key])?row[key]:id(row[key])])):null;
+    const state=window.amplifier?.getState();
+    const question=document.querySelector(`[data-question-id="${CSS.escape(target.questionId)}"]`);
+    const card=question?.querySelectorAll('.a-compact-artifact')[1],button=card?.querySelector('.a-document-preview-toggle');
+    const notice=card?.querySelector('.a-compact-artifact-notice');
+    const controls=notice?[...notice.querySelectorAll('button')].slice(0,4):[];
+    const keep=controls.some(node=>node.textContent==='Keep current preview');
+    const reset=controls.some(node=>node.textContent?.startsWith('Reset preview and '));
+    const session=state?.sessions?.find(row=>row.id===target.sessionId);
+    const savedQuestion=session?.questions?.find(row=>row.id===target.questionId);
+    const presentations=state?.canvasWorkspace?.presentations||[],views=state?.canvasWorkspace?.views||[];
+    const exact=presentations.filter(row=>row.id===target.resourceId&&row.version===target.version);
+    const leases=views.filter(row=>row.resourceId===target.resourceId);
+    return {selectedSessionId:id(state?.selectedSessionId),stateRevision:Number.isSafeInteger(state?.revision)?state.revision:null,
+     question:scalar(savedQuestion,['id','revision','contentRevision','status']),
+     cardPresent:!!card,buttonPresent:!!button,expanded:button?.getAttribute('aria-expanded')==='true',
+     buttonDisabled:button?.disabled??null,iframeCount:card?.querySelectorAll('iframe').length??0,
+     notice:!notice?'absent':keep&&reset?'keep-or-reset':notice.textContent?.startsWith('Shown in Canvas')?'shown-in-canvas':'other',
+     keepControl:keep,resetControl:reset,inlineErrorPresent:!!card?.querySelector('.a-inline-artifact-notice'),
+     primary:scalar(state?.canvas,['id','selectedVersion','revision','open','_presentationDisposed']),
+     presentations:exact.slice(0,4).map(row=>scalar(row,['id','version','presentation','questionId','questionContentRevision','sessionId'])),
+     presentationsOmitted:Math.max(0,exact.length-4),
+     leases:leases.slice(0,8).map(row=>scalar(row,['viewId','resourceId','resourceRevision','generation','selectedVersion','dirty'])),
+     leasesOmitted:Math.max(0,leases.length-8)};
+   },target);
+   if(data.snapshots.length<data.limits.snapshots)data.snapshots.push({sequence:++sequence,stage,...facts});else data.omitted++;
+  }catch{fault(stage+'-state-unavailable')}
+ };
+ const finish=failed=>finished??=(async()=>{
+  data.endedStage=data.stage;
+  active=false;page.off('request',onRequest);page.off('response',onResponse);page.off('requestfailed',onFailed);
+  await snapshot(failed?'failure-final':'preview-mounted');
+  closed=true;
+  data.selectionRequest=data.network.some(row=>row.action==='canvas.select')?'observed':data.omitted||data.errors.length?'unknown':'absent-in-attempt';
+  data.inlineRequest=data.network.some(row=>row.action==='canvas.views.inline')?'observed':data.omitted||data.errors.length?'unknown':'absent-in-attempt';
+  data.pendingResponseReads=data.network.filter(row=>row.responseState==='body-pending').length;
+  for(const row of data.network.filter(row=>row.action==='inline-resource'))
+   row.matchesAttemptLease=data.network.some(lease=>lease.action==='canvas.views.inline'
+    &&lease.response?.accepted===true&&lease.response.result?.viewId===row.args.viewId
+    &&lease.response.result?.resourceRevision===row.args.resourceRevision
+    &&lease.response.result?.generation===row.args.generation);
+  // An unfinished read stays explicitly pending; do not extend the iframe wait.
+ })();
+ page.on('request',onRequest);page.on('response',onResponse);page.on('requestfailed',onFailed);
+ await snapshot('before-click');active=true;data.stage='click-pending';
+ return {snapshot,finish,waiting(){data.stage='iframe-wait'}};
+}
+
 const inspect=async(pane,questionId)=>pane.evaluate((el,id)=>{
  const box=node=>{
   if(!node)return null;
@@ -513,10 +635,20 @@ try{
  const reviewFixture=await reviewResponse.json();
  const reviewQuestion=pane.locator(`[data-question-id="${reviewFixture.question.id}"]`);
  const htmlReview=reviewQuestion.locator('.a-compact-artifact').nth(1);
- await htmlReview.getByRole('button',{name:/^Preview here:/}).click();
  const iframe=htmlReview.locator('iframe'),inner=htmlReview.frameLocator('iframe');
- await expect(iframe).toHaveAttribute('sandbox','allow-scripts');
- await expect(inner.getByRole('heading',{name:'HTML mockup v1',exact:true})).toBeVisible();
+ const reviewBoundary=await observeReviewBoundary(page,{attempt:'second-html-review',
+  sessionId:ready.sessionId,questionId:reviewFixture.question.id,
+  questionRevision:reviewFixture.question.revision,questionContentRevision:reviewFixture.question.contentRevision,
+  resourceId:reviewFixture.html.id,version:reviewFixture.question.artifacts?.find(row=>row.id===reviewFixture.html.id)?.version??null},reviewFixture.html);
+ let reviewFailed=true;
+ try{
+  await htmlReview.getByRole('button',{name:/^Preview here:/}).click();
+  await reviewBoundary.snapshot('click-resolved');
+  reviewBoundary.waiting();
+  await expect(iframe).toHaveAttribute('sandbox','allow-scripts');
+  await expect(inner.getByRole('heading',{name:'HTML mockup v1',exact:true})).toBeVisible();
+  reviewFailed=false;
+ }finally{await reviewBoundary.finish(reviewFailed)}
  const innerControl=inner.getByRole('button',{name:'Try mockup',exact:true});
  // Merely mounting a review must not disable the overflow cue.
  await composer.evaluate(element=>element.focus({preventScroll:true}));await expect(composer).toBeFocused();
