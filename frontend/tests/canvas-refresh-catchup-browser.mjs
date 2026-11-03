@@ -188,10 +188,77 @@ try{
   assert.equal((await sample()).executed,dirty.executed);assert.equal((await sample()).input,dirty.input);
   assert.equal((await view()).dirty,true);
   await action('canvas.views.dirty',{...target(await view()),dirty:false});
+  const narrow=[],toolbar=panel.locator('.a-canvas-artifact-toolbar');
+  row.observed={original,loaded,dirty,narrow};
+  if(kind==='html'){
+   // Real completion feedback must coexist with the retained-preview Load row.
+   // This 214-byte fixture is separate from the 426-byte Files native journey.
+   let timer,receive,expire;
+   const arrived=new Promise(resolve=>{receive=resolve;expire=()=>resolve(null);timer=setTimeout(expire,10000)});
+   page.on('download',receive);
+   try{
+    await toolbar.getByRole('button',{name:'Download canvas source',exact:true}).click();
+    const download=await arrived;assert.ok(download,'Narrow-layout setup download did not arrive');
+    assert.equal(await download.failure(),null);
+    const file=join(output,'narrow-running-v2.html');await download.saveAs(file);
+    const bytes=await readFile(file);assert.deepEqual(bytes,Buffer.from(html(2)));
+    row.observed.feedbackDownload={file:'narrow-running-v2.html',bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};
+    await expect(toolbar.locator('.a-saved-file-download>[role="status"]')).toHaveText('Download started. Check your browser’s downloads.');
+    const after=await sample();assert.equal(after.executed,dirty.executed);assert.equal(after.input,dirty.input);
+    assert.deepEqual(target(after.view),target(dirty.view));assert.equal(after.view.runningVersion,2);
+   }finally{clearTimeout(timer);page.off('download',receive);expire()}
+  }
   for(const width of [390,320]){
    await page.setViewportSize({width,height:780});
    const box=await load(3).evaluate(el=>{const r=el.getBoundingClientRect();return {width:r.width,height:r.height,inside:r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight,hit:el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}});
+   const layout=await toolbar.evaluate(bar=>{
+    const rect=el=>{const r=el.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}};
+    const inspect=el=>{
+     const r=rect(el),style=getComputedStyle(el),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);
+     return {...r,tag:el.tagName,visible:el.checkVisibility({checkVisibilityCSS:true}),inert:!!el.closest('[inert]'),
+      hit:el.contains(hit),nativeHit:hit===el,clipped:el.scrollWidth>el.clientWidth+1||el.scrollHeight>el.clientHeight+1,
+      gridRow:style.gridRow,gridColumn:style.gridColumn,display:style.display};
+    };
+    const controls=Object.fromEntries([
+     ['version','[aria-label="Choose artifact version"]'],['refresh','.a-canvas-refresh'],
+     ['copy','[aria-label="Copy canvas source"]'],['download','.a-saved-file-download>button'],
+     ['details','.a-canvas-details'],['load','.a-canvas-load-version']
+    ].map(([name,selector])=>[name,inspect(bar.querySelector(selector))]));
+    const freshness=bar.querySelector('.a-canvas-freshness'),status=bar.querySelector('.a-saved-file-download>[role="status"]');
+    const r=rect(bar),style=getComputedStyle(bar),freshStyle=getComputedStyle(freshness);
+    return {toolbar:r,contentLeft:r.left+parseFloat(style.borderLeftWidth)+parseFloat(style.paddingLeft),
+     contentRight:r.right-parseFloat(style.borderRightWidth)-parseFloat(style.paddingRight),
+     viewport:{width:innerWidth,height:innerHeight},overflow:bar.scrollWidth>bar.clientWidth+1,controls,
+     freshness:{...inspect(freshness),paddingLeft:parseFloat(freshStyle.paddingLeft),paddingRight:parseFloat(freshStyle.paddingRight)},
+     feedback:status.textContent?inspect(status):null,
+     decorationPointerEvents:[...bar.querySelectorAll('.a-saved-file-download>button *')].map(el=>getComputedStyle(el).pointerEvents)};
+   });
+   narrow.push({width,box,layout}); // Keep the measurement even if an assertion fails.
    assert.ok(box.width>=44&&box.height>=44&&box.inside&&box.hit,JSON.stringify(box));
+   assert.equal(layout.overflow,false);
+   assert.ok(layout.toolbar.left>=0&&layout.toolbar.right<=layout.viewport.width,'Toolbar must fit the narrow viewport');
+   for(const [name,r] of Object.entries(layout.controls)){
+    assert.equal(r.tag,'BUTTON',name);assert.ok(r.width>=44&&r.height>=44,name);
+    assert.ok(r.visible&&!r.inert&&r.hit&&!r.clipped,name);
+    assert.ok(r.left>=layout.contentLeft-1&&r.right<=layout.contentRight+1&&r.top>=0&&r.bottom<=layout.viewport.height,name);
+   }
+   assert.equal(layout.controls.download.nativeHit,true);
+   assert.ok(layout.decorationPointerEvents.length>0&&layout.decorationPointerEvents.every(value=>value==='none'));
+   const {version,refresh:refreshBox,copy,download,details,load:loadBox}=layout.controls;
+   assert.ok(Math.abs(version.top-refreshBox.top)<=1&&version.right<=refreshBox.left);
+   assert.ok(copy.top>=Math.max(version.bottom,refreshBox.bottom));
+   assert.ok(Math.abs(copy.top-download.top)<=1&&Math.abs(copy.top-details.top)<=1);
+   assert.ok(copy.right<=download.left&&download.right<=details.left);
+   const fresh=layout.freshness;
+   assert.ok(fresh.visible&&!fresh.inert&&!fresh.clipped&&fresh.top>=Math.max(copy.bottom,download.bottom,details.bottom));
+   assert.ok(Math.abs(fresh.left-layout.contentLeft)<=1&&Math.abs(fresh.right-layout.contentRight)<=1,'Freshness must span the toolbar');
+   assert.ok(Math.abs(loadBox.left-(fresh.left+fresh.paddingLeft))<=1&&Math.abs(loadBox.right-(fresh.right-fresh.paddingRight))<=1,'Load must use the full freshness content width');
+   if(kind==='html'){
+    const feedback=layout.feedback;assert.ok(feedback?.visible&&!feedback.inert&&!feedback.clipped);
+    assert.ok(feedback.top>=fresh.bottom&&feedback.bottom<=layout.toolbar.bottom&&feedback.bottom<=layout.viewport.height,'Download feedback must not overlap freshness/Load');
+    assert.ok(Math.abs(feedback.left-layout.contentLeft)<=1&&Math.abs(feedback.right-layout.contentRight)<=1,'Download feedback must own a full row');
+    assert.notEqual(feedback.gridRow,fresh.gridRow);
+   }
    await capture(kind+'-retained-'+width);
   }
   await load(3).tap();await frame().getByRole('heading',{name:'Executable version 3'}).waitFor();
@@ -222,7 +289,7 @@ try{
   await frame().getByRole('heading',{name:'Executable version 1'}).waitFor();
   assert.equal((await view()).selectedVersion,1,'Cold page retains explicit historical selection, not JS memory');
   assert.notEqual((await sample()).executed,pinned.executed);
-  row.observed={original,loaded,third,pinned,versions:(await view()).versions.map(v=>v.version)};
+  row.observed={...row.observed,original,loaded,third,pinned,versions:(await view()).versions.map(v=>v.version)};
   await capture(kind+'-pinned-retained');return row.observed;
  });
  for(const mode of ['accepted-toolbar','accepted-details','unknown','proxy-html','malformed-details','refused'])await check('Load feedback: '+mode,async row=>{
