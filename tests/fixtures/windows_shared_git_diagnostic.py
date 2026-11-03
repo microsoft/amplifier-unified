@@ -3,6 +3,8 @@
 No installs, source substitutions, worker hooks or production mutations. Raw
 captures remain private. Unknown owners stay alive until the five-minute CI job
 terminates their owner; a cancelled/timed-out job is never diagnostic success.
+Only the public async helper entry is exercised; accepted synchronous cases
+are not repeated. Successful helper calls expose no operation cleanup object.
 """
 import asyncio
 import hashlib
@@ -73,7 +75,7 @@ def argv(repo):
             "refs/heads/main", "refs/tags/main", "refs/tags/main^{}"]
 
 
-def child(root, repo):
+async def child(root, repo):
     assert Path.cwd() == root
     with directory(root, owned_root=root) as pinned:
         raw = pinned.read_private("helper.py", limit=32768)
@@ -82,21 +84,23 @@ def child(root, repo):
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     exec(compile(raw, str(root / "helper.py"), "exec"), module.__dict__)
-    operation = module._Operation(argv(repo), 35)
-    output, error, code = "", None, None
+    output, error, code, error_cleanup = "", None, None, None
     try:
-        output, code = operation.run(), 0
+        output, code = await module.check_output(argv(repo), timeout=35), 0
     except BaseException as exc:
         error = "HelperCleanupError" if type(exc) is module._CleanupError else failure(exc)
+        facts = getattr(exc, "cleanup", None)
+        if type(facts) is dict:
+            error_cleanup = cleanup(facts)  # Only exposed failure/cancel facts.
         if type(exc) is subprocess.CalledProcessError:
             code, output = exc.returncode, exc.output or ""
     raw = output.encode("utf-8" if sys.flags.utf8_mode else locale.getencoding())
     try:
         sys.stdout.buffer.write(raw)
         sys.stdout.buffer.flush()
-        save(root, "B-" + repo + "-helper.json", {"exception": error,
+        save(root, "B-async-" + repo + "-helper.json", {"entry": "public-check-output-async", "exception": error,
             "returncode": code, "outputComplete": error in {None, "CalledProcessError"},
-            "cleanup": cleanup(operation.cleanup)})
+            "pendingEmpty": not module._PENDING, "errorCleanup": error_cleanup})
     finally:
         while module._PENDING:  # Outer Job owns finite termination of this child.
             time.sleep(1)
@@ -108,17 +112,23 @@ def helper_result(root, label):
         with directory(root, owned_root=root) as pinned:
             raw = pinned.read_private(label + "-helper.json", limit=16384)
         value = json.loads(raw)
-        assert type(value) is dict and set(value) == {"exception", "returncode", "outputComplete", "cleanup"}
+        assert type(value) is dict and set(value) == {
+            "entry", "exception", "returncode", "outputComplete", "pendingEmpty", "errorCleanup"}
+        assert value["entry"] == "public-check-output-async"
         assert value["exception"] is None or type(value["exception"]) is str and value["exception"] in ERRORS
         assert value["returncode"] is None or type(value["returncode"]) is int and -(2**31) <= value["returncode"] < 2**32
         assert type(value["outputComplete"]) is bool
-        value["cleanup"] = cleanup(value["cleanup"])
+        assert type(value["pendingEmpty"]) is bool
+        if value["errorCleanup"] is not None:
+            assert value["exception"] is not None
+            value["errorCleanup"] = cleanup(value["errorCleanup"])
         return value
     except BaseException:
         return None
 
 
 async def compare(root, repo, route, env, git):
+    assert route == "B-async"  # No repeat of accepted A/synchronous-B cases.
     label = route + "-" + repo
     save(root, label + "-starting.json", {"stage": "starting"})
     owner = result = error = None
@@ -133,7 +143,7 @@ async def compare(root, repo, route, env, git):
             if len(block) > room:
                 overflow = True
                 raise ValueError("capture limit")
-    command = [git, *argv(repo)[1:]] if route == "A" else [
+    command = [
         sys.executable, "-I", "-S", "-B", str(Path(__file__).resolve()), "--child", str(root), repo]
     cancelled = None
     try:
@@ -141,7 +151,7 @@ async def compare(root, repo, route, env, git):
             owner = await WindowsOwnedProcess.start(command, cwd=str(root), env=env,
                 trusted_python=sys._base_executable, gate_timeout=10, cleanup_timeout=5)
             OWNERS.append(owner)
-            # Both routes keep stdin open/unwritten until natural process exit.
+            # Preserve the accepted child's open/unwritten stdin and ownership.
             tasks = [asyncio.create_task(owner.wait()),
                      *(asyncio.create_task(drain(name)) for name in captures)]
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
@@ -189,7 +199,7 @@ async def compare(root, repo, route, env, git):
         "ioFinalized": bool(owner is not None and owner.io_finalized),
         "discarded": bool(owner is not None and owner.output_discarded),
         "tasksSettled": settled, "cleanupConfirmed": bool(confirmed),
-        "helper": helper_result(root, label) if route == "B" and confirmed and settled else None}
+        "helper": helper_result(root, label) if confirmed and settled else None}
     for name, raw in captures.items():
         private(root, label + "-" + name + ".bin", bytes(raw))
     save(root, label + "-completed.json", row)
@@ -204,11 +214,10 @@ def successful(row):
         and row["mainRef"] and row["refSyntax"] and row["returncode"] == 0
         and row["cleanupConfirmed"] and row["activeProcesses"] == 0
         and row["treeEmpty"] and row["ioFinalized"] and row["tasksSettled"] and not row["discarded"]
-        and (row["route"] == "A" or inner is not None and inner["exception"] is None
-             and inner["returncode"] == 0 and inner["outputComplete"]
-             and all(inner["cleanup"][key] is True for key in
-                     ("process_exited", "tree_empty", "io_finalized", "handles_closed"))
-             and inner["cleanup"]["owner_retained"] is False and not inner["cleanup"]["errors"]))
+        and row["route"] == "B-async"
+        and inner is not None and inner["entry"] == "public-check-output-async" and inner["exception"] is None
+        and inner["returncode"] == 0 and inner["outputComplete"]
+        and inner["pendingEmpty"] and inner["errorCleanup"] is None)
 
 
 async def experiment(report):
@@ -244,19 +253,19 @@ async def experiment(report):
     # This hash is which('git'), NOT proof of bare CreateProcess executable identity.
     report["stage"] = "comparison"
     for repo in REPOS:
-        for route in ("A", "B"):
-            report["cases"].append(await compare(root, repo, route, env, git))
-            if RETAINED:
-                report["stage"] = "retained-unknown"
-                return
+        report["cases"].append(await compare(root, repo, "B-async", env, git))
+        if RETAINED:
+            report["stage"] = "retained-unknown"
+            return
     report["stage"] = "completed"
     report["status"] = "PASS" if all(successful(row) for row in report["cases"]) else "FAIL"
 
 
 def validate(report):
-    assert set(report) == {"schema", "diagnosticOnly", "status", "stage", "python", "windowsBuild",
+    assert set(report) == {"schema", "qualification", "diagnosticOnly", "status", "stage", "python", "windowsBuild",
                            "helperSha256", "gitWhichSha256", "cases", "exception"}
-    assert report["schema"] == 1 and report["diagnosticOnly"] is True
+    assert report["schema"] == 2 and report["qualification"] == "public-check-output-async"
+    assert report["diagnosticOnly"] is True
     assert report["status"] in {"PASS", "FAIL"}
     assert report["stage"] in {"preflight", "helper-download", "comparison", "completed", "retained-unknown"}
     assert re.fullmatch(r"3\.13\.[0-9]{1,4}", report["python"])
@@ -264,9 +273,9 @@ def validate(report):
     assert report["helperSha256"] == SHA
     assert report["gitWhichSha256"] is None or re.fullmatch("[a-f0-9]{64}", report["gitWhichSha256"])
     assert report["exception"] is None or type(report["exception"]) is str and report["exception"] in ERRORS
-    assert type(report["cases"]) is list and len(report["cases"]) <= 4
+    assert type(report["cases"]) is list and len(report["cases"]) <= 2
     for index, row in enumerate(report["cases"]):
-        assert list(REPOS)[index // 2] == row["repo"] and row["route"] == ("A", "B")[index % 2]
+        assert list(REPOS)[index] == row["repo"] and row["route"] == "B-async"
         assert set(row) == {"repo", "route", "seconds", "stage", "exception", "timedOut", "overflow",
             "stdoutBytes", "stderrBytes", "mainRef", "refSyntax", "returncode", "activeProcesses",
             "treeEmpty", "ioFinalized", "discarded", "tasksSettled", "cleanupConfirmed", "helper"}
@@ -281,17 +290,21 @@ def validate(report):
             assert row[key] is None or type(row[key]) is int and -(2**31) <= row[key] < 2**32
         if row["helper"] is not None:
             h = row["helper"]
-            assert set(h) == {"exception", "returncode", "outputComplete", "cleanup"}
+            assert set(h) == {"entry", "exception", "returncode", "outputComplete", "pendingEmpty", "errorCleanup"}
+            assert h["entry"] == "public-check-output-async" and type(h["pendingEmpty"]) is bool
             assert h["exception"] in ERRORS and type(h["outputComplete"]) is bool
             assert h["returncode"] is None or type(h["returncode"]) is int and -(2**31) <= h["returncode"] < 2**32
-            assert set(h["cleanup"]) == {*BOOLS, "errors"}
-            assert all(h["cleanup"][key] is None or type(h["cleanup"][key]) is bool for key in BOOLS)
-            assert type(h["cleanup"]["errors"]) is list and len(h["cleanup"]["errors"]) <= 8
-            for e in h["cleanup"]["errors"]:
-                assert set(e) == {"stage", "winerror"} and e["stage"] in STAGES
-                assert e["winerror"] is None or type(e["winerror"]) is int and -(2**31) <= e["winerror"] < 2**32
+            if h["errorCleanup"] is not None:
+                assert h["exception"] is not None
+                c = h["errorCleanup"]
+                assert set(c) == {*BOOLS, "errors"}
+                assert all(c[key] is None or type(c[key]) is bool for key in BOOLS)
+                assert type(c["errors"]) is list and len(c["errors"]) <= 8
+                for e in c["errors"]:
+                    assert set(e) == {"stage", "winerror"} and e["stage"] in STAGES
+                    assert e["winerror"] is None or type(e["winerror"]) is int and -(2**31) <= e["winerror"] < 2**32
     if report["status"] == "PASS":
-        assert report["stage"] == "completed" and len(report["cases"]) == 4
+        assert report["stage"] == "completed" and len(report["cases"]) == 2
         assert report["exception"] is None and all(successful(row) for row in report["cases"])
 
 
@@ -303,9 +316,10 @@ if __name__ == "__main__":
     assert os.name == "nt" and sys.implementation.name == "cpython"
     assert sys.version_info[:2] == (3, 13) and struct.calcsize("P") == 8
     if len(sys.argv) == 4 and sys.argv[1] == "--child" and sys.argv[3] in REPOS:
-        raise SystemExit(child(Path(sys.argv[2]), sys.argv[3]))
+        raise SystemExit(asyncio.run(child(Path(sys.argv[2]), sys.argv[3])))
     assert len(sys.argv) == 1 and os.environ.get("GITHUB_ACTIONS") == "true"
-    report = {"schema": 1, "diagnosticOnly": True, "status": "FAIL", "stage": "preflight",
+    report = {"schema": 2, "qualification": "public-check-output-async",
+        "diagnosticOnly": True, "status": "FAIL", "stage": "preflight",
         "python": ".".join(map(str, sys.version_info[:3])), "windowsBuild": sys.getwindowsversion().build,
         "helperSha256": SHA, "gitWhichSha256": None, "cases": [], "exception": None}
     loop = asyncio.new_event_loop()
