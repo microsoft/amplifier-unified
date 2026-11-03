@@ -1,7 +1,7 @@
 """Owner-to-browser handoff, not remote pairing or a fresh Windows Hello check.
 
-The activation gate remains closed pending native and combined-flow acceptance.
-Candidate protocol checks must select the private reader explicitly in fixtures.
+The foreground owner launcher reads existing private credentials only.
+Listener authentication and grant exchange remain separate from that local read.
 """
 from __future__ import annotations
 
@@ -46,15 +46,12 @@ def current_owner_sid() -> str:
 
 
 def read_owner_control_token(data_dir: Path, owner_sid: str) -> str:
-    """Closed activation gate. No environment/config/CLI bypass."""
-    raise BrowserEntryUnavailable(
-        "Windows browser entry remains disabled pending native private-credential "
-        "and TLS storage/initialization qualification and combined-flow acceptance."
-    )
+    """Read the existing owner credential through the native private boundary."""
+    return _read_private_owner_control_token(data_dir, owner_sid)
 
 
 def _read_private_owner_control_token(data_dir: Path, owner_sid: str) -> str:
-    """Candidate existing-only read of both credentials under one directory pin."""
+    """Existing-only read of both credentials under one directory pin."""
     from . import windows_files
     from .auth import _windows_credential_value
     try:

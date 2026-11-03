@@ -217,8 +217,8 @@ jobs:
     # separate offline qualifier or supply a preinstalled replacement command.
     needs: windows-user-trial
     runs-on: windows-latest
-    # 8-minute host setup + 21-minute test/evidence step + action overhead.
-    timeout-minutes: 30
+    # 8-minute setup + unchanged 21-minute cold check + 4-minute CLI cell + overhead.
+    timeout-minutes: 34
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONUTF8: '1'
@@ -338,11 +338,31 @@ jobs:
           '@
           & "$base/env/Scripts/python.exe" -I -B -c $check $env:GITHUB_WORKSPACE $base
           if ($LASTEXITCODE -ne 0) { throw 'Native default-command check failed; inspect bounded publicresult.json.' }
+      - name: Require installed foreground CLI TLS, public open and graceful cleanup
+        # Default success() sequencing: never run this cell after cold failure.
+        timeout-minutes: 4
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = $env:DEFAULT_TRIAL_BASE
+          $wheel = @(Get-ChildItem "$base/wheels/*.whl")
+          if ($wheel.Count -ne 1) { throw 'Expected exactly one foreground candidate wheel.' }
+          $probe = Join-Path $env:GITHUB_WORKSPACE 'tests/fixtures/windows_user_trial_probe.py'
+          & "$base/env/Scripts/python.exe" -I -B $probe --cli-run $wheel[0].FullName --candidate-receipt "$base/candidate.json" --receipt "$base/evidence/foreground.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Native foreground CLI check failed; inspect bounded foreground.json.' }
       - name: Upload only the bounded default-runtime result
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-default-runtime
           path: ${{ runner.temp }}/dr-ci/evidence/publicresult.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload only bounded foreground CLI facts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-foreground-cli
+          path: ${{ runner.temp }}/dr-ci/evidence/foreground.json
           if-no-files-found: warn
           retention-days: 7

@@ -1,4 +1,4 @@
-"""Bounded installed Windows candidate check, NOT public activation acceptance.
+"""Bounded installed Windows public-entry check, NOT device acceptance.
 
 Uses the maintained worker_startup_probe's local-module/settings pattern. Only
 the provider is scripted; Core, Foundation, loop, context, capture, filesystem,
@@ -26,6 +26,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import runpy
 import shutil
 import socket
 import stat
@@ -63,7 +64,8 @@ CHECKS = STAGES | {"privateTlsGrantCookieCsrfReplay", "inheritedAccessLookup",
           "realWorkerToolUtf8History", "hostRestartResumeWithoutReplay",
           "outputSnapshotReadExactBytes", "stopDescendantTreeAndIo",
           "privateRuntimeProjectApi", "maintainedNativePrerequisites",
-          "twoFreshHostsAndInstalledWorkerGraphs", "unexpectedPythonNetworkAttempts"}
+          "twoFreshHostsAndInstalledWorkerGraphs", "unexpectedPythonNetworkAttempts",
+          "publicOwnerEntryInitialized"}
 # Exact maintained native cells, not a file-wide/full-suite gate. Keep explicit
 # parameter IDs so a missing forced-cleanup branch cannot hide behind one pass.
 NATIVE_CONTROLS = {
@@ -687,6 +689,22 @@ def installed(wheel, report=None):
             "imports": origins, "graph": sorted(graph, key=lambda row: row["name"].lower())}
 
 
+def validate_installation(item):
+    assert set(item) == {"wheelSha256", "verifiedMembers", "imports", "graph"}
+    assert re.fullmatch("[0-9a-f]{64}", item["wheelSha256"])
+    assert type(item["verifiedMembers"]) is int and 0 < item["verifiedMembers"] <= 10**9
+    assert set(item["imports"]) == set(IMPORTS)
+    for row in item["imports"].values():
+        assert set(row) == {"origin", "sha256"} and row["origin"] == "installed"
+        assert re.fullmatch("[0-9a-f]{64}", row["sha256"])
+    for row in item["graph"]:
+        assert {"name", "version"} <= set(row) <= {"name", "version", "commit"}
+        assert re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", row["name"])
+        assert re.fullmatch(r"[A-Za-z0-9_.+!-]{1,100}", row["version"])
+        if "commit" in row:
+            assert re.fullmatch("[0-9a-f]{40}|[0-9a-f]{64}", row["commit"])
+
+
 def validate_public(value):
     """Fail closed before upload, including nested child evidence and metadata."""
     def sha(value, lengths=(64,)):
@@ -728,18 +746,7 @@ def validate_public(value):
             total += attempt["count"]
         assert total == item["network"]["unknownAttempts"]
     def installation(item):
-        assert set(item) == {"wheelSha256", "verifiedMembers", "imports", "graph"}
-        sha(item["wheelSha256"]); number(item["verifiedMembers"])
-        assert set(item["imports"]) == set(IMPORTS)
-        for row in item["imports"].values():
-            assert set(row) == {"origin", "sha256"} and row["origin"] == "installed"
-            sha(row["sha256"])
-        for row in item["graph"]:
-            assert {"name", "version"} <= set(row) <= {"name", "version", "commit"}
-            assert re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", row["name"])
-            assert re.fullmatch(r"[A-Za-z0-9_.+!-]{1,100}", row["version"])
-            if "commit" in row:
-                sha(row["commit"], (40, 64))
+        validate_installation(item)
     common = {"status", "stage", "checks", "failureKind", "errno", "winerror", "installationStage",
               "installationImport", "installationCheck", "installationImportFailure", "installationMissingModule"}
     def checks(item):
@@ -771,7 +778,7 @@ def validate_public(value):
     for commit in value["candidate"].values():
         sha(commit, (40, 64))
     assert value["publicAcceptance"] is False
-    assert value["qualification"] == "private-adapter-candidate-only"
+    assert value["qualification"] == "public-entry-scripted-provider-not-device"
     assert value["runtimePreparation"] == "separate-private-project-api-plus-preinstalled-worker"
     assert len(value["python"]) == 3
     for version in value["python"]:
@@ -780,7 +787,7 @@ def validate_public(value):
     for key in {"outerJobsSettled", "scratchRemoved"} & value.keys():
         assert type(value[key]) is bool
     for item in value.get("hosts", []):
-        assert set(item) <= common | {"installed", "innerJobsSettled", "publicGateClosed", "network",
+        assert set(item) <= common | {"installed", "innerJobsSettled", "network",
                                       "networkDiagnostics", "turnStep", "lastAction", "errors", "workerFacts",
                                       "runtimeStartup"}
         checks(item)
@@ -820,7 +827,7 @@ def validate_public(value):
                 assert facts["status"] == "PASS"
         if "installed" in item:
             installation(item["installed"])
-        for key in {"innerJobsSettled", "publicGateClosed"} & item.keys():
+        for key in {"innerJobsSettled"} & item.keys():
             assert type(item[key]) is bool
         if "network" in item:
             assert set(item["network"]) == {"blockedOptionalIpv6Probes", "unknownAttempts"}
@@ -1347,7 +1354,6 @@ async def journey(root, wheel, report, guard, phase):
         command=command, startup_timeout=90, retention={"prewarm_on_select": False})
     runtime.home = home
     runner = app = reservation = None
-    original_reader = entry.read_owner_control_token
     owners = []
     worker_facts_path = root / "worker-facts.json"
     # Reset only this bounded observation before a fresh host can start a worker.
@@ -1376,19 +1382,10 @@ async def journey(root, wheel, report, guard, phase):
         app = await server.create_app(home, workspace=workspace, runtime=runtime, voice=False,
             background_updates=False, background_work=False, preload_providers=False, server_config=config)
         runtime.app_bridge = app["service"].app_bridge
-        assert app["browser_entry"] is None
-        try:
-            original_reader(home, entry.current_owner_sid())
-        except entry.BrowserEntryUnavailable:
-            report["publicGateClosed"] = True
-        else:
-            raise AssertionError("Public gate changed; re-review qualification boundary")
-        # Same explicit candidate seam as test_native_actual_app_tls_grant_cookie_and_replay.
-        # This in-process fixture changes the reader selection, not the source
-        # gate, stored settings or credential initialization implementation.
-        entry.read_owner_control_token = entry._read_private_owner_control_token
-        entry.initialize(app)
+        # Normal create_app must initialize the PUBLIC owner-entry reader.
+        # A closed gate fails this check; there is no fixture adapter or re-init.
         assert app["browser_entry"] is not None
+        report["checks"]["publicOwnerEntryInitialized"] = "PASS"
         runner = web.AppRunner(app, access_log=None)
         await runner.setup()
         await web.SockSite(runner, reservation, ssl_context=tls.ssl_context(home, config)).start()
@@ -1522,7 +1519,6 @@ async def journey(root, wheel, report, guard, phase):
                 "control": auth.control_token(home), "secret": auth.session_secret(home),
                 "nonReplay": baseline}), owned_root=root)
     finally:
-        entry.read_owner_control_token = original_reader
         # Include a worker that failed before its first parked observation.
         for row in runtime.workers.values():
             if row.get("windows_owner") is not None and row["windows_owner"] not in owners:
@@ -1831,7 +1827,7 @@ def run(wheel, receipt):
     assert set(retained) == {"head", "tree"} and all(
         re.fullmatch(r"[0-9a-f]{40,64}", value) for value in retained.values())
     report = dict(candidate=retained, status="FAIL", stage="private_fixture_creation", checks={},
-                  qualification="private-adapter-candidate-only", publicAcceptance=False,
+                  qualification="public-entry-scripted-provider-not-device", publicAcceptance=False,
                   runtimePreparation="separate-private-project-api-plus-preinstalled-worker",
                   outerJobsSettled=True,
                   python=list(sys.version_info[:3]), windowsBuild=sys.getwindowsversion().build)
@@ -1873,6 +1869,382 @@ def run(wheel, receipt):
     return 0 if report["status"] == "PASS" else 1
 
 
+CLI_MODES = ("setup", "status", "export", "serve", "open")
+
+
+class CliOutput(io.BytesIO):
+    def write(self, raw):
+        assert self.tell() + len(raw) <= 65536
+        return super().write(raw)
+
+
+def cli_arguments(mode, root, port):
+    assert mode in CLI_MODES and type(port) is int and 1 <= port <= 65535
+    common = ["--data-dir", str(root / "app"), "--workspace", str(root / "workspace café 日本語")]
+    if mode in {"serve", "open"}:
+        return [*common, "--bind", "127.0.0.1", "--port", str(port),
+                *(["--no-open"] if mode == "serve" else []), mode]
+    return [*common, "setup-tls", *([] if mode == "setup" else [mode])]
+
+
+class CliNetworkGuard(NetworkGuard):
+    """One real asyncio CLI listener, not a loopback/network permission window."""
+    def __init__(self, log, port, *, serve=False, connect=False):
+        super().__init__(log)
+        self.port = port if connect else None
+        self.target_port, self.serve, self.listener = port, serve, None
+
+    def audit(self, event, args):
+        if (event == "socket.bind" and self.serve and self.listener is None
+                and args[1] == ("127.0.0.1", self.target_port)):
+            frame = sys._getframe(1)
+            # Actual CPython create_server binds this exact socket; no patched
+            # resolver/binder/run_app and no generic numeric/DNS exemption.
+            if (frame.f_code is asyncio.BaseEventLoop.create_server.__code__
+                    and args[0] is frame.f_locals.get("sock")
+                    and args[0].family == socket.AF_INET and args[0].type == socket.SOCK_STREAM):
+                self.listener = args[0]
+                return
+        return super().audit(event, args)
+
+
+def cli_material(root):
+    from amplifier_web.windows_files import directory
+    with directory(root / "app/config/tls", owned_root=root / "app") as pinned:
+        return {name: digest(pinned.read_private(name, limit=65536))
+                for name in ("ca.crt", "ca.key", "leaf.crt", "leaf.key")}
+
+
+@contextmanager
+def cli_application(root, checks):
+    """Observe real CLI startup/cleanup; only optional provider preload is off.
+
+    No replacement runtime, command, app, listener or run_app. The supported
+    settings action disables update checks before the initial three-second tick.
+    This cell does not qualify provider discovery/preload or a browser backend.
+    """
+    from amplifier_web import server
+    from amplifier_web.runtime import RuntimeManager
+    from aiohttp import web
+    original = server.create_app
+    tasks = []
+
+    async def create(*args, **kwargs):
+        assert "runtime" not in kwargs and "preload_providers" not in kwargs
+        app = await original(*args, **kwargs, preload_providers=False)
+        assert type(app["service"].runtime) is RuntimeManager
+        checks["defaultRuntime"] = "PASS"
+        assert app["browser_entry"] is not None
+        checks["publicEntryInitialized"] = "PASS"
+        service = app["service"]
+        await service.dispatch("settings.update",
+            {"patch": {"updates": {"autoCheck": False, "autoInstall": False}}},
+            origin="system", include_state=False)
+        assert service.state["settings"]["updates"]["autoCheck"] is False
+        assert service.state["settings"]["updates"]["autoInstall"] is False
+        checks["updatesDisabled"] = "PASS"
+
+        def exit_loop():
+            raise web.GracefulExit()
+
+        async def watch_stop():
+            await until((root / "cli-stop").exists)
+            asyncio.get_running_loop().call_soon(exit_loop)
+
+        async def started(_app):
+            tasks.append(asyncio.create_task(watch_stop()))
+
+        async def cleaned(_app):
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            # Runs AFTER the real server's service.close on_cleanup callback.
+            assert not service.runtime.workers
+            checks["appCleanup"] = "PASS"
+
+        app.on_startup.append(started)
+        app.on_cleanup.append(cleaned)
+        return app
+
+    server.create_app = create
+    try:
+        yield
+    finally:
+        server.create_app = original
+
+
+def cli_child(wheel, mode):
+    require_ci()
+    root = Path(os.environ["WINDOWS_TRIAL_ROOT"])
+    port = int((root / "cli-port").read_text(encoding="ascii"))
+    report = {"mode": mode, "status": "FAIL", "checks": {}, "network": {
+        "blockedOptionalIpv6Probes": 0, "unknownAttempts": 0}}
+    guard = CliNetworkGuard(root / ("network-cli-" + mode + ".jsonl"), port,
+                            serve=mode == "serve", connect=mode == "open")
+    sys.addaudithook(guard.audit)
+    try:
+        report["installed"] = installed(wheel)
+        from amplifier_web.deployment import write_private
+        from amplifier_web import cli
+        before = cli_material(root) if mode != "setup" else None
+        original_open, argv = cli.webbrowser.open, sys.argv
+        def browser(url):
+            assert mode == "open" and url.startswith(f"https://127.0.0.1:{port}/login#ticket=")
+            assert re.fullmatch("[A-Za-z0-9_-]{43}", url.split("#ticket=")[1])
+            write_private(root / "cli-browser-url", url, owned_root=root)
+            report["checks"]["browserDelivered"] = "PASS"
+            return True  # Only delivery is substituted; grant issuance is real.
+        output = CliOutput()
+        text = io.TextIOWrapper(output, encoding="utf-8")
+        try:
+            cli.webbrowser.open = browser
+            sys.argv = ["amplifier-unified", *cli_arguments(mode, root, port)]
+            with control_socketpairs(guard), redirect_stdout(text), redirect_stderr(text):
+                if mode == "serve":
+                    with cli_application(root, report["checks"]):
+                        runpy.run_module("amplifier_web", run_name="__main__")
+                else:
+                    runpy.run_module("amplifier_web", run_name="__main__")
+            text.flush()
+            report["checks"]["mainReturned"] = "PASS"
+            after = cli_material(root)
+            if before is not None:
+                assert after == before
+                report["checks"]["tlsMaterialStable"] = "PASS"
+            if mode == "export":
+                from amplifier_web.tls import exported_ca_bytes
+                assert output.getvalue() == exported_ca_bytes(root / "app")
+                write_private(root / "cli-export.crt", output.getvalue(), owned_root=root)
+                report["checks"]["exportMatchesCa"] = "PASS"
+            elif mode == "status":
+                from amplifier_web.tls import ca_fingerprint
+                assert "Local CA: configured" in output.getvalue().decode("utf-8")
+                assert "TLS listener: ready" in output.getvalue().decode("utf-8")
+                assert ca_fingerprint(root / "app") in output.getvalue().decode("utf-8")
+            elif mode == "serve":
+                assert (root / "cli-stop").exists() and report["checks"]["appCleanup"] == "PASS"
+                assert guard.listener is not None and guard.listener.fileno() == -1
+                report["checks"]["listenerClosed"] = "PASS"
+                from amplifier_web.reset import repair_lock
+                with repair_lock(root / "app", shared=False):
+                    report["checks"]["repairLockReleased"] = "PASS"
+            assert installed(wheel) == report["installed"]
+            report["network"] = guard.verify()
+            report["status"] = "PASS"
+        finally:
+            cli.webbrowser.open, sys.argv = original_open, argv
+            text.detach()
+    except BaseException:
+        pass  # Fixed facts only; missing cleanup/diagnostics cannot pass.
+    finally:
+        report["network"] = {"blockedOptionalIpv6Probes": guard.probes, "unknownAttempts": guard.blocked}
+        write_json(root / ("cli-" + mode + ".json"), report)
+    return 0 if report["status"] == "PASS" else 1
+
+
+def validate_cli_public(report):
+    assert set(report) == {"schema", "qualification", "publicAcceptance", "candidate", "status",
+                          "stage", "checks", "children", "outerJobsSettled", "scratchRemoved",
+                          "unknownNetworkAttempts"}
+    assert report["schema"] == 1 and report["publicAcceptance"] is False
+    assert report["qualification"] == "installed-foreground-cli-no-preload-not-device"
+    assert report["status"] in {"PASS", "FAIL"} and report["stage"] in {"fixture", *CLI_MODES, "complete"}
+    assert set(report["candidate"]) == {"head", "tree"}
+    assert all(re.fullmatch("[0-9a-f]{40}|[0-9a-f]{64}", v) for v in report["candidate"].values())
+    for key in ("outerJobsSettled", "scratchRemoved"):
+        assert type(report[key]) is bool
+    assert type(report["unknownNetworkAttempts"]) is int and 0 <= report["unknownNetworkAttempts"] <= 10**9
+    assert set(report["checks"]) <= {"cookieCsrfReplay", "exportFingerprint"}
+    assert all(value == "PASS" for value in report["checks"].values())
+    assert type(report["children"]) is list and len(report["children"]) <= 5
+    assert [child["mode"] for child in report["children"]] == list(CLI_MODES[:len(report["children"])])
+    required = {"setup": {"mainReturned"}, "status": {"mainReturned", "tlsMaterialStable"},
+        "export": {"mainReturned", "tlsMaterialStable", "exportMatchesCa"},
+        "serve": {"mainReturned", "tlsMaterialStable", "defaultRuntime", "publicEntryInitialized",
+                  "updatesDisabled", "appCleanup", "repairLockReleased", "listenerClosed"},
+        "open": {"mainReturned", "tlsMaterialStable", "browserDelivered"}}
+    for child in report["children"]:
+        assert {"mode", "status", "checks", "network"} <= set(child) <= {
+            "mode", "status", "checks", "network", "installed"}
+        assert child["status"] in {"PASS", "FAIL"} and set(child["checks"]) <= required[child["mode"]]
+        assert all(value == "PASS" for value in child["checks"].values())
+        assert set(child["network"]) == {"blockedOptionalIpv6Probes", "unknownAttempts"}
+        assert all(type(v) is int and 0 <= v <= 10**9 for v in child["network"].values())
+        if "installed" in child:
+            validate_installation(child["installed"])
+        if child["status"] == "PASS":
+            assert required[child["mode"]] <= set(child["checks"]) and "installed" in child
+            assert child["network"]["unknownAttempts"] == 0
+    if report["status"] == "PASS":
+        assert report["stage"] == "complete" and report["outerJobsSettled"] and report["scratchRemoved"]
+        assert report["unknownNetworkAttempts"] == 0
+        assert set(report["checks"]) == {"cookieCsrfReplay", "exportFingerprint"}
+        assert len(report["children"]) == 5 and all(c["status"] == "PASS" for c in report["children"])
+        assert all(c["installed"] == report["children"][0]["installed"] for c in report["children"])
+    return report
+
+
+async def cli_hosts(root, wheel, report):
+    guard = NetworkGuard(root / "network-cli-client.jsonl")
+    sys.addaudithook(guard.audit)
+    from amplifier_web.windows_jobs import WindowsOwnedProcess
+    from amplifier_web import browser_entry as entry, auth
+    from aiohttp import ClientSession, TCPConnector, DummyCookieJar, ClientConnectionError
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    jobs, observations = [], {}
+    # Select only one numeric endpoint. Release the reservation before the real
+    # CLI binds it; collision is a failed check, never kill/retry another owner.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+        guard.reserving = True
+        reservation.bind(("127.0.0.1", 0))
+        guard.port = reservation.getsockname()[1]
+    (root / "cli-port").write_text(str(guard.port), encoding="ascii")
+
+    async def launch(mode):
+        report["stage"], report["outerJobsSettled"] = mode, False
+        owned = {"mode": mode, "job": None, "readers": []}
+        jobs.append(owned)  # An uncertain start must retain scratch/custody.
+        job = await WindowsOwnedProcess.start([sys.executable, "-I", "-B", str(Path(__file__).resolve()),
+            "--cli-child", str(wheel), "--cli-mode", mode], cwd=str(root),
+            env=dict(os.environ), trusted_python=sys._base_executable)
+        async def drain(stream):
+            while await stream.read(65536):
+                pass
+        owned["job"] = job
+        owned["readers"] = [asyncio.create_task(drain(stream)) for stream in (job.stdout, job.stderr)]
+        return job
+
+    async def finish(job, mode):
+        result = await asyncio.wait_for(job.wait(), 30)
+        assert result.payload_returncode == 0 and result.active_processes == 0
+        assert job.tree_empty and job.io_finalized and not result.output_discarded
+        observations[mode] = json.loads((root / ("cli-" + mode + ".json")).read_text(encoding="utf-8"))
+        assert observations[mode]["status"] == "PASS"
+
+    try:
+        for mode in ("setup", "status", "export"):
+            await finish(await launch(mode), mode)
+        from amplifier_web.tls import exported_ca_bytes, ca_fingerprint
+        ca = (root / "cli-export.crt").read_bytes()
+        assert ca == exported_ca_bytes(root / "app")
+        fingerprint = x509.load_pem_x509_certificate(ca).fingerprint(hashes.SHA256()).hex().upper()
+        assert ":".join(fingerprint[i:i+2] for i in range(0, len(fingerprint), 2)) == ca_fingerprint(root / "app")
+        report["checks"]["exportFingerprint"] = "PASS"
+        serve = await launch("serve")
+        from amplifier_web.deployment import load_server_config
+        _, pin = entry._owner_probe_targets(root / "app", load_server_config(root / "app"))
+        origin = f"https://127.0.0.1:{guard.port}"
+        async with ClientSession(connector=TCPConnector(ssl=pin), trust_env=False,
+                                 cookie_jar=DummyCookieJar()) as client:
+            async with asyncio.timeout(60):
+                while True:
+                    try:
+                        async with client.get(origin + "/login") as response:
+                            assert response.status == 200
+                            csrf = response.cookies[auth.CSRF_COOKIE].value
+                            await response.read()
+                        break
+                    except ClientConnectionError:
+                        await asyncio.sleep(.05)
+            await finish(await launch("open"), "open")
+            url = (root / "cli-browser-url").read_text(encoding="utf-8")
+            assert url.startswith(origin + "/login#ticket=")
+            ticket = url.split("#ticket=")[1]
+            headers = {"Origin": origin, "Cookie": f"{auth.CSRF_COOKIE}={csrf}"}
+            async with client.get(origin + "/api/state") as response:
+                assert response.status == 401
+                await response.read()
+            for supplied, expected in (("wrong", 403), (csrf, 303), (csrf, 403)):
+                async with client.post(origin + entry.REDEEM_PATH, headers=headers,
+                        data={"csrf": supplied, "ticket": ticket}, allow_redirects=False) as response:
+                    assert response.status == expected
+                    if expected == 303:
+                        cookie = response.cookies[auth.SESSION_COOKIE]
+                        assert cookie["secure"] and cookie["httponly"] and cookie["samesite"] == "Strict"
+                    await response.read()
+            async with client.get(origin + "/api/state",
+                    headers={"Cookie": f"{auth.SESSION_COOKIE}={cookie.value}"}) as response:
+                assert response.status == 200
+                await response.read()
+            report["checks"]["cookieCsrfReplay"] = "PASS"
+        (root / "cli-stop").touch()
+        await finish(serve, "serve")
+        guard.verify()
+    finally:
+        # Forced close is containment ONLY. PASS still requires the child's
+        # ordinary-main/app-cleanup/lock-release facts and natural wait above.
+        complete = True
+        for owned in jobs:
+            job, readers = owned["job"], owned["readers"]
+            if job is None:
+                complete = False
+                continue
+            try:
+                result = await job.close()
+                await asyncio.gather(*readers)
+                complete &= result.active_processes == 0 and job.tree_empty and job.io_finalized
+            except BaseException:
+                complete = False  # Settle other owned jobs; retain uncertain scratch.
+            path = root / ("cli-" + owned["mode"] + ".json")
+            try:
+                if path.exists():
+                    observations[owned["mode"]] = json.loads(path.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                complete = False
+        report["outerJobsSettled"] = bool(jobs) and complete
+        report["children"] = [observations[m] for m in CLI_MODES if m in observations]
+        if guard.blocked:
+            raise AssertionError("Unknown network attempt")
+
+
+def cli_run(wheel, receipt, candidate_receipt):
+    require_ci()
+    retained = json.loads(candidate_receipt.read_text(encoding="utf-8"))["candidate"]
+    report = {"schema": 1, "candidate": retained, "status": "FAIL", "stage": "fixture", "checks": {},
+        "qualification": "installed-foreground-cli-no-preload-not-device", "publicAcceptance": False,
+        "children": [], "outerJobsSettled": True, "scratchRemoved": False, "unknownNetworkAttempts": 0}
+    root = None
+    try:
+        root = canonical_temp(os.environ["TEMP"]) / ("uc-" + uuid.uuid4().hex[:12])
+        assert not root.exists()
+        private_directory(root, root)
+        sanitize(root)
+        for folder in ("home", "home/roaming", "home/local", "app", "shared", "ownership",
+                       "workspace café 日本語"):
+            private_directory(root / folder, root)
+        async def bounded():
+            async with asyncio.timeout(150):
+                await cli_hosts(root, wheel, report)
+        asyncio.run(bounded())
+        report.update(status="PASS", stage="complete")
+    except BaseException:
+        pass
+    finally:
+        if root is not None and root.exists():
+            report["unknownNetworkAttempts"] = sum(len(path.read_text(encoding="utf-8").splitlines())
+                for path in root.glob("network-*.jsonl"))
+            if report["unknownNetworkAttempts"]:
+                report["status"] = "FAIL"
+        if root is not None and root.exists() and report["outerJobsSettled"]:
+            try:
+                shutil.rmtree(root)
+                report["scratchRemoved"] = True
+            except OSError:
+                pass
+        if not report["scratchRemoved"]:
+            report["status"] = "FAIL"
+        try:
+            validate_cli_public(report)
+        except (AssertionError, KeyError, ValueError, TypeError):
+            report.update(status="FAIL", children=[], checks={})
+            validate_cli_public(report)
+        write_json(receipt, report)
+    return 0 if report["status"] == "PASS" else 1
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--candidate", type=Path)
@@ -1881,6 +2253,10 @@ def main():
     parser.add_argument("--worker", type=Path)
     parser.add_argument("--host", type=Path)
     parser.add_argument("--controls", type=Path)
+    parser.add_argument("--cli-run", type=Path)
+    parser.add_argument("--cli-child", type=Path)
+    parser.add_argument("--cli-mode", choices=CLI_MODES)
+    parser.add_argument("--candidate-receipt", type=Path)
     parser.add_argument("--phase", choices=("first", "resume"))
     parser.add_argument("--receipt", type=Path)
     args = parser.parse_args()
@@ -1898,6 +2274,11 @@ def main():
         return host(args.host.resolve(), args.phase)
     elif args.controls:
         return native_controls(args.controls.resolve())
+    elif args.cli_run:
+        return cli_run(args.cli_run.resolve(), args.receipt.resolve(), args.candidate_receipt.resolve())
+    elif args.cli_child:
+        assert args.cli_mode is not None
+        return cli_child(args.cli_child.resolve(), args.cli_mode)
     else:
         parser.error("Choose candidate, requirements, worker or run")
     return 0
