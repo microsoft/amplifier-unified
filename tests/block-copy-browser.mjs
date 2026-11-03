@@ -264,7 +264,13 @@ try{
   const selected=()=>{const canvas=window.amplifier.getState().canvas;return {id:canvas.id,version:canvas.selectedVersion??canvas.revision}};
   let release;
   const gate=new Promise(resolve=>{release=resolve});
-  const control=window.blockCopyLateSource={facts:{expected,phase:'armed'},release,
+  const control=window.blockCopyLateSource={facts:{expected,phase:'armed',events:[]},release,
+   record:event=>{
+    const events=control.facts.events;
+    if(['held','v2observed','released','fulfilled','observedafter'][events.length]!==event)
+     throw Error('Unexpected late-source event order');
+    events.push({sequence:events.length+1,event});
+   },
    restore:()=>Object.defineProperty(Response.prototype,'text',descriptor)};
   Object.defineProperty(Response.prototype,'text',{...descriptor,value:function(...args){
    const address=new URL(this.url,location.href);
@@ -279,10 +285,12 @@ try{
      sha256:Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('')});
     if(this.status!==200||!this.bodyUsed||bytes.length!==expected.bytes||control.facts.sha256!==expected.sha256)
      throw Error('The delayed consumer must receive the exact real successful v1 body');
+    control.record('held');
     Object.assign(control.facts,{phase:'held',verifiedAt:performance.now()});
     await gate;
     return text; // The actual native body, not a substituted fixture constant.
    }).then(text=>{
+    control.record('fulfilled');
     Object.assign(control.facts,{phase:'fulfilled',fulfilledAt:performance.now(),completionSelection:selected()});
     return text;
    }).catch(error=>{Object.assign(control.facts,{phase:'failed',error:error.message});throw error});
@@ -319,10 +327,13 @@ try{
   const control=window.blockCopyLateSource,current=window.amplifier.getState().canvas;
   if(control.facts.phase!=='held'||current.id!==id||current.selectedVersion!==2)
    throw Error('Release requires the real held v1 body and confirmed v2 selection');
+  control.record('v2observed');
   Object.assign(control.facts,{selectionObservedAt:performance.now(),releaseSelection:{id:current.id,version:current.selectedVersion}});
+  control.record('released');
   control.facts.releasedAt=performance.now();control.release();
   await control.pending;
   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+  control.record('observedafter');
   control.facts.observedAfterFulfillmentAt=performance.now();
   return control.facts;
  },storedArtifact.id),'Release successful old-source completion');
@@ -330,7 +341,9 @@ try{
  const late=evidence.lateSource;
  assert.equal(late.phase,'fulfilled');assert.equal(late.status,200);assert.equal(late.bodyUsed,true);
  assert.equal(late.bytes,expectedOldBody.bytes);assert.equal(late.sha256,expectedOldBody.sha256);
- assert.ok(late.bodyArrivedAt<=late.verifiedAt&&late.verifiedAt<late.selectionObservedAt&&late.selectionObservedAt<=late.releasedAt&&late.releasedAt<=late.fulfilledAt&&late.selectionObservedAt<late.fulfilledAt&&late.fulfilledAt<late.observedAfterFulfillmentAt,JSON.stringify(late));
+ // Clock precision may tie correctly ordered microtasks; guarded events prove causality.
+ assert.deepEqual(late.events,['held','v2observed','released','fulfilled','observedafter'].map((event,index)=>({sequence:index+1,event})));
+ assert.ok(late.bodyArrivedAt<=late.verifiedAt&&late.verifiedAt<=late.selectionObservedAt&&late.selectionObservedAt<=late.releasedAt&&late.releasedAt<=late.fulfilledAt&&late.fulfilledAt<=late.observedAfterFulfillmentAt,JSON.stringify(late));
  assert.deepEqual(late.completionSelection,{id:storedArtifact.id,version:2});
  assert.equal((await state()).canvas.selectedVersion,2);
  assert.equal(await canvas.locator('.a-canvas-preview > .a-canvas-code').textContent(),newStoredSource);
