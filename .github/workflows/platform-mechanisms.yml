@@ -1,6 +1,11 @@
 name: Focused platform mechanisms
 on:
   workflow_dispatch:
+    inputs:
+      foreground_only:
+        description: Run only installed foreground CLI diagnosis; reuses accepted public/cold evidence, does not requalify it
+        type: boolean
+        default: false
   pull_request:
     paths:
       - .github/workflows/platform-mechanisms.yml
@@ -75,6 +80,7 @@ permissions:
   contents: read
 jobs:
   passive-process-check:
+    if: ${{ !inputs.foreground_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -112,6 +118,7 @@ jobs:
           result = unittest.TextTestRunner(verbosity=2).run(suite);
           sys.exit(not result.wasSuccessful())"
   windows-private-config-tls:
+    if: ${{ !inputs.foreground_only }}
     runs-on: windows-latest
     timeout-minutes: 5
     env:
@@ -148,6 +155,7 @@ jobs:
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_cli_deployment.py::test_service_cli_binds_every_operation_to_selected_data_root tests/test_cli_deployment.py::test_background_launcher_uses_platform_neutral_owned_service_check tests/test_cli_deployment.py::test_windows_service_cli_real_chain_root_boundary tests/test_cli_deployment.py::test_windows_default_launcher_refuses_before_setup_or_browser
           if ($LASTEXITCODE -ne 0) { throw 'CLI service root binding checks failed.' }
   windows-user-trial:
+    if: ${{ !inputs.foreground_only }}
     # Candidate-only combined boundary, not a universal suite/release gate.
     # The existing 5-minute stdlib/PowerShell and private-config lanes are unchanged.
     runs-on: windows-latest
@@ -216,9 +224,10 @@ jobs:
     # Public dependency setup is intentional ONLY here. Do not relax the
     # separate offline qualifier or supply a preinstalled replacement command.
     needs: windows-user-trial
+    if: ${{ !cancelled() && (inputs.foreground_only || needs.windows-user-trial.result == 'success') }}
     runs-on: windows-latest
-    # 8-minute host setup + 21-minute test/evidence step + action overhead.
-    timeout-minutes: 30
+    # 8-minute setup + unchanged 21-minute cold check + 4-minute CLI cell + overhead.
+    timeout-minutes: 34
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONUTF8: '1'
@@ -257,6 +266,7 @@ jobs:
           uv pip install --python "$base/env/Scripts/python.exe" --only-binary amplifier-core $wheel[0].FullName "pytest>=8,<10" "pytest-asyncio>=1.4,<2" "pytest-aiohttp>=1.1,<2" @modules
           if ($LASTEXITCODE -ne 0) { throw 'Default-command candidate host installation failed.' }
       - name: Require one native cold default-command call PASS with no skip
+        if: ${{ !inputs.foreground_only }}
         # The maintained node has a finite 1200-second subprocess deadline.
         # Leave one minute for collection, safe evidence and cleanup handling.
         timeout-minutes: 21
@@ -338,11 +348,31 @@ jobs:
           '@
           & "$base/env/Scripts/python.exe" -I -B -c $check $env:GITHUB_WORKSPACE $base
           if ($LASTEXITCODE -ne 0) { throw 'Native default-command check failed; inspect bounded publicresult.json.' }
+      - name: Require installed foreground CLI TLS, public open and graceful cleanup
+        # Default success() sequencing: never run this cell after cold failure.
+        timeout-minutes: 4
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = $env:DEFAULT_TRIAL_BASE
+          $wheel = @(Get-ChildItem "$base/wheels/*.whl")
+          if ($wheel.Count -ne 1) { throw 'Expected exactly one foreground candidate wheel.' }
+          $probe = Join-Path $env:GITHUB_WORKSPACE 'tests/fixtures/windows_user_trial_probe.py'
+          & "$base/env/Scripts/python.exe" -I -B $probe --cli-run $wheel[0].FullName --candidate-receipt "$base/candidate.json" --receipt "$base/evidence/foreground.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Native foreground CLI check failed; inspect bounded foreground.json.' }
       - name: Upload only the bounded default-runtime result
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-default-runtime
           path: ${{ runner.temp }}/dr-ci/evidence/publicresult.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload only bounded foreground CLI facts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-foreground-cli
+          path: ${{ runner.temp }}/dr-ci/evidence/foreground.json
           if-no-files-found: warn
           retention-days: 7

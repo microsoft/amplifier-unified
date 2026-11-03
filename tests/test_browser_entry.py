@@ -102,10 +102,16 @@ async def request(app, path, *, method="POST", headers=None, body=None, secure=T
 
 @pytest.fixture
 def owner(tmp_path, monkeypatch):
+    from amplifier_web import windows_files
+    from test_windows_auth import PrivateFiles
     monkeypatch.setattr(entry, "is_windows", lambda: True)
     monkeypatch.setattr(entry, "current_owner_sid", lambda: SID)
-    # Explicit candidate-only fixture selection, never a production gate change.
-    monkeypatch.setattr(entry, "read_owner_control_token", lambda *a: "c" * 64)
+    # Portable filesystem API model, not native storage qualification. Keep the
+    # actual public reader/validation in the protocol path.
+    files = PrivateFiles()
+    files.content[tmp_path / "config/auth/session-secret"] = b"s" * 64
+    files.content[tmp_path / "config/auth/control-token"] = b"c" * 64
+    monkeypatch.setattr(windows_files, "directory", files.directory)
     app = web.Application()
     app["control_token"], app["session_secret"] = "c" * 64, "s" * 64
     app["server_config"] = {"session_ttl_seconds": 120}
@@ -283,6 +289,9 @@ async def test_windows_page_no_password_and_posix_login_preserved(owner, monkeyp
 
 async def test_real_app_routes_and_static_parity_without_listener(tmp_path, monkeypatch):
     from test_service import Runtime
+    # This portable route/static check starts with POSIX entry policy, then
+    # selects the Windows page. Native public entry is qualified separately.
+    monkeypatch.setattr(entry, "is_windows", lambda: False)
     app = await server.create_app(tmp_path, workspace=tmp_path, runtime=Runtime(), voice=False,
                                   background_updates=False, background_work=False, preload_providers=False)
     try:
@@ -308,6 +317,75 @@ async def test_http_no_pin_or_unsafe_pin_precedes_credential_read(tmp_path, monk
         monkeypatch.setattr(entry, "_owner_probe_targets", lambda *a: ([ORIGIN + "/api/health"], pin))
         with pytest.raises(entry.BrowserEntryUnavailable, match="exact SHA-256"):
             await entry.owner_browser_url(tmp_path, {})
+
+
+async def test_public_launcher_existing_read_issue_cookie_and_pin_order_model(owner, monkeypatch):
+    """Real public reader and handlers; only filesystem/HTTPS transport are fake."""
+    from amplifier_web import update_readiness, windows_files
+    events = []
+    original_directory = windows_files.directory
+    @contextmanager
+    def directory(path, *, owned_root, create=False):
+        events.append("existing-private-read")
+        assert events[0] == "private-leaf-pin" and create is False
+        with original_directory(path, owned_root=owned_root, create=create) as pinned:
+            yield pinned
+    monkeypatch.setattr(windows_files, "directory", directory)
+    pin = aiohttp.Fingerprint(bytes(range(32)))
+    def targets(*args):
+        events.append("private-leaf-pin")
+        return [ORIGIN + "/api/health"], pin
+    monkeypatch.setattr(entry, "_owner_probe_targets", targets)
+    identity = owner["service"].update_manager.running_identity
+    monkeypatch.setattr(update_readiness, "running_identity", lambda: identity)
+    class Response:
+        async def __aenter__(self):
+            self.response = await self.operation()
+            self.status = self.response.status
+            return self
+        async def __aexit__(self, *a):
+            pass
+        async def json(self):
+            return json.loads(self.response.body)
+    class Client:
+        def __init__(self, **kwargs):
+            assert kwargs["trust_env"] is False
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            pass
+        def check(self, kwargs):
+            assert events[:2] == ["private-leaf-pin", "existing-private-read"]
+            assert kwargs["ssl"] is pin and kwargs["allow_redirects"] is False
+            assert kwargs["headers"]["Authorization"] == "Bearer " + owner["control_token"]
+        def get(self, url, **kwargs):
+            self.check(kwargs)
+            assert url == ORIGIN + "/api/health"
+            events.append("pinned-health")
+            async def health():
+                return web.json_response({"ok": True, "app": "amplifier-unified", **identity,
+                    "dataIdentity": auth.data_identity(owner["service"].data_dir)})
+            result = Response()
+            result.operation = health
+            return result
+        def post(self, url, **kwargs):
+            self.check(kwargs)
+            assert url == ORIGIN + entry.ISSUE_PATH
+            events.append("pinned-issue")
+            result = Response()
+            result.operation = lambda: request(owner, entry.ISSUE_PATH,
+                                                headers=kwargs["headers"], body=kwargs["json"])
+            return result
+    monkeypatch.setattr(aiohttp, "ClientSession", Client)
+    url = await entry.owner_browser_url(owner["service"].data_dir, {})
+    assert owner["control_token"] not in url
+    ticket = url.split("#ticket=")[1]
+    response = await redeem(owner, ticket)
+    assert response.status == 303
+    cookie = response.cookies[auth.SESSION_COOKIE]
+    assert cookie["secure"] and cookie["httponly"] and cookie["samesite"] == "Strict"
+    assert (await redeem(owner, ticket)).status == 403
+    assert events.index("existing-private-read") < events.index("pinned-health") < events.index("pinned-issue")
 
 
 async def test_launcher_unknown_post_is_not_replayed(tmp_path, monkeypatch):
@@ -562,8 +640,8 @@ for (const [origin, action, valid] of [
 
 @pytest.mark.skipif(os.name != "nt", reason="Native Windows HTTPS/private-storage combined boundary")
 async def test_native_actual_app_tls_grant_cookie_and_replay(native_root, monkeypatch, aiohttp_client, unused_tcp_port):
-    """Candidate-only selection. This does not remove the production activation gate."""
-    from aiohttp.test_utils import TestServer
+    """Actual public owner entry with native private files and HTTPS."""
+    from aiohttp.test_utils import TestClient, TestServer
     from amplifier_web import tls, windows_files
     from test_service import Runtime
     home = native_root / "host"
@@ -575,26 +653,41 @@ async def test_native_actual_app_tls_grant_cookie_and_replay(native_root, monkey
         monkeypatch.setenv(name, str(native_root / folder))
     config = load_server_config(home, overrides={"port": unused_tcp_port, "bind": ["127.0.0.1"]})
     config = tls.setup_local_ca(home, config)
-    monkeypatch.setattr(entry, "read_owner_control_token", entry._read_private_owner_control_token)
     app = await server.create_app(home, workspace=native_root / "workspace", runtime=Runtime(), voice=False,
                                   background_updates=False, background_work=False, preload_providers=False, server_config=config)
-    listener = TestServer(app, port=unused_tcp_port)
-    await listener.start_server(ssl=tls.ssl_context(home, config))
-    _, pin = entry._owner_probe_targets(home, config)
-    client = await aiohttp_client(listener, connector=aiohttp.TCPConnector(ssl=pin))
-    url = await entry.owner_browser_url(home, config)
-    assert app["control_token"] not in url
-    response = await client.get("/login")
-    csrf = response.cookies[auth.CSRF_COOKIE].value
-    ticket = url.split("#ticket=")[1]
-    headers = {"Origin": f"https://127.0.0.1:{unused_tcp_port}", "Cookie": f"{auth.CSRF_COOKIE}={csrf}"}
-    response = await client.post(entry.REDEEM_PATH, data={"csrf": csrf, "ticket": ticket}, headers=headers, allow_redirects=False)
-    assert response.status == 303 and response.cookies[auth.SESSION_COOKIE]["secure"]
-    assert response.cookies[auth.SESSION_COOKIE]["httponly"]
-    cookie = response.cookies[auth.SESSION_COOKIE].value
-    response = await client.get("/", headers={"Cookie": f"{auth.SESSION_COOKIE}={cookie}"}, allow_redirects=False)
-    assert response.status == 200
-    assert (await client.post(entry.REDEEM_PATH, data={"csrf": csrf, "ticket": ticket}, headers=headers, allow_redirects=False)).status == 403
+    listener = client = None
+    try:
+        assert isinstance(app["browser_entry"], entry.GrantStore)
+        listener = TestServer(app, port=unused_tcp_port)
+        await listener.start_server(ssl=tls.ssl_context(home, config))
+        _, pin = entry._owner_probe_targets(home, config)
+        client = TestClient(listener, connector=aiohttp.TCPConnector(ssl=pin))
+        await client.start_server()
+        url = await entry.owner_browser_url(home, config)
+        assert app["control_token"] not in url
+        response = await client.get("/login")
+        csrf = response.cookies[auth.CSRF_COOKIE].value
+        ticket = url.split("#ticket=")[1]
+        headers = {"Origin": f"https://127.0.0.1:{unused_tcp_port}", "Cookie": f"{auth.CSRF_COOKIE}={csrf}"}
+        response = await client.post(entry.REDEEM_PATH, data={"csrf": csrf, "ticket": ticket}, headers=headers, allow_redirects=False)
+        assert response.status == 303 and response.cookies[auth.SESSION_COOKIE]["secure"]
+        assert response.cookies[auth.SESSION_COOKIE]["httponly"]
+        cookie = response.cookies[auth.SESSION_COOKIE].value
+        response = await client.get("/", headers={"Cookie": f"{auth.SESSION_COOKIE}={cookie}"}, allow_redirects=False)
+        assert response.status == 200
+        assert (await client.post(entry.REDEEM_PATH, data={"csrf": csrf, "ticket": ticket}, headers=headers, allow_redirects=False)).status == 403
+    finally:
+        primary = sys.exception()
+        cleanup_errors = []
+        for resource in (client, listener, app["service"]):
+            if resource is not None:
+                try:
+                    await resource.close()
+                except BaseException as exc:
+                    cleanup_errors.append(exc)
+        if cleanup_errors:
+            raise BaseExceptionGroup("Public owner TLS fixture cleanup failed",
+                                     ([primary] if primary is not None else []) + cleanup_errors)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Native Windows TLS listener-confusion controls")
@@ -611,7 +704,6 @@ async def test_native_unrelated_listener_and_proxy_never_receive_bearer(
     config = tls.setup_local_ca(home, config)
     auth.session_secret(home)
     token = auth.control_token(home)
-    monkeypatch.setattr(entry, "read_owner_control_token", entry._read_private_owner_control_token)
     monkeypatch.setattr(update_readiness, "running_identity", lambda: {"version": __version__, "revision": REVISION})
     received, trusted_received = [], []
     async def catcher(req):
