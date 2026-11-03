@@ -2070,6 +2070,219 @@ async def test_default_runtime_probe_start_observer_preserves_original_behavior(
     assert 'private' not in json.dumps(report)
 
 
+@pytest.mark.parametrize('cloned', [False, True])
+@pytest.mark.parametrize('outcome', ['return', 'error', 'cancel'])
+async def test_default_runtime_probe_worker_await_observer_is_exact_and_outcome_neutral(
+        tmp_path, monkeypatch, cloned, outcome):
+    from types import FunctionType
+    fixture = _default_runtime_probe_module()
+    release, entered = asyncio.Event(), asyncio.Event()
+    token, original_error = object(), ValueError('private configured module failure')
+
+    async def prepare_manager():
+        entered.set()
+        await release.wait()
+        if outcome == 'error':
+            raise original_error
+        return token
+
+    class Worker:
+        async def start(self):
+            try:
+                return await prepare_manager()
+            finally:
+                if outcome == 'cancel':
+                    await asyncio.sleep(0)  # Like the real worker's async cleanup.
+
+    loaded = Worker.start
+    if cloned:
+        code = loaded.__code__.replace(co_filename='private-equal-code-clone.py')
+        assert code == loaded.__code__ and code is not loaded.__code__
+        method = FunctionType(code, loaded.__globals__, closure=loaded.__closure__)
+    else:
+        method = loaded
+    path = tmp_path / 'privately-created-observation.json'
+    path.write_text('{}', encoding='utf-8')
+    # Model only the loaded-code table. The hook and real CPython coroutine
+    # suspension/profile semantics execute unchanged; no runtime/job is launched.
+    monkeypatch.setattr(fixture, 'sys', SimpleNamespace(
+        modules={**sys.modules, '__main__': SimpleNamespace(Worker=Worker),
+                 'amplifier_web.host.session': SimpleNamespace(prepare_manager=prepare_manager)},
+        getprofile=sys.getprofile, setprofile=sys.setprofile))
+    assert sys.getprofile() is None
+    owner = Worker()
+    fixture.install_worker_start_observer(path)
+    try:
+        owner.start_task = asyncio.create_task(method(owner))
+        await asyncio.wait_for(entered.wait(), .5)
+        await asyncio.sleep(0)  # Only allow the already queued observer callback.
+        facts = fixture.read_worker_startup(path)
+        if cloned:
+            assert facts['diagnosticStatus'] == 'FAIL' and not facts['observed']
+        else:
+            assert facts['diagnosticStatus'] == 'PASS' and facts['observed'] and not facts['taskDone']
+            assert [frame['source'] for frame in facts['awaiting']] == ['worker_start', 'manager_prepare']
+            assert all(type(frame['offset']) is int for frame in facts['awaiting'])
+            assert 'private' not in json.dumps(facts)
+        if outcome == 'cancel':
+            owner.start_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await owner.start_task
+        else:
+            release.set()
+            if outcome == 'return':
+                assert await owner.start_task is token
+            else:
+                with pytest.raises(ValueError) as caught:
+                    await owner.start_task
+                assert caught.value is original_error
+        await asyncio.sleep(0)
+        if not cloned:
+            final = fixture.read_worker_startup(path)
+            assert final['taskDone']
+            if outcome == 'error':
+                assert final['errors'][0]['class'] == 'ValueError'
+                assert {frame['source'] for frame in final['errors'][0]['frames']} == {
+                    'worker_start', 'manager_prepare'}
+            else:
+                assert final['errors'] == []
+            if outcome == 'cancel':
+                assert [frame['source'] for frame in final['awaiting']] == ['worker_start', 'manager_prepare']
+            assert sys.getprofile() is None
+    finally:
+        sys.setprofile(None)  # Only this test's in-process synthetic profiler.
+        if not owner.start_task.done():
+            owner.start_task.cancel()
+        await asyncio.gather(owner.start_task, return_exceptions=True)
+
+
+def test_default_runtime_probe_worker_observer_never_replaces_existing_profiler(tmp_path, monkeypatch):
+    fixture = _default_runtime_probe_module()
+    path = tmp_path / 'privately-created-observation.json'
+    path.write_text('{}', encoding='utf-8')
+    setprofile = Mock(side_effect=AssertionError('must not replace an existing profiler'))
+    monkeypatch.setattr(fixture, 'sys', SimpleNamespace(getprofile=lambda: object(), setprofile=setprofile))
+    fixture.install_worker_start_observer(path)
+    assert fixture.read_worker_startup(path) == {
+        'diagnosticStatus': 'FAIL', 'observed': False, 'taskDone': False, 'awaiting': [], 'errors': []}
+    setprofile.assert_not_called()
+
+
+@pytest.mark.parametrize('fail', [False, True])
+def test_default_runtime_probe_worker_hook_is_targeted_and_restores_environment(tmp_path, monkeypatch, fail):
+    import builtins
+    from contextlib import nullcontext
+    from amplifier_web import deployment
+    fixture = _default_runtime_probe_module()
+    environment, writes = {}, {}
+    monkeypatch.setattr(fixture, 'os', SimpleNamespace(environ=environment))
+
+    def private_write(path, value, *, owned_root):
+        assert owned_root == tmp_path and path.is_relative_to(tmp_path)
+        assert not environment  # Write hooks/initial record before binding.
+        writes[path] = value
+
+    monkeypatch.setattr(deployment, 'write_private', private_write)
+    with pytest.raises(ValueError) if fail else nullcontext():
+        with fixture.worker_startup_observer(tmp_path, tmp_path / 'installed-app') as path:
+            assert path == tmp_path / 'worker-startup.json'
+            assert environment == {'PYTHONPATH': str(tmp_path / 'startup-observer')}
+            script = writes[tmp_path / 'startup-observer/sitecustomize.py']
+            # Nonworker Python invocations must never load the fixture/hook.
+            imports = []
+            def only_sys(name, *args, **kwargs):
+                imports.append(name)
+                assert name == 'sys'
+                return SimpleNamespace(argv=['another-script.py'])
+            exec(compile(script, '<private-startup-hook>', 'exec'), {
+                '__builtins__': {**vars(builtins), '__import__': only_sys}})
+            assert imports == ['sys']
+            installed, registered = Mock(), {}
+            module = SimpleNamespace(Path=Path, install_worker_start_observer=installed)
+            spec = SimpleNamespace(name='cold_worker_start_observer',
+                                   loader=SimpleNamespace(exec_module=Mock()))
+            util = SimpleNamespace(spec_from_file_location=Mock(return_value=spec),
+                                   module_from_spec=Mock(return_value=module))
+            def matching_worker(name, *args, **kwargs):
+                if name == 'sys':
+                    return SimpleNamespace(argv=[str(tmp_path / 'installed-app/runtime_worker.py')],
+                                           modules=registered)
+                assert name == 'importlib.util'
+                return SimpleNamespace(util=util)
+            exec(compile(script, '<private-startup-hook>', 'exec'), {
+                '__builtins__': {**vars(builtins), '__import__': matching_worker}})
+            assert registered == {spec.name: module}
+            util.spec_from_file_location.assert_called_once_with(spec.name, fixture.__file__)
+            spec.loader.exec_module.assert_called_once_with(module)
+            installed.assert_called_once_with(path)
+            if fail:
+                raise ValueError('original startup failure')
+    assert not environment
+    fixture.validate_worker_startup(json.loads(writes[tmp_path / 'worker-startup.json']))
+
+
+async def test_default_runtime_probe_worker_observer_write_fault_cannot_become_success(tmp_path, monkeypatch):
+    fixture = _default_runtime_probe_module()
+    path = tmp_path / 'privately-created-observation.json'
+    path.write_text('{}', encoding='utf-8')
+    entered, release = asyncio.Event(), asyncio.Event()
+    class Worker:
+        async def start(self):
+            entered.set()
+            await release.wait()
+            return 7
+    attempts = []
+    class FaultOnce:
+        def open(self, *args, **kwargs):
+            attempts.append(True)
+            if len(attempts) == 1:
+                raise OSError('private observation write failure')
+            return path.open(*args, **kwargs)
+    monkeypatch.setattr(fixture, 'sys', SimpleNamespace(
+        modules={**sys.modules, '__main__': SimpleNamespace(Worker=Worker)},
+        getprofile=sys.getprofile, setprofile=sys.setprofile))
+    assert sys.getprofile() is None
+    owner = Worker()
+    fixture.install_worker_start_observer(FaultOnce())
+    try:
+        owner.start_task = asyncio.create_task(owner.start())
+        await asyncio.wait_for(entered.wait(), .5)
+        await asyncio.sleep(0)
+        assert fixture.read_worker_startup(path)['diagnosticStatus'] == 'FAIL'
+        release.set()
+        assert await owner.start_task == 7  # Diagnostic fault cannot alter start.
+        await asyncio.sleep(0)
+        assert fixture.read_worker_startup(path)['diagnosticStatus'] == 'FAIL'
+        assert sys.getprofile() is None
+    finally:
+        sys.setprofile(None)
+        if not owner.start_task.done():
+            owner.start_task.cancel()
+        await asyncio.gather(owner.start_task, return_exceptions=True)
+
+
+def test_default_runtime_probe_worker_observation_is_bounded_and_closed(tmp_path):
+    fixture = _default_runtime_probe_module()
+    path = tmp_path / 'privately-created-observation.json'
+    valid = {'diagnosticStatus': 'PASS', 'observed': True, 'taskDone': False, 'errors': [],
+             'awaiting': [{'source': 'manager_prepare', 'offset': 112}]}
+    report = {**fixture.empty_inner_report(), 'workerStartup': valid}
+    fixture.validate_inner_report(report)
+    assert fixture.parse_inner_output(json.dumps(report)) == report
+    for value in ({**valid, 'privatePath': 'private'}, {**valid, 'observed': 123},
+                  {**valid, 'awaiting': [{'source': 'private-callee', 'offset': 112}]},
+                  {**valid, 'awaiting': valid['awaiting'] * 6},
+                  {**valid, 'awaiting': [{'source': 'manager_prepare', 'offset': -1}]}):
+        with pytest.raises(AssertionError):
+            fixture.validate_inner_report({**report, 'workerStartup': value})
+        path.write_text(json.dumps(value), encoding='utf-8')
+        assert fixture.read_worker_startup(path)['diagnosticStatus'] == 'FAIL'
+    path.write_bytes(b' ' * 4097)
+    assert fixture.read_worker_startup(path)['diagnosticStatus'] == 'FAIL'
+    path.unlink()
+    assert fixture.read_worker_startup(path)['diagnosticStatus'] == 'FAIL'
+
+
 def test_default_runtime_probe_startup_snapshot_schema_is_closed():
     fixture = _default_runtime_probe_module()
     valid = {'diagnosticStatus': 'PASS', 'verifiedWorkerObserved': False,

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import hashlib
 import importlib.metadata as metadata
 import json
@@ -60,6 +60,18 @@ CODE_LABELS = {
     "runtime_readline": ("amplifier_web.runtime", "_BoundedWorkerLines.readline"),
     "runtime_write": ("amplifier_web.runtime", "RuntimeManager._write"),
     "runtime_profiles": ("amplifier_web.runtime_profiles", "ensure"),
+    "worker_start": ("__main__", "Worker.start"),
+    "worker_bridge": ("__main__", "Worker.bridge"),
+    "manager_prepare": ("amplifier_web.host.session", "prepare_manager"),
+    "bundle_prepare": ("amplifier_foundation.bundle._dataclass", "Bundle.prepare"),
+    "session_create": ("amplifier_foundation.bundle._prepared", "PreparedBundle.create_session"),
+    "module_resolve": ("amplifier_foundation.bundle._prepared", "BundleModuleResolver.async_resolve"),
+    "module_activate": ("amplifier_foundation.modules.activator", "ModuleActivator.activate_all"),
+    "module_install": ("amplifier_foundation.modules.activator", "ModuleActivator._install_dependencies"),
+    "core_initialize": ("amplifier_core.session", "AmplifierSession.initialize"),
+    "core_initialize_session": ("amplifier_core._session_init", "initialize_session"),
+    "core_load": ("amplifier_core.loader", "ModuleLoader.load"),
+    "core_validate": ("amplifier_core.loader", "ModuleLoader._validate_module"),
 }
 STARTUP_PHASES = frozenset({"runtime-setup", "bundle-preparation", "session-mount", "ready"})
 # Retain the outer lifeline and its scratch identity when the primitive cannot
@@ -205,6 +217,164 @@ def validate_diagnostic(value):
             assert type(frame["offset"]) is int and 0 <= frame["offset"] <= 10**6
 
 
+def validate_worker_startup(value):
+    assert type(value) is dict and set(value) == {
+        "diagnosticStatus", "observed", "taskDone", "awaiting", "errors"}
+    assert type(value["diagnosticStatus"]) is str and value["diagnosticStatus"] in {"PENDING", "PASS", "FAIL"}
+    assert type(value["observed"]) is bool and type(value["taskDone"]) is bool
+    if value["diagnosticStatus"] == "PASS":
+        assert value["observed"]
+    validate_diagnostic({"checkpoint": "runtime_start", "errors": [
+        {"class": "other", "frames": value["awaiting"]}]})
+    validate_diagnostic({"checkpoint": "runtime_start", "errors": value["errors"]})
+
+
+def install_worker_start_observer(path):
+    """Diagnostic-only profile callback; schedule snapshots AFTER coroutine yield.
+
+    No task, timer, worker wrapper, command override or early app import. Only
+    the exact loaded Worker.start can arm a snapshot. The bounded await walk
+    emits exact loaded-code labels/offsets, never names, paths, args or locals.
+    """
+    facts = {"diagnosticStatus": "PENDING", "observed": False, "taskDone": False, "awaiting": [], "errors": []}
+    previous = None
+    failed = False
+
+    def persist():
+        nonlocal previous
+        raw = json.dumps(facts, sort_keys=True)
+        if raw != previous:
+            # The parent fixture privately created this file before payload.
+            with path.open("r+", encoding="utf-8") as stream:
+                stream.seek(0)
+                stream.write(raw)
+                stream.truncate()
+            previous = raw
+
+    def code_for(module, qualname):
+        value = sys.modules.get(module)
+        for part in qualname.split("."):
+            value = getattr(value, part, None) if value is not None else None
+        return getattr(value, "__code__", None)
+
+    def snapshot(task):
+        nonlocal failed
+        try:
+            facts.update(diagnosticStatus="FAIL" if failed else "PASS",
+                         observed=True, taskDone=task.done())
+            codes = {}
+            for label, (module, qualname) in CODE_LABELS.items():
+                code = code_for(module, qualname)
+                if isinstance(code, types.CodeType):
+                    codes[id(code)] = (code, label)
+            value, frames = task.get_coro(), []
+            for _ in range(64):
+                if type(value) is not types.CoroutineType:
+                    break
+                code, frame = value.cr_code, value.cr_frame
+                known = codes.get(id(code))
+                if frame is not None and known is not None and known[0] is code:
+                    frames.append({"source": known[1],
+                        "offset": max(0, min(frame.f_lineno - code.co_firstlineno, 10**6))})
+                value = value.cr_await
+            # Stop cancels the real start task, whose finally also awaits
+            # cleanup. Preserve the pre-cancellation wait, not that teardown.
+            if frames and not task.cancelling():
+                facts["awaiting"] = frames[-5:]
+            if task.done() and not task.cancelled():
+                # Reading the settled task does not change its return/raise.
+                # Capture a startup error that escaped before runtime.error.
+                error = task.exception()
+                if error is not None:
+                    facts["errors"] = failure_facts(error, "runtime_start")["errors"]
+            persist()
+        except BaseException:
+            failed = True
+            facts["diagnosticStatus"] = "FAIL"
+            try:
+                persist()
+            except BaseException:
+                pass  # Missing/unreadable final evidence fails in the parent.
+        finally:
+            try:
+                if task.done() and sys.getprofile() is profile:
+                    sys.setprofile(None)
+            except BaseException:
+                pass  # A diagnostic finalizer has no execution authority.
+
+    def profile(frame, event, arg):
+        nonlocal failed
+        try:
+            if (event == "return" and frame.f_code.co_name == "start"
+                    and frame.f_code is code_for("__main__", "Worker.start")):
+                # This local is inspected only on the exact trusted function.
+                # Its value is not serialized or used for execution authority.
+                task = frame.f_locals["self"].start_task
+                asyncio.get_running_loop().call_soon(snapshot, task)
+        except BaseException:
+            failed = True
+            facts["diagnosticStatus"] = "FAIL"
+            try:
+                persist()
+            except BaseException:
+                pass
+
+    if sys.getprofile() is not None:
+        facts["diagnosticStatus"] = "FAIL"  # Never replace an existing profiler.
+        persist()
+        return
+    sys.setprofile(profile)
+
+
+@contextmanager
+def worker_startup_observer(root, app):
+    """Add only an observer directory to this CI fixture's worker environment.
+
+    sitecustomize is scoped to the exact packaged worker script. The ordinary
+    uv/default command, fresh project, bootstrap and installed packages remain
+    unchanged. Other Python launches do not install the callback.
+    """
+    from amplifier_web.deployment import write_private
+    path = root / "worker-startup.json"
+    observer = root / "startup-observer"
+    initial = {"diagnosticStatus": "PENDING", "observed": False, "taskDone": False, "awaiting": [], "errors": []}
+    write_private(path, json.dumps(initial), owned_root=root)
+    script = (
+        "import sys\n"
+        f"if sys.argv[0] == {str(app / 'runtime_worker.py')!r}:\n"
+        "    import importlib.util\n"
+        f"    spec = importlib.util.spec_from_file_location('cold_worker_start_observer', {__file__!r})\n"
+        "    module = importlib.util.module_from_spec(spec)\n"
+        "    sys.modules[spec.name] = module\n"
+        "    spec.loader.exec_module(module)\n"
+        f"    module.install_worker_start_observer(module.Path({str(path)!r}))\n")
+    write_private(observer / "sitecustomize.py", script, owned_root=root)
+    previous = os.environ.get("PYTHONPATH")
+    # The maintained cold parent sanitizes this variable. Do not replace an
+    # external caller's import selection or silently combine another hook.
+    assert not previous
+    os.environ["PYTHONPATH"] = str(observer)
+    try:
+        yield path
+    finally:
+        if previous is None:
+            os.environ.pop("PYTHONPATH", None)
+        else:
+            os.environ["PYTHONPATH"] = previous
+
+
+def read_worker_startup(path):
+    try:
+        with path.open("rb") as stream:
+            raw = stream.read(4097)
+        assert len(raw) <= 4096
+        value = json.loads(raw)
+        validate_worker_startup(value)
+        return value
+    except Exception:
+        return {"diagnosticStatus": "FAIL", "observed": False, "taskDone": False, "awaiting": [], "errors": []}
+
+
 def parse_inner_output(raw, *, outer_failure=None):
     """An empty/malformed child result is not evidence of inner preflight."""
     try:
@@ -224,9 +394,11 @@ def parse_inner_output(raw, *, outer_failure=None):
 def validate_inner_report(report):
     """Only bounded fixed fields may leave the private test directory."""
     assert type(report) is dict
-    assert set(report) - {"diagnostic", "startup"} == set(empty_inner_report())
+    assert set(report) - {"diagnostic", "startup", "workerStartup"} == set(empty_inner_report())
     if "diagnostic" in report:
         validate_diagnostic(report["diagnostic"])
+    if "workerStartup" in report:
+        validate_worker_startup(report["workerStartup"])
     if "startup" in report:
         startup = report["startup"]
         assert type(startup) is dict and set(startup) == {
@@ -253,6 +425,9 @@ def validate_inner_report(report):
         assert row["commit"] is None or re.fullmatch(r"[0-9a-f]{40,64}", row["commit"])
         assert re.fullmatch(r"[0-9a-f]{64}", row["sha256"])
     if report["status"] == "PASS":
+        assert "workerStartup" not in report or (
+            report["workerStartup"]["diagnosticStatus"] == "PASS"
+            and report["workerStartup"]["observed"] and not report["workerStartup"]["errors"])
         assert "startup" not in report or report["startup"]["diagnosticStatus"] == "PASS"
         assert "diagnostic" not in report or not report["diagnostic"]["errors"]
         assert all(report["checks"].values()) and report["stage"] == "complete"
@@ -263,7 +438,7 @@ def validate_inner_report(report):
 
 def validate_report(report):
     """The public result requires parent-observed cleanup, not child testimony."""
-    assert set(report) - {"diagnostic", "startup"} == set(empty_inner_report()) | {"outerJob"}
+    assert set(report) - {"diagnostic", "startup", "workerStartup"} == set(empty_inner_report()) | {"outerJob"}
     assert report["schema"] == 2
     validate_inner_report({key: (1 if key == "schema" else report[key])
                            for key in report if key != "outerJob"})
@@ -523,7 +698,13 @@ async def journey(root, wheel, report):
         assert await ensure(home, None, session) is None
         report["stage"] = "preparation"
         checkpoint(report, "runtime_start")
-        await observe_default_start(runtime, session, service.on_runtime_event, report, project)
+        with worker_startup_observer(root, app) as observation:
+            try:
+                await observe_default_start(runtime, session, service.on_runtime_event, report, project)
+            finally:
+                report["workerStartup"] = read_worker_startup(observation)
+        assert (report["workerStartup"]["diagnosticStatus"] == "PASS"
+                and report["workerStartup"]["observed"] and not report["workerStartup"]["errors"])
         assert report["startup"]["diagnosticStatus"] == "PASS"
         checkpoint(report, "journey")
         row = runtime.workers[sid]
