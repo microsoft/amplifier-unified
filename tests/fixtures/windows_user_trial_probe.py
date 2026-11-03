@@ -14,6 +14,7 @@ import asyncio
 import base64
 import configparser
 import csv
+from collections import Counter
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from contextvars import ContextVar
 import ctypes
@@ -195,6 +196,100 @@ def completed_worker_facts(path):
     if facts["diagnosticStatus"] == "PENDING":
         facts["diagnosticStatus"] = "FAIL"
     return facts  # The existing public validator still rejects any extra fields.
+
+
+@contextmanager
+def observe_tool_writes(root, output):
+    """Count completed real byte writes, not requests/provider/tool-call intents.
+
+    The installed WriteTool retains its path policy, execute method, writer and
+    result. Only its imported byte-writer reference is observed in this worker.
+    An observer failure cannot change that writer's return/exception/cancellation;
+    it invalidates final worker diagnostics and the resume qualification instead.
+    """
+    module = importlib.import_module("amplifier_module_tool_filesystem.write")
+    original = module.write_text_preserving
+    assert original is importlib.import_module("amplifier_module_tool_filesystem._newlines").write_text_preserving
+    assert module.WriteTool.execute.__globals__ is module.__dict__
+    state = {"failed": False}
+    def observed(*args, **kwargs):
+        result = original(*args, **kwargs)  # Exceptions/cancellation propagate untouched.
+        try:
+            path = Path(args[0] if args else kwargs["path"])
+            assert path.absolute() == Path(output).absolute()
+            with path.open("rb") as stream:
+                raw = stream.read(4097)
+            assert len(raw) <= 4096 and type(result) is int and result == len(raw)
+            with (root / "tool-effects.jsonl").open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps({"bytes": len(raw), "sha256": digest(raw)}, sort_keys=True) + "\n")
+        except BaseException:
+            state["failed"] = True
+        return result
+    module.write_text_preserving = observed
+    try:
+        yield state
+    finally:
+        module.write_text_preserving = original
+
+
+def tool_effects(root):
+    """Private, bounded synthetic ledger; never upload paths, contents or IDs."""
+    with (root / "tool-effects.jsonl").open("rb") as stream:
+        raw = stream.read(4097)
+    assert len(raw) <= 4096
+    rows = [json.loads(line) for line in raw.decode("utf-8").splitlines()]
+    assert 1 <= len(rows) <= 16
+    expected = (MARKER + "\n").encode("utf-8")
+    assert all(row == {"bytes": len(expected), "sha256": digest(expected)} for row in rows)
+    return rows
+
+
+def trial_history_rows(history):
+    """Keep every tool/assistant effect and each delivered user input.
+
+    Request-only hook reminders and mutable provider metadata are not effects.
+    Canonical content, tool calls and tool-result correlation ARE compared.
+    """
+    assert len(history) <= 128
+    return [{key: row.get(key) for key in ("role", "content", "tool_calls", "tool_call_id")}
+            for row in history if row.get("role") in {"assistant", "tool"} or
+            (row.get("role") == "user" and
+             (row.get("metadata") or {}).get("amplifier_input", {}).get("kind") == "user")]
+
+
+def history_multiplicity(rows):
+    return Counter(digest(json.dumps(row, sort_keys=True, ensure_ascii=True).encode("utf-8")) for row in rows)
+
+
+def row_text(row):
+    content = row["content"]
+    return content if isinstance(content, str) else "".join(
+        part.get("text", "") for part in (content if isinstance(content, list) else [])
+        if isinstance(part, dict) and part.get("type") == "text")
+
+
+def non_replay_baseline(root, history):
+    effects, rows = tool_effects(root), trial_history_rows(history)
+    assert len(effects) == 1  # One actual initial write, not an invented baseline.
+    assert any(row["role"] == "tool" for row in rows)
+    assert any(row["role"] == "assistant" and row_text(row) == MARKER for row in rows)
+    assert sum(row["role"] == "user" and row_text(row) == "FIRST_TRIAL café 日本語" for row in rows) == 1
+    assert sum(row["role"] == "user" and row_text(row) == "WAIT_FOR_STOP" for row in rows) == 1
+    assert not any((row["role"], row_text(row)) in {
+        ("user", "RESUME_TRIAL"), ("assistant", RESUMED)} for row in rows)
+    return {"effects": effects, "history": sorted(history_multiplicity(rows).items())}
+
+
+def assert_resume_without_replay(root, baseline, history):
+    assert set(baseline) == {"effects", "history"}
+    assert tool_effects(root) == baseline["effects"]
+    rows = trial_history_rows(history)
+    additions = [row for row in rows if (row["role"], row_text(row)) in {
+        ("user", "RESUME_TRIAL"), ("assistant", RESUMED)}]
+    assert len(additions) == 2 and {row["role"] for row in additions} == {"user", "assistant"}
+    assert all(not row["tool_calls"] and not row["tool_call_id"] for row in additions)
+    expected = Counter(dict(baseline["history"])) + history_multiplicity(additions)
+    assert history_multiplicity(rows) == expected
 
 
 def observed_runtime_type(base):
@@ -1175,11 +1270,14 @@ async def worker(wheel):
             guard.verify()
             write_json(root / ("installed-worker-" + str(os.getpid()) + ".json"), evidence)
     owner.start = observed_start
+    effects = {"failed": True}
     try:
-        await owner.run()
+        with observe_tool_writes(root, root / "workspace café 日本語" / "trial.txt") as effects:
+            await owner.run()
         guard.verify()
     finally:
         implementation.publish = original_publish
+        diagnostic_failed = diagnostic_failed or effects["failed"]
         facts["diagnosticStatus"] = "FAIL" if diagnostic_failed else "PASS"
         try:
             write_json(root / "worker-facts.json", facts)
@@ -1390,7 +1488,7 @@ async def journey(root, wheel, report, guard, phase):
             if phase == "resume":
                 assert any(m["role"] == "assistant" and RESUMED in str(m.get("content")) for m in history)
                 assert sum(m["role"] == "user" and "FIRST_TRIAL" in str(m.get("content")) for m in history) == 1
-                report["checks"]["hostRestartResumeWithoutReplay"] = "PASS"
+                assert_resume_without_replay(root, saved["nonReplay"], history)
                 return
             report["turnStep"] = "history_assistant"
             assert any(m["role"] == "assistant" and MARKER in str(m.get("content")) for m in history)
@@ -1405,8 +1503,6 @@ async def journey(root, wheel, report, guard, phase):
             response = await client.get(origin + read["downloadUrl"], headers=headers)
             assert response.status == 200 and await response.read() == output.read_bytes()
             report["checks"]["outputSnapshotReadExactBytes"] = "PASS"
-            write_private(root / "checkpoint.json", json.dumps({"sid": sid, "output": record["id"],
-                "control": auth.control_token(home), "secret": auth.session_secret(home)}), owned_root=root)
             report["stage"] = "stop_tree"
             await action("conversation.send", {"sessionId": sid, "text": "WAIT_FOR_STOP"}, "trial-wait")
             await until(blocked.exists)
@@ -1419,6 +1515,12 @@ async def journey(root, wheel, report, guard, phase):
             assert owners[-1].job.tree_empty and owners[-1].job.io_finalized
             assert owners[-1].result.active_processes == 0
             report["checks"]["stopDescendantTreeAndIo"] = "PASS"
+            # Final first-host snapshot: Stop and actual owned job/I/O settled.
+            # The second host cannot select a convenient post-resume baseline.
+            baseline = non_replay_baseline(root, SessionHistoryStore(directory).load_messages())
+            write_private(root / "checkpoint.json", json.dumps({"sid": sid, "output": record["id"],
+                "control": auth.control_token(home), "secret": auth.session_secret(home),
+                "nonReplay": baseline}), owned_root=root)
     finally:
         entry.read_owner_control_token = original_reader
         # Include a worker that failed before its first parked observation.
@@ -1441,6 +1543,12 @@ async def journey(root, wheel, report, guard, phase):
         if sys.exception() is None:
             assert report["runtimeStartup"]["status"] == "PASS"
             assert report["workerFacts"]["diagnosticStatus"] == "PASS"
+            if phase == "resume":
+                # The final promise includes shutdown: no late tool write or
+                # history effect can escape a check made while still parked.
+                assert_resume_without_replay(root, saved["nonReplay"],
+                    SessionHistoryStore(directory).load_messages())
+                report["checks"]["hostRestartResumeWithoutReplay"] = "PASS"
 
 
 def require_ci():

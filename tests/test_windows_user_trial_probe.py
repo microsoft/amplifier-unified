@@ -246,6 +246,252 @@ def test_scripted_provider_controls_select_latest_delivered_input(tmp_path, monk
     assert len((tmp_path / "calls.jsonl").read_text(encoding="utf-8").splitlines()) == 1
 
 
+def replay_history(output):
+    """Synthetic canonical rows, including the actual tool call/result shape."""
+    def user(text, identity):
+        return {"role": "user", "content": text, "metadata": {
+            "amplifier_input": {"version": 1, "kind": "user", "id": identity, "source": "user"}}}
+    first = [
+        user("FIRST_TRIAL café 日本語", "synthetic-first"),
+        {"role": "assistant", "content": [], "tool_calls": [{
+            "id": "trial-write", "name": "write_file",
+            "arguments": {"file_path": str(output), "content": probe.MARKER + "\n"}}]},
+        {"role": "tool", "tool_call_id": "trial-write",
+         "content": json.dumps({"file_path": str(output), "bytes": len((probe.MARKER + "\n").encode())})},
+        {"role": "assistant", "content": [{"type": "text", "text": probe.MARKER}]},
+        user("WAIT_FOR_STOP", "synthetic-stop"),
+    ]
+    resume = [user("RESUME_TRIAL", "synthetic-resume"),
+              {"role": "assistant", "content": [{"type": "text", "text": probe.RESUMED}]}]
+    return first, resume
+
+
+def real_trial_writer(workspace):
+    from amplifier_module_tool_filesystem.write import WriteTool
+    async def emit(*args, **kwargs):
+        pass
+    # Real installed tool/path policy/writer; this hook sink has no I/O/effects.
+    return WriteTool({"working_dir": str(workspace), "allowed_write_paths": [str(workspace)]},
+                     types.SimpleNamespace(hooks=types.SimpleNamespace(emit=emit)))
+
+
+@pytest.mark.parametrize("extra_effect", [False, True, "shutdown"])
+def test_non_replay_oracle_detects_extra_actual_identical_byte_tool_write_without_new_user(
+        tmp_path, extra_effect):
+    workspace = tmp_path / "workspace café 日本語"
+    output = workspace / "trial.txt"
+    writer = real_trial_writer(workspace)
+    arguments = {"file_path": str(output), "content": probe.MARKER + "\n"}
+    first, resume = replay_history(output)
+    # First-host observation encloses the REAL WriteTool.execute and its actual
+    # byte writer. The observer never generates a substitute tool result/write.
+    with probe.observe_tool_writes(tmp_path, output) as first_observer:
+        first_result = immediate(writer.execute(arguments))
+    assert first_result.success and first_observer == {"failed": False}
+    before_bytes = output.read_bytes()
+    baseline = probe.non_replay_baseline(tmp_path, first)
+    assert len(baseline["effects"]) == 1
+    probe.write_json(tmp_path / "baseline.json", baseline)
+    # New observer instance, same persisted ledger/baseline: model fresh host
+    # lifetime rather than resetting counters or using provider-call counts.
+    with probe.observe_tool_writes(tmp_path, output) as second_observer:
+        if extra_effect is True:
+            second_result = immediate(writer.execute(arguments))
+            assert second_result.success and second_result.model_dump() == first_result.model_dump()
+    assert second_observer == {"failed": False}
+    after = first + resume
+    # The old oracle STILL passes even after an extra actual same-byte write.
+    assert output.read_bytes() == before_bytes == (probe.MARKER + "\n").encode()
+    assert sum(row["role"] == "user" and "FIRST_TRIAL" in str(row["content"]) for row in after) == 1
+    assert any(row["role"] == "assistant" and probe.RESUMED in str(row["content"]) for row in after)
+    persisted = json.loads((tmp_path / "baseline.json").read_text(encoding="utf-8"))
+    if extra_effect == "shutdown":
+        probe.assert_resume_without_replay(tmp_path, persisted, after)  # Parked observation passes.
+        with probe.observe_tool_writes(tmp_path, output) as shutdown_observer:
+            assert immediate(writer.execute(arguments)).success  # Late real write, no new input.
+        assert shutdown_observer == {"failed": False} and output.read_bytes() == before_bytes
+    if extra_effect:
+        assert len(probe.tool_effects(tmp_path)) == 2
+        with pytest.raises(AssertionError):
+            probe.assert_resume_without_replay(tmp_path, persisted, after)
+    else:
+        probe.assert_resume_without_replay(tmp_path, persisted, after)
+    # Only bounded size/hash facts survive in the private ledger/checkpoint.
+    assert str(output) not in json.dumps(persisted) and probe.MARKER not in json.dumps(persisted)
+
+
+@pytest.mark.parametrize("duplicate", ["tool", "assistant_call", "assistant_result",
+                                     "resume_assistant", "resume_user", "first_user"])
+def test_non_replay_oracle_detects_duplicate_history_effects_with_unchanged_file_and_ledger(
+        tmp_path, duplicate):
+    output = tmp_path / "workspace" / "trial.txt"
+    with probe.observe_tool_writes(tmp_path, output):
+        assert immediate(real_trial_writer(output.parent).execute({
+            "file_path": str(output), "content": probe.MARKER + "\n"})).success
+    first, resume = replay_history(output)
+    baseline = probe.non_replay_baseline(tmp_path, first)
+    after = first + resume
+    index = {"tool": 2, "assistant_call": 1, "assistant_result": 3,
+             "resume_assistant": 6, "resume_user": 5, "first_user": 0}[duplicate]
+    after.append(copy.deepcopy(after[index]))
+    assert len(probe.tool_effects(tmp_path)) == 1 and output.read_bytes() == (probe.MARKER + "\n").encode()
+    with pytest.raises(AssertionError):
+        probe.assert_resume_without_replay(tmp_path, baseline, after)
+
+
+@pytest.mark.parametrize("fault", ["missing-ledger", "empty-ledger", "malformed-ledger",
+                                  "wrong-hash", "oversized-ledger", "changed-tool-content",
+                                  "missing-tool", "extra-assistant"])
+def test_non_replay_oracle_never_accepts_incomplete_or_changed_evidence(tmp_path, fault):
+    output = tmp_path / "workspace" / "trial.txt"
+    with probe.observe_tool_writes(tmp_path, output):
+        assert immediate(real_trial_writer(output.parent).execute({
+            "file_path": str(output), "content": probe.MARKER + "\n"})).success
+    first, resume = replay_history(output)
+    baseline, after = probe.non_replay_baseline(tmp_path, first), copy.deepcopy(first + resume)
+    path = tmp_path / "tool-effects.jsonl"
+    if fault == "missing-ledger":
+        path.unlink()
+    elif fault == "empty-ledger":
+        path.write_bytes(b"")
+    elif fault == "malformed-ledger":
+        path.write_bytes(b"{")
+    elif fault == "wrong-hash":
+        path.write_text(json.dumps({"bytes": 1, "sha256": "a"*64}) + "\n", encoding="utf-8")
+    elif fault == "oversized-ledger":
+        path.write_bytes(b"x" * 4097)
+    elif fault == "changed-tool-content":
+        after[2]["content"] = "Synthetic changed result"
+    elif fault == "missing-tool":
+        del after[2]
+    elif fault == "extra-assistant":
+        after.append({"role": "assistant", "content": "Synthetic extra effect"})
+    with pytest.raises((AssertionError, OSError, ValueError)):
+        probe.assert_resume_without_replay(tmp_path, baseline, after)
+
+
+def test_write_effect_observer_does_not_count_denied_tool_intents(tmp_path):
+    output = tmp_path / "workspace" / "trial.txt"
+    writer = real_trial_writer(output.parent)
+    writer.denied_write_paths = [str(output.parent)]
+    with probe.observe_tool_writes(tmp_path, output) as observation:
+        result = immediate(writer.execute({"file_path": str(output), "content": probe.MARKER + "\n"}))
+    assert result.success is False and observation == {"failed": False}
+    assert not output.exists() and not (tmp_path / "tool-effects.jsonl").exists()
+    with pytest.raises(OSError):
+        probe.non_replay_baseline(tmp_path, replay_history(output)[0])
+
+
+@pytest.mark.parametrize("fault", ["writer-permission", "writer-cancel", "ledger", "readback"])
+def test_write_effect_observer_preserves_real_tool_result_exception_and_cancel(
+        tmp_path, monkeypatch, fault):
+    import asyncio
+    import amplifier_module_tool_filesystem.write as implementation
+    output = tmp_path / "workspace" / "trial.txt"
+    writer = real_trial_writer(output.parent)
+    arguments = {"file_path": str(output), "content": probe.MARKER + "\n"}
+    original_writer, original_open = implementation.write_text_preserving, Path.open
+    original_error = asyncio.CancelledError("synthetic cancel") if fault == "writer-cancel" else PermissionError(13, "synthetic refusal")
+    if fault.startswith("writer-"):
+        def denied(path, data):
+            assert path == output
+            raise original_error
+        monkeypatch.setattr(Path, "write_bytes", denied)
+        if fault == "writer-permission":
+            unobserved = immediate(writer.execute(arguments))
+        with probe.observe_tool_writes(tmp_path, output) as observation:
+            if fault == "writer-cancel":
+                with pytest.raises(asyncio.CancelledError) as caught:
+                    immediate(writer.execute(arguments))
+                assert caught.value is original_error
+            else:
+                observed = immediate(writer.execute(arguments))
+                assert observed.model_dump() == unobserved.model_dump() and observed.success is False
+        assert observation == {"failed": False}
+    else:
+        def failed_open(path, mode="r", *args, **kwargs):
+            if (fault == "ledger" and path.name == "tool-effects.jsonl" or
+                    fault == "readback" and path == output and mode == "rb"):
+                raise OSError(28, "synthetic diagnostic I/O")
+            return original_open(path, mode, *args, **kwargs)
+        monkeypatch.setattr(Path, "open", failed_open)
+        with probe.observe_tool_writes(tmp_path, output) as observation:
+            observed = immediate(writer.execute(arguments))
+        assert observed.success is True and observation == {"failed": True}
+        with original_open(output, "rb") as stream:
+            assert stream.read() == (probe.MARKER + "\n").encode()
+    assert implementation.write_text_preserving is original_writer
+    assert not (tmp_path / "tool-effects.jsonl").exists()
+
+
+def test_write_effect_diagnostic_failure_invalidates_worker_only_after_cleanup(tmp_path, monkeypatch):
+    import amplifier_web
+    import amplifier_module_tool_filesystem.write as writer_module
+    implementation = types.ModuleType("amplifier_web.runtime_worker")
+    original_writer, original_publish, original_open = writer_module.write_text_preserving, lambda event: None, Path.open
+    implementation.publish, implementation.configure_protocol = original_publish, lambda: None
+    output = tmp_path / "workspace café 日本語" / "trial.txt"
+    results, cleaned = [], []
+    class Worker:
+        async def start(self):
+            pass
+        async def run(self):
+            try:
+                result = await real_trial_writer(output.parent).execute({
+                    "file_path": str(output), "content": probe.MARKER + "\n"})
+                assert result.success is True
+                results.append(result)
+            finally:
+                cleaned.append(True)
+    implementation.Worker = Worker
+    monkeypatch.setitem(sys.modules, implementation.__name__, implementation)
+    monkeypatch.setattr(amplifier_web, "runtime_worker", implementation, raising=False)
+    monkeypatch.setattr(probe, "require_ci", lambda: None)
+    monkeypatch.setattr(probe.sys, "addaudithook", lambda hook: None)
+    monkeypatch.setattr(probe, "NetworkGuard", lambda log: types.SimpleNamespace(
+        verify=lambda: {}, audit=lambda event, args: None))
+    monkeypatch.setenv("WINDOWS_TRIAL_ROOT", str(tmp_path))
+    def failed_ledger(path, *args, **kwargs):
+        if path.name == "tool-effects.jsonl":
+            raise OSError(28, "synthetic ledger failure")
+        return original_open(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "open", failed_ledger)
+    with pytest.raises(AssertionError):
+        immediate(probe.worker(tmp_path / "candidate.whl"))
+    assert len(results) == 1 and cleaned == [True]
+    assert writer_module.write_text_preserving is original_writer and implementation.publish is original_publish
+    facts = json.loads((tmp_path / "worker-facts.json").read_text(encoding="utf-8"))
+    assert facts["diagnosticStatus"] == "FAIL"
+    with original_open(output, "rb") as stream:
+        assert stream.read() == (probe.MARKER + "\n").encode()
+
+
+def test_non_replay_wiring_captures_first_host_baseline_after_stop_and_checks_before_pass():
+    tree = ast.parse(Path(SPEC.origin).read_text(encoding="utf-8"))
+    journey = ast.unparse(next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)
+                              and node.name == "journey"))
+    worker = ast.unparse(next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)
+                             and node.name == "worker"))
+    assert journey.index("baseline = non_replay_baseline(") > journey.index(
+        "assert owners[-1].result.active_processes == 0")
+    assert journey.index("assert_resume_without_replay(root, saved['nonReplay'], history)") < journey.index(
+        "report['checks']['hostRestartResumeWithoutReplay'] = 'PASS'")
+    assert journey.index("report['checks']['hostRestartResumeWithoutReplay'] = 'PASS'") > journey.index(
+        "assert report['innerJobsSettled']")
+    assert journey.count("assert_resume_without_replay(") == 2
+    assert "'nonReplay': baseline" in journey
+    assert "with observe_tool_writes(root," in worker
+    assert "diagnostic_failed = diagnostic_failed or effects['failed']" in worker
+    assert "assert not diagnostic_failed" in worker
+    assert "await owner.run()" in worker and "guard.verify()" in worker
+    # A private checkpoint/ledger is NOT a new public report field.
+    value = report()
+    value["hosts"] = [{"status": "FAIL", "stage": "host_restart_resume", "checks": {},
+                      "nonReplay": {"private": "not-for-upload"}}]
+    with pytest.raises(AssertionError):
+        probe.validate_public(value)
+
+
 def test_missing_module_cannot_silently_qualify(tmp_path):
     path = tmp_path / "pyproject.toml"
     path.write_text('[dependency-groups]\ndev=[]\n')
