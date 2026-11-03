@@ -1739,7 +1739,7 @@ class Worker:
                     from .worker_input import ThreadedPipeReader
                 else:
                     from worker_input import ThreadedPipeReader
-                reader = threaded_reader = ThreadedPipeReader(sys.stdin, MAX_MESSAGE_BYTES)
+                reader = threaded_reader = ThreadedPipeReader.for_worker(sys.stdin, MAX_MESSAGE_BYTES)
             else:
                 reader = asyncio.StreamReader(limit=MAX_MESSAGE_BYTES)
                 protocol = asyncio.StreamReaderProtocol(reader)

@@ -8,10 +8,13 @@ from pathlib import Path
 import sys
 import threading
 import unittest
+from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from amplifier_web.runtime_protocol import MAX_MESSAGE_BYTES, encode_message
 from amplifier_web.worker_input import ThreadedPipeReader
+from amplifier_web import worker_input
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -266,6 +269,351 @@ class ThreadedReaderTests(unittest.IsolatedAsyncioTestCase):
             os.write(self.write_fd, b"late\n")
         with self.assertRaisesRegex(RuntimeError, "closed"):
             await self.reader.readline()
+
+
+class ControlInputIsolationTests(unittest.TestCase):
+    @contextmanager
+    def native_model(self, fault=None):
+        """Unavailable kernel/CRT only; real isolation body, no real descriptors."""
+        import io
+        import types
+        fds = {0: "control"}
+        inherit = {0: True}
+        streams, calls = [], []
+        failure = OSError("original synthetic failure")
+        state = SimpleNamespace(standard="control", reads=0)
+        class Stream:
+            closed = False
+            def __init__(self, fd): self.fd, self.contents = fd, io.BytesIO(b'init\nStop\n')
+            def fileno(self): return self.fd
+            def close(self):
+                self.closed = True
+                close(self.fd)
+            def readline(self, limit):
+                state.reads += 1
+                return self.contents.readline(limit)
+            def __enter__(self): return self
+            def __exit__(self, *args): self.close()
+        def check(stage):
+            calls.append(stage)
+            if stage == fault or isinstance(fault, tuple) and stage in fault:
+                raise failure
+        def dup(fd):
+            check("dup")
+            target = max(fds) + 1
+            fds[target], inherit[target] = fds[fd], False
+            return target
+        def set_inheritable(fd, value):
+            check("noninherit")
+            inherit[fd] = True if fault == "still-inheritable" else value
+        def fdopen(fd, mode):
+            check("fdopen")
+            self.assertEqual(mode, "rb")
+            stream = Stream(fd)
+            streams.append(stream)
+            return stream
+        def open_eof(path, mode):
+            check("open-eof")
+            self.assertEqual(path, "nul")
+            self.assertEqual(mode, 0x8000)
+            fd = max(fds) + 1
+            fds[fd], inherit[fd] = "independent-eof", False
+            return fd
+        def dup2(src, dest, *, inheritable):
+            check("dup2" if fds[src] == "independent-eof" else "restore")
+            fds[dest], inherit[dest] = fds[src], inheritable
+        def close(fd):
+            check("close-eof" if fds[fd] == "independent-eof" else "close-control")
+            del fds[fd]
+        bindings = 0
+        def bind(fd):
+            nonlocal bindings
+            bindings += 1
+            check("bind" if bindings == 1 else "restore-bind")
+            state.standard = fds[fd]
+        model_os = SimpleNamespace(name="nt", O_RDONLY=0, O_BINARY=0x8000, devnull="nul",
+            dup=dup, set_inheritable=set_inheritable, get_inheritable=lambda fd: inherit[fd],
+            fdopen=fdopen, open=open_eof, dup2=dup2, close=close)
+        crt = types.ModuleType("msvcrt")
+        crt.setmode = lambda fd, mode: check("binary")
+        with patch.object(worker_input, "os", model_os), \
+             patch.object(worker_input, "_CONTROL_INPUT", None), \
+             patch.object(worker_input, "_CONTROL_CLAIMED", False), \
+             patch.object(worker_input, "_FAILED_CONTROL_INPUTS", []), \
+             patch.object(worker_input, "_bind_standard_input", bind), \
+             patch.dict(sys.modules, {"msvcrt": crt}):
+            yield SimpleNamespace(fds=fds, inherit=inherit, streams=streams, calls=calls,
+                failure=failure, state=state, pipe=SimpleNamespace(fileno=lambda: 0))
+
+    def test_default_stdin_is_independent_eof_before_any_reader_and_setup_is_idempotent(self):
+        with self.native_model() as m:
+            # BEFORE: a duplicate still names the synchronously read control
+            # object. An inheritable=False flag alone cannot fix default stdin.
+            self.assertEqual(m.state.standard, "control")
+            control = worker_input.isolate_control_input(m.pipe)
+            self.assertEqual(m.fds[control.fileno()], "control")
+            self.assertFalse(m.inherit[control.fileno()])
+            self.assertEqual(m.fds[0], m.state.standard)
+            self.assertEqual(m.state.standard, "independent-eof")
+            self.assertEqual(m.state.reads, 0)
+            calls = list(m.calls)
+            self.assertIs(worker_input.isolate_control_input(m.pipe), control)
+            self.assertEqual(m.calls, calls)
+            self.assertEqual(control.readline(100), b"init\n")
+            self.assertEqual(control.readline(100), b"Stop\n")
+            self.assertEqual(control.readline(100), b"")
+            control.close()
+            with self.assertRaisesRegex(RuntimeError, "already closed"):
+                worker_input.isolate_control_input(m.pipe)
+
+    def test_fallible_setup_preserves_original_error_and_no_reader_or_descriptor_leak(self):
+        for fault in ("dup", "noninherit", "binary", "fdopen", "open-eof", "dup2", "bind", "still-inheritable"):
+            with self.subTest(fault=fault), self.native_model(fault) as m:
+                with self.assertRaises(OSError) as caught:
+                    worker_input.isolate_control_input(m.pipe)
+                if fault == "still-inheritable":
+                    self.assertIn("remained inheritable", str(caught.exception))
+                else:
+                    self.assertIs(caught.exception, m.failure)
+                self.assertEqual(m.fds, {0: "control"})
+                self.assertEqual(m.state.standard, "control")
+                self.assertEqual(m.state.reads, 0)
+                self.assertFalse(worker_input._FAILED_CONTROL_INPUTS)
+                self.assertIsNone(worker_input._CONTROL_INPUT)
+
+    def test_unknown_close_is_retained_and_not_retried_or_reopened(self):
+        with self.native_model("close-eof") as m:
+            with self.assertRaises(OSError) as caught:
+                worker_input.isolate_control_input(m.pipe)
+            self.assertIs(caught.exception, m.failure)
+            self.assertEqual(m.calls.count("close-eof"), 1)
+            self.assertEqual(m.fds[0], "control")
+            self.assertTrue(worker_input._FAILED_CONTROL_INPUTS)
+            before = list(m.calls)
+            with self.assertRaisesRegex(RuntimeError, "unconfirmed"):
+                worker_input.isolate_control_input(m.pipe)
+            self.assertEqual(before, m.calls)
+
+    def test_failed_restore_retains_control_and_preserves_first_error_without_reader(self):
+        with self.native_model(("bind", "restore-bind")) as m:
+            with self.assertRaises(OSError) as caught:
+                worker_input.isolate_control_input(m.pipe)
+            self.assertIs(caught.exception, m.failure)
+            self.assertIs(worker_input._FAILED_CONTROL_INPUTS[0], m.streams[0])
+            self.assertFalse(m.streams[0].closed)
+            self.assertEqual(m.state.reads, 0)
+            calls = list(m.calls)
+            with self.assertRaisesRegex(RuntimeError, "unconfirmed"):
+                worker_input.isolate_control_input(m.pipe)
+            self.assertEqual(calls, m.calls)
+
+    def test_bind_standard_input_uses_exact_win64_handles_and_confirms_binding(self):
+        import types
+        kernel = Mock()
+        kernel.SetStdHandle.return_value = 1
+        kernel.GetStdHandle.return_value = 0x100000001
+        crt = types.ModuleType("msvcrt")
+        crt.get_osfhandle = Mock(return_value=0x100000001)
+        with patch.dict(sys.modules, {"msvcrt": crt}), \
+             patch.object(ctypes, "WinDLL", return_value=kernel, create=True), \
+             patch.object(ctypes, "get_last_error", return_value=5, create=True), \
+             patch.object(ctypes, "WinError", side_effect=lambda code: OSError(code, "synthetic"), create=True):
+            worker_input._bind_standard_input(0)
+            kernel.SetStdHandle.assert_called_once_with(0xfffffff6, 0x100000001)
+            self.assertEqual(kernel.SetStdHandle.argtypes, [ctypes.c_uint32, ctypes.c_void_p])
+            self.assertIs(kernel.GetStdHandle.restype, ctypes.c_void_p)
+            kernel.GetStdHandle.return_value = 4
+            with self.assertRaisesRegex(OSError, "not confirmed"):
+                worker_input._bind_standard_input(0)
+            kernel.SetStdHandle.return_value = 0
+            with self.assertRaises(OSError):
+                worker_input._bind_standard_input(0)
+
+    def test_worker_reader_owns_only_private_control_and_never_closes_pending_stream(self):
+        for fault in (None, "loop", "thread-create", "thread-start"):
+            with self.subTest(fault=fault), self.native_model() as m:
+                started = []
+                def create_thread(**kwargs):
+                    if fault == "thread-create": raise m.failure
+                    def start():
+                        if fault == "thread-start": raise m.failure
+                        self.assertEqual(m.fds[0], "independent-eof")
+                        self.assertEqual(m.state.standard, "independent-eof")
+                        self.assertEqual(m.state.reads, 0)
+                        started.append(kwargs)
+                    return SimpleNamespace(start=start)
+                with patch.object(worker_input.asyncio, "get_running_loop",
+                        side_effect=m.failure if fault == "loop" else None, return_value=SimpleNamespace()), \
+                     patch.object(worker_input.threading, "Thread", side_effect=create_thread):
+                    if fault is not None:
+                        with self.assertRaises(OSError) as caught:
+                            ThreadedPipeReader.for_worker(m.pipe, 16)
+                        self.assertIs(caught.exception, m.failure)
+                        if fault == "loop":
+                            self.assertEqual(m.fds, {0: "control"})
+                            self.assertFalse(m.streams)
+                            self.assertFalse(worker_input._CONTROL_CLAIMED)
+                            continue
+                        self.assertTrue(m.streams[0].closed)
+                    else:
+                        reader = ThreadedPipeReader.for_worker(m.pipe, 16)
+                        self.assertIs(reader._stream, m.streams[0])
+                        self.assertEqual(m.calls.count("dup"), 1)  # No shared-object default stdin.
+                        self.assertEqual(len(started), 1)
+                        self.assertTrue(started[0]["daemon"])
+                        reader.close()
+                        reader.close()
+                        self.assertFalse(reader._stream.closed)  # Daemon owns blocked read.
+                    self.assertEqual(m.fds[0], "independent-eof")
+                    self.assertEqual(m.state.standard, "independent-eof")
+                    with self.assertRaisesRegex(RuntimeError, "already|closed"):
+                        ThreadedPipeReader.for_worker(m.pipe, 16)
+
+    def test_posix_factory_keeps_existing_constructor_without_stdin_isolation(self):
+        class Portable(ThreadedPipeReader):
+            def __init__(self, pipe, limit, **kwargs): self.args = pipe, limit, kwargs
+        pipe = object()
+        with patch.object(worker_input, "os", SimpleNamespace(name="posix")), \
+             patch.object(worker_input, "isolate_control_input", side_effect=AssertionError("POSIX isolation")):
+            self.assertEqual(Portable.for_worker(pipe, 32).args, (pipe, 32, {}))
+
+
+class ControlInputDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_real_worker_read_dispatches_init_commands_stop_and_preserves_cancel(self):
+        from amplifier_web import runtime_worker
+        for cancel in (False, True):
+            with self.subTest(cancel=cancel):
+                reader = SimpleNamespace(close=Mock())
+                lines = [encode_message({"op": "start"}), encode_message({"op": "echo", "payload": "café"}),
+                         encode_message({"op": "stop"}), b""]
+                original = asyncio.CancelledError("original")
+                async def readline():
+                    if cancel: raise original
+                    return lines.pop(0)
+                reader.readline = readline
+                received = []
+                async def command(data): received.append(data)
+                worker = SimpleNamespace(command=command, tasks=set(), shutdown=asyncio.Event())
+                with patch.object(runtime_worker, "sys", SimpleNamespace(platform="win32", stdin=object())), \
+                     patch.object(ThreadedPipeReader, "for_worker", return_value=reader) as factory:
+                    if cancel:
+                        with self.assertRaises(asyncio.CancelledError) as caught:
+                            await runtime_worker.Worker.read(worker)
+                        self.assertIs(caught.exception, original)
+                    else:
+                        await runtime_worker.Worker.read(worker)
+                        await asyncio.sleep(0)
+                        self.assertEqual([v["op"] for v in received], ["start", "echo", "stop"])
+                        self.assertEqual(received[1]["payload"], "café")
+                    factory.assert_called_once_with(runtime_worker.sys.stdin, MAX_MESSAGE_BYTES)
+                reader.close.assert_called_once_with()
+                self.assertTrue(worker.shutdown.is_set())
+
+
+@unittest.skipUnless(os.name == "nt", "native private-control/default-stdin contract")
+class NativeControlInputTests(unittest.IsolatedAsyncioTestCase):
+    failed_owners = []  # Unknown native cleanup retains custody, never a retry.
+
+    async def test_private_commands_survive_while_ordinary_child_sees_eof(self):
+        """Native-selectable; no provider/install/network or redirector kill."""
+        from amplifier_web.windows_jobs import CleanupError, WindowsOwnedProcess
+        source = r'''
+import asyncio, ctypes, json, msvcrt, os, sys
+sys.path.insert(0, sys.argv[1])
+from amplifier_web import runtime_worker
+from amplifier_web.worker_input import ThreadedPipeReader
+runtime_worker.configure_protocol()
+async def main():
+    reader = ThreadedPipeReader.for_worker(sys.stdin, 1024)
+    request = None
+    try:
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetStdHandle.argtypes, kernel.GetStdHandle.restype = [ctypes.c_uint32], ctypes.c_void_p
+        assert kernel.GetStdHandle(0xfffffff6) == msvcrt.get_osfhandle(0)
+        assert os.read(0, 1) == b"" and not os.get_inheritable(reader._stream.fileno())
+        runtime_worker.publish({"type": "ready", "private": True, "defaultEof": True})
+        first = json.loads(await reader.readline())
+        assert first == {"op": "start", "text": "café"}
+        runtime_worker.publish({"type": "command", "text": first["text"]})
+        request = asyncio.create_task(reader.readline())
+        while (reader._pending is None or not reader._requests.empty()):
+            assert not request.done()
+            await asyncio.sleep(.001)
+        # Real ordinary child default stdin, not another owned-process pipe.
+        # This child is already inside the retained outer Job's containment.
+        child = await asyncio.create_subprocess_exec(
+            sys._base_executable, "-I", "-S", "-B", "-c",
+            "import sys; assert sys.stdin.buffer.read()==b''; print('eof')",
+            stdin=None, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        async with asyncio.timeout(3):
+            out, err = await child.communicate()
+        assert child.returncode == 0 and out.strip() == b"eof" and not err
+        assert not request.done() and not reader._pending.done()
+        runtime_worker.publish({"type": "child", "defaultEof": True, "controlPending": True})
+        assert json.loads(await request) == {"op": "stop"}
+        runtime_worker.publish({"type": "stopped"})
+    finally:
+        reader.close()
+        if request is not None:
+            request.cancel()
+            try: await request
+            except asyncio.CancelledError: pass
+asyncio.run(main())
+'''
+        owner = result = stderr_task = None
+        stderr = bytearray()
+        async def drain():
+            while block := await owner.stderr.read(4096):
+                stderr.extend(block)
+                self.assertLessEqual(len(stderr), 65536)
+        async def receive():
+            line = await owner.stdout.readline()
+            self.assertLessEqual(len(line), 4096)
+            self.assertTrue(line)
+            return json.loads(line)
+        try:
+            async with asyncio.timeout(20):
+                owner = await WindowsOwnedProcess.start(
+                    [sys._base_executable, "-I", "-S", "-B", "-c", source, str(ROOT)],
+                    cwd=str(ROOT), env=dict(os.environ), trusted_python=sys._base_executable,
+                    gate_timeout=10, cleanup_timeout=5)
+                stderr_task = asyncio.create_task(drain())
+                self.assertEqual(await receive(), {"type": "ready", "private": True, "defaultEof": True})
+                owner.stdin.write(encode_message({"op": "start", "text": "café"}))
+                await owner.stdin.drain()
+                self.assertEqual(await receive(), {"type": "command", "text": "café"})
+                self.assertEqual(await receive(), {"type": "child", "defaultEof": True, "controlPending": True})
+                owner.stdin.write(encode_message({"op": "stop"}))
+                await owner.stdin.drain()
+                self.assertEqual(await receive(), {"type": "stopped"})
+                result = await owner.wait()  # Keep stdin open until natural exit.
+                self.assertEqual(result.payload_returncode, 0)
+                self.assertEqual(await owner.stdout.read(), b"")
+                await stderr_task
+                self.assertEqual(stderr, b"")
+        except CleanupError as error:
+            owner = error.owner
+            raise
+        finally:
+            if owner is not None:
+                try:
+                    if owner.state != "cleanup_failed":
+                        result = await owner.close()
+                except BaseException:
+                    if owner not in self.failed_owners:
+                        self.failed_owners.append(owner)
+                    raise
+                if not (result is not None and result.active_processes == 0
+                        and owner.tree_empty and owner.io_finalized):
+                    self.failed_owners.append(owner)
+                    self.fail("private-control probe cleanup was not confirmed")
+                self.assertFalse(owner.output_discarded, "private-control probe output was discarded")
+            if stderr_task is not None and not stderr_task.done():
+                stderr_task.cancel()
+                done, pending = await asyncio.wait({stderr_task}, timeout=1)
+                self.assertFalse(pending, "private-control probe reader did not settle")
+                if not stderr_task.cancelled():
+                    stderr_task.exception()
 
 
 class WorkerSubprocessTests(unittest.IsolatedAsyncioTestCase):
