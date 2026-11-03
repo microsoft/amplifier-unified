@@ -1,5 +1,12 @@
 """ONE Files1318 cycle in the prepared browser-test runner; never run on the host.
 
+Pinned Main 024466 / 0.50.1 is source-prepared only. The separately saved
+files1318-current0501-draft-manifest.json is NOT an execution manifest. Check31
+raw retention must be recovered, verified and bound in a reviewed successor
+before its seven worktree results may be reused. This driver explicitly refuses
+that draft before creating output or reading an execution contract; changing
+reviewed:false alone cannot admit it. Historical qualification paths stay pinned.
+
 Pinned Main 6fe / 0.50.0: files1318-current0500-manifest.json. Reuse only the
 unchanged 80/84 Python cases, 19 Node cases and seven component checks from the
 accepted check30 lineage. Run four affected Files/worktree cases plus three
@@ -456,6 +463,7 @@ CURRENT0490_COMPONENTS = ('canvas-renderers', 'renderer-stalled-response', 'canv
                          'standard-ux-canvas-files', 'mobile-navigation-focus', 'peer-preview-focus',
                          'canvas-refresh-catchup')
 CURRENT0500_MANIFEST = ROOT / 'output/files1318-current0500-manifest.json'
+CURRENT0501_DRAFT_MANIFEST = ROOT / 'output/files1318-current0501-draft-manifest.json'
 CHECK30_ROOT = ROOT / 'output/files1318-check30-dcfeb'
 CURRENT0500_BINDING = {
     'baselineRevision': '6fe7ed600583197b924f0f6eb4eac5e20527c5c6',
@@ -4731,7 +4739,7 @@ def main():
                                  COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST,
                                  CURRENT0481_MANIFEST, CURRENT0482_MANIFEST, FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST,
                                  CHECK27_MANIFEST, CHECK27_V2_MANIFEST, CHECK28_MANIFEST,
-                                 CURRENT0490_MANIFEST, CURRENT0500_MANIFEST])
+                                 CURRENT0490_MANIFEST, CURRENT0500_MANIFEST, CURRENT0501_DRAFT_MANIFEST])
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--corner-diagnostic', action='store_true')
     modes.add_argument('--contour-qualification', action='store_true')
@@ -4742,6 +4750,9 @@ def main():
     modes.add_argument('--focus-contrast', action='store_true')
     modes.add_argument('--coarse-toolbar-qualification', action='store_true')
     args = parser.parse_args()
+    if args.manifest == CURRENT0501_DRAFT_MANIFEST:
+        parser.error('0.50.1 source draft is not executable: recover and verify Check31 raw retention, '
+                     'then bind the reviewed focused successor; no Check31 result is reusable from stdout alone')
     touch_checkpoint = (args.touch_event_diagnostic or args.native_state_diagnostic or args.portal_host_experiment
                         or args.state_reduction or args.focus_contrast)
     checkpoint_mode = args.corner_diagnostic or touch_checkpoint
