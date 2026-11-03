@@ -3,10 +3,11 @@
 No installs, source substitutions, worker hooks or production mutations. Raw
 captures remain private. Unknown owners stay alive until the five-minute CI job
 terminates their owner; a cancelled/timed-out job is never diagnostic success.
-Only nested public-async cases run: one additional retained owned-process
-boundary, without uv, stream redirection or app startup. Successful helper calls
-expose no operation cleanup object.
+Only nested stream-context public-async cases run, without uv or app startup.
+The exact worker protocol function and real pending stdin reader supply the
+single added context. Successful helper calls expose no operation cleanup object.
 """
+import ast
 import asyncio
 import hashlib
 import importlib.util
@@ -42,6 +43,56 @@ LIMIT = 256 * 1024
 OWNERS, RETAINED = [], []
 JOB_FIELDS = ("exception", "timedOut", "overflow", "returncode", "activeProcesses",
               "treeEmpty", "ioFinalized", "discarded", "tasksSettled", "cleanupConfirmed")
+STREAM_SOURCES = {
+    "configureBodySha256": "c180a6bf2f92065709ec7f3dc76b6142dcc231c5c7d5fd159c7ff6435130d3a1",
+    "readerSourceSha256": "9912b288c98166658c6c3ead02fbd6d8dc7db39e3ad518733be461fa165851bc",
+    "protocolSourceSha256": "0316c164a342ab4d7fc58ce4d62070293ce09fb5c35fa169a37ccc37c1390d06",
+}
+
+
+def worker_streams():
+    """Execute the unmodified checked-out function/module, no full app imports.
+
+    LF normalization is Python's source newline normalization, so checkout CRLF
+    does not change the attested function AST or actual input-reader code.
+    """
+    app = Path(__file__).resolve().parents[2] / "amplifier_web"
+    worker = ast.parse((app / "runtime_worker.py").read_bytes())
+    functions = [node for node in worker.body
+                 if isinstance(node, ast.FunctionDef) and node.name == "configure_protocol"]
+    assert len(functions) == 1
+    function = functions[0]
+    assert hashlib.sha256(ast.dump(function, include_attributes=False).encode()).hexdigest() == STREAM_SOURCES["configureBodySha256"]
+    scope = {"os": os, "sys": sys, "_PROTOCOL": None}
+    # This is the exact AST node, without rewritten calls, globals or body.
+    exec(compile(ast.Module(body=[function], type_ignores=[]),
+                 str(app / "runtime_worker.py"), "exec"), scope)
+    scope["configure_protocol"]()
+    protocol = scope["_PROTOCOL"]
+    try:
+        modules = []
+        for filename, key in (("worker_input.py", "readerSourceSha256"),
+                              ("runtime_protocol.py", "protocolSourceSha256")):
+            raw = (app / filename).read_bytes().replace(b"\r\n", b"\n")
+            assert hashlib.sha256(raw).hexdigest() == STREAM_SOURCES[key]
+            spec = importlib.util.spec_from_file_location("diagnostic_" + filename[:-3], app / filename)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            exec(compile(raw, str(app / filename), "exec"), module.__dict__)
+            modules.append(module)
+        reader = modules[0].ThreadedPipeReader(sys.stdin, modules[1].MAX_MESSAGE_BYTES)
+    except BaseException:
+        protocol.close()
+        raise
+    return protocol, reader
+
+
+def reader_pending(reader, request):
+    # Dequeued request + live daemon + unresolved delivery is direct source-state
+    # evidence, not an assertion that a kernel ReadFile stack was inspected.
+    return (not request.done() and reader._pending is not None and not reader._pending.done()
+            and reader._requests.empty() and reader._thread.is_alive()
+            and not reader._closed.is_set() and not reader._eof)
 
 
 def private(root, name, raw):
@@ -79,6 +130,36 @@ def argv(repo):
 
 
 async def child(root, repo):
+    protocol, reader = worker_streams()
+    request = None
+    try:
+        request = asyncio.create_task(reader.readline())
+        # No new deadline: the unchanged outer owned operation bounds setup too.
+        while not reader_pending(reader, request):
+            if request.done():
+                request.result()
+                raise AssertionError("stdin delivery was not pending")
+            assert reader._thread.is_alive() and not reader._closed.is_set()
+            await asyncio.sleep(.01)
+        facts = {**STREAM_SOURCES, "protocolConfigured": True, "pendingReadDequeued": True,
+                 "pendingAfterHelper": False}
+        return await helper_child(root, repo, protocol, reader, request, facts)
+    finally:
+        # Existing cancellation semantics stop delivery, NOT the OS read.
+        # Do not join the daemon or close its buffered descriptor on the loop.
+        try:
+            reader.close()
+            if request is not None:
+                request.cancel()
+                try:
+                    await request
+                except asyncio.CancelledError:
+                    pass
+        finally:
+            protocol.close()
+
+
+async def helper_child(root, repo, protocol, reader, request, stream_facts):
     assert Path.cwd() == root
     with directory(root, owned_root=root) as pinned:
         raw = pinned.read_private("helper.py", limit=32768)
@@ -99,11 +180,15 @@ async def child(root, repo):
             code, output = exc.returncode, exc.output or ""
     raw = output.encode("utf-8" if sys.flags.utf8_mode else locale.getencoding())
     try:
-        sys.stdout.buffer.write(raw)
-        sys.stdout.buffer.flush()
+        # configure_protocol redirected stdout; only its retained descriptor
+        # still reaches the parent's ref-output stream.
+        protocol.write(raw)
+        protocol.flush()
+        stream_facts["pendingAfterHelper"] = reader_pending(reader, request)
         save(root, "B-async-" + repo + "-helper.json", {"entry": "public-check-output-async", "exception": error,
             "returncode": code, "outputComplete": error in {None, "CalledProcessError"},
-            "pendingEmpty": not module._PENDING, "errorCleanup": error_cleanup})
+            "pendingEmpty": not module._PENDING, "errorCleanup": error_cleanup,
+            "streamContext": stream_facts})
     finally:
         while module._PENDING:  # Outer Job owns finite termination of this child.
             time.sleep(1)
@@ -116,7 +201,8 @@ def helper_result(root, label):
             raw = pinned.read_private(label + "-helper.json", limit=16384)
         value = json.loads(raw)
         assert type(value) is dict and set(value) == {
-            "entry", "exception", "returncode", "outputComplete", "pendingEmpty", "errorCleanup"}
+            "entry", "exception", "returncode", "outputComplete", "pendingEmpty", "errorCleanup", "streamContext"}
+        validate_stream_context(value["streamContext"])
         assert value["entry"] == "public-check-output-async"
         assert value["exception"] is None or type(value["exception"]) is str and value["exception"] in ERRORS
         assert value["returncode"] is None or type(value["returncode"]) is int and -(2**31) <= value["returncode"] < 2**32
@@ -133,7 +219,7 @@ def helper_result(root, label):
 def nested_result(root, repo):
     try:
         with directory(root, owned_root=root) as pinned:
-            raw = pinned.read_private("inner-nested-async-" + repo + "-completed.json", limit=16384)
+            raw = pinned.read_private("inner-nested-stream-async-" + repo + "-completed.json", limit=16384)
         value = json.loads(raw)
         validate_case(value)
         assert value["repo"] == repo and value["innerJob"] is None
@@ -146,10 +232,10 @@ async def nested(root, repo):
     # The unchanged leaf gets exactly this child's inherited env/cwd. Outer
     # stdin remains open; the extra owned pipe is likewise left open/unwritten.
     try:
-        row = await compare(root, repo, "nested-async", dict(os.environ), None, inner=True)
+        row = await compare(root, repo, "nested-stream-async", dict(os.environ), None, inner=True)
         with directory(root, owned_root=root) as pinned:
-            output = pinned.read_private("inner-nested-async-" + repo + "-stdout.bin", limit=LIMIT)
-            errors = pinned.read_private("inner-nested-async-" + repo + "-stderr.bin", limit=LIMIT)
+            output = pinned.read_private("inner-nested-stream-async-" + repo + "-stdout.bin", limit=LIMIT)
+            errors = pinned.read_private("inner-nested-stream-async-" + repo + "-stderr.bin", limit=LIMIT)
         sys.stdout.buffer.write(output)
         sys.stdout.buffer.flush()
         sys.stderr.buffer.write(errors)
@@ -163,7 +249,7 @@ async def nested(root, repo):
 
 
 async def compare(root, repo, route, env, git, *, inner=False):
-    assert route == "nested-async"  # No repeat of accepted nonnested cases.
+    assert route == "nested-stream-async"  # No repeat of accepted nonnested cases.
     label = ("inner-" if inner else "") + route + "-" + repo
     save(root, label + "-starting.json", {"stage": "starting"})
     owner = result = error = None
@@ -254,10 +340,12 @@ def job_success(row):
 def successful(row, *, inner=False):
     helper = row["helper"]
     return (job_success(row) and row["mainRef"] and row["refSyntax"]
-        and row["route"] == "nested-async"
+        and row["route"] == "nested-stream-async"
         and helper is not None and helper["entry"] == "public-check-output-async"
         and helper["exception"] is None and helper["returncode"] == 0 and helper["outputComplete"]
         and helper["pendingEmpty"] and helper["errorCleanup"] is None
+        and all(helper["streamContext"][key] is True for key in
+                ("protocolConfigured", "pendingReadDequeued", "pendingAfterHelper"))
         and (row["innerJob"] is None if inner else row["innerJob"] is not None and job_success(row["innerJob"])))
 
 
@@ -294,7 +382,7 @@ async def experiment(report):
     # This hash is which('git'), NOT proof of bare CreateProcess executable identity.
     report["stage"] = "comparison"
     for repo in REPOS:
-        report["cases"].append(await compare(root, repo, "nested-async", env, git))
+        report["cases"].append(await compare(root, repo, "nested-stream-async", env, git))
         if RETAINED:
             report["stage"] = "retained-unknown"
             return
@@ -315,7 +403,7 @@ def validate_case(row):
     assert type(row) is dict and set(row) == {
         "repo", "route", "seconds", "stage", *JOB_FIELDS,
         "stdoutBytes", "stderrBytes", "mainRef", "refSyntax", "helper", "innerJob"}
-    assert row["repo"] in REPOS and row["route"] == "nested-async"
+    assert row["repo"] in REPOS and row["route"] == "nested-stream-async"
     assert type(row["seconds"]) in (float, int) and 0 <= row["seconds"] <= 300
     assert row["stage"] == "completed"
     validate_job({key: row[key] for key in JOB_FIELDS})
@@ -327,7 +415,9 @@ def validate_case(row):
         validate_job(row["innerJob"])
     if row["helper"] is not None:
         h = row["helper"]
-        assert type(h) is dict and set(h) == {"entry", "exception", "returncode", "outputComplete", "pendingEmpty", "errorCleanup"}
+        assert type(h) is dict and set(h) == {
+            "entry", "exception", "returncode", "outputComplete", "pendingEmpty", "errorCleanup", "streamContext"}
+        validate_stream_context(h["streamContext"])
         assert h["entry"] == "public-check-output-async" and type(h["pendingEmpty"]) is bool
         assert h["exception"] in ERRORS and type(h["outputComplete"]) is bool
         assert h["returncode"] is None or type(h["returncode"]) is int and -(2**31) <= h["returncode"] < 2**32
@@ -342,10 +432,18 @@ def validate_case(row):
                 assert e["winerror"] is None or type(e["winerror"]) is int and -(2**31) <= e["winerror"] < 2**32
 
 
+def validate_stream_context(value):
+    assert type(value) is dict and set(value) == {
+        *STREAM_SOURCES, "protocolConfigured", "pendingReadDequeued", "pendingAfterHelper"}
+    assert all(value[key] == digest for key, digest in STREAM_SOURCES.items())
+    assert all(type(value[key]) is bool for key in
+               ("protocolConfigured", "pendingReadDequeued", "pendingAfterHelper"))
+
+
 def validate(report):
     assert set(report) == {"schema", "qualification", "diagnosticOnly", "status", "stage", "python", "windowsBuild",
                            "helperSha256", "gitWhichSha256", "cases", "exception"}
-    assert report["schema"] == 3 and report["qualification"] == "nested-public-check-output-async"
+    assert report["schema"] == 4 and report["qualification"] == "nested-stream-public-check-output-async"
     assert report["diagnosticOnly"] is True
     assert report["status"] in {"PASS", "FAIL"}
     assert report["stage"] in {"preflight", "helper-download", "comparison", "completed", "retained-unknown"}
@@ -375,7 +473,7 @@ if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[1] == "--nested" and sys.argv[3] in REPOS:
         raise SystemExit(asyncio.run(nested(Path(sys.argv[2]), sys.argv[3])))
     assert len(sys.argv) == 1 and os.environ.get("GITHUB_ACTIONS") == "true"
-    report = {"schema": 3, "qualification": "nested-public-check-output-async",
+    report = {"schema": 4, "qualification": "nested-stream-public-check-output-async",
         "diagnosticOnly": True, "status": "FAIL", "stage": "preflight",
         "python": ".".join(map(str, sys.version_info[:3])), "windowsBuild": sys.getwindowsversion().build,
         "helperSha256": SHA, "gitWhichSha256": None, "cases": [], "exception": None}
