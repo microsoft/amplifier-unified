@@ -11,6 +11,7 @@ import {chromium,expect} from '@playwright/test';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {questionFadeExecution} from './question-fade-runtime.mjs';
+import {boundaryRead,boundaryIdentity,boundaryRequests,boundaryLease,BOUNDARY_OBSERVATION_MS} from './browser-boundary-evidence.mjs';
 
 const root=realpathSync(fileURLToPath(new URL('../../',import.meta.url)));
 const {python,artifactRoot,evidence:executionEvidence}=questionFadeExecution({root});
@@ -89,8 +90,8 @@ let failureScreenshotAttempted=false;
 // correlation. Diagnostic failures never replace the journey's original error.
 async function observeReviewBoundary(page,target,artifactReceipt){
  const data={target,stage:'setup',snapshots:[],network:[],errors:[],omitted:0,
-  limits:{requests:12,snapshots:6,responseBytes:131072},
-  limitation:'Passive state reads can affect timing; response bodies are Playwright observations, not independent wire captures.'};
+  limits:{requests:12,snapshots:6,responseBytes:131072,optionalReadMs:BOUNDARY_OBSERVATION_MS},
+  limitation:'Passive reads can affect timing. Deadlines need a responsive Node event loop and do not cancel evaluation. Response bodies are Playwright observations, not independent wire captures.'};
  report.reviewBoundary=data;
  let active=false,closed=false,sequence=0,finished;
  const requests=new WeakMap();
@@ -122,16 +123,18 @@ async function observeReviewBoundary(page,target,artifactReceipt){
     const raw=JSON.parse(text),body=raw?.action==='shell.command'?raw.args:raw;
     action=body?.action;args=body?.args;
     if(!['canvas.select','canvas.views.inline'].includes(action))return;
-    if((args?.id??args?.resourceId)!==target.resourceId||args?.version!==target.version
-     ||args?.questionId!==target.questionId||args?.questionContentRevision!==target.questionContentRevision)return;
     commandId=id(raw.id??body.id);
-   }else if(request.method()==='GET'&&/^\/api\/canvas\/views\/[^/]+\/resource$/.test(url.pathname)
-    &&url.searchParams.get('resourceId')===target.resourceId){
-    action='inline-resource';args={viewId:url.pathname.split('/')[4],resourceId:target.resourceId,
-     resourceRevision:url.searchParams.get('resourceRevision'),generation:Number(url.searchParams.get('generation'))};
+   }else if(request.method()==='GET'&&/^\/api\/canvas\/views\/[^/]+\/resource$/.test(url.pathname)){
+    action='inline-resource';args={viewId:url.pathname.split('/')[4],resourceId:url.searchParams.get('resourceId'),
+     resourceRevision:url.searchParams.get('resourceRevision'),
+     generation:url.searchParams.has('generation')?Number(url.searchParams.get('generation')):null};
    }else return;
    if(data.network.length>=data.limits.requests){data.omitted++;return}
-   const row={sequence:++sequence,stage:data.stage,action,commandId,args:pick(args),responseState:'not-observed'};
+   const identityMatch=action==='inline-resource'?boundaryIdentity({resourceId:id(args.resourceId)},{resourceId:target.resourceId}):
+    boundaryIdentity({resourceId:id(action==='canvas.select'?args?.id:args?.resourceId),version:number(args?.version),
+     questionId:id(args?.questionId),questionContentRevision:number(args?.questionContentRevision)},
+    {resourceId:target.resourceId,version:target.version,questionId:target.questionId,questionContentRevision:target.questionContentRevision});
+   const row={sequence:++sequence,stage:data.stage,action,commandId,args:pick(args),identityMatch,responseState:'not-observed'};
    data.network.push(row);requests.set(request,row);
   }catch{fault('request-observation-unavailable')}
  };
@@ -154,9 +157,9 @@ async function observeReviewBoundary(page,target,artifactReceipt){
  };
  const onFailed=request=>{const row=requests.get(request);if(row&&!closed){row.responseState='request-failed';row.failureSequence=++sequence}};
  const snapshot=async stage=>{
+  if(closed)return;
   data.stage=stage;
-  try{
-   const facts=await page.evaluate(target=>{
+   const result=await boundaryRead(()=>page.evaluate(target=>{
     const id=value=>typeof value==='string'&&/^[a-zA-Z0-9:_-]{1,200}$/.test(value)?value:null;
     const scalar=(row,keys)=>row?Object.fromEntries(keys.map(key=>[key,
      typeof row[key]==='boolean'||Number.isSafeInteger(row[key])?row[key]:id(row[key])])):null;
@@ -183,28 +186,27 @@ async function observeReviewBoundary(page,target,artifactReceipt){
      presentationsOmitted:Math.max(0,exact.length-4),
      leases:leases.slice(0,8).map(row=>scalar(row,['viewId','resourceId','resourceRevision','generation','selectedVersion','dirty'])),
      leasesOmitted:Math.max(0,leases.length-8)};
-   },target);
+   },target));
+   if(closed)return;
+   const facts=result.status==='observed'?result.value:{status:result.status};
+   if(result.status!=='observed')fault(stage+'-state-'+result.status);
    if(data.snapshots.length<data.limits.snapshots)data.snapshots.push({sequence:++sequence,stage,...facts});else data.omitted++;
-  }catch{fault(stage+'-state-unavailable')}
  };
  const finish=failed=>finished??=(async()=>{
   data.endedStage=data.stage;
   active=false;page.off('request',onRequest);page.off('response',onResponse);page.off('requestfailed',onFailed);
   await snapshot(failed?'failure-final':'preview-mounted');
   closed=true;
-  data.selectionRequest=data.network.some(row=>row.action==='canvas.select')?'observed':data.omitted||data.errors.length?'unknown':'absent-in-attempt';
-  data.inlineRequest=data.network.some(row=>row.action==='canvas.views.inline')?'observed':data.omitted||data.errors.length?'unknown':'absent-in-attempt';
+  data.selectionRequest=boundaryRequests(data.network,'canvas.select',!!(data.omitted||data.errors.length));
+  data.inlineRequest=boundaryRequests(data.network,'canvas.views.inline',!!(data.omitted||data.errors.length));
   data.pendingResponseReads=data.network.filter(row=>row.responseState==='body-pending').length;
   for(const row of data.network.filter(row=>row.action==='inline-resource'))
-   row.matchesAttemptLease=data.network.some(lease=>lease.action==='canvas.views.inline'
-    &&lease.response?.accepted===true&&lease.response.result?.viewId===row.args.viewId
-    &&lease.response.result?.resourceRevision===row.args.resourceRevision
-    &&lease.response.result?.generation===row.args.generation);
+   row.matchesAttemptLease=boundaryLease(row,data.network,!!(data.omitted||data.errors.length));
   // An unfinished read stays explicitly pending; do not extend the iframe wait.
  })();
  page.on('request',onRequest);page.on('response',onResponse);page.on('requestfailed',onFailed);
  await snapshot('before-click');active=true;data.stage='click-pending';
- return {snapshot,finish,waiting(){data.stage='iframe-wait'}};
+ return {snapshot,finish,waiting(){if(!closed)data.stage='iframe-wait'}};
 }
 
 const inspect=async(pane,questionId)=>pane.evaluate((el,id)=>{
@@ -304,11 +306,13 @@ const successShot=async name=>{
 const failureShot=async()=>{
  if(failureScreenshotAttempted||!page||page.isClosed())return;
  failureScreenshotAttempted=true;
- try{
-  const path=join(artifacts,'failure.png');
-  const bytes=await page.screenshot({path,timeout:2000,animations:'disabled'});
+ const path=join(artifacts,'failure.png');
+ const result=await boundaryRead(()=>page.screenshot({path,timeout:2000,animations:'disabled'}));
+ report.failureScreenshotObservation={status:result.status,budgetMs:BOUNDARY_OBSERVATION_MS};
+ if(result.status==='observed'){
+  const bytes=result.value;
   report.screenshots.push({kind:'failure',file:'failure.png',sha256:hash(bytes),bytes:bytes.length});
- }catch(error){report.failureScreenshotError=String(error?.stack||error).slice(0,2000)}
+ }
 };
 
 try{
@@ -729,8 +733,15 @@ try{
  failure=error;
  report.failure={name:error?.name||'Error',message:String(error?.message||error),stack:String(error?.stack||error).slice(0,8000)};
  if(pane&&page&&!page.isClosed()){
-  try{if(await pane.count()===1)await record('failure-context',pane,report.question.id)}
-  catch(contextError){report.failureContextError=String(contextError?.stack||contextError).slice(0,2000)}
+  // Commit only an on-time read. The old record() continuation could append
+  // late facts after cleanup; this optional context never owns the failure.
+  const context=await boundaryRead(async()=>await pane.count()===1?inspect(pane,report.question.id):null);
+  report.failureContextObservation={status:context.status,budgetMs:BOUNDARY_OBSERVATION_MS};
+  if(context.status==='observed'&&context.value){
+   const state=context.value,label='failure-context';
+   boundedPush(report.focus,{label,...state.focus});
+   boundedPush(report.geometry,{label,...state.geometry,runtime:state.runtime,overflow:state.overflow,mask:state.mask});
+  }
  }
  await failureShot();
 }finally{

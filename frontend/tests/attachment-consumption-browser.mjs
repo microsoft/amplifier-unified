@@ -4,6 +4,7 @@ import './composer-test-helpers.mjs';
 import {installAttachmentObserver} from './attachment-consumption-observer.mjs';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {bounded,withActionRoute,observed,resultOf,combinedFailure} from './chat-reference-harness.mjs';
+import {boundaryRead,openBoundaryHandle,closeBoundaryHandle,boundaryIdentity,boundaryRequests,BOUNDARY_OBSERVATION_MS} from './browser-boundary-evidence.mjs';
 import {spawn} from 'node:child_process';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
@@ -81,8 +82,8 @@ async function waitRuntimeSend(page,owner,previous){
 // No event is cancelled, validity method invoked, action dispatched or retried.
 async function observeFirstSend(page,owner,attachmentId){
  const data={attempt:'accepted-two-cycle-A',owner,attachmentId,stage:'setup',network:[],snapshots:[],errors:[],omitted:0,
-  limits:{requests:8,events:24,snapshots:4,responseBytes:65536,outboxBytes:65536},
-  limitation:'Passive diagnostic reads can affect timing; absent means absent only within this observed attempt.'};
+  limits:{requests:8,events:24,snapshots:4,responseBytes:65536,outboxBytes:65536,optionalReadMs:BOUNDARY_OBSERVATION_MS},
+  limitation:'Passive reads can affect timing. Deadlines are not cancellation; late setup gets bounded cleanup without rewriting its unknown receipt. A lost handle reply may leave listener removal unconfirmed until page close.'};
  report.firstSendBoundary=data;
  const id=value=>typeof value==='string'&&/^[a-zA-Z0-9:_-]{1,200}$/.test(value)?value:null;
  const receipt=row=>{
@@ -104,10 +105,11 @@ async function observeFirstSend(page,owner,attachmentId){
    if(url.origin!==new URL(page.url()).origin||url.pathname!=='/api/actions'||request.method()!=='POST')return;
    const text=request.postData();if(!text||text.length>32768){fault('action-body-unavailable');return}
    const raw=JSON.parse(text),body=raw?.action==='shell.command'?raw.args:raw;
-   if(body?.action!=='conversation.send'||body.args?.sessionId!==owner)return;
+   if(body?.action!=='conversation.send')return;
    if(data.network.length>=data.limits.requests){data.omitted++;return}
-   const args=body.args,row={sequence:++sequence,stage:data.stage,commandId:id(raw.id??body.id),
-    sessionId:owner,exactFixtureText:args.text==='Submit A',
+   const args=body.args??{},row={sequence:++sequence,stage:data.stage,action:body.action,commandId:id(raw.id??body.id),
+    sessionId:id(args.sessionId),identityMatch:boundaryIdentity({sessionId:id(args.sessionId)},{sessionId:owner}),
+    exactFixtureText:args.text==='Submit A',
     exactAttachmentBatch:Array.isArray(args.attachmentIds)&&args.attachmentIds.length===1&&args.attachmentIds[0]===attachmentId,
     attachmentCount:Array.isArray(args.attachmentIds)?args.attachmentIds.length:null,responseState:'not-observed'};
    requests.set(request,row);data.network.push(row);
@@ -131,13 +133,19 @@ async function observeFirstSend(page,owner,attachmentId){
  };
  const onFailed=request=>{const row=requests.get(request);if(row&&!closed){row.responseState='request-failed';row.failureSequence=++sequence}};
  const snapshot=async stage=>{
+  if(closed)return;
   data.stage=stage;const row={sequence:++sequence,stage};
-  try{row.dom=dom?await dom.evaluate(value=>value.read()):{status:'observer-unavailable'}}catch{row.dom={status:'page-unavailable'};fault(stage+'-dom-unavailable')}
-  try{
+  const observedDom=dom?await boundaryRead(()=>dom.evaluate(value=>value.read())):{status:'observer-unavailable'};
+  row.dom=observedDom.status==='observed'?observedDom.value:{status:observedDom.status};
+  if(observedDom.status!=='observed')fault(stage+'-dom-'+observedDom.status);
+  const observedFixture=await boundaryRead(async()=>{
    const state=await inspect(page),sends=state.sends.filter(value=>value.sessionId===owner);
-   row.fixture={selectedSessionId:id(state.selectedSessionId),ownerSendCount:sends.length,
+   return {selectedSessionId:id(state.selectedSessionId),ownerSendCount:sends.length,
     inputIds:sends.slice(0,8).map(value=>id(value.inputId)),inputsOmitted:Math.max(0,sends.length-8)};
-  }catch{row.fixture={status:'unavailable'};fault(stage+'-fixture-unavailable')}
+  });
+  row.fixture=observedFixture.status==='observed'?observedFixture.value:{status:observedFixture.status};
+  if(observedFixture.status!=='observed')fault(stage+'-fixture-'+observedFixture.status);
+  if(closed)return;
   if(data.snapshots.length<data.limits.snapshots)data.snapshots.push(row);else data.omitted++;
  };
  const finish=failed=>finished??=(async()=>{
@@ -145,16 +153,21 @@ async function observeFirstSend(page,owner,attachmentId){
   active=false;page.off('request',onRequest);page.off('response',onResponse);page.off('requestfailed',onFailed);
   await snapshot(failed?'original-wait-or-click-failed':'runtime-send-observed');
   if(dom){
-   try{data.events=await dom.evaluate(value=>value.finish())}catch{fault('event-cleanup-unavailable')}
-   try{await dom.dispose()}catch{fault('handle-disposal-unavailable')}
+   const cleanup=await closeBoundaryHandle(dom);
+   data.events=cleanup.events.status==='observed'?cleanup.events.value:{status:cleanup.events.status};
+   data.handleDisposal=cleanup.disposal;
+   if(cleanup.events.status!=='observed')fault('event-cleanup-'+cleanup.events.status);
+   if(cleanup.disposal.status!=='observed')fault('handle-disposal-'+cleanup.disposal.status);
+  }else{
+   data.events={status:'observer-unavailable'};
+   data.handleDisposal={status:'unknown'};
   }
   closed=true;
-  data.requestObservation=data.network.length?'observed':data.errors.length||data.omitted?'unknown':'absent-in-attempt';
+  data.requestObservation=boundaryRequests(data.network,'conversation.send',!!(data.errors.length||data.omitted));
   data.pendingResponseReads=data.network.filter(row=>row.responseState==='body-pending').length;
  })();
  page.on('request',onRequest);page.on('response',onResponse);page.on('requestfailed',onFailed);
- try{
-  dom=await page.evaluateHandle(({owner,attachmentId})=>{
+ const setup=await openBoundaryHandle(()=>page.evaluateHandle(({owner,attachmentId})=>{
    const id=value=>typeof value==='string'&&/^[a-zA-Z0-9:_-]{1,200}$/.test(value)?value:null;
    const form=document.querySelector('.a-composer'),events=[];let omitted=0,sequence=0;
    const category=node=>node===form?'form':node?.matches?.('[data-part="composer-primary-action"]')?'primary-action':
@@ -200,10 +213,12 @@ async function observeFirstSend(page,owner,attachmentId){
     }
     return {records:events,omitted};
    }};
-  },{owner,attachmentId});
- }catch{fault('event-observer-setup-unavailable')}
+  },{owner,attachmentId}));
+ data.setup={status:setup.status};
+ if(setup.status==='observed')dom=setup.value;
+ else fault('event-observer-setup-'+setup.status);
  await snapshot('before-click');active=true;data.stage='click-pending';
- return {finish,clickResolved(){data.stage='runtime-wait';data.clickResolvedSequence=++sequence}};
+ return {finish,clickResolved(){if(!closed){data.stage='runtime-wait';data.clickResolvedSequence=++sequence}}};
 }
 async function consumed(page,ids){
  await expect.poll(async()=>{const data=await trace(page);return ids.every(id=>data.rules.find(r=>r.id===id)?.armed);},{timeout:10000}).toBe(true);
