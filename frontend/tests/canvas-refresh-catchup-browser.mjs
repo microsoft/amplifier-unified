@@ -94,7 +94,13 @@ try{
   assert.equal(after.view.runningVersion,1);assert.equal(after.view.latestVersion,2);
   const metadata=(await action('canvas.versions.inspect',{id,sessionId,version:after.view.runningVersion})).result;
   assert.equal(metadata.version,1);assert.equal(metadata.revision,2);assert.equal(metadata.source,undefined);
+  const clientId=(await state()).client.id;
+  assert.equal(typeof clientId,'string');assert.ok(clientId);
+  // SavedFileDownload uses the canonical clientUrl(): preserve the exact
+  // version URL AND its current client binding, not a query-stripped match.
+  const attachmentUrl=new URL(metadata.download.url,url);attachmentUrl.searchParams.set('clientId',clientId);
   const seam=row.observed.files={metadata,requests:[],attachmentRequests:[],downloadEvents:0,
+   clientId,attachmentUrl:attachmentUrl.pathname+attachmentUrl.search,
    before:after,after:null,download:null,listenerRemoved:false};
   const retainedFrame=await panel.locator('[data-canvas-view="primary"] iframe').elementHandle();
   assert.ok(retainedFrame);
@@ -129,7 +135,7 @@ try{
    assert.equal(seam.downloadEvents,1);
    assert.ok(seam.requests.length>=2,'Disclosure and Download must each inspect exact metadata');
    assert.ok(seam.requests.every(args=>args.id===id&&args.version===1&&args.sessionId===sessionId&&!args.includeSource));
-   assert.deepEqual(seam.attachmentRequests,[{method:'GET',url:metadata.download.url}]);
+   assert.deepEqual(seam.attachmentRequests,[{method:'GET',url:seam.attachmentUrl}]);
    await panel.getByRole('button',{name:'Close canvas details',exact:true}).click();
    seam.after=await sample();assert.equal(seam.after.executed,after.executed);assert.equal(seam.after.input,after.input);
    assert.deepEqual(target(seam.after.view),target(after.view));

@@ -1,5 +1,16 @@
 """ONE Files1318 cycle in the prepared browser-test runner; never run on the host.
 
+Current 0.48.1 composition: default full qualification with the exclusive
+/workspace/output/files1318-current0481-manifest.json. It binds published Main
+8ba344be and reviewed product e15e3745; only this driver and the producer's
+current-layout adapter differ. No historical build/test/browser proof is reused.
+Fresh canonical build + parity, 84 exact Python cases, 19 Node cases, full source,
+renderer normal/negative, usability, standard-UX, catch-up, wheel and installed
+journeys are required. Counts are source expectations until actually collected.
+The 426-byte native journey and separate 214-byte catch-up fixture stay distinct.
+Historical modes and pins below remain unchanged. This script never authorizes
+environment admission, old UNKNOWN cleanup, pixels, publication or a replay.
+
 Admission (parent-owned, not performed here): commit the reviewed final source,
 including this driver and the other workers' final files, then freeze ONE job:
   /opt/unified-prepared/venv/bin/python -B scripts/files1318_integrated_checks.py
@@ -268,6 +279,32 @@ COMPACT25_BEFORE = {
         'parent-manifest.json': '5876c590fff80ceabd8c1e8d56274c4440ddabf76b41d34b34c74856d86439d4',
     },
 }
+CURRENT0481_MANIFEST = ROOT / 'output/files1318-current0481-manifest.json'
+CURRENT0481_BINDING = {
+    'baselineRevision': '8ba344be35cc88165b5e5e32db7f5c0bc896bd53',
+    'baselineTree': 'd24d363f2ce8ff03fe770240db0f9ce6d83df699',
+    'reviewedRevision': 'e15e3745d826cbbce0735a582c14b79779e890b2',
+    'reviewedTree': '28e7a14f37f7c37559a45d7da19233af74330030',
+    # SHA-256 of canonical JSON {path:{mode,sha256}}, sorted, compact separators.
+    # All 3337 reviewed inputs except this driver and two pinned test adapters.
+    'reviewedClosureSha256': '5bd34579a708c410e2492c3a239b88f254aa2ba4728f1f3565c5883b67586163',
+    'trackedCount': 3340,
+}
+CURRENT0481_PRODUCER_SHA = 'b036aa4f2df38321361100a6862871e42d1f7137eca17455de6c2564cf498275'
+CURRENT0481_CATCHUP = 'frontend/tests/canvas-refresh-catchup-browser.mjs'
+CURRENT0481_CATCHUP_SHA = '734940871bd5a97bcd6eefa9567a955e1eebd8b521286a2ff8332e08559556f9'
+CURRENT0481_CHANGES = (
+    'amplifier_web/canvas_paths.py', 'amplifier_web/canvas_versions.py', 'docs/canvas.md',
+    'frontend/src/artifact-file-details.jsx', 'frontend/src/canvas-experience.css',
+    'frontend/src/canvas-viewer.jsx', 'frontend/src/canvas-workspace.css',
+    'frontend/src/canvas-workspace.jsx', 'frontend/src/inline-artifacts.jsx',
+    'frontend/tests/canvas-refresh-catchup-browser.mjs', 'frontend/tests/canvas-renderers-browser.mjs',
+    'frontend/tests/canvas-usability-browser.mjs', 'frontend/tests/file-controls-browser-topology.mjs',
+    'frontend/tests/file-controls-topology-preflight.mjs', 'frontend/tests/generated-file-controls-browser.mjs',
+    'frontend/tests/standard-ux-canvas-files-browser.mjs', 'scripts/files1318_integrated_checks.py',
+    'tests/fixtures/empty_host_ui_server.py', 'tests/fixtures/generated_file_controls_server.py',
+    'tests/fixtures/outputs_ui_server.py', 'tests/test_canvas_downloads.py', 'tests/test_canvas_paths.py',
+)
 HARNESS = OUT / 'harness'
 VENV = OUT / 'installed'
 DRIVER = 'scripts/files1318_integrated_checks.py'
@@ -448,6 +485,20 @@ PYTEST_NODES = (
 )
 UNIT_FILES = ('frontend/tests/clipboard-paste.test.mjs', 'tests/block-copy.test.mjs',
               'frontend/tests/artifact-placement.test.mjs')
+CURRENT0481_PYTEST_NODES = (*PYTEST_NODES,
+    *nodes('test_canvas_downloads', 'running_preview_metadata_copy_and_download_do_not_follow_latest'),
+    *nodes('test_canvas_versions',
+        *(f'file_versions_replace_content_storage_mode_and_survive_restart[{transition}]'
+          for transition in ('small-large', 'large-small')),
+        *(f'{name}[{kind}]' for name in (
+            'executable_latest_discovers_versions_without_replacing_running_definition',
+            'ui_load_uses_exact_saved_version_and_preserves_latest_intent_and_preferences',
+            'same_path_publication_and_restore_retain_latest_and_pinned_previews') for kind in ('html', 'babylon'))),
+    *nodes('test_canvas_views',
+        *(f'{name}[{kind}]' for name in (
+            'load_version_refuses_agent_stale_missing_and_dirty_before_replacement',
+            'same_artifact_select_requires_ui_reset_for_different_executable_version') for kind in ('html', 'babylon')),
+        'load_version_is_primary_executable_only_and_preserves_historical_intent'))
 
 
 def require(value, message):
@@ -505,7 +556,8 @@ def frozen_inputs(frozen, *, built=False):
                                  COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST, PORTAL_HOST_MANIFEST,
                                  STATE_REDUCTION_MANIFEST, FOCUS_CONTRAST_MANIFEST,
                                  FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST,
-                                 COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST), 'Unsafe frozen path')
+                                 COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST,
+                                 CURRENT0481_MANIFEST), 'Unsafe frozen path')
         require(path.parent.resolve().is_relative_to(ROOT), 'Frozen path escapes snapshot')
         require(expected['mode'] in ('100644', '100755', '120000')
                 and re.fullmatch('[a-f0-9]{64}', expected['sha256']), 'Invalid frozen identity')
@@ -514,6 +566,25 @@ def frozen_inputs(frozen, *, built=False):
         actual[name] = file_identity(path)
         require(actual[name] == expected, f'Frozen input changed: {name}')
     return actual
+
+
+def current0481_snapshot(frozen):
+    """A fixed reviewed closure, not an arbitrary new-baseline manifest escape."""
+    require(frozen.get('current0481Binding') == CURRENT0481_BINDING
+            and frozen['baselineRevision'] == CURRENT0481_BINDING['baselineRevision']
+            and frozen['baselineTree'] == CURRENT0481_BINDING['baselineTree']
+            and set(frozen) == {'schemaVersion', 'baselineRevision', 'baselineTree', 'revision', 'tree',
+                                'reviewed', 'changedPaths', 'files', 'current0481Binding'}
+            and len(frozen['files']) == CURRENT0481_BINDING['trackedCount']
+            and set(frozen['changedPaths']) == set(CURRENT0481_CHANGES),
+            'Current qualification must bind exactly Main 8ba and reviewed e15 inputs')
+    closure = {n: v for n, v in frozen['files'].items() if n not in (DRIVER, PRODUCER, CURRENT0481_CATCHUP)}
+    require(len(closure) == 3337 and hashlib.sha256(json.dumps(closure, sort_keys=True,
+                separators=(',', ':')).encode()).hexdigest() == CURRENT0481_BINDING['reviewedClosureSha256']
+            and frozen['files'][PRODUCER] == {'mode': '100644', 'sha256': CURRENT0481_PRODUCER_SHA}
+            and frozen['files'][CURRENT0481_CATCHUP] == {'mode': '100644', 'sha256': CURRENT0481_CATCHUP_SHA}
+            and frozen['files'][DRIVER]['mode'] == '100644',
+            'Current closure changed outside driver/pinned layout and client-URL test adapters')
 
 
 def diagnostic_static(frozen, *, binding='diagnosticReuse'):
@@ -1511,6 +1582,8 @@ def runtime_readiness():
 
 
 def pytest_process():
+    current = os.environ.get('FILES1318_CURRENT_QUALIFICATION') == '1'
+    selection = CURRENT0481_PYTEST_NODES if current else PYTEST_NODES
     sys.path[:0] = [str(ROOT), str(ROOT / 'tests')]
     import pytest
     import amplifier_web.server
@@ -1520,10 +1593,10 @@ def pytest_process():
         def pytest_collection_finish(self, session):
             collected = [item.nodeid for item in session.items]
             save('python-collection.json', collected)
-            if Counter(collected) != Counter(PYTEST_NODES):
+            if Counter(collected) != Counter(selection):
                 raise pytest.UsageError('Files1318 exact collection mismatch')
 
-    args = pytest_arguments(OUT)
+    args = pytest_arguments(OUT, current=current)
     save('pytest-call.json', {'call': 'pytest.main', 'args': args})
     try:
         code = pytest.main(args, plugins=[Collection()])
@@ -1532,11 +1605,12 @@ def pytest_process():
     return int(code)
 
 
-def pytest_arguments(folder):
+def pytest_arguments(folder, *, current=False):
     return ['-c', '/dev/null', '--rootdir=/workspace', '--import-mode=importlib',
             '-p', 'no:cacheprovider', '-p', 'pytest_asyncio.plugin', '-p', 'pytest_aiohttp.plugin',
             '--asyncio-mode=auto', '-x', '-v', '--tb=short',
-            '--junitxml=' + str(folder / 'python.xml'), *[str(ROOT / n) for n in PYTEST_NODES]]
+            '--junitxml=' + str(folder / 'python.xml'),
+            *[str(ROOT / n) for n in (CURRENT0481_PYTEST_NODES if current else PYTEST_NODES)]]
 
 
 def fixture_process(mode):
@@ -1581,19 +1655,20 @@ def installed_readiness():
                                    'wheel': wheel_proof(package.parent)})
 
 
-def junit(folder=None):
+def junit(folder=None, *, current=False):
+    selection = CURRENT0481_PYTEST_NODES if current else PYTEST_NODES
     root = ET.parse((folder or OUT) / 'python.xml').getroot()
     cases = root.findall('.//testcase')
     counts = {'tests': len(cases), **{tag: len(root.findall('.//' + tag))
                                     for tag in ('failure', 'error', 'skipped')}}
     if folder is None:
         save('python-counts.json', counts)
-    require(counts == {'tests': len(PYTEST_NODES), 'failure': 0, 'error': 0, 'skipped': 0},
+    require(counts == {'tests': len(selection), 'failure': 0, 'error': 0, 'skipped': 0},
             'JUnit must contain exactly the selection, with zero skip/error/fail')
-    require(Counter(read((folder or OUT) / 'python-collection.json')) == Counter(PYTEST_NODES),
+    require(Counter(read((folder or OUT) / 'python-collection.json')) == Counter(selection),
             'Collection changed')
     require(Counter(c.attrib['classname'].replace('.', '/') + '.py::' + c.attrib['name'] for c in cases)
-            == Counter(PYTEST_NODES), 'JUnit full node identities differ')
+            == Counter(selection), 'JUnit full node identities differ')
     return counts
 
 
@@ -1670,7 +1745,7 @@ def file_frame_proof(proof, folder, recorded_folder=None):
                     for key in ('intersections', 'headerIntersections')), 'Occlusion evidence missing')
 
 
-def generated_coverage(proof, folder, *, compact_button=False, recorded_folder=None):
+def generated_coverage(proof, folder, *, compact_button=False, recorded_folder=None, current=False):
     source = (ROOT / 'frontend/tests/generated-file-controls-browser.mjs').read_text()
     taps = [g for g in proof['geometry'] if g['label'] == 'corner-tap-before']
     require(len(taps) == 14, 'Missing corner-tap measurements')
@@ -1745,7 +1820,7 @@ def generated_coverage(proof, folder, *, compact_button=False, recorded_folder=N
             Counter(('desktop', 'touch')), 'Unexpected preview document requests')
     file_frame_proof(proof, folder, recorded_folder)
     if compact_button:
-        compact_button_proof(proof, taps)
+        compact_button_proof(proof, taps, current=current)
 
 
 def contour_sample(sample, *, reachable=(True, True, True, True)):
@@ -1966,7 +2041,7 @@ def contour_proof(proof, taps, padding_count):
             'Missing/changed per-touch padding conversion negatives')
 
 
-def compact_button_proof(proof, taps):
+def compact_button_proof(proof, taps, *, current=False):
     """Validate the pinned full producer's raw evidence, not just its pass flags."""
     finite = lambda n: type(n) in (int, float) and math.isfinite(n)
     labels = ('desktop-preview', 'touch-390-preview', 'touch-320-preview')
@@ -2069,7 +2144,14 @@ def compact_button_proof(proof, taps):
         require(all(taps[tap_index][k] == v for k, v in before.items() if k != 'corners')
                 and taps[tap_index]['acceptance']['corners'] == before['corners'],
                 'Compact capture is not the existing first/second primary tap')
-        if label == 'touch-390-preview':
+        if label == 'touch-390-preview' and current:
+            # The accepted current toolbar has explicit Refresh/feedback rows.
+            # Do not relabel its coordinates as the historical 8ac rectangle.
+            require(proof['currentLayout'] == g['layoutBinding'] == CURRENT0481_BINDING['reviewedRevision']
+                    and g['baselineMatched'] is False
+                    and before['viewport'] == {'width': 390, 'height': 844, 'scale': 1, 'offsetLeft': 0, 'offsetTop': 0},
+                    'Current full journey lacks its exact reviewed layout binding')
+        elif label == 'touch-390-preview':
             # Immutable original failed 8ac gesture; no candidate-derived inset.
             expected = {
                 'rect': {'x': 292, 'y': 207.5, 'width': 44, 'height': 44, 'top': 207.5, 'right': 336, 'bottom': 251.5, 'left': 292},
@@ -2261,7 +2343,7 @@ def compact_button_proof(proof, taps):
             'Full native/download branches or listener cleanup did not settle')
 
 
-def generated_proof(mode, *, coarse_toolbar=False, compact_button=False, evidence_root=None, reused_build=False):
+def generated_proof(mode, *, coarse_toolbar=False, compact_button=False, evidence_root=None, reused_build=False, current=False):
     folder = evidence_root or OUT
     reports = list((folder / f'generated-{mode}/evidence').glob('generated-file-controls-*/observations.json'))
     require(len(reports) == 1, 'Require one generated-file journey report')
@@ -2280,7 +2362,9 @@ def generated_proof(mode, *, coarse_toolbar=False, compact_button=False, evidenc
     require(proof['browserCleanup'] == [{'label': label, 'closed': True, 'connected': False}
                                        for label in ('desktop', 'touch')], 'Browser cleanup')
     recorded_folder = QUALIFIED_OUT / reports[0].parent.relative_to(folder) if evidence_root else None
-    generated_coverage(proof, reports[0].parent, compact_button=compact_button, recorded_folder=recorded_folder)
+    require(proof.get('currentLayout') == (CURRENT0481_BINDING['reviewedRevision'] if current else None),
+            'Wrong current/historical full-journey layout binding')
+    generated_coverage(proof, reports[0].parent, compact_button=compact_button, recorded_folder=recorded_folder, current=current)
     expected = read(folder / 'candidate.json')
     static = {p.removeprefix('amplifier_web/static/'): h for p, h in expected['static'].items()}
     package = (read(OUT / 'installed-identity.json')['packageRoot']
@@ -3501,6 +3585,108 @@ def evidence_manifest(deadline):
     return result
 
 
+def catchup_proof():
+    """Read the maintained catch-up report and bytes; never substitute pass prose."""
+    folder, = (OUT / 'canvas-refresh-catchup/evidence').glob('canvas-catchup-*')
+    proof = read(folder / 'report.json')
+    names = [
+        'Markdown Latest catches first and adjacent missed updates via Refresh',
+        'Pinned HTML discovers missed v2 without executing it or replacing input',
+        'Latest HTML Refresh discovers v2 without executing new code or losing input',
+        'Latest HTML reconnect discovers v2 without executing new code or losing input',
+        *[kind + ' retains adjacent versions, exact explicit Load, dirty refusal and narrow controls'
+          for kind in ('html', 'babylon')],
+        *['Load feedback: ' + mode for mode in
+          ('accepted-toolbar', 'accepted-details', 'unknown', 'proxy-html', 'malformed-details', 'refused')],
+        'Declared dirty view blocks publication; same-definition Refresh retains it',
+    ]
+    require(proof['status'] == 'passed' and proof['errors'] == [] and not proof.get('error')
+            and [c['name'] for c in proof['checks']] == names
+            and all(c['status'] == 'passed' and not c.get('error') for c in proof['checks']),
+            'Current catch-up must complete all 13 original cases plus the composed seam assertions')
+    def html(version):
+        return (f'<h1>Executable version {version}</h1><label>Local unfinished input <input id="edit"></label>'
+                '<output id="executed"></output><script>document.getElementById(\'executed\').textContent='
+                f"'executed-v{version}-'+crypto.randomUUID()</script>").encode()
+    def download(row, version, name):
+        path = folder / name
+        require(row == {'file': name, 'bytes': 214, 'sha256': sha(path)}
+                and path.is_file() and not path.is_symlink() and path.read_bytes() == html(version),
+                'Catch-up download is not the separate exact 214-byte saved definition')
+    seam = proof['checks'][2]['observed']['files']
+    before, after = seam['before'], seam['after']
+    binding = ('viewId', 'resourceId', 'resourceRevision', 'generation')
+    require(seam['sameIframe'] is True and seam['listenerRemoved'] is True and seam['downloadEvents'] == 1
+            and before['executed'] == after['executed'] and before['input'] == after['input'] == 'Keep latest input'
+            and all(before['view'][k] == after['view'][k] for k in binding)
+            and after['view']['selectedVersion'] is None and after['view']['runningVersion'] == 1
+            and after['view']['latestVersion'] == 2 and seam['metadata']['version'] == 1
+            and seam['metadata']['revision'] == 2 and 'source' not in seam['metadata']
+            and len(seam['requests']) >= 2
+            and all(r['id'] == after['view']['resourceId'] and r['version'] == 1
+                    and r.get('sessionId') and not r.get('includeSource') for r in seam['requests'])
+            and re.fullmatch('[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', seam['clientId'])
+            and seam['metadata']['download']['url'] == f"/api/canvas/{after['view']['resourceId']}/download?version=1"
+            and seam['attachmentUrl'] == seam['metadata']['download']['url'] + '&clientId=' + seam['clientId']
+            and seam['attachmentRequests'] == [{'method': 'GET', 'url': seam['attachmentUrl']}]
+            and not set(seam['actions']) & {'canvas.select', 'canvas.show', 'canvas.views.loadVersion',
+                                           'canvas.versions.revise', 'canvas.versions.restore'},
+            'Catch-up metadata/copy/download implicitly loaded Latest or lost the running preview')
+    download(seam['download'], 1, 'retained-running-v1.html')
+    for kind, case in zip(('html', 'babylon'), proof['checks'][4:6]):
+        observed = case['observed']
+        require([n['width'] for n in observed['narrow']] == [390, 320], 'Both existing narrow viewports required')
+        if kind == 'html':
+            download(observed['feedbackDownload'], 2, 'narrow-running-v2.html')
+        for sample in observed['narrow']:
+            layout, box = sample['layout'], sample['box']
+            require(box['width'] >= 44 and box['height'] >= 44 and box['inside'] is True and box['hit'] is True
+                    and layout['overflow'] is False and layout['viewport'] == {'width': sample['width'], 'height': 780}
+                    and layout['toolbar']['left'] >= 0 and layout['toolbar']['right'] <= sample['width'],
+                    'Catch-up narrow toolbar/Load outside viewport')
+            controls = layout['controls']
+            require(set(controls) == {'version', 'refresh', 'copy', 'download', 'details', 'load'}
+                    and all(c['tag'] == 'BUTTON' and c['visible'] is True and c['inert'] is False
+                        and c['hit'] is True and c['clipped'] is False and c['width'] >= 44 and c['height'] >= 44
+                        and c['left'] >= layout['contentLeft']-1 and c['right'] <= layout['contentRight']+1
+                        and 0 <= c['top'] < c['bottom'] <= 780 for c in controls.values())
+                    and controls['download']['nativeHit'] is True
+                    and layout['decorationPointerEvents'] and set(layout['decorationPointerEvents']) == {'none'},
+                    'Catch-up narrow native button/decoration boundary differs')
+            version, refresh, copy, saved, details, load = (controls[k] for k in
+                ('version', 'refresh', 'copy', 'download', 'details', 'load'))
+            fresh = layout['freshness']
+            require(abs(version['top']-refresh['top']) <= 1 and version['right'] <= refresh['left']
+                    and copy['top'] >= max(version['bottom'], refresh['bottom'])
+                    and abs(copy['top']-saved['top']) <= 1 and abs(copy['top']-details['top']) <= 1
+                    and copy['right'] <= saved['left'] and saved['right'] <= details['left']
+                    and fresh['visible'] is True and fresh['inert'] is False and fresh['clipped'] is False
+                    and fresh['top'] >= max(copy['bottom'], saved['bottom'], details['bottom'])
+                    and abs(fresh['left']-layout['contentLeft']) <= 1 and abs(fresh['right']-layout['contentRight']) <= 1
+                    and abs(load['left']-fresh['left']-fresh['paddingLeft']) <= 1
+                    and abs(load['right']-fresh['right']+fresh['paddingRight']) <= 1,
+                    'Current Refresh/freshness/Load grid composition overlaps or loses full width')
+            if kind == 'html':
+                feedback = layout['feedback']
+                require(feedback['visible'] is True and feedback['inert'] is False and feedback['clipped'] is False
+                        and feedback['top'] >= fresh['bottom']
+                        and feedback['bottom'] <= min(780, layout['toolbar']['bottom'])
+                        and abs(feedback['left']-layout['contentLeft']) <= 1
+                        and abs(feedback['right']-layout['contentRight']) <= 1
+                        and feedback['gridRow'] != fresh['gridRow'], 'Download feedback overlaps freshness/Load')
+    pngs = ['markdown-caught-up', 'pinned-retained',
+            *[f'{kind}-{suffix}' for kind in ('html', 'babylon')
+              for suffix in ('retained-390', 'retained-320', 'pinned-retained')],
+            *['load-feedback-' + mode for mode in
+              ('accepted-toolbar', 'accepted-details', 'unknown', 'proxy-html', 'malformed-details', 'refused')]]
+    require(proof['screenshots'] == [n + '.png' for n in pngs], 'Unexpected catch-up screenshot wave')
+    require(all((folder / (n + '.png')).is_file() and not (folder / (n + '.png')).is_symlink()
+                and (folder / (n + '.png')).read_bytes()[:8] == b'\x89PNG\r\n\x1a\n' for n in pngs),
+            'Catch-up rendered evidence missing')
+    save('canvas-refresh-catchup/accepted-report.json', {'path': str(folder / 'report.json'),
+        'sha256': sha(folder / 'report.json'), 'checks': len(names), 'pngCount': len(pngs), 'visualJudgment': 'pending'})
+
+
 def main():
     started = time.monotonic()
     hard_deadline = started + BUDGET
@@ -3512,7 +3698,7 @@ def main():
                                  COARSE_TOOLBAR_MANIFEST, NATIVE_STATE_MANIFEST, PORTAL_HOST_MANIFEST,
                                  STATE_REDUCTION_MANIFEST, FOCUS_CONTRAST_MANIFEST,
                                  FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST,
-                                 COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST])
+                                 COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST, CURRENT0481_MANIFEST])
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--corner-diagnostic', action='store_true')
     modes.add_argument('--contour-qualification', action='store_true')
@@ -3539,14 +3725,15 @@ def main():
                      else COARSE_TOOLBAR_MANIFEST if args.coarse_toolbar_qualification
                      else CONTOUR_MANIFEST if args.contour_qualification else MANIFEST)
     manifest_paths = ((FOCUS_CONTRAST_MANIFEST, FOCUS_CONTRAST_SETTLED_MANIFEST)
-                      if args.focus_contrast else (MANIFEST, COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST)
+                      if args.focus_contrast else (MANIFEST, COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST, CURRENT0481_MANIFEST)
                       if manifest_path == MANIFEST else (manifest_path,))
     if args.manifest not in manifest_paths:
         parser.error('The manifest must match the selected qualification mode')
     compact25 = args.manifest == COMPACT25_MANIFEST
+    current0481 = args.manifest == CURRENT0481_MANIFEST
     compact24 = args.manifest in (COMPACT24_MANIFEST, COMPACT25_MANIFEST)
     compact23 = args.manifest in (COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST)
-    compact_button = args.manifest in (COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST)
+    compact_button = args.manifest in (COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST, CURRENT0481_MANIFEST)
     select_output(CORNER_OUT if args.corner_diagnostic
                   else FOCUS_CONTRAST_OUT if args.focus_contrast
                   else STATE_REDUCTION_OUT if args.state_reduction
@@ -3569,6 +3756,14 @@ def main():
         report['limits'].append(
             'Full source and installed qualification, not a checkpoint. Exact canonical assets required; '
             'first-390 wrong target stops the journey and remains a failure, without retry or waiver.')
+    if current0481:
+        report.update(qualification='current0481-full', priorChecksConsumed=25, priorPrelaunchNotRunsRetained=2,
+                      currentSource=CURRENT0481_BINDING, historicalProofReuse=False)
+        for name in ('frontend-build-parity', 'canvas-refresh-catchup'):
+            report['phases'][name] = {'status': 'unrun', 'reason': 'not_started'}
+        report['limits'].append('Main/e15 composition requires all current phases freshly executed. '
+                                'Old 23/24/25 failures and cancelled/expired non-runs remain historical; '
+                                'current rows move the original derived contour, not its native target/bytes oracle.')
     if compact23:
         report.update(continuationOf=COMPACT23_BEFORE, priorPrelaunchNotRunsRetained=2)
         report['phases']['compact23-reuse'] = {'status': 'unrun', 'reason': 'not_started'}
@@ -3691,15 +3886,19 @@ def main():
 
         def snapshot():
             frozen = read(args.manifest)
-            require(frozen['schemaVersion'] == 2
-                    and re.fullmatch('826f6c84[a-f0-9]{32}', frozen['baselineRevision'])
-                    and re.fullmatch('2ca2a7c5[a-f0-9]{32}', frozen['baselineTree']), 'Wrong parent baseline')
+            require(frozen['schemaVersion'] == 2, 'Wrong manifest schema')
+            if current0481:
+                current0481_snapshot(frozen)
+            else:
+                require(re.fullmatch('826f6c84[a-f0-9]{32}', frozen['baselineRevision'])
+                        and re.fullmatch('2ca2a7c5[a-f0-9]{32}', frozen['baselineTree']), 'Wrong parent baseline')
             require(all(re.fullmatch('[a-f0-9]{40}', frozen[key]) for key in ('revision', 'tree'))
                     and frozen['revision'] != frozen['baselineRevision']
                     and frozen['tree'] != frozen['baselineTree'] and frozen['reviewed'] is True,
                     'Require the committed, parent-reviewed candidate, not dirty baseline bytes')
             changed = frozen['changedPaths']
-            allowed_changes = (REVIEWED_CHANGES | COMPACT_BUTTON_PRODUCT_PATHS if compact_button
+            allowed_changes = (set(CURRENT0481_CHANGES) if current0481 else
+                               REVIEWED_CHANGES | COMPACT_BUTTON_PRODUCT_PATHS if compact_button
                                else REVIEWED_CHANGES | {COARSE_TOOLBAR_CSS} if fresh_product else REVIEWED_CHANGES)
             require(isinstance(changed, list) and len(changed) == len(set(changed))
                     and DRIVER in changed and set(changed) <= allowed_changes
@@ -3708,7 +3907,7 @@ def main():
                 require(not checkpoint_mode and not reuse_mode and not fresh_product
                         and set(changed) == allowed_changes
                         and all(frozen['files'].get(name) == {'sha256': digest, 'mode': '100644'}
-                                for name, digest in COMPACT_BUTTON_INPUTS.items()),
+                                for name, digest in ({} if current0481 else COMPACT_BUTTON_INPUTS).items()),
                         'Compact full qualification requires exact product/producer identities and full scope')
             if compact23:
                 require(frozen.get('compact23Before') == COMPACT23_BEFORE
@@ -3726,13 +3925,18 @@ def main():
             save('source-before.json', frozen_inputs(frozen))
             required = {*COPY, 'scripts/browser_check_runner.py', 'pyproject.toml', 'uv.lock',
                         'frontend/package-lock.json', 'frontend/package.json',
-                        *(n.split('::')[0] for n in PYTEST_NODES),
+                        *(n.split('::')[0] for n in (CURRENT0481_PYTEST_NODES if current0481 else PYTEST_NODES)),
                         *UNIT_FILES, 'tests/fixtures/empty_host_ui_server.py',
                         'tests/fixtures/outputs_ui_server.py',
                         'frontend/tests/canvas-renderers-browser.mjs',
                         'frontend/tests/canvas-usability-browser.mjs',
                         'frontend/tests/standard-ux-canvas-files-browser.mjs'}
             require(required <= frozen['files'].keys(), 'Parent manifest omits required source')
+            if current0481:
+                require(len(CURRENT0481_PYTEST_NODES) == 84 and len(set(CURRENT0481_PYTEST_NODES)) == 84
+                        and {'frontend/tests/canvas-refresh-catchup-browser.mjs', 'frontend/tests/fixture-python.mjs',
+                             'frontend/scripts/build-reader-example.mjs', 'frontend/scripts/shell-example-build.mjs'}
+                            <= frozen['files'].keys(), 'Current runtime helper/selector closure incomplete')
             if args.contour_qualification:
                 require(frozen['files'][PRODUCER]['sha256'] == CONTOUR_PRODUCER_SHA,
                         'Contour producer differs from the reviewed verifier interface')
@@ -3802,6 +4006,8 @@ def main():
             return frozen, expected
 
         frozen, wheel_command = step('snapshot', snapshot)
+        product_inputs = ({name: frozen['files'][name]['sha256'] for name in COMPACT_BUTTON_INPUTS}
+                          if current0481 else COMPACT_BUTTON_INPUTS)
         # Import maintained stdlib helpers only after frozen bytes are checked.
         from browser_check_runner import run_scenarios
         from cold_restore_checks import verify_wheel
@@ -3819,6 +4025,11 @@ def main():
             'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
             'GIT_TERMINAL_PROMPT': '0',
         }
+        if current0481:
+            env['FILES1318_CURRENT_QUALIFICATION'] = '1'
+            # Required by real shell package validation in maintained renderer
+            # fixtures; this is the prepared Node tree, never host dependencies.
+            env['AMPLIFIER_SHELL_NODE_MODULES'] = str(ROOT / 'frontend/node_modules')
         if args.corner_diagnostic:
             env['FILES1318_CORNER_DIAGNOSTIC'] = '1'  # Fixed child evidence destination only.
         elif args.focus_contrast:
@@ -3967,6 +4178,15 @@ def main():
             require(tree(OUT / 'static-before') == before, 'Pre-build static preservation differs')
         if (not checkpoint_mode and not reuse_mode and not compact23) or args.portal_host_experiment:
             run('frontend-build', [NPM, 'run', 'build'], cap=240)
+        if current0481:
+            first_static = tree(ROOT / 'amplifier_web/static')
+            first_build = read(ROOT / 'amplifier_web/static/build.json')
+            save('frontend-build/first-static.json', first_static)
+            def build_parity():
+                require(tree(ROOT / 'amplifier_web/static') == first_static
+                        and read(ROOT / 'amplifier_web/static/build.json') == first_build,
+                        'Two canonical frontend builds differ')
+            run('frontend-build-parity', [NPM, 'run', 'build'], cap=240, verify=build_parity)
 
         def source_freeze():
             save('source-after-reuse.json' if (checkpoint_mode or reuse_mode or compact23) and not args.portal_host_experiment
@@ -4007,7 +4227,7 @@ def main():
                         'Compact candidate must use a fresh changed canonical build, not restored static')
                 save('frontend-build-identity.json', {
                     'build': build_identity, 'sourceRevision': frozen['revision'], 'sourceTree': frozen['tree'],
-                    'manifestSha256': report['manifestSha256'], 'inputs': COMPACT_BUTTON_INPUTS,
+                    'manifestSha256': report['manifestSha256'], 'inputs': product_inputs,
                     'static': value['static'], 'reusedBuild': False})
             if compact23:
                 require(value['static'] == reused['static'] and read(ROOT / 'amplifier_web/static/build.json') == reused['build'],
@@ -4026,13 +4246,16 @@ def main():
                     verdict='expected_stalled_response_failure' if name == 'renderer-stalled-response' else 'passed')
             save('report.json', report)
         if not checkpoint_mode and not reuse_mode and not args.coarse_toolbar_qualification and not compact23:
-            run('python-tests', [PYTHON, '-I', '-B', ROOT / DRIVER, '--python-tests'], cap=180, verify=junit)
+            run('python-tests', [PYTHON, '-I', '-B', ROOT / DRIVER, '--python-tests'], cap=180,
+                verify=lambda: junit(current=current0481))
             run('frontend-units', [NODE, '--test', '--test-reporter=tap',
                                   *(ROOT / name for name in UNIT_FILES)], cap=60, verify=unit_proof)
 
         def generated(mode):
             root = HARNESS if mode == 'installed' else ROOT
             extra = {'FILE_CONTROLS_FIXTURE': str(root / DRIVER), 'FILES1318_FIXTURE': mode}
+            if current0481:
+                extra['FILE_CONTROLS_CURRENT_LAYOUT'] = CURRENT0481_BINDING['reviewedRevision']
             if mode == 'installed':
                 extra.update(AMPLIFIER_TEST_PYTHON=str(VENV / 'bin/python'), AMPLIFIER_TEST_INSTALLED='1',
                              AMPLIFIER_TEST_PACKAGE_ROOT=read(OUT / 'installed-identity.json')['packageRoot'])
@@ -4062,21 +4285,30 @@ def main():
             run('generated-' + mode, [NODE, 'tests/generated-file-controls-browser.mjs'],
                 root=root, extra=extra, cap=160,
                 verify=None if checkpoint_mode else lambda: generated_proof(
-                    mode, coarse_toolbar=args.coarse_toolbar_qualification, compact_button=compact_button, reused_build=compact23))
+                    mode, coarse_toolbar=args.coarse_toolbar_qualification, compact_button=compact_button,
+                    reused_build=compact23, current=current0481))
 
         if not compact23:
             generated('source')
         if not checkpoint_mode:
             if not compact25:
                 run('canvas-renderers', [NPM, 'run', 'test:canvas-renderers-browser'],
-                    verify=lambda: renderer_proof(startup=compact23, live_route_cleanup=compact24))
+                    verify=lambda: renderer_proof(startup=compact23 or current0481, live_route_cleanup=compact24 or current0481))
                 # Raw nonzero is retained; only the exact correlated negative qualifies.
                 run('renderer-stalled-response', [NPM, 'run', 'test:canvas-renderers-browser'],
                     extra={'CANVAS_RENDERER_STALLED_BODY': '1'}, cap=120,
-                    verify=lambda: renderer_proof(True, startup=compact23, live_route_cleanup=compact24), negative=True)
+                    verify=lambda: renderer_proof(True, startup=compact23 or current0481, live_route_cleanup=compact24 or current0481), negative=True)
                 run('canvas-usability', [NODE, 'tests/canvas-usability-browser.mjs'], verify=usability_proof)
             run('standard-ux-canvas-files', [NODE, 'tests/standard-ux-canvas-files-browser.mjs'],
-                verify=lambda: standard_files_proof(sequential_focus=compact25))
+                verify=lambda: standard_files_proof(sequential_focus=compact25 or current0481))
+            if current0481:
+                run('canvas-refresh-catchup', [NODE, 'tests/canvas-refresh-catchup-browser.mjs'],
+                    cap=180, verify=catchup_proof)
+                example = tree(ROOT / 'examples/shell-reader/dist')
+                require(set(example) == {'module.mjs', 'manifest.json'} and
+                        example['manifest.json'] == frozen['files']['examples/shell-reader/manifest.json']['sha256'],
+                        'Normal renderer did not produce the canonical reader example for the wheel')
+                save('reader-example-build.json', {'executedBy': 'canvas-renderers', 'files': example})
             if compact25:
                 # Skipping the renderer browser must not silently drop its build
                 # side effect: these two files are forced into the wheel.
@@ -4147,7 +4379,7 @@ def main():
                 save('static-final.json', tree(package / 'amplifier_web/static'))
                 if compact_button:
                     build_identity = read(OUT / 'frontend-build-identity.json')
-                    require(build_identity['inputs'] == COMPACT_BUTTON_INPUTS and build_identity['reusedBuild'] is False
+                    require(build_identity['inputs'] == product_inputs and build_identity['reusedBuild'] is False
                             and expected['static'] == build_identity['static']
                             and read(ROOT / 'amplifier_web/static/build.json') == build_identity['build']
                             and read(package / 'amplifier_web/static/build.json') == build_identity['build']
@@ -4160,6 +4392,21 @@ def main():
                                 (set(COMPACT23_REUSED_PHASES) | (set(COMPACT25_REUSED_PHASES) if compact25 else set())
                                  if compact23 else set()),
                             'Compact full qualification lost fresh-build/source/installed identity')
+                if current0481:
+                    phases = set(PHASES) | {'frontend-build-parity', 'canvas-refresh-catchup'}
+                    require(set(report['phases']) == phases and all(
+                        row['status'] == ('running' if name == 'final-integrity' else 'passed')
+                        for name, row in report['phases'].items())
+                        and all(report['phases'][name]['executed'] is True for name in (
+                            'frontend-build', 'frontend-build-parity', 'python-tests', 'frontend-units',
+                            'topology-source', 'generated-source', 'canvas-renderers', 'renderer-stalled-response',
+                            'canvas-usability', 'standard-ux-canvas-files', 'canvas-refresh-catchup',
+                            'wheel-build', 'fresh-venv', 'install-wheel', 'installed-readiness',
+                            'topology-installed', 'generated-installed'))
+                        and read(OUT / 'frontend-build/first-static.json') ==
+                            {n.removeprefix('amplifier_web/static/'): h for n, h in expected['static'].items()}
+                        and tree(ROOT / 'examples/shell-reader/dist') == read(OUT / 'reader-example-build.json')['files'],
+                        'Current source/build/installed qualification incomplete or reused')
                 if compact23:
                     require(all(sha(folder / name) == digest
                                 for folder in (COMPACT23_ROOT, OUT / 'prior-compact23')

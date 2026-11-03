@@ -28,6 +28,11 @@ assert.ok([cornerDiagnosticMode,touchEventDiagnosticMode,nativeStateDiagnosticMo
  'Conflicting file-controls diagnostic/qualification modes');
 const fullJourney=![cornerDiagnosticMode,touchEventDiagnosticMode,nativeStateDiagnosticMode,portalHostExperimentMode,
  stateReductionMode,focusContrastMode,coarseToolbarQualificationMode].some(Boolean);
+// A reviewed current product composition, not a diagnostic or an old geometry
+// replay. The native contour algorithm/event/bytes oracles below are unchanged.
+const currentLayout=process.env.FILE_CONTROLS_CURRENT_LAYOUT;
+assert.ok(currentLayout===undefined||currentLayout==='e15e3745d826cbbce0735a582c14b79779e890b2','Unknown current layout binding');
+assert.ok(!currentLayout||fullJourney,'Current layout is only available to the full journey');
 // Fixed binding to the retained failed first-390 gesture, NOT a new measurement
 // chosen to fit this candidate. No predecessor report is modified or rerun.
 const coarseToolbarBaseline={
@@ -1642,10 +1647,18 @@ async function cornerTap(control,corner,diagnostic=null,beforeTap=null,precondit
     diagnostic.preconditionsPassed=true;
    }
    if(diagnostic.compactDecorationRequested&&diagnostic.label==='touch-390-preview'){
-    // Fixed original failed contour, not a point chosen from this candidate.
-    for(const [key,value] of Object.entries(coarseToolbarBaseline.before))
-     assert.deepEqual(measured[key],value,`Original first-390 ${key} changed`);
-    diagnostic.baselineMatched=true;
+    if(currentLayout){
+     // The reviewed Refresh/full-width rows move the control. Do not claim the
+     // old rectangle matched. The same exact contour was already checked above.
+     assert.deepEqual(measured.viewport,coarseToolbarBaseline.before.viewport);
+     diagnostic.layoutBinding=currentLayout;
+     diagnostic.baselineMatched=false;
+    }else{
+     // Historical modes retain the fixed original failed contour.
+     for(const [key,value] of Object.entries(coarseToolbarBaseline.before))
+      assert.deepEqual(measured[key],value,`Original first-390 ${key} changed`);
+     diagnostic.baselineMatched=true;
+    }
    }
    probe=await tapOperation(tap,'arm-passive-capture',()=>original.evaluateHandle(armTouchEventCapture,
     {intended:measured.intended,compactDecoration:!!diagnostic.compactDecorationRequested}));
@@ -2923,7 +2936,8 @@ async function run(){
  assert.deepEqual(errors,[]);
  if(fullJourney){
   assert.deepEqual(compactPrimaryGestures.map(g=>g.label),['touch-390-preview','touch-320-preview']);
-  assert.equal(compactPrimaryGestures[0].baselineMatched,true);
+  assert.equal(compactPrimaryGestures[0].baselineMatched,!currentLayout);
+  if(currentLayout)assert.equal(compactPrimaryGestures[0].layoutBinding,currentLayout);
   for(const gesture of compactPrimaryGestures){
    assert.equal(gesture.tapAttempts,1);assert.equal(gesture.strictEventsPassed,true);
    assert.equal(gesture.originalOraclePassed,true);assert.equal(gesture.originalListenerRemoved,true);
@@ -3022,6 +3036,7 @@ try{
     'The contact-envelope check assumes DPR=1 and visual scale=1; fine desktop and coarse 390/320 layouts are separate observations.',
     'Existing screenshots and all 13 narrow PNG brackets remain evidence awaiting independent visual judgment.']}:{}),
   contourOracle,
+  ...(currentLayout?{currentLayout}:{}),
   ...(fullJourney?{downloadDecorations,compactPrimaryGestures,downloadNeighbors}:{}),
   installed:ready&&{packageRoot:ready.packageRoot,verified:ready.installedVerified,staticSha256:ready.staticSha256},
   seed,checks,geometry,fileFrameCaptures,downloads,downloadSettlements,tapSettlements,tapDrain,
