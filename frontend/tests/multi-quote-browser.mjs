@@ -7,6 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {createSelectionEvidence,observeOptional,OPTIONAL_OBSERVATION_MS} from './selection-failure-evidence.mjs';
 const reservation=createServer();await new Promise(r=>reservation.listen(0,'127.0.0.1',r));const port=reservation.address().port;await new Promise(r=>reservation.close(r));
 const url=`http://127.0.0.1:${port}`,proof=process.env.AMPLIFIER_PROOF_DIR;
 if(proof)mkdirSync(proof,{recursive:true});
@@ -20,17 +21,9 @@ const references=doc=>doc.segments.filter(s=>s.type==='quote');
 const observe=async()=>{const response=await context.request.get(url+'/fixture/message-source');assert.equal(response.status(),200);return response.json();};
 const checkpoints=[],compactGeometry=[];
 const cardObservations=[];
-const selectionObservations=[];let omittedSelectionObservations=0,selectionAttempt=0,selectionPage=0;
-const selectionPages=new WeakMap(),selectionFailures=new WeakMap();
-function selectionBinding(target,helper,stage,selector){
- let owner=selectionPages.get(target);
- if(!owner){owner={pageId:++selectionPage};selectionPages.set(target,owner)}
- return owner.binding=Object.freeze({pageId:owner.pageId,attempt:++selectionAttempt,helper,stage,selector});
-}
-function retainSelectionObservation(phase,facts){
- if(selectionObservations.length===16){selectionObservations.shift();omittedSelectionObservations++}
- const observation={phase,...facts};selectionObservations.push(observation);return observation;
-}
+const selectionEvidence=createSelectionEvidence();
+const {observations:selectionObservations,binding:selectionBinding,
+ retain:retainSelectionObservation,observeFailure:observeSelectionFailure}=selectionEvidence;
 // Installed on each document, including reloads. One current probe retains the
 // actual selected node; rebinding or closing the page releases the old closure.
 // Geometry reads may flush layout. No timing-equivalence claim follows.
@@ -79,32 +72,6 @@ function installSelectionObserver(){
   window.multiQuoteSelectionProbe=inspect;
   return inspect();
  };
-}
-async function observeSelectionFailure(target,error,failureStage=null){
- const key=error!==null&&(typeof error==='object'||typeof error==='function')?error:null;
- let retained=key&&selectionFailures.get(key);
- if(retained){
-  // Bind evidence to the original error without mutating it. Deferred errors
-  // keep their original page/attempt even after other failures or main work.
-  if(retained.failureStage===null&&failureStage!==null)retained={...retained,failureStage};
-  if(selectionObservations.at(-1)!==retained){
-   const {phase,...facts}=retained;
-   selectionFailures.set(key,retainSelectionObservation(phase,facts));
-  }
-  return;
- }
- // The expected binding lives outside the page and is captured BEFORE awaits.
- // A previous probe is not evidence for an attempt that failed before binding.
- const expected=selectionPages.get(target)?.binding;
- let facts={...(expected??{pageId:null,attempt:null,helper:null,stage:'no-selection-attempt',selector:null}),
-  available:false,reason:expected?'observation_unavailable':'attempt_unbound'};
- if(expected)try{
-  const observed=await target.evaluate(()=>window.multiQuoteSelectionProbe?.()??null);
-  facts=observed&&['pageId','attempt','helper','stage','selector'].every(field=>observed[field]===expected[field])?
-   observed:{...expected,available:false,reason:observed?'probe_not_bound':'probe_unavailable'};
- }catch{}
- const observation=retainSelectionObservation(error?.name==='TimeoutError'?'selection-timeout':'selection-failed',{...facts,failureStage});
- if(key)selectionFailures.set(key,observation);
 }
 async function observeCards(stage){
  const rendered=await page.getByRole('textbox',{name:'Message Amplifier'}).evaluate(editor=>{
@@ -914,13 +881,18 @@ try{
   }
  }
  if(comparisonError)throw comparisonError;
- if(proof)writeFileSync(join(proof,'observed-document.json'),JSON.stringify({sourceA,sourceB,first,second,expected,submitted,sent,initialScroll:beforeScroll,selectionObservations,omittedSelectionObservations},null,2));
+ if(proof)writeFileSync(join(proof,'observed-document.json'),JSON.stringify({sourceA,sourceB,first,second,expected,submitted,sent,initialScroll:beforeScroll,selectionObservations,omittedSelectionObservations:selectionEvidence.omitted},null,2));
  console.log('PASS exact Unicode/multiline passages + whole message, interleaved commentary, attachment, reload, keyboard reorder, removal, captured delayed target, narrow rendering, sent projection and adjacent cycle.');
 }catch(error){
  await observeSelectionFailure(page,error);
  if(proof){
-  try{writeFileSync(join(proof,'failure.json'),JSON.stringify({message:error.message,errors,selectionObservations,omittedSelectionObservations},null,2))}catch{}
-  await page.screenshot({path:join(proof,'failure.png')}).catch(()=>{});
+  const record={message:error.message,errors,selectionObservations,omittedSelectionObservations:selectionEvidence.omitted};
+  try{writeFileSync(join(proof,'failure.json'),JSON.stringify(record,null,2))}catch{}
+  const screenshot=await observeOptional(()=>page.screenshot({path:join(proof,'failure.png'),timeout:OPTIONAL_OBSERVATION_MS}));
+  // Expiry is not cancellation or proof of a complete PNG. Preserve the original
+  // failure even if screenshot settlement or this optional report write fails.
+  record.failureScreenshot={status:screenshot.status,budgetMs:OPTIONAL_OBSERVATION_MS};
+  try{writeFileSync(join(proof,'failure.json'),JSON.stringify(record,null,2))}catch{}
  }
  throw error;
 }finally{await browser.close();fixture.kill();await new Promise(resolve=>fixture.exitCode!==null?resolve():fixture.once('exit',resolve));}
