@@ -2,6 +2,7 @@ import {showFixtureConversation} from './browser-chat-pages.mjs';
 // Public local-file path, exact server location, copy and Canvas lifecycle.
 import {spawn} from 'node:child_process';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
+import {boundaryRead,BOUNDARY_OBSERVATION_MS} from './browser-boundary-evidence.mjs';
 import {fileURLToPath} from 'node:url';
 import {dirname} from 'node:path';
 import {mkdir,writeFile,lstat} from 'node:fs/promises';
@@ -13,10 +14,17 @@ await mkdir(out,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/outputs_ui_server.py','--canvas-reading'],{stdio:['ignore','pipe','pipe']});
 const stopFixture=ownFixture(fixture,{label:'Canvas files fixture',timeoutMs:5000});
 let browser,page,ready,focusScope,focusInvoker,logs='',failure,uiFailure,uiPassed=false,browserClosed=null,fixtureExit=null,fixtureCleanup=null,homeRemoved=null,fixtureStopSucceeded=false;
-const errors=[],checks=[],cleanupFailures=[];
+const errors=[],checks=[],cleanupFailures=[],evidenceFailures=[];
 const focusTraversal={complete:false,initial:null,steps:[]};
-const focusReturn={complete:false,before:null,after:null};
+const focusReturn={complete:false,before:null,after:null,observations:[],observationDeadlineMs:BOUNDARY_OBSERVATION_MS};
 const errorRecord=error=>({name:error?.name||'Error',message:String(error?.message||error),...(error instanceof AggregateError?{errors:error.errors.map(errorRecord)}:{})});
+async function focusEvidence(key,read){
+ const observation={key,...await boundaryRead(read)};focusReturn.observations.push(observation);
+ // Only this bounded result can publish evidence. The pending read never owns
+ // the record, so a late reply/rejection cannot rewrite a timeout or escape.
+ if(observation.status==='observed')focusReturn[key]=observation.value;
+ else evidenceFailures.push(Error(`Focus-return ${key} evidence ${observation.status}`));
+}
 fixture.once('close',(code,signal)=>{fixtureExit={pid:fixture.pid,code,signal,settled:true}});
 let fixtureLines='';
 fixture.stdout.on('data',chunk=>{
@@ -50,7 +58,15 @@ try{
  checks.push('Public file form opens exact text bytes and the named server path; both copies match fixture ownership; missing server file manager is explicit.');
  await inspector.getByRole('button',{name:'Close canvas details',exact:true}).click();await expect(inspector).toBeHidden();
  const focusButton=canvas.getByRole('button',{name:'Focus canvas',exact:true});
- focusInvoker=await focusButton.elementHandle();assert.ok(focusInvoker);
+ const pendingInvoker=focusButton.elementHandle(),invoker=await boundaryRead(()=>pendingInvoker);
+ focusReturn.invokerAcquisition={status:invoker.status};
+ if(invoker.status!=='observed'){
+  // A deadline is not cancellation. Dispose a late-owned handle once, but do
+  // not let that completion mutate this already-final acquisition receipt.
+  void pendingInvoker.then(handle=>handle&&boundaryRead(()=>handle.dispose()),()=>{}).catch(()=>{});
+  throw Error(`Focus-return invoker acquisition ${invoker.status}`);
+ }
+ focusInvoker=invoker.value;assert.ok(focusInvoker);
  await focusButton.click();await expect(canvas).toHaveAttribute('role','dialog');await expect(canvas.getByRole('button',{name:'Exit canvas focus',exact:true})).toBeFocused();
  // useModalFocus includes the container-header toggle before the panel, and
  // CanvasTabs uses roving tabindex. Neither negative tabs nor inert controls
@@ -81,24 +97,23 @@ try{
  for(let index=start+1;index<count;index++)await pressTab('Tab',index);
  await pressTab('Tab',0);await pressTab('Shift+Tab',count-1);
  focusTraversal.complete=true;
- focusReturn.before=await focusState();
+ await focusEvidence('before',focusState);
  let returnFailure;
  try{
   await page.keyboard.press('Escape');await expect(canvas).not.toHaveAttribute('role','dialog');
   await expect(canvas.getByRole('button',{name:'Focus canvas',exact:true})).toBeFocused();
- }catch(error){returnFailure=error}
- try{
-  focusReturn.after=await focusState();
-  focusReturn.invoker=await focusInvoker.evaluate(node=>({connected:node.isConnected,tag:node.tagName,
+ }catch(error){
+  // Publish the original assertion before optional observations can time out.
+  returnFailure=error;uiFailure=error;focusReturn.primaryFailure=errorRecord(error);
+ }
+ await focusEvidence('after',focusState);
+ await focusEvidence('invoker',()=>focusInvoker.evaluate(node=>({connected:node.isConnected,tag:node.tagName,
    label:node.getAttribute('aria-label'),focused:document.activeElement===node,
    sameControl:node===document.querySelector('#workspace-canvas [aria-label="Focus canvas"]'),
-   inert:!!node.closest('[inert]'),visible:!!node.getClientRects().length}));
-  focusReturn.canvas=await canvas.evaluate(node=>({role:node.getAttribute('role'),focused:node.dataset.focused,hidden:node.hidden}));
- }catch(error){
-  focusReturn.captureError=errorRecord(error);
-  throw returnFailure?new AggregateError([returnFailure,error],'Canvas focus return and evidence capture failed'):error;
- }
+   inert:!!node.closest('[inert]'),visible:!!node.getClientRects().length})));
+ await focusEvidence('canvas',()=>canvas.evaluate(node=>({role:node.getAttribute('role'),focused:node.dataset.focused,hidden:node.hidden})));
  if(returnFailure)throw returnFailure;
+ assert.equal(evidenceFailures.length,0,'Focus-return evidence is incomplete; not a pass');
  assert.deepEqual(focusReturn.invoker,{connected:true,tag:'BUTTON',label:'Focus canvas',focused:true,sameControl:true,inert:false,visible:true});
  assert.deepEqual(focusReturn.canvas,{role:null,focused:'false',hidden:false});focusReturn.complete=true;
  const anchor=page.locator('.a-messages [data-message-id]').filter({hasText:'Canvas reading marker 55'});await anchor.scrollIntoViewIfNeeded();
@@ -114,13 +129,16 @@ try{
  const final=await page.request.get(ready.url+'/fixture').then(response=>response.json());assert.equal(final.selected,ready.sessionId);assert.equal(final.message,ready.original);assert.equal(final.file,'Original report bytes.');assert.deepEqual(final.outputs,[]);assert.deepEqual(final.sent,[]);assert.deepEqual(errors,[]);
  checks.push('Narrow Back to chat preserves the exact draft, selection, original message and original file; no output or model input created.');
  await page.screenshot({path:out+'/canvas-files.png'});uiPassed=true;
-}catch(error){uiFailure=error}
+}catch(error){uiFailure??=error}
 finally{
  try{
   await finishFixture({label:'Canvas files fixture',close:[
    ...(uiFailure&&page?[['Canvas files failure screenshot',()=>page.screenshot({path:out+'/failure.png'})]]:[]),
    ...(focusScope?[['Canvas files retained focus scope',()=>focusScope.dispose()]]:[]),
-   ...(focusInvoker?[['Canvas files retained focus invoker',()=>focusInvoker.dispose()]]:[]),
+   ...(focusInvoker?[['Canvas files retained focus invoker',async()=>{
+    const disposal=await boundaryRead(()=>focusInvoker.dispose());focusReturn.invokerDisposal={status:disposal.status};
+    assert.equal(disposal.status,'observed','Focus-return invoker disposal did not settle');
+   }]]:[]),
    ['Canvas files browser',async()=>{if(browser){try{await browser.close()}finally{browserClosed=!browser.isConnected()}assert.equal(browserClosed,true)}}]
   ],stop:async()=>{await stopFixture();fixtureStopSucceeded=true}});
  }catch(error){cleanupFailures.push(error)}
@@ -136,9 +154,9 @@ finally{
   assert.equal(homeRemoved,true);
  }catch(error){cleanupFailures.push(error)}
  try{await writeFile(out+'/fixture.log',logs)}catch(error){cleanupFailures.push(error)}
- const failures=[...(uiFailure?[uiFailure]:[]),...cleanupFailures];
+ const failures=[...(uiFailure?[uiFailure]:[]),...evidenceFailures,...cleanupFailures];
  failure=failures.length>1?new AggregateError(failures,'Canvas files UI and/or cleanup failed'):failures[0];
- const observations={schemaVersion:1,passed:uiPassed&&!failure,uiPassed,checks,focusTraversal,focusReturn,browserClosed,fixtureExit,fixtureStopSucceeded,fixtureCleanup,homeRemoved,uiFailure:uiFailure?errorRecord(uiFailure):null,cleanupFailures:cleanupFailures.map(errorRecord),failure:failure?errorRecord(failure):null,limits:['Synthetic local Linux host with no file manager; no actual OS reveal action or remote browser/server pair.','Native selectOption exercises form state, not native picker gesture.','Desktop ordinary path plus keyboard focus/Escape and narrow Back; not complete four-mode repetition.','No Canvas resize or physical user-scroll gesture claim; anchor positioned through locator before public close/reopen.']};
+ const observations={schemaVersion:1,passed:uiPassed&&!failure,uiPassed,checks,focusTraversal,focusReturn,browserClosed,fixtureExit,fixtureStopSucceeded,fixtureCleanup,homeRemoved,uiFailure:uiFailure?errorRecord(uiFailure):null,evidenceFailures:evidenceFailures.map(errorRecord),cleanupFailures:cleanupFailures.map(errorRecord),failure:failure?errorRecord(failure):null,limits:['Synthetic local Linux host with no file manager; no actual OS reveal action or remote browser/server pair.','Native selectOption exercises form state, not native picker gesture.','Desktop ordinary path plus keyboard focus/Escape and narrow Back; not complete four-mode repetition.','No Canvas resize or physical user-scroll gesture claim; anchor positioned through locator before public close/reopen.','Optional focus evidence has 500ms observation deadlines, not cancellation; late results never rewrite saved observations.']};
  try{await writeFile(out+'/observations.json',JSON.stringify(observations,null,2)+'\n')}
  catch(error){
   failure=failure?new AggregateError([failure,error],'Canvas files observations could not be saved'):error;

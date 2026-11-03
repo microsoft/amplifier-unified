@@ -6,6 +6,10 @@ unit-proof packet at output/files1318-check26-units. Only the unchanged 84 Pytho
 and 19 Node cases may be reused, after exact source/environment/proof checks.
 Shared modal focus changed: canonical build/parity and all browser/package phases
 run again. Check 26 remains failed; no source-browser or built-asset reuse.
+The v2 successor uses files1318-focus-return-v2-manifest.json: it corrects
+the original-contract-byte join, bounds optional focus evidence to 500ms and adds
+the maintained 390px mobile drawer/Details selection and both peer-focus cases.
+The v1 manifest and its closure remain immutable; neither path changes budgets.
 
 Current 0.48.2 composition: default full qualification with the exclusive
 /workspace/output/files1318-current0482-manifest.json. It binds pinned Main
@@ -334,6 +338,7 @@ CURRENT0482_BINDING = {
     'trackedCount': 3344,
 }
 FOCUS_RETURN_MANIFEST = ROOT / 'output/files1318-focus-return-manifest.json'
+FOCUS_RETURN_V2_MANIFEST = ROOT / 'output/files1318-focus-return-v2-manifest.json'
 CHECK26_ROOT = ROOT / 'output/files1318-check26-units'
 CHECK26_BEFORE = {
     'revision': 'e2d5fb3dac01176ef50eb7079aef2e73008edf0d',
@@ -344,6 +349,15 @@ CHECK26_BEFORE = {
     'evidenceSha256': '2eb8ee1c7e3fc8ccc65b1e5cae4746257ba99ef5bf7be0597c4f5b7f9cf706c9',
 }
 FOCUS_RETURN_CLOSURE_SHA = '9dc88fdbe99361f2afce04771f30d078e479cd7ea26376732a4adc36e79fb8a0'
+FOCUS_RETURN_V2_CLOSURE_SHA = 'a1b6a93a420f4e6e8d5f8be55868e4c525eb3c7985f5a2f1e39d91877986a036'
+FOCUS_RETURN_V2_ADDITIONAL = (
+    'frontend/tests/mobile-navigation-browser.mjs', 'frontend/tests/peer-preview-focus-browser.mjs',
+    'tests/fixtures/mobile_navigation_ui_server.py',
+)
+# Receipt provenance hashes the original prepared contract bytes. The saved
+# execution-contract.json was reserialized by save(); it has a distinct hash.
+CHECK26_ORIGINAL_CONTRACT_SHA = 'b5c8f0de626a119240a1f2e025903c089fb0b1e2f86a97e8abf138e28e0f3f45'
+CHECK26_SAVED_CONTRACT_SHA = '55544dc538c89fe371471492789111996b91d5949db6fd32876513922589a675'
 CHECK26_UNIT_PHASES = ('python-tests', 'frontend-units')
 CHECK26_UNIT_FILES = (
     'report.json', 'evidence-manifest.json', 'parent-manifest.json', 'execution-contract.json',
@@ -606,7 +620,8 @@ def frozen_inputs(frozen, *, built=False):
                                  STATE_REDUCTION_MANIFEST, FOCUS_CONTRAST_MANIFEST,
                                  FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST,
                                  COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST,
-                                 CURRENT0481_MANIFEST, CURRENT0482_MANIFEST, FOCUS_RETURN_MANIFEST), 'Unsafe frozen path')
+                                 CURRENT0481_MANIFEST, CURRENT0482_MANIFEST, FOCUS_RETURN_MANIFEST,
+                                 FOCUS_RETURN_V2_MANIFEST), 'Unsafe frozen path')
         require(path.parent.resolve().is_relative_to(ROOT), 'Frozen path escapes snapshot')
         require(expected['mode'] in ('100644', '100755', '120000')
                 and re.fullmatch('[a-f0-9]{64}', expected['sha256']), 'Invalid frozen identity')
@@ -653,20 +668,22 @@ def current0482_snapshot(frozen):
             'Successor source changed outside the qualification driver')
 
 
-def focus_return_snapshot(frozen):
+def focus_return_snapshot(frozen, *, shared_focus=False):
     require(frozen.get('check26Before') == CHECK26_BEFORE
             and frozen['baselineRevision'] == CURRENT0482_BINDING['baselineRevision']
             and frozen['baselineTree'] == CURRENT0482_BINDING['baselineTree']
             and set(frozen) == {'schemaVersion', 'baselineRevision', 'baselineTree', 'revision', 'tree',
                                 'reviewed', 'changedPaths', 'files', 'check26Before'}
-            and set(frozen['changedPaths']) == set(CURRENT0481_CHANGES) | {'frontend/src/responsive-navigation.jsx'}
+            and set(frozen['changedPaths']) == set(CURRENT0481_CHANGES) | {'frontend/src/responsive-navigation.jsx'} |
+                (set(FOCUS_RETURN_V2_ADDITIONAL) if shared_focus else set())
             and len(frozen['files']) == 3344, 'Focus repair must bind the exact check-26 source and scope')
     closure = {n: v for n, v in frozen['files'].items() if n != DRIVER}
     require(hashlib.sha256(json.dumps(closure, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-            == FOCUS_RETURN_CLOSURE_SHA, 'Focus-return product/test closure changed')
+            == (FOCUS_RETURN_V2_CLOSURE_SHA if shared_focus else FOCUS_RETURN_CLOSURE_SHA),
+            'Focus-return product/test closure changed')
 
 
-def check26_units(frozen):
+def check26_units(frozen, *, shared_focus=False):
     """Reuse two unchanged unit phases only; retain the actual later browser failure."""
     require(sha(CHECK26_ROOT / 'INDEX.json') == CHECK26_BEFORE['indexSha256'], 'Check-26 index changed')
     index = read(CHECK26_ROOT / 'INDEX.json')['files']
@@ -689,7 +706,8 @@ def check26_units(frozen):
     require(previous['revision'] == CHECK26_BEFORE['revision'] and previous['tree'] == CHECK26_BEFORE['tree']
             and previous['files'].keys() == frozen['files'].keys()
             and {n for n in frozen['files'] if frozen['files'][n] != previous['files'][n]} ==
-                {DRIVER, 'frontend/src/responsive-navigation.jsx', 'frontend/tests/standard-ux-canvas-files-browser.mjs'},
+                {DRIVER, 'frontend/src/responsive-navigation.jsx', 'frontend/tests/standard-ux-canvas-files-browser.mjs'} |
+                (set(FOCUS_RETURN_V2_ADDITIONAL) if shared_focus else set()),
             'Unit reuse requires every other input, including unit owners/helpers/locks, unchanged')
     require(old['passed'] is False and old['complete'] is False and old['finalization'] == {'status': 'passed'}
             and old['qualification'] == 'current0482-full'
@@ -705,11 +723,27 @@ def check26_units(frozen):
             and 'Focus canvas' in failed['uiFailure']['message'] and 'Received: inactive' in failed['uiFailure']['message']
             and failed['cleanupFailures'] == [] and failed['homeRemoved'] is True,
             'Wrong check-26 failure; do not substitute the old traversal failure')
+    check26_unit_processes(prior, old, previous)
+    require(read(prior / 'pytest-call.json') == {'call': 'pytest.main', 'args': pytest_arguments(QUALIFIED_OUT, current=True)}
+            and junit(prior, current=True) == read(prior / 'python-counts.json'), 'Check-26 Python selection differs')
+    unit_proof(prior)
+    retained_environment(prior)
+    value = {'priorPassed': False, 'priorComplete': False, 'source': CHECK26_BEFORE,
+             'proofFiles': bindings, 'reusedPhases': list(CHECK26_UNIT_PHASES),
+             'buildReusable': False, 'browserReusable': False}
+    save('check26-unit-reuse.json', value)
+    return value
+
+
+def check26_unit_processes(prior, old, previous):
+    """Join the two authentic process receipts without hashing a reserialization as the original."""
     contract = read(prior / 'execution-contract.json')
+    require(sha(prior / 'execution-contract.json') == CHECK26_SAVED_CONTRACT_SHA,
+            'Check-26 saved serialized contract changed')
     provenance = {'manifestSha256': CHECK26_BEFORE['manifestSha256'],
                   'revision': previous['revision'], 'tree': previous['tree'],
                   'baselineRevision': previous['baselineRevision'], 'baselineTree': previous['baselineTree'],
-                  'contractSha256': sha(prior / 'execution-contract.json')}
+                  'contractSha256': CHECK26_ORIGINAL_CONTRACT_SHA}
     require(contract['source']['sourceHead'] == previous['revision'], 'Check-26 contract source differs')
     commands = {
         'python-tests': [str(PYTHON), '-I', '-B', str(ROOT / DRIVER), '--python-tests'],
@@ -725,15 +759,7 @@ def check26_units(frozen):
                 and raw['reason'] is None and raw['cleanup'] == CLEAN and type(raw['exitCode']) is int
                 and raw['exitCode'] == 0 and row['cwd'] == str(ROOT / 'frontend')
                 and raw['env'] == row['env'], 'Check-26 unit process/pass/cleanup differs')
-    require(read(prior / 'pytest-call.json') == {'call': 'pytest.main', 'args': pytest_arguments(QUALIFIED_OUT, current=True)}
-            and junit(prior, current=True) == read(prior / 'python-counts.json'), 'Check-26 Python selection differs')
-    unit_proof(prior)
-    retained_environment(prior)
-    value = {'priorPassed': False, 'priorComplete': False, 'source': CHECK26_BEFORE,
-             'proofFiles': bindings, 'reusedPhases': list(CHECK26_UNIT_PHASES),
-             'buildReusable': False, 'browserReusable': False}
-    save('check26-unit-reuse.json', value)
-    return value
+    return provenance
 
 
 def diagnostic_static(frozen, *, binding='diagnosticReuse'):
@@ -3644,7 +3670,7 @@ def usability_proof(evidence_root=None):
             [{**expected, 'browserErrors': 0}], 'Canvas usability completion report missing/changed')
 
 
-def standard_files_proof(*, sequential_focus=False, focus_return=False):
+def standard_files_proof(*, sequential_focus=False, focus_return=False, bounded_focus=False):
     proof = read(OUT / 'standard-ux-canvas-files/evidence/observations.json')
     source = (ROOT / 'frontend/tests/standard-ux-canvas-files-browser.mjs').read_text()
     expected = re.findall(r"checks\.push\('([^']+)'\)", source)
@@ -3674,6 +3700,14 @@ def standard_files_proof(*, sequential_focus=False, focus_return=False):
             before = step['after']
     if focus_return:
         result = proof['focusReturn']
+        if bounded_focus:
+            require(result['observationDeadlineMs'] == 500 and proof['evidenceFailures'] == []
+                    and result['invokerAcquisition'] == result['invokerDisposal'] == {'status': 'observed'}
+                    and not result.get('primaryFailure')
+                    and [row['key'] for row in result['observations']] == ['before', 'after', 'invoker', 'canvas']
+                    and all(row['status'] == 'observed' and row['value'] == result[row['key']]
+                            for row in result['observations']),
+                    'Focus boundary evidence/handle acquisition/disposal missing, unavailable or timed out')
         start = proof['focusTraversal']['initial']['activeIndex']
         after = result['after']
         require(result['complete'] is True and not result.get('captureError')
@@ -3696,6 +3730,54 @@ def standard_files_proof(*, sequential_focus=False, focus_return=False):
                             'runnerCleanup': True, 'homeRemoved': True}
             and not home.exists() and not home.is_symlink(),
             'Standard canvas/files fixture cleanup identity/removal mismatch')
+
+
+def shared_focus_proof(name):
+    """The maintained shared-hook seams, not a new browser matrix."""
+    def clean(row):
+        exit_state = row['fixtureExit']
+        require(row['browserClosed'] is True and set(exit_state) == {'pid', 'code', 'signal'}
+                and type(exit_state['pid']) is int and exit_state['pid'] > 0
+                and type(exit_state['code']) is int and exit_state['code'] == 0 and exit_state['signal'] is None,
+                'Shared-focus browser/fixture cleanup did not settle normally')
+    if name == 'mobile-navigation-focus':
+        folder = OUT / name / 'evidence'
+        proof = read(folder / 'results.json')
+        require(proof == read(folder / 'results-partial.json') and proof['passed'] is True
+                and proof['selection'] == 'focus-only' and proof['results'] == [] and proof['errors'] == []
+                and not proof.get('error'), 'Mobile focus-only selection incomplete or broader than admitted')
+        checks = proof['focusChecks']
+        require([c['check'] for c in checks] == [
+            'child Escape retains parent drawer, invoker and background inertness',
+            'parent Escape restores header opener, draft and noninert chat',
+            'reopened drawer close returns focus to its header opener']
+            and all(c['passed'] is True and c['state']['activeInert'] is False
+                    and c['state']['viewport'] == {'width': 390, 'height': 844}
+                    and c['state']['detailsCount'] == 0 for c in checks), 'Nested drawer focus evidence incomplete')
+        child = checks[0]['state']
+        require(child['drawerHidden'] is False and child['chatInert'] is True
+                and child['activeLabel'].startswith('Details and actions for '), 'Child Escape dismissed or lost parent focus')
+        require(all(c['state'] == {'activeId': 'navigation-toggle', 'activeLabel': 'Open navigation',
+                    'viewport': {'width': 390, 'height': 844},
+                    'activeInert': False, 'drawerHidden': True, 'chatInert': False, 'detailsCount': 0}
+                    for c in checks[1:]), 'Parent Escape/close did not restore its opener')
+        clean(proof['cleanup'])
+    elif name == 'peer-preview-focus':
+        proof = read(OUT / name / 'evidence/focus-result.json')
+        require(proof['passed'] is True and not proof.get('error')
+                and [(r['width'], r['dismiss']) for r in proof['evidence']] == [(390, 'Escape'), (320, 'Close')]
+                and [(r['width'], r['dismiss']) for r in proof['cleanup']] == [(390, 'Escape'), (320, 'Close')],
+                'Both maintained peer dismissal cases required')
+        for row, cleanup in zip(proof['evidence'], proof['cleanup']):
+            require(all(row[key] is True for key in ('passed', 'sourceRemoved', 'parentContinuity', 'noExecution'))
+                    and row['focus']['tag'] == 'BUTTON' and row['focus']['inert'] is False and row['focus']['messageId']
+                    and row['caretBefore'] == row['caretAfter']
+                    and row['caretBefore']['anchor'] != row['caretBefore']['focus']
+                    and (row['width'] != 390 or row['explicitOpenNotRedirected'] is True),
+                    'Peer dismissal/fallback/explicit Open chat continuity incomplete')
+            clean(cleanup)
+    else:
+        raise RuntimeError('Unknown shared-focus seam')
 
 
 BROWSER_READY = r"""
@@ -3860,7 +3942,7 @@ def main():
                                  STATE_REDUCTION_MANIFEST, FOCUS_CONTRAST_MANIFEST,
                                  FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST,
                                  COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST,
-                                 CURRENT0481_MANIFEST, CURRENT0482_MANIFEST, FOCUS_RETURN_MANIFEST])
+                                 CURRENT0481_MANIFEST, CURRENT0482_MANIFEST, FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST])
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--corner-diagnostic', action='store_true')
     modes.add_argument('--contour-qualification', action='store_true')
@@ -3889,14 +3971,15 @@ def main():
     manifest_paths = ((FOCUS_CONTRAST_MANIFEST, FOCUS_CONTRAST_SETTLED_MANIFEST)
                       if args.focus_contrast else (MANIFEST, COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST,
                           COMPACT24_MANIFEST, COMPACT25_MANIFEST, CURRENT0481_MANIFEST, CURRENT0482_MANIFEST,
-                          FOCUS_RETURN_MANIFEST)
+                          FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST)
                       if manifest_path == MANIFEST else (manifest_path,))
     if args.manifest not in manifest_paths:
         parser.error('The manifest must match the selected qualification mode')
     compact25 = args.manifest == COMPACT25_MANIFEST
     current0481 = args.manifest == CURRENT0481_MANIFEST
     current0482 = args.manifest == CURRENT0482_MANIFEST
-    focus_return = args.manifest == FOCUS_RETURN_MANIFEST
+    shared_focus = args.manifest == FOCUS_RETURN_V2_MANIFEST
+    focus_return = args.manifest in (FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST)
     current_full = current0481 or current0482 or focus_return
     compact24 = args.manifest in (COMPACT24_MANIFEST, COMPACT25_MANIFEST)
     compact23 = args.manifest in (COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST)
@@ -3935,10 +4018,10 @@ def main():
                                 'Old 23/24/25 failures and cancelled/expired non-runs remain historical; '
                                 'current rows move the original derived contour, not its native target/bytes oracle.')
     if focus_return:
-        report.update(qualification='focus-return-after26', priorChecksConsumed=26,
+        report.update(qualification='focus-return-v2-after26' if shared_focus else 'focus-return-after26', priorChecksConsumed=26,
                       continuationOf=CHECK26_BEFORE,
                       currentSource={'baselineRevision': CURRENT0482_BINDING['baselineRevision'],
-                                     'nonDriverClosureSha256': FOCUS_RETURN_CLOSURE_SHA},
+                                     'nonDriverClosureSha256': FOCUS_RETURN_V2_CLOSURE_SHA if shared_focus else FOCUS_RETURN_CLOSURE_SHA},
                       historicalProofReuse='unit-only-after-exact-validation')
         report['phases']['check26-unit-reuse'] = {'status': 'unrun', 'reason': 'not_started'}
         for name in CHECK26_UNIT_PHASES:
@@ -3946,6 +4029,12 @@ def main():
         report['limits'][-1] = ('Check 26 remains failed at Escape focus restoration. Only unchanged 84/19 unit cases '
                                'may be reused after exact input/environment checks. Shared focus changed, so build/parity '
                                'and every browser/package phase run freshly; no old browser pass or asset is restored.')
+    if shared_focus:
+        for name in ('mobile-navigation-focus', 'peer-preview-focus'):
+            report['phases'][name] = {'status': 'unrun', 'reason': 'not_started'}
+        report['limits'].append('Shared-hook qualification selects the maintained 390px drawer/Details block and both '
+                                'peer-focus cases, not the mobile width/scroll matrix. React ordering supports the '
+                                'repair mechanism but is not retrospective proof of check-26 active-element history.')
     if compact23:
         report.update(continuationOf=COMPACT23_BEFORE, priorPrelaunchNotRunsRetained=2)
         report['phases']['compact23-reuse'] = {'status': 'unrun', 'reason': 'not_started'}
@@ -4070,7 +4159,7 @@ def main():
             frozen = read(args.manifest)
             require(frozen['schemaVersion'] == 2, 'Wrong manifest schema')
             if focus_return:
-                focus_return_snapshot(frozen)
+                focus_return_snapshot(frozen, shared_focus=shared_focus)
             elif current0482:
                 current0482_snapshot(frozen)
             elif current0481:
@@ -4087,6 +4176,8 @@ def main():
                                set(CURRENT0481_CHANGES) if current_full else
                                REVIEWED_CHANGES | COMPACT_BUTTON_PRODUCT_PATHS if compact_button
                                else REVIEWED_CHANGES | {COARSE_TOOLBAR_CSS} if fresh_product else REVIEWED_CHANGES)
+            if shared_focus:
+                allowed_changes |= set(FOCUS_RETURN_V2_ADDITIONAL)
             require(isinstance(changed, list) and len(changed) == len(set(changed))
                     and DRIVER in changed and set(changed) <= allowed_changes
                     and set(changed) <= frozen['files'].keys(), 'Candidate changes exceed selected fixed scope')
@@ -4124,6 +4215,13 @@ def main():
                         and {'frontend/tests/canvas-refresh-catchup-browser.mjs', 'frontend/tests/fixture-python.mjs',
                              'frontend/scripts/build-reader-example.mjs', 'frontend/scripts/shell-example-build.mjs'}
                             <= frozen['files'].keys(), 'Current runtime helper/selector closure incomplete')
+            if shared_focus:
+                require({*FOCUS_RETURN_V2_ADDITIONAL, 'frontend/tests/browser-boundary-evidence.mjs',
+                         'frontend/tests/chat-reference-harness.mjs', 'frontend/tests/composer-test-helpers.mjs',
+                         'tests/fixtures/peer_preview_ui_server.py', 'tests/fixtures/chat_ui_server.py',
+                         'tests/fixtures/settings_ui_server.py', 'tests/fixtures/peer_message_content.py',
+                         'tests/test_collaborative_workspaces.py'} <= frozen['files'].keys(),
+                        'Shared-focus canonical fixture/helper closure incomplete')
             if args.contour_qualification:
                 require(frozen['files'][PRODUCER]['sha256'] == CONTOUR_PRODUCER_SHA,
                         'Contour producer differs from the reviewed verifier interface')
@@ -4321,7 +4419,7 @@ def main():
         run('browser-readiness', [NODE, '--input-type=module', '-e',
             BROWSER_READY.replace('/artifacts/files1318-qualified', str(OUT))], cap=45)
         if focus_return:
-            reused26 = step('check26-unit-reuse', lambda: check26_units(frozen))
+            reused26 = step('check26-unit-reuse', lambda: check26_units(frozen, shared_focus=shared_focus))
             for name in CHECK26_UNIT_PHASES:
                 report['phases'][name].update(status='REUSED', executed=False,
                     reason='exact_check26_unit_source_environment_and_evidence_verified',
@@ -4496,7 +4594,16 @@ def main():
                     verify=lambda: renderer_proof(True, startup=compact23 or current_full, live_route_cleanup=compact24 or current_full), negative=True)
                 run('canvas-usability', [NODE, 'tests/canvas-usability-browser.mjs'], verify=usability_proof)
             run('standard-ux-canvas-files', [NODE, 'tests/standard-ux-canvas-files-browser.mjs'],
-                verify=lambda: standard_files_proof(sequential_focus=compact25 or current_full, focus_return=focus_return))
+                verify=lambda: standard_files_proof(sequential_focus=compact25 or current_full,
+                                                    focus_return=focus_return, bounded_focus=shared_focus))
+            if shared_focus:
+                run('mobile-navigation-focus', [NODE, 'tests/mobile-navigation-browser.mjs'], cap=90,
+                    extra={'MOBILE_NAVIGATION_FOCUS_ONLY': '1',
+                           'AMPLIFIER_TEST_OUTPUT': str(OUT / 'mobile-navigation-focus/evidence')},
+                    verify=lambda: shared_focus_proof('mobile-navigation-focus'))
+                run('peer-preview-focus', [NODE, 'tests/peer-preview-focus-browser.mjs'], cap=150,
+                    extra={'AMPLIFIER_PROOF_DIR': str(OUT / 'peer-preview-focus/evidence')},
+                    verify=lambda: shared_focus_proof('peer-preview-focus'))
             if current_full:
                 run('canvas-refresh-catchup', [NODE, 'tests/canvas-refresh-catchup-browser.mjs'],
                     cap=180, verify=catchup_proof)
@@ -4592,6 +4699,12 @@ def main():
                 if current_full:
                     phases = set(PHASES) | {'frontend-build-parity', 'canvas-refresh-catchup'} | (
                         {'check26-unit-reuse'} if focus_return else set())
+                    if shared_focus:
+                        phases |= {'mobile-navigation-focus', 'peer-preview-focus'}
+                        require(all(report['phases'][name]['status'] == 'passed'
+                                    and report['phases'][name]['executed'] is True
+                                    for name in ('mobile-navigation-focus', 'peer-preview-focus')),
+                                'Shared modal-focus seams were not freshly qualified')
                     require(set(report['phases']) == phases and all(
                         row['status'] == ('running' if name == 'final-integrity' else
                                          'REUSED' if focus_return and name in CHECK26_UNIT_PHASES else 'passed')
