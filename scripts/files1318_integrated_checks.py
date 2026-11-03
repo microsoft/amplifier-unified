@@ -1,5 +1,12 @@
 """ONE Files1318 cycle in the prepared browser-test runner; never run on the host.
 
+Check-26 focus-return repair: default qualification with
+/workspace/output/files1318-focus-return-manifest.json and the fixed retained
+unit-proof packet at output/files1318-check26-units. Only the unchanged 84 Python
+and 19 Node cases may be reused, after exact source/environment/proof checks.
+Shared modal focus changed: canonical build/parity and all browser/package phases
+run again. Check 26 remains failed; no source-browser or built-asset reuse.
+
 Current 0.48.2 composition: default full qualification with the exclusive
 /workspace/output/files1318-current0482-manifest.json. It binds pinned Main
 f3aa529e and reviewed Files 0f6dd87a through their exact source-only merge.
@@ -326,6 +333,27 @@ CURRENT0482_BINDING = {
     'composedClosureSha256': '460f588eb75780eec7fe969bb5940922138efed4a27e47e823752789989e51fc',
     'trackedCount': 3344,
 }
+FOCUS_RETURN_MANIFEST = ROOT / 'output/files1318-focus-return-manifest.json'
+CHECK26_ROOT = ROOT / 'output/files1318-check26-units'
+CHECK26_BEFORE = {
+    'revision': 'e2d5fb3dac01176ef50eb7079aef2e73008edf0d',
+    'tree': 'd23bcbefb8ff15683eb486a3dd8d81013a496bd9',
+    'reportSha256': '2326b451077138a5a9c31d3f1d5e9928414a7b3c0bb5cb952a2c9714114ba3dd',
+    'indexSha256': 'd42518985c769798ba7ce11ba308b642321c8e08ad7a0d0c83256afde5972912',
+    'manifestSha256': '3f8ea6906699d75597d330ce3e7ea5602c68f4e2eab86c558f67fd64935706b3',
+    'evidenceSha256': '2eb8ee1c7e3fc8ccc65b1e5cae4746257ba99ef5bf7be0597c4f5b7f9cf706c9',
+}
+FOCUS_RETURN_CLOSURE_SHA = '9dc88fdbe99361f2afce04771f30d078e479cd7ea26376732a4adc36e79fb8a0'
+CHECK26_UNIT_PHASES = ('python-tests', 'frontend-units')
+CHECK26_UNIT_FILES = (
+    'report.json', 'evidence-manifest.json', 'parent-manifest.json', 'execution-contract.json',
+    'runtime-readiness.json', 'browser-readiness.json', 'executables.json',
+    'prepared-inventory.json', 'prepared-plan.json', 'pytest-call.json',
+    'python.xml', 'python-collection.json', 'python-counts.json',
+    'python-tests/results.json', 'python-tests/python-tests.log',
+    'frontend-units/results.json', 'frontend-units/frontend-units.log',
+    'standard-ux-canvas-files/evidence/observations.json',
+)
 HARNESS = OUT / 'harness'
 VENV = OUT / 'installed'
 DRIVER = 'scripts/files1318_integrated_checks.py'
@@ -578,7 +606,7 @@ def frozen_inputs(frozen, *, built=False):
                                  STATE_REDUCTION_MANIFEST, FOCUS_CONTRAST_MANIFEST,
                                  FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST,
                                  COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST,
-                                 CURRENT0481_MANIFEST, CURRENT0482_MANIFEST), 'Unsafe frozen path')
+                                 CURRENT0481_MANIFEST, CURRENT0482_MANIFEST, FOCUS_RETURN_MANIFEST), 'Unsafe frozen path')
         require(path.parent.resolve().is_relative_to(ROOT), 'Frozen path escapes snapshot')
         require(expected['mode'] in ('100644', '100755', '120000')
                 and re.fullmatch('[a-f0-9]{64}', expected['sha256']), 'Invalid frozen identity')
@@ -623,6 +651,89 @@ def current0482_snapshot(frozen):
                 separators=(',', ':')).encode()).hexdigest() == CURRENT0482_BINDING['composedClosureSha256']
             and frozen['files'][DRIVER]['mode'] == '100644',
             'Successor source changed outside the qualification driver')
+
+
+def focus_return_snapshot(frozen):
+    require(frozen.get('check26Before') == CHECK26_BEFORE
+            and frozen['baselineRevision'] == CURRENT0482_BINDING['baselineRevision']
+            and frozen['baselineTree'] == CURRENT0482_BINDING['baselineTree']
+            and set(frozen) == {'schemaVersion', 'baselineRevision', 'baselineTree', 'revision', 'tree',
+                                'reviewed', 'changedPaths', 'files', 'check26Before'}
+            and set(frozen['changedPaths']) == set(CURRENT0481_CHANGES) | {'frontend/src/responsive-navigation.jsx'}
+            and len(frozen['files']) == 3344, 'Focus repair must bind the exact check-26 source and scope')
+    closure = {n: v for n, v in frozen['files'].items() if n != DRIVER}
+    require(hashlib.sha256(json.dumps(closure, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+            == FOCUS_RETURN_CLOSURE_SHA, 'Focus-return product/test closure changed')
+
+
+def check26_units(frozen):
+    """Reuse two unchanged unit phases only; retain the actual later browser failure."""
+    require(sha(CHECK26_ROOT / 'INDEX.json') == CHECK26_BEFORE['indexSha256'], 'Check-26 index changed')
+    index = read(CHECK26_ROOT / 'INDEX.json')['files']
+    prior = OUT / 'prior-check26'
+    prior.mkdir()
+    bindings = {'INDEX.json': CHECK26_BEFORE['indexSha256'],
+                **{n: index[n]['sha256'] for n in CHECK26_UNIT_FILES}}
+    require(bindings['report.json'] == CHECK26_BEFORE['reportSha256']
+            and bindings['parent-manifest.json'] == CHECK26_BEFORE['manifestSha256']
+            and bindings['evidence-manifest.json'] == CHECK26_BEFORE['evidenceSha256'], 'Check-26 anchors changed')
+    for name, digest in bindings.items():
+        source, target = CHECK26_ROOT / name, prior / name
+        require(source.resolve() == source and stat.S_ISREG(source.lstat().st_mode)
+                and sha(source) == digest, f'Changed unit-proof input: {name}')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        require(sha(target) == digest, 'Unit-proof copy differs')
+    old, previous = read(prior / 'report.json'), read(prior / 'parent-manifest.json')
+    evidence = read(prior / 'evidence-manifest.json')
+    require(previous['revision'] == CHECK26_BEFORE['revision'] and previous['tree'] == CHECK26_BEFORE['tree']
+            and previous['files'].keys() == frozen['files'].keys()
+            and {n for n in frozen['files'] if frozen['files'][n] != previous['files'][n]} ==
+                {DRIVER, 'frontend/src/responsive-navigation.jsx', 'frontend/tests/standard-ux-canvas-files-browser.mjs'},
+            'Unit reuse requires every other input, including unit owners/helpers/locks, unchanged')
+    require(old['passed'] is False and old['complete'] is False and old['finalization'] == {'status': 'passed'}
+            and old['qualification'] == 'current0482-full'
+            and old['manifestSha256'] == CHECK26_BEFORE['manifestSha256']
+            and old['evidenceManifestSha256'] == CHECK26_BEFORE['evidenceSha256']
+            and old['phases']['standard-ux-canvas-files']['status'] == 'failed',
+            'Check 26 must remain the original partial failure')
+    for name, digest in bindings.items():
+        if name not in ('INDEX.json', 'report.json', 'evidence-manifest.json'):
+            require(evidence[name] == digest, 'Check-26 evidence binding differs')
+    failed = read(prior / 'standard-ux-canvas-files/evidence/observations.json')
+    require(failed['passed'] is False and failed['focusTraversal']['complete'] is True
+            and 'Focus canvas' in failed['uiFailure']['message'] and 'Received: inactive' in failed['uiFailure']['message']
+            and failed['cleanupFailures'] == [] and failed['homeRemoved'] is True,
+            'Wrong check-26 failure; do not substitute the old traversal failure')
+    contract = read(prior / 'execution-contract.json')
+    provenance = {'manifestSha256': CHECK26_BEFORE['manifestSha256'],
+                  'revision': previous['revision'], 'tree': previous['tree'],
+                  'baselineRevision': previous['baselineRevision'], 'baselineTree': previous['baselineTree'],
+                  'contractSha256': sha(prior / 'execution-contract.json')}
+    require(contract['source']['sourceHead'] == previous['revision'], 'Check-26 contract source differs')
+    commands = {
+        'python-tests': [str(PYTHON), '-I', '-B', str(ROOT / DRIVER), '--python-tests'],
+        'frontend-units': [str(NODE), '--test', '--test-reporter=tap', *(str(ROOT / n) for n in UNIT_FILES)],
+    }
+    for phase, command in commands.items():
+        result, row = read(prior / phase / 'results.json'), old['phases'][phase]
+        raw, = result['scenarios']
+        require(result['source'] == provenance and result['complete'] is True and result['passed'] is True
+                and row['status'] == row['verdict'] == raw['status'] == 'passed'
+                and row['executed'] is True and row['process'] == raw and row['reason'] is None
+                and raw['command'] == row['command'] == command and raw['id'] == phase
+                and raw['reason'] is None and raw['cleanup'] == CLEAN and type(raw['exitCode']) is int
+                and raw['exitCode'] == 0 and row['cwd'] == str(ROOT / 'frontend')
+                and raw['env'] == row['env'], 'Check-26 unit process/pass/cleanup differs')
+    require(read(prior / 'pytest-call.json') == {'call': 'pytest.main', 'args': pytest_arguments(QUALIFIED_OUT, current=True)}
+            and junit(prior, current=True) == read(prior / 'python-counts.json'), 'Check-26 Python selection differs')
+    unit_proof(prior)
+    retained_environment(prior)
+    value = {'priorPassed': False, 'priorComplete': False, 'source': CHECK26_BEFORE,
+             'proofFiles': bindings, 'reusedPhases': list(CHECK26_UNIT_PHASES),
+             'buildReusable': False, 'browserReusable': False}
+    save('check26-unit-reuse.json', value)
+    return value
 
 
 def diagnostic_static(frozen, *, binding='diagnosticReuse'):
@@ -3533,7 +3644,7 @@ def usability_proof(evidence_root=None):
             [{**expected, 'browserErrors': 0}], 'Canvas usability completion report missing/changed')
 
 
-def standard_files_proof(*, sequential_focus=False):
+def standard_files_proof(*, sequential_focus=False, focus_return=False):
     proof = read(OUT / 'standard-ux-canvas-files/evidence/observations.json')
     source = (ROOT / 'frontend/tests/standard-ux-canvas-files-browser.mjs').read_text()
     expected = re.findall(r"checks\.push\('([^']+)'\)", source)
@@ -3561,6 +3672,18 @@ def standard_files_proof(*, sequential_focus=False):
                     and step['after']['nodes'] == nodes and step['after']['activeIndex'] == index
                     and step['after']['active'] == nodes[index], 'Native focus did not traverse/wrap through exact retained scope')
             before = step['after']
+    if focus_return:
+        result = proof['focusReturn']
+        start = proof['focusTraversal']['initial']['activeIndex']
+        after = result['after']
+        require(result['complete'] is True and not result.get('captureError')
+                and result['before'] == proof['focusTraversal']['steps'][-1]['after']
+                and after['activeIndex'] == start and after['active'] == after['nodes'][start]
+                and after['active'] == {**proof['focusTraversal']['initial']['active'], 'label': 'Focus canvas'}
+                and result['invoker'] == {'connected': True, 'tag': 'BUTTON', 'label': 'Focus canvas',
+                    'focused': True, 'sameControl': True, 'inert': False, 'visible': True}
+                and result['canvas'] == {'role': None, 'focused': 'false', 'hidden': False},
+                'Escape did not restore the retained original native invoker after commit')
     exit_state, cleanup = proof['fixtureExit'], proof['fixtureCleanup']
     require(set(exit_state) == {'pid', 'code', 'signal', 'settled'}
             and type(exit_state['pid']) is int and exit_state['pid'] > 0
@@ -3737,7 +3860,7 @@ def main():
                                  STATE_REDUCTION_MANIFEST, FOCUS_CONTRAST_MANIFEST,
                                  FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST,
                                  COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST,
-                                 CURRENT0481_MANIFEST, CURRENT0482_MANIFEST])
+                                 CURRENT0481_MANIFEST, CURRENT0482_MANIFEST, FOCUS_RETURN_MANIFEST])
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--corner-diagnostic', action='store_true')
     modes.add_argument('--contour-qualification', action='store_true')
@@ -3765,14 +3888,16 @@ def main():
                      else CONTOUR_MANIFEST if args.contour_qualification else MANIFEST)
     manifest_paths = ((FOCUS_CONTRAST_MANIFEST, FOCUS_CONTRAST_SETTLED_MANIFEST)
                       if args.focus_contrast else (MANIFEST, COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST,
-                          COMPACT24_MANIFEST, COMPACT25_MANIFEST, CURRENT0481_MANIFEST, CURRENT0482_MANIFEST)
+                          COMPACT24_MANIFEST, COMPACT25_MANIFEST, CURRENT0481_MANIFEST, CURRENT0482_MANIFEST,
+                          FOCUS_RETURN_MANIFEST)
                       if manifest_path == MANIFEST else (manifest_path,))
     if args.manifest not in manifest_paths:
         parser.error('The manifest must match the selected qualification mode')
     compact25 = args.manifest == COMPACT25_MANIFEST
     current0481 = args.manifest == CURRENT0481_MANIFEST
     current0482 = args.manifest == CURRENT0482_MANIFEST
-    current_full = current0481 or current0482
+    focus_return = args.manifest == FOCUS_RETURN_MANIFEST
+    current_full = current0481 or current0482 or focus_return
     compact24 = args.manifest in (COMPACT24_MANIFEST, COMPACT25_MANIFEST)
     compact23 = args.manifest in (COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST)
     compact_button = current_full or args.manifest in (
@@ -3809,6 +3934,15 @@ def main():
         report['limits'].append('Main/e15 composition requires all current phases freshly executed. '
                                 'Old 23/24/25 failures and cancelled/expired non-runs remain historical; '
                                 'current rows move the original derived contour, not its native target/bytes oracle.')
+    if focus_return:
+        report.update(qualification='focus-return-after26', priorChecksConsumed=26,
+                      currentSource=CHECK26_BEFORE, historicalProofReuse='unit-only-after-exact-validation')
+        report['phases']['check26-unit-reuse'] = {'status': 'unrun', 'reason': 'not_started'}
+        for name in CHECK26_UNIT_PHASES:
+            report['phases'][name]['reason'] = 'reuse_pending_exact_check26_proof'
+        report['limits'][-1] = ('Check 26 remains failed at Escape focus restoration. Only unchanged 84/19 unit cases '
+                               'may be reused after exact input/environment checks. Shared focus changed, so build/parity '
+                               'and every browser/package phase run freshly; no old browser pass or asset is restored.')
     if compact23:
         report.update(continuationOf=COMPACT23_BEFORE, priorPrelaunchNotRunsRetained=2)
         report['phases']['compact23-reuse'] = {'status': 'unrun', 'reason': 'not_started'}
@@ -3932,7 +4066,9 @@ def main():
         def snapshot():
             frozen = read(args.manifest)
             require(frozen['schemaVersion'] == 2, 'Wrong manifest schema')
-            if current0482:
+            if focus_return:
+                focus_return_snapshot(frozen)
+            elif current0482:
                 current0482_snapshot(frozen)
             elif current0481:
                 current0481_snapshot(frozen)
@@ -3944,7 +4080,8 @@ def main():
                     and frozen['tree'] != frozen['baselineTree'] and frozen['reviewed'] is True,
                     'Require the committed, parent-reviewed candidate, not dirty baseline bytes')
             changed = frozen['changedPaths']
-            allowed_changes = (set(CURRENT0481_CHANGES) if current_full else
+            allowed_changes = (set(CURRENT0481_CHANGES) | {'frontend/src/responsive-navigation.jsx'} if focus_return else
+                               set(CURRENT0481_CHANGES) if current_full else
                                REVIEWED_CHANGES | COMPACT_BUTTON_PRODUCT_PATHS if compact_button
                                else REVIEWED_CHANGES | {COARSE_TOOLBAR_CSS} if fresh_product else REVIEWED_CHANGES)
             require(isinstance(changed, list) and len(changed) == len(set(changed))
@@ -4180,6 +4317,15 @@ def main():
                 "assert not build.ProjectBuilder('/workspace').check_dependencies('wheel')"], cap=30)
         run('browser-readiness', [NODE, '--input-type=module', '-e',
             BROWSER_READY.replace('/artifacts/files1318-qualified', str(OUT))], cap=45)
+        if focus_return:
+            reused26 = step('check26-unit-reuse', lambda: check26_units(frozen))
+            for name in CHECK26_UNIT_PHASES:
+                report['phases'][name].update(status='REUSED', executed=False,
+                    reason='exact_check26_unit_source_environment_and_evidence_verified',
+                    sourceRevision=CHECK26_BEFORE['revision'], sourceTree=CHECK26_BEFORE['tree'],
+                    priorEvidence=f'prior-check26/{name}/results.json',
+                    priorEvidenceSha256=reused26['proofFiles'][f'{name}/results.json'])
+            save('report.json', report)
         if compact23:
             reused = step('compact23-reuse', lambda: compact23_reuse(frozen, standard_focus=compact25))
             for name in COMPACT23_REUSED_PHASES:
@@ -4292,7 +4438,7 @@ def main():
                     priorEvidenceSha256=reused25['proofFiles'][f'{name}/results.json'],
                     verdict='expected_stalled_response_failure' if name == 'renderer-stalled-response' else 'passed')
             save('report.json', report)
-        if not checkpoint_mode and not reuse_mode and not args.coarse_toolbar_qualification and not compact23:
+        if not checkpoint_mode and not reuse_mode and not args.coarse_toolbar_qualification and not compact23 and not focus_return:
             run('python-tests', [PYTHON, '-I', '-B', ROOT / DRIVER, '--python-tests'], cap=180,
                 verify=lambda: junit(current=current_full))
             run('frontend-units', [NODE, '--test', '--test-reporter=tap',
@@ -4347,7 +4493,7 @@ def main():
                     verify=lambda: renderer_proof(True, startup=compact23 or current_full, live_route_cleanup=compact24 or current_full), negative=True)
                 run('canvas-usability', [NODE, 'tests/canvas-usability-browser.mjs'], verify=usability_proof)
             run('standard-ux-canvas-files', [NODE, 'tests/standard-ux-canvas-files-browser.mjs'],
-                verify=lambda: standard_files_proof(sequential_focus=compact25 or current_full))
+                verify=lambda: standard_files_proof(sequential_focus=compact25 or current_full, focus_return=focus_return))
             if current_full:
                 run('canvas-refresh-catchup', [NODE, 'tests/canvas-refresh-catchup-browser.mjs'],
                     cap=180, verify=catchup_proof)
@@ -4436,24 +4582,34 @@ def main():
                             and report['phases']['frontend-build']['status'] == ('REUSED' if compact23 else 'passed')
                             and report['phases']['frontend-build']['executed'] is (not compact23)
                             and {name for name, row in report['phases'].items() if row['status'] == 'REUSED'} ==
-                                (set(COMPACT23_REUSED_PHASES) | (set(COMPACT25_REUSED_PHASES) if compact25 else set())
+                                (set(CHECK26_UNIT_PHASES) if focus_return else
+                                 set(COMPACT23_REUSED_PHASES) | (set(COMPACT25_REUSED_PHASES) if compact25 else set())
                                  if compact23 else set()),
                             'Compact full qualification lost fresh-build/source/installed identity')
                 if current_full:
-                    phases = set(PHASES) | {'frontend-build-parity', 'canvas-refresh-catchup'}
+                    phases = set(PHASES) | {'frontend-build-parity', 'canvas-refresh-catchup'} | (
+                        {'check26-unit-reuse'} if focus_return else set())
                     require(set(report['phases']) == phases and all(
-                        row['status'] == ('running' if name == 'final-integrity' else 'passed')
+                        row['status'] == ('running' if name == 'final-integrity' else
+                                         'REUSED' if focus_return and name in CHECK26_UNIT_PHASES else 'passed')
                         for name, row in report['phases'].items())
                         and all(report['phases'][name]['executed'] is True for name in (
                             'frontend-build', 'frontend-build-parity', 'python-tests', 'frontend-units',
                             'topology-source', 'generated-source', 'canvas-renderers', 'renderer-stalled-response',
                             'canvas-usability', 'standard-ux-canvas-files', 'canvas-refresh-catchup',
                             'wheel-build', 'fresh-venv', 'install-wheel', 'installed-readiness',
-                            'topology-installed', 'generated-installed'))
+                            'topology-installed', 'generated-installed')
+                            if not (focus_return and name in CHECK26_UNIT_PHASES))
                         and read(OUT / 'frontend-build/first-static.json') ==
                             {n.removeprefix('amplifier_web/static/'): h for n, h in expected['static'].items()}
                         and tree(ROOT / 'examples/shell-reader/dist') == read(OUT / 'reader-example-build.json')['files'],
-                        'Current source/build/installed qualification incomplete or reused')
+                        'Current source/build/installed qualification incomplete or unexpected reuse')
+                    if focus_return:
+                        require(all(report['phases'][name]['executed'] is False for name in CHECK26_UNIT_PHASES)
+                                and all(sha(folder / name) == digest
+                                    for folder in (CHECK26_ROOT, OUT / 'prior-check26')
+                                    for name, digest in reused26['proofFiles'].items()),
+                                'Check-26 unit evidence changed or passing unit phases were replayed')
                 if compact23:
                     require(all(sha(folder / name) == digest
                                 for folder in (COMPACT23_ROOT, OUT / 'prior-compact23')
