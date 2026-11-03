@@ -239,25 +239,37 @@ jobs:
                   'revision': revision, 'tree': tree, 'runId': run_id, 'runAttempt': attempt, 'missing': []}
               assert targets == TARGETS
 
-          def resolved_source(value, root):
+          def resolved_source(name, value, root):
               if value is None:
-                  return None  # Installed version is known; registry URL is not attested by direct_url.
+                  assert name in {'amplifier-core', 'pytest'}, 'Missing resolved VCS source for ' + name
+                  return None  # Registry version/binary is recorded; no direct URL is attested.
+              sources = {
+                  'amplifier-foundation': ('amplifier-foundation', None),
+                  'amplifier-module-loop-live': ('amplifier-module-loop-live', None),
+                  'amplifier-module-loop-streaming': ('amplifier-module-loop-streaming', None),
+                  'amplifier-module-context-simple': ('amplifier-module-context-simple', None),
+                  'amplifier-module-tool-filesystem': ('amplifier-module-tool-filesystem', None),
+                  'amplifier-module-tool-apply-patch': ('amplifier-bundle-filesystem', 'modules/tool-apply-patch'),
+                  'amplifier-module-tool-delegate': ('amplifier-foundation', 'modules/tool-delegate'),
+              }
+              repository, subdirectory = sources[name]
               url = urlsplit(value['url'])
               assert not url.username and not url.password and not url.query and not url.fragment
               if url.scheme == 'file':
-                  assert not url.netloc
+                  assert name == 'amplifier-module-loop-live' and not url.netloc
+                  assert value.get('subdirectory') is None
                   assert Path(url.path).resolve() == root / '.ci/loop-live'
                   commit = git('-C', '.ci/loop-live', 'rev-parse', 'HEAD')
                   assert re.fullmatch('[0-9a-f]{40}', commit)
                   return {'url': 'file:.ci/loop-live', 'checkoutCommit': commit}
               assert url.scheme == 'https' and url.netloc == 'github.com'
-              assert re.fullmatch(r'/microsoft/[A-Za-z0-9_.-]+', url.path)
+              assert url.path.removesuffix('.git') == '/microsoft/' + repository
               vcs = value['vcs_info']
               assert vcs['vcs'] == 'git' and re.fullmatch('[0-9a-f]{40}', vcs['commit_id'])
               result = {'url': url.geturl(), 'vcs': 'git', 'commitId': vcs['commit_id']}
               subdir = value.get('subdirectory')
+              assert subdir == subdirectory
               if subdir is not None:
-                  assert subdir in {'modules/tool-delegate', 'modules/tool-apply-patch'}
                   result['subdirectory'] = subdir
               return result
 
@@ -320,8 +332,16 @@ jobs:
                                        'amplifier-module-tool-filesystem', 'amplifier-module-tool-apply-patch',
                                        'amplifier-module-tool-delegate', 'pytest'):
                               dist = md.distribution(name)
-                              record['distributions'][name] = {'version': dist.version,
-                                  'directSource': resolved_source(json.loads(dist.read_text('direct_url.json') or 'null'), Path.cwd().resolve())}
+                              identity = record['distributions'][name] = {
+                                  'version': dist.version, 'directSourceStatus': 'unverified'}
+                              try:
+                                  identity['directSource'] = resolved_source(name,
+                                      json.loads(dist.read_text('direct_url.json') or 'null'), Path.cwd().resolve())
+                                  identity['directSourceStatus'] = 'registry' if identity['directSource'] is None else 'verified'
+                              except Exception:
+                                  identity['directSourceStatus'] = 'refused'
+                                  record['provenanceFailureDistribution'] = name
+                                  raise
                           for name in ('amplifier_core', 'amplifier_core._engine', 'amplifier_foundation',
                                        'amplifier_foundation.bundle', 'amplifier_module_loop_live',
                                        'amplifier_module_loop_live.runtime', 'amplifier_module_loop_live.orchestrator',

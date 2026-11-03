@@ -1156,9 +1156,17 @@ def test_native_child_ci_requires_exact_collection_and_successful_junit(change):
             ns['validate_results'](collected, root, code)
 
 
-@pytest.mark.parametrize('change', ['none', 'token', 'query', 'foreign-host', 'moving-ref', 'subdirectory', 'foreign-file-host'])
+@pytest.mark.parametrize('change', [
+    'none', 'token', 'query', 'foreign-host', 'moving-ref', 'subdirectory', 'foreign-file-host',
+    'missing-subdirectory', 'wrong-repository', 'wrong-checkout-distribution', 'missing-commit',
+    'missing:amplifier-foundation', 'missing:amplifier-module-loop-live',
+    'missing:amplifier-module-loop-streaming', 'missing:amplifier-module-context-simple',
+    'missing:amplifier-module-tool-filesystem', 'missing:amplifier-module-tool-apply-patch',
+    'missing:amplifier-module-tool-delegate',
+])
 def test_native_child_ci_records_only_actual_public_vcs_provenance(change, tmp_path):
     ns = native_child_validation()
+    name = 'amplifier-module-tool-apply-patch'
     value = {'url': 'https://github.com/microsoft/amplifier-bundle-filesystem',
              'vcs_info': {'vcs': 'git', 'commit_id': 'c' * 40, 'requested_revision': 'main'},
              'subdirectory': 'modules/tool-apply-patch'}
@@ -1167,20 +1175,50 @@ def test_native_child_ci_records_only_actual_public_vcs_provenance(change, tmp_p
     elif change == 'foreign-host': value['url'] = 'https://other.invalid/microsoft/module'
     elif change == 'moving-ref': value['vcs_info']['commit_id'] = 'main'
     elif change == 'subdirectory': value['subdirectory'] = '../../private'
-    elif change == 'foreign-file-host': value['url'] = 'file://other-host' + str(tmp_path / '.ci/loop-live')
+    elif change == 'foreign-file-host':
+        name, value = 'amplifier-module-loop-live', {'url': 'file://other-host' + str(tmp_path / '.ci/loop-live')}
+    elif change == 'missing-subdirectory': del value['subdirectory']
+    elif change == 'wrong-repository': value['url'] = 'https://github.com/microsoft/amplifier-foundation'
+    elif change == 'wrong-checkout-distribution': value = {'url': (tmp_path / '.ci/loop-live').as_uri()}
+    elif change == 'missing-commit': del value['vcs_info']['commit_id']
+    elif change.startswith('missing:'): name, value = change.split(':', 1)[1], None
     if change == 'none':
-        assert ns['resolved_source'](value, tmp_path) == {
+        assert ns['resolved_source'](name, value, tmp_path) == {
             'url': value['url'], 'vcs': 'git', 'commitId': 'c' * 40, 'subdirectory': 'modules/tool-apply-patch'}
-        assert ns['resolved_source'](None, tmp_path) is None
-        ns['git'] = lambda *args: 'd' * 40
-        assert ns['resolved_source']({'url': (tmp_path / '.ci/loop-live').as_uri()}, tmp_path) == {
+        for registry in ('amplifier-core', 'pytest'):
+            assert ns['resolved_source'](registry, None, tmp_path) is None
+        for distribution, repository, subdirectory in [
+            ('amplifier-foundation', 'amplifier-foundation', None),
+            ('amplifier-module-loop-live', 'amplifier-module-loop-live', None),
+            ('amplifier-module-loop-streaming', 'amplifier-module-loop-streaming', None),
+            ('amplifier-module-context-simple', 'amplifier-module-context-simple', None),
+            ('amplifier-module-tool-filesystem', 'amplifier-module-tool-filesystem', None),
+            ('amplifier-module-tool-delegate', 'amplifier-foundation', 'modules/tool-delegate'),
+        ]:
+            direct = {'url': 'https://github.com/microsoft/' + repository,
+                      'vcs_info': value['vcs_info'], **({'subdirectory': subdirectory} if subdirectory else {})}
+            assert ns['resolved_source'](distribution, direct, tmp_path) == {
+                'url': direct['url'], 'vcs': 'git', 'commitId': 'c' * 40,
+                **({'subdirectory': subdirectory} if subdirectory else {})}
+        def checkout_commit(*args):
+            assert args == ('-C', '.ci/loop-live', 'rev-parse', 'HEAD')
+            return 'd' * 40
+        ns['git'] = checkout_commit
+        assert ns['resolved_source']('amplifier-module-loop-live',
+                {'url': (tmp_path / '.ci/loop-live').as_uri()}, tmp_path) == {
             'url': 'file:.ci/loop-live', 'checkoutCommit': 'd' * 40}
     else:
-        with pytest.raises(AssertionError):
-            ns['resolved_source'](value, tmp_path)
+        with pytest.raises((AssertionError, KeyError)):
+            ns['resolved_source'](name, value, tmp_path)
 
 
-@pytest.mark.parametrize('change', ['none', 'missing-native-engine', 'wrong-mount', 'duplicate-entry'])
+@pytest.mark.parametrize('change', [
+    'none', 'missing-native-engine', 'wrong-mount', 'duplicate-entry',
+    'missing:amplifier-foundation', 'missing:amplifier-module-loop-live',
+    'missing:amplifier-module-loop-streaming', 'missing:amplifier-module-context-simple',
+    'missing:amplifier-module-tool-filesystem', 'missing:amplifier-module-tool-apply-patch',
+    'missing:amplifier-module-tool-delegate',
+])
 def test_native_child_ci_import_hook_retains_partial_provenance(change, tmp_path):
     import ast
     from copy import deepcopy
@@ -1199,13 +1237,31 @@ def test_native_child_ci_import_hook_retains_partial_provenance(change, tmp_path
             raise ModuleNotFoundError('missing fixture native engine')
         return {'origin': str(tmp_path / (name + ('.so' if name == 'amplifier_core._engine' else '.py'))),
                 'sha256': 'a' * 64}
-    record = {'distributions': {}, 'modules': {}}
+    provenance = native_child_validation()
+    provenance['git'] = lambda *args: 'd' * 40
+    missing = change.split(':', 1)[1] if change.startswith('missing:') else None
+    def distribution(name):
+        direct = None
+        if name not in {'amplifier-core', 'pytest', missing}:
+            if name == 'amplifier-module-loop-live':
+                direct = {'url': (Path.cwd() / '.ci/loop-live').as_uri()}
+            else:
+                repository = {'amplifier-module-tool-apply-patch': 'amplifier-bundle-filesystem',
+                              'amplifier-module-tool-delegate': 'amplifier-foundation'}.get(name, name)
+                direct = {'url': 'https://github.com/microsoft/' + repository,
+                          'vcs_info': {'vcs': 'git', 'commit_id': 'c' * 40, 'requested_revision': 'main'}}
+                if name in {'amplifier-module-tool-apply-patch', 'amplifier-module-tool-delegate'}:
+                    direct['subdirectory'] = 'modules/' + name.removeprefix('amplifier-module-')
+        def read_text(path):
+            assert path == 'direct_url.json'
+            return json.dumps(direct) if direct is not None else None
+        return SimpleNamespace(version='1.2.3', read_text=read_text)
+    record = {'passed': False, 'distributions': {}, 'modules': {}}
     saved = []
     namespace = {
         'record': record, 'save': lambda: saved.append(deepcopy(record)),
-        'module_identity': identity, 'resolved_source': lambda value, root: value,
-        'md': SimpleNamespace(distribution=lambda name: SimpleNamespace(version='1.2.3', read_text=lambda path: None),
-                              entry_points=lambda group: entries),
+        'module_identity': identity, 'resolved_source': provenance['resolved_source'],
+        'md': SimpleNamespace(distribution=distribution, entry_points=lambda group: entries),
         'importlib': SimpleNamespace(machinery=SimpleNamespace(EXTENSION_SUFFIXES=['.so']),
             import_module=lambda name: SimpleNamespace(mount=mounts[name.removeprefix('amplifier_module_').replace('_', '-')])),
         'json': json, 'Path': Path,
@@ -1220,8 +1276,17 @@ def test_native_child_ci_import_hook_retains_partial_provenance(change, tmp_path
         with pytest.raises((ModuleNotFoundError, AssertionError, ValueError)):
             hook(None)
         assert 'canonicalMounts' not in record
-    assert saved == [record] and record['phase'] == 'pytest-imports'
-    assert 'amplifier_core._engine' in record['modules']
+    assert saved == [record] and record['phase'] == 'pytest-imports' and record['passed'] is False
+    assert record['distributions']['amplifier-core'] == {
+        'version': '1.2.3', 'directSourceStatus': 'registry', 'directSource': None}
+    if missing:
+        assert record['provenanceFailureDistribution'] == missing
+        assert record['distributions'][missing] == {'version': '1.2.3', 'directSourceStatus': 'refused'}
+        assert not record['modules']  # Refused before native imports or collection.
+    else:
+        assert 'provenanceFailureDistribution' not in record
+        assert 'amplifier_core._engine' in record['modules']
+        assert record['distributions']['amplifier-module-tool-apply-patch']['directSource']['commitId'] == 'c' * 40
 
 
 def test_browser_retains_only_the_successfully_built_public_web_payload():
