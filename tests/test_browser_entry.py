@@ -160,6 +160,7 @@ async def test_grant_cookie_protects_actual_auth_middleware_and_replay(owner):
 
 @pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer wrong"},
     {"Authorization": "Bearer amt_" + "x" * 64}, {"Authorization": "Bearer amc_" + "x" * 64},
+    {"Authorization": "Bearer amd_" + "x" * 64},
     {"Cookie": f"{auth.SESSION_COOKIE}=" + auth.new_session("s" * 64)}])
 async def test_issue_requires_explicit_control_not_session_or_device(owner, headers):
     assert (await request(owner, entry.ISSUE_PATH, headers=headers, body=issue_body(owner))).status == 403
@@ -202,11 +203,24 @@ def test_package_identity_does_not_invent_or_normalize_source(identity):
 
 
 @pytest.mark.parametrize("headers", [{"Origin": "https://attacker.example"}, {"Origin": "null"},
+    {"Origin": "chrome-extension://" + "a" * 32},
     {"Origin": None}, {"Host": "attacker.example"}, {"Sec-Fetch-Site": "cross-site"}])
 async def test_cross_origin_host_csrf_rejection_preserves_ticket(owner, headers):
     ticket = await issue(owner)
     assert (await redeem(owner, ticket, headers=headers)).status == 403
     assert (await redeem(owner, ticket)).status == 303
+
+
+async def test_connection_extension_transport_cannot_issue_owner_ticket(owner):
+    # Device enrollment/self CORS exemptions must not expand the Windows
+    # owner-browser boundary when both routes share the authentication middleware.
+    response = await request(owner, entry.ISSUE_PATH, headers={
+        "Origin": "chrome-extension://" + "a" * 32,
+        "Authorization": "Bearer " + owner["control_token"],
+    }, body=issue_body(owner))
+    assert response.status == 403
+    assert "Access-Control-Allow-Origin" not in response.headers
+    assert not owner["browser_entry"]._grants
 
 
 @pytest.mark.parametrize("remote", ["peername", "sockname"])
