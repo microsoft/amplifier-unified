@@ -378,6 +378,7 @@ CHECK26_UNIT_FILES = (
     'standard-ux-canvas-files/evidence/observations.json',
 )
 CHECK27_MANIFEST = ROOT / 'output/files1318-check27-tail-manifest.json'
+CHECK27_V2_MANIFEST = ROOT / 'output/files1318-check27-tail-v2-manifest.json'
 CHECK27_ROOT = ROOT / 'output/files1318-check27-9853'
 CHECK27_STATIC = ROOT / 'output/files1318-check27-static'
 CHECK27_BEFORE = {
@@ -390,6 +391,7 @@ CHECK27_BEFORE = {
     'originalContractSha256': 'ff3294c8f6dab91d39907c6fffa6f8311baad92205681dba639d08985884a523',
 }
 CHECK27_CLOSURE_SHA = '568702b8b55c1b8388ce067717b133fb00618ee6fd7c41c3c400cb29218b1f1a'
+CHECK27_V2_CLOSURE_SHA = 'a07c08ade5a75dfa2d1140ef9410146cc3ecb9f4d69a9491af7102f5af355385'
 CHECK27_REUSED_PHASES = ('frontend-build', 'frontend-build-parity', 'topology-source', 'generated-source',
                          'canvas-renderers', 'renderer-stalled-response', 'canvas-usability')
 HARNESS = OUT / 'harness'
@@ -645,7 +647,7 @@ def frozen_inputs(frozen, *, built=False):
                                  FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST,
                                  COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST,
                                  CURRENT0481_MANIFEST, CURRENT0482_MANIFEST, FOCUS_RETURN_MANIFEST,
-                                 FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST), 'Unsafe frozen path')
+                                 FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST, CHECK27_V2_MANIFEST), 'Unsafe frozen path')
         require(path.parent.resolve().is_relative_to(ROOT), 'Frozen path escapes snapshot')
         require(expected['mode'] in ('100644', '100755', '120000')
                 and re.fullmatch('[a-f0-9]{64}', expected['sha256']), 'Invalid frozen identity')
@@ -707,7 +709,7 @@ def focus_return_snapshot(frozen, *, shared_focus=False):
             'Focus-return product/test closure changed')
 
 
-def check27_snapshot(frozen):
+def check27_snapshot(frozen, *, settled_host=False):
     require(frozen.get('check27Before') == CHECK27_BEFORE and frozen.get('check26Before') == CHECK26_BEFORE
             and frozen['baselineRevision'] == CURRENT0482_BINDING['baselineRevision']
             and frozen['baselineTree'] == CURRENT0482_BINDING['baselineTree']
@@ -718,7 +720,8 @@ def check27_snapshot(frozen):
             'Check-27 tail source/scope binding differs')
     closure = {n: v for n, v in frozen['files'].items() if n != DRIVER}
     require(hashlib.sha256(json.dumps(closure, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-            == CHECK27_CLOSURE_SHA, 'Check-27 tail changed outside its exact harness correction')
+            == (CHECK27_V2_CLOSURE_SHA if settled_host else CHECK27_CLOSURE_SHA),
+            'Check-27 tail changed outside its exact harness correction')
 
 
 def check27_processes(prior, old, previous):
@@ -4123,7 +4126,7 @@ def main():
                                  FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST,
                                  COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST,
                                  CURRENT0481_MANIFEST, CURRENT0482_MANIFEST, FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST,
-                                 CHECK27_MANIFEST])
+                                 CHECK27_MANIFEST, CHECK27_V2_MANIFEST])
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--corner-diagnostic', action='store_true')
     modes.add_argument('--contour-qualification', action='store_true')
@@ -4152,16 +4155,17 @@ def main():
     manifest_paths = ((FOCUS_CONTRAST_MANIFEST, FOCUS_CONTRAST_SETTLED_MANIFEST)
                       if args.focus_contrast else (MANIFEST, COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST,
                           COMPACT24_MANIFEST, COMPACT25_MANIFEST, CURRENT0481_MANIFEST, CURRENT0482_MANIFEST,
-                          FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST)
+                          FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST, CHECK27_V2_MANIFEST)
                       if manifest_path == MANIFEST else (manifest_path,))
     if args.manifest not in manifest_paths:
         parser.error('The manifest must match the selected qualification mode')
     compact25 = args.manifest == COMPACT25_MANIFEST
     current0481 = args.manifest == CURRENT0481_MANIFEST
     current0482 = args.manifest == CURRENT0482_MANIFEST
-    check27_tail = args.manifest == CHECK27_MANIFEST
-    shared_focus = args.manifest in (FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST)
-    focus_return = args.manifest in (FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST)
+    settled_host = args.manifest == CHECK27_V2_MANIFEST
+    check27_tail = args.manifest in (CHECK27_MANIFEST, CHECK27_V2_MANIFEST)
+    shared_focus = args.manifest in (FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST, CHECK27_V2_MANIFEST)
+    focus_return = args.manifest in (FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST, CHECK27_V2_MANIFEST)
     current_full = current0481 or current0482 or focus_return
     compact24 = args.manifest in (COMPACT24_MANIFEST, COMPACT25_MANIFEST)
     compact23 = args.manifest in (COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST)
@@ -4221,7 +4225,7 @@ def main():
         report.update(qualification='check27-remaining-tail', priorChecksConsumed=27, reusedBuild=True,
                       continuationOf=CHECK27_BEFORE,
                       currentSource={'baselineRevision': CURRENT0482_BINDING['baselineRevision'],
-                                     'nonDriverClosureSha256': CHECK27_CLOSURE_SHA},
+                                     'nonDriverClosureSha256': CHECK27_V2_CLOSURE_SHA if settled_host else CHECK27_CLOSURE_SHA},
                       historicalProofReuse='check27-build-browser-and-guarded-check26-units')
         report['phases']['check27-reuse'] = {'status': 'unrun', 'reason': 'not_started'}
         report['phases']['reader-example-build'] = {'status': 'unrun', 'reason': 'not_started'}
@@ -4354,7 +4358,7 @@ def main():
             frozen = read(args.manifest)
             require(frozen['schemaVersion'] == 2, 'Wrong manifest schema')
             if check27_tail:
-                check27_snapshot(frozen)
+                check27_snapshot(frozen, settled_host=settled_host)
             elif focus_return:
                 focus_return_snapshot(frozen, shared_focus=shared_focus)
             elif current0482:

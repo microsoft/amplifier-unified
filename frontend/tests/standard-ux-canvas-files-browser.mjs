@@ -163,14 +163,19 @@ try{
   await dismiss.click();await expect(canvas).toBeHidden();await expect(composer).toBeVisible();
   // Reuse the canonical close journey's readback boundary: optimistic hiding
   // alone is not proof that the host accepted the visibility change.
+  // Poll deadlines do not cancel callbacks. Keep their receipts local, and
+  // publish a detached immutable value only after the awaited poll succeeds.
+  let hostReceipt;
+  narrowDismiss.host=null;
   await expect.poll(async()=>{
    const response=await page.request.get(ready.url+'/api/state?clientId='+encodeURIComponent(before.clientId),{timeout:5000});
    assert.equal(response.status(),200);const body=await boundaryRead(()=>response.json());
    assert.equal(body.status,'observed','Host visibility readback unavailable');const state=body.value;
-   narrowDismiss.host={requestClientId:before.clientId,httpStatus:response.status(),canvasOpen:state.canvas.open,
+   hostReceipt={requestClientId:before.clientId,httpStatus:response.status(),canvasOpen:state.canvas.open,
     resourceId:state.canvas.id,sessionId:state.selectedSessionId};
    return state.canvas.open;
   }).toBe(false);
+  narrowDismiss.host=Object.freeze({...hostReceipt});
  }catch(error){uiFailure??=error;narrowDismiss.primaryFailure=errorRecord(error)}
  await narrowEvidence('after',narrowState);
  if(uiFailure)throw uiFailure;
