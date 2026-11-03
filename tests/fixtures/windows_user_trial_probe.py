@@ -1870,6 +1870,76 @@ def run(wheel, receipt):
 
 
 CLI_MODES = ("setup", "status", "export", "serve", "open")
+CLI_STEPS = frozenset({"installed", "tls_before", "main", "app_create", "settings_update",
+                      "updates_check", "main_returned", "tls_after", "export", "status",
+                      "serve_cleanup", "complete"})
+CLI_FUNCTIONS = {
+    "cli_main": ("amplifier_web.cli", "main"),
+    "cli_serve": ("amplifier_web.cli", "_serve_unlocked"),
+    "app_dispatch": ("amplifier_web.service", "AppService.dispatch"),
+    "app_dispatch_action": ("amplifier_web.service", "AppService._dispatch"),
+    "app_preferences": ("amplifier_web.service", "AppService._refresh_shared_preferences"),
+    "app_publish": ("amplifier_web.service", "AppService._publish"),
+    "update_tick": ("amplifier_web.updates", "UpdateManager.tick"),
+    "update_check": ("amplifier_web.updates", "UpdateManager.check"),
+    "asyncio_create_server": ("asyncio.base_events", "BaseEventLoop.create_server"),
+    "asyncio_resolve_server": ("asyncio.base_events", "BaseEventLoop._create_server_getaddrinfo"),
+    "asyncio_getaddrinfo": ("asyncio.base_events", "BaseEventLoop.getaddrinfo"),
+    "socket_getfqdn": ("socket", "getfqdn"),
+}
+CLI_SOURCES = DIAGNOSTIC_SOURCES | frozenset(CLI_FUNCTIONS) | {"cli_app_create"}
+
+
+def cli_codes():
+    codes = diagnostic_codes()
+    for label, (name, qualified) in CLI_FUNCTIONS.items():
+        value = sys.modules.get(name)
+        for part in qualified.split("."):
+            value = getattr(value, part, None)
+        code = getattr(value, "__code__", None)
+        if isinstance(code, types.CodeType):
+            codes[code] = label
+    return codes
+
+
+def validate_cli_diagnostics(child):
+    """Same bounded safe-frame/error contract, with CLI-only known code labels."""
+    def frame(item):
+        assert item["source"] in CLI_SOURCES
+        if item["source"] == "other":
+            assert set(item) == {"source"}
+        else:
+            assert set(item) == {"source", "codeSha256", "lineOffset"}
+            assert re.fullmatch("[0-9a-f]{64}", item["codeSha256"])
+            assert type(item["lineOffset"]) is int and 0 <= item["lineOffset"] <= 10**6
+    if "step" in child:
+        assert child["step"] in CLI_STEPS
+    if "errors" in child:
+        assert type(child["errors"]) is list and 1 <= len(child["errors"]) <= EXCEPTION_RECORD_LIMIT
+        for error in child["errors"]:
+            assert {"class", "frames"} <= set(error) <= {"class", "frames", "errno", "winerror"}
+            assert error["class"] in ERROR_LABELS and type(error["frames"]) is list and len(error["frames"]) <= 5
+            for item in error["frames"]:
+                frame(item)
+                assert item["source"] != "other"
+            for key in {"errno", "winerror"} & error.keys():
+                assert type(error[key]) is int and -(2**31) <= error[key] < 2**32
+    if "networkDiagnostics" in child:
+        value = child["networkDiagnostics"]
+        assert set(value) == {"attempts", "overflow"}
+        assert type(value["overflow"]) is int and 0 <= value["overflow"] <= 10**9
+        assert type(value["attempts"]) is list and len(value["attempts"]) <= 32
+        total = value["overflow"]
+        for item in value["attempts"]:
+            assert item["event"] in NETWORK_EVENTS and item["case"] == item["phase"] == "outside"
+            assert type(item["count"]) is int and 0 < item["count"] <= 10**9
+            frame({k: v for k, v in item.items() if k not in {"event", "case", "phase", "count"}})
+            total += item["count"]
+        assert total == child["network"]["unknownAttempts"]
+    if child["status"] == "PASS":
+        assert not child.get("errors")
+        if "step" in child:
+            assert child["step"] == "complete"
 
 
 class CliOutput(io.BytesIO):
@@ -1895,6 +1965,11 @@ class CliNetworkGuard(NetworkGuard):
         self.target_port, self.serve, self.listener = port, serve, None
 
     def audit(self, event, args):
+        if event not in NETWORK_EVENTS:
+            return
+        # Only loaded public functions get names/fingerprints; resolve at the
+        # event because main may import a source after the guard was created.
+        self.codes.update(cli_codes())
         if (event == "socket.bind" and self.serve and self.listener is None
                 and args[1] == ("127.0.0.1", self.target_port)):
             frame = sys._getframe(1)
@@ -1916,7 +1991,7 @@ def cli_material(root):
 
 
 @contextmanager
-def cli_application(root, checks):
+def cli_application(root, checks, observation=None, guard=None):
     """Observe real CLI startup/cleanup; only optional provider preload is off.
 
     No replacement runtime, command, app, listener or run_app. The supported
@@ -1930,6 +2005,8 @@ def cli_application(root, checks):
     tasks = []
 
     async def create(*args, **kwargs):
+        if observation is not None:
+            observation["step"] = "app_create"
         assert "runtime" not in kwargs and "preload_providers" not in kwargs
         app = await original(*args, **kwargs, preload_providers=False)
         assert type(app["service"].runtime) is RuntimeManager
@@ -1937,9 +2014,13 @@ def cli_application(root, checks):
         assert app["browser_entry"] is not None
         checks["publicEntryInitialized"] = "PASS"
         service = app["service"]
+        if observation is not None:
+            observation["step"] = "settings_update"
         await service.dispatch("settings.update",
             {"patch": {"updates": {"autoCheck": False, "autoInstall": False}}},
             origin="system", include_state=False)
+        if observation is not None:
+            observation["step"] = "updates_check"
         assert service.state["settings"]["updates"]["autoCheck"] is False
         assert service.state["settings"]["updates"]["autoInstall"] is False
         checks["updatesDisabled"] = "PASS"
@@ -1968,6 +2049,9 @@ def cli_application(root, checks):
         app.on_cleanup.append(cleaned)
         return app
 
+    if guard is not None:
+        guard.codes[create.__code__] = "cli_app_create"
+
     server.create_app = create
     try:
         yield
@@ -1979,7 +2063,7 @@ def cli_child(wheel, mode):
     require_ci()
     root = Path(os.environ["WINDOWS_TRIAL_ROOT"])
     port = int((root / "cli-port").read_text(encoding="ascii"))
-    report = {"mode": mode, "status": "FAIL", "checks": {}, "network": {
+    report = {"mode": mode, "status": "FAIL", "step": "installed", "checks": {}, "network": {
         "blockedOptionalIpv6Probes": 0, "unknownAttempts": 0}}
     guard = CliNetworkGuard(root / ("network-cli-" + mode + ".jsonl"), port,
                             serve=mode == "serve", connect=mode == "open")
@@ -1988,6 +2072,7 @@ def cli_child(wheel, mode):
         report["installed"] = installed(wheel)
         from amplifier_web.deployment import write_private
         from amplifier_web import cli
+        report["step"] = "tls_before"
         before = cli_material(root) if mode != "setup" else None
         original_open, argv = cli.webbrowser.open, sys.argv
         def browser(url):
@@ -2001,29 +2086,35 @@ def cli_child(wheel, mode):
         try:
             cli.webbrowser.open = browser
             sys.argv = ["amplifier-unified", *cli_arguments(mode, root, port)]
+            report["step"] = "main"
             with control_socketpairs(guard), redirect_stdout(text), redirect_stderr(text):
                 if mode == "serve":
-                    with cli_application(root, report["checks"]):
+                    with cli_application(root, report["checks"], report, guard):
                         runpy.run_module("amplifier_web", run_name="__main__")
                 else:
                     runpy.run_module("amplifier_web", run_name="__main__")
             text.flush()
+            report["step"] = "main_returned"
             report["checks"]["mainReturned"] = "PASS"
+            report["step"] = "tls_after"
             after = cli_material(root)
             if before is not None:
                 assert after == before
                 report["checks"]["tlsMaterialStable"] = "PASS"
             if mode == "export":
+                report["step"] = "export"
                 from amplifier_web.tls import exported_ca_bytes
                 assert output.getvalue() == exported_ca_bytes(root / "app")
                 write_private(root / "cli-export.crt", output.getvalue(), owned_root=root)
                 report["checks"]["exportMatchesCa"] = "PASS"
             elif mode == "status":
+                report["step"] = "status"
                 from amplifier_web.tls import ca_fingerprint
                 assert "Local CA: configured" in output.getvalue().decode("utf-8")
                 assert "TLS listener: ready" in output.getvalue().decode("utf-8")
                 assert ca_fingerprint(root / "app") in output.getvalue().decode("utf-8")
             elif mode == "serve":
+                report["step"] = "serve_cleanup"
                 assert (root / "cli-stop").exists() and report["checks"]["appCleanup"] == "PASS"
                 assert guard.listener is not None and guard.listener.fileno() == -1
                 report["checks"]["listenerClosed"] = "PASS"
@@ -2033,13 +2124,18 @@ def cli_child(wheel, mode):
             assert installed(wheel) == report["installed"]
             report["network"] = guard.verify()
             report["status"] = "PASS"
+            report["step"] = "complete"
         finally:
             cli.webbrowser.open, sys.argv = original_open, argv
             text.detach()
-    except BaseException:
-        pass  # Fixed facts only; missing cleanup/diagnostics cannot pass.
+    except BaseException as exc:
+        try:
+            report["errors"] = safe_exception(exc, {**cli_codes(), **guard.codes})
+        except BaseException:
+            report["errors"] = [{"class": "other", "frames": []}]
     finally:
         report["network"] = {"blockedOptionalIpv6Probes": guard.probes, "unknownAttempts": guard.blocked}
+        report["networkDiagnostics"] = guard.network_diagnostics()
         write_json(root / ("cli-" + mode + ".json"), report)
     return 0 if report["status"] == "PASS" else 1
 
@@ -2067,11 +2163,12 @@ def validate_cli_public(report):
         "open": {"mainReturned", "tlsMaterialStable", "browserDelivered"}}
     for child in report["children"]:
         assert {"mode", "status", "checks", "network"} <= set(child) <= {
-            "mode", "status", "checks", "network", "installed"}
+            "mode", "status", "checks", "network", "installed", "step", "errors", "networkDiagnostics"}
         assert child["status"] in {"PASS", "FAIL"} and set(child["checks"]) <= required[child["mode"]]
         assert all(value == "PASS" for value in child["checks"].values())
         assert set(child["network"]) == {"blockedOptionalIpv6Probes", "unknownAttempts"}
         assert all(type(v) is int and 0 <= v <= 10**9 for v in child["network"].values())
+        validate_cli_diagnostics(child)
         if "installed" in child:
             validate_installation(child["installed"])
         if child["status"] == "PASS":
