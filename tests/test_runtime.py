@@ -3048,7 +3048,7 @@ async def test_default_runtime_probe_uninstrumented_journey_keeps_real_acceptanc
                 target.write_bytes(manifest.read_bytes() if name == 'pyproject.toml' else
                     b'version = 1\n' if name == 'uv.lock' else b'synthetic Python')
             with (project / 'uv.lock').open('a', encoding='utf-8') as stream:
-                for name in fixture.IMPORTS.values():
+                for name in dict.fromkeys(fixture.IMPORTS.values()):
                     stream.write('[[package]]\nname = "' + name + '"\nversion = "1.0"\nsource = {registry = "https://example.invalid/simple"}\n')
             self.workers[session['id']] = row
             if failure != 'not-ready':
