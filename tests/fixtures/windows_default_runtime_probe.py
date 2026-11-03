@@ -20,6 +20,7 @@ import re
 import struct
 import subprocess
 import sys
+import time
 import tomllib
 import types
 import zipfile
@@ -104,6 +105,7 @@ THREAD_OPERATIONS = {
     "shared_remote": ("amplifier_foundation.sources.shared", "remote_revision.<read>"),
     "shared_publish": ("amplifier_foundation.sources.shared", "SharedSourceStore.ensure.<publish>"),
 }
+SUBPROCESS_EVENTS = frozenset({"run", "first_communicate", "kill", "drain_communicate", "wait"})
 # Retain the outer lifeline and its scratch identity when the primitive cannot
 # confirm cleanup. A public FAIL record never authorizes a retry or deletion.
 FAILED_OUTER_OWNERS = []
@@ -302,7 +304,7 @@ def validate_worker_startup(value):
         assert type(value["operationsTruncated"]) is bool
         assert type(value["threadOperations"]) is list and len(value["threadOperations"]) <= 8
         for row in value["threadOperations"]:
-            assert type(row) is dict and set(row) == {
+            assert type(row) is dict and set(row) - {"subprocessLifecycle"} == {
                 "operation", "module", "queued", "entered", "returned", "failed", "errors"}
             assert type(row["operation"]) is str and row["operation"] in {*THREAD_OPERATIONS, "other"}
             assert type(row["module"]) is str and row["module"] in ACTIVATION_MODULES
@@ -313,6 +315,163 @@ def validate_worker_startup(value):
             assert type(row["errors"]) is list and len(row["errors"]) <= 1
             validate_diagnostic({"checkpoint": "runtime_start", "errors": row["errors"]})
             assert all(error["frames"] == [] for error in row["errors"])
+            if "subprocessLifecycle" in row:
+                assert row["operation"] == "shared_remote"
+                validate_subprocess_lifecycle(row["subprocessLifecycle"])
+
+
+def validate_subprocess_lifecycle(value):
+    assert type(value) is dict and set(value) == {"status", "timeoutSeen", "events", "codeHashes"}
+    assert type(value["status"]) is str and value["status"] in {"PENDING", "PASS", "FAIL", "refused"}
+    assert type(value["timeoutSeen"]) is bool
+    assert type(value["codeHashes"]) is dict and set(value["codeHashes"]) <= {"run", "communicate", "kill", "wait"}
+    assert all(type(raw) is str and re.fullmatch("[0-9a-f]{64}", raw)
+               for raw in value["codeHashes"].values())
+    assert type(value["events"]) is dict and set(value["events"]) <= SUBPROCESS_EVENTS
+    for row in value["events"].values():
+        assert type(row) is dict and set(row) == {"entered", "exited", "entryBucket", "exitBucket"}
+        assert all(type(row[key]) is int and 0 <= row[key] <= 10**6 for key in ("entered", "exited"))
+        assert row["exited"] <= row["entered"]
+        assert type(row["entryBucket"]) is int and 0 <= row["entryBucket"] <= 8
+        assert row["exitBucket"] is None or (type(row["exitBucket"]) is int and 0 <= row["exitBucket"] <= 8)
+        assert (row["exitBucket"] is None) == (row["exited"] == 0)
+        if row["exitBucket"] is not None:
+            assert row["exitBucket"] >= row["entryBucket"]
+    if value["timeoutSeen"]:
+        assert "kill" in value["events"]
+    if "drain_communicate" in value["events"]:
+        assert value["timeoutSeen"]
+
+
+@contextmanager
+def observe_shared_subprocess(function, publish):
+    """Thread-local read-only profiling of one exact shared_remote invocation.
+
+    Only original loaded run/communicate/kill/wait code is observed. The run
+    frame must descend from this exact read callable; method frames must bind
+    its retained process object. Never inspect arguments/output or signal it.
+    'exited' includes exceptional unwind, not successful return or process exit.
+    Elapsed buckets: <1, <5, <30, <40, <60, <300, <900, <1200, >=1200 seconds.
+    """
+    facts = {"status": "PENDING", "timeoutSeen": False, "events": {}, "codeHashes": {}}
+    def send():
+        try:
+            publish({**facts, "events": {key: dict(row) for key, row in facts["events"].items()},
+                     "codeHashes": dict(facts["codeHashes"])})
+        except BaseException:
+            facts["status"] = "FAIL"
+
+    try:
+        previous = sys.getprofile()
+        codes = {name: getattr(subprocess.run if name == "run" else getattr(subprocess.Popen, name),
+                               "__code__", None) for name in ("run", "communicate", "kill", "wait")}
+        assert all(type(code) is types.CodeType for code in codes.values())
+        facts["codeHashes"] = {name: code_fingerprint(code) for name, code in codes.items()}
+        target = function.__code__
+        started = time.monotonic()
+    except BaseException:
+        facts["status"] = "FAIL"
+        send()
+        yield
+        return
+    if previous is not None:
+        facts["status"] = "refused"
+        send()
+        yield
+        return
+    run_frame = process = None
+    active = {}
+
+    def event(name, entering):
+        elapsed = max(0, time.monotonic() - started)
+        bucket = sum(elapsed >= bound for bound in (1, 5, 30, 40, 60, 300, 900, 1200))
+        row = facts["events"].setdefault(name, {
+            "entered": 0, "exited": 0, "entryBucket": bucket, "exitBucket": None})
+        key = "entered" if entering else "exited"
+        row[key] = min(row[key] + 1, 10**6)
+        row["entryBucket" if entering else "exitBucket"] = bucket
+        send()
+
+    def profile(frame, kind, arg):
+        nonlocal run_frame, process
+        try:
+            if kind == "call":
+                code = frame.f_code
+                if code is codes["run"]:
+                    caller = frame.f_back
+                    for _ in range(8):
+                        if caller is None or caller.f_code is target:
+                            break
+                        caller = caller.f_back
+                    if caller is None or caller.f_code is not target:
+                        return
+                    if run_frame is not None:
+                        facts["status"] = "FAIL"  # Unexpected second run, no relabel.
+                        send()
+                        return
+                    run_frame = frame
+                    name = "run"
+                elif run_frame is not None and (
+                        frame.f_back is run_frame or
+                        (code is codes["wait"] and id(frame.f_back) in active
+                         and active[id(frame.f_back)][0] is frame.f_back
+                         and active[id(frame.f_back)][1] in {"first_communicate", "drain_communicate"})):
+                    candidate = frame.f_locals.get("self")
+                    retained = run_frame.f_locals.get("process")
+                    if retained is None or candidate is not retained:
+                        return
+                    if process is None and code is codes["communicate"]:
+                        process = retained
+                    if candidate is not process:
+                        return
+                    if code is codes["communicate"]:
+                        timeout = frame.f_locals.get("timeout")
+                        if "first_communicate" not in facts["events"] and type(timeout) in {int, float} and timeout == 35:
+                            name = "first_communicate"
+                        elif facts["timeoutSeen"] and timeout is None and "kill" in facts["events"]:
+                            name = "drain_communicate"
+                        else:
+                            facts["status"] = "FAIL"
+                            send()
+                            return
+                    elif code is codes["kill"]:
+                        name = "kill"
+                        facts["timeoutSeen"] |= type(run_frame.f_locals.get("exc")) is subprocess.TimeoutExpired
+                    elif code is codes["wait"]:
+                        name = "wait"
+                    else:
+                        return
+                else:
+                    return
+                active[id(frame)] = (frame, name)
+                event(name, True)
+            elif kind == "return":
+                retained = active.pop(id(frame), None)
+                if retained is not None and retained[0] is frame:
+                    event(retained[1], False)
+        except BaseException:
+            facts["status"] = "FAIL"
+            send()
+
+    facts["status"] = "PASS"
+    installed = False
+    try:
+        try:
+            sys.setprofile(profile)
+            installed = True
+        except BaseException:
+            facts["status"] = "FAIL"
+        send()
+        yield
+    finally:
+        try:
+            if installed and sys.getprofile() is profile:
+                sys.setprofile(previous)
+            elif installed:
+                facts["status"] = "FAIL"  # Do not overwrite somebody else's hook.
+        except BaseException:
+            facts["status"] = "FAIL"
+        send()
 
 
 def loaded_code(module, qualname):
@@ -484,6 +643,19 @@ def install_worker_start_observer(path):
             except BaseException:
                 pass
 
+    def lifecycle_event(row, value):
+        nonlocal failed
+        try:
+            validate_subprocess_lifecycle(value)
+            row["subprocessLifecycle"] = value
+            if value["status"] != "PASS":
+                failed = True
+                facts["diagnosticStatus"] = "FAIL"
+            persist()
+        except BaseException:
+            failed = True
+            facts["diagnosticStatus"] = "FAIL"
+
     def observe_thread_call(frame):
         """CPython 3.13 write-through locals, on the ORIGINAL to_thread entry.
 
@@ -531,7 +703,15 @@ def install_worker_start_observer(path):
                     pass  # A closed loop cannot change the underlying call.
             signal("entered")
             try:
-                result = function(*args, **kwargs)
+                if (row["operation"] == "shared_remote"
+                        and type(function) is types.FunctionType
+                        and function.__code__ is code_for(*THREAD_OPERATIONS["shared_remote"])):
+                    def lifecycle(value):
+                        loop.call_soon_threadsafe(lifecycle_event, row, value)
+                    with observe_shared_subprocess(function, lifecycle):
+                        result = function(*args, **kwargs)
+                else:
+                    result = function(*args, **kwargs)
             except BaseException as error:
                 safe = failure_facts(error, "runtime_start")["errors"][:1]
                 for item in safe:

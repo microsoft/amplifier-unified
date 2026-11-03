@@ -2242,7 +2242,7 @@ def test_default_runtime_probe_loaded_code_fingerprint_is_path_independent_and_e
 @pytest.mark.parametrize('case', [
     'queued', 'returned', 'timeout', 'called', 'unknown', 'clone',
     'outsider', 'nested', 'cancel', 'observer-fault', 'saturation', 'callable',
-    'nested-remote', 'cancel-entered', 'truncation',
+    'nested-remote', 'cancel-entered', 'truncation', 'lifecycle-wired',
 ])
 async def test_default_runtime_probe_thread_operation_phases_without_real_executor(
         tmp_path, monkeypatch, case):
@@ -2302,6 +2302,19 @@ async def test_default_runtime_probe_thread_operation_phases_without_real_execut
             return operation()
         return await thread(read)
 
+    lifecycle_calls = []
+    if case == 'lifecycle-wired':
+        from contextlib import contextmanager
+        @contextmanager
+        def lifecycle(function, publish):
+            # Parent/worker model executes the executor callback on this same
+            # thread. Independently checked real thread-local hook is covered
+            # by original-bodies tests, not installed over the root profiler.
+            lifecycle_calls.append(function)
+            publish({'status': 'PASS', 'timeoutSeen': False, 'events': {}, 'codeHashes': {}})
+            yield
+        monkeypatch.setattr(fixture, 'observe_shared_subprocess', lifecycle)
+
     operation_functions = []
     if case == 'truncation':
         def successful():
@@ -2319,7 +2332,7 @@ async def test_default_runtime_probe_thread_operation_phases_without_real_execut
                 for fn in operation_functions:
                     assert await thread(fn) is token
                 return token
-            if case == 'nested-remote':
+            if case in {'nested-remote', 'lifecycle-wired'}:
                 return await remote_revision()
             if case == 'nested':
                 return await complete_io(function)
@@ -2374,11 +2387,11 @@ async def test_default_runtime_probe_thread_operation_phases_without_real_execut
         row = facts['threadOperations'][0]
         label = ('other' if case in {'unknown', 'clone', 'callable', 'saturation'}
                  else 'receipt_reuse' if case == 'truncation'
-                 else 'shared_remote' if case == 'nested-remote' else 'shared_clean')
+                 else 'shared_remote' if case in {'nested-remote', 'lifecycle-wired'} else 'shared_clean')
         assert row == {'module': 'loop-live', 'operation': label,
                        'queued': 1, 'entered': 0, 'returned': 0, 'failed': 0, 'errors': []}
         if label != 'other' and case != 'truncation':
-            expected_code = remote_revision.__code__.co_consts[1] if case == 'nested-remote' else operation.__code__
+            expected_code = remote_revision.__code__.co_consts[1] if case in {'nested-remote', 'lifecycle-wired'} else operation.__code__
             assert facts['codeHashes'][label] == fixture.code_fingerprint(expected_code)
         if case == 'outsider':
             outside = asyncio.create_task(thread(operation))
@@ -2440,7 +2453,16 @@ async def test_default_runtime_probe_thread_operation_phases_without_real_execut
                 assert row['errors'][0]['frames'] == []
                 assert ('returncode' in row['errors'][0]) is (case == 'called')
             assert 'private' not in json.dumps(final)
-            assert final['diagnosticStatus'] == ('FAIL' if case == 'observer-fault' else 'PASS')
+            assert final['diagnosticStatus'] == ('FAIL' if case in {'observer-fault', 'nested-remote'} else 'PASS')
+            if case == 'nested-remote':
+                assert row['subprocessLifecycle']['status'] == 'refused'
+            elif case == 'lifecycle-wired':
+                assert len(lifecycle_calls) == 1
+                assert lifecycle_calls[0].__code__ is remote_revision.__code__.co_consts[1]
+                assert row['subprocessLifecycle'] == {
+                    'status': 'PASS', 'timeoutSeen': False, 'events': {}, 'codeHashes': {}}
+            else:
+                assert 'subprocessLifecycle' not in row and not lifecycle_calls
             fixture.validate_worker_startup(final)
         await asyncio.sleep(0)
         assert sys.getprofile() is None
@@ -2451,6 +2473,257 @@ async def test_default_runtime_probe_thread_operation_phases_without_real_execut
             if task and not task.done():
                 task.cancel()
         await asyncio.gather(*(task for task in (worker.start_task, outside) if task), return_exceptions=True)
+
+
+@pytest.mark.parametrize('mode', [
+    'normal', 'timeout-drained', 'drain-held', 'first-held', 'called-error',
+    'kill-error', 'cancel', 'wait-held', 'equal-run-clone', 'equal-read-clone', 'foreign-process',
+])
+def test_default_runtime_probe_shared_subprocess_lifecycle_original_bodies(tmp_path, monkeypatch, mode):
+    import inspect
+    import subprocess
+    import textwrap
+    from types import FunctionType
+    fixture = _default_runtime_probe_module()
+    snapshots, checkpoints, calls = [], {}, []
+    clock = [0]
+    token = object()
+    timeout = subprocess.TimeoutExpired('private argv', 35, output=b'private output')
+    cancelled = asyncio.CancelledError('private cancellation')
+    kill_error = PermissionError(5, 'private PID or handle')
+    class Held(BaseException): pass
+    held = Held()
+
+    class Process:
+        returncode = 0
+        stdin, stdout, stderr = None, token, None
+        _communication_started = False
+        args = 'private argv'
+
+        def __init__(self, *args, **kwargs):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def _remaining_time(self, endtime):
+            return None if endtime is None else endtime - clock[0]
+        def _communicate(self, input, endtime, orig_timeout):
+            calls.append(('communicate', orig_timeout))
+            if orig_timeout == 35:
+                checkpoints['first'] = snapshots[-1]
+                # Same method code, different object AND unrelated caller.
+                # These must not be mistaken for this run's process lifecycle.
+                other = Process()
+                other.wait()
+                if mode == 'first-held':
+                    clock[0] = 901
+                    checkpoints['first-held'] = snapshots[-1]
+                    raise held
+                if mode == 'cancel':
+                    raise cancelled
+                if mode not in {'normal', 'called-error', 'wait-held', 'equal-run-clone', 'equal-read-clone', 'foreign-process'}:
+                    clock[0] = 35
+                    raise timeout
+            else:
+                checkpoints['drain'] = snapshots[-1]
+                if mode == 'drain-held':
+                    clock[0] = 901
+                    checkpoints['drain-held'] = snapshots[-1]
+                    raise held
+            return ('synthetic', None)
+        def kill(self):
+            calls.append(('kill', None))
+            if mode == 'kill-error':
+                raise kill_error
+        def wait(self, timeout=None):
+            if mode == 'wait-held' and self is not process_other:
+                # Only the retained original communicator has a trusted parent.
+                if snapshots[-1]['events'].get('wait'):
+                    checkpoints['wait-held'] = snapshots[-1]
+                    raise held
+            return 0
+        def poll(self):
+            return 7 if mode == 'called-error' else 0
+
+    process_other = Process()
+    # No monkeypatch of the stdlib. Execute its actual maintained function
+    # bodies with inert process/OS globals; no native handle or thread exists.
+    globals_ = {'Popen': Process, 'TimeoutExpired': subprocess.TimeoutExpired,
+                'CalledProcessError': subprocess.CalledProcessError, '_mswindows': True,
+                'PIPE': -1, '_time': lambda: clock[0], 'CompletedProcess': lambda *args: args}
+    exec(compile(inspect.getsource(subprocess.run), '<actual-stdlib-run-model>', 'exec'), globals_)
+    if mode == 'foreign-process':
+        import ast
+        # Negative discriminator: inject an inert method call in the SAME run
+        # frame, while its retained 'process' is a different object. All other
+        # cases execute the unchanged stdlib run body above.
+        tree = ast.parse(inspect.getsource(subprocess.run))
+        body = next(node for node in ast.walk(tree) if isinstance(node, ast.With))
+        body.body[:0] = ast.parse('Popen().wait()').body
+        exec(compile(ast.fix_missing_locations(tree), '<foreign-process-model>', 'exec'), globals_)
+    exec(compile(textwrap.dedent(inspect.getsource(subprocess.Popen.communicate)),
+                 '<actual-communicate-model>', 'exec'), globals_)
+    Process.communicate = globals_['communicate']
+    api = SimpleNamespace(run=globals_['run'], Popen=Process, TimeoutExpired=subprocess.TimeoutExpired)
+    monkeypatch.setattr(fixture, 'subprocess', api)
+    monkeypatch.setattr(fixture, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def read():
+        return api.run(['private git argv'], stdout=-1, text=True, timeout=35, check=True)
+
+    def unrelated():
+        return api.run(['another private argv'], stdout=-1, text=True, timeout=35, check=True)
+
+    invoked_read = read
+    if mode == 'equal-read-clone':
+        code = read.__code__.replace(co_filename='equal-but-foreign-read.py')
+        assert code == read.__code__ and code is not read.__code__
+        invoked_read = FunctionType(code, read.__globals__, closure=read.__closure__)
+    assert sys.getprofile() is None
+    expected_error = (timeout if mode == 'timeout-drained' else
+                      held if mode in {'drain-held', 'first-held', 'wait-held'} else
+                      cancelled if mode == 'cancel' else kill_error if mode == 'kill-error' else None)
+    try:
+        with fixture.observe_shared_subprocess(read, snapshots.append):
+            if mode == 'equal-run-clone':
+                original = api.run
+                code = original.__code__.replace(co_filename='equal-but-foreign-run.py')
+                assert code == original.__code__ and code is not original.__code__
+                api.run = FunctionType(code, original.__globals__, argdefs=original.__defaults__)
+                api.run.__kwdefaults__ = original.__kwdefaults__
+            if mode == 'normal':
+                assert unrelated()[1] == 0
+                assert snapshots[-1]['events'] == {}
+            if expected_error is not None:
+                with pytest.raises(type(expected_error)) as caught:
+                    invoked_read()
+                assert caught.value is expected_error
+            elif mode == 'called-error':
+                with pytest.raises(subprocess.CalledProcessError) as caught:
+                    invoked_read()
+                assert caught.value.returncode == 7
+            else:
+                assert invoked_read()[1:] == (0, 'synthetic', None)
+        assert sys.getprofile() is None
+        final = snapshots[-1]
+        fixture.validate_subprocess_lifecycle(final)
+        assert final['status'] == 'PASS'
+        assert set(final['codeHashes']) == {'run', 'communicate', 'kill', 'wait'}
+        assert Process.communicate is globals_['communicate']
+        if mode != 'equal-run-clone':
+            assert api.run is globals_['run']  # Observer replaced no method.
+        assert 'private' not in json.dumps(snapshots)
+        if mode in {'equal-run-clone', 'equal-read-clone'}:
+            assert final['events'] == {}  # Equality is not loaded-code identity.
+            return
+        assert final['events']['run']['entered'] == final['events']['run']['exited'] == 1
+        first = checkpoints['first']['events']['first_communicate']
+        assert first['entered'] == 1 and first['exited'] == 0 and first['exitBucket'] is None
+        if mode in {'timeout-drained', 'drain-held'}:
+            drain = checkpoints['drain']['events']
+            assert checkpoints['drain']['timeoutSeen']
+            assert drain['kill']['entered'] == drain['kill']['exited'] == 1
+            assert drain['first_communicate']['exited'] == 1
+            assert drain['drain_communicate'] == {
+                'entered': 1, 'exited': 0, 'entryBucket': 3, 'exitBucket': None}
+            assert final['events']['drain_communicate']['exitBucket'] == (7 if mode == 'drain-held' else 3)
+        if mode == 'first-held':
+            assert not checkpoints['first-held']['timeoutSeen']
+            assert 'kill' not in checkpoints['first-held']['events']
+            assert 'drain_communicate' not in final['events']
+        if mode == 'wait-held':
+            assert checkpoints['wait-held']['events']['wait']['exited'] == 0
+        if mode == 'foreign-process':
+            assert final['events']['wait']['entered'] == final['events']['wait']['exited'] == 1
+        assert final['timeoutSeen'] is (mode in {'timeout-drained', 'drain-held', 'kill-error'})
+        assert ('drain_communicate' in final['events']) is (mode in {'timeout-drained', 'drain-held'})
+    finally:
+        sys.setprofile(None)  # Only this synthetic in-process observer.
+
+
+@pytest.mark.parametrize('fault', ['existing', 'install', 'fingerprint', 'publish', 'replacement'])
+def test_default_runtime_probe_lifecycle_refusal_and_fault_preserve_original(monkeypatch, fault):
+    fixture = _default_runtime_probe_module()
+    snapshots = []
+    error, token = ValueError('private original error'), object()
+    previous = lambda *args: None
+    replacement = lambda *args: None
+    state = [previous if fault == 'existing' else None]
+    def setprofile(value):
+        if fault == 'install':
+            raise RuntimeError('private installation fault')
+        state[0] = value  # Inert model: no actual profiler installed.
+    monkeypatch.setattr(fixture, 'sys', SimpleNamespace(getprofile=lambda: state[0], setprofile=setprofile))
+    if fault == 'fingerprint':
+        monkeypatch.setattr(fixture, 'code_fingerprint', Mock(side_effect=RuntimeError('private hash fault')))
+    publications = []
+    def publish(value):
+        publications.append(value)
+        if fault == 'publish' and len(publications) == 1:
+            raise RuntimeError('private publisher fault')
+        snapshots.append(value)
+    def read():
+        raise error
+    with pytest.raises(ValueError) as caught:
+        with fixture.observe_shared_subprocess(read, publish):
+            if fault == 'replacement':
+                state[0] = replacement
+            raise error
+    assert caught.value is error
+    assert snapshots[-1]['status'] == ('refused' if fault == 'existing' else 'FAIL')
+    assert state[0] is (previous if fault == 'existing' else replacement if fault == 'replacement' else None)
+    # A refused observer does not run tools, change outcomes or overwrite hooks.
+    with fixture.observe_shared_subprocess(read, lambda value: None):
+        result = token
+    assert result is token
+
+
+def test_default_runtime_probe_lifecycle_closed_schema_and_existing_budget(tmp_path):
+    fixture = _default_runtime_probe_module()
+    event = {'entered': 10**6, 'exited': 10**6, 'entryBucket': 8, 'exitBucket': 8}
+    lifecycle = {'status': 'PASS', 'timeoutSeen': True,
+                 'events': dict.fromkeys(fixture.SUBPROCESS_EVENTS, event),
+                 'codeHashes': dict.fromkeys(('run', 'communicate', 'kill', 'wait'), 'f' * 64)}
+    operation = {'module': 'context-simple', 'operation': 'shared_remote', 'queued': 1,
+                 'entered': 1, 'returned': 0, 'failed': 1,
+                 'errors': [{'class': 'TimeoutExpired', 'frames': []}],
+                 'subprocessLifecycle': lifecycle}
+    frame = {'source': max(fixture.CODE_LABELS, key=len), 'offset': 10**6}
+    error = {'class': 'CalledProcessError', 'frames': [frame] * 5, 'returncode': -(2**31)}
+    facts = {'diagnosticStatus': 'PASS', 'observed': True, 'taskDone': True,
+             'awaiting': [frame] * 5, 'errors': [error] * 4,
+             'activationChildren': [{'module': 'hooks-session-naming', 'taskDone': True,
+                'cancelled': False, 'awaiting': [frame] * 3,
+                'errors': [{**error, 'frames': [frame] * 2}]}] * 4,
+             'activationTruncated': True, 'threadOperations': [operation] * 8,
+             'operationsTruncated': True,
+             'codeHashes': dict.fromkeys(list(fixture.CODE_LABELS)[:16], 'e' * 64),
+             'foundation': {'status': 'verified', 'version': '1' * 100, 'commit': 'b' * 64}}
+    fixture.validate_worker_startup(facts)
+    raw = json.dumps(facts)
+    assert len(raw.encode()) <= fixture.WORKER_DIAGNOSTIC_BYTES == 16 * 1024
+    path = tmp_path / 'private-observation.json'
+    path.write_text(raw, encoding='utf-8')
+    assert fixture.read_worker_startup(path) == facts
+    for patch in ({'status': 'private'}, {'timeoutSeen': 1}, {'pid': 99},
+                  {'events': {'private-callee': event}},
+                  {'events': {'run': {**event, 'entered': True}}},
+                  {'events': {'run': {**event, 'exited': 10**6 + 1}}},
+                  {'events': {'run': {**event, 'entryBucket': 9}}},
+                  {'events': {'run': {**event, 'exitBucket': 'private'}}},
+                  {'events': {'run': {**event, 'exitBucket': None}}},
+                  {'events': {'run': {**event, 'entryBucket': 8, 'exitBucket': 3}}},
+                  {'events': {'run': {**event, 'stdout': 'private'}}},
+                  {'codeHashes': {'private-path': 'f' * 64}},
+                  {'codeHashes': {'run': 'not-hash'}},
+                  {'timeoutSeen': False},
+                  {'events': {}}):
+        with pytest.raises(AssertionError):
+            fixture.validate_subprocess_lifecycle({**lifecycle, **patch})
+    with pytest.raises(AssertionError):
+        fixture.validate_worker_startup({**facts, 'threadOperations': [
+            {**operation, 'operation': 'receipt_reuse'}]})
 
 
 @pytest.mark.parametrize('cloned', [False, True])
