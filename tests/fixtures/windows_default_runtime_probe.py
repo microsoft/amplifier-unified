@@ -67,13 +67,22 @@ CODE_LABELS = {
     "session_create": ("amplifier_foundation.bundle._prepared", "PreparedBundle.create_session"),
     "module_resolve": ("amplifier_foundation.bundle._prepared", "BundleModuleResolver.async_resolve"),
     "module_activate": ("amplifier_foundation.modules.activator", "ModuleActivator.activate_all"),
+    "module_activate_one": ("amplifier_foundation.modules.activator", "ModuleActivator.activate"),
     "module_install": ("amplifier_foundation.modules.activator", "ModuleActivator._install_dependencies"),
+    "module_install_uncached": ("amplifier_foundation.modules.activator", "ModuleActivator._install_dependencies_uncached"),
+    "source_resolve": ("amplifier_foundation.sources.resolver", "SimpleSourceResolver.resolve"),
+    "git_resolve": ("amplifier_foundation.sources.git", "GitSourceHandler.resolve"),
+    "git_resolve_locked": ("amplifier_foundation.sources.git", "GitSourceHandler._resolve_locked"),
+    "file_resolve": ("amplifier_foundation.sources.file", "FileSourceHandler.resolve"),
+    "filelock_acquire": ("filelock.asyncio", "BaseAsyncFileLock.acquire"),
+    "thread_wait": ("asyncio.threads", "to_thread"),
     "core_initialize": ("amplifier_core.session", "AmplifierSession.initialize"),
     "core_initialize_session": ("amplifier_core._session_init", "initialize_session"),
     "core_load": ("amplifier_core.loader", "ModuleLoader.load"),
     "core_validate": ("amplifier_core.loader", "ModuleLoader._validate_module"),
 }
 STARTUP_PHASES = frozenset({"runtime-setup", "bundle-preparation", "session-mount", "ready"})
+ACTIVATION_MODULES = frozenset({"loop-live", "context-simple", "hooks-session-naming", "other"})
 # Retain the outer lifeline and its scratch identity when the primitive cannot
 # confirm cleanup. A public FAIL record never authorizes a retry or deletion.
 FAILED_OUTER_OWNERS = []
@@ -218,7 +227,7 @@ def validate_diagnostic(value):
 
 
 def validate_worker_startup(value):
-    assert type(value) is dict and set(value) == {
+    assert type(value) is dict and set(value) - {"activationChildren", "activationTruncated"} == {
         "diagnosticStatus", "observed", "taskDone", "awaiting", "errors"}
     assert type(value["diagnosticStatus"]) is str and value["diagnosticStatus"] in {"PENDING", "PASS", "FAIL"}
     assert type(value["observed"]) is bool and type(value["taskDone"]) is bool
@@ -227,18 +236,35 @@ def validate_worker_startup(value):
     validate_diagnostic({"checkpoint": "runtime_start", "errors": [
         {"class": "other", "frames": value["awaiting"]}]})
     validate_diagnostic({"checkpoint": "runtime_start", "errors": value["errors"]})
+    if "activationChildren" in value or "activationTruncated" in value:
+        assert type(value["activationTruncated"]) is bool
+        children = value["activationChildren"]
+        assert type(children) is list and 1 <= len(children) <= 4
+        for child in children:
+            assert type(child) is dict and set(child) == {
+                "module", "taskDone", "cancelled", "awaiting", "errors"}
+            assert type(child["module"]) is str and child["module"] in ACTIVATION_MODULES
+            assert type(child["taskDone"]) is bool and type(child["cancelled"]) is bool
+            assert type(child["awaiting"]) is list and len(child["awaiting"]) <= 3
+            assert type(child["errors"]) is list and len(child["errors"]) <= 1
+            validate_diagnostic({"checkpoint": "runtime_start", "errors": [
+                {"class": "other", "frames": child["awaiting"]}, *child["errors"]]})
+            assert all(len(row["frames"]) <= 2 for row in child["errors"])
 
 
 def install_worker_start_observer(path):
     """Diagnostic-only profile callback; schedule snapshots AFTER coroutine yield.
 
     No task, timer, worker wrapper, command override or early app import. Only
-    the exact loaded Worker.start can arm a snapshot. The bounded await walk
-    emits exact loaded-code labels/offsets, never names, paths, args or locals.
+    the exact loaded Worker.start can arm a snapshot. Child snapshots require
+    exact activate coroutines listed in its trusted activate_all gather frame.
+    The bounded await walks emit labels/offsets, never arbitrary task data.
     """
     facts = {"diagnosticStatus": "PENDING", "observed": False, "taskDone": False, "awaiting": [], "errors": []}
     previous = None
     failed = False
+    root_task = None
+    child_rows = {}  # Retain at most four exact task identities, never emit IDs.
 
     def persist():
         nonlocal previous
@@ -257,26 +283,74 @@ def install_worker_start_observer(path):
             value = getattr(value, part, None) if value is not None else None
         return getattr(value, "__code__", None)
 
+    def codes_now():
+        codes = {}
+        for label, (module, qualname) in CODE_LABELS.items():
+            code = code_for(module, qualname)
+            if isinstance(code, types.CodeType):
+                codes[id(code)] = (code, label)
+        return codes
+
+    def frames_now(task, codes):
+        value, frames = task.get_coro(), []
+        for _ in range(64):
+            if type(value) is not types.CoroutineType:
+                break
+            code, frame = value.cr_code, value.cr_frame
+            known = codes.get(id(code))
+            if frame is not None and known is not None and known[0] is code:
+                frames.append({"source": known[1],
+                    "offset": max(0, min(frame.f_lineno - code.co_firstlineno, 10**6))})
+            value = value.cr_await
+        return frames
+
+    def scoped_child(task, frame):
+        if root_task is None or root_task.done() or root_task.cancelling():
+            return False
+        code = code_for("amplifier_foundation.modules.activator", "ModuleActivator.activate_all")
+        value = root_task.get_coro()
+        for _ in range(64):
+            if type(value) is not types.CoroutineType:
+                break
+            if value.cr_code is code and value.cr_frame is not None:
+                scope = value.cr_frame.f_locals
+                # Only identity comparisons on the exact trusted gather frame.
+                # Do not discover all_tasks or read arbitrary task names/args.
+                tasks = scope.get("tasks")
+                return (scope.get("self") is frame.f_locals.get("self")
+                        and type(tasks) is list and len(tasks) <= 128
+                        and any(coro is task.get_coro() for coro in tasks))
+            value = value.cr_await
+        return False
+
+    def snapshot_child(task, row):
+        nonlocal failed
+        try:
+            row.update(taskDone=task.done(), cancelled=task.cancelled())
+            frames = frames_now(task, codes_now())
+            if frames and not task.cancelling() and not root_task.cancelling():
+                row["awaiting"] = frames[-3:]
+            if task.done() and not task.cancelled():
+                error = task.exception()
+                if error is not None:
+                    row["errors"] = failure_facts(error, "runtime_start")["errors"][:1]
+                    for error_row in row["errors"]:
+                        error_row["frames"] = error_row["frames"][-2:]
+            persist()
+        except BaseException:
+            failed = True
+            facts["diagnosticStatus"] = "FAIL"
+            try:
+                persist()
+            except BaseException:
+                pass
+
     def snapshot(task):
         nonlocal failed
         try:
             facts.update(diagnosticStatus="FAIL" if failed else "PASS",
                          observed=True, taskDone=task.done())
-            codes = {}
-            for label, (module, qualname) in CODE_LABELS.items():
-                code = code_for(module, qualname)
-                if isinstance(code, types.CodeType):
-                    codes[id(code)] = (code, label)
-            value, frames = task.get_coro(), []
-            for _ in range(64):
-                if type(value) is not types.CoroutineType:
-                    break
-                code, frame = value.cr_code, value.cr_frame
-                known = codes.get(id(code))
-                if frame is not None and known is not None and known[0] is code:
-                    frames.append({"source": known[1],
-                        "offset": max(0, min(frame.f_lineno - code.co_firstlineno, 10**6))})
-                value = value.cr_await
+            frames = frames_now(task, codes_now())
             # Stop cancels the real start task, whose finally also awaits
             # cleanup. Preserve the pre-cancellation wait, not that teardown.
             if frames and not task.cancelling():
@@ -303,14 +377,36 @@ def install_worker_start_observer(path):
                 pass  # A diagnostic finalizer has no execution authority.
 
     def profile(frame, event, arg):
-        nonlocal failed
+        nonlocal failed, root_task
         try:
             if (event == "return" and frame.f_code.co_name == "start"
                     and frame.f_code is code_for("__main__", "Worker.start")):
                 # This local is inspected only on the exact trusted function.
                 # Its value is not serialized or used for execution authority.
                 task = frame.f_locals["self"].start_task
+                root_task = task
                 asyncio.get_running_loop().call_soon(snapshot, task)
+            elif (event == "return" and frame.f_code.co_name == "activate"
+                    and frame.f_code is code_for(
+                        "amplifier_foundation.modules.activator", "ModuleActivator.activate")):
+                task = asyncio.current_task()
+                known = child_rows.get(id(task))
+                if known is not None and known[0] is task:
+                    row = known[1]
+                elif task is not None and scoped_child(task, frame):
+                    if len(child_rows) == 4:
+                        facts["activationTruncated"] = True
+                        persist()
+                        return
+                    name = frame.f_locals.get("module_name")
+                    row = {"module": name if type(name) is str and name in ACTIVATION_MODULES else "other",
+                           "taskDone": False, "cancelled": False, "awaiting": [], "errors": []}
+                    child_rows[id(task)] = (task, row)
+                    facts.setdefault("activationChildren", []).append(row)
+                    facts.setdefault("activationTruncated", False)
+                else:
+                    return
+                asyncio.get_running_loop().call_soon(snapshot_child, task, row)
         except BaseException:
             failed = True
             facts["diagnosticStatus"] = "FAIL"

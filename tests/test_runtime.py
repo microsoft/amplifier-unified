@@ -2156,6 +2156,138 @@ async def test_default_runtime_probe_worker_await_observer_is_exact_and_outcome_
         await asyncio.gather(owner.start_task, return_exceptions=True)
 
 
+@pytest.mark.parametrize('stage,outcome,cloned,count', [
+    ('resolve', 'cancel', False, 2), ('install', 'cancel', False, 2),
+    ('resolve', 'return', False, 2), ('install', 'return', False, 2),
+    ('resolve', 'child-error', False, 2), ('resolve', 'cancel', True, 2),
+    ('resolve', 'cancel', False, 6),
+])
+async def test_default_runtime_probe_activation_children_are_gather_scoped_and_bounded(
+        tmp_path, monkeypatch, stage, outcome, cloned, count):
+    from types import FunctionType, MethodType
+    from amplifier_foundation.modules import activator
+    from amplifier_foundation.sources.resolver import SimpleSourceResolver
+    fixture = _default_runtime_probe_module()
+    release, entered, outsider_release = asyncio.Event(), set(), asyncio.Event()
+    original_error = PermissionError(13, 'private module path/URL/account')
+
+    class Handler:
+        def can_handle(self, parsed):
+            return True
+
+        async def resolve(self, parsed, cache_dir):
+            if 'outsider' in parsed.path:
+                await outsider_release.wait()
+            elif stage == 'resolve':
+                entered.add(parsed.path)
+                await release.wait()
+                if outcome == 'child-error' and 'module-0' in parsed.path:
+                    raise original_error
+                if outcome == 'child-error':
+                    await outsider_release.wait()  # Keep the gather pending.
+            return SimpleNamespace(active_path=Path(parsed.path))
+
+    resolver = object.__new__(SimpleSourceResolver)
+    resolver.base_path, resolver.cache_dir, resolver._handlers = tmp_path, tmp_path / 'cache', [Handler()]
+    owner = object.__new__(activator.ModuleActivator)
+    owner._resolver, owner._activated, owner.install_deps, owner.strict = resolver, set(), stage == 'install', True
+    owner.dependency_batch, owner.refresh_dependencies = None, False
+    owner.install_python = sys.executable
+
+    async def inert_thread(function, *args, **kwargs):
+        # Drive the REAL _install_dependencies await without starting a thread,
+        # install, process or reading install state. This models only that wait.
+        entered.add(function.__self__.source.name)
+        await release.wait()
+        return True
+
+    monkeypatch.setattr(activator, 'asyncio', SimpleNamespace(gather=asyncio.gather, to_thread=inert_thread))
+    monkeypatch.setattr(sys, 'path', list(sys.path))
+    loaded_activate = activator.ModuleActivator.activate
+    if cloned:
+        code = loaded_activate.__code__.replace(co_filename='private-equal-activate-clone.py')
+        assert code is not loaded_activate.__code__ and code == loaded_activate.__code__
+        owner.activate = MethodType(FunctionType(
+            code, loaded_activate.__globals__, argdefs=loaded_activate.__defaults__), owner)
+    modules = [{'module': ('loop-live' if i == 0 else 'context-simple' if i == 1
+                           else 'private-module-name'),
+                'source': str(tmp_path / f'module-{i}')} for i in range(count)]
+
+    class Worker:
+        async def start(self):
+            try:
+                return await owner.activate_all(modules)
+            finally:
+                await asyncio.sleep(0)  # Must not overwrite pre-cancel waits.
+
+    path = tmp_path / 'privately-created-observation.json'
+    path.write_text('{}', encoding='utf-8')
+    monkeypatch.setattr(fixture, 'sys', SimpleNamespace(
+        modules={**sys.modules, '__main__': SimpleNamespace(Worker=Worker)},
+        getprofile=sys.getprofile, setprofile=sys.setprofile))
+    assert sys.getprofile() is None
+    worker, outsiders = Worker(), []
+    fixture.install_worker_start_observer(path)
+    try:
+        worker.start_task = asyncio.create_task(worker.start())
+        async with asyncio.timeout(1):
+            while len(entered) < count:
+                await asyncio.sleep(0)
+        # Same activate code AND same activator, but not in the trusted gather.
+        outsiders.append(asyncio.create_task(owner.activate(
+            'hooks-session-naming', str(tmp_path / 'outsider'))))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        facts = fixture.read_worker_startup(path)
+        assert facts['diagnosticStatus'] == 'PASS' and facts['observed']
+        assert 'module_activate' in {frame['source'] for frame in facts['awaiting']}
+        if cloned:
+            assert 'activationChildren' not in facts
+        else:
+            children = facts['activationChildren']
+            assert len(children) == min(count, 4) and facts['activationTruncated'] is (count > 4)
+            assert {child['module'] for child in children} <= {'loop-live', 'context-simple', 'other'}
+            expected = 'source_resolve' if stage == 'resolve' else 'module_install'
+            assert all(expected in {frame['source'] for frame in child['awaiting']} for child in children)
+            assert all(not child['taskDone'] and not child['cancelled'] for child in children)
+            assert 'private' not in json.dumps(facts) and 'outsider' not in json.dumps(facts)
+            fixture.validate_worker_startup(facts)
+        if outcome in {'return', 'child-error'}:
+            release.set()
+            if outcome == 'return':
+                results = await asyncio.wait_for(worker.start_task, 1)
+                assert set(results) == {row['module'] for row in modules}
+            else:
+                async with asyncio.timeout(1):
+                    while not fixture.read_worker_startup(path).get('activationChildren', [{}])[0].get('errors'):
+                        await asyncio.sleep(0)
+                child = fixture.read_worker_startup(path)['activationChildren'][0]
+                assert child['taskDone'] and child['errors'][0]['class'] == 'PermissionError'
+                assert child['errors'][0]['errno'] == 13
+                worker.start_task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await worker.start_task
+        else:
+            worker.start_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await worker.start_task
+        await asyncio.sleep(0)
+        final = fixture.read_worker_startup(path)
+        assert final['taskDone'] and final['diagnosticStatus'] == 'PASS'
+        if not cloned:
+            assert [row['awaiting'] for row in final['activationChildren']] == [
+                row['awaiting'] for row in facts['activationChildren']]
+            assert all(row['taskDone'] for row in final['activationChildren'])
+            assert 'hooks-session-naming' not in json.dumps(final)
+        assert sys.getprofile() is None
+    finally:
+        sys.setprofile(None)
+        for task in [worker.start_task, *outsiders]:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(worker.start_task, *outsiders, return_exceptions=True)
+
+
 def test_default_runtime_probe_worker_observer_never_replaces_existing_profiler(tmp_path, monkeypatch):
     fixture = _default_runtime_probe_module()
     path = tmp_path / 'privately-created-observation.json'
@@ -2281,6 +2413,48 @@ def test_default_runtime_probe_worker_observation_is_bounded_and_closed(tmp_path
     assert fixture.read_worker_startup(path)['diagnosticStatus'] == 'FAIL'
     path.unlink()
     assert fixture.read_worker_startup(path)['diagnosticStatus'] == 'FAIL'
+
+
+def test_default_runtime_probe_activation_child_schema_privacy_and_total_bound(tmp_path):
+    fixture = _default_runtime_probe_module()
+    # Longest permitted labels/numbers and maximum rows must still fit the
+    # original private-read bound. No new log channel or output limit is added.
+    source = max(fixture.CODE_LABELS, key=len)
+    frame = {'source': source, 'offset': 10**6}
+    error = {'class': 'NotImplementedError', 'frames': [frame] * 5,
+             'errno': -(2**31), 'winerror': 2**32 - 1}
+    child = {'module': 'hooks-session-naming', 'taskDone': True, 'cancelled': False,
+             'awaiting': [frame] * 3, 'errors': [{**error, 'frames': [frame] * 2}]}
+    facts = {'diagnosticStatus': 'PASS', 'observed': True, 'taskDone': True,
+             'awaiting': [frame] * 5, 'errors': [error] * 4,
+             'activationChildren': [child] * 4, 'activationTruncated': True}
+    fixture.validate_worker_startup(facts)
+    raw = json.dumps(facts, sort_keys=True)
+    assert len(raw.encode()) <= 4096
+    path = tmp_path / 'private-observation.json'
+    path.write_text(raw, encoding='utf-8')
+    assert fixture.read_worker_startup(path) == facts
+    report = {**fixture.empty_inner_report(), 'workerStartup': facts}
+    fixture.validate_inner_report(report)
+    fixture.validate_report({**report, 'schema': 2, 'outerJob': {
+        'status': 'confirmed', 'activeProcesses': 0, 'treeEmpty': True,
+        'ioFinalized': True, 'timedOut': False, 'outputDiscarded': False}})
+    for patch in ({'activationChildren': [child] * 5}, {'activationTruncated': 1},
+                  {'activationChildren': [{**child, 'module': 'private-module'}]},
+                  {'activationChildren': [{**child, 'source': 'private-url'}]},
+                  {'activationChildren': [{**child, 'taskDone': 123}]},
+                  {'activationChildren': [{**child, 'cancelled': 'private'}]},
+                  {'activationChildren': [{**child, 'awaiting': [frame] * 4}]},
+                  {'activationChildren': [{**child, 'errors': [error] * 2}]},
+                  {'activationChildren': [{**child, 'errors': [error]}]}):
+        value = {**facts, **patch}
+        with pytest.raises(AssertionError):
+            fixture.validate_worker_startup(value)
+        path.write_text(json.dumps(value), encoding='utf-8')
+        assert fixture.read_worker_startup(path)['diagnosticStatus'] == 'FAIL'
+    for missing in ('activationChildren', 'activationTruncated'):
+        with pytest.raises((AssertionError, KeyError)):
+            fixture.validate_worker_startup({key: value for key, value in facts.items() if key != missing})
 
 
 def test_default_runtime_probe_startup_snapshot_schema_is_closed():
