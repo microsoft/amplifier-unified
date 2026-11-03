@@ -2,64 +2,262 @@
 
 Status: implementation design and trial preparation; **not a native Windows support claim**.
 
-## November 2 source trial — preparation only
+## Conditional foreground trial runbook
 
-The `feat/windows-user-trial` branch starts from current Unified `main`
-(`41f6ba18a5aaeb2c97c5cee1cdcc2033291ac21f`) and integrates the reviewed
-Windows mechanisms from PR1431. Integration checkpoint
-`5f0d9be9a3d8afb327459dd4f6baa9f107080e76` preserves the current host changes;
-it is **not yet an authenticated native Windows conversation build**.
+**Proposed instructions, not yet cleared for a user trial.** Commands below are
+source-checked against `4f59da50639ad80c87f9201736f58fecddd0cf7d`; that is a
+candidate, not public-activation acceptance. The Windows trial owner must supply
+an exact qualified commit with owner-browser entry activated before use.
+Do not substitute `main`, a moving branch, or the current public release.
+At this checkpoint browser entry deliberately refuses. Never remove that gate,
+relax ACLs, disable ownership, or put the control token in a browser URL.
 
-Foundation PR456 is merged at `a49c22f0f2e7ad4cee954e3091cd115f7d25d41f`;
-its post-merge Windows/Linux matrix and installed-consumer jobs pass. That
-qualifies the upstream mechanisms, not the combined Unified app. Unified's
-credential/browser entry, first-worker lifecycle, optional-controller isolation
-and saved-output reads are being integrated separately.
+This is an ordinary-user **foreground** path for Windows 11 x64, Windows
+PowerShell 5.1 or PowerShell 7, and Edge or Chrome. It needs no WSL, administrator
+terminal, execution-policy bypass or Task Scheduler registration. Foundation
+PR456 is merged at `a49c22f0f2e7ad4cee954e3091cd115f7d25d41f`; its passing
+mechanism/consumer checks do not qualify the combined Unified app.
 
-### Prepare a separate checkout
+### 1. Check prerequisites and install the selected checkout
 
-Use an ordinary, non-administrator PowerShell window. Keep this checkout and
-its eventual trial state separate from an existing Unified installation.
-The following commands obtain source only. They do not install or launch it.
+Have Git, [uv](https://docs.astral.sh/uv/getting-started/installation/) and
+ordinary, non-free-threaded **CPython 3.13 x64** available. A system `py` default
+of 3.15 can remain installed: select `py -3.13` when using that launcher, or
+`uv venv --python 3.13` as below. Do not use an unqualified `python`, install a compiler
+to work around missing wheels, or change the system Python.
+
+Run each block in order in the same ordinary PowerShell window. Stop on any
+failure. Assignments and invocations are separate statements; these examples
+do not require PowerShell 7 syntax or venv activation scripts.
 
 ```powershell
+$ErrorActionPreference = 'Stop'
 git --version
-git clone --single-branch --branch feat/windows-user-trial `
-  https://github.com/microsoft/amplifier-unified.git amplifier-unified-windows
-Set-Location amplifier-unified-windows
-git rev-parse HEAD
+if ($LASTEXITCODE -ne 0) { throw 'Git is required.' }
+uv --version
+if ($LASTEXITCODE -ne 0) { throw 'uv is required.' }
+$QualifiedRef = 'MANAGER-SUPPLIED-40-HEX-COMMIT'
+if ($QualifiedRef -notmatch '^[0-9a-fA-F]{40}$') { throw 'Obtain the qualified trial commit first.' }
+$Source = Join-Path $HOME ('amplifier-unified-windows-source-' + [guid]::NewGuid().ToString('N'))
+git clone --no-checkout https://github.com/microsoft/amplifier-unified.git "$Source"
+if ($LASTEXITCODE -ne 0) { throw 'Source download failed.' }
+git -C "$Source" checkout --detach "$QualifiedRef"
+if ($LASTEXITCODE -ne 0) { throw 'Qualified checkout failed.' }
+$ActualRef = git -C "$Source" rev-parse HEAD
+if ($LASTEXITCODE -ne 0 -or $ActualRef -ne $QualifiedRef) { throw 'Candidate identity mismatch.' }
+$env:UV_PROJECT_ENVIRONMENT = Join-Path $Source '.venv'
+uv venv --python 3.13 "$env:UV_PROJECT_ENVIRONMENT"
+if ($LASTEXITCODE -ne 0) { throw 'Trial environment creation failed.' }
+$Python = Join-Path $Source '.venv\Scripts\python.exe'
+$Unified = Join-Path $Source '.venv\Scripts\amplifier-unified.exe'
+& "$Python" -I -S -c "import sys,sysconfig,struct; assert sys.platform=='win32'; assert sys.implementation.name=='cpython'; assert sys.version_info[:2]==(3,13); assert struct.calcsize('P')==8; assert not sysconfig.get_config_var('Py_GIL_DISABLED'); print(sys.version)"
+if ($LASTEXITCODE -ne 0) { throw 'Requires ordinary CPython 3.13 x64.' }
+uv sync --project "$Source" --python 3.13 --locked --no-dev --no-editable
+if ($LASTEXITCODE -ne 0) { throw 'Candidate installation failed; do not launch.' }
 ```
 
-Record the resulting commit when reporting a test. The branch will advance;
-its name alone does not identify tested bytes. Do not reset an existing checkout
-or overwrite personal changes to follow these instructions.
+This installs non-editably into this new checkout's venv, not the global uv
+tool environment. `--locked` preserves the checkout's host dependency resolution;
+the project's binary-only Core rule still applies. It does not freeze dynamic
+worker/bundle downloads. Record the exact checkout and the trial owner's resolved
+host/worker evidence; a version string or newer package is not equivalent.
+Do not run global resync/reset or the no-argument background launcher.
 
-### Do not launch this checkpoint yet
+### 2. Create private trial state before writing trial payloads
 
-There is no qualified native install/start command for this checkpoint.
-The PowerShell installer and owner-browser activation remain deliberately
-closed. Do not remove their checks, send the control token in a browser URL,
-relax ACLs, or disable ownership to get past a refusal. Choosing Python 3.13
-does not by itself repair these runtime boundaries.
+`--data-dir` alone is **not isolation**. Use a new trial root on local fixed
+NTFS storage under your real profile. Do not change `HOME` or `USERPROFILE`.
+The installed Windows directory helper creates owner-private directories at
+creation and validates ancestors; `New-Item` followed by an ACL repair is not
+equivalent. An unsafe ACL, junction, network/redirected profile or non-NTFS path
+must fail. Do not weaken it; ask the trial owner for a supported location.
 
-The intended first trial is a foreground host on Windows 11 x64, with ordinary
-non-free-threaded CPython 3.13, Git, uv, an **existing** local workspace, and
-Edge or Chrome. It will not require Task Scheduler registration. In-app workspace
-creation/starters, publishing and cross-host transfer are outside that initial
-trial; unsupported controls must report unavailability rather than abort startup
-or bypass a retained fence.
+```powershell
+$Trial = Join-Path $HOME ('amplifier-unified-windows-trial-' + [guid]::NewGuid().ToString('N'))
+$Provision = @'
+import sys
+from pathlib import Path
+from amplifier_web.windows_files import directory
+root = Path(sys.argv[1])
+if root.exists():
+    raise SystemExit("Choose a new trial root; existing state was not changed.")
+with directory(root, owned_root=root, create=True):
+    for relative in ("app", "shared", "ownership", "shared/projects", "export"):
+        with directory(root / relative, owned_root=root, create=True):
+            pass
+'@
+$Provision | & "$Python" -I - "$Trial"
+if ($LASTEXITCODE -ne 0) { throw 'Private trial provisioning failed; do not continue.' }
+$env:AMPLIFIER_WEB_HOME = Join-Path $Trial 'app'
+$env:AMPLIFIER_HOME = Join-Path $Trial 'shared'
+$env:AMPLIFIER_SESSION_STATE_HOME = Join-Path $Trial 'ownership'
+$env:AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH = Join-Path $Trial 'shared\projects'
+$env:AMPLIFIER_UNIFIED_IMPORT_HOME = $env:AMPLIFIER_HOME
+& "$Unified" --data-dir "$env:AMPLIFIER_WEB_HOME" --version
+if ($LASTEXITCODE -ne 0) { throw 'Installed launcher check failed.' }
+$Workspace = (Get-Item -LiteralPath 'C:\path\to\existing\trial workspace').FullName
+if (-not (Test-Path -LiteralPath $Workspace -PathType Container)) { throw 'Choose an existing workspace directory.' }
+Write-Output "Candidate: $ActualRef"
+Write-Output "Trial root: $Trial"
+Write-Output "Launcher: $Unified"
+```
 
-Before launch guidance replaces this warning, the exact candidate must pass:
+Replace the workspace placeholder with an existing, disposable local workspace
+you intend the trial to access, preferably containing spaces and Unicode. This
+is not a sandbox: tools can use their granted file/network access.
+The roots have distinct owners:
 
-1. Private credential/TLS initialization and owner grant-to-cookie authentication.
-2. Actual worker startup and a deterministic first response with inherited access.
-3. UTF-8 output attachment and readback under a space/Unicode workspace.
-4. Stop, owned-process cleanup, host restart and a second turn from saved history.
+| Setting | Trial location and meaning |
+| --- | --- |
+| `AMPLIFIER_WEB_HOME` / `--data-dir` | `app`: Unified app configuration and state |
+| `AMPLIFIER_HOME` | `shared`: shared settings, keys location and native transcripts |
+| `AMPLIFIER_SESSION_STATE_HOME` | `ownership`: Foundation execution ownership, **not transcripts** |
+| `AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH` | `shared/projects`: capture location |
+| `AMPLIFIER_UNIFIED_IMPORT_HOME` | `shared`: legacy import scan root, not the personal `.amplifier` |
 
-Synthetic CI can qualify these code paths without a paid provider call.
-The Windows user's actual profile, AI-account connection, browser trust and
-live-provider response remain device observations, not inferred CI results.
-The full clean-machine bootstrap rubric below remains separate.
+The workspace's `.amplifier/settings.yaml` and `settings.local.yaml` still apply.
+Normal startup also runs additive settings migration, which can write workspace
+settings from legacy `.amplifier-unified` files. Review these inputs or use a
+disposable workspace copy; do not claim existing workspace files are untouched.
+Inherited environment credentials, external OAuth stores, Git configuration,
+proxy settings, caches and tool-specific homes are not isolated by these roots.
+Do not copy personal shared settings/history or create a new `keys.env` for this
+trial. Use an existing provider API key already available to the host environment
+first; never print it, paste it into chat or place it in a command argument.
+An OpenAI API account/key with API billing is distinct from a ChatGPT subscription.
+If no suitable credential exists, leave the live-provider check pending and use
+the app's connection UI only after its native credential path is qualified.
+
+### 3. Set up TLS and review the public CA
+
+Keep all connection options **before** the subcommand, as the CLI parser requires.
+Persist the dedicated numeric loopback endpoint before certificate creation:
+
+```powershell
+& "$Unified" --data-dir "$env:AMPLIFIER_WEB_HOME" config set port 8942
+if ($LASTEXITCODE -ne 0) { throw 'Port configuration failed.' }
+& "$Unified" --data-dir "$env:AMPLIFIER_WEB_HOME" config set bind '[127.0.0.1]'
+if ($LASTEXITCODE -ne 0) { throw 'Bind configuration failed.' }
+& "$Unified" --data-dir "$env:AMPLIFIER_WEB_HOME" config set public_origins '[https://127.0.0.1:8942]'
+if ($LASTEXITCODE -ne 0) { throw 'Origin configuration failed.' }
+& "$Unified" --data-dir "$env:AMPLIFIER_WEB_HOME" setup-tls
+if ($LASTEXITCODE -ne 0) { throw 'TLS setup failed.' }
+& "$Unified" --data-dir "$env:AMPLIFIER_WEB_HOME" setup-tls status
+if ($LASTEXITCODE -ne 0) { throw 'TLS inspection failed.' }
+$CaFile = Join-Path $Trial 'export\trial-ca.pem'
+$CaPem = & "$Unified" --data-dir "$env:AMPLIFIER_WEB_HOME" setup-tls export
+if ($LASTEXITCODE -ne 0) { throw 'Public CA export failed.' }
+$CaPem | Set-Content -LiteralPath "$CaFile" -Encoding Ascii
+& "$Python" -I -c "import sys; from pathlib import Path; from cryptography import x509; from cryptography.hazmat.primitives import hashes; print(':'.join(format(b,'02X') for b in x509.load_pem_x509_certificate(Path(sys.argv[1]).read_bytes()).fingerprint(hashes.SHA256())))" "$CaFile"
+if ($LASTEXITCODE -ne 0) { throw 'Exported CA inspection failed.' }
+```
+
+Require `TLS listener: ready` and compare the exported certificate's SHA-256
+fingerprint with `setup-tls status`. This hashes the X.509 certificate, not the
+PEM file bytes. Explicit ASCII avoids PowerShell 5.1's UTF-16 redirection default.
+Only the public CA is exported; never export `ca.key`, `leaf.key` or auth files.
+
+**Security-sensitive user action:** only after the fingerprints match, decide
+whether to trust this trial CA for your Windows account. A trusted root can
+authenticate certificates it signs; this is not merely dismissing a warning.
+If your device policy permits it, you may run the following yourself in the
+same ordinary-user shell. An agent must not perform this trust-store change.
+
+```powershell
+$ImportedCa = Import-Certificate -FilePath "$CaFile" -CertStoreLocation Cert:\CurrentUser\Root
+$TrialCaStorePath = 'Cert:\CurrentUser\Root\' + $ImportedCa.Thumbprint
+Write-Output "$TrialCaStorePath"
+```
+
+Record that exact store path for later user-controlled removal. The store's
+Thumbprint identifies the entry; it is not the SHA-256 verification above.
+Do not use LocalMachine trust, change organizational policy or bypass a browser
+certificate warning. If trust is prohibited or the browser still rejects HTTPS,
+stop browser entry and retain that limitation. `TLS listener: ready` proves
+loadable local material, not browser trust or authenticated chat.
+
+### 4. Start the foreground host and open the owned browser
+
+Before serving, open a child PowerShell window that inherits these process-only
+environment settings. It will be used for `open`; it does not inherit `$Unified`.
+Keep the printed absolute launcher path.
+
+```powershell
+Start-Process powershell.exe -ArgumentList '-NoProfile', '-NoExit'
+& "$Unified" --data-dir "$env:AMPLIFIER_WEB_HOME" --workspace "$Workspace" --port 8942 --bind 127.0.0.1 --public-origin https://127.0.0.1:8942 --no-open serve
+```
+
+Keep the first window running. This is the normal CLI startup chain, including
+the repair lock, settings migration, workspace configuration, TLS loading and
+host ownership. Do not call internal server constructors to skip a failed stage.
+Do not stop an unrelated listener if port 8942 is busy. A listening message proves
+socket binding, not browser authentication, first-worker preparation or chat.
+
+**Only with the trial owner's qualified browser-activated commit**, in the child
+window set the printed absolute launcher path, then invoke the real CLI:
+
+```powershell
+$Unified = 'C:\absolute\path\to\trial-source\.venv\Scripts\amplifier-unified.exe'
+& "$Unified" --data-dir "$env:AMPLIFIER_WEB_HOME" --port 8942 --bind 127.0.0.1 --public-origin https://127.0.0.1:8942 open
+if ($LASTEXITCODE -ne 0) { throw 'Owner browser entry failed; retain the refusal.' }
+```
+
+Do not use a globally installed launcher, a fresh shell without the trial
+environment, a raw URL/token handoff or a password/Hello-PIN workaround.
+The launcher requires app-owned leaf-pinned HTTPS before reading/sending its
+control credential. If entry is disabled, that is an expected qualification
+fence, not permission to bypass it.
+
+### 5. Record what actually works
+
+After entry and the native configuration path are qualified, open **Settings →
+AI connections → Connect AI**. Choose the intended API service and **Use the key
+already on this host**, save/check the connection, and choose a supported model.
+Select that connection/model for the trial conversation. A key in the environment
+alone is not a saved connection or a working model; retain any setup failure.
+These checks contact the provider and may use its API allowance.
+
+Use the existing trial workspace and selected default bundle.
+Check a first response and a small file-backed task with UTF-8 output
+attachment/readback. Record the selected provider/model and resolved worker graph
+without secrets. Runtime download/setup can take minutes; startup alone is not
+default-bundle or live-provider acceptance.
+
+Test **Stop** while owned descendants are active; confirm cleanup, not just a
+stopped spinner. In the serving window, **Ctrl+C is ordinary foreground shutdown**,
+not a product failure. Wait for shutdown before restarting with the same roots
+and command. Reopen with the same launcher and verify saved history plus a second
+turn. Do not start a competing host or delete ownership state to force recovery.
+Closing this foreground terminal stops the host; background lifetime is not
+being tested.
+
+After the trial and shutdown, remove only this trial's CA if you no longer need
+its trust. Closing PowerShell or deleting trial files does **not** remove trust.
+This is another security-sensitive **user-only** action. In the original shell,
+inspect the exact entry and its thumbprint first; if the variables are gone,
+restore `$TrialCaStorePath` from the exact path you recorded, not a subject search.
+Do not remove certificates by wildcard or name:
+
+```powershell
+Get-Item -LiteralPath "$TrialCaStorePath" | Format-List Subject, Thumbprint, PSPath
+Remove-Item -LiteralPath "$TrialCaStorePath" -Confirm
+```
+
+Confirm removal only after matching that entry to the trial import. Keep the
+trial state for diagnostics until the trial owner has reviewed the result.
+
+| Can be prepared now | Still requires exact acceptance |
+| --- | --- |
+| Source review and this conditional runbook | Native installed cold startup, ownership, Stop/descendant cleanup and restart checks for the selected candidate |
+| A separate checkout after the owner selects its ref | Public CLI/browser entry activation and the rendered owner grant-to-cookie flow |
+| A planned ordinary-user device trial | Actual Windows profile/ACLs, Edge/Chrome trust, AI-account connection, default bundle/tools and live-provider response |
+| Foreground-only scope | Installer, no-argument background launcher and Task Scheduler lifecycle; clean-machine bootstrap remains separate |
+
+In-app workspace creation/starters, publishing and cross-host transfer are outside
+this initial trial. Unsupported controls must report unavailability, not bypass
+retained fences. Synthetic native CI can qualify scripted responses without paid
+calls; it cannot establish these device/live-provider observations. No native
+trial, trust import or live-provider execution is claimed by this documentation.
 
 ## Original design assessment
 
