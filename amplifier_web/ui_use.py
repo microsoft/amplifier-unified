@@ -27,11 +27,21 @@ class UIUse:
 
     def stop(self, sid, stopped):
         values = self.stopped | {sid} if stopped else self.stopped - {sid}
+        errors = []
         if stopped:
             # A storage refusal must not leave this process accepting more input.
             self.stopped = values
-            for operation_id in tuple(self.pending.get(sid,())):self.connections.cancel(operation_id)
-        write_private(self.stop_path, json.dumps(sorted(values)), owned_root=self.service.data_dir)
+            for operation_id in tuple(self.pending.get(sid,())):
+                try:
+                    self.connections.cancel(operation_id)
+                except (OSError, ValueError, RuntimeError) as exc:
+                    errors.append(exc)
+        try:
+            write_private(self.stop_path, json.dumps(sorted(values)), owned_root=self.service.data_dir)
+        except (OSError, ValueError, RuntimeError) as exc:
+            errors.append(exc)
+        if errors:
+            raise errors[0]
         self.stopped = values
 
     def workspace(self, sid):

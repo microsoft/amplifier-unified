@@ -218,6 +218,43 @@ def test_durable_connection_writes_keep_the_explicit_host_root(manager, monkeypa
     assert writes == [manager.path, manager.path]
 
 
+async def test_ui_stop_fences_all_queued_delivery_when_private_writes_fail(manager, monkeypatch):
+    from types import SimpleNamespace
+    from amplifier_web import device_connections, ui_use
+    device = enrollment(manager, ['browser.observe', 'browser.act'])
+    ready(manager, device)
+    commands = [operation(device, action='browser.click', args={'selector': '#save'}) for _ in range(2)]
+    for command in commands:
+        manager.submit(command)
+    host = ui_use.UIUse(SimpleNamespace(data_dir=manager.owned_root), manager)
+    host.pending['chat'] = {command['id'] for command in commands}
+    failures = []
+    def refuse(path, *args, **kwargs):
+        failures.append(path)
+        raise PermissionError('Synthetic private publication refusal')
+    with monkeypatch.context() as patch:
+        patch.setattr(device_connections, 'write_private', refuse)
+        patch.setattr(ui_use, 'write_private', refuse)
+        with pytest.raises(PermissionError):
+            host.stop('chat', True)
+    assert host.stopped == {'chat'}
+    assert len(failures) == 3  # Both cancellations and the Stop receipt were attempted.
+    assert all(manager.lookup(command['id'])['status'] == 'cancelled' for command in commands)
+    # Even another failed ledger write cannot restore deliverable disk rows.
+    with monkeypatch.context() as patch:
+        patch.setattr(device_connections, 'write_private', refuse)
+        with pytest.raises(PermissionError):
+            manager.save()
+    assert all(manager.lookup(command['id'])['status'] == 'cancelled' for command in commands)
+    poll = asyncio.create_task(manager.poll(device['deviceID']))
+    await asyncio.sleep(0)
+    manager.events[device['deviceID']].set()
+    assert (await asyncio.wait_for(poll, 1))['operation'] is None
+    restarted = Connections(manager.devices, Pairings(manager.devices), 'test-secret',
+                            owned_root=manager.owned_root)
+    assert all(restarted.lookup(command['id'])['status'] == 'cancelled' for command in commands)
+
+
 async def test_public_contract_authentication_and_web_consent(aiohttp_client, tmp_path):
     app = await create_app(tmp_path, workspace=tmp_path, runtime=Runtime(), preload_providers=False,
                            voice=False, background_updates=False)
