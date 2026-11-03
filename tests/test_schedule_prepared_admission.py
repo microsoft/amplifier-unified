@@ -7,6 +7,7 @@ No existing schedules, accounts or homes are used.
 import asyncio
 import copy
 from collections import Counter
+import hashlib
 import importlib.metadata
 import json
 import os
@@ -185,6 +186,47 @@ async def mount(coordinator, config=None):
                 'moduleFile':str(Path(__file__).resolve()),
                 'sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest()})+'\\n')
 '''
+
+AGENT_NAME = 'inert-schedule-agent'
+AGENT_DEFINITION = {'description': 'Inert restoration witness', 'instruction': 'Never invoked by this fixture.'}
+
+
+AGENT_OBSERVER = '''
+def install_agent_observer():
+    from amplifier_web.runtime_controls import RuntimeControls
+    def observe(controls, stage):
+        name = 'inert-schedule-agent'
+        digest = lambda value: hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+        available = controls.coordinator.config.get('agents', {})
+        records = controls.configurator.agents_list()
+        definitions = [row.config_summary for row in records if row.name == name]
+        disabled = controls.configurator.snapshot()['agents']['disabled']
+        task = controls.coordinator.session_state.get('task') or {}
+        row = {**binding(controls.coordinator), 'pid':os.getpid(), 'stage':stage,
+            'available':name in available, 'definitionHashes':[digest(value) for value in definitions],
+            'disabled':disabled, 'disabledHash':digest(disabled), 'taskId':task.get('id')}
+        with Path(os.environ['SCHEDULE_FIXTURE_AGENT_OBSERVATIONS']).open('a') as stream:
+            stream.write(json.dumps(row)+'\\n')
+    restore = RuntimeControls._restore_saved
+    async def restored(self, *args, **kwargs):
+        observe(self, 'restore_begin')
+        try:
+            return await restore(self, *args, **kwargs)
+        finally:
+            observe(self, 'restore_end')
+    RuntimeControls._restore_saved = restored
+    perform = RuntimeControls.perform
+    async def performed(self, operation, *args, **kwargs):
+        try:
+            return await perform(self, operation, *args, **kwargs)
+        finally:
+            observe(self, 'control:' + operation)
+    RuntimeControls.perform = performed
+'''
+
+
+def agent_digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
 async def until(predicate):
@@ -412,7 +454,11 @@ async def test_used_session_source_survives_preparation_and_material_change_refu
     await prepared_occurrences(tmp_path, monkeypatch, None, 'ui', inherited_source=True)
 
 
-async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, *, inherited_source=False):
+async def test_disabled_agent_survives_preparation_and_material_enable_refuses(tmp_path, monkeypatch):
+    await prepared_occurrences(tmp_path, monkeypatch, None, 'ui', disabled_agent=True)
+
+
+async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, *, inherited_source=False, disabled_agent=False):
     import amplifier_module_context_simple as context
     import amplifier_module_loop_live as loop
     import amplifier_module_hook_context_intelligence as capture
@@ -427,10 +473,13 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
     monkeypatch.setenv('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', str(tmp_path / 'capture'))
     producer_events = tmp_path / 'producer-observations.jsonl'
     monkeypatch.setenv('SCHEDULE_FIXTURE_OBSERVATIONS', str(producer_events))
-    (tmp_path / 'schedule_observer.py').write_text(OBSERVER)
+    agent_events = tmp_path / 'agent-observations.jsonl'
+    monkeypatch.setenv('SCHEDULE_FIXTURE_AGENT_OBSERVATIONS', str(agent_events))
+    (tmp_path / 'schedule_observer.py').write_text(OBSERVER + AGENT_OBSERVER)
     launcher = tmp_path / 'observed_worker.py'
     launcher.write_text("import asyncio\nfrom schedule_observer import install\n"
-                       "install()\nfrom amplifier_web.runtime_worker import Worker, configure_protocol\n"
+                       "install()\n" + ("from schedule_observer import install_agent_observer\ninstall_agent_observer()\n" if disabled_agent else "") +
+                       "from amplifier_web.runtime_worker import Worker, configure_protocol\n"
                        "configure_protocol()\nasyncio.run(Worker().run())\n")
     modules = {name: str(Path(module.__file__).parent) for name, module in (
         ('loop-live', loop), ('context-simple', context), ('hook-context-intelligence', capture))}
@@ -456,6 +505,7 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
     behavior.write_text(json.dumps({'bundle': {'name': 'fixture-behavior'}, 'context': {'awareness': str(awareness)}}))
     bundle = tmp_path / 'bundle.yaml'
     bundle.write_text(json.dumps({'bundle': {'name': 'schedule-fixture'},
+        **({'agents': {AGENT_NAME: AGENT_DEFINITION}} if disabled_agent else {}),
         'includes': [{'bundle': str(behavior)}],
         'session': {'orchestrator': {'module': 'loop-live', 'config': {'use_streaming': False, 'max_iterations': 1}},
                     'context': {'module': 'context-simple', 'source': modules['context-simple']}},
@@ -483,7 +533,8 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
 
     def read_calls():
         errors, decoded = [], {}
-        for name, path in (('producerEvents', producer_events), ('calls', calls), ('sourceMounts', source_mounts)):
+        for name, path in (('producerEvents', producer_events), ('calls', calls),
+                           ('sourceMounts', source_mounts), ('agentStates', agent_events)):
             try:
                 raw = path.read_text() if path.exists() else ''
             except (OSError, UnicodeError) as exc:
@@ -503,7 +554,27 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
         report['observationErrors'] = errors
         report['producerEvents'] = decoded['producerEvents']
         report['sourceMounts'] = decoded['sourceMounts']
+        report['agentStates'] = decoded['agentStates']
         return decoded['calls']
+
+    def saved_agent(target):
+        configuration, summary = template(app, app._session(target))
+        directory = home / 'sessions' / target
+        plan = configuration['plan']
+        disabled = configuration['controls'].get('configurator', {}).get('disabled', {}).get('agents', [])
+        return {'summary': summary, 'planSource': 'effective' if (directory / 'effective-configuration.json').exists() else 'override',
+                'definitionHash': agent_digest(plan['agents'][AGENT_NAME]) if AGENT_NAME in plan.get('agents', {}) else None,
+                'disabled': disabled, 'disabledHash': agent_digest(disabled)}
+
+    async def assert_agent(target):
+        catalog = await runtime.control(target, 'catalog.inspect', {})
+        report.setdefault('agentCatalogs', []).append({'sessionId': target, 'agentsHash': agent_digest(catalog['agents'])})
+        assert AGENT_NAME not in catalog['agents'], catalog
+        report['calls'] = read_calls()
+        row = report['agentStates'][-1]
+        assert row['sessionId'] == target and row['stage'] == 'control:catalog.inspect'
+        assert not row['available'] and row['disabled'] == [AGENT_NAME], row
+        assert row['definitionHashes'] == [agent_digest(AGENT_DEFINITION)], row
 
     def assert_sources(mounted=None):
         import hashlib, inspect
@@ -538,6 +609,7 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
             directory = home / 'sessions' / target
             observations.append({'stage': 'input_admission', 'sessionId': target,
                 'summary': summary, 'guardReason': reason,
+                **({'agent': saved_agent(target)} if disabled_agent else {}),
                 'planSource': 'effective' if (directory / 'effective-configuration.json').exists() else 'override'})
             return reason
         try:
@@ -559,16 +631,32 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
         if material_change and kwargs.get('origin') == 'scheduler' and action == 'task.create':
             target = app._session(args['sessionId'])
             before = template(app, target)[1]
-            update_settings(settings_paths(target['workspace'], session_id=target['id'])['session'],
-                lambda settings: settings['sources']['modules'].update({'provider-fixture': str(source_paths['C'])}))
+            if disabled_agent:
+                directory = home / 'sessions' / target['id']
+                path = directory / 'configuration.json'
+                plan = json.loads(path.read_text())
+                plan.setdefault('agents', {})[AGENT_NAME] = copy.deepcopy(AGENT_DEFINITION)
+                path.write_text(json.dumps(plan))
+                path = directory / 'control-state.json'
+                state = json.loads(path.read_text())
+                state['configurator']['disabled']['agents'].remove(AGENT_NAME)
+                path.write_text(json.dumps(state))
+            else:
+                update_settings(settings_paths(target['workspace'], session_id=target['id'])['session'],
+                    lambda settings: settings['sources']['modules'].update({'provider-fixture': str(source_paths['C'])}))
             report['materialChange'] = {'target': target['id'], 'before': before,
-                'after': template(app, target)[1], 'injectedAt': 'before_task_create'}
+                'after': template(app, target)[1], 'injectedAt': 'before_task_create',
+                **({'agent': saved_agent(target['id'])} if disabled_agent else {})}
+            if disabled_agent:
+                assert report['materialChange']['agent']['definitionHash'] == agent_digest(AGENT_DEFINITION)
+                assert report['materialChange']['agent']['disabled'] == []
         try:
             result = await original_dispatch(action, args, **kwargs)
         except BaseException as exc:
             if kwargs.get('origin') == 'scheduler' and action == 'task.create':
                 observations.append({'stage': action, 'sessionId': args['sessionId'],
                     'error': {'type': type(exc).__name__, 'detail': str(exc)},
+                    **({'agent': saved_agent(args['sessionId'])} if disabled_agent else {}),
                     'summary': template(app, app._session(args['sessionId']))[1]})
             raise
         if kwargs.get('origin') == 'scheduler' and action in {'session.create', 'task.create'}:
@@ -578,6 +666,7 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
             # are diagnostic evidence here only; production receipts keep hashes.
             observations.append({'stage': action, 'sessionId': target,
                                  'summary': summary, 'configuration': configuration,
+                                 **({'agent': saved_agent(target)} if disabled_agent else {}),
                                  'planSource': 'effective' if (home / 'sessions' / target / 'effective-configuration.json').exists() else 'override',
                                  'receipt': copy.deepcopy(result['result'])})
         return result
@@ -597,6 +686,14 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
             await mode(app, app._session(source_id))
         await app.management.ensure_runtime(app._session(source_id))
         await runtime.control(source_id, 'task.get', {})
+        if disabled_agent:
+            catalog = await runtime.control(source_id, 'catalog.inspect', {})
+            assert catalog['agents'][AGENT_NAME] == AGENT_DEFINITION
+            report['originalAgentDefinitionHash'] = agent_digest(catalog['agents'][AGENT_NAME])
+            await runtime.control(source_id, 'configuration.toggle',
+                {'section': 'agents', 'name': AGENT_NAME, 'enabled': False})
+            await assert_agent(source_id)
+            report['sourceAgent'] = saved_agent(source_id)
         source_summary = template(app, app._session(source_id))[1]
         if inherited_source:
             source_config = template(app, app._session(source_id))[0]
@@ -638,8 +735,11 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
             assert task['id'] == run['taskId'] and task['maxTurns'] == 1
             report['calls'] = read_calls()
             assert_execution(report)
-            if inherited_source:
-                assert_sources()
+            if inherited_source or disabled_agent:
+                if inherited_source:
+                    assert_sources()
+                if disabled_agent:
+                    await assert_agent(target)
                 for previous in prior_runs:
                     assert app.schedules.store.run(source_id, previous['id']) == previous
                 prior_runs.append(copy.deepcopy(app.schedules.store.run(source_id, run['id'])))
@@ -655,7 +755,7 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
             report['repeatTicks'].append({'occurrence': occurrence + 1, 'additionalAdmissions': 0,
                                          'additionalGenerations': 0})
             assert len(app.schedules.store.runs(source_id)) == occurrence + 1
-        if inherited_source:
+        if inherited_source or disabled_agent:
             material_change = True
             before_execution = copy.deepcopy((report['admissions'], report['generations'], report['sourceMounts']))
             now[0] = app.schedules.store.get(source_id, schedule['id'])['nextDue']
@@ -667,7 +767,8 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
             assert not rejected.get('taskId')
             assert (report['admissions'], report['generations'], report['sourceMounts']) == before_execution
             assert_execution(report)
-            assert_sources()
+            if inherited_source:
+                assert_sources()
             for previous in prior_runs:
                 assert app.schedules.store.run(source_id, previous['id']) == previous
             comparison = rejected['destinationConfigurationComparison']
@@ -675,11 +776,32 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
             assert comparison['after']['stage'] == 'task_creation_admission'
             assert comparison['before']['configurationHash'] == report['materialChange']['before']['configurationHash']
             assert comparison['after']['configurationHash'] == report['materialChange']['after']['configurationHash']
-            assert comparison['changedCategories'] == ['sourceSettings']
+            if disabled_agent:
+                assert comparison['changedCategories'] == configuration_changes(
+                    report['materialChange']['before'], report['materialChange']['after'])
+                assert 'controls.configurator' in comparison['changedCategories']
+                assert set(comparison['changedCategories']) <= {'controls.configurator', 'plan.agents'}
+            else:
+                assert comparison['changedCategories'] == ['sourceSettings']
             assert str(tmp_path) not in json.dumps(comparison)
             assert app.schedules.store.get(source_id, schedule['id'])['status'] == 'needs_review'
         assert template(app, app._session(source_id))[1] == source_summary
         assert app._session(source_id)['messages'] == []
+        if disabled_agent:
+            # Prove the original definition can really be restored, not merely
+            # that an inspection label claims it is disabled. No agent is run.
+            report['restorationProbes'] = []
+            for target in [source_id, *destinations]:
+                await runtime.control(target, 'configuration.toggle',
+                    {'section': 'agents', 'name': AGENT_NAME, 'enabled': True})
+                catalog = await runtime.control(target, 'catalog.inspect', {})
+                report['restorationProbes'].append({'sessionId': target,
+                    'definitionHash': agent_digest(catalog['agents'].get(AGENT_NAME))})
+                assert catalog['agents'][AGENT_NAME] == AGENT_DEFINITION
+                await runtime.control(target, 'configuration.toggle',
+                    {'section': 'agents', 'name': AGENT_NAME, 'enabled': False})
+                await assert_agent(target)
+            assert template(app, app._session(source_id))[1] == source_summary
         completed = True
     except BaseException as exc:
         report['failure'] = {'type': type(exc).__name__, 'detail': str(exc)}
@@ -718,6 +840,6 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
             report['calls'] = read_calls()
             artifacts = os.environ.get('AMPLIFIER_TEST_ARTIFACTS')
             if artifacts:
-                path = Path(artifacts) / ('schedule-prepared-' + ('source-inheritance' if inherited_source else 'pinned' if selection else 'default')
+                path = Path(artifacts) / ('schedule-prepared-' + ('disabled-agent' if disabled_agent else 'source-inheritance' if inherited_source else 'pinned' if selection else 'default')
                     + ('-full-system' if authorization == 'full-system' else '') + '.json')
                 path.write_text(json.dumps(report, indent=2))
