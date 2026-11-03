@@ -3,8 +3,9 @@
 No installs, source substitutions, worker hooks or production mutations. Raw
 captures remain private. Unknown owners stay alive until the five-minute CI job
 terminates their owner; a cancelled/timed-out job is never diagnostic success.
-Only the public async helper entry is exercised; accepted synchronous cases
-are not repeated. Successful helper calls expose no operation cleanup object.
+Only nested public-async cases run: one additional retained owned-process
+boundary, without uv, stream redirection or app startup. Successful helper calls
+expose no operation cleanup object.
 """
 import asyncio
 import hashlib
@@ -39,6 +40,8 @@ STAGES = {"terminate", "cancel_read", "query_job", "wait_process", "finish_read"
           "wait_io", "close_handle", "other"}
 LIMIT = 256 * 1024
 OWNERS, RETAINED = [], []
+JOB_FIELDS = ("exception", "timedOut", "overflow", "returncode", "activeProcesses",
+              "treeEmpty", "ioFinalized", "discarded", "tasksSettled", "cleanupConfirmed")
 
 
 def private(root, name, raw):
@@ -127,9 +130,41 @@ def helper_result(root, label):
         return None
 
 
-async def compare(root, repo, route, env, git):
-    assert route == "B-async"  # No repeat of accepted A/synchronous-B cases.
-    label = route + "-" + repo
+def nested_result(root, repo):
+    try:
+        with directory(root, owned_root=root) as pinned:
+            raw = pinned.read_private("inner-nested-async-" + repo + "-completed.json", limit=16384)
+        value = json.loads(raw)
+        validate_case(value)
+        assert value["repo"] == repo and value["innerJob"] is None
+        return {key: value[key] for key in JOB_FIELDS}
+    except BaseException:
+        return None
+
+
+async def nested(root, repo):
+    # The unchanged leaf gets exactly this child's inherited env/cwd. Outer
+    # stdin remains open; the extra owned pipe is likewise left open/unwritten.
+    try:
+        row = await compare(root, repo, "nested-async", dict(os.environ), None, inner=True)
+        with directory(root, owned_root=root) as pinned:
+            output = pinned.read_private("inner-nested-async-" + repo + "-stdout.bin", limit=LIMIT)
+            errors = pinned.read_private("inner-nested-async-" + repo + "-stderr.bin", limit=LIMIT)
+        sys.stdout.buffer.write(output)
+        sys.stdout.buffer.flush()
+        sys.stderr.buffer.write(errors)
+        sys.stderr.buffer.flush()
+        return int(not successful(row, inner=True))
+    finally:
+        if RETAINED:
+            # The retained outer Job's unchanged 50-second deadline owns this
+            # process. Never exit/drop an unknown inner owner before that.
+            await asyncio.Event().wait()
+
+
+async def compare(root, repo, route, env, git, *, inner=False):
+    assert route == "nested-async"  # No repeat of accepted nonnested cases.
+    label = ("inner-" if inner else "") + route + "-" + repo
     save(root, label + "-starting.json", {"stage": "starting"})
     owner = result = error = None
     tasks, captures = [], {"stdout": bytearray(), "stderr": bytearray()}
@@ -144,7 +179,8 @@ async def compare(root, repo, route, env, git):
                 overflow = True
                 raise ValueError("capture limit")
     command = [
-        sys.executable, "-I", "-S", "-B", str(Path(__file__).resolve()), "--child", str(root), repo]
+        sys.executable, "-I", "-S", "-B", str(Path(__file__).resolve()),
+        "--child" if inner else "--nested", str(root), repo]
     cancelled = None
     try:
         async with asyncio.timeout(50):
@@ -199,7 +235,8 @@ async def compare(root, repo, route, env, git):
         "ioFinalized": bool(owner is not None and owner.io_finalized),
         "discarded": bool(owner is not None and owner.output_discarded),
         "tasksSettled": settled, "cleanupConfirmed": bool(confirmed),
-        "helper": helper_result(root, label) if confirmed and settled else None}
+        "helper": helper_result(root, "B-async-" + repo) if confirmed and settled else None,
+        "innerJob": nested_result(root, repo) if not inner and confirmed and settled else None}
     for name, raw in captures.items():
         private(root, label + "-" + name + ".bin", bytes(raw))
     save(root, label + "-completed.json", row)
@@ -208,16 +245,20 @@ async def compare(root, repo, route, env, git):
     return row
 
 
-def successful(row):
-    inner = row["helper"]
+def job_success(row):
     return (row["exception"] is None and not row["timedOut"] and not row["overflow"]
-        and row["mainRef"] and row["refSyntax"] and row["returncode"] == 0
-        and row["cleanupConfirmed"] and row["activeProcesses"] == 0
-        and row["treeEmpty"] and row["ioFinalized"] and row["tasksSettled"] and not row["discarded"]
-        and row["route"] == "B-async"
-        and inner is not None and inner["entry"] == "public-check-output-async" and inner["exception"] is None
-        and inner["returncode"] == 0 and inner["outputComplete"]
-        and inner["pendingEmpty"] and inner["errorCleanup"] is None)
+        and row["returncode"] == 0 and row["cleanupConfirmed"] and row["activeProcesses"] == 0
+        and row["treeEmpty"] and row["ioFinalized"] and row["tasksSettled"] and not row["discarded"])
+
+
+def successful(row, *, inner=False):
+    helper = row["helper"]
+    return (job_success(row) and row["mainRef"] and row["refSyntax"]
+        and row["route"] == "nested-async"
+        and helper is not None and helper["entry"] == "public-check-output-async"
+        and helper["exception"] is None and helper["returncode"] == 0 and helper["outputComplete"]
+        and helper["pendingEmpty"] and helper["errorCleanup"] is None
+        and (row["innerJob"] is None if inner else row["innerJob"] is not None and job_success(row["innerJob"])))
 
 
 async def experiment(report):
@@ -253,7 +294,7 @@ async def experiment(report):
     # This hash is which('git'), NOT proof of bare CreateProcess executable identity.
     report["stage"] = "comparison"
     for repo in REPOS:
-        report["cases"].append(await compare(root, repo, "B-async", env, git))
+        report["cases"].append(await compare(root, repo, "nested-async", env, git))
         if RETAINED:
             report["stage"] = "retained-unknown"
             return
@@ -261,10 +302,50 @@ async def experiment(report):
     report["status"] = "PASS" if all(successful(row) for row in report["cases"]) else "FAIL"
 
 
+def validate_job(row):
+    assert type(row) is dict and set(row) == set(JOB_FIELDS)
+    assert row["exception"] is None or type(row["exception"]) is str and row["exception"] in ERRORS
+    for key in ("timedOut", "overflow", "treeEmpty", "ioFinalized", "discarded", "tasksSettled", "cleanupConfirmed"):
+        assert type(row[key]) is bool
+    for key in ("returncode", "activeProcesses"):
+        assert row[key] is None or type(row[key]) is int and -(2**31) <= row[key] < 2**32
+
+
+def validate_case(row):
+    assert type(row) is dict and set(row) == {
+        "repo", "route", "seconds", "stage", *JOB_FIELDS,
+        "stdoutBytes", "stderrBytes", "mainRef", "refSyntax", "helper", "innerJob"}
+    assert row["repo"] in REPOS and row["route"] == "nested-async"
+    assert type(row["seconds"]) in (float, int) and 0 <= row["seconds"] <= 300
+    assert row["stage"] == "completed"
+    validate_job({key: row[key] for key in JOB_FIELDS})
+    for key in ("mainRef", "refSyntax"):
+        assert type(row[key]) is bool
+    for key in ("stdoutBytes", "stderrBytes"):
+        assert type(row[key]) is int and 0 <= row[key] <= LIMIT
+    if row["innerJob"] is not None:
+        validate_job(row["innerJob"])
+    if row["helper"] is not None:
+        h = row["helper"]
+        assert type(h) is dict and set(h) == {"entry", "exception", "returncode", "outputComplete", "pendingEmpty", "errorCleanup"}
+        assert h["entry"] == "public-check-output-async" and type(h["pendingEmpty"]) is bool
+        assert h["exception"] in ERRORS and type(h["outputComplete"]) is bool
+        assert h["returncode"] is None or type(h["returncode"]) is int and -(2**31) <= h["returncode"] < 2**32
+        if h["errorCleanup"] is not None:
+            assert h["exception"] is not None
+            c = h["errorCleanup"]
+            assert type(c) is dict and set(c) == {*BOOLS, "errors"}
+            assert all(c[key] is None or type(c[key]) is bool for key in BOOLS)
+            assert type(c["errors"]) is list and len(c["errors"]) <= 8
+            for e in c["errors"]:
+                assert set(e) == {"stage", "winerror"} and e["stage"] in STAGES
+                assert e["winerror"] is None or type(e["winerror"]) is int and -(2**31) <= e["winerror"] < 2**32
+
+
 def validate(report):
     assert set(report) == {"schema", "qualification", "diagnosticOnly", "status", "stage", "python", "windowsBuild",
                            "helperSha256", "gitWhichSha256", "cases", "exception"}
-    assert report["schema"] == 2 and report["qualification"] == "public-check-output-async"
+    assert report["schema"] == 3 and report["qualification"] == "nested-public-check-output-async"
     assert report["diagnosticOnly"] is True
     assert report["status"] in {"PASS", "FAIL"}
     assert report["stage"] in {"preflight", "helper-download", "comparison", "completed", "retained-unknown"}
@@ -275,34 +356,8 @@ def validate(report):
     assert report["exception"] is None or type(report["exception"]) is str and report["exception"] in ERRORS
     assert type(report["cases"]) is list and len(report["cases"]) <= 2
     for index, row in enumerate(report["cases"]):
-        assert list(REPOS)[index] == row["repo"] and row["route"] == "B-async"
-        assert set(row) == {"repo", "route", "seconds", "stage", "exception", "timedOut", "overflow",
-            "stdoutBytes", "stderrBytes", "mainRef", "refSyntax", "returncode", "activeProcesses",
-            "treeEmpty", "ioFinalized", "discarded", "tasksSettled", "cleanupConfirmed", "helper"}
-        assert type(row["seconds"]) in (float, int) and 0 <= row["seconds"] <= 300
-        assert row["stage"] == "completed" and row["exception"] in ERRORS
-        for key in ("timedOut", "overflow", "mainRef", "refSyntax", "treeEmpty", "ioFinalized",
-                    "discarded", "tasksSettled", "cleanupConfirmed"):
-            assert type(row[key]) is bool
-        for key in ("stdoutBytes", "stderrBytes"):
-            assert type(row[key]) is int and 0 <= row[key] <= LIMIT
-        for key in ("returncode", "activeProcesses"):
-            assert row[key] is None or type(row[key]) is int and -(2**31) <= row[key] < 2**32
-        if row["helper"] is not None:
-            h = row["helper"]
-            assert set(h) == {"entry", "exception", "returncode", "outputComplete", "pendingEmpty", "errorCleanup"}
-            assert h["entry"] == "public-check-output-async" and type(h["pendingEmpty"]) is bool
-            assert h["exception"] in ERRORS and type(h["outputComplete"]) is bool
-            assert h["returncode"] is None or type(h["returncode"]) is int and -(2**31) <= h["returncode"] < 2**32
-            if h["errorCleanup"] is not None:
-                assert h["exception"] is not None
-                c = h["errorCleanup"]
-                assert set(c) == {*BOOLS, "errors"}
-                assert all(c[key] is None or type(c[key]) is bool for key in BOOLS)
-                assert type(c["errors"]) is list and len(c["errors"]) <= 8
-                for e in c["errors"]:
-                    assert set(e) == {"stage", "winerror"} and e["stage"] in STAGES
-                    assert e["winerror"] is None or type(e["winerror"]) is int and -(2**31) <= e["winerror"] < 2**32
+        validate_case(row)
+        assert list(REPOS)[index] == row["repo"]
     if report["status"] == "PASS":
         assert report["stage"] == "completed" and len(report["cases"]) == 2
         assert report["exception"] is None and all(successful(row) for row in report["cases"])
@@ -317,8 +372,10 @@ if __name__ == "__main__":
     assert sys.version_info[:2] == (3, 13) and struct.calcsize("P") == 8
     if len(sys.argv) == 4 and sys.argv[1] == "--child" and sys.argv[3] in REPOS:
         raise SystemExit(asyncio.run(child(Path(sys.argv[2]), sys.argv[3])))
+    if len(sys.argv) == 4 and sys.argv[1] == "--nested" and sys.argv[3] in REPOS:
+        raise SystemExit(asyncio.run(nested(Path(sys.argv[2]), sys.argv[3])))
     assert len(sys.argv) == 1 and os.environ.get("GITHUB_ACTIONS") == "true"
-    report = {"schema": 2, "qualification": "public-check-output-async",
+    report = {"schema": 3, "qualification": "nested-public-check-output-async",
         "diagnosticOnly": True, "status": "FAIL", "stage": "preflight",
         "python": ".".join(map(str, sys.version_info[:3])), "windowsBuild": sys.getwindowsversion().build,
         "helperSha256": SHA, "gitWhichSha256": None, "cases": [], "exception": None}
