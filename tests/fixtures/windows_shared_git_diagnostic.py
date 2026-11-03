@@ -3,9 +3,9 @@
 No installs, source substitutions, worker hooks or production mutations. Raw
 captures remain private. Unknown owners stay alive until the five-minute CI job
 terminates their owner; a cancelled/timed-out job is never diagnostic success.
-Only nested stream-context public-async cases run, without uv or app startup.
-The exact worker protocol function and real pending stdin reader supply the
-single added context. Successful helper calls expose no operation cleanup object.
+Only two split-stream public-async cases run, using context-simple: exact protocol
+setup alone, then the real pending reader alone. No no-stream or combined case
+is repeated. Successful helper calls expose no operation cleanup object.
 """
 import ast
 import asyncio
@@ -29,8 +29,8 @@ import uuid
 SHA = "11f47553e965956a99c1fed0bd1305aa8f75163206f6c2c51c75b97ad1e32dc4"
 URL = ("https://raw.githubusercontent.com/microsoft/amplifier-foundation/"
        "c716df3cea84b2539aabdfea58a69ae676a1e853/amplifier_foundation/sources/_windows_git.py")
-REPOS = {"context-simple": "amplifier-module-context-simple",
-         "context-intelligence": "amplifier-bundle-context-intelligence"}
+REPOS = {"context-simple": "amplifier-module-context-simple"}
+VARIANTS = ("protocol-only", "reader-only")
 ERRORS = {None, "other", "HelperCleanupError", "CleanupError", "TimeoutExpired",
           "CalledProcessError", "TimeoutError", "OSError", "PermissionError",
           "FileNotFoundError", "AssertionError", "ValueError", "TypeError",
@@ -50,12 +50,13 @@ STREAM_SOURCES = {
 }
 
 
-def worker_streams():
+def worker_streams(variant):
     """Execute the unmodified checked-out function/module, no full app imports.
 
     LF normalization is Python's source newline normalization, so checkout CRLF
     does not change the attested function AST or actual input-reader code.
     """
+    assert variant in VARIANTS
     app = Path(__file__).resolve().parents[2] / "amplifier_web"
     worker = ast.parse((app / "runtime_worker.py").read_bytes())
     functions = [node for node in worker.body
@@ -63,26 +64,34 @@ def worker_streams():
     assert len(functions) == 1
     function = functions[0]
     assert hashlib.sha256(ast.dump(function, include_attributes=False).encode()).hexdigest() == STREAM_SOURCES["configureBodySha256"]
-    scope = {"os": os, "sys": sys, "_PROTOCOL": None}
-    # This is the exact AST node, without rewritten calls, globals or body.
-    exec(compile(ast.Module(body=[function], type_ignores=[]),
-                 str(app / "runtime_worker.py"), "exec"), scope)
-    scope["configure_protocol"]()
-    protocol = scope["_PROTOCOL"]
+    inputs = []
+    for filename, key in (("worker_input.py", "readerSourceSha256"),
+                          ("runtime_protocol.py", "protocolSourceSha256")):
+        raw = (app / filename).read_bytes().replace(b"\r\n", b"\n")
+        assert hashlib.sha256(raw).hexdigest() == STREAM_SOURCES[key]
+        inputs.append((filename, raw))
+    # All source identities are attested; only the chosen variant executes.
+    protocol = reader = None
     try:
-        modules = []
-        for filename, key in (("worker_input.py", "readerSourceSha256"),
-                              ("runtime_protocol.py", "protocolSourceSha256")):
-            raw = (app / filename).read_bytes().replace(b"\r\n", b"\n")
-            assert hashlib.sha256(raw).hexdigest() == STREAM_SOURCES[key]
-            spec = importlib.util.spec_from_file_location("diagnostic_" + filename[:-3], app / filename)
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[spec.name] = module
-            exec(compile(raw, str(app / filename), "exec"), module.__dict__)
-            modules.append(module)
-        reader = modules[0].ThreadedPipeReader(sys.stdin, modules[1].MAX_MESSAGE_BYTES)
+        if variant == "protocol-only":
+            scope = {"os": os, "sys": sys, "_PROTOCOL": None}
+            # Exact AST, no rewritten calls, globals or body; no input reader.
+            exec(compile(ast.Module(body=[function], type_ignores=[]),
+                         str(app / "runtime_worker.py"), "exec"), scope)
+            scope["configure_protocol"]()
+            protocol = scope["_PROTOCOL"]
+        else:
+            modules = []
+            for filename, raw in inputs:
+                spec = importlib.util.spec_from_file_location("diagnostic_" + filename[:-3], app / filename)
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[spec.name] = module
+                exec(compile(raw, str(app / filename), "exec"), module.__dict__)
+                modules.append(module)
+            reader = modules[0].ThreadedPipeReader(sys.stdin, modules[1].MAX_MESSAGE_BYTES)
     except BaseException:
-        protocol.close()
+        if protocol is not None:
+            protocol.close()
         raise
     return protocol, reader
 
@@ -129,26 +138,32 @@ def argv(repo):
             "refs/heads/main", "refs/tags/main", "refs/tags/main^{}"]
 
 
-async def child(root, repo):
-    protocol, reader = worker_streams()
+async def child(root, repo, variant):
+    protocol, reader = worker_streams(variant)
     request = None
     try:
-        request = asyncio.create_task(reader.readline())
-        # No new deadline: the unchanged outer owned operation bounds setup too.
-        while not reader_pending(reader, request):
-            if request.done():
-                request.result()
-                raise AssertionError("stdin delivery was not pending")
-            assert reader._thread.is_alive() and not reader._closed.is_set()
-            await asyncio.sleep(.01)
-        facts = {**STREAM_SOURCES, "protocolConfigured": True, "pendingReadDequeued": True,
-                 "pendingAfterHelper": False}
-        return await helper_child(root, repo, protocol, reader, request, facts)
+        assert (protocol is not None) == (variant == "protocol-only")
+        assert (reader is not None) == (variant == "reader-only")
+        if reader is not None:
+            request = asyncio.create_task(reader.readline())
+            # No new deadline: the unchanged outer owned operation bounds setup.
+            while not reader_pending(reader, request):
+                if request.done():
+                    request.result()
+                    raise AssertionError("stdin delivery was not pending")
+                assert reader._thread.is_alive() and not reader._closed.is_set()
+                await asyncio.sleep(.01)
+        facts = {**STREAM_SOURCES, "variant": variant,
+                 "protocolConfigured": protocol is not None, "readerActive": reader is not None,
+                 "pendingReadDequeued": reader is not None, "pendingAfterHelper": False}
+        output = protocol if protocol is not None else sys.stdout.buffer
+        return await helper_child(root, repo, output, reader, request, facts)
     finally:
         # Existing cancellation semantics stop delivery, NOT the OS read.
         # Do not join the daemon or close its buffered descriptor on the loop.
         try:
-            reader.close()
+            if reader is not None:
+                reader.close()
             if request is not None:
                 request.cancel()
                 try:
@@ -156,7 +171,8 @@ async def child(root, repo):
                 except asyncio.CancelledError:
                     pass
         finally:
-            protocol.close()
+            if protocol is not None:
+                protocol.close()
 
 
 async def helper_child(root, repo, protocol, reader, request, stream_facts):
@@ -180,12 +196,12 @@ async def helper_child(root, repo, protocol, reader, request, stream_facts):
             code, output = exc.returncode, exc.output or ""
     raw = output.encode("utf-8" if sys.flags.utf8_mode else locale.getencoding())
     try:
-        # configure_protocol redirected stdout; only its retained descriptor
-        # still reaches the parent's ref-output stream.
+        # Exact configure_protocol's descriptor only in protocol-only. Reader-only
+        # writes ordinary stdout unchanged, so each variant isolates one delta.
         protocol.write(raw)
         protocol.flush()
-        stream_facts["pendingAfterHelper"] = reader_pending(reader, request)
-        save(root, "B-async-" + repo + "-helper.json", {"entry": "public-check-output-async", "exception": error,
+        stream_facts["pendingAfterHelper"] = reader is not None and reader_pending(reader, request)
+        save(root, stream_facts["variant"] + "-" + repo + "-helper.json", {"entry": "public-check-output-async", "exception": error,
             "returncode": code, "outputComplete": error in {None, "CalledProcessError"},
             "pendingEmpty": not module._PENDING, "errorCleanup": error_cleanup,
             "streamContext": stream_facts})
@@ -216,26 +232,26 @@ def helper_result(root, label):
         return None
 
 
-def nested_result(root, repo):
+def nested_result(root, repo, variant):
     try:
         with directory(root, owned_root=root) as pinned:
-            raw = pinned.read_private("inner-nested-stream-async-" + repo + "-completed.json", limit=16384)
+            raw = pinned.read_private("inner-" + variant + "-" + repo + "-completed.json", limit=16384)
         value = json.loads(raw)
         validate_case(value)
-        assert value["repo"] == repo and value["innerJob"] is None
+        assert value["repo"] == repo and value["route"] == variant and value["innerJob"] is None
         return {key: value[key] for key in JOB_FIELDS}
     except BaseException:
         return None
 
 
-async def nested(root, repo):
+async def nested(root, repo, variant):
     # The unchanged leaf gets exactly this child's inherited env/cwd. Outer
     # stdin remains open; the extra owned pipe is likewise left open/unwritten.
     try:
-        row = await compare(root, repo, "nested-stream-async", dict(os.environ), None, inner=True)
+        row = await compare(root, repo, variant, dict(os.environ), None, inner=True)
         with directory(root, owned_root=root) as pinned:
-            output = pinned.read_private("inner-nested-stream-async-" + repo + "-stdout.bin", limit=LIMIT)
-            errors = pinned.read_private("inner-nested-stream-async-" + repo + "-stderr.bin", limit=LIMIT)
+            output = pinned.read_private("inner-" + variant + "-" + repo + "-stdout.bin", limit=LIMIT)
+            errors = pinned.read_private("inner-" + variant + "-" + repo + "-stderr.bin", limit=LIMIT)
         sys.stdout.buffer.write(output)
         sys.stdout.buffer.flush()
         sys.stderr.buffer.write(errors)
@@ -249,7 +265,7 @@ async def nested(root, repo):
 
 
 async def compare(root, repo, route, env, git, *, inner=False):
-    assert route == "nested-stream-async"  # No repeat of accepted nonnested cases.
+    assert route in VARIANTS  # No repeat of accepted no-stream/failing combined.
     label = ("inner-" if inner else "") + route + "-" + repo
     save(root, label + "-starting.json", {"stage": "starting"})
     owner = result = error = None
@@ -266,7 +282,7 @@ async def compare(root, repo, route, env, git, *, inner=False):
                 raise ValueError("capture limit")
     command = [
         sys.executable, "-I", "-S", "-B", str(Path(__file__).resolve()),
-        "--child" if inner else "--nested", str(root), repo]
+        "--child" if inner else "--nested", str(root), repo, route]
     cancelled = None
     try:
         async with asyncio.timeout(50):
@@ -321,8 +337,8 @@ async def compare(root, repo, route, env, git, *, inner=False):
         "ioFinalized": bool(owner is not None and owner.io_finalized),
         "discarded": bool(owner is not None and owner.output_discarded),
         "tasksSettled": settled, "cleanupConfirmed": bool(confirmed),
-        "helper": helper_result(root, "B-async-" + repo) if confirmed and settled else None,
-        "innerJob": nested_result(root, repo) if not inner and confirmed and settled else None}
+        "helper": helper_result(root, label.removeprefix("inner-")) if confirmed and settled else None,
+        "innerJob": nested_result(root, repo, route) if not inner and confirmed and settled else None}
     for name, raw in captures.items():
         private(root, label + "-" + name + ".bin", bytes(raw))
     save(root, label + "-completed.json", row)
@@ -340,12 +356,14 @@ def job_success(row):
 def successful(row, *, inner=False):
     helper = row["helper"]
     return (job_success(row) and row["mainRef"] and row["refSyntax"]
-        and row["route"] == "nested-stream-async"
+        and row["route"] in VARIANTS
         and helper is not None and helper["entry"] == "public-check-output-async"
         and helper["exception"] is None and helper["returncode"] == 0 and helper["outputComplete"]
         and helper["pendingEmpty"] and helper["errorCleanup"] is None
-        and all(helper["streamContext"][key] is True for key in
-                ("protocolConfigured", "pendingReadDequeued", "pendingAfterHelper"))
+        and helper["streamContext"]["variant"] == row["route"]
+        and helper["streamContext"]["protocolConfigured"] == (row["route"] == "protocol-only")
+        and all(helper["streamContext"][key] == (row["route"] == "reader-only")
+                for key in ("readerActive", "pendingReadDequeued", "pendingAfterHelper"))
         and (row["innerJob"] is None if inner else row["innerJob"] is not None and job_success(row["innerJob"])))
 
 
@@ -381,8 +399,8 @@ async def experiment(report):
     report["gitWhichSha256"] = hashlib.sha256(Path(git).read_bytes()).hexdigest()
     # This hash is which('git'), NOT proof of bare CreateProcess executable identity.
     report["stage"] = "comparison"
-    for repo in REPOS:
-        report["cases"].append(await compare(root, repo, "nested-stream-async", env, git))
+    for variant in VARIANTS:
+        report["cases"].append(await compare(root, "context-simple", variant, env, git))
         if RETAINED:
             report["stage"] = "retained-unknown"
             return
@@ -403,7 +421,7 @@ def validate_case(row):
     assert type(row) is dict and set(row) == {
         "repo", "route", "seconds", "stage", *JOB_FIELDS,
         "stdoutBytes", "stderrBytes", "mainRef", "refSyntax", "helper", "innerJob"}
-    assert row["repo"] in REPOS and row["route"] == "nested-stream-async"
+    assert row["repo"] in REPOS and row["route"] in VARIANTS
     assert type(row["seconds"]) in (float, int) and 0 <= row["seconds"] <= 300
     assert row["stage"] == "completed"
     validate_job({key: row[key] for key in JOB_FIELDS})
@@ -434,16 +452,17 @@ def validate_case(row):
 
 def validate_stream_context(value):
     assert type(value) is dict and set(value) == {
-        *STREAM_SOURCES, "protocolConfigured", "pendingReadDequeued", "pendingAfterHelper"}
+        *STREAM_SOURCES, "variant", "protocolConfigured", "readerActive", "pendingReadDequeued", "pendingAfterHelper"}
+    assert value["variant"] in VARIANTS
     assert all(value[key] == digest for key, digest in STREAM_SOURCES.items())
     assert all(type(value[key]) is bool for key in
-               ("protocolConfigured", "pendingReadDequeued", "pendingAfterHelper"))
+               ("protocolConfigured", "readerActive", "pendingReadDequeued", "pendingAfterHelper"))
 
 
 def validate(report):
     assert set(report) == {"schema", "qualification", "diagnosticOnly", "status", "stage", "python", "windowsBuild",
                            "helperSha256", "gitWhichSha256", "cases", "exception"}
-    assert report["schema"] == 4 and report["qualification"] == "nested-stream-public-check-output-async"
+    assert report["schema"] == 5 and report["qualification"] == "nested-split-stream-public-check-output-async"
     assert report["diagnosticOnly"] is True
     assert report["status"] in {"PASS", "FAIL"}
     assert report["stage"] in {"preflight", "helper-download", "comparison", "completed", "retained-unknown"}
@@ -455,7 +474,7 @@ def validate(report):
     assert type(report["cases"]) is list and len(report["cases"]) <= 2
     for index, row in enumerate(report["cases"]):
         validate_case(row)
-        assert list(REPOS)[index] == row["repo"]
+        assert row["repo"] == "context-simple" and row["route"] == VARIANTS[index]
     if report["status"] == "PASS":
         assert report["stage"] == "completed" and len(report["cases"]) == 2
         assert report["exception"] is None and all(successful(row) for row in report["cases"])
@@ -468,12 +487,12 @@ if __name__ == "__main__":
     from amplifier_web.windows_jobs import CleanupError, WindowsOwnedProcess
     assert os.name == "nt" and sys.implementation.name == "cpython"
     assert sys.version_info[:2] == (3, 13) and struct.calcsize("P") == 8
-    if len(sys.argv) == 4 and sys.argv[1] == "--child" and sys.argv[3] in REPOS:
-        raise SystemExit(asyncio.run(child(Path(sys.argv[2]), sys.argv[3])))
-    if len(sys.argv) == 4 and sys.argv[1] == "--nested" and sys.argv[3] in REPOS:
-        raise SystemExit(asyncio.run(nested(Path(sys.argv[2]), sys.argv[3])))
+    if len(sys.argv) == 5 and sys.argv[1] == "--child" and sys.argv[3] in REPOS and sys.argv[4] in VARIANTS:
+        raise SystemExit(asyncio.run(child(Path(sys.argv[2]), sys.argv[3], sys.argv[4])))
+    if len(sys.argv) == 5 and sys.argv[1] == "--nested" and sys.argv[3] in REPOS and sys.argv[4] in VARIANTS:
+        raise SystemExit(asyncio.run(nested(Path(sys.argv[2]), sys.argv[3], sys.argv[4])))
     assert len(sys.argv) == 1 and os.environ.get("GITHUB_ACTIONS") == "true"
-    report = {"schema": 4, "qualification": "nested-stream-public-check-output-async",
+    report = {"schema": 5, "qualification": "nested-split-stream-public-check-output-async",
         "diagnosticOnly": True, "status": "FAIL", "stage": "preflight",
         "python": ".".join(map(str, sys.version_info[:3])), "windowsBuild": sys.getwindowsversion().build,
         "helperSha256": SHA, "gitWhichSha256": None, "cases": [], "exception": None}
