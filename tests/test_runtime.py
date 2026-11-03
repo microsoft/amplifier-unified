@@ -1587,6 +1587,304 @@ def test_default_runtime_probe_native_parent_has_no_redirector_timeout_kill():
                    for node in ast.walk(body))
 
 
+def test_default_runtime_probe_fixture_home_is_private_before_environment_and_imports(tmp_path, monkeypatch):
+    import ast
+    from contextlib import contextmanager
+    from amplifier_web import windows_files
+    fixture = _default_runtime_probe_module()
+    root = tmp_path / 'scratch'
+    keys = {'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'AMPLIFIER_WEB_HOME',
+            'AMPLIFIER_HOME', 'AMPLIFIER_UNIFIED_IMPORT_HOME', 'AMPLIFIER_SESSION_STATE_HOME',
+            'AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME'}
+    environment = {key: 'must-not-be-inherited' for key in keys}
+    environment.update(PATH='preserve-uv-path', UV_CACHE_DIR=str(root / 'uv-cache'))
+    original = environment.copy()
+    created = []
+
+    @contextmanager
+    def directory(path, *, owned_root, create):
+        assert owned_root == root and create is True and path.is_relative_to(root)
+        assert environment == original  # No app can use partly prepared homes.
+        created.append(path)
+        yield
+
+    monkeypatch.setattr(fixture, 'os', SimpleNamespace(environ=environment))
+    monkeypatch.setattr(windows_files, 'directory', directory)
+    fixture.prepare_fixture_home(root)
+    assert set(created) == {root / name for name in (
+        'app', 'shared', 'workspace', 'user', 'user/roaming', 'user/local',
+        'user/cache', 'ownership', 'captures')}
+    assert all(Path(environment[key]).is_relative_to(root) for key in keys)
+    assert environment['HOME'] == environment['USERPROFILE'] == str(root / 'user')
+    assert environment['PATH'] == original['PATH']
+    assert environment['UV_CACHE_DIR'] == original['UV_CACHE_DIR']
+    assert not root.exists()  # Only the kernel boundary was modeled.
+    tree = ast.parse(Path(fixture.__file__).read_text(encoding='utf-8'))
+    journey = next(node for node in tree.body
+                   if isinstance(node, ast.AsyncFunctionDef) and node.name == 'journey')
+    setup = next(node for node in journey.body if isinstance(node, ast.Expr)
+                 and isinstance(node.value, ast.Call)
+                 and getattr(node.value.func, 'id', None) == 'prepare_fixture_home')
+    assert all(setup.lineno < node.lineno for node in journey.body
+               if isinstance(node, (ast.Import, ast.ImportFrom)))
+
+
+def test_default_runtime_probe_unsafe_fixture_home_is_not_repaired(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from amplifier_web import windows_files
+    fixture = _default_runtime_probe_module()
+    environment = {'PATH': 'preserve-uv-path'}
+    error = PermissionError('unsafe existing private fixture path')
+    entered = []
+
+    @contextmanager
+    def directory(path, *, owned_root, create):
+        entered.append((path, owned_root, create))
+        raise error
+        yield
+
+    monkeypatch.setattr(fixture, 'os', SimpleNamespace(environ=environment))
+    monkeypatch.setattr(windows_files, 'directory', directory)
+    with pytest.raises(PermissionError) as caught:
+        fixture.prepare_fixture_home(tmp_path)
+    assert caught.value is error and environment == {'PATH': 'preserve-uv-path'}
+    assert entered == [(tmp_path / 'app', tmp_path, True)]
+    assert not tuple(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize('prepared', [False, True])
+async def test_default_runtime_probe_fresh_app_import_requires_isolated_home(tmp_path, prepared):
+    """Finite import-only child: no AppService instance, runtime, uv or listener."""
+    import os
+    import subprocess
+    source = Path(__file__).resolve().parents[1]
+    temporary = tmp_path / 'temp'
+    temporary.mkdir()
+    script = r'''
+import importlib.util, json, ntpath, os, sys
+from contextlib import contextmanager
+from pathlib import Path
+from unittest.mock import patch
+source, root, prepared = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3] == "True"
+sys.path.insert(0, str(source))
+assert not any(key in os.environ for key in (
+    "HOME", "USERPROFILE", "HOMEPATH", "HOMEDRIVE", "APPDATA", "LOCALAPPDATA"))
+# Native Windows uses this directly. On the Linux author host, model ONLY its
+# ~ expansion with the actual CPython ntpath function; Path.home/imports remain
+# real. POSIX pwd fallback would otherwise hide the Windows missing-home defect.
+if os.name != "nt":
+    original = os.path.expanduser
+    os.path.expanduser = lambda value: (
+        ntpath.expanduser(value) if os.fspath(value).startswith("~") else original(value))
+blocked = []
+def guard(event, args):
+    if event in {"socket.bind", "socket.connect", "socket.getaddrinfo", "socket.sendto",
+                 "socket.gethostbyname", "socket.gethostbyaddr", "socket.getnameinfo",
+                 "subprocess.Popen", "os.system", "os.posix_spawn"}:
+        blocked.append(event)
+        raise AssertionError("network/process effect prohibited")
+    targets, directory_fd = [], None
+    if event == "open":
+        mode, flags = args[1:3]
+        if ((isinstance(mode, str) and any(char in mode for char in "wax+"))
+                or (isinstance(flags, int) and flags &
+                    (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND))):
+            targets = [args[0]]
+    elif event in {"os.mkdir", "os.remove", "os.rmdir", "os.chmod"}:
+        targets = [args[0]]
+        directory_fd = args[1] if event in {"os.remove", "os.rmdir"} else args[2]
+    elif event in {"os.link", "os.symlink", "os.rename"}:
+        targets = list(args[:2])
+    for target in targets:
+        if isinstance(target, int):
+            continue
+        path = Path(target)
+        if not path.is_absolute() and directory_fd not in {None, -1}:
+            # filelock's import-time temporary probe removes relative to its
+            # owned directory fd on POSIX. Resolve that fd, not the source cwd.
+            assert os.name == "posix"
+            info = os.fstat(directory_fd)
+            parent = next(candidate for candidate in (root.parent, *root.parent.rglob("*"))
+                          if candidate.is_dir() and
+                          (candidate.stat().st_dev, candidate.stat().st_ino) == (info.st_dev, info.st_ino))
+            path = parent / path
+        assert path.absolute().is_relative_to(root.parent), "write escaped test scratch"
+sys.addaudithook(guard)
+spec = importlib.util.spec_from_file_location(
+    "cold_home_import_fixture", source / "tests/fixtures/windows_default_runtime_probe.py")
+fixture = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(fixture)
+assert "amplifier_web.service" not in sys.modules
+assert not (root / "app/runtime").exists()
+if prepared:
+    from amplifier_web import windows_files
+    @contextmanager
+    def model_directory(path, *, owned_root, create):
+        # Models native creation only. Test is about real import/home semantics,
+        # not an ACL pass; actual NTFS validation stays in native CI.
+        assert owned_root == root and create and path.is_relative_to(root)
+        path.mkdir(parents=True, exist_ok=True)
+        yield
+    with patch.object(windows_files, "directory", model_directory):
+        fixture.prepare_fixture_home(root)
+    assert Path.home() == root / "user"
+try:
+    from amplifier_web.service import AppService
+except RuntimeError as error:
+    assert not prepared and ntpath.expanduser("~") == "~"
+    modules = []
+    tb = error.__traceback__
+    while tb:
+        modules.append(tb.tb_frame.f_globals.get("__name__", ""))
+        tb = tb.tb_next
+    assert any(name.startswith("pathlib") for name in modules)
+    assert any(name in {"amplifier_foundation.session.finder",
+                        "amplifier_web.status_protocol.reader"} for name in modules)
+    result = "missing-home-RuntimeError"
+else:
+    assert prepared and AppService.__module__ == "amplifier_web.service"
+    assert Path.home() == root / "user"
+    from amplifier_web.status_protocol.reader import DEFAULT_DIRECTORY
+    assert DEFAULT_DIRECTORY == root / "user/.amplifier/emitter"
+    assert not DEFAULT_DIRECTORY.exists()  # No status/app state was opened.
+    result = "actual-AppService-import-PASS"
+assert not blocked
+assert not (root / "app/runtime").exists() and not (root / "app/app.sqlite3").exists()
+print(json.dumps({"result": result, "networkProcessAttempts": blocked}))
+'''
+    keep = {'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'PATH'}
+    environment = {key: value for key, value in os.environ.items() if key.upper() in keep}
+    environment.update(TEMP=str(temporary), TMP=str(temporary), TMPDIR=str(temporary))
+    argv = [sys.executable, '-I', '-B', '-c', script, str(source),
+            str(tmp_path / 'cold-scratch'), str(prepared)]
+    if sys.platform == 'win32':
+        fixture = _default_runtime_probe_module()
+        outcome = await fixture.run_owned_probe(
+            argv, cwd=tmp_path, env=environment, scratch=tmp_path, timeout=15)
+        if fixture.FAILED_OUTER_OWNERS:
+            # Keep the helper's existing owner/scratch records alive after this
+            # test fails. A later parameter must not replace an uncertain owner.
+            sys.modules[fixture.__name__ + '_retained_import_' + str(id(fixture))] = fixture
+        outer = outcome['outerJob']
+        assert (outcome['succeeded'] and outcome['tasksSettled']
+                and outer['status'] == 'confirmed' and not outer['timedOut']
+                and outer['activeProcesses'] == 0 and outer['treeEmpty']
+                and outer['ioFinalized'] and not outer['outputDiscarded']), (
+                    'Bounded cold-home import or owned cleanup failed')
+        output = outcome['stdout']
+    else:
+        child = subprocess.run(
+            argv, cwd=tmp_path, env=environment,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+        assert child.returncode == 0, 'Bounded cold-home import regression failed'
+        output = child.stdout
+    assert json.loads(output) == {
+        'result': 'actual-AppService-import-PASS' if prepared else 'missing-home-RuntimeError',
+        'networkProcessAttempts': []}
+
+
+@pytest.mark.parametrize('prepared', [False, True])
+@pytest.mark.parametrize('mode', ['normal', 'timeout', 'cleanup-unknown', 'io-unknown', 'discarded'])
+async def test_default_runtime_probe_home_import_windows_owns_deadline_and_cleanup(
+        tmp_path, monkeypatch, prepared, mode):
+    import subprocess
+    from types import FunctionType
+    from unittest.mock import AsyncMock
+    from amplifier_web import windows_jobs
+    fixture = _default_runtime_probe_module()
+    expected = {'result': 'actual-AppService-import-PASS' if prepared else 'missing-home-RuntimeError',
+                'networkProcessAttempts': []}
+
+    class Job:
+        state = 'running'
+        tree_empty = io_finalized = output_discarded = False
+
+        def __init__(self):
+            self.stdin = SimpleNamespace(close=Mock())
+            self.stdout, self.stderr = asyncio.StreamReader(), asyncio.StreamReader()
+            self.stdout.feed_data(json.dumps(expected).encode())
+            self.stdout.feed_eof()
+            self.stderr.feed_eof()
+            self.done = asyncio.Event()
+            self.closes = 0
+            if mode not in {'timeout', 'cleanup-unknown'}:
+                self.finish()
+
+        def finish(self):
+            self.tree_empty, self.io_finalized = True, mode != 'io-unknown'
+            self.output_discarded = mode == 'discarded'
+            self.done.set()
+
+        async def wait(self):
+            await self.done.wait()
+            return windows_jobs.ProcessResult(0, 0, 0, self.output_discarded)
+
+        async def close(self):
+            self.closes += 1
+            if mode == 'cleanup-unknown':
+                self.state = 'cleanup_failed'
+                raise windows_jobs.CleanupError(self)
+            if not self.done.is_set():
+                self.finish()
+            return await self.wait()
+
+    job = Job()
+    start = AsyncMock(return_value=job)
+    monkeypatch.setattr(windows_jobs.WindowsOwnedProcess, 'start', start)
+    monkeypatch.setattr(subprocess, 'run', Mock(
+        side_effect=AssertionError('Windows import test used redirector-only subprocess.run')))
+    deadlines = []
+
+    def bounded_timeout(seconds):
+        deadlines.append(seconds)
+        assert seconds == 15
+        return asyncio.timeout(.01)  # Exercise the real helper's timeout path.
+
+    monkeypatch.setattr(fixture, 'asyncio', SimpleNamespace(
+        **{name: getattr(asyncio, name) for name in (
+            'create_task', 'gather', 'shield')}, timeout=bounded_timeout))
+    original = test_default_runtime_probe_fresh_app_import_requires_isolated_home
+    windows_branch = FunctionType(original.__code__, {
+        **original.__globals__,
+        'sys': SimpleNamespace(platform='win32', executable=sys.executable, modules=sys.modules),
+        '_default_runtime_probe_module': lambda: fixture,
+    })
+    try:
+        if mode == 'normal':
+            await asyncio.wait_for(windows_branch(tmp_path, prepared), 1)
+        else:
+            with pytest.raises(AssertionError, match='import or owned cleanup failed'):
+                await asyncio.wait_for(windows_branch(tmp_path, prepared), 1)
+        assert deadlines == [15] and job.closes == 1
+        job.stdin.close.assert_called_once_with()
+        start.assert_awaited_once()
+        argv = start.await_args.args[0]
+        assert argv[0] == sys.executable and argv[1:4] == ['-I', '-B', '-c']
+        assert 'from amplifier_web.service import AppService' in argv[4]
+        assert argv[-1] == str(prepared)
+        assert start.await_args.kwargs['trusted_python'] == sys._base_executable
+        assert start.await_args.kwargs['cleanup_timeout'] == 5
+        assert start.await_args.kwargs['cwd'] == tmp_path
+        environment = start.await_args.kwargs['env']
+        assert not {'HOME', 'USERPROFILE', 'HOMEPATH', 'HOMEDRIVE', 'APPDATA', 'LOCALAPPDATA'} & {
+            name.upper() for name in environment}
+        assert environment['TEMP'] == environment['TMP'] == environment['TMPDIR'] == str(tmp_path / 'temp')
+        retained = [key for key, module in tuple(sys.modules.items())
+                    if key.startswith(fixture.__name__ + '_retained_import_') and module is fixture]
+        if mode in {'cleanup-unknown', 'io-unknown'}:
+            assert fixture.FAILED_OUTER_OWNERS == [{'owner': job, 'scratch': tmp_path}]
+            assert len(retained) == 1  # Helper + its existing ownership evidence survive.
+        else:
+            assert not fixture.FAILED_OUTER_OWNERS and not retained
+        assert (tmp_path / 'temp').is_dir() and not (tmp_path / 'cold-scratch').exists()
+    finally:
+        # Only the inert model's fake owner is retired here. Real uncertain
+        # native owners in the maintained test are never dropped or retried.
+        for key, module in tuple(sys.modules.items()):
+            if key.startswith(fixture.__name__ + '_retained_import_') and module is fixture:
+                del sys.modules[key]
+
+
 @pytest.mark.parametrize('boundary', [
     'runtime_preflight', 'input_paths', 'private_root', 'private_log',
     'journey_imports', 'installed_direct_url',

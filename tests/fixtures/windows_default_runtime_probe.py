@@ -33,7 +33,7 @@ IMPORTS = {
 CHECKS = ("installedHost", "coldDefaultCommand", "workerIdentity", "scriptedTurn",
           "workerProvenance", "ownedJobCleanup")
 CHECKPOINTS = frozenset({
-    "runtime_preflight", "input_paths", "private_root", "private_log", "journey_imports",
+    "runtime_preflight", "input_paths", "private_root", "private_log", "fixture_home", "journey_imports",
     "installed_import", "installed_distribution", "installed_direct_url", "installed_origin",
     "installed_members", "installed_manifest", "journey", "complete",
     "outer_run", "outer_close", "parent_output_json", "parent_output_schema",
@@ -384,7 +384,29 @@ def verify_worker_lock(project, imports):
             assert "registry" in source and imports[package]["commit"] is None
 
 
+def prepare_fixture_home(root):
+    """Create and bind isolated homes BEFORE imports can evaluate Path.home()."""
+    from amplifier_web.windows_files import directory
+    home, shared, workspace = root / "app", root / "shared", root / "workspace"
+    user = root / "user"
+    for path in (home, shared, workspace, user, user / "roaming", user / "local",
+                 user / "cache", root / "ownership", root / "captures"):
+        with directory(path, owned_root=root, create=True):
+            pass
+    # Do not inherit a real profile to fix missing-home imports. Each consumer
+    # sees only privately created scratch; the worker project stays absent.
+    os.environ.update(AMPLIFIER_WEB_HOME=str(home), AMPLIFIER_HOME=str(shared),
+        AMPLIFIER_UNIFIED_IMPORT_HOME=str(root / "legacy"),
+        AMPLIFIER_SESSION_STATE_HOME=str(root / "ownership"),
+        AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH=str(root / "captures"),
+        USERPROFILE=str(user), HOME=str(user),
+        APPDATA=str(user / "roaming"), LOCALAPPDATA=str(user / "local"),
+        XDG_CONFIG_HOME=str(user), XDG_CACHE_HOME=str(user / "cache"))
+
+
 async def journey(root, wheel, report):
+    checkpoint(report, "fixture_home")
+    prepare_fixture_home(root)
     checkpoint(report, "journey_imports")
     from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
     from amplifier_web.deployment import write_private
@@ -404,15 +426,6 @@ async def journey(root, wheel, report):
     checkpoint(report, "journey")
     report["stage"] = "fixture"
     home, shared, workspace = root / "app", root / "shared", root / "workspace"
-    for path in (home, shared, workspace, root / "user", root / "ownership", root / "captures"):
-        with directory(path, owned_root=root, create=True):
-            pass
-    os.environ.update(AMPLIFIER_WEB_HOME=str(home), AMPLIFIER_HOME=str(shared),
-        AMPLIFIER_UNIFIED_IMPORT_HOME=str(root / "legacy"),
-        AMPLIFIER_SESSION_STATE_HOME=str(root / "ownership"),
-        AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH=str(root / "captures"),
-        USERPROFILE=str(root / "user"), HOME=str(root / "user"),
-        XDG_CONFIG_HOME=str(root / "user"), XDG_CACHE_HOME=str(root / "user/cache"))
     settings = {"bundle": {"app": []}, "web_bundles": {"excluded": list(DEFAULT_BEHAVIORS)}}
     write_private(shared / "settings.yaml", json.dumps(settings), owned_root=shared)
     provider = root / "provider/amplifier_module_provider_default_fixture"
