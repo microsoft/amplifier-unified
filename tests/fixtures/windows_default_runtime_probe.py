@@ -4,6 +4,10 @@ Run with a noneditable candidate host Python and its exact wheel. No worker
 project, lock, venv, uv process or prepare_project double is supplied. Network
 resolution/builds from declared sources are allowed in this GitHub setup check;
 only the conversation provider is scripted. Private logs stay under --root.
+
+The cold journey is uninstrumented. Retained measurement helpers and closed
+schemas support historical failure evidence/tests only; the entry no longer
+creates a worker import hook or calls those helpers.
 """
 from __future__ import annotations
 
@@ -829,43 +833,6 @@ def install_worker_start_observer(path):
     sys.setprofile(profile)
 
 
-@contextmanager
-def worker_startup_observer(root, app):
-    """Add only an observer directory to this CI fixture's worker environment.
-
-    sitecustomize is scoped to the exact packaged worker script. The ordinary
-    uv/default command, fresh project, bootstrap and installed packages remain
-    unchanged. Other Python launches do not install the callback.
-    """
-    from amplifier_web.deployment import write_private
-    path = root / "worker-startup.json"
-    observer = root / "startup-observer"
-    initial = {"diagnosticStatus": "PENDING", "observed": False, "taskDone": False, "awaiting": [], "errors": []}
-    write_private(path, json.dumps(initial), owned_root=root)
-    script = (
-        "import sys\n"
-        f"if sys.argv[0] == {str(app / 'runtime_worker.py')!r}:\n"
-        "    import importlib.util\n"
-        f"    spec = importlib.util.spec_from_file_location('cold_worker_start_observer', {__file__!r})\n"
-        "    module = importlib.util.module_from_spec(spec)\n"
-        "    sys.modules[spec.name] = module\n"
-        "    spec.loader.exec_module(module)\n"
-        f"    module.install_worker_start_observer(module.Path({str(path)!r}))\n")
-    write_private(observer / "sitecustomize.py", script, owned_root=root)
-    previous = os.environ.get("PYTHONPATH")
-    # The maintained cold parent sanitizes this variable. Do not replace an
-    # external caller's import selection or silently combine another hook.
-    assert not previous
-    os.environ["PYTHONPATH"] = str(observer)
-    try:
-        yield path
-    finally:
-        if previous is None:
-            os.environ.pop("PYTHONPATH", None)
-        else:
-            os.environ["PYTHONPATH"] = previous
-
-
 def read_worker_startup(path):
     try:
         with path.open("rb") as stream:
@@ -953,9 +920,9 @@ def validate_inner_report(report):
         assert row["commit"] is None or re.fullmatch(r"[0-9a-f]{40,64}", row["commit"])
         assert re.fullmatch(r"[0-9a-f]{64}", row["sha256"])
     if report["status"] == "PASS":
-        assert "workerStartup" not in report or (
-            report["workerStartup"]["diagnosticStatus"] == "PASS"
-            and report["workerStartup"]["observed"] and not report["workerStartup"]["errors"])
+        # Historical instrumented FAIL records remain readable above. A new
+        # cold qualification must not be granted from a worker-injected run.
+        assert "workerStartup" not in report
         assert "startup" not in report or report["startup"]["diagnosticStatus"] == "PASS"
         assert "diagnostic" not in report or not report["diagnostic"]["errors"]
         assert all(report["checks"].values()) and report["stage"] == "complete"
@@ -1231,13 +1198,9 @@ async def journey(root, wheel, report):
         assert await ensure(home, None, session) is None
         report["stage"] = "preparation"
         checkpoint(report, "runtime_start")
-        with worker_startup_observer(root, app) as observation:
-            try:
-                await observe_default_start(runtime, session, service.on_runtime_event, report, project)
-            finally:
-                report["workerStartup"] = read_worker_startup(observation)
-        assert (report["workerStartup"]["diagnosticStatus"] == "PASS"
-                and report["workerStartup"]["observed"] and not report["workerStartup"]["errors"])
+        # Only the host observes the normal start. Do not create an import hook,
+        # alter worker PYTHONPATH, install a profiler or wrap worker callables.
+        await observe_default_start(runtime, session, service.on_runtime_event, report, project)
         assert report["startup"]["diagnosticStatus"] == "PASS"
         checkpoint(report, "journey")
         row = runtime.workers[sid]

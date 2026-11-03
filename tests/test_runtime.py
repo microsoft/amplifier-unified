@@ -2956,57 +2956,214 @@ def test_default_runtime_probe_worker_observer_never_replaces_existing_profiler(
     setprofile.assert_not_called()
 
 
-@pytest.mark.parametrize('fail', [False, True])
-def test_default_runtime_probe_worker_hook_is_targeted_and_restores_environment(tmp_path, monkeypatch, fail):
-    import builtins
-    from contextlib import nullcontext
-    from amplifier_web import deployment
+def test_default_runtime_probe_uninstrumented_entry_has_no_worker_hook_path():
+    import ast
     fixture = _default_runtime_probe_module()
-    environment, writes = {}, {}
-    monkeypatch.setattr(fixture, 'os', SimpleNamespace(environ=environment))
+    tree = ast.parse(Path(fixture.__file__).read_text(encoding='utf-8'))
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    assert 'worker_startup_observer' not in functions
+    # Measurement helpers remain only for historical diagnostic-schema/model
+    # checks. Recursively inspect the actual fixture entry's local call graph.
+    pending, visited = ['main'], set()
+    while pending:
+        name = pending.pop()
+        if name in visited:
+            continue
+        visited.add(name)
+        node = functions[name]
+        pending.extend(child.id for child in ast.walk(node)
+                       if isinstance(child, ast.Name) and child.id in functions and child.id not in visited)
+        assert not any(isinstance(child, ast.Call)
+                       and getattr(child.func, 'attr', '') in {'setprofile', 'settrace'}
+                       for child in ast.walk(node))
+        assert not any(isinstance(child, ast.Constant) and isinstance(child.value, str)
+                       and any(value in child.value for value in (
+                           'sitecustomize', 'startup-observer', 'worker-startup.json', 'PYTHONPATH'))
+                       for child in ast.walk(node))
+    assert {'journey', 'observe_default_start', 'observe_lock', 'installed_host'} <= visited
+    assert not visited & {'install_worker_start_observer', 'observe_shared_subprocess',
+                          'loaded_code', 'code_fingerprint', 'worker_foundation', 'read_worker_startup'}
+    journey = functions['journey']
+    calls = [node for node in ast.walk(journey) if isinstance(node, ast.Call)]
+    manager = [node for node in calls if getattr(node.func, 'id', None) == 'RuntimeManager']
+    assert len(manager) == 1 and not manager[0].args
+    assert {keyword.arg for keyword in manager[0].keywords} == {'startup_timeout', 'retention'}
+    assert next(keyword.value.value for keyword in manager[0].keywords
+                if keyword.arg == 'startup_timeout') == 900
+    # The parent keeps its approved explicit Python, finite deadline and owned
+    # Job. The native entry still strips inherited PYTHONPATH rather than
+    # treating a successful instrumented result as normal-source acceptance.
+    import inspect
+    native = ast.parse(inspect.getsource(
+        test_native_windows_default_runtime_command_cold_prepare_turn_and_stop))
+    runs = [node for node in ast.walk(native) if isinstance(node, ast.Call)
+            and getattr(node.func, 'attr', None) == 'run_owned_probe']
+    assert len(runs) == 1
+    assert next(keyword.value.value for keyword in runs[0].keywords if keyword.arg == 'timeout') == 1200
 
-    def private_write(path, value, *, owned_root):
-        assert owned_root == tmp_path and path.is_relative_to(tmp_path)
-        assert not environment  # Write hooks/initial record before binding.
+
+@pytest.mark.parametrize('failure', [None, 'start', 'cancel', 'not-ready', 'identity', 'provenance', 'cleanup'])
+async def test_default_runtime_probe_uninstrumented_journey_keeps_real_acceptance(
+        tmp_path, monkeypatch, failure):
+    """Actual maintained journey with inert app/kernel, never a Windows pass."""
+    import builtins
+    import os
+    from contextlib import nullcontext
+    from types import FunctionType
+    fixture = _default_runtime_probe_module()
+    root = tmp_path / 'scratch'
+    app, project = root / 'installed-app', root / 'app/runtime/project'
+    manifest, wheel = tmp_path / 'manifest.toml', tmp_path / 'candidate.whl'
+    manifest.write_bytes(b'[project]\nname = "synthetic-runtime"\n')
+    wheel.write_bytes(b'synthetic audited-wheel boundary')
+    hashes = dict.fromkeys(fixture.APP_FILES, 'a' * 64)
+    imports = {name: {'version': '1.0', 'commit': None, 'sha256': 'b' * 64}
+               for name in fixture.IMPORTS}
+    environment = dict(os.environ)
+    writes, events, calls = {}, [], []
+    error = asyncio.CancelledError() if failure == 'cancel' else RuntimeError('original startup failure')
+    ready = asyncio.get_running_loop().create_future()
+    job = SimpleNamespace(identity=SimpleNamespace(guard_pid=7), tree_empty=False,
+                          io_finalized=False, verify_member=Mock())
+    owner = SimpleNamespace(job=job, process=SimpleNamespace(pid=11), created=123, result=None)
+    row = {'windows_owner': owner, 'process': owner.process, 'ready': ready,
+           'generation': None, 'source_generation': None, 'native_worker_pid': 11, 'parked': True}
+    session = {'id': 'synthetic-cold-session'}
+    class Runtime:
+        command = None
+        def __init__(self, **kwargs):
+            assert kwargs == {'startup_timeout': 900, 'retention': {'prewarm_on_select': False}}
+            self.workers, self._preparations = {}, {}
+            calls.append(self)
+        async def start(self, selected, emit):
+            assert selected is session and not project.exists()  # Fresh until real startup boundary.
+            assert dict(os.environ) == environment and sys.getprofile() is None
+            await emit('runtime.status', {'phase': 'runtime-setup'})
+            if failure in {'start', 'cancel'}:
+                raise error
+            for name in ('pyproject.toml', 'uv.lock', '.venv/Scripts/python.exe'):
+                target = project / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(manifest.read_bytes() if name == 'pyproject.toml' else
+                    b'version = 1\n' if name == 'uv.lock' else b'synthetic Python')
+            with (project / 'uv.lock').open('a', encoding='utf-8') as stream:
+                for name in fixture.IMPORTS.values():
+                    stream.write('[[package]]\nname = "' + name + '"\nversion = "1.0"\nsource = {registry = "https://example.invalid/simple"}\n')
+            self.workers[session['id']] = row
+            if failure != 'not-ready':
+                ready.set_result({})
+            if failure == 'identity':
+                row['native_worker_pid'] = 99
+            await emit('runtime.status', {'phase': 'ready'})
+        def _command(self):
+            return ['synthetic-uv.exe', 'run', '--project', str(project),
+                    '--python', '3.13', 'python', str(app / 'runtime_worker.py')]
+        @staticmethod
+        def project_path(command):
+            return command[command.index('--project') + 1]
+        async def stop(self, sid):
+            assert sid == session['id']
+            self.workers.clear()
+            owner.result = SimpleNamespace(active_processes=1 if failure == 'cleanup' else 0)
+            job.tree_empty = job.io_finalized = failure != 'cleanup'
+    class Service:
+        def __init__(self, home, *, runtime, workspace):
+            assert home == root / 'app' and workspace == root / 'workspace'
+            self.runtime = runtime
+        async def app_bridge(self, *args):
+            raise AssertionError('inert journey must never invoke app bridge')
+        async def dispatch(self, action, args, **kwargs):
+            events.append(action)
+            if action == 'conversation.send':
+                proof = {'pid': 11, 'imports': {key: dict(value) for key, value in imports.items()},
+                         'appHashes': hashes}
+                if failure == 'provenance':
+                    proof['imports']['amplifier_foundation']['version'] = '2.0'
+                (root / 'worker-proof.json').write_text(json.dumps(proof), encoding='utf-8')
+        def _session(self, *args):
+            return session
+        async def on_runtime_event(self, kind, data):
+            assert dict(os.environ) == environment
+        async def close(self):
+            await self.runtime.stop(session['id'])
+    def write_private(path, value, *, owned_root):
+        assert path.is_relative_to(owned_root)
+        assert path.suffix != '.pth' and path.name != 'sitecustomize.py'
+        assert 'startup-observer' not in str(path)
         writes[path] = value
+    async def ensure(home, generation, selected):
+        assert home == root / 'app' and generation is None and selected is session
+        return None
+    modules = {
+        'amplifier_web.builtin_behaviors': SimpleNamespace(DEFAULT_BEHAVIORS=('excluded',)),
+        'amplifier_web.deployment': SimpleNamespace(write_private=write_private),
+        'amplifier_web.runtime': SimpleNamespace(RuntimeManager=Runtime),
+        'amplifier_web.runtime_environment': SimpleNamespace(
+            manifest_path=lambda: manifest, project_path=lambda _: project),
+        'amplifier_web.runtime_profiles': SimpleNamespace(ensure=ensure),
+        'amplifier_web.service': SimpleNamespace(AppService=Service),
+        'amplifier_web.session_files': SimpleNamespace(sessions_dir=lambda _: root / 'history'),
+        'amplifier_web.windows_files': SimpleNamespace(directory=lambda *args, **kwargs: nullcontext()),
+        'amplifier_foundation.session.history': SimpleNamespace(SessionHistoryStore=lambda _: SimpleNamespace(
+            load_messages=lambda: [{'role': 'assistant', 'content': 'Default command café verified'}])),
+    }
+    def imports_only(name, *args, **kwargs):
+        assert name in modules
+        return modules[name]  # No app imports, service/database or native launch.
+    def inert_home(selected):
+        assert selected == root and not project.exists()
+    globals_ = {**fixture.__dict__, 'prepare_fixture_home': inert_home,
+                'installed_host': lambda *args: (app, hashes),
+                '__builtins__': {**vars(builtins), '__import__': imports_only}}
+    for name in ('worker_startup_observer', 'read_worker_startup',
+                 'install_worker_start_observer', 'observe_shared_subprocess'):
+        globals_[name] = Mock(side_effect=AssertionError('retired worker hook reached: ' + name))
+    actual = FunctionType(fixture.journey.__code__, globals_)
+    report = fixture.empty_inner_report()
+    if failure is None:
+        await actual(root, wheel, report)
+        assert report['status'] == 'PASS' and all(report['checks'].values())
+        fixture.validate_inner_report(report)
+        job.verify_member.assert_called_once_with(11, 123)
+    else:
+        expected = asyncio.CancelledError if failure == 'cancel' else RuntimeError if failure == 'start' else AssertionError
+        with pytest.raises(expected) as caught:
+            await actual(root, wheel, report)
+        if failure in {'start', 'cancel'}:
+            assert caught.value is error
+        assert report['status'] == 'FAIL'
+    assert len(calls) == 1 and calls[0].command is None and not calls[0].workers
+    assert 'workerStartup' not in report
+    assert dict(os.environ) == environment and sys.getprofile() is None
+    assert set(writes) == {root / 'shared/settings.yaml',
+                          root / 'provider/amplifier_module_provider_default_fixture/__init__.py',
+                          root / 'bundle.yaml'}
+    for name in ('worker_startup_observer', 'read_worker_startup',
+                 'install_worker_start_observer', 'observe_shared_subprocess'):
+        globals_[name].assert_not_called()
+    assert events == (['session.create', 'conversation.send']
+                      if failure in {None, 'provenance', 'cleanup'} else ['session.create'])
 
-    monkeypatch.setattr(deployment, 'write_private', private_write)
-    with pytest.raises(ValueError) if fail else nullcontext():
-        with fixture.worker_startup_observer(tmp_path, tmp_path / 'installed-app') as path:
-            assert path == tmp_path / 'worker-startup.json'
-            assert environment == {'PYTHONPATH': str(tmp_path / 'startup-observer')}
-            script = writes[tmp_path / 'startup-observer/sitecustomize.py']
-            # Nonworker Python invocations must never load the fixture/hook.
-            imports = []
-            def only_sys(name, *args, **kwargs):
-                imports.append(name)
-                assert name == 'sys'
-                return SimpleNamespace(argv=['another-script.py'])
-            exec(compile(script, '<private-startup-hook>', 'exec'), {
-                '__builtins__': {**vars(builtins), '__import__': only_sys}})
-            assert imports == ['sys']
-            installed, registered = Mock(), {}
-            module = SimpleNamespace(Path=Path, install_worker_start_observer=installed)
-            spec = SimpleNamespace(name='cold_worker_start_observer',
-                                   loader=SimpleNamespace(exec_module=Mock()))
-            util = SimpleNamespace(spec_from_file_location=Mock(return_value=spec),
-                                   module_from_spec=Mock(return_value=module))
-            def matching_worker(name, *args, **kwargs):
-                if name == 'sys':
-                    return SimpleNamespace(argv=[str(tmp_path / 'installed-app/runtime_worker.py')],
-                                           modules=registered)
-                assert name == 'importlib.util'
-                return SimpleNamespace(util=util)
-            exec(compile(script, '<private-startup-hook>', 'exec'), {
-                '__builtins__': {**vars(builtins), '__import__': matching_worker}})
-            assert registered == {spec.name: module}
-            util.spec_from_file_location.assert_called_once_with(spec.name, fixture.__file__)
-            spec.loader.exec_module.assert_called_once_with(module)
-            installed.assert_called_once_with(path)
-            if fail:
-                raise ValueError('original startup failure')
-    assert not environment
-    fixture.validate_worker_startup(json.loads(writes[tmp_path / 'worker-startup.json']))
+
+def test_default_runtime_probe_uninstrumented_pass_rejects_historical_injected_acceptance():
+    fixture = _default_runtime_probe_module()
+    inner = {'schema': 1, 'status': 'PASS', 'stage': 'complete',
+             'checks': dict.fromkeys(fixture.CHECKS, True), 'wheelSha256': 'a' * 64,
+             'manifestSha256': 'b' * 64, 'lockSha256': 'c' * 64,
+             'appHashes': dict.fromkeys(fixture.APP_FILES, 'd' * 64),
+             'workerImports': {name: {'version': '1.0', 'commit': None, 'sha256': 'e' * 64}
+                               for name in fixture.IMPORTS}}
+    fixture.validate_inner_report(inner)  # No injected facts required for normal startup.
+    old_facts = {'diagnosticStatus': 'PASS', 'observed': True, 'taskDone': True,
+                 'errors': [], 'awaiting': [{'source': 'worker_start', 'offset': 82}]}
+    old = {**inner, 'workerStartup': old_facts}
+    with pytest.raises(AssertionError):
+        fixture.validate_inner_report(old)
+    old['status'] = 'FAIL'
+    fixture.validate_inner_report(old)
+    assert fixture.parse_inner_output(json.dumps(old)) == old
+    assert old['status'] == 'FAIL'  # Passive validation never promotes old evidence.
 
 
 async def test_default_runtime_probe_worker_observer_write_fault_cannot_become_success(tmp_path, monkeypatch):
