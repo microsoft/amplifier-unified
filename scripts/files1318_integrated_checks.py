@@ -3936,7 +3936,10 @@ def main():
                                 'current rows move the original derived contour, not its native target/bytes oracle.')
     if focus_return:
         report.update(qualification='focus-return-after26', priorChecksConsumed=26,
-                      currentSource=CHECK26_BEFORE, historicalProofReuse='unit-only-after-exact-validation')
+                      continuationOf=CHECK26_BEFORE,
+                      currentSource={'baselineRevision': CURRENT0482_BINDING['baselineRevision'],
+                                     'nonDriverClosureSha256': FOCUS_RETURN_CLOSURE_SHA},
+                      historicalProofReuse='unit-only-after-exact-validation')
         report['phases']['check26-unit-reuse'] = {'status': 'unrun', 'reason': 'not_started'}
         for name in CHECK26_UNIT_PHASES:
             report['phases'][name]['reason'] = 'reuse_pending_exact_check26_proof'
