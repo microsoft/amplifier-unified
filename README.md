@@ -111,10 +111,13 @@ and trigger compiler errors; you do not need to remove or downgrade it.
 `uv` can download the requested Python into its own managed installation.
 
 **Native Windows is not yet supported.** The Bash installer is for macOS,
-Linux and WSL, not PowerShell. Installing the Python package directly on Windows
-does not provide working sign-in, background startup or conversation ownership.
-The [native Windows setup design](docs/design/native-windows-installation.md)
-records the proposed turnkey path, implementation dependencies and acceptance checks.
+Linux and WSL, not PowerShell. Package installation alone does not establish
+native sign-in, worker readiness or safe background startup.
+The [conditional foreground trial runbook](docs/design/native-windows-installation.md#conditional-foreground-trial-runbook)
+describes an isolated PowerShell trial **without WSL**, but awaits an exact
+qualified, browser-activated candidate from the Windows trial owner. It is not
+a command to run the current public release. The native installer, default
+background launcher and Task Scheduler path remain unqualified.
 
 <details>
 <summary><strong>Linux</strong></summary>
