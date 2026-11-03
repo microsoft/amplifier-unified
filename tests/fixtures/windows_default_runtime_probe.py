@@ -37,6 +37,8 @@ IMPORTS = {
     "amplifier_core": "amplifier-core",
     "amplifier_foundation": "amplifier-foundation",
     "amplifier_module_loop_live": "amplifier-module-loop-live",
+    "amplifier_ui_use": "amplifier-bundle-ui-use",
+    "amplifier_module_tool_ui_use": "amplifier-bundle-ui-use",
 }
 CHECKS = ("installedHost", "coldDefaultCommand", "workerIdentity", "scriptedTurn",
           "workerProvenance", "ownedJobCleanup")
@@ -1121,7 +1123,8 @@ def installed_host(wheel, report=None):
     if report is not None:
         checkpoint(report, "installed_members")
     with zipfile.ZipFile(wheel) as archive:
-        for name in (*APP_FILES, "runtime_deps/pyproject.toml", "runtime_deps/compatibility.txt"):
+        for name in (*APP_FILES, "runtime_deps/pyproject.toml", "runtime_deps/compatibility.txt",
+                     "runtime_deps/features.toml"):
             raw = archive.read("amplifier_web/" + name)
             assert (app / name).read_bytes() == raw
             assert Path(dist.locate_file("amplifier_web/" + name)).resolve() == app / name
@@ -1131,7 +1134,7 @@ def installed_host(wheel, report=None):
 
 
 def verify_worker_lock(project, imports):
-    """Bind the three observed imports to the actual uv-installed resolution."""
+    """Bind every required observed import to the actual uv-installed resolution."""
     lock = tomllib.loads((project / "uv.lock").read_text(encoding="utf-8"))
     for package, distribution in IMPORTS.items():
         rows = [row for row in lock["package"] if row["name"] == distribution]

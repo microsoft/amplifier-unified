@@ -9,8 +9,10 @@ source-checked against `4f59da50639ad80c87f9201736f58fecddd0cf7d`; that is a
 candidate, not public-activation acceptance. The Windows trial owner must supply
 an exact qualified commit with owner-browser entry activated before use.
 Do not substitute `main`, a moving branch, or the current public release.
-At this checkpoint browser entry deliberately refuses. Never remove that gate,
-relax ACLs, disable ownership, or put the control token in a browser URL.
+The source-checked `4f59` checkpoint deliberately refuses browser entry. Later
+integration candidates include the public existing-only credential reader, but
+that source change is not foreground CLI or device acceptance. Never bypass a
+refusal, relax ACLs, disable ownership, or put the control token in a browser URL.
 
 This is an ordinary-user **foreground** path for Windows 11 x64, Windows
 PowerShell 5.1 or PowerShell 7, and Edge or Chrome. It needs no WSL, administrator

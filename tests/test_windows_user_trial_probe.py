@@ -33,6 +33,20 @@ def test_fixture_and_embedded_provider_compile_and_require_maintained_modules():
     assert any(value.startswith("amplifier-module-context-simple @") for value in requirements)
 
 
+def test_current_default_ui_use_graph_remains_declared_and_audited():
+    import tomllib
+    host = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    worker = tomllib.loads((ROOT / "amplifier_web/runtime_deps/pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert any(value.startswith("amplifier-bundle-ui-use @ ") for value in host["dependencies"])
+    assert any(value.startswith("amplifier-bundle-ui-use @ ") for value in worker["dependencies"])
+    assert any(value.startswith("qrcode") for value in host["dependencies"])
+    for name in ("amplifier_ui_use", "amplifier_module_tool_ui_use"):
+        assert probe.IMPORTS[name] == "amplifier-bundle-ui-use"
+    assert probe.IMPORTS["qrcode"] == "qrcode"
+    # This is installed-package provenance, not a claim that the UI-use tool or
+    # optional browser/decision backend was mounted or exercised on Windows.
+
+
 def test_scripted_provider_passes_real_metadata_constructor_before_mount(monkeypatch):
     from amplifier_web.provider_environment import provider_class, provider_config_schema
     module = types.ModuleType("amplifier_module_provider_fixture")
