@@ -180,8 +180,9 @@ async def test_worker_routes_correction_under_existing_ownership(monkeypatch):
     worker = Worker()
     worker.session, worker.execution, worker.shared_handle = object(), object(), object()
     worker.controls = SimpleNamespace(preserve_configuration=True)
-    worker.runtime, worker.activation = object(), object()
-    worker.acquire_for_mutation = AsyncMock()
+    worker.runtime, worker.activation = SimpleNamespace(accepted={}), object()
+    worker.shared_store = SimpleNamespace(acquire=Mock(side_effect=AssertionError('Do not reacquire the active owner')))
+    worker.acquire_for_mutation = AsyncMock(wraps=worker.acquire_for_mutation)
     worker.bind_activation = Mock(return_value='token')
     worker.activation_gate = SimpleNamespace(reset=Mock())
     worker.park = AsyncMock()
@@ -192,18 +193,23 @@ async def test_worker_routes_correction_under_existing_ownership(monkeypatch):
         assert worker.command_lock.locked()
         assert activation is worker.activation
         assert args['targetGenerationId'] == 'generation'
-        assert worker.context_bindings['correction'] == {'clientId': 'browser', 'targets': []}
+        assert worker.context_bindings['correction'] == {
+            'clientId': 'browser', 'targets': [], 'interruptionRevision': 7}
         assert stop_epoch() == 0
         return {'accepted': True, 'disposition': 'queued'}
     monkeypatch.setattr('amplifier_web.conversation_steering.submit', adapter)
     replies = []
     monkeypatch.setattr('amplifier_web.runtime_worker.publish', replies.append)
     await worker.command({'op': 'control', 'id': 'request', 'operation': 'conversation.steer',
+        'interruptionRevision': 7,
         'arguments': {'inputId': 'correction', 'targetGenerationId': 'generation',
                       'context_binding': {'clientId': 'browser', 'targets': []}}})
     assert 'error' not in replies[0]
     assert replies[0]['result']['disposition'] == 'queued'
     assert worker.controls.preserve_configuration is False
+    worker.acquire_for_mutation.assert_awaited_once_with()
+    worker.shared_store.acquire.assert_not_called()
+    worker.park.assert_not_awaited()
     worker.activation_gate.reset.assert_called_once_with('token')
 
 
