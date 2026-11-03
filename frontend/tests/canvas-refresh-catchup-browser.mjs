@@ -3,7 +3,8 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
-import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -86,7 +87,63 @@ try{
   // A generation/DOM token and actual field value discriminate discovery from remount.
   assert.equal(after.executed,before.executed,'Refresh must not execute the new saved HTML definition');
   assert.equal(after.input,before.input,'Refresh must not discard local HTML input');
-  assert.equal(after.view.selectedVersion,null);assert.deepEqual(after.view.versions.map(v=>v.version),[1,2]);return row.observed;
+  assert.equal(after.view.selectedVersion,null);assert.deepEqual(after.view.versions.map(v=>v.version),[1,2]);
+  // Composition seam: Latest intent is not the displayed executable definition.
+  // File details and its fresh download metadata must use the running v1, while
+  // v2 remains available only through the existing explicit Load control.
+  assert.equal(after.view.runningVersion,1);assert.equal(after.view.latestVersion,2);
+  const metadata=(await action('canvas.versions.inspect',{id,sessionId,version:after.view.runningVersion})).result;
+  assert.equal(metadata.version,1);assert.equal(metadata.revision,2);assert.equal(metadata.source,undefined);
+  const seam=row.observed.files={metadata,requests:[],attachmentRequests:[],downloadEvents:0,
+   before:after,after:null,download:null,listenerRemoved:false};
+  const retainedFrame=await panel.locator('[data-canvas-view="primary"] iframe').elementHandle();
+  assert.ok(retainedFrame);
+  const commandStart=report.actions.length;
+  const observe=request=>{
+   const requestUrl=new URL(request.url());
+   if(request.method()==='POST'&&requestUrl.pathname==='/api/actions'){
+    const body=unwrap(request.postDataJSON());
+    if(body.action==='canvas.versions.inspect'&&body.args.id===id)seam.requests.push(body.args);
+   }
+   if(requestUrl.pathname===`/api/canvas/${id}/download`)seam.attachmentRequests.push({method:request.method(),url:requestUrl.pathname+requestUrl.search});
+  };
+  let timer,receive,expire;
+  const arrived=new Promise(resolve=>{receive=download=>{seam.downloadEvents++;resolve(download)};expire=()=>resolve(null)});
+  page.on('request',observe);page.on('download',receive);
+  try{
+   await context.grantPermissions(['clipboard-read','clipboard-write']);
+   await panel.getByRole('button',{name:'Copy canvas source',exact:true}).click();
+   await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(html(1));
+   await panel.getByRole('button',{name:'Canvas details',exact:true}).click();
+   const details=panel.locator('.a-canvas-inspector .a-canvas-file-path');
+   await details.getByText('File details',{exact:true}).click();
+   await expect(details.getByText('Saved version 1',{exact:true})).toBeVisible();
+   assert.equal(seam.downloadEvents,0,'Copy/disclosure must not start a download');
+   timer=setTimeout(expire,10000);
+   await details.getByRole('button',{name:'Download saved file',exact:true}).click();
+   const download=await arrived;assert.ok(download,'Running-version download did not arrive');
+   assert.equal(await download.failure(),null);assert.equal(download.suggestedFilename(),metadata.download.filename);
+   const filename='retained-running-v1.html';await download.saveAs(join(output,filename));
+   const bytes=await readFile(join(output,filename));assert.deepEqual(bytes,Buffer.from(html(1)));
+   seam.download={file:filename,bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};
+   assert.equal(seam.downloadEvents,1);
+   assert.ok(seam.requests.length>=2,'Disclosure and Download must each inspect exact metadata');
+   assert.ok(seam.requests.every(args=>args.id===id&&args.version===1&&args.sessionId===sessionId&&!args.includeSource));
+   assert.deepEqual(seam.attachmentRequests,[{method:'GET',url:metadata.download.url}]);
+   await panel.getByRole('button',{name:'Close canvas details',exact:true}).click();
+   seam.after=await sample();assert.equal(seam.after.executed,after.executed);assert.equal(seam.after.input,after.input);
+   assert.deepEqual(target(seam.after.view),target(after.view));
+   assert.equal(seam.after.view.runningVersion,1);assert.equal(seam.after.view.latestVersion,2);
+   assert.equal(seam.after.view.selectedVersion,null);
+   seam.sameIframe=await retainedFrame.evaluate(node=>node.isConnected&&node===document.querySelector('[data-canvas-view="primary"] iframe'));
+   assert.equal(seam.sameIframe,true);
+   const current=await state();assert.equal(current.selectedSessionId,sessionId);assert.equal(current.view.draft,'Catchup must retain the composer');
+   const newer=await page.request.get(url+`/api/canvas/${id}/source?version=2`);
+   assert.equal(newer.status(),200);assert.equal(await newer.text(),html(2),'Inspection/download must not replace the newer saved source');
+   seam.actions=report.actions.slice(commandStart);
+   assert.ok(!seam.actions.some(name=>['canvas.select','canvas.show','canvas.views.loadVersion','canvas.versions.revise','canvas.versions.restore'].includes(name)));
+  }finally{clearTimeout(timer);page.off('request',observe);page.off('download',receive);expire();seam.listenerRemoved=true;await retainedFrame.dispose()}
+  return row.observed;
  });
  await reconnect();
  await check('Latest HTML reconnect discovers v2 without executing new code or losing input',async row=>{
