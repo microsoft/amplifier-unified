@@ -17,6 +17,7 @@ let browser,page,ready,focusScope,focusInvoker,logs='',failure,uiFailure,uiPasse
 const errors=[],checks=[],cleanupFailures=[],evidenceFailures=[];
 const focusTraversal={complete:false,initial:null,steps:[]};
 const focusReturn={complete:false,before:null,after:null,observations:[],observationDeadlineMs:BOUNDARY_OBSERVATION_MS};
+const narrowDismiss={complete:false,observations:[],observationDeadlineMs:BOUNDARY_OBSERVATION_MS};
 const errorRecord=error=>({name:error?.name||'Error',message:String(error?.message||error),...(error instanceof AggregateError?{errors:error.errors.map(errorRecord)}:{})});
 async function focusEvidence(key,read){
  const observation={key,...await boundaryRead(read)};focusReturn.observations.push(observation);
@@ -24,6 +25,11 @@ async function focusEvidence(key,read){
  // the record, so a late reply/rejection cannot rewrite a timeout or escape.
  if(observation.status==='observed')focusReturn[key]=observation.value;
  else evidenceFailures.push(Error(`Focus-return ${key} evidence ${observation.status}`));
+}
+async function narrowEvidence(key,read){
+ const observation={key,...await boundaryRead(read)};narrowDismiss.observations.push(observation);
+ if(observation.status==='observed')narrowDismiss[key]=observation.value;
+ else evidenceFailures.push(Error(`Narrow dismissal ${key} evidence ${observation.status}`));
 }
 fixture.once('close',(code,signal)=>{fixtureExit={pid:fixture.pid,code,signal,settled:true}});
 let fixtureLines='';
@@ -124,10 +130,58 @@ try{
  await expect.poll(async()=>Math.abs(await anchorTop()-readingTop)).toBeLessThan(3);assert.equal(await anchor.getAttribute('data-message-id'),readingId);
  checks.push('Visible saved-message anchor remains within 3px after closing/reopening Canvas; exact message identity retained.');
  checks.push('Focus/Escape and close/reopen retain resource identity and return focus to the invoking control.');
- await page.setViewportSize({width:390,height:844});await expect(canvas.getByRole('button',{name:'Back to chat',exact:true})).toBeVisible();assert.ok(await canvas.evaluate(el=>el.scrollWidth<=el.clientWidth));await canvas.getByRole('button',{name:'Back to chat',exact:true}).click();await expect(composer).toBeVisible();
+ // The current canonical return-to-chat control is Close Canvas on every
+ // layout (docs/canvas.md); no product branch renders the former Back to chat.
+ const dismiss=canvas.getByRole('button',{name:'Close canvas panel',exact:true});
+ const workspace=page.locator('[data-part="workspace"][data-pane-layout]');
+ const narrowState=()=>page.evaluate(()=>{
+  const state=window.amplifier.getState(),panel=document.querySelector('#workspace-canvas'),layout=panel.closest('.a-layout');
+  const button=panel.querySelector('[aria-label="Close canvas panel"]'),box=button?.getBoundingClientRect();
+  return {viewport:{width:innerWidth,height:innerHeight},mediaNarrow:matchMedia('(max-width:900px)').matches,
+   narrow:layout.dataset.narrow,overlay:layout.dataset.canvasOverlay,canvasHidden:panel.hidden,
+   canvasOpen:state.canvas.open,resourceId:state.canvas.id,clientId:state.client.id,sessionId:state.selectedSessionId,
+   draft:state.view.draft,overflow:panel.scrollWidth>panel.clientWidth,
+   button:button?{tag:button.tagName,label:button.getAttribute('aria-label'),text:button.textContent.trim(),
+    action:button.dataset.action,visible:!!button.getClientRects().length&&!button.closest('[hidden],[inert]'),
+    width:box.width,height:box.height,left:box.left,right:box.right,top:box.top,bottom:box.bottom}:null};
+ });
+ try{
+  await page.setViewportSize({width:390,height:844});
+  await expect(workspace).toHaveAttribute('data-narrow','true');
+  await expect(workspace).toHaveAttribute('data-canvas-overlay','true');
+  await expect(dismiss).toBeVisible();await expect(dismiss).toHaveText('Close Canvas');
+  await narrowEvidence('before',narrowState);
+  assert.equal(evidenceFailures.length,0,'Narrow dismissal evidence incomplete');
+  const before=narrowDismiss.before;
+  assert.deepEqual(before.viewport,{width:390,height:844});assert.equal(before.mediaNarrow,true);
+  assert.equal(before.narrow,'true');assert.equal(before.overlay,'true');assert.equal(before.canvasHidden,false);
+  assert.equal(before.canvasOpen,true);assert.equal(before.resourceId,resourceId);
+  assert.equal(before.sessionId,ready.sessionId);assert.equal(before.draft,'Keep private file-inspection draft');
+  assert.equal(before.overflow,false);
+  assert.equal(before.button.tag,'BUTTON');assert.equal(before.button.action,'canvas.visibility');assert.equal(before.button.visible,true);
+  assert.ok(before.button.width>=44&&before.button.height>=44&&before.button.left>=0&&before.button.right<=390&&before.button.top>=0&&before.button.bottom<=844);
+  await dismiss.click();await expect(canvas).toBeHidden();await expect(composer).toBeVisible();
+  // Reuse the canonical close journey's readback boundary: optimistic hiding
+  // alone is not proof that the host accepted the visibility change.
+  await expect.poll(async()=>{
+   const response=await page.request.get(ready.url+'/api/state?clientId='+encodeURIComponent(before.clientId),{timeout:5000});
+   assert.equal(response.status(),200);const body=await boundaryRead(()=>response.json());
+   assert.equal(body.status,'observed','Host visibility readback unavailable');const state=body.value;
+   narrowDismiss.host={requestClientId:before.clientId,httpStatus:response.status(),canvasOpen:state.canvas.open,
+    resourceId:state.canvas.id,sessionId:state.selectedSessionId};
+   return state.canvas.open;
+  }).toBe(false);
+ }catch(error){uiFailure??=error;narrowDismiss.primaryFailure=errorRecord(error)}
+ await narrowEvidence('after',narrowState);
+ if(uiFailure)throw uiFailure;
+ assert.equal(evidenceFailures.length,0,'Narrow dismissal evidence incomplete');
+ assert.equal(narrowDismiss.after.canvasHidden,true);assert.equal(narrowDismiss.after.canvasOpen,false);
+ for(const key of ['resourceId','clientId','sessionId','draft'])assert.equal(narrowDismiss.after[key],narrowDismiss.before[key]);
+ assert.equal(narrowDismiss.host.resourceId,resourceId);assert.equal(narrowDismiss.host.sessionId,ready.sessionId);
+ narrowDismiss.hostHiddenConfirmed=true;narrowDismiss.complete=true;
  assert.equal(await page.evaluate(()=>window.amplifier.getState().view.draft),'Keep private file-inspection draft');
  const final=await page.request.get(ready.url+'/fixture').then(response=>response.json());assert.equal(final.selected,ready.sessionId);assert.equal(final.message,ready.original);assert.equal(final.file,'Original report bytes.');assert.deepEqual(final.outputs,[]);assert.deepEqual(final.sent,[]);assert.deepEqual(errors,[]);
- checks.push('Narrow Back to chat preserves the exact draft, selection, original message and original file; no output or model input created.');
+ checks.push('Narrow Close Canvas returns to chat and preserves the exact draft, selection, original message and original file; no output or model input created.');
  await page.screenshot({path:out+'/canvas-files.png'});uiPassed=true;
 }catch(error){uiFailure??=error}
 finally{
@@ -156,7 +210,7 @@ finally{
  try{await writeFile(out+'/fixture.log',logs)}catch(error){cleanupFailures.push(error)}
  const failures=[...(uiFailure?[uiFailure]:[]),...evidenceFailures,...cleanupFailures];
  failure=failures.length>1?new AggregateError(failures,'Canvas files UI and/or cleanup failed'):failures[0];
- const observations={schemaVersion:1,passed:uiPassed&&!failure,uiPassed,checks,focusTraversal,focusReturn,browserClosed,fixtureExit,fixtureStopSucceeded,fixtureCleanup,homeRemoved,uiFailure:uiFailure?errorRecord(uiFailure):null,evidenceFailures:evidenceFailures.map(errorRecord),cleanupFailures:cleanupFailures.map(errorRecord),failure:failure?errorRecord(failure):null,limits:['Synthetic local Linux host with no file manager; no actual OS reveal action or remote browser/server pair.','Native selectOption exercises form state, not native picker gesture.','Desktop ordinary path plus keyboard focus/Escape and narrow Back; not complete four-mode repetition.','No Canvas resize or physical user-scroll gesture claim; anchor positioned through locator before public close/reopen.','Optional focus evidence has 500ms observation deadlines, not cancellation; late results never rewrite saved observations.']};
+ const observations={schemaVersion:1,passed:uiPassed&&!failure,uiPassed,checks,focusTraversal,focusReturn,narrowDismiss,browserClosed,fixtureExit,fixtureStopSucceeded,fixtureCleanup,homeRemoved,uiFailure:uiFailure?errorRecord(uiFailure):null,evidenceFailures:evidenceFailures.map(errorRecord),cleanupFailures:cleanupFailures.map(errorRecord),failure:failure?errorRecord(failure):null,limits:['Synthetic local Linux host with no file manager; no actual OS reveal action or remote browser/server pair.','Native selectOption exercises form state, not native picker gesture.','Desktop ordinary path plus keyboard focus/Escape and narrow Close Canvas; not complete four-mode repetition.','No Canvas resize or physical user-scroll gesture claim; anchor positioned through locator before public close/reopen.','Optional focus/narrow evidence has 500ms observation deadlines, not cancellation; late results never rewrite saved observations.']};
  try{await writeFile(out+'/observations.json',JSON.stringify(observations,null,2)+'\n')}
  catch(error){
   failure=failure?new AggregateError([failure,error],'Canvas files observations could not be saved'):error;
@@ -164,4 +218,4 @@ finally{
  }finally{console.log(JSON.stringify({canvasFilesQualification:observations}))}
 }
 if(failure)throw failure;
-console.log('Canvas file path passed: exact local bytes and owner, absolute/relative copy, unavailable reveal, focus return, narrow Back and unchanged chat/draft/file.');
+console.log('Canvas file path passed: exact local bytes and owner, absolute/relative copy, unavailable reveal, focus return, narrow Close Canvas and unchanged chat/draft/file.');
