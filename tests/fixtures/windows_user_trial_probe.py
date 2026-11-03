@@ -973,6 +973,12 @@ class NetworkGuard:
             return
         if event == "socket.bind" and address == ("::1", 0):
             frame = sys._getframe(1)
+            # The CLI adapter delegates this exact event to us. Preserve the
+            # original probe caller across ONLY that known frame on this guard.
+            # The IPv6 bind remains denied, source-attested and socket-checked.
+            if (frame.f_code is CliNetworkGuard.audit.__code__
+                    and frame.f_locals.get("self") is self):
+                frame = frame.f_back
             if (self.probes == 0 and frame.f_code == self.probe_code
                     and frame.f_globals.get("__name__") == "urllib3.util.connection"
                     and Path(frame.f_globals["__file__"]).resolve() == self.probe_path
@@ -1889,6 +1895,11 @@ CLI_FUNCTIONS = {
     "asyncio_resolve_server": ("asyncio.base_events", "BaseEventLoop._create_server_getaddrinfo"),
     "asyncio_getaddrinfo": ("asyncio.base_events", "BaseEventLoop.getaddrinfo"),
     "socket_getfqdn": ("socket", "getfqdn"),
+    "urllib3_ipv6_probe": ("urllib3.util.connection", "_has_ipv6"),
+    "configuration_capture": ("amplifier_web.configuration_authority", "ConfigurationAuthority.capture"),
+    "configuration_capture_effect": ("amplifier_web.configuration_authority", "ConfigurationAuthority._capture"),
+    "configuration_source": ("amplifier_web.configuration_authority", "ConfigurationAuthority.source"),
+    "collaboration_source": ("amplifier_web.collaboration", "Collaboration.source"),
 }
 CLI_SOURCES = DIAGNOSTIC_SOURCES | frozenset(CLI_FUNCTIONS) | {"cli_app_create"}
 
@@ -2017,11 +2028,16 @@ def cli_application(root, checks, observation=None, guard=None):
         assert app["browser_entry"] is not None
         checks["publicEntryInitialized"] = "PASS"
         service = app["service"]
+        assert service.data_dir == root / "app" and not service.state["sessions"]
         if observation is not None:
             observation["step"] = "settings_update"
         await service.dispatch("settings.update",
             {"patch": {"updates": {"autoCheck": False, "autoInstall": False}}},
-            origin="system", include_state=False)
+            # This CI-only bootstrap is the authorized owner of an empty
+            # synthetic state, not a transported agent/system conversation.
+            # Use the existing trusted user boundary; never invent a caller,
+            # Full-access setting, capability grant or authority callback.
+            origin="user", include_state=False)
         if observation is not None:
             observation["step"] = "updates_check"
         assert service.state["settings"]["updates"]["autoCheck"] is False

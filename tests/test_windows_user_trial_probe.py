@@ -2479,9 +2479,31 @@ def test_foreground_cli_receipt_rejects_missing_proof_and_private_fields(fault):
 
 @pytest.mark.parametrize("closed", [False, True])
 @pytest.mark.parametrize("dispatch_failure", [False, True])
+@pytest.mark.parametrize("fixture_scope", ["fresh", "wrong-home", "existing-session"])
 def test_foreground_cli_actual_startup_wrapper_uses_real_settings_action_and_no_fake_runtime(
-        monkeypatch, tmp_path, closed, dispatch_failure):
+        monkeypatch, tmp_path, closed, dispatch_failure, fixture_scope):
     """Inert app/loop model only; execute the actual fixture wrapper, never a host."""
+    from amplifier_web.configuration_authority import ConfigurationAuthority
+    authority = ConfigurationAuthority.__new__(ConfigurationAuthority)
+    collaboration_tree = ast.parse((ROOT / "amplifier_web/collaboration.py").read_text(encoding="utf-8"))
+    declaration = next(node for node in collaboration_tree.body
+                       if isinstance(node, ast.ClassDef) and node.name == "Collaboration")
+    source = next(node for node in declaration.body if isinstance(node, ast.FunctionDef) and node.name == "source")
+    namespace = {}
+    exec(compile(ast.Module(body=[source], type_ignores=[]), "<actual-collaboration-source>", "exec"), namespace)
+    class MissingCaller(RuntimeError):
+        pass
+    def rejected(*args):
+        raise MissingCaller("No fixture-owned agent conversation exists")
+    collaboration = types.SimpleNamespace(error=rejected)
+    collaboration.source = types.MethodType(namespace["source"], collaboration)
+    authority.service = types.SimpleNamespace(collaboration=collaboration)
+    patch = {"patch": {"updates": {"autoCheck": False, "autoInstall": False}}}
+    # Actual capture -> _capture -> source -> Collaboration.source refuses the
+    # original unowned system call before any configuration mutation/grant.
+    with pytest.raises(MissingCaller):
+        authority.capture("settings.update", patch, "system", None)
+    assert authority.capture("settings.update", patch, "user", None) is None
     parent = types.ModuleType("amplifier_web")
     parent.__path__ = []
     server = types.ModuleType("amplifier_web.server")
@@ -2489,11 +2511,17 @@ def test_foreground_cli_actual_startup_wrapper_uses_real_settings_action_and_no_
     class Runtime:
         workers = {}
     runtime.RuntimeManager = Runtime
-    service = types.SimpleNamespace(runtime=Runtime(), state={"settings": {"updates": {}}})
+    service = types.SimpleNamespace(runtime=Runtime(), data_dir=tmp_path / "app",
+                                    state={"settings": {"updates": {}}, "sessions": []})
+    if fixture_scope == "wrong-home":
+        service.data_dir = tmp_path / "unowned"
+    elif fixture_scope == "existing-session":
+        service.state["sessions"].append({"id": "synthetic-existing"})
     calls = []
     sentinel = PermissionError("Synthetic private failure must not be disclosed")
     async def dispatch(name, args, **kwargs):
         calls.append((name, args, kwargs))
+        authority.check(authority.capture(name, args, kwargs["origin"], None))
         if dispatch_failure:
             raise sentinel
         service.state["settings"]["updates"].update(args["patch"]["updates"])
@@ -2520,6 +2548,11 @@ def test_foreground_cli_actual_startup_wrapper_uses_real_settings_action_and_no_
                 immediate(coroutine)
             assert "publicEntryInitialized" not in checks and len(calls) == 1
             assert observation["step"] == "app_create"
+        elif fixture_scope != "fresh":
+            with pytest.raises(AssertionError):
+                immediate(coroutine)
+            assert observation["step"] == "app_create" and len(calls) == 1
+            assert "updatesDisabled" not in checks
         elif dispatch_failure:
             with pytest.raises(PermissionError) as error:
                 immediate(coroutine)
@@ -2532,7 +2565,7 @@ def test_foreground_cli_actual_startup_wrapper_uses_real_settings_action_and_no_
                 {"workspace": "synthetic", "server_config": {}, "preload_providers": False})
             assert calls[1] == ("settings.update",
                 {"patch": {"updates": {"autoCheck": False, "autoInstall": False}}},
-                {"origin": "system", "include_state": False})
+                {"origin": "user", "include_state": False})
             assert checks == {"defaultRuntime": "PASS", "publicEntryInitialized": "PASS", "updatesDisabled": "PASS"}
             assert observation["step"] == "updates_check"
             assert len(app.on_startup) == len(app.on_cleanup) == 1
@@ -2595,6 +2628,8 @@ def test_foreground_cli_source_and_workflow_preserve_entry_cleanup_budget_and_co
     assert "sanitize(root)" in run and "canonical_temp(" in run and "report['outerJobsSettled']" in run
     assert "shutil.rmtree(root)" in run and run.index("sanitize(root)") < run.index("asyncio.run(")
     assert "validate_cli_public(report)" in run
+    assert "origin='user'" in application and "origin='system'" not in application
+    assert "service.data_dir == root / 'app' and (not service.state['sessions'])" in application
     compile(tree, SPEC.origin, "exec")
 
 
@@ -2715,6 +2750,61 @@ def test_foreground_cli_diagnostics_are_bounded_and_fail_closed(fault):
     else:
         with pytest.raises(AssertionError):
             probe.validate_cli_diagnostics(child)
+
+
+@pytest.mark.parametrize("cli_guard", [False, True])
+@pytest.mark.parametrize("fault", [None, "wrong-code", "wrong-module", "wrong-file",
+                                  "wrong-host", "wrong-family", "repeat"])
+def test_foreground_cli_attested_optional_probe_keeps_real_caller_through_adapter(
+        tmp_path, monkeypatch, cli_guard, fault):
+    """Execute exact installed probe code with an inert socket, never a bind."""
+    guard = (probe.CliNetworkGuard(tmp_path / "network.jsonl", 8942) if cli_guard else
+             probe.NetworkGuard(tmp_path / "network.jsonl"))
+    streams = []
+    class Stream:
+        family = socket.AF_INET if fault == "wrong-family" else socket.AF_INET6
+        closed = False
+        def bind(self, address):
+            guard.audit("socket.bind", (self, address))
+        def close(self):
+            self.closed = True
+        def fileno(self):
+            return -1 if self.closed else 77
+    def create(*args):
+        stream = Stream()
+        streams.append(stream)
+        return stream
+    original_frame = sys._getframe
+    def frame(depth=0):
+        value = original_frame(depth + 1)
+        # Native socket.bind is C and contributes no Python caller frame.
+        # Remove only this inert transport shim, not the CLI audit adapter.
+        if value.f_code is Stream.bind.__code__:
+            return value.f_back
+        if (value.f_code is probe.CliNetworkGuard.audit.__code__
+                and value.f_back.f_code is Stream.bind.__code__):
+            return types.SimpleNamespace(f_code=value.f_code, f_locals=value.f_locals,
+                f_globals=value.f_globals, f_lineno=value.f_lineno, f_back=value.f_back.f_back)
+        return value
+    monkeypatch.setattr(sys, "_getframe", frame)
+    namespace = {"__name__": "urllib3.util.connection", "__file__": str(guard.probe_path),
+        "socket": types.SimpleNamespace(has_ipv6=True, socket=create, AF_INET6=socket.AF_INET6)}
+    if fault == "wrong-module":
+        namespace["__name__"] = "private_unknown_module"
+    elif fault == "wrong-file":
+        namespace["__file__"] = str(tmp_path / "private_unknown_module.py")
+    code = guard.probe_code.replace(co_name="private_unknown_function") if fault == "wrong-code" else guard.probe_code
+    function = types.FunctionType(code, namespace)
+    assert function("::2" if fault == "wrong-host" else "::1") is False
+    if fault == "repeat":
+        assert function("::1") is False
+    assert all(stream.closed for stream in streams) and len(streams) == (2 if fault == "repeat" else 1)
+    assert guard.probes == (1 if fault in {None, "repeat"} else 0)
+    assert guard.blocked == (0 if fault is None else 1)
+    log = tmp_path / "network.jsonl"
+    assert log.exists() is (fault is not None)
+    if fault:
+        assert "private_unknown" not in log.read_text()
 
 
 @pytest.mark.parametrize("unknown", [False, True])
