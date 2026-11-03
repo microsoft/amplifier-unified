@@ -194,6 +194,7 @@ AGENT_DEFINITION = {'description': 'Inert restoration witness', 'instruction': '
 AGENT_OBSERVER = '''
 def install_agent_observer():
     from amplifier_web.runtime_controls import RuntimeControls
+    controls_by_session = {}
     def observe(controls, stage):
         name = 'inert-schedule-agent'
         digest = lambda value: hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
@@ -207,6 +208,12 @@ def install_agent_observer():
             'disabled':disabled, 'disabledHash':digest(disabled), 'taskId':task.get('id')}
         with Path(os.environ['SCHEDULE_FIXTURE_AGENT_OBSERVATIONS']).open('a') as stream:
             stream.write(json.dumps(row)+'\\n')
+    initialize = RuntimeControls.__init__
+    def initialized(self, *args, **kwargs):
+        initialize(self, *args, **kwargs)
+        controls_by_session[self.coordinator.session_id] = self
+        observe(self, 'initialized')
+    RuntimeControls.__init__ = initialized
     restore = RuntimeControls._restore_saved
     async def restored(self, *args, **kwargs):
         observe(self, 'restore_begin')
@@ -222,6 +229,19 @@ def install_agent_observer():
         finally:
             observe(self, 'control:' + operation)
     RuntimeControls.perform = performed
+    from amplifier_module_loop_streaming import StreamingOrchestrator
+    execute = StreamingOrchestrator._execute_one_turn
+    signature = inspect.signature(execute)
+    @functools.wraps(execute)
+    async def executed(self, *args, **kwargs):
+        coordinator = signature.bind(self, *args, **kwargs).arguments['coordinator']
+        controls = controls_by_session[coordinator.session_id]
+        observe(controls, 'execution_begin')
+        try:
+            return await execute(self, *args, **kwargs)
+        finally:
+            observe(controls, 'execution_end')
+    StreamingOrchestrator._execute_one_turn = executed
 '''
 
 
@@ -510,7 +530,7 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
         'session': {'orchestrator': {'module': 'loop-live', 'config': {'use_streaming': False, 'max_iterations': 1}},
                     'context': {'module': 'context-simple', 'source': modules['context-simple']}},
         'providers': [{'module': 'provider-fixture', 'source': str(provider.parent), 'config': {
-            'calls': str(calls), **({'source_observations': str(source_mounts)} if inherited_source else {})}}]}))
+            'calls': str(calls), **({'source_observations': str(source_mounts)} if inherited_source or disabled_agent else {})}}]}))
     command = [sys.executable, str(launcher)]
     monkeypatch.setattr(RuntimeManager, '_command', lambda self, *a, **kw: list(self.command or command))
     runtime = RuntimeManager(command=command, startup_timeout=45, retention={'prewarm_on_select': False})
@@ -571,10 +591,35 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
         report.setdefault('agentCatalogs', []).append({'sessionId': target, 'agentsHash': agent_digest(catalog['agents'])})
         assert AGENT_NAME not in catalog['agents'], catalog
         report['calls'] = read_calls()
-        row = report['agentStates'][-1]
-        assert row['sessionId'] == target and row['stage'] == 'control:catalog.inspect'
+        row = next(row for row in reversed(report['agentStates'])
+                   if row['sessionId'] == target and row['stage'] == 'control:catalog.inspect')
         assert not row['available'] and row['disabled'] == [AGENT_NAME], row
         assert row['definitionHashes'] == [agent_digest(AGENT_DEFINITION)], row
+
+    def assert_agent_states(rows=None):
+        rows = report['agentStates'] if rows is None else rows
+        sessions = [source_id, *(row['target'] for row in report['expected'])]
+        assert {row['sessionId'] for row in rows} == set(sessions)
+        pids = {sid: {row['pid'] for row in rows if row['sessionId'] == sid} for sid in sessions}
+        assert all(len(values) == 1 for values in pids.values())
+        assert len(set.union(*pids.values())) == len(sessions)
+        assert Counter(row['sessionId'] for row in rows if row['stage'] == 'initialized') == Counter(sessions)
+        expected = {row['target']: row for row in report['expected']}
+        for stage in ('restore_begin', 'restore_end', 'execution_begin', 'execution_end'):
+            assert Counter(row['sessionId'] for row in rows if row['stage'] == stage) == Counter(expected.keys())
+        for row in rows:
+            assert row['stage'] in {'initialized', 'restore_begin', 'restore_end', 'execution_begin', 'execution_end',
+                'control:task.get', 'control:task.create', 'control:catalog.inspect',
+                'control:configuration.toggle', 'control:schedule.submit'}, row
+            assert row['definitionHashes'] == [agent_digest(AGENT_DEFINITION)], row
+            assert row['disabledHash'] == agent_digest(row['disabled'])
+            if row['stage'] in {'restore_end', 'execution_begin', 'execution_end', 'control:schedule.submit'}:
+                assert row['disabled'] == [AGENT_NAME] and not row['available'], row
+            if row['stage'].startswith('execution_'):
+                run = expected[row['sessionId']]
+                assert row['inputIds'] == [run['inputId']] and row['taskId'] == run['taskId'], row
+                generations = [item for item in report['generations'] if item['sessionId'] == row['sessionId']]
+                assert {item['generation_id'] for item in generations} == {row['generationId']}
 
     def assert_sources(mounted=None):
         import hashlib, inspect
@@ -594,9 +639,9 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
             assert row['coordinatorType'] == MockCoordinator.__module__ + '.' + MockCoordinator.__qualname__
             assert row['validation']['producer'] == 'ProviderValidator._check_protocol_compliance'
             assert row['validation']['sourceSha256'] == validator_hash
-        module = source_paths['B'] / 'amplifier_module_provider_fixture' / '__init__.py'
+        module = (source_paths['B'] / 'amplifier_module_provider_fixture' if inherited_source else provider) / '__init__.py'
         for row in mounted:
-            assert row['label'] == 'B', row
+            assert row['label'] == ('B' if inherited_source else 'default'), row
             assert Path(row['moduleFile']).resolve() == module.resolve(), row
             assert row['sha256'] == hashlib.sha256(module.read_bytes()).hexdigest(), row
 
@@ -694,6 +739,8 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
                 {'section': 'agents', 'name': AGENT_NAME, 'enabled': False})
             await assert_agent(source_id)
             report['sourceAgent'] = saved_agent(source_id)
+            # First capture the full red journey even if persistence has lost
+            # this definition. The preserved-state assertion follows execution.
         source_summary = template(app, app._session(source_id))[1]
         if inherited_source:
             source_config = template(app, app._session(source_id))[0]
@@ -736,10 +783,11 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
             report['calls'] = read_calls()
             assert_execution(report)
             if inherited_source or disabled_agent:
-                if inherited_source:
-                    assert_sources()
+                assert_sources()
                 if disabled_agent:
                     await assert_agent(target)
+                    assert_agent_states()
+                    assert saved_agent(target)['definitionHash'] == agent_digest(AGENT_DEFINITION)
                 for previous in prior_runs:
                     assert app.schedules.store.run(source_id, previous['id']) == previous
                 prior_runs.append(copy.deepcopy(app.schedules.store.run(source_id, run['id'])))
@@ -767,8 +815,7 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
             assert not rejected.get('taskId')
             assert (report['admissions'], report['generations'], report['sourceMounts']) == before_execution
             assert_execution(report)
-            if inherited_source:
-                assert_sources()
+            assert_sources()
             for previous in prior_runs:
                 assert app.schedules.store.run(source_id, previous['id']) == previous
             comparison = rejected['destinationConfigurationComparison']
@@ -788,6 +835,7 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
         assert template(app, app._session(source_id))[1] == source_summary
         assert app._session(source_id)['messages'] == []
         if disabled_agent:
+            assert report['sourceAgent']['definitionHash'] == agent_digest(AGENT_DEFINITION)
             # Prove the original definition can really be restored, not merely
             # that an inspection label claims it is disabled. No agent is run.
             report['restorationProbes'] = []
@@ -819,7 +867,23 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
                 assert_execution(report)
                 assert len(report['expected']) == 2
                 assert_fault_controls(report)
-                if inherited_source:
+                if disabled_agent:
+                    assert_agent_states()
+                    for mutation in ('lost_definition', 'enabled_during_execution', 'extra_execution_witness', 'wrong_worker_pid'):
+                        bad = copy.deepcopy(report['agentStates'])
+                        row = next(row for row in bad if row['stage'] == 'execution_begin')
+                        if mutation == 'lost_definition':
+                            row['definitionHashes'] = []
+                        elif mutation == 'enabled_during_execution':
+                            row['available'] = True
+                        elif mutation == 'extra_execution_witness':
+                            bad.append(copy.deepcopy(row))
+                        else:
+                            row['pid'] = -1
+                        with pytest.raises(AssertionError):
+                            assert_agent_states(bad)
+                        report['negativeControls'].append(mutation)
+                if inherited_source or disabled_agent:
                     assert_sources()
                     for mutation in ('extra_validation_mount', 'missing_validation_binding', 'wrong_source'):
                         bad = copy.deepcopy(report['sourceMounts'])
