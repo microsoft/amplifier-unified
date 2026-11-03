@@ -2411,7 +2411,7 @@ def cleanup_processes(monkeypatch):
     originals = {name: getattr(Path, name) for name in ('iterdir', 'read_text', 'stat', 'open', 'readlink')}
     original_close = os.close
 
-    def configure(fault, count=1):
+    def configure(fault, count=1, *, environment=None):
         pids = list(range(91001, 91001 + count))
         births = {pid: str(12300 + i) for i, pid in enumerate(pids)}
         live, handles, denied, calls = set(pids), {}, set(), []
@@ -2475,7 +2475,8 @@ def cleanup_processes(monkeypatch):
                     except PermissionError:
                         denied.add(pid)
                         raise
-                    return (runner.OWNER_ENV + '=' + token + '\0PRIVATE=SECRET\0').encode()
+                    owner = token if environment is None else environment[runner.OWNER_ENV]
+                    return (runner.OWNER_ENV + '=' + owner + '\0PRIVATE=SECRET\0').encode()
                 def __exit__(self, *args):
                     try:
                         operation('environ_close', pid)
@@ -2612,22 +2613,46 @@ def test_cleanup_failure_receipt_success_uses_existing_scan_and_signal_sequence(
 @pytest.mark.parametrize('operation', ['stat', 'signal', 'pidfd_close'])
 def test_cleanup_failure_receipt_keeps_next_scenario_unrun(tmp_path, monkeypatch, cleanup_processes, operation):
     from types import SimpleNamespace
-    fixture = cleanup_processes(operation)
+    environment = {}
+    fixture = cleanup_processes(operation, environment=environment)
     monkeypatch.setattr(runner, 'process_identities', lambda: {})
     launches = []
+    def wait(*, timeout):
+        pytest.fail('Injected unsafe cleanup must not reach process.wait')
     def popen(*args, **kwargs):
+        assert not launches and kwargs['start_new_session'] is True
+        # Detached fake descendants inherit this launch's real owner token.
+        # Keep only that field in memory, not the caller's whole environment.
+        owner = kwargs['env'][runner.OWNER_ENV]
+        assert re.fullmatch(r'[0-9a-f]{32}', owner)
+        environment[runner.OWNER_ENV] = owner
         launches.append(args[0])
-        return SimpleNamespace(pid=fixture.group, poll=lambda: 0, returncode=0)
+        return SimpleNamespace(pid=fixture.group, poll=lambda: 0, wait=wait, returncode=0)
     monkeypatch.setattr(runner.subprocess, 'Popen', popen)
     code, report, output = execute(tmp_path, [scenario('first', 'pass'), scenario('later', 'pass')])
     first, later = report['scenarios']
+    assert set(environment) == {runner.OWNER_ENV} and len(launches) == 1
+    assert fixture.calls.count((operation, fixture.pids[0])) == 1
     assert code == 1 and not report['passed'] and not report['complete']
     assert first['status'] == 'failed' and first['exitCode'] == 0
     assert first['cleanup']['remaining'] == ['unknown']
     assert first['cleanup']['failure']['operation'] == operation
+    owned = operation != 'stat'
+    assert first['cleanup']['failure']['ownership'] == ('proven' if owned else 'unknown')
+    assert first['cleanup']['terminated'] == (1 if owned else None)
+    attempts = first['cleanup']['signalAttempts']
+    assert attempts['attempted'] == int(owned)
+    assert attempts['returned'] == int(operation == 'pidfd_close')
+    assert attempts['failed'] == int(operation == 'signal')
+    if owned:
+        assert fixture.calls.count(('environ_read', fixture.pids[0])) == 1
+        assert first['cleanup']['observedBeforeTermination'][0]['processGroup'] == 88001
+        assert fixture.group == 88000  # Ownership came from the token, not the group.
+    assert not fixture.handles
     assert later['status'] == 'unrun' and later['reason'] == 'unsafe_cleanup'
     assert len(launches) == 1 and not (output / 'later.log').exists()
     assert 'SECRET' not in json.dumps(first['cleanup'])
+    assert all(value not in json.dumps(report) for value in environment.values())
 
 
 def test_cleanup_failure_receipt_fallback_does_not_trust_exception_payload():
