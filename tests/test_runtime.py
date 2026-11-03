@@ -1969,6 +1969,13 @@ async def test_default_runtime_probe_startup_distinguishes_identity_from_ready_t
     """Real host start/identity/write/wait, with only the existing inert job."""
     fixture = _default_runtime_probe_module()
     monkeypatch.setitem(sys.modules, fixture.__name__, fixture)
+    from amplifier_web import runtime as runtime_module, worker_diagnostics
+    async def inert_diagnostic_write(function, *args, **kwargs):
+        assert function is worker_diagnostics.save_startup_failure
+        return None  # This host model must not start a real diagnostic thread.
+    monkeypatch.setattr(runtime_module, 'asyncio', SimpleNamespace(
+        **{name: value for name, value in vars(asyncio).items() if name != 'to_thread'},
+        to_thread=inert_diagnostic_write))
     model = windows_runtime_model
     model.manager.startup_timeout = .02
     if identity:
@@ -2052,6 +2059,8 @@ async def test_default_runtime_probe_start_observer_preserves_original_behavior(
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b'synthetic existence only, not provenance')
+    lock_bytes = b'version = 1\n'
+    (tmp_path / 'uv.lock').write_bytes(lock_bytes)
     call = fixture.observe_default_start(
         Runtime(), {'id': 'fixed-synthetic-session'}, emit, report, tmp_path)
     if outcome == 'return':
@@ -2066,8 +2075,382 @@ async def test_default_runtime_probe_start_observer_preserves_original_behavior(
     assert facts['diagnosticStatus'] == ('FAIL' if observer_fault else 'PASS')
     assert facts['phases'] == ([] if observer_fault or outcome.startswith('callback-') else ['session-mount'])
     assert all(facts[key] for key in ('projectManifestExists', 'lockExists', 'venvPythonExists')) is not observer_fault
+    assert report['lockObservation'] == {'status': 'present', 'sha256': fixture.digest(lock_bytes)}
     fixture.validate_inner_report(report)
     assert 'private' not in json.dumps(report)
+
+
+@pytest.mark.parametrize('case', [
+    'verified', 'not-loaded', 'missing', 'no-vcs', 'bad-commit', 'bad-json',
+    'bad-version', 'foreign-origin', 'editable', 'oversized',
+])
+def test_default_runtime_probe_early_foundation_metadata_is_worker_owned(monkeypatch, case):
+    fixture = _default_runtime_probe_module()
+    host = Path('/synthetic-worker-prefix')
+    origin = host / 'site-packages/amplifier_foundation/__init__.py'
+    commit = 'b' * 40  # Deliberately not the host's historical a49c22 revision.
+    raw = json.dumps({'url': 'https://private-host/credential-must-not-leak',
+                      'vcs_info': {'vcs': 'git', 'commit_id': commit}})
+    if case == 'no-vcs':
+        raw = None
+    elif case == 'bad-commit':
+        raw = json.dumps({'vcs_info': {'vcs': 'git', 'commit_id': 'private-branch'}})
+    elif case == 'bad-json':
+        raw = 'private invalid JSON'
+    elif case == 'editable':
+        raw = json.dumps({'dir_info': {'editable': True}})
+    elif case == 'oversized':
+        raw = ' ' * 8193
+    modules = {} if case == 'not-loaded' else {
+        'amplifier_foundation': SimpleNamespace(__file__=str(
+            Path('/foreign/__init__.py') if case == 'foreign-origin' else origin))}
+    monkeypatch.setattr(fixture, 'sys', SimpleNamespace(modules=modules, prefix=str(host)))
+    def distribution(name):
+        assert name == 'amplifier-foundation'
+        if case == 'missing':
+            raise fixture.metadata.PackageNotFoundError()
+        return SimpleNamespace(version='private version prose' if case == 'bad-version' else '1.2.3',
+                               locate_file=lambda _: origin, read_text=lambda _: raw)
+    monkeypatch.setattr(fixture.metadata, 'distribution', distribution)
+    expected = ('verified' if case == 'verified' else 'not_loaded' if case == 'not-loaded'
+                else 'missing' if case == 'missing' else 'no_vcs' if case == 'no-vcs' else 'invalid')
+    value = fixture.worker_foundation()
+    assert value == {'status': expected,
+                     'version': '1.2.3' if expected in {'verified', 'no_vcs'} else None,
+                     'commit': commit if expected == 'verified' else None}
+    assert 'private' not in json.dumps(value)
+    facts = {'diagnosticStatus': 'PASS', 'observed': True, 'taskDone': False,
+             'awaiting': [], 'errors': [], 'foundation': value}
+    fixture.validate_worker_startup(facts)
+    for patch in ({'status': 'private-status'}, {'version': 'private version'},
+                  {'commit': 'private-branch'}, {'url': 'private-host'},
+                  {'status': 'verified', 'commit': None}):
+        with pytest.raises(AssertionError):
+            fixture.validate_worker_startup({**facts, 'foundation': {**value, **patch}})
+
+
+@pytest.mark.parametrize('kind', ['timeout', 'called', 'timeout-subclass', 'called-subclass', 'os'])
+def test_default_runtime_probe_exact_subprocess_error_identity_has_no_payload(kind):
+    import subprocess
+    fixture = _default_runtime_probe_module()
+    class PrivateTimeout(subprocess.TimeoutExpired): pass
+    class PrivateCalled(subprocess.CalledProcessError): pass
+    error = {
+        'timeout': subprocess.TimeoutExpired('private-command', 35, output=b'private', stderr=b'private'),
+        'called': subprocess.CalledProcessError(17, 'private-command', output=b'private', stderr=b'private'),
+        'timeout-subclass': PrivateTimeout('private-command', 35),
+        'called-subclass': PrivateCalled(17, 'private-command'),
+        'os': OSError(22, 'private-path'),
+    }[kind]
+    value = fixture.failure_facts(error, 'runtime_start')
+    fixture.validate_diagnostic(value)
+    row = value['errors'][0]
+    assert row['class'] == {'timeout': 'TimeoutExpired', 'called': 'CalledProcessError',
+                            'os': 'OSError'}.get(kind, 'other')
+    assert ('returncode' in row) is (kind == 'called')
+    if kind == 'called':
+        assert row['returncode'] == 17
+    assert 'private' not in json.dumps(value)
+
+
+@pytest.mark.parametrize('case', ['present', 'missing', 'invalid', 'oversized'])
+def test_default_runtime_probe_failed_start_lock_has_independent_status(tmp_path, case):
+    fixture = _default_runtime_probe_module()
+    raw = b'version = 1\n[[package]]\nname = "amplifier-foundation"\nversion = "1.0.0"\n'
+    if case != 'missing':
+        (tmp_path / 'uv.lock').write_bytes(
+            raw if case == 'present' else b'\xff' if case == 'invalid' else b'x' * (4 * 1024 * 1024 + 1))
+    report = fixture.empty_inner_report()
+    fixture.observe_lock(tmp_path, report)
+    assert report['lockObservation'] == {
+        'status': case if case in {'present', 'missing'} else 'invalid',
+        'sha256': fixture.digest(raw) if case == 'present' else None}
+    assert report['lockSha256'] is None and not any(report['checks'].values())
+    fixture.validate_inner_report(report)
+    fixture.validate_report({**report, 'schema': 2, 'outerJob': {
+        'status': 'confirmed', 'activeProcesses': 0, 'treeEmpty': True,
+        'ioFinalized': True, 'timedOut': False, 'outputDiscarded': False}})
+    for patch in ({'path': 'private'}, {'sha256': 'private'},
+                  {'status': 'private-state'}, {'status': 'present', 'sha256': None}):
+        with pytest.raises(AssertionError):
+            fixture.validate_inner_report({**report, 'lockObservation': {**report['lockObservation'], **patch}})
+
+
+def test_default_runtime_probe_thread_diagnostic_total_budget_and_schema(tmp_path):
+    fixture = _default_runtime_probe_module()
+    source = max(fixture.CODE_LABELS, key=len)
+    frame = {'source': source, 'offset': 10**6}
+    error = {'class': 'CalledProcessError', 'frames': [frame] * 5, 'returncode': -(2**31)}
+    child = {'module': 'hooks-session-naming', 'taskDone': True, 'cancelled': False,
+             'awaiting': [frame] * 3, 'errors': [{**error, 'frames': [frame] * 2}]}
+    operation = {'operation': 'receipt_record', 'module': 'hooks-session-naming',
+                 'queued': 10**6, 'entered': 10**6, 'failed': 10**6, 'returned': 0,
+                 'errors': [{**error, 'frames': []}]}
+    facts = {'diagnosticStatus': 'PASS', 'observed': True, 'taskDone': True,
+             'awaiting': [frame] * 5, 'errors': [error] * 4,
+             'activationChildren': [child] * 4, 'activationTruncated': True,
+             'foundation': {'status': 'verified', 'version': '1' * 100, 'commit': 'a' * 64},
+             'codeHashes': {name: 'b' * 64 for name in list(fixture.CODE_LABELS | fixture.THREAD_OPERATIONS)[:16]},
+             'threadOperations': [operation] * 8, 'operationsTruncated': True}
+    fixture.validate_worker_startup(facts)
+    raw = json.dumps(facts)
+    assert len(raw.encode()) <= fixture.WORKER_DIAGNOSTIC_BYTES == 16 * 1024
+    path = tmp_path / 'private-observation.json'
+    path.write_text(raw, encoding='utf-8')
+    assert fixture.read_worker_startup(path) == facts
+    report = {**fixture.empty_inner_report(), 'workerStartup': facts}
+    fixture.validate_report({**report, 'schema': 2, 'outerJob': {
+        'status': 'confirmed', 'activeProcesses': 0, 'treeEmpty': True,
+        'ioFinalized': True, 'timedOut': False, 'outputDiscarded': False}})
+    invalid = [
+        {'threadOperations': [operation] * 9}, {'operationsTruncated': 1},
+        {'threadOperations': [{**operation, 'operation': 'private-symbol'}]},
+        {'threadOperations': [{**operation, 'module': 'private-module'}]},
+        {'threadOperations': [{**operation, 'output': 'private'}]},
+        {'threadOperations': [{**operation, 'queued': True}]},
+        {'threadOperations': [{**operation, 'entered': 10**6 + 1}]},
+        {'threadOperations': [{**operation, 'queued': 0}]},
+        {'threadOperations': [{**operation, 'returned': 1}]},
+        {'threadOperations': [{**operation, 'errors': [error]}]},
+        {'threadOperations': [{**operation, 'errors': [{'class': 'TimeoutExpired', 'frames': [], 'returncode': 7}]}]},
+        {'codeHashes': {'private-file.py': 'b' * 64}},
+        {'codeHashes': {name: 'b' * 64 for name in list(fixture.CODE_LABELS)[:17]}},
+        {'codeHashes': {'worker_start': 'private-contents'}},
+    ]
+    for patch in invalid:
+        with pytest.raises(AssertionError):
+            fixture.validate_worker_startup({**facts, **patch})
+    path.write_bytes(b' ' * (fixture.WORKER_DIAGNOSTIC_BYTES + 1))
+    assert fixture.read_worker_startup(path)['diagnosticStatus'] == 'FAIL'
+
+
+def test_default_runtime_probe_loaded_code_fingerprint_is_path_independent_and_exact(monkeypatch):
+    fixture = _default_runtime_probe_module()
+    def original():
+        def nested():
+            return 1
+        return nested
+    clone = original.__code__.replace(co_filename='private-machine-path.py')
+    assert fixture.code_fingerprint(clone) == fixture.code_fingerprint(original.__code__)
+    changed = original.__code__.replace(co_consts=(*original.__code__.co_consts, 'changed'))
+    assert fixture.code_fingerprint(changed) != fixture.code_fingerprint(original.__code__)
+    monkeypatch.setattr(fixture, 'sys', SimpleNamespace(modules={'synthetic': SimpleNamespace(parent=original)}))
+    assert fixture.loaded_code('synthetic', 'parent.<nested>') is original().__code__
+    assert fixture.loaded_code('synthetic', 'parent.<unknown>') is None
+
+
+@pytest.mark.parametrize('case', [
+    'queued', 'returned', 'timeout', 'called', 'unknown', 'clone',
+    'outsider', 'nested', 'cancel', 'observer-fault', 'saturation', 'callable',
+    'nested-remote', 'cancel-entered', 'truncation',
+])
+async def test_default_runtime_probe_thread_operation_phases_without_real_executor(
+        tmp_path, monkeypatch, case):
+    """Use original CPython to_thread code, but a queued inert executor."""
+    import contextvars
+    import functools
+    import subprocess
+    from types import FunctionType
+    fixture = _default_runtime_probe_module()
+    loop = asyncio.get_running_loop()
+    submitted, invoked = [], []
+    token = object()
+    original_error = (subprocess.TimeoutExpired('private-command', 35, output=b'private')
+                      if case == 'timeout' else subprocess.CalledProcessError(
+                          23, 'private-command', output=b'private'))
+    selected_context = contextvars.ContextVar('synthetic-operation-context')
+
+    def operation():
+        invoked.append(selected_context.get())
+        if case in {'timeout', 'called'}:
+            raise original_error
+        return token
+
+    def unknown():
+        return operation()
+
+    function = unknown if case == 'unknown' else operation
+    if case == 'callable':
+        class Opaque:
+            @property
+            def __code__(self):
+                raise AssertionError('must not inspect unknown callable attributes')
+            def __call__(self):
+                return operation()
+        function = Opaque()
+    if case == 'clone':
+        function = FunctionType(operation.__code__.replace(co_filename='private-clone.py'),
+                                operation.__globals__, closure=operation.__closure__)
+        assert function.__code__ == operation.__code__ and function.__code__ is not operation.__code__
+    def submit(executor, callback):
+        assert executor is None
+        future = loop.create_future()
+        submitted.append((callback, future))
+        return future
+    # No patch to asyncio.to_thread: only this test callable's globals select
+    # an inert executor. The ORIGINAL code object and locals proxy still run.
+    thread = FunctionType(asyncio.to_thread.__code__, {
+        'events': SimpleNamespace(get_running_loop=lambda: SimpleNamespace(run_in_executor=submit)),
+        'contextvars': contextvars, 'functools': functools})
+
+    async def complete_io(fn):
+        task = asyncio.create_task(thread(fn))
+        return await asyncio.shield(task)
+
+    async def remote_revision():
+        def read():
+            return operation()
+        return await thread(read)
+
+    operation_functions = []
+    if case == 'truncation':
+        def successful():
+            return token
+        for i in range(9):
+            code = successful.__code__.replace(co_consts=(*successful.__code__.co_consts, i))
+            operation_functions.append(FunctionType(code, successful.__globals__, closure=successful.__closure__))
+        names = list(fixture.THREAD_OPERATIONS)
+        monkeypatch.setattr(fixture, 'THREAD_OPERATIONS', {
+            name: ('synthetic_ops', 'f' + str(i)) for i, name in enumerate(names)})
+
+    class Activator:
+        async def activate(self, module_name, source_uri):
+            if case == 'truncation':
+                for fn in operation_functions:
+                    assert await thread(fn) is token
+                return token
+            if case == 'nested-remote':
+                return await remote_revision()
+            if case == 'nested':
+                return await complete_io(function)
+            if case == 'saturation':
+                def extra():
+                    return token
+                for _ in range(3):
+                    await thread(extra)
+                return token
+            return await thread(function)
+        async def activate_all(self, modules):
+            tasks = [self.activate(name, 'private-source') for name in (
+                ['loop-live', 'context-simple', 'hooks-session-naming', 'secret-name']
+                if case == 'saturation' else ['loop-live'])]
+            return await asyncio.gather(*tasks, return_exceptions=True)
+    owner = Activator()
+    class Worker:
+        async def start(self):
+            return await owner.activate_all([])
+    mock_modules = {
+        **sys.modules, '__main__': SimpleNamespace(Worker=Worker),
+        'asyncio.threads': SimpleNamespace(to_thread=thread),
+        'amplifier_foundation.sources.shared': SimpleNamespace(
+            complete_io=complete_io, clean_checkout=operation, remote_revision=remote_revision),
+        'amplifier_foundation.modules.activator': SimpleNamespace(ModuleActivator=Activator),
+    }
+    if case == 'truncation':
+        mock_modules['synthetic_ops'] = SimpleNamespace(**{
+            'f' + str(i): fn for i, fn in enumerate(operation_functions[:8])})
+    monkeypatch.setattr(fixture, 'sys', SimpleNamespace(modules=mock_modules,
+        getprofile=sys.getprofile, setprofile=sys.setprofile))
+    path = tmp_path / 'privately-created-observation.json'
+    path.write_text('{}', encoding='utf-8')
+    attempts = []
+    class FaultOnce:
+        def open(self, *args, **kwargs):
+            attempts.append(True)
+            if len(attempts) == 1:
+                raise OSError('private observer failure')
+            return path.open(*args, **kwargs)
+    worker, outside = Worker(), None
+    marker = selected_context.set('inherited-context')
+    assert sys.getprofile() is None
+    fixture.install_worker_start_observer(FaultOnce() if case == 'observer-fault' else path)
+    try:
+        worker.start_task = asyncio.create_task(worker.start())
+        async with asyncio.timeout(1):
+            while not submitted:
+                await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        facts = fixture.read_worker_startup(path)
+        row = facts['threadOperations'][0]
+        label = ('other' if case in {'unknown', 'clone', 'callable', 'saturation'}
+                 else 'receipt_reuse' if case == 'truncation'
+                 else 'shared_remote' if case == 'nested-remote' else 'shared_clean')
+        assert row == {'module': 'loop-live', 'operation': label,
+                       'queued': 1, 'entered': 0, 'returned': 0, 'failed': 0, 'errors': []}
+        if label != 'other' and case != 'truncation':
+            expected_code = remote_revision.__code__.co_consts[1] if case == 'nested-remote' else operation.__code__
+            assert facts['codeHashes'][label] == fixture.code_fingerprint(expected_code)
+        if case == 'outsider':
+            outside = asyncio.create_task(thread(operation))
+            async with asyncio.timeout(1):
+                while len(submitted) < 2:
+                    await asyncio.sleep(0)
+            assert fixture.read_worker_startup(path)['threadOperations'] == [row]
+        if case in {'saturation', 'truncation'}:
+            index = 0
+            async with asyncio.timeout(1):
+                while not worker.start_task.done():
+                    while index < len(submitted):
+                        callback, future = submitted[index]
+                        future.set_result(callback())
+                        index += 1
+                    await asyncio.sleep(0)
+            assert await worker.start_task == [token] * (4 if case == 'saturation' else 1)
+            await asyncio.sleep(0)
+            final = fixture.read_worker_startup(path)
+            assert len(final['threadOperations']) == (4 if case == 'saturation' else 8)
+            assert all(row['queued'] == row['entered'] == row['returned'] == (3 if case == 'saturation' else 1)
+                       and row['failed'] == 0 for row in final['threadOperations'])
+            assert final['operationsTruncated'] is (case == 'truncation')
+            fixture.validate_worker_startup(final)
+        elif case in {'queued', 'cancel'}:
+            worker.start_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await worker.start_task
+            assert not invoked
+        else:
+            callback, future = submitted[0]
+            try:
+                result = callback()  # Model executor entry in this same thread.
+            except type(original_error) as error:
+                assert error is original_error
+                future.set_exception(error)
+            else:
+                assert result is token
+                future.set_result(result)
+            if case == 'cancel-entered':
+                # The underlying callable finished, but its caller can still
+                # cancel before receipt. Counters are not admission/success.
+                worker.start_task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await worker.start_task
+                results = [token]
+            else:
+                results = await worker.start_task
+            assert results == [original_error] if case in {'timeout', 'called'} else results == [token]
+            await asyncio.sleep(0)
+            final = fixture.read_worker_startup(path)
+            row = final['threadOperations'][0]
+            assert row['queued'] == row['entered'] == 1
+            assert row['failed'] == (case in {'timeout', 'called'})
+            assert row['returned'] == (case not in {'timeout', 'called'})
+            assert invoked == ['inherited-context']
+            if case in {'timeout', 'called'}:
+                assert row['errors'][0]['class'] == type(original_error).__name__
+                assert row['errors'][0]['frames'] == []
+                assert ('returncode' in row['errors'][0]) is (case == 'called')
+            assert 'private' not in json.dumps(final)
+            assert final['diagnosticStatus'] == ('FAIL' if case == 'observer-fault' else 'PASS')
+            fixture.validate_worker_startup(final)
+        await asyncio.sleep(0)
+        assert sys.getprofile() is None
+    finally:
+        sys.setprofile(None)
+        selected_context.reset(marker)
+        for task in (worker.start_task, outside):
+            if task and not task.done():
+                task.cancel()
+        await asyncio.gather(*(task for task in (worker.start_task, outside) if task), return_exceptions=True)
 
 
 @pytest.mark.parametrize('cloned', [False, True])

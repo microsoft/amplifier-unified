@@ -13,10 +13,12 @@ from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import hashlib
 import importlib.metadata as metadata
 import json
+import marshal
 import os
 from pathlib import Path
 import re
 import struct
+import subprocess
 import sys
 import tomllib
 import types
@@ -44,6 +46,7 @@ ERROR_CLASSES = {kind: kind.__name__ for kind in (
     IsADirectoryError, ImportError, ModuleNotFoundError, ValueError, TypeError,
     AttributeError, KeyError, RuntimeError, NotImplementedError, TimeoutError,
     UnicodeDecodeError, UnicodeEncodeError, json.JSONDecodeError,
+    subprocess.TimeoutExpired, subprocess.CalledProcessError,
 )}
 CODE_LABELS = {
     "cold_main": (__name__, "main"),
@@ -76,6 +79,10 @@ CODE_LABELS = {
     "file_resolve": ("amplifier_foundation.sources.file", "FileSourceHandler.resolve"),
     "filelock_acquire": ("filelock.asyncio", "BaseAsyncFileLock.acquire"),
     "thread_wait": ("asyncio.threads", "to_thread"),
+    "shared_resolve": ("amplifier_foundation.sources.shared", "resolve_shared_source"),
+    "shared_store_resolve": ("amplifier_foundation.sources.shared", "SharedSourceStore.resolve"),
+    "shared_ensure": ("amplifier_foundation.sources.shared", "SharedSourceStore.ensure"),
+    "shared_io": ("amplifier_foundation.sources.shared", "complete_io"),
     "core_initialize": ("amplifier_core.session", "AmplifierSession.initialize"),
     "core_initialize_session": ("amplifier_core._session_init", "initialize_session"),
     "core_load": ("amplifier_core.loader", "ModuleLoader.load"),
@@ -83,6 +90,20 @@ CODE_LABELS = {
 }
 STARTUP_PHASES = frozenset({"runtime-setup", "bundle-preparation", "session-mount", "ready"})
 ACTIVATION_MODULES = frozenset({"loop-live", "context-simple", "hooks-session-naming", "other"})
+# Existing root/child facts can approach 4 KiB. Eight bounded operation counters
+# and code fingerprints need explicit headroom, not an unbounded private log.
+WORKER_DIAGNOSTIC_BYTES = 16 * 1024
+THREAD_OPERATIONS = {
+    "receipt_reuse": ("amplifier_foundation.modules.preparation", "PreparationReceipt.reusable"),
+    "receipt_record": ("amplifier_foundation.modules.preparation", "PreparationReceipt.record"),
+    "shared_verify": ("amplifier_foundation.sources.shared", "SharedSourceStore.verify"),
+    "shared_clean": ("amplifier_foundation.sources.shared", "clean_checkout"),
+    "git_clone": ("amplifier_foundation.sources.git", "GitSourceHandler._clone_at_commit"),
+    "shared_build": ("amplifier_foundation.sources.shared", "build_view"),
+    # Nested callables are selected from the exact loaded parent's co_consts.
+    "shared_remote": ("amplifier_foundation.sources.shared", "remote_revision.<read>"),
+    "shared_publish": ("amplifier_foundation.sources.shared", "SharedSourceStore.ensure.<publish>"),
+}
 # Retain the outer lifeline and its scratch identity when the primitive cannot
 # confirm cleanup. A public FAIL record never authorizes a retry or deletion.
 FAILED_OUTER_OWNERS = []
@@ -191,6 +212,9 @@ def _failure_facts(error, name):
                 number = getattr(error, key, None)
                 if type(number) is int and -(2**31) <= number < 2**32:
                     row[key] = number
+        if kind is subprocess.CalledProcessError and type(error.returncode) is int:
+            if -(2**31) <= error.returncode < 2**32:
+                row["returncode"] = error.returncode
         tb, scanned = BaseException.__getattribute__(error, "__traceback__"), 0
         while tb is not None and scanned < 128:
             scanned += 1
@@ -214,9 +238,11 @@ def validate_diagnostic(value):
     assert type(value["checkpoint"]) is str and value["checkpoint"] in CHECKPOINTS
     assert type(value["errors"]) is list and len(value["errors"]) <= 4
     for row in value["errors"]:
-        assert type(row) is dict and {"class", "frames"} <= set(row) <= {"class", "frames", "errno", "winerror"}
+        assert type(row) is dict and {"class", "frames"} <= set(row) <= {"class", "frames", "errno", "winerror", "returncode"}
         assert type(row["class"]) is str and row["class"] in {*ERROR_CLASSES.values(), "other"}
-        for key in ("errno", "winerror"):
+        if "returncode" in row:
+            assert row["class"] == "CalledProcessError"
+        for key in ("errno", "winerror", "returncode"):
             if key in row:
                 assert type(row[key]) is int and -(2**31) <= row[key] < 2**32
         assert type(row["frames"]) is list and len(row["frames"]) <= 5
@@ -227,7 +253,9 @@ def validate_diagnostic(value):
 
 
 def validate_worker_startup(value):
-    assert type(value) is dict and set(value) - {"activationChildren", "activationTruncated"} == {
+    assert type(value) is dict and set(value) - {
+        "activationChildren", "activationTruncated", "foundation", "codeHashes",
+        "threadOperations", "operationsTruncated"} == {
         "diagnosticStatus", "observed", "taskDone", "awaiting", "errors"}
     assert type(value["diagnosticStatus"]) is str and value["diagnosticStatus"] in {"PENDING", "PASS", "FAIL"}
     assert type(value["observed"]) is bool and type(value["taskDone"]) is bool
@@ -250,6 +278,91 @@ def validate_worker_startup(value):
             validate_diagnostic({"checkpoint": "runtime_start", "errors": [
                 {"class": "other", "frames": child["awaiting"]}, *child["errors"]]})
             assert all(len(row["frames"]) <= 2 for row in child["errors"])
+    if "foundation" in value:
+        row = value["foundation"]
+        assert type(row) is dict and set(row) == {"status", "version", "commit"}
+        assert type(row["status"]) is str and row["status"] in {"not_loaded", "missing", "invalid", "no_vcs", "verified"}
+        assert row["version"] is None or (type(row["version"]) is str and
+            re.fullmatch(r"[A-Za-z0-9_.+!-]{1,100}", row["version"]))
+        assert row["commit"] is None or (type(row["commit"]) is str and
+            re.fullmatch(r"[0-9a-f]{40,64}", row["commit"]))
+        if row["status"] == "verified":
+            assert row["version"] is not None and row["commit"] is not None
+        elif row["status"] != "no_vcs":
+            assert row["version"] is None and row["commit"] is None
+        else:
+            assert row["version"] is not None and row["commit"] is None
+    if "codeHashes" in value:
+        hashes = value["codeHashes"]
+        assert type(hashes) is dict and len(hashes) <= 16
+        assert all(type(key) is str and key in CODE_LABELS | THREAD_OPERATIONS
+                   and type(raw) is str and re.fullmatch("[0-9a-f]{64}", raw)
+                   for key, raw in hashes.items())
+    if "threadOperations" in value or "operationsTruncated" in value:
+        assert type(value["operationsTruncated"]) is bool
+        assert type(value["threadOperations"]) is list and len(value["threadOperations"]) <= 8
+        for row in value["threadOperations"]:
+            assert type(row) is dict and set(row) == {
+                "operation", "module", "queued", "entered", "returned", "failed", "errors"}
+            assert type(row["operation"]) is str and row["operation"] in {*THREAD_OPERATIONS, "other"}
+            assert type(row["module"]) is str and row["module"] in ACTIVATION_MODULES
+            assert all(type(row[key]) is int and 0 <= row[key] <= 10**6
+                       for key in ("queued", "entered", "returned", "failed"))
+            assert row["entered"] <= row["queued"]
+            assert row["returned"] + row["failed"] <= row["entered"]
+            assert type(row["errors"]) is list and len(row["errors"]) <= 1
+            validate_diagnostic({"checkpoint": "runtime_start", "errors": row["errors"]})
+            assert all(error["frames"] == [] for error in row["errors"])
+
+
+def loaded_code(module, qualname):
+    value = sys.modules.get(module)
+    for part in qualname.split("."):
+        if part.startswith("<"):
+            parent = getattr(value, "__code__", None)
+            return next((code for code in getattr(parent, "co_consts", ())
+                         if type(code) is types.CodeType and code.co_name == part[1:-1]), None)
+        value = getattr(value, part, None) if value is not None else None
+    return getattr(value, "__code__", None)
+
+
+def code_fingerprint(code):
+    """Interpreter-specific code digest, with all filenames normalized."""
+    def normalize(value):
+        return value.replace(co_filename="<loaded-code>", co_consts=tuple(
+            normalize(item) if type(item) is types.CodeType else item for item in value.co_consts))
+    return digest(marshal.dumps(normalize(code)))
+
+
+def worker_foundation():
+    """Read only the already loaded worker package and its own distribution."""
+    empty = {"status": "not_loaded", "version": None, "commit": None}
+    module = sys.modules.get("amplifier_foundation")
+    if module is None:
+        return empty
+    try:
+        dist = metadata.distribution("amplifier-foundation")
+        origin = Path(module.__file__).resolve()
+        assert origin.is_relative_to(Path(sys.prefix).resolve())
+        assert origin == Path(dist.locate_file("amplifier_foundation/__init__.py")).resolve()
+        version = dist.version
+        assert type(version) is str and re.fullmatch(r"[A-Za-z0-9_.+!-]{1,100}", version)
+        raw = dist.read_text("direct_url.json")
+        if raw is None:
+            return {"status": "no_vcs", "version": version, "commit": None}
+        assert len(raw) <= 8192
+        direct = json.loads(raw)
+        assert type(direct) is dict and not direct.get("dir_info", {}).get("editable")
+        vcs = direct.get("vcs_info")
+        if vcs is None:
+            return {"status": "no_vcs", "version": version, "commit": None}
+        commit = vcs.get("commit_id")
+        assert vcs.get("vcs") == "git" and type(commit) is str and re.fullmatch(r"[0-9a-f]{40,64}", commit)
+        return {"status": "verified", "version": version, "commit": commit}
+    except metadata.PackageNotFoundError:
+        return {**empty, "status": "missing"}
+    except Exception:
+        return {**empty, "status": "invalid"}
 
 
 def install_worker_start_observer(path):
@@ -265,10 +378,13 @@ def install_worker_start_observer(path):
     failed = False
     root_task = None
     child_rows = {}  # Retain at most four exact task identities, never emit IDs.
+    operations = {}  # At most eight fixed operation/module counter rows.
+    fingerprint_codes = {}
 
     def persist():
         nonlocal previous
         raw = json.dumps(facts, sort_keys=True)
+        assert len(raw.encode("utf-8")) <= WORKER_DIAGNOSTIC_BYTES
         if raw != previous:
             # The parent fixture privately created this file before payload.
             with path.open("r+", encoding="utf-8") as stream:
@@ -278,10 +394,16 @@ def install_worker_start_observer(path):
             previous = raw
 
     def code_for(module, qualname):
-        value = sys.modules.get(module)
-        for part in qualname.split("."):
-            value = getattr(value, part, None) if value is not None else None
-        return getattr(value, "__code__", None)
+        return loaded_code(module, qualname)
+
+    def fingerprint(label, code):
+        hashes = facts.setdefault("codeHashes", {})
+        if label in hashes:
+            assert fingerprint_codes[label] is code  # Rebinding is not one provenance.
+            return
+        if label not in hashes and len(hashes) < 16:
+            hashes[label] = code_fingerprint(code)
+            fingerprint_codes[label] = code
 
     def codes_now():
         codes = {}
@@ -299,6 +421,7 @@ def install_worker_start_observer(path):
             code, frame = value.cr_code, value.cr_frame
             known = codes.get(id(code))
             if frame is not None and known is not None and known[0] is code:
+                fingerprint(known[1], code)
                 frames.append({"source": known[1],
                     "offset": max(0, min(frame.f_lineno - code.co_firstlineno, 10**6))})
             value = value.cr_await
@@ -322,6 +445,106 @@ def install_worker_start_observer(path):
                         and any(coro is task.get_coro() for coro in tasks))
             value = value.cr_await
         return False
+
+    def activation_module(task):
+        if root_task is None or root_task.done() or root_task.cancelling():
+            return None
+        value = task.get_coro()
+        code = code_for("amplifier_foundation.modules.activator", "ModuleActivator.activate")
+        if (type(value) is types.CoroutineType and value.cr_code is code
+                and value.cr_frame is not None and scoped_child(task, value.cr_frame)):
+            name = value.cr_frame.f_locals.get("module_name")
+            return name if type(name) is str and name in ACTIVATION_MODULES else "other"
+        # complete_io deliberately creates a child task. Follow ONLY the exact
+        # trusted coroutine's retained task edge, never global task discovery.
+        complete = code_for("amplifier_foundation.sources.shared", "complete_io")
+        for child, row in child_rows.values():
+            value = child.get_coro()
+            for _ in range(64):
+                if type(value) is not types.CoroutineType:
+                    break
+                if (value.cr_code is complete and value.cr_frame is not None
+                        and value.cr_frame.f_locals.get("task") is task):
+                    return row["module"]
+                value = value.cr_await
+        return None
+
+    def operation_event(row, event, error=None):
+        nonlocal failed
+        try:
+            row[event] = min(row[event] + 1, 10**6)
+            if error is not None:
+                row["errors"] = error
+            persist()
+        except BaseException:
+            failed = True
+            facts["diagnosticStatus"] = "FAIL"
+            try:
+                persist()
+            except BaseException:
+                pass
+
+    def observe_thread_call(frame):
+        """CPython 3.13 write-through locals, on the ORIGINAL to_thread entry.
+
+        Original to_thread still owns context propagation, executor submission
+        and cancellation. The sole callable wrapper reports entry/return/error
+        and invokes the identical function/args exactly once. No thread starts
+        here. Unknown callable code is labelled other, never introspected.
+        """
+        module = activation_module(asyncio.current_task())
+        if module is None:
+            return
+        function = frame.f_locals["func"]
+        code = (function.__code__ if type(function) in {
+            types.FunctionType, types.MethodType} else None)
+        # On coroutine resume do not wrap our own callable a second time.
+        if code is observed_call_code:
+            return
+        label = "other"
+        for name, (owner, qualname) in THREAD_OPERATIONS.items():
+            if code is not None and code is code_for(owner, qualname):
+                label = name
+                fingerprint(label, code)
+                break
+        key = (module, label)
+        row = operations.get(key)
+        if row is None:
+            if len(operations) == 8:
+                facts["operationsTruncated"] = True
+                return
+            row = {"module": module, "operation": label, "queued": 0, "entered": 0,
+                   "returned": 0, "failed": 0, "errors": []}
+            operations[key] = row
+            facts.setdefault("threadOperations", []).append(row)
+            facts.setdefault("operationsTruncated", False)
+        loop = asyncio.get_running_loop()
+        frame.f_locals["func"] = make_observed(function, loop, row)
+        operation_event(row, "queued")
+
+    def make_observed(function, loop, row):
+        def observed_call(*args, **kwargs):
+            def signal(event, error=None):
+                try:
+                    loop.call_soon_threadsafe(operation_event, row, event, error)
+                except BaseException:
+                    pass  # A closed loop cannot change the underlying call.
+            signal("entered")
+            try:
+                result = function(*args, **kwargs)
+            except BaseException as error:
+                safe = failure_facts(error, "runtime_start")["errors"][:1]
+                for item in safe:
+                    item["frames"] = []
+                signal("failed", safe)
+                raise
+            else:
+                signal("returned")
+                return result
+        return observed_call
+
+    # Retain the exact wrapper code identity without constructing a task/thread.
+    observed_call_code = make_observed(None, None, None).__code__
 
     def snapshot_child(task, row):
         nonlocal failed
@@ -350,6 +573,8 @@ def install_worker_start_observer(path):
         try:
             facts.update(diagnosticStatus="FAIL" if failed else "PASS",
                          observed=True, taskDone=task.done())
+            if facts.get("foundation", {}).get("status", "not_loaded") == "not_loaded":
+                facts["foundation"] = worker_foundation()
             frames = frames_now(task, codes_now())
             # Stop cancels the real start task, whose finally also awaits
             # cleanup. Preserve the pre-cancellation wait, not that teardown.
@@ -379,7 +604,9 @@ def install_worker_start_observer(path):
     def profile(frame, event, arg):
         nonlocal failed, root_task
         try:
-            if (event == "return" and frame.f_code.co_name == "start"
+            if (event == "call" and frame.f_code is code_for("asyncio.threads", "to_thread")):
+                observe_thread_call(frame)
+            elif (event == "return" and frame.f_code.co_name == "start"
                     and frame.f_code is code_for("__main__", "Worker.start")):
                 # This local is inspected only on the exact trusted function.
                 # Its value is not serialized or used for execution authority.
@@ -462,13 +689,30 @@ def worker_startup_observer(root, app):
 def read_worker_startup(path):
     try:
         with path.open("rb") as stream:
-            raw = stream.read(4097)
-        assert len(raw) <= 4096
+            raw = stream.read(WORKER_DIAGNOSTIC_BYTES + 1)
+        assert len(raw) <= WORKER_DIAGNOSTIC_BYTES
         value = json.loads(raw)
         validate_worker_startup(value)
         return value
     except Exception:
         return {"diagnosticStatus": "FAIL", "observed": False, "taskDone": False, "awaiting": [], "errors": []}
+
+
+def observe_lock(project, report):
+    """Hash an existing failed-start lock; existence is not graph acceptance."""
+    try:
+        path = project / "uv.lock"
+        try:
+            with path.open("rb") as stream:
+                raw = stream.read(4 * 1024 * 1024 + 1)
+        except FileNotFoundError:
+            report["lockObservation"] = {"status": "missing", "sha256": None}
+            return
+        assert len(raw) <= 4 * 1024 * 1024
+        tomllib.loads(raw.decode("utf-8"))
+        report["lockObservation"] = {"status": "present", "sha256": digest(raw)}
+    except Exception:
+        report["lockObservation"] = {"status": "invalid", "sha256": None}
 
 
 def parse_inner_output(raw, *, outer_failure=None):
@@ -490,7 +734,15 @@ def parse_inner_output(raw, *, outer_failure=None):
 def validate_inner_report(report):
     """Only bounded fixed fields may leave the private test directory."""
     assert type(report) is dict
-    assert set(report) - {"diagnostic", "startup", "workerStartup"} == set(empty_inner_report())
+    assert set(report) - {"diagnostic", "startup", "workerStartup", "lockObservation"} == set(empty_inner_report())
+    if "lockObservation" in report:
+        lock = report["lockObservation"]
+        assert type(lock) is dict and set(lock) == {"status", "sha256"}
+        assert type(lock["status"]) is str and lock["status"] in {"missing", "invalid", "present"}
+        if lock["status"] == "present":
+            assert type(lock["sha256"]) is str and re.fullmatch("[0-9a-f]{64}", lock["sha256"])
+        else:
+            assert lock["sha256"] is None
     if "diagnostic" in report:
         validate_diagnostic(report["diagnostic"])
     if "workerStartup" in report:
@@ -534,7 +786,7 @@ def validate_inner_report(report):
 
 def validate_report(report):
     """The public result requires parent-observed cleanup, not child testimony."""
-    assert set(report) - {"diagnostic", "startup", "workerStartup"} == set(empty_inner_report()) | {"outerJob"}
+    assert set(report) - {"diagnostic", "startup", "workerStartup", "lockObservation"} == set(empty_inner_report()) | {"outerJob"}
     assert report["schema"] == 2
     validate_inner_report({key: (1 if key == "schema" else report[key])
                            for key in report if key != "outerJob"})
@@ -736,6 +988,11 @@ async def observe_default_start(runtime, session, emit, report, project):
             facts["venvPythonExists"] = (project / ".venv/Scripts/python.exe").is_file()
         except BaseException:
             failed = True
+        try:
+            observe_lock(project, report)
+        except BaseException:
+            failed = True
+            report["lockObservation"] = {"status": "invalid", "sha256": None}
         facts["diagnosticStatus"] = "FAIL" if failed else "PASS"
 
 
