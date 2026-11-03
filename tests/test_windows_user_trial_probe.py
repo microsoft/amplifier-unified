@@ -142,8 +142,108 @@ assert not log.exists()
     child = subprocess.run([sys.executable, "-I", "-B", "-c", script,
         str(ROOT), str(tmp_path / "network.jsonl")], capture_output=True, text=True, timeout=20)
     assert child.returncode == 0, child.stdout + child.stderr
-    assert "3 passed" in child.stdout
+    assert "19 passed" in child.stdout
     assert not (tmp_path / "network.jsonl").exists()
+
+
+@pytest.mark.parametrize("tail", [False, True])
+@pytest.mark.parametrize("structured", [False, True])
+@pytest.mark.parametrize("branch", ["stop", "resume", "first", "tool_result"])
+def test_scripted_provider_controls_select_latest_delivered_input(tmp_path, monkeypatch, tail, structured, branch):
+    import asyncio
+    import sqlite3
+    from importlib.metadata import distribution
+    from amplifier_core.message_models import ChatRequest, Message, ToolSpec, TextBlock
+    from amplifier_web.access_mode import keys, read_mode
+    module = types.ModuleType("trial_stop_provider")
+    exec(compile(probe.PROVIDER, "<scripted-provider>", "exec"), module.__dict__)
+    workspace = tmp_path / "workspace café 日本語"
+    workspace.mkdir()
+    sid = "synthetic-stop"
+    # Real worker-side standing-policy read, no Full-access function double.
+    with sqlite3.connect(tmp_path / "app.sqlite3") as db:
+        db.execute("CREATE TABLE commands (id TEXT PRIMARY KEY, receipt TEXT)")
+        db.execute("INSERT INTO commands VALUES (?,?)", (
+            keys(workspace, sid)["workspace"], json.dumps({"result": {"mode": "full", "revision": 1}})))
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path))
+    assert read_mode(tmp_path, workspace, sid) == "full"
+    provider = module.Provider({name: str(path) for name, path in {
+        "output": workspace / "trial.txt", "calls": tmp_path / "calls.jsonl",
+        "blocked": tmp_path / "blocked.json"}.items()}, coordinator=types.SimpleNamespace(session_id=sid))
+    # Load this dependency's inspected pure provenance module directly, avoiding
+    # package __init__ side effects. Do not replace InputContext or Core Message.
+    source = distribution("amplifier-module-loop-live").locate_file("amplifier_module_loop_live/provenance.py")
+    spec = importlib.util.spec_from_file_location("trial_input_provenance", source)
+    provenance = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(provenance)
+    def user(text, identity):
+        saved = []
+        async def add(message):
+            saved.append(message)
+        command = types.SimpleNamespace(kind="user", id=identity, source="user",
+                                        call_id=None, target_generation_id=None)
+        context = provenance.InputContext(types.SimpleNamespace(add_message=add), text, command)
+        immediate(context.add_message({"role": "user", "content": text}))
+        assert saved[0]["metadata"]["amplifier_input"]["id"] == identity
+        if structured:
+            saved[0]["content"] = [TextBlock(text=text)]
+        return Message(**saved[0])
+    messages = [
+        user("FIRST_TRIAL café 日本語", "first"),
+        Message(role="tool", tool_call_id="trial-write", content="Saved"),
+        Message(role="assistant", content=probe.MARKER),
+        user("WAIT_FOR_STOP", "stop"),
+    ]
+    if branch == "resume":
+        messages.append(user("RESUME_TRIAL", "resume"))  # old WAIT must not replay
+    elif branch == "first":
+        messages = [messages[0]]
+    elif branch == "tool_result":
+        messages.pop()  # first turn's real tool result must still finish normally
+    if tail:
+        # The maintained loop appends provider:request injections as user-role,
+        # ephemeral request-view messages AFTER the actual admitted input.
+        messages.append(Message(role="user", content="Synthetic app guidance" if branch == "stop"
+                                else "Synthetic reminder WAIT_FOR_STOP RESUME_TRIAL",
+                                metadata={"ephemeral": True, "reminder_placement": "tail"}))
+    request = ChatRequest(messages=messages, tools=[ToolSpec(name="write_file", parameters={})])
+    spawned, waiting = [], []
+    marker = object()
+    def spawn(argv, **kwargs):
+        assert argv == [sys.executable, "-I", "-c", "import time; time.sleep(180)"]
+        assert kwargs == {"stdin": -3, "stdout": -3, "stderr": -3}
+        spawned.append(True)
+        return types.SimpleNamespace(pid=1234)  # Never create or signal a process.
+    class Pending:
+        def __await__(self):
+            waiting.append(True)
+            yield marker
+    module.subprocess = types.SimpleNamespace(Popen=spawn, DEVNULL=-3)
+    module.asyncio = types.SimpleNamespace(Event=lambda: types.SimpleNamespace(wait=lambda: Pending()))
+    operation = provider.complete(request)
+    try:
+        if branch == "stop":
+            assert operation.send(None) is marker
+            assert spawned == waiting == [True]
+            assert json.loads((tmp_path / "blocked.json").read_text(encoding="utf-8")) == {"pid": 1234}
+            cancelled = asyncio.CancelledError("synthetic stop")
+            with pytest.raises(asyncio.CancelledError) as caught:
+                operation.throw(cancelled)
+            assert caught.value is cancelled
+        else:
+            response = immediate(operation)
+            if branch == "first":
+                assert len(response.tool_calls) == 1
+                assert response.tool_calls[0].model_dump() == {
+                    "id": "trial-write", "name": "write_file",
+                    "arguments": {"file_path": str(workspace / "trial.txt"), "content": probe.MARKER + "\n"}}
+            else:
+                assert response.tool_calls is None
+                assert response.content[0].text == (probe.RESUMED if branch == "resume" else probe.MARKER)
+            assert not spawned and not waiting and not (tmp_path / "blocked.json").exists()
+    finally:
+        operation.close()
+    assert len((tmp_path / "calls.jsonl").read_text(encoding="utf-8").splitlines()) == 1
 
 
 def test_missing_module_cannot_silently_qualify(tmp_path):
@@ -788,6 +888,12 @@ def test_first_turn_discriminators_keep_real_send_and_outcome_assertions():
         "assert row['process'].pid != row['windows_owner'].job.identity.guard_pid",
         "assert output.read_text(encoding='utf-8') == MARKER + '\\n'",
         "assert any((m['role'] == 'tool' for m in history))",
+        "await until(blocked.exists)",
+        "kernel, handle = child_handle(json.loads(blocked.read_text())['pid'])",
+        "await runtime.stop(sid)",
+        "assert kernel.WaitForSingleObject(handle, 5000) == 0",
+        "assert owners[-1].job.tree_empty and owners[-1].job.io_finalized",
+        "assert owners[-1].result.active_processes == 0",
         "assert report['innerJobsSettled']",
     ):
         assert required in source

@@ -340,7 +340,11 @@ class Provider:
             Path(self.config["output"]).parent, self.coordinator.session_id) == "full"
         with Path(self.config["calls"]).open("a", encoding="utf-8") as stream:
             stream.write(json.dumps({"pid":os.getpid(), "access":"full"}) + "\n")
-        text = str(next(m.content for m in reversed(request.messages) if m.role == "user"))
+        # loop-live tags delivered inputs; streaming's later user-role reminder
+        # rows are request context, not another fixture command. Select only the
+        # newest delivered user input, never a stale marker elsewhere in history.
+        text = str(next(m.content for m in reversed(request.messages)
+            if m.role == "user" and (m.metadata or {}).get("amplifier_input", {}).get("kind") == "user"))
         if "WAIT_FOR_STOP" in text:
             child = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(180)"],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
