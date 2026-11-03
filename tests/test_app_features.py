@@ -112,6 +112,9 @@ async def test_status_reports_pending_guard_without_installing(helper_manager, p
     assert status["appRevision"] == REVISION
     assert status["installedExtras"] == ["tui"]
     assert status["action"] == "updates.featureInstall"
+    assert {row['id']:row['providerModule'] for row in status['features'] if row['id'].startswith('decisions-')} == {
+        'decisions-openai':'provider-openai', 'decisions-azure':'provider-azure-openai',
+        'decisions-jev':'provider-jev', 'decisions-local':'provider-local-decisions'}
     await helper_manager.lock.acquire()
     assert app_features.status(helper_manager)["pending"] is True
     helper_manager.lock.release()
@@ -250,6 +253,7 @@ async def managed(tmp_path, monkeypatch):
     monkeypatch.setattr(app_features, "running_application", lambda manager: copy.deepcopy(HOST_APP))
     monkeypatch.setattr(app_updates, "installed_extras", lambda: ["tui"])
     monkeypatch.setattr(app_updates.components, "installed_graph", lambda: copy.deepcopy(BASELINE))
+    monkeypatch.setattr("amplifier_web.app_feature_probe.installed_dependency_extras", lambda extras: {})
     monkeypatch.setattr(app_updates.components, "read_graph", AsyncMock(return_value=copy.deepcopy(CANDIDATE)))
     monkeypatch.setattr(app_updates.components, "updates", AsyncMock(side_effect=AssertionError("feature checked newer components")))
     monkeypatch.setattr(app_updates, "check", AsyncMock(side_effect=AssertionError("feature checked newer app releases")))
@@ -568,7 +572,8 @@ async def test_rejected_concurrent_feature_keeps_active_update_phase_and_receipt
 
 
 @pytest.mark.parametrize("caller", ["ui", "agent"])
-async def test_shared_action_persists_queued_admission_and_exact_retry_cannot_replay(managed, monkeypatch, caller):
+@pytest.mark.parametrize("feature", ["native-desktop", "managed-browser", "decisions-openai", "decisions-azure", "decisions-jev", "decisions-local"])
+async def test_shared_action_persists_queued_admission_and_exact_retry_cannot_replay(managed, monkeypatch, caller, feature):
     service = managed.service
     scheduled = []
 
@@ -580,7 +585,7 @@ async def test_shared_action_persists_queued_admission_and_exact_retry_cannot_re
         return None
 
     monkeypatch.setattr(service, "_task", hold)
-    args = {"feature": "native-desktop", "hostInstanceId": service.instance_id}
+    args = {"feature": feature, "hostInstanceId": service.instance_id}
 
     async def request():
         if caller == "agent":

@@ -119,3 +119,17 @@ guard supports ordinary CPython 3.13 only and requires explicit
 Task Scheduler expands percent-bearing executable/working-directory paths.
 Reject those paths rather than recording a literal identity that launches a
 different program. Task registration/state is not authenticated host health.
+
+## Keep agent context and coordination useful
+
+Workspace starter instructions and the coordinate-work skill must support one
+manager coordinating many independent workers through complete deliverables.
+Prefer current task briefs, exact outcome links and on-demand details over
+repeated whole-history reads or routine progress/approval exchanges. Preserve
+actual Stop, authority, ownership and unknown-effect recovery boundaries.
+
+Automatically loaded scratch is a short current context/index, not task status,
+a release ledger, event history or new authority. Keep detailed evidence with its
+owner; replace stale current entries and preserve useful history outside automatic
+includes. Changes to these templates should verify rendered prompts omit linked
+archives while current notes still reload, and preserve existing user files.
