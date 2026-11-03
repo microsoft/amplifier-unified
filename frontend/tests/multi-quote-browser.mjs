@@ -20,6 +20,11 @@ const references=doc=>doc.segments.filter(s=>s.type==='quote');
 const observe=async()=>{const response=await context.request.get(url+'/fixture/message-source');assert.equal(response.status(),200);return response.json();};
 const checkpoints=[],compactGeometry=[];
 const cardObservations=[];
+const selectionObservations=[];let omittedSelectionObservations=0;
+function retainSelectionObservation(phase,facts){
+ if(selectionObservations.length===16){selectionObservations.shift();omittedSelectionObservations++}
+ selectionObservations.push({phase,...facts});
+}
 async function observeCards(stage){
  const rendered=await page.getByRole('textbox',{name:'Message Amplifier'}).evaluate(editor=>{
   const bounds=node=>{const r=node.getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,right:r.right,width:r.width,height:r.height};};
@@ -89,7 +94,7 @@ async function quoteRendered(page,article,text){
  const body=article.locator('.a-detail-text');
  await body.scrollIntoViewIfNeeded();
  await body.dispatchEvent('pointerdown');
- await body.evaluate((root,text)=>{
+ const installed=await body.evaluate((root,text)=>{
   document.activeElement?.blur();
   const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT),nodes=[];let node,rendered='';
   while((node=walker.nextNode())){nodes.push({node,start:rendered.length});rendered+=node.textContent;}
@@ -99,9 +104,50 @@ async function quoteRendered(page,article,text){
   const range=document.createRange();range.setStart(first.node,start-first.start);range.setEnd(last.node,end-last.start);
   const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);
   document.dispatchEvent(new Event('selectionchange'));
+  // Fixed-size passive facts only. Keep the original root to distinguish a
+  // detached source from an empty/current selection after the existing timeout.
+  const inspect=()=>{
+   try{
+    const current=window.getSelection(),selected=current?.rangeCount?current.getRangeAt(0):null;
+    const article=root.closest('[data-message-id]'),pane=root.closest('.a-messages');
+    const toolbar=document.querySelector('.a-quote-selection'),active=document.activeElement;
+    const rect=node=>{
+     if(!node)return null;
+     const value=node.getBoundingClientRect();
+     return Object.fromEntries(['x','y','width','height','top','bottom','left','right'].map(key=>
+      [key,Number.isFinite(value[key])&&Math.abs(value[key])<=1e7?value[key]:null]));
+    };
+    const messageId=article?.getAttribute('data-message-id');
+    const activeCategory=!active?'none':active===document.body?'body':root.contains(active)?'source':
+     active.closest('.a-composer')?'composer':active.matches('input,textarea,[contenteditable=true]')?'editor':
+     active.matches('button')?'button':'other';
+    return {available:true,sourceKind:'rendered-message',
+     messageId:typeof messageId==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(messageId)?messageId:null,
+     rootConnected:root.isConnected,rangeCount:current?.rangeCount??0,collapsed:current?.isCollapsed??null,
+     anchorConnected:current?.anchorNode?.isConnected??false,focusConnected:current?.focusNode?.isConnected??false,
+     rangeStartConnected:selected?.startContainer?.isConnected??false,rangeEndConnected:selected?.endContainer?.isConnected??false,
+     rangeInsideSource:!!selected&&root.contains(selected.startContainer)&&root.contains(selected.endContainer),
+     exactTextMatch:!!current&&current.toString()===text,activeCategory,
+     rects:{selection:rect(selected),source:rect(root),pane:rect(pane),toolbar:rect(toolbar)},
+     toolbarPresent:!!toolbar,quoteButtonPresent:!!toolbar?.querySelector('button'),
+     errorStatusPresent:!!toolbar?.querySelector('.a-quote-selection-error,[role=status]')};
+   }catch{return {available:false,reason:'observation_unavailable'}}
+  };
+  window.multiQuoteSelectionProbe=inspect;
+  return inspect();
  },text);
- await page.getByRole('button',{name:'Quote selection',exact:true}).click();
- await expect(page.locator('.a-quote-selection')).toHaveCount(0);
+ retainSelectionObservation('range-installed',installed);
+ try{
+  await page.getByRole('button',{name:'Quote selection',exact:true}).click();
+  await expect(page.locator('.a-quote-selection')).toHaveCount(0);
+ }catch(error){
+  const facts=await page.evaluate(()=>window.multiQuoteSelectionProbe?.()??{available:false,reason:'probe_unavailable'})
+   .catch(()=>({available:false,reason:'observation_unavailable'}));
+  retainSelectionObservation(error.name==='TimeoutError'?'selection-timeout':'selection-failed',facts);
+  throw error;
+ }finally{
+  await page.evaluate(()=>{delete window.multiQuoteSelectionProbe}).catch(()=>{});
+ }
 }
 async function noPassageEditor(page){
  await expect(page.getByRole('button',{name:'Choose passage',exact:true,includeHidden:true})).toHaveCount(0);
@@ -784,9 +830,12 @@ try{
   await referenceContext.close();await comparisonContext.close();
  }
  if(comparisonError)throw comparisonError;
- if(proof)writeFileSync(join(proof,'observed-document.json'),JSON.stringify({sourceA,sourceB,first,second,expected,submitted,sent,initialScroll:beforeScroll},null,2));
+ if(proof)writeFileSync(join(proof,'observed-document.json'),JSON.stringify({sourceA,sourceB,first,second,expected,submitted,sent,initialScroll:beforeScroll,selectionObservations,omittedSelectionObservations},null,2));
  console.log('PASS exact Unicode/multiline passages + whole message, interleaved commentary, attachment, reload, keyboard reorder, removal, captured delayed target, narrow rendering, sent projection and adjacent cycle.');
 }catch(error){
- if(proof){writeFileSync(join(proof,'failure.json'),JSON.stringify({message:error.message,errors},null,2));await page.screenshot({path:join(proof,'failure.png')}).catch(()=>{});}
+ if(proof){
+  try{writeFileSync(join(proof,'failure.json'),JSON.stringify({message:error.message,errors,selectionObservations,omittedSelectionObservations},null,2))}catch{}
+  await page.screenshot({path:join(proof,'failure.png')}).catch(()=>{});
+ }
  throw error;
 }finally{await browser.close();fixture.kill();await new Promise(resolve=>fixture.exitCode!==null?resolve():fixture.once('exit',resolve));}
