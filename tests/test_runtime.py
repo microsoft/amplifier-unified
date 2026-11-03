@@ -1587,6 +1587,256 @@ def test_default_runtime_probe_native_parent_has_no_redirector_timeout_kill():
                    for node in ast.walk(body))
 
 
+@pytest.mark.parametrize('boundary', [
+    'runtime_preflight', 'input_paths', 'private_root', 'private_log',
+    'journey_imports', 'installed_direct_url',
+])
+def test_default_runtime_probe_preflight_failure_facts_distinguish_boundaries(monkeypatch, boundary):
+    from contextlib import nullcontext
+    import io
+    from amplifier_web import windows_files
+    fixture = _default_runtime_probe_module()
+    monkeypatch.setitem(sys.modules, fixture.__name__, fixture)
+    published, opened = [], []
+
+    class InertPath:
+        def __truediv__(self, name):
+            return self
+
+        def exists(self):
+            return boundary == 'input_paths'
+
+        def is_file(self):
+            return True
+
+        def open(self, *args, **kwargs):
+            opened.append(True)
+            if boundary == 'private_log':
+                raise PermissionError(13, 'private path/token must not be copied')
+            return nullcontext(io.StringIO())
+
+    def directory(*args, **kwargs):
+        if boundary == 'private_root':
+            raise PermissionError(13, 'private owner data must not be copied')
+        return nullcontext()
+
+    async def journey(root, wheel, report):
+        fixture.checkpoint(report, boundary)
+        if boundary == 'journey_imports':
+            raise ModuleNotFoundError('private module name')
+        raise AssertionError('private wheel/installed bytes')
+
+    def run(coroutine):
+        try:
+            coroutine.send(None)
+        except StopIteration as done:
+            return done.value
+        finally:
+            coroutine.close()
+        raise AssertionError('unexpected asynchronous I/O')
+
+    parser = SimpleNamespace(add_argument=lambda *a, **kw: None,
+                             parse_args=lambda: SimpleNamespace(root=InertPath(), wheel=InertPath()))
+    monkeypatch.setattr(fixture, 'argparse', SimpleNamespace(ArgumentParser=lambda: parser))
+    monkeypatch.setattr(fixture, 'sys', SimpleNamespace(
+        platform='other' if boundary == 'runtime_preflight' else 'win32',
+        version_info=(3, 13), modules=sys.modules))
+    monkeypatch.setattr(fixture, 'os', SimpleNamespace(environ={'GITHUB_ACTIONS': 'true'}))
+    monkeypatch.setattr(fixture, 'struct', SimpleNamespace(calcsize=lambda _: 8))
+    monkeypatch.setattr(fixture, 'asyncio', SimpleNamespace(run=run))
+    monkeypatch.setattr(fixture, 'journey', journey)
+    monkeypatch.setattr(windows_files, 'directory', directory)
+    monkeypatch.setattr(fixture, 'redirect_stdout', lambda _: nullcontext())
+    monkeypatch.setattr(fixture, 'redirect_stderr', lambda _: nullcontext())
+    monkeypatch.setattr(fixture, 'print', published.append, raising=False)
+    assert fixture.main() == 1
+    report = json.loads(published[0])
+    fixture.validate_inner_report(report)
+    assert report['stage'] == 'preflight' and not any(report['checks'].values())
+    assert report['diagnostic']['checkpoint'] == boundary
+    error = report['diagnostic']['errors'][0]
+    assert error['class'] == ('PermissionError' if boundary in {'private_root', 'private_log'}
+                              else 'ModuleNotFoundError' if boundary == 'journey_imports'
+                              else 'AssertionError')
+    if boundary in {'private_root', 'private_log'}:
+        assert error['errno'] == 13
+    assert error['frames'] and error['frames'][0]['source'] == 'cold_main'
+    assert 'private' not in json.dumps(error).replace('private_root', '')
+    assert bool(opened) == (boundary in {'private_log', 'journey_imports', 'installed_direct_url'})
+
+
+@pytest.mark.parametrize('fault,checkpoint', [
+    (None, 'installed_members'), ('distribution', 'installed_distribution'),
+    ('direct-url', 'installed_direct_url'), ('editable', 'installed_direct_url'),
+    ('origin', 'installed_origin'), ('payload', 'installed_members'),
+    ('metadata-origin', 'installed_members'), ('missing-member', 'installed_members'),
+])
+def test_default_runtime_probe_installed_audit_checkpoints_do_not_bypass_audit(
+        tmp_path, monkeypatch, fault, checkpoint):
+    from contextlib import nullcontext
+    fixture = _default_runtime_probe_module()
+    monkeypatch.setitem(sys.modules, fixture.__name__, fixture)
+    host = tmp_path / 'host'
+    app, wheel = host / 'amplifier_web', tmp_path / 'candidate.whl'
+    members = {name: ('synthetic:' + name).encode() for name in (
+        *fixture.APP_FILES, 'runtime_deps/pyproject.toml', 'runtime_deps/compatibility.txt')}
+    for name, raw in members.items():
+        path = app / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+    if fault == 'payload':
+        (app / 'runtime.py').write_bytes(b'incorrect installed bytes')
+    fake_app = SimpleNamespace(__file__=str(
+        (tmp_path / 'foreign/__init__.py') if fault == 'origin' else app / '__init__.py'))
+    monkeypatch.setitem(sys.modules, 'amplifier_web', fake_app)
+    monkeypatch.setattr(fixture, 'sys', SimpleNamespace(prefix=str(host), modules=sys.modules))
+
+    def distribution(name):
+        assert name == 'amplifier-unified'
+        if fault == 'distribution':
+            raise fixture.metadata.PackageNotFoundError('private missing distribution')
+        return SimpleNamespace(
+            read_text=lambda _: json.dumps({
+                'url': 'file:///wrong.whl' if fault == 'direct-url' else wheel.resolve().as_uri(),
+                'dir_info': {'editable': fault == 'editable'}}),
+            locate_file=lambda name: tmp_path / name if fault == 'metadata-origin' else host / name)
+
+    def archive_read(name):
+        assert name.startswith('amplifier_web/')
+        if fault == 'missing-member':
+            raise KeyError('private wheel member')
+        return members[name.removeprefix('amplifier_web/')]
+
+    monkeypatch.setattr(fixture.metadata, 'distribution', distribution)
+    monkeypatch.setattr(fixture.zipfile, 'ZipFile',
+                        lambda _: nullcontext(SimpleNamespace(read=archive_read)))
+    report = fixture.empty_inner_report()
+    if fault:
+        with pytest.raises(Exception) as caught:
+            fixture.installed_host(wheel, report)
+        facts = fixture.failure_facts(caught.value, report['diagnostic']['checkpoint'])
+        fixture.validate_diagnostic(facts)
+        assert any(frame['source'] == 'cold_installed_host'
+                   for frame in facts['errors'][0]['frames'])
+    else:
+        actual_app, hashes = fixture.installed_host(wheel, report)
+        assert actual_app == app
+        assert hashes == {name: fixture.digest(members[name]) for name in fixture.APP_FILES}
+    assert report['diagnostic']['checkpoint'] == checkpoint
+    assert not report['checks']['installedHost']  # Only journey may grant this.
+
+
+@pytest.mark.parametrize('cloned', [False, True])
+def test_default_runtime_probe_diagnostic_code_requires_exact_identity(monkeypatch, cloned):
+    from types import FunctionType
+    fixture = _default_runtime_probe_module()
+    monkeypatch.setitem(sys.modules, fixture.__name__, fixture)
+    original = fixture.installed_host
+    code = original.__code__.replace(co_filename='different-source.py')
+    assert code is not original.__code__ and code == original.__code__
+    candidate = (FunctionType(code, original.__globals__, original.__name__,
+                              original.__defaults__) if cloned else original)
+
+    def unavailable(_):
+        raise ValueError('synthetic metadata failure; do not publish text')
+
+    monkeypatch.setattr(fixture.metadata, 'distribution', unavailable)
+    report = fixture.empty_inner_report()
+    with pytest.raises(ValueError) as caught:
+        candidate(Path('synthetic-candidate.whl'), report)
+    facts = fixture.failure_facts(caught.value, 'installed_distribution')
+    fixture.validate_diagnostic(facts)
+    frames = facts['errors'][0]['frames']
+    if cloned:
+        assert frames == []  # Structurally equal code is not the loaded function.
+    else:
+        assert len(frames) == 1 and frames[0]['source'] == 'cold_installed_host'
+        assert type(frames[0]['offset']) is int
+
+
+@pytest.mark.parametrize('raw,checkpoint', [
+    (b'', 'parent_output_json'), (b'private non-JSON output', 'parent_output_json'),
+    (b'\xff', 'parent_output_json'), (b'[]', 'parent_output_schema'),
+    (b'null', 'parent_output_schema'), (b'{"status":"private"}', 'parent_output_schema'),
+])
+def test_default_runtime_probe_output_failure_is_not_inferred_inner_preflight(raw, checkpoint):
+    fixture = _default_runtime_probe_module()
+    report = fixture.parse_inner_output(raw)
+    fixture.validate_inner_report(report)
+    assert report['status'] == 'FAIL'
+    assert report['diagnostic']['checkpoint'] == checkpoint
+    assert report['diagnostic']['errors']
+    assert 'private' not in json.dumps(report)
+    valid = fixture.empty_inner_report()
+    assert fixture.parse_inner_output(json.dumps(valid)) == valid
+    failure = fixture.failure_facts(PermissionError(5, 'private'), 'outer_run')
+    assert fixture.parse_inner_output(b'', outer_failure=failure)['diagnostic'] == failure
+
+
+def test_default_runtime_probe_diagnostic_privacy_bounds_and_schema(monkeypatch):
+    fixture = _default_runtime_probe_module()
+
+    class PrivateError(RuntimeError):
+        def __str__(self):
+            raise AssertionError('must not stringify private exception')
+
+        def __repr__(self):
+            raise AssertionError('must not repr private exception')
+
+    error = PrivateError()
+    cursor = error
+    for _ in range(10):
+        cursor.__cause__ = PrivateError()
+        cursor = cursor.__cause__
+    cursor.__cause__ = error
+    facts = fixture.failure_facts(error, 'private_root')
+    assert len(facts['errors']) == 4
+    assert all(row == {'class': 'other', 'frames': []} for row in facts['errors'])
+    fixture.validate_diagnostic(facts)
+    bad = [
+        {**facts, 'checkpoint': 'private-path'},
+        {**facts, 'error': 'private prose'},
+        {'checkpoint': 'private_root', 'errors': [{'class': 'PrivateError', 'frames': []}]},
+        {'checkpoint': 'private_root', 'errors': [{'class': 'OSError', 'errno': True, 'frames': []}]},
+        {'checkpoint': 'private_root', 'errors': [{'class': 'OSError', 'frames': [
+            {'source': 'private_symbol', 'offset': 1}]}]},
+    ]
+    for value in bad:
+        with pytest.raises(AssertionError):
+            fixture.validate_inner_report({**fixture.empty_inner_report(), 'diagnostic': value})
+    # Observation itself can fail. It still cannot escape the outcome path or
+    # authorize success; there is no private stringification as a fallback.
+    def broken(*args):
+        raise PrivateError()
+    monkeypatch.setattr(fixture, '_failure_facts', broken)
+    fallback = fixture.parse_inner_output(b'')
+    fixture.validate_inner_report(fallback)
+    assert fallback['status'] == 'FAIL'
+    assert fallback['diagnostic'] == {
+        'checkpoint': 'parent_output_json', 'errors': [{'class': 'other', 'frames': []}]}
+
+
+async def test_default_runtime_probe_diagnostic_fault_keeps_failed_outer_owner(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    from amplifier_web import windows_jobs
+    fixture = _default_runtime_probe_module()
+    job = SimpleNamespace(state='cleanup_failed', tree_empty=False, io_finalized=False,
+                          output_discarded=False, close=AsyncMock())
+    monkeypatch.setattr(windows_jobs.WindowsOwnedProcess, 'start',
+                        AsyncMock(side_effect=windows_jobs.CleanupError(job)))
+    def broken(*args):
+        raise RuntimeError('private observer failure')
+    monkeypatch.setattr(fixture, '_failure_facts', broken)
+    outcome = await fixture.run_owned_probe(
+        ['C:/fixture/python.exe', 'probe.py'], cwd=tmp_path, env={}, scratch=tmp_path)
+    assert not outcome['succeeded'] and outcome['tasksSettled']
+    assert outcome['outerJob']['status'] == 'unknown'
+    assert fixture.FAILED_OUTER_OWNERS == [{'owner': job, 'scratch': tmp_path}]
+    job.close.assert_not_awaited()  # Never retry a settled failed native launch.
+    fixture.validate_diagnostic(outcome['failure'])
+    assert outcome['failure']['errors'] == [{'class': 'other', 'frames': []}]
+
+
 @pytest.mark.parametrize('mode', ['normal', 'timeout', 'cleanup-unknown', 'io-unknown', 'overflow'])
 async def test_default_runtime_probe_outer_job_deadline_and_cleanup(tmp_path, monkeypatch, mode):
     from unittest.mock import AsyncMock
@@ -1637,6 +1887,9 @@ async def test_default_runtime_probe_outer_job_deadline_and_cleanup(tmp_path, mo
     assert job.closes == 1
     assert len(outcome['stdout']) <= 128 and len(outcome['stderr']) <= 128
     assert outcome['succeeded'] == (mode == 'normal')
+    assert (outcome['failure'] is None) == (mode == 'normal')
+    if outcome['failure'] is not None:
+        fixture.validate_diagnostic(outcome['failure'])
     assert outcome['outerJob']['timedOut'] == (mode in {'timeout', 'cleanup-unknown', 'io-unknown'})
     confirmed = mode in {'normal', 'timeout', 'overflow'}
     assert (outcome['outerJob']['status'] == 'confirmed') == confirmed
@@ -1669,6 +1922,8 @@ async def test_default_runtime_probe_retains_owner_when_start_cleanup_is_unknown
         'treeEmpty': False, 'ioFinalized': False, 'outputDiscarded': False}
     assert fixture.FAILED_OUTER_OWNERS == [{'owner': job, 'scratch': tmp_path}]
     job.close.assert_not_awaited()  # A settled failed native start is not replayed.
+    assert outcome['failure']['checkpoint'] == 'outer_run'
+    fixture.validate_diagnostic(outcome['failure'])
 
 
 def test_default_runtime_probe_public_pass_requires_outer_cleanup_proof():
@@ -1750,11 +2005,8 @@ async def test_native_windows_default_runtime_command_cold_prepare_turn_and_stop
          '--root', str(root), '--wheel', str(wheel)], cwd=tmp_path.resolve(),
         env=env, scratch=root, timeout=1200)
     # Do not expose raw subprocess output or private logs in a pytest failure.
-    try:
-        report = json.loads(outcome['stdout'])
-        fixture.validate_inner_report(report)
-    except (ValueError, AssertionError):
-        report = fixture.empty_inner_report()
+    report = fixture.parse_inner_output(
+        outcome['stdout'], outer_failure=outcome.get('failure'))
     report = {**report, 'schema': 2, 'outerJob': outcome['outerJob']}
     if not outcome['succeeded']:
         report['status'] = 'FAIL'

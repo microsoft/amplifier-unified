@@ -19,6 +19,7 @@ import re
 import struct
 import sys
 import tomllib
+import types
 import zipfile
 
 
@@ -31,6 +32,28 @@ IMPORTS = {
 }
 CHECKS = ("installedHost", "coldDefaultCommand", "workerIdentity", "scriptedTurn",
           "workerProvenance", "ownedJobCleanup")
+CHECKPOINTS = frozenset({
+    "runtime_preflight", "input_paths", "private_root", "private_log", "journey_imports",
+    "installed_import", "installed_distribution", "installed_direct_url", "installed_origin",
+    "installed_members", "installed_manifest", "journey", "complete",
+    "outer_run", "outer_close", "parent_output_json", "parent_output_schema",
+    "inner_report_schema",
+})
+ERROR_CLASSES = {kind: kind.__name__ for kind in (
+    AssertionError, OSError, PermissionError, FileNotFoundError, NotADirectoryError,
+    IsADirectoryError, ImportError, ModuleNotFoundError, ValueError, TypeError,
+    AttributeError, KeyError, RuntimeError, NotImplementedError, TimeoutError,
+    UnicodeDecodeError, UnicodeEncodeError, json.JSONDecodeError,
+)}
+CODE_LABELS = {
+    "cold_main": (__name__, "main"),
+    "cold_journey": (__name__, "journey"),
+    "cold_installed_host": (__name__, "installed_host"),
+    "cold_outer": (__name__, "run_owned_probe"),
+    "private_directory": ("amplifier_web.windows_files", "PinnedDirectory.__init__"),
+    "private_acl": ("amplifier_web.windows_files", "_API.validate_acl"),
+    "private_file_info": ("amplifier_web.windows_files", "_API.info"),
+}
 # Retain the outer lifeline and its scratch identity when the primitive cannot
 # confirm cleanup. A public FAIL record never authorizes a retry or deletion.
 FAILED_OUTER_OWNERS = []
@@ -102,10 +125,100 @@ def empty_inner_report():
             "manifestSha256": None, "lockSha256": None, "appHashes": {}, "workerImports": {}}
 
 
+def checkpoint(report, name):
+    assert name in CHECKPOINTS
+    report["diagnostic"] = {"checkpoint": name, "errors": []}
+
+
+def failure_facts(error, name):
+    """Fixed labels only; no exception text, filenames, symbols or frame locals."""
+    try:
+        return _failure_facts(error, name)
+    except BaseException:
+        # A diagnostic fault cannot skip the caller's retained cleanup/report.
+        # Original outcome remains FAIL; an unknown class is not a cause claim.
+        return {"checkpoint": name, "errors": [{"class": "other", "frames": []}]}
+
+
+def _failure_facts(error, name):
+    assert name in CHECKPOINTS
+    codes = {}
+    for label, (module_name, qualname) in CODE_LABELS.items():
+        value = sys.modules.get(module_name)
+        for part in qualname.split("."):
+            value = getattr(value, part, None) if value is not None else None
+        code = getattr(value, "__code__", None)
+        if isinstance(code, types.CodeType):
+            # Code equality is structural. Retain each exact loaded object so
+            # an equal-but-distinct clone cannot claim its diagnostic label.
+            codes[id(code)] = (code, label)
+    rows, seen = [], set()
+    while isinstance(error, BaseException) and id(error) not in seen and len(rows) < 4:
+        seen.add(id(error))
+        kind = type(error)
+        row = {"class": ERROR_CLASSES.get(kind, "other"), "frames": []}
+        if kind in ERROR_CLASSES and isinstance(error, OSError):
+            for key in ("errno", "winerror"):
+                number = getattr(error, key, None)
+                if type(number) is int and -(2**31) <= number < 2**32:
+                    row[key] = number
+        tb, scanned = BaseException.__getattribute__(error, "__traceback__"), 0
+        while tb is not None and scanned < 128:
+            scanned += 1
+            code = tb.tb_frame.f_code
+            known = codes.get(id(code))
+            if known is not None and known[0] is code:
+                row["frames"].append({"source": known[1],
+                    "offset": max(0, min(tb.tb_lineno - code.co_firstlineno, 10**6))})
+                row["frames"] = row["frames"][-5:]
+            tb = tb.tb_next
+        rows.append(row)
+        cause = BaseException.__getattribute__(error, "__cause__")
+        error = cause if cause is not None else (
+            None if BaseException.__getattribute__(error, "__suppress_context__")
+            else BaseException.__getattribute__(error, "__context__"))
+    return {"checkpoint": name, "errors": rows}
+
+
+def validate_diagnostic(value):
+    assert type(value) is dict and set(value) == {"checkpoint", "errors"}
+    assert type(value["checkpoint"]) is str and value["checkpoint"] in CHECKPOINTS
+    assert type(value["errors"]) is list and len(value["errors"]) <= 4
+    for row in value["errors"]:
+        assert type(row) is dict and {"class", "frames"} <= set(row) <= {"class", "frames", "errno", "winerror"}
+        assert type(row["class"]) is str and row["class"] in {*ERROR_CLASSES.values(), "other"}
+        for key in ("errno", "winerror"):
+            if key in row:
+                assert type(row[key]) is int and -(2**31) <= row[key] < 2**32
+        assert type(row["frames"]) is list and len(row["frames"]) <= 5
+        for frame in row["frames"]:
+            assert type(frame) is dict and set(frame) == {"source", "offset"}
+            assert type(frame["source"]) is str and frame["source"] in CODE_LABELS
+            assert type(frame["offset"]) is int and 0 <= frame["offset"] <= 10**6
+
+
+def parse_inner_output(raw, *, outer_failure=None):
+    """An empty/malformed child result is not evidence of inner preflight."""
+    try:
+        report = json.loads(raw)
+    except Exception as error:
+        report = empty_inner_report()
+        report["diagnostic"] = outer_failure or failure_facts(error, "parent_output_json")
+        return report
+    try:
+        validate_inner_report(report)
+    except Exception as error:
+        report = empty_inner_report()
+        report["diagnostic"] = failure_facts(error, "parent_output_schema")
+    return report
+
+
 def validate_inner_report(report):
     """Only bounded fixed fields may leave the private test directory."""
-    assert set(report) == {"schema", "status", "stage", "checks", "wheelSha256",
-                           "manifestSha256", "lockSha256", "appHashes", "workerImports"}
+    assert type(report) is dict
+    assert set(report) - {"diagnostic"} == set(empty_inner_report())
+    if "diagnostic" in report:
+        validate_diagnostic(report["diagnostic"])
     assert report["schema"] == 1 and report["status"] in {"PASS", "FAIL"}
     assert report["stage"] in {"preflight", "fixture", "preparation", "turn", "stop", "complete"}
     assert set(report["checks"]) == set(CHECKS)
@@ -121,6 +234,7 @@ def validate_inner_report(report):
         assert row["commit"] is None or re.fullmatch(r"[0-9a-f]{40,64}", row["commit"])
         assert re.fullmatch(r"[0-9a-f]{64}", row["sha256"])
     if report["status"] == "PASS":
+        assert "diagnostic" not in report or not report["diagnostic"]["errors"]
         assert all(report["checks"].values()) and report["stage"] == "complete"
         assert all(report[name] is not None for name in ("wheelSha256", "manifestSha256", "lockSha256"))
         assert set(report["appHashes"]) == set(APP_FILES)
@@ -129,10 +243,10 @@ def validate_inner_report(report):
 
 def validate_report(report):
     """The public result requires parent-observed cleanup, not child testimony."""
-    assert set(report) == set(empty_inner_report()) | {"outerJob"}
+    assert set(report) - {"diagnostic"} == set(empty_inner_report()) | {"outerJob"}
     assert report["schema"] == 2
     validate_inner_report({key: (1 if key == "schema" else report[key])
-                           for key in empty_inner_report()})
+                           for key in report if key != "outerJob"})
     outer = report["outerJob"]
     assert set(outer) == {"status", "timedOut", "activeProcesses", "treeEmpty",
                           "ioFinalized", "outputDiscarded"}
@@ -160,6 +274,7 @@ async def run_owned_probe(argv, *, cwd, env, scratch, timeout=1200, output_limit
     tasks = []
     stdout, stderr = bytearray(), bytearray()
     timed_out = succeeded = cleanup_confirmed = False
+    failure = None
 
     async def read_stdout():
         while chunk := await owner.stdout.read(4096):
@@ -188,10 +303,11 @@ async def run_owned_probe(argv, *, cwd, env, scratch, timeout=1200, output_limit
         async with asyncio.timeout(timeout):
             result, _, _ = await asyncio.shield(group)
         succeeded = result.payload_returncode == 0 and not result.output_discarded
-    except TimeoutError:
+    except TimeoutError as error:
         timed_out = True
-    except Exception:
-        pass  # No private exception/output strings enter public evidence.
+        failure = failure_facts(error, "outer_run")
+    except Exception as error:
+        failure = failure_facts(error, "outer_run")
     finally:
         if owner is not None:
             try:
@@ -201,8 +317,9 @@ async def run_owned_probe(argv, *, cwd, env, scratch, timeout=1200, output_limit
                     result = await owner.close()
                     cleanup_confirmed = (result.active_processes == 0
                                          and owner.tree_empty and owner.io_finalized)
-            except Exception:
+            except Exception as error:
                 cleanup_confirmed = False
+                failure = failure_facts(error, "outer_close")
             finally:
                 if not cleanup_confirmed:
                     FAILED_OUTER_OWNERS.append({"owner": owner, "scratch": scratch})
@@ -221,19 +338,29 @@ async def run_owned_probe(argv, *, cwd, env, scratch, timeout=1200, output_limit
              "outputDiscarded": bool(owner is not None and owner.output_discarded)}
     return {"stdout": bytes(stdout), "stderr": bytes(stderr), "outerJob": outer,
             "succeeded": succeeded and cleanup_confirmed and not timed_out and not outer["outputDiscarded"],
-            "tasksSettled": all(task.done() for task in tasks)}
+            "tasksSettled": all(task.done() for task in tasks), "failure": failure}
 
 
-def installed_host(wheel):
+def installed_host(wheel, report=None):
     """Bind used app/manifest bytes to the installed candidate wheel, not checkout."""
+    if report is not None:
+        checkpoint(report, "installed_import")
     import amplifier_web
     app = Path(amplifier_web.__file__).resolve().parent
+    if report is not None:
+        checkpoint(report, "installed_distribution")
     dist = metadata.distribution("amplifier-unified")
+    if report is not None:
+        checkpoint(report, "installed_direct_url")
     direct = json.loads(dist.read_text("direct_url.json") or "{}")
     assert direct.get("url") == wheel.resolve().as_uri()
     assert not direct.get("dir_info", {}).get("editable")
+    if report is not None:
+        checkpoint(report, "installed_origin")
     assert app.is_relative_to(Path(sys.prefix).resolve())
     hashes = {}
+    if report is not None:
+        checkpoint(report, "installed_members")
     with zipfile.ZipFile(wheel) as archive:
         for name in (*APP_FILES, "runtime_deps/pyproject.toml", "runtime_deps/compatibility.txt"):
             raw = archive.read("amplifier_web/" + name)
@@ -258,6 +385,7 @@ def verify_worker_lock(project, imports):
 
 
 async def journey(root, wheel, report):
+    checkpoint(report, "journey_imports")
     from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
     from amplifier_web.deployment import write_private
     from amplifier_web.runtime import RuntimeManager
@@ -268,10 +396,12 @@ async def journey(root, wheel, report):
     from amplifier_web.windows_files import directory
     from amplifier_foundation.session.history import SessionHistoryStore
 
-    app, hashes = installed_host(wheel)
+    app, hashes = installed_host(wheel, report)
+    checkpoint(report, "installed_manifest")
     report.update(wheelSha256=digest(wheel.read_bytes()), appHashes=hashes,
                   manifestSha256=digest(manifest_path().read_bytes()))
     report["checks"]["installedHost"] = True
+    checkpoint(report, "journey")
     report["stage"] = "fixture"
     home, shared, workspace = root / "app", root / "shared", root / "workspace"
     for path in (home, shared, workspace, root / "user", root / "ownership", root / "captures"):
@@ -375,6 +505,7 @@ async def journey(root, wheel, report):
         assert all(o.result is not None and o.result.active_processes == 0
                    and o.job.tree_empty and o.job.io_finalized for o in owners)
     report.update(status="PASS", stage="complete")
+    checkpoint(report, "complete")
 
 
 def main():
@@ -383,23 +514,29 @@ def main():
     parser.add_argument("--wheel", type=Path, required=True)
     args = parser.parse_args()
     report = empty_inner_report()
+    checkpoint(report, "runtime_preflight")
     try:
         assert sys.platform == "win32" and os.environ.get("GITHUB_ACTIONS") == "true"
         assert sys.version_info[:2] == (3, 13) and struct.calcsize("P") == 8
+        checkpoint(report, "input_paths")
         assert not args.root.exists() and args.wheel.is_file()
+        checkpoint(report, "private_root")
         from amplifier_web.windows_files import directory
         with directory(args.root, owned_root=args.root, create=True):
             pass
+        checkpoint(report, "private_log")
         with (args.root / "private-probe.log").open("x", encoding="utf-8") as logs:
             with redirect_stdout(logs), redirect_stderr(logs):
                 asyncio.run(journey(args.root, args.wheel, report))
-    except Exception:
+    except Exception as error:
         report["status"] = "FAIL"  # Never publish exception text/paths/private logs.
+        report["diagnostic"] = failure_facts(error, report["diagnostic"]["checkpoint"])
     try:
         validate_inner_report(report)
-    except Exception:
+    except Exception as error:
         # Do not emit even a partially valid arbitrary worker-supplied record.
-        report.update(status="FAIL", workerImports={}, appHashes={})
+        report = empty_inner_report()
+        report["diagnostic"] = failure_facts(error, "inner_report_schema")
         validate_inner_report(report)
     print(json.dumps(report, sort_keys=True))
     return 0 if report["status"] == "PASS" else 1
