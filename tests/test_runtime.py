@@ -3166,6 +3166,151 @@ def test_default_runtime_probe_uninstrumented_pass_rejects_historical_injected_a
     assert old['status'] == 'FAIL'  # Passive validation never promotes old evidence.
 
 
+@pytest.mark.parametrize('fault', [
+    None, 'missing-path', 'wrong-name', 'outside', 'case-sibling', 'symlink',
+    'missing-file', 'unsafe', 'close', 'oversize', 'malformed', 'missing-facts', 'extra-field',
+])
+def test_default_runtime_probe_exact_private_startup_receipt(tmp_path, monkeypatch, fault):
+    from contextlib import contextmanager
+    from amplifier_web import windows_files
+    fixture = _default_runtime_probe_module()
+    home = tmp_path / 'app'
+    name = 'startup-' + 'a' * 32 + '.log'
+    path = home / 'logs/workers' / name
+    if fault == 'wrong-name':
+        path = path.with_name('other.log')
+    if fault == 'outside':
+        path = tmp_path / 'other/logs/workers' / name
+    if fault == 'case-sibling':
+        path = tmp_path / 'App/logs/workers' / name
+    facts = {'errors': [{'class': 'ModuleActivationError'}, {'class': 'TimeoutExpired'}],
+             'truncated': False}
+    header = {'startupFailureFacts': facts, 'failure': 'private failure text URL path SID token'}
+    if fault == 'missing-facts':
+        header.pop('startupFailureFacts')
+    if fault == 'extra-field':
+        facts['errors'][1]['stderr'] = 'private text'
+    raw = json.dumps(header).encode() + b'\n\nraw private stderr never uploaded'
+    if fault == 'malformed':
+        raw = b'{bad json\n\nprivate'
+    if fault == 'oversize':
+        raw = b'x' * 60_001
+    opened, reads, closed = [], [], []
+    @contextmanager
+    def directory(parent, *, owned_root, create):
+        assert parent == home / 'logs/workers' and owned_root == home and create is False
+        opened.append(parent)
+        if fault in {'symlink', 'unsafe'}:
+            raise PermissionError('native refuses reparse/unsafe ACL without reading')
+        def read(selected, *, limit):
+            reads.append(selected)
+            assert selected == name and limit == 60_000
+            if fault == 'missing-file':
+                raise FileNotFoundError('missing selected receipt')
+            return raw
+        try:
+            yield SimpleNamespace(read_private=read)
+        finally:
+            closed.append(True)
+            if fault == 'close':
+                raise OSError('native handle close not confirmed')
+    monkeypatch.setattr(windows_files, 'directory', directory)
+    error = RuntimeError('original')
+    if fault != 'missing-path':
+        error.diagnostic_path = path
+    result = fixture.read_startup_failure(home, error)
+    expected = 'present' if fault is None else 'missing' if fault in {
+        'missing-path', 'missing-file', 'missing-facts'} else 'invalid'
+    assert result == {'status': expected, 'facts': facts if fault is None else None}
+    assert 'private' not in json.dumps(result)
+    if fault in {'missing-path', 'wrong-name', 'outside', 'case-sibling'}:
+        assert not opened and not reads
+    elif fault in {'symlink', 'unsafe'}:
+        assert opened and not reads
+    else:
+        assert reads == [name] and closed == [True]
+    assert not home.exists()  # Fake native boundary; no real path/ACL mutation.
+    report = fixture.empty_inner_report()
+    report['startupFailureFacts'] = result
+    fixture.validate_inner_report(report)
+    assert fixture.parse_inner_output(json.dumps(report)) == report and report['status'] == 'FAIL'
+
+
+@pytest.mark.parametrize('outcome', ['raise', 'cancel', 'read-fault'])
+async def test_default_runtime_probe_private_receipt_observation_preserves_original(
+        tmp_path, monkeypatch, outcome):
+    fixture = _default_runtime_probe_module()
+    error = asyncio.CancelledError('original') if outcome == 'cancel' else RuntimeError('original')
+    error.diagnostic_path = tmp_path / 'selected-private-receipt'
+    def observe(home, selected):
+        assert home == tmp_path and selected is error
+        if outcome == 'read-fault':
+            raise asyncio.CancelledError('diagnostic failure cannot replace original')
+        return {'status': 'missing', 'facts': None}
+    monkeypatch.setattr(fixture, 'read_startup_failure', observe)
+    async def start(session, emit):
+        raise error
+    runtime = SimpleNamespace(home=tmp_path, workers={}, start=start)
+    async def emit(*args): pass
+    report = fixture.empty_inner_report()
+    with pytest.raises(type(error)) as caught:
+        await fixture.observe_default_start(runtime, {'id': 'synthetic'}, emit, report, tmp_path)
+    assert caught.value is error and report['status'] == 'FAIL'
+    assert report['startupFailureFacts'] == {
+        'status': 'invalid' if outcome == 'read-fault' else 'missing', 'facts': None}
+    assert report['lockObservation'] == {'status': 'missing', 'sha256': None}
+    fixture.validate_inner_report(report)
+
+
+def test_default_runtime_probe_private_receipt_facts_schema_and_diagnostic_byte_audit(tmp_path, monkeypatch):
+    from amplifier_web import worker_diagnostics as diagnostics
+    from amplifier_web.host import config
+    fixture = _default_runtime_probe_module()
+    writes = []
+    monkeypatch.setattr(config, 'app_home', lambda: tmp_path)
+    monkeypatch.setattr(config, 'write_private', lambda path, raw, **kwargs: writes.append(raw))
+    capture = diagnostics.StartupCapture()
+    error = RuntimeError('private original')
+    error.__cause__ = fixture.subprocess.CalledProcessError(128, ['secret command'], stderr='private stderr')
+    try:
+        selected = capture.save(error, 'synthetic')
+    finally:
+        capture.close()
+    assert selected is not None
+    facts = json.loads(writes[0].partition('\n\n')[0])['startupFailureFacts']
+    fixture.validate_startup_failure_facts(facts)
+    assert facts == {'errors': [{'class': 'RuntimeError'}, {'class': 'CalledProcessError', 'returncode': 128}],
+                     'truncated': False}
+    assert 'worker_diagnostics.py' in fixture.APP_FILES  # Host AND scripted worker use this audit.
+    for invalid in (
+        {**facts, 'path': 'private'}, {**facts, 'errors': []}, {**facts, 'errors': facts['errors'] * 3},
+        {**facts, 'truncated': 1}, {**facts, 'errors': [{'class': 'PrivateError'}]},
+        {**facts, 'errors': [{'class': 'TimeoutExpired', 'returncode': 128}]},
+        {**facts, 'errors': [{'class': 'other', 'errno': 13}]},
+        {**facts, 'errors': [{'class': 'CalledProcessError', 'returncode': True}]},
+        {**facts, 'errors': [{'class': 'PermissionError', 'errno': 2**32}]},
+    ):
+        with pytest.raises(AssertionError):
+            fixture.validate_startup_failure_facts(invalid)
+    # A previously valid seven-file FAIL stays readable; a new PASS must bind
+    # all eight installed files and must not carry failure-only supplemental facts.
+    old = fixture.empty_inner_report()
+    old['appHashes'] = {name: 'a' * 64 for name in fixture.APP_FILES if name != 'worker_diagnostics.py'}
+    fixture.validate_inner_report(old)
+    current = {**old, 'status': 'PASS', 'stage': 'complete',
+        'checks': dict.fromkeys(fixture.CHECKS, True), 'wheelSha256': 'b' * 64,
+        'manifestSha256': 'c' * 64, 'lockSha256': 'd' * 64,
+        'workerImports': {name: {'version': '1.0', 'commit': None, 'sha256': 'e' * 64}
+                          for name in fixture.IMPORTS}}
+    with pytest.raises(AssertionError):
+        fixture.validate_inner_report(current)
+    current['appHashes'] = {name: 'a' * 64 for name in fixture.APP_FILES}
+    fixture.validate_inner_report(current)
+    for value in ({'status': 'present', 'facts': facts}, {'status': 'missing', 'facts': None}):
+        with pytest.raises(AssertionError):
+            fixture.validate_inner_report({**current, 'startupFailureFacts': value})
+
+
 async def test_default_runtime_probe_worker_observer_write_fault_cannot_become_success(tmp_path, monkeypatch):
     fixture = _default_runtime_probe_module()
     path = tmp_path / 'privately-created-observation.json'

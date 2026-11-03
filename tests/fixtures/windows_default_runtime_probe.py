@@ -31,7 +31,8 @@ import zipfile
 
 
 APP_FILES = ("__init__.py", "runtime.py", "runtime_worker.py", "runtime_bootstrap.py",
-             "runtime_environment.py", "windows_jobs.py", "windows_launch_guard.py")
+             "runtime_environment.py", "windows_jobs.py", "windows_launch_guard.py",
+             "worker_diagnostics.py")
 IMPORTS = {
     "amplifier_core": "amplifier-core",
     "amplifier_foundation": "amplifier-foundation",
@@ -878,10 +879,78 @@ def parse_inner_output(raw, *, outer_failure=None):
     return report
 
 
+STARTUP_FAILURE_CLASSES = frozenset({
+    "Exception", "RuntimeError", "AssertionError", "ValueError", "TypeError", "KeyError",
+    "AttributeError", "ImportError", "ModuleNotFoundError", "OSError", "PermissionError",
+    "FileNotFoundError", "NotADirectoryError", "IsADirectoryError", "NotImplementedError",
+    "TimeoutError", "CancelledError", "TimeoutExpired", "CalledProcessError",
+    "UnicodeError", "UnicodeDecodeError", "UnicodeEncodeError", "ModuleActivationError", "other",
+})
+
+
+def validate_startup_failure_facts(value):
+    assert type(value) is dict and set(value) == {"errors", "truncated"}
+    assert type(value["truncated"]) is bool
+    assert type(value["errors"]) is list and 1 <= len(value["errors"]) <= 4
+    os_errors = {"OSError", "PermissionError", "FileNotFoundError", "NotADirectoryError",
+                 "IsADirectoryError", "TimeoutError"}
+    for row in value["errors"]:
+        assert type(row) is dict and {"class"} <= set(row) <= {"class", "errno", "winerror", "returncode"}
+        assert type(row["class"]) is str and row["class"] in STARTUP_FAILURE_CLASSES
+        for key in ("errno", "winerror", "returncode"):
+            if key in row:
+                assert type(row[key]) is int and -(2**31) <= row[key] < 2**32
+                assert (row["class"] == "CalledProcessError" if key == "returncode"
+                        else row["class"] in os_errors)
+
+
+def read_startup_failure(home, error):
+    """Only the host-selected receipt, using native private handle validation.
+
+    No stale search, path-based file read or raw receipt content is exported.
+    Invalid/missing facts remain an observation of failure, never acceptance.
+    """
+    missing = {"status": "missing", "facts": None}
+    try:
+        path = getattr(error, "diagnostic_path", None)
+        if path is None:
+            return missing
+        assert isinstance(home, Path) and isinstance(path, Path)
+        assert re.fullmatch(r"startup-[a-f0-9]{32}\.log", path.name)
+        parent = home / "logs" / "workers"
+        # Exact lexical components, not case-folded containment or a rebindable
+        # resolve() proof. The native boundary validates every actual object.
+        assert path.parts[:-1] == parent.parts
+        from amplifier_web.windows_files import directory
+        with directory(parent, owned_root=home, create=False) as pinned:
+            raw = pinned.read_private(path.name, limit=60_000)
+        assert type(raw) is bytes and len(raw) <= 60_000
+        header = json.loads(raw.partition(b"\n\n")[0])
+        assert type(header) is dict
+        if "startupFailureFacts" not in header:
+            return missing
+        facts = header["startupFailureFacts"]
+        validate_startup_failure_facts(facts)
+        return {"status": "present", "facts": facts}
+    except FileNotFoundError:
+        return missing
+    except BaseException:
+        return {"status": "invalid", "facts": None}
+
+
 def validate_inner_report(report):
     """Only bounded fixed fields may leave the private test directory."""
     assert type(report) is dict
-    assert set(report) - {"diagnostic", "startup", "workerStartup", "lockObservation"} == set(empty_inner_report())
+    assert set(report) - {"diagnostic", "startup", "workerStartup", "lockObservation", "startupFailureFacts"} == set(empty_inner_report())
+    if "startupFailureFacts" in report:
+        assert report["status"] == "FAIL"
+        observed = report["startupFailureFacts"]
+        assert type(observed) is dict and set(observed) == {"status", "facts"}
+        assert type(observed["status"]) is str and observed["status"] in {"present", "missing", "invalid"}
+        if observed["status"] == "present":
+            validate_startup_failure_facts(observed["facts"])
+        else:
+            assert observed["facts"] is None
     if "lockObservation" in report:
         lock = report["lockObservation"]
         assert type(lock) is dict and set(lock) == {"status", "sha256"}
@@ -933,7 +1002,7 @@ def validate_inner_report(report):
 
 def validate_report(report):
     """The public result requires parent-observed cleanup, not child testimony."""
-    assert set(report) - {"diagnostic", "startup", "workerStartup", "lockObservation"} == set(empty_inner_report()) | {"outerJob"}
+    assert set(report) - {"diagnostic", "startup", "workerStartup", "lockObservation", "startupFailureFacts"} == set(empty_inner_report()) | {"outerJob"}
     assert report["schema"] == 2
     validate_inner_report({key: (1 if key == "schema" else report[key])
                            for key in report if key != "outerJob"})
@@ -1127,6 +1196,14 @@ async def observe_default_start(runtime, session, emit, report, project):
 
     try:
         return await runtime.start(session, observed_emit)
+    except BaseException as error:
+        # Read only the receipt selected by the original raised host error.
+        # Any observation fault must preserve that same failure/cancellation.
+        try:
+            report["startupFailureFacts"] = read_startup_failure(runtime.home, error)
+        except BaseException:
+            report["startupFailureFacts"] = {"status": "invalid", "facts": None}
+        raise
     finally:
         try:
             observe_row()
