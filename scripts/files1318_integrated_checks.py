@@ -1,5 +1,14 @@
 """ONE Files1318 cycle in the prepared browser-test runner; never run on the host.
 
+Check-27 remaining tail: files1318-check27-tail-manifest.json admits only the
+canonical narrow Close Canvas oracle correction and this driver. Supply the
+immutable selected packet at output/files1318-check27-9853 and its exact built
+assets at output/files1318-check27-static. Revalidate seven completed build/
+browser phases plus the already guarded check-26 units without replay. Fresh
+readiness, corrected standard UX, shared-focus, catch-up, reader-example build,
+wheel/install, full installed journey and final integrity remain required.
+The overall check-27 failure is never relabeled as a pass.
+
 Check-26 focus-return repair: default qualification with
 /workspace/output/files1318-focus-return-manifest.json and the fixed retained
 unit-proof packet at output/files1318-check26-units. Only the unchanged 84 Python
@@ -368,6 +377,21 @@ CHECK26_UNIT_FILES = (
     'frontend-units/results.json', 'frontend-units/frontend-units.log',
     'standard-ux-canvas-files/evidence/observations.json',
 )
+CHECK27_MANIFEST = ROOT / 'output/files1318-check27-tail-manifest.json'
+CHECK27_ROOT = ROOT / 'output/files1318-check27-9853'
+CHECK27_STATIC = ROOT / 'output/files1318-check27-static'
+CHECK27_BEFORE = {
+    'revision': '985311615b91c8a049c81eca551116a8573ca98a',
+    'tree': '71f0e948e7daf23cae0255658a03946548a2470b',
+    'indexSha256': '9cd3535a061350bf34b9fed7dd5ab2d3d04768bfe2969672a9147e6e823236ec',
+    'reportSha256': '4338f3abf54dba3b6643579bc6d646c0864f6e37160af2784c31868ff6df26d3',
+    'manifestSha256': '7d0aa448e38b782b469bc4220f66ed441dfdf359c730c08169e85c1cea6f78eb',
+    'evidenceSha256': 'b520d811d0e521bed9b92980c945f8ef3cc622ec129c00977a61c96b9b857621',
+    'originalContractSha256': 'ff3294c8f6dab91d39907c6fffa6f8311baad92205681dba639d08985884a523',
+}
+CHECK27_CLOSURE_SHA = '568702b8b55c1b8388ce067717b133fb00618ee6fd7c41c3c400cb29218b1f1a'
+CHECK27_REUSED_PHASES = ('frontend-build', 'frontend-build-parity', 'topology-source', 'generated-source',
+                         'canvas-renderers', 'renderer-stalled-response', 'canvas-usability')
 HARNESS = OUT / 'harness'
 VENV = OUT / 'installed'
 DRIVER = 'scripts/files1318_integrated_checks.py'
@@ -621,7 +645,7 @@ def frozen_inputs(frozen, *, built=False):
                                  FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST,
                                  COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST,
                                  CURRENT0481_MANIFEST, CURRENT0482_MANIFEST, FOCUS_RETURN_MANIFEST,
-                                 FOCUS_RETURN_V2_MANIFEST), 'Unsafe frozen path')
+                                 FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST), 'Unsafe frozen path')
         require(path.parent.resolve().is_relative_to(ROOT), 'Frozen path escapes snapshot')
         require(expected['mode'] in ('100644', '100755', '120000')
                 and re.fullmatch('[a-f0-9]{64}', expected['sha256']), 'Invalid frozen identity')
@@ -681,6 +705,138 @@ def focus_return_snapshot(frozen, *, shared_focus=False):
     require(hashlib.sha256(json.dumps(closure, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
             == (FOCUS_RETURN_V2_CLOSURE_SHA if shared_focus else FOCUS_RETURN_CLOSURE_SHA),
             'Focus-return product/test closure changed')
+
+
+def check27_snapshot(frozen):
+    require(frozen.get('check27Before') == CHECK27_BEFORE and frozen.get('check26Before') == CHECK26_BEFORE
+            and frozen['baselineRevision'] == CURRENT0482_BINDING['baselineRevision']
+            and frozen['baselineTree'] == CURRENT0482_BINDING['baselineTree']
+            and set(frozen) == {'schemaVersion', 'baselineRevision', 'baselineTree', 'revision', 'tree',
+                                'reviewed', 'changedPaths', 'files', 'check26Before', 'check27Before'}
+            and set(frozen['changedPaths']) == set(CURRENT0481_CHANGES) | {'frontend/src/responsive-navigation.jsx'} |
+                set(FOCUS_RETURN_V2_ADDITIONAL) and len(frozen['files']) == 3344,
+            'Check-27 tail source/scope binding differs')
+    closure = {n: v for n, v in frozen['files'].items() if n != DRIVER}
+    require(hashlib.sha256(json.dumps(closure, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+            == CHECK27_CLOSURE_SHA, 'Check-27 tail changed outside its exact harness correction')
+
+
+def check27_processes(prior, old, previous):
+    """Original contract-byte provenance, actual exits and the strict negative verdict."""
+    require(read(prior / 'execution-contract.json')['source']['sourceHead'] == previous['revision'],
+            'Check-27 serialized contract source differs')
+    provenance = {'manifestSha256': CHECK27_BEFORE['manifestSha256'],
+                  'revision': previous['revision'], 'tree': previous['tree'],
+                  'baselineRevision': previous['baselineRevision'], 'baselineTree': previous['baselineTree'],
+                  'contractSha256': CHECK27_BEFORE['originalContractSha256']}
+    commands = {
+        'frontend-build': [str(NPM), 'run', 'build'], 'frontend-build-parity': [str(NPM), 'run', 'build'],
+        'topology-source': [str(NODE), 'tests/file-controls-topology-preflight.mjs'],
+        'generated-source': [str(NODE), 'tests/generated-file-controls-browser.mjs'],
+        'canvas-renderers': [str(NPM), 'run', 'test:canvas-renderers-browser'],
+        'renderer-stalled-response': [str(NPM), 'run', 'test:canvas-renderers-browser'],
+        'canvas-usability': [str(NODE), 'tests/canvas-usability-browser.mjs'],
+    }
+    for name, command in commands.items():
+        result, row = read(prior / name / 'results.json'), old['phases'][name]
+        raw, = result['scenarios']
+        negative = name == 'renderer-stalled-response'
+        require(result['source'] == provenance and result['complete'] is True and result['passed'] is (not negative)
+                and raw['status'] == ('failed' if negative else 'passed')
+                and type(raw['exitCode']) is int and raw['exitCode'] == (1 if negative else 0)
+                and row['status'] == 'passed' and row['executed'] is True
+                and row['verdict'] == ('expected_stalled_response_failure' if negative else 'passed')
+                and row['process'] == raw and row['reason'] is None and raw['reason'] is None
+                and raw['cleanup'] == CLEAN and raw['id'] == name
+                and raw['command'] == row['command'] == command and raw['env'] == row['env']
+                and row['cwd'] == str(ROOT / 'frontend'), f'Check-27 {name} raw receipt differs')
+
+
+def check27_reuse(frozen, units):
+    require(sha(CHECK27_ROOT / 'INDEX.json') == CHECK27_BEFORE['indexSha256'], 'Check-27 index changed')
+    index = read(CHECK27_ROOT / 'INDEX.json')
+    require(index['selectedOnly'] is True and index['omitted'] == ['cache', 'tmp', 'home', 'static-before']
+            and len(index['files']) == 136, 'Unexpected retained check-27 selection')
+    bindings = {'INDEX.json': CHECK27_BEFORE['indexSha256'],
+                **{n: row['sha256'] for n, row in index['files'].items()}}
+    require(bindings['report.json'] == CHECK27_BEFORE['reportSha256']
+            and bindings['parent-manifest.json'] == CHECK27_BEFORE['manifestSha256']
+            and bindings['evidence-manifest.json'] == CHECK27_BEFORE['evidenceSha256'], 'Check-27 anchors changed')
+    prior = OUT / 'prior-check27'
+    prior.mkdir()
+    for name, digest in bindings.items():
+        source, target = CHECK27_ROOT / name, prior / name
+        require(not Path(name).is_absolute() and '..' not in Path(name).parts and str(Path(name)) == name
+                and source.resolve() == source and stat.S_ISREG(source.lstat().st_mode)
+                and re.fullmatch('[a-f0-9]{64}', digest) and sha(source) == digest, f'Changed check-27 proof: {name}')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        require(sha(target) == digest, 'Check-27 proof copy differs')
+    old, previous, evidence = read(prior / 'report.json'), read(prior / 'parent-manifest.json'), read(prior / 'evidence-manifest.json')
+    require(previous['revision'] == CHECK27_BEFORE['revision'] and previous['tree'] == CHECK27_BEFORE['tree']
+            and previous['files'].keys() == frozen['files'].keys()
+            and {n for n in frozen['files'] if frozen['files'][n] != previous['files'][n]} ==
+                {DRIVER, 'frontend/tests/standard-ux-canvas-files-browser.mjs'},
+            'Check-27 build/browser reuse requires all product, runner, fixture and dependency inputs unchanged')
+    require(old['passed'] is False and old['complete'] is False and old['finalization'] == {'status': 'passed'}
+            and old['qualification'] == 'focus-return-v2-after26'
+            and old['manifestSha256'] == CHECK27_BEFORE['manifestSha256']
+            and old['evidenceManifestSha256'] == CHECK27_BEFORE['evidenceSha256']
+            and old['phases']['standard-ux-canvas-files']['status'] == 'failed'
+            and all(old['phases'][n]['status'] == 'unrun' for n in
+                    ('mobile-navigation-focus', 'peer-preview-focus', 'canvas-refresh-catchup',
+                     'wheel-build', 'generated-installed', 'final-integrity')),
+            'Check 27 must remain the original partial failure, with its tail unrun')
+    for name, digest in bindings.items():
+        if name not in ('INDEX.json', 'report.json', 'evidence-manifest.json') and not name.startswith('host-'):
+            require(evidence[name] == digest, 'Check-27 evidence manifest differs')
+    failed = read(prior / 'standard-ux-canvas-files/evidence/observations.json')
+    require(failed['passed'] is False and len(failed['checks']) == 3 and failed['focusReturn']['complete'] is True
+            and failed['focusReturn']['invoker']['sameControl'] is True and failed['focusReturn']['invoker']['focused'] is True
+            and 'Back to chat' in failed['uiFailure']['message'] and 'element(s) not found' in failed['uiFailure']['message']
+            and failed['evidenceFailures'] == failed['cleanupFailures'] == [] and failed['homeRemoved'] is True,
+            'Check-27 must retain the passed Escape checkpoint and later obsolete-label failure')
+    require(read(prior / 'check26-unit-reuse.json') == units
+            and all(old['phases'][n]['status'] == 'REUSED' and old['phases'][n]['executed'] is False
+                    for n in CHECK26_UNIT_PHASES)
+            and all(sha(prior / 'prior-check26' / n) == h for n, h in units['proofFiles'].items()),
+            'Chained check-26 unit evidence differs')
+    check27_processes(prior, old, previous)
+    retained_environment(prior)
+    build, expected = read(prior / 'frontend-build-identity.json'), read(prior / 'candidate.json')
+    static_files = {n.removeprefix('amplifier_web/static/'): h for n, h in expected['static'].items()}
+    require(len(static_files) == 311 and expected['static'] == read(prior / 'static.json') == build['static']
+            and build['sourceRevision'] == previous['revision'] and build['sourceTree'] == previous['tree']
+            and build['manifestSha256'] == CHECK27_BEFORE['manifestSha256'] and build['reusedBuild'] is False
+            and build['inputs'] == {n: frozen['files'][n]['sha256'] for n in COMPACT_BUTTON_INPUTS}
+            and static_files == read(prior / 'frontend-build/first-static.json')
+            and CHECK27_STATIC.resolve() == CHECK27_STATIC and tree(CHECK27_STATIC) == static_files,
+            'Supply exact retained check-27 canonical assets; no rebuild or committed-static fallback')
+    for name, digest in static_files.items():
+        asset = CHECK27_STATIC / name
+        require(not Path(name).is_absolute() and '..' not in Path(name).parts and asset.resolve() == asset
+                and stat.S_ISREG(asset.lstat().st_mode) and sha(asset) == digest, 'Unsafe or changed check-27 asset')
+    static = ROOT / 'amplifier_web/static'
+    before = tree(static)
+    save('static-before.json', before)
+    shutil.copytree(static, OUT / 'static-before')
+    require(tree(OUT / 'static-before') == before, 'Pre-reuse static preservation failed')
+    shutil.rmtree(static)  # Guest-only generated output after verified preservation.
+    shutil.copytree(CHECK27_STATIC, static)
+    require(tree(static) == static_files and read(static / 'build.json') == build['build'], 'Restored check-27 assets differ')
+    topology_proof('source', prior)
+    generated_proof('source', compact_button=True, evidence_root=prior, current=True, validation_prefix='check27-validation')
+    renderer_proof(startup=True, live_route_cleanup=True, evidence_root=prior)
+    renderer_proof(True, startup=True, live_route_cleanup=True, evidence_root=prior)
+    usability_proof(prior)
+    save('frontend-build-identity.json', {**build, 'reusedFor': {
+        'revision': frozen['revision'], 'tree': frozen['tree'], 'basis': 'exact check-27 source and environment'}})
+    save('frontend-build/first-static.json', static_files)
+    value = {'priorPassed': False, 'priorComplete': False, 'source': CHECK27_BEFORE,
+             'proofFiles': bindings, 'reusedPhases': list(CHECK27_REUSED_PHASES),
+             'static': expected['static'], 'build': build['build'], 'rawNegativeExit': 1, 'negativeVerified': True}
+    save('check27-reuse.json', value)
+    return value
 
 
 def check26_units(frozen, *, shared_focus=False):
@@ -2518,7 +2674,8 @@ def compact_button_proof(proof, taps, *, current=False):
             'Full native/download branches or listener cleanup did not settle')
 
 
-def generated_proof(mode, *, coarse_toolbar=False, compact_button=False, evidence_root=None, reused_build=False, current=False):
+def generated_proof(mode, *, coarse_toolbar=False, compact_button=False, evidence_root=None, reused_build=False, current=False,
+                    validation_prefix=None):
     folder = evidence_root or OUT
     reports = list((folder / f'generated-{mode}/evidence').glob('generated-file-controls-*/observations.json'))
     require(len(reports) == 1, 'Require one generated-file journey report')
@@ -2570,14 +2727,14 @@ def generated_proof(mode, *, coarse_toolbar=False, compact_button=False, evidenc
             server_origins[when] = origin
         # The frozen server's index/static routes resolve beside server.py.
         # This proves the same fixture's serving package/assets, not a packet trace.
-        save(f'{"compact23-validation" if evidence_root else "generated-" + mode}/serving-assets.json', {
+        save(f'{validation_prefix or ("compact23-validation" if evidence_root else "generated-" + mode)}/serving-assets.json', {
             'fixturePid': proof['cleanup']['pid'], 'packageRoot': package,
             'serverOrigins': server_origins, 'build': build_identity['build'],
             'static': static, 'reusedBuild': reused_build or bool(evidence_root),
             'basis': 'same-fixture server module origins and adjacent static bytes; not browser response capture'})
         if coarse_toolbar:
             coarse_toolbar_proof(proof, mode)
-    save(f'{"compact23-validation" if evidence_root else "generated-" + mode}/accepted-report.json', {
+    save(f'{validation_prefix or ("compact23-validation" if evidence_root else "generated-" + mode)}/accepted-report.json', {
         'path': str(reports[0]), 'sha256': sha(reports[0]), 'visualJudgment': 'pending',
         'frameBindingCounts': dict(Counter(c['binding']['status'] for c in proof['fileFrameCaptures']))})
 
@@ -3670,7 +3827,7 @@ def usability_proof(evidence_root=None):
             [{**expected, 'browserErrors': 0}], 'Canvas usability completion report missing/changed')
 
 
-def standard_files_proof(*, sequential_focus=False, focus_return=False, bounded_focus=False):
+def standard_files_proof(*, sequential_focus=False, focus_return=False, bounded_focus=False, narrow_dismiss=False):
     proof = read(OUT / 'standard-ux-canvas-files/evidence/observations.json')
     source = (ROOT / 'frontend/tests/standard-ux-canvas-files-browser.mjs').read_text()
     expected = re.findall(r"checks\.push\('([^']+)'\)", source)
@@ -3718,6 +3875,29 @@ def standard_files_proof(*, sequential_focus=False, focus_return=False, bounded_
                     'focused': True, 'sameControl': True, 'inert': False, 'visible': True}
                 and result['canvas'] == {'role': None, 'focused': 'false', 'hidden': False},
                 'Escape did not restore the retained original native invoker after commit')
+    if narrow_dismiss:
+        result = proof['narrowDismiss']
+        require(result['complete'] is True and result['hostHiddenConfirmed'] is True
+                and result['observationDeadlineMs'] == 500 and not result.get('primaryFailure')
+                and [o['key'] for o in result['observations']] == ['before', 'after']
+                and all(o['status'] == 'observed' and o['value'] == result[o['key']] for o in result['observations'])
+                and proof['evidenceFailures'] == [], 'Narrow dismissal evidence incomplete')
+        before, after = result['before'], result['after']
+        require(before['viewport'] == after['viewport'] == {'width': 390, 'height': 844}
+                and before['mediaNarrow'] is True and before['narrow'] == before['overlay'] == 'true'
+                and before['canvasOpen'] is True and before['canvasHidden'] is False and before['overflow'] is False
+                and after['canvasOpen'] is False and after['canvasHidden'] is True
+                and all(before[k] == after[k] and before[k] for k in ('resourceId', 'sessionId', 'clientId', 'draft'))
+                and after['draft'] == 'Keep private file-inspection draft', 'Narrow close lost its original state')
+        require(result['host'] == {'requestClientId': before['clientId'], 'httpStatus': 200, 'canvasOpen': False,
+                                   'resourceId': before['resourceId'], 'sessionId': before['sessionId']},
+                'Host readback did not confirm the same client/session/resource dismissal')
+        button = before['button']
+        require(button['tag'] == 'BUTTON' and button['label'] == 'Close canvas panel'
+                and button['text'] == 'Close Canvas' and button['action'] == 'canvas.visibility'
+                and button['visible'] is True and button['width'] >= 44 and button['height'] >= 44
+                and 0 <= button['left'] < button['right'] <= 390 and 0 <= button['top'] < button['bottom'] <= 844,
+                'Narrow return-to-chat control must be the visible native canonical action')
     exit_state, cleanup = proof['fixtureExit'], proof['fixtureCleanup']
     require(set(exit_state) == {'pid', 'code', 'signal', 'settled'}
             and type(exit_state['pid']) is int and exit_state['pid'] > 0
@@ -3942,7 +4122,8 @@ def main():
                                  STATE_REDUCTION_MANIFEST, FOCUS_CONTRAST_MANIFEST,
                                  FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST,
                                  COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST,
-                                 CURRENT0481_MANIFEST, CURRENT0482_MANIFEST, FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST])
+                                 CURRENT0481_MANIFEST, CURRENT0482_MANIFEST, FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST,
+                                 CHECK27_MANIFEST])
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--corner-diagnostic', action='store_true')
     modes.add_argument('--contour-qualification', action='store_true')
@@ -3971,15 +4152,16 @@ def main():
     manifest_paths = ((FOCUS_CONTRAST_MANIFEST, FOCUS_CONTRAST_SETTLED_MANIFEST)
                       if args.focus_contrast else (MANIFEST, COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST,
                           COMPACT24_MANIFEST, COMPACT25_MANIFEST, CURRENT0481_MANIFEST, CURRENT0482_MANIFEST,
-                          FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST)
+                          FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST)
                       if manifest_path == MANIFEST else (manifest_path,))
     if args.manifest not in manifest_paths:
         parser.error('The manifest must match the selected qualification mode')
     compact25 = args.manifest == COMPACT25_MANIFEST
     current0481 = args.manifest == CURRENT0481_MANIFEST
     current0482 = args.manifest == CURRENT0482_MANIFEST
-    shared_focus = args.manifest == FOCUS_RETURN_V2_MANIFEST
-    focus_return = args.manifest in (FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST)
+    check27_tail = args.manifest == CHECK27_MANIFEST
+    shared_focus = args.manifest in (FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST)
+    focus_return = args.manifest in (FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST)
     current_full = current0481 or current0482 or focus_return
     compact24 = args.manifest in (COMPACT24_MANIFEST, COMPACT25_MANIFEST)
     compact23 = args.manifest in (COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST)
@@ -4035,6 +4217,19 @@ def main():
         report['limits'].append('Shared-hook qualification selects the maintained 390px drawer/Details block and both '
                                 'peer-focus cases, not the mobile width/scroll matrix. React ordering supports the '
                                 'repair mechanism but is not retrospective proof of check-26 active-element history.')
+    if check27_tail:
+        report.update(qualification='check27-remaining-tail', priorChecksConsumed=27, reusedBuild=True,
+                      continuationOf=CHECK27_BEFORE,
+                      currentSource={'baselineRevision': CURRENT0482_BINDING['baselineRevision'],
+                                     'nonDriverClosureSha256': CHECK27_CLOSURE_SHA},
+                      historicalProofReuse='check27-build-browser-and-guarded-check26-units')
+        report['phases']['check27-reuse'] = {'status': 'unrun', 'reason': 'not_started'}
+        report['phases']['reader-example-build'] = {'status': 'unrun', 'reason': 'not_started'}
+        for name in CHECK27_REUSED_PHASES:
+            report['phases'][name]['reason'] = 'reuse_pending_exact_check27_proof'
+        report['limits'][-2] = ('Check 27 remains failed at obsolete Back to chat. Exact product/build/browser inputs '
+                               'are unchanged; seven completed phases and guarded 84/19 units are reused only after '
+                               'current readiness and retained-proof validation. All unfinished phases execute.')
     if compact23:
         report.update(continuationOf=COMPACT23_BEFORE, priorPrelaunchNotRunsRetained=2)
         report['phases']['compact23-reuse'] = {'status': 'unrun', 'reason': 'not_started'}
@@ -4158,7 +4353,9 @@ def main():
         def snapshot():
             frozen = read(args.manifest)
             require(frozen['schemaVersion'] == 2, 'Wrong manifest schema')
-            if focus_return:
+            if check27_tail:
+                check27_snapshot(frozen)
+            elif focus_return:
                 focus_return_snapshot(frozen, shared_focus=shared_focus)
             elif current0482:
                 current0482_snapshot(frozen)
@@ -4427,6 +4624,16 @@ def main():
                     priorEvidence=f'prior-check26/{name}/results.json',
                     priorEvidenceSha256=reused26['proofFiles'][f'{name}/results.json'])
             save('report.json', report)
+        if check27_tail:
+            reused27 = step('check27-reuse', lambda: check27_reuse(frozen, reused26))
+            for name in CHECK27_REUSED_PHASES:
+                report['phases'][name].update(status='REUSED', executed=False,
+                    reason='exact_check27_source_environment_raw_receipts_and_oracles_verified',
+                    sourceRevision=CHECK27_BEFORE['revision'], sourceTree=CHECK27_BEFORE['tree'],
+                    priorEvidence=f'prior-check27/{name}/results.json',
+                    priorEvidenceSha256=reused27['proofFiles'][f'{name}/results.json'],
+                    verdict='expected_stalled_response_failure' if name == 'renderer-stalled-response' else 'passed')
+            save('report.json', report)
         if compact23:
             reused = step('compact23-reuse', lambda: compact23_reuse(frozen, standard_focus=compact25))
             for name in COMPACT23_REUSED_PHASES:
@@ -4463,16 +4670,16 @@ def main():
             save('reuse-evidence-validation.json', reused)
             report['reuseEvidence'] = reused
             save('report.json', report)
-        if args.portal_host_experiment or compact_button and not compact23:
+        if args.portal_host_experiment or compact_button and not compact23 and not check27_tail:
             # Preserve committed static as before-context. Never restore either
             # the failed gap build or native17's reused build for this variant.
             before = tree(ROOT / 'amplifier_web/static')
             save('static-before.json', before)
             shutil.copytree(ROOT / 'amplifier_web/static', OUT / 'static-before')
             require(tree(OUT / 'static-before') == before, 'Pre-build static preservation differs')
-        if (not checkpoint_mode and not reuse_mode and not compact23) or args.portal_host_experiment:
+        if (not checkpoint_mode and not reuse_mode and not compact23 and not check27_tail) or args.portal_host_experiment:
             run('frontend-build', [NPM, 'run', 'build'], cap=240)
-        if current_full:
+        if current_full and not check27_tail:
             first_static = tree(ROOT / 'amplifier_web/static')
             first_build = read(ROOT / 'amplifier_web/static/build.json')
             save('frontend-build/first-static.json', first_static)
@@ -4483,7 +4690,7 @@ def main():
             run('frontend-build-parity', [NPM, 'run', 'build'], cap=240, verify=build_parity)
 
         def source_freeze():
-            save('source-after-reuse.json' if (checkpoint_mode or reuse_mode or compact23) and not args.portal_host_experiment
+            save('source-after-reuse.json' if (checkpoint_mode or reuse_mode or compact23 or check27_tail) and not args.portal_host_experiment
                  else 'source-after-build.json',
                  frozen_inputs(frozen, built=True))
             value = candidate(frozen)
@@ -4506,7 +4713,7 @@ def main():
                     'build': build_identity, 'sourceRevision': frozen['revision'], 'sourceTree': frozen['tree'],
                     'manifestSha256': report['manifestSha256'], 'css': frozen['files'][COARSE_TOOLBAR_CSS],
                     'static': value['static'], 'reusedBuild': False})
-            if compact_button and not compact23:
+            if compact_button and not compact23 and not check27_tail:
                 build_identity = read(ROOT / 'amplifier_web/static/build.json')
                 before = read(OUT / 'static-before.json')
                 require(set(build_identity) == {'id', 'version'}
@@ -4526,6 +4733,10 @@ def main():
             if compact23:
                 require(value['static'] == reused['static'] and read(ROOT / 'amplifier_web/static/build.json') == reused['build'],
                         'Continuation assets differ from the verified check-23 build')
+            if check27_tail:
+                require(value['static'] == reused27['static']
+                        and read(ROOT / 'amplifier_web/static/build.json') == reused27['build'],
+                        'Tail assets differ from the verified check-27 build')
             save('candidate.json', value)
             save('static.json', value['static'])
         step('source-freeze', source_freeze)
@@ -4580,12 +4791,12 @@ def main():
                 root=root, extra=extra, cap=160,
                 verify=None if checkpoint_mode else lambda: generated_proof(
                     mode, coarse_toolbar=args.coarse_toolbar_qualification, compact_button=compact_button,
-                    reused_build=compact23, current=current_full))
+                    reused_build=compact23 or check27_tail, current=current_full))
 
-        if not compact23:
+        if not compact23 and not check27_tail:
             generated('source')
         if not checkpoint_mode:
-            if not compact25:
+            if not compact25 and not check27_tail:
                 run('canvas-renderers', [NPM, 'run', 'test:canvas-renderers-browser'],
                     verify=lambda: renderer_proof(startup=compact23 or current_full, live_route_cleanup=compact24 or current_full))
                 # Raw nonzero is retained; only the exact correlated negative qualifies.
@@ -4595,7 +4806,8 @@ def main():
                 run('canvas-usability', [NODE, 'tests/canvas-usability-browser.mjs'], verify=usability_proof)
             run('standard-ux-canvas-files', [NODE, 'tests/standard-ux-canvas-files-browser.mjs'],
                 verify=lambda: standard_files_proof(sequential_focus=compact25 or current_full,
-                                                    focus_return=focus_return, bounded_focus=shared_focus))
+                                                    focus_return=focus_return, bounded_focus=shared_focus,
+                                                    narrow_dismiss=check27_tail))
             if shared_focus:
                 run('mobile-navigation-focus', [NODE, 'tests/mobile-navigation-browser.mjs'], cap=90,
                     extra={'MOBILE_NAVIGATION_FOCUS_ONLY': '1',
@@ -4607,12 +4819,13 @@ def main():
             if current_full:
                 run('canvas-refresh-catchup', [NODE, 'tests/canvas-refresh-catchup-browser.mjs'],
                     cap=180, verify=catchup_proof)
-                example = tree(ROOT / 'examples/shell-reader/dist')
-                require(set(example) == {'module.mjs', 'manifest.json'} and
-                        example['manifest.json'] == frozen['files']['examples/shell-reader/manifest.json']['sha256'],
-                        'Normal renderer did not produce the canonical reader example for the wheel')
-                save('reader-example-build.json', {'executedBy': 'canvas-renderers', 'files': example})
-            if compact25:
+                if not check27_tail:
+                    example = tree(ROOT / 'examples/shell-reader/dist')
+                    require(set(example) == {'module.mjs', 'manifest.json'} and
+                            example['manifest.json'] == frozen['files']['examples/shell-reader/manifest.json']['sha256'],
+                            'Normal renderer did not produce the canonical reader example for the wheel')
+                    save('reader-example-build.json', {'executedBy': 'canvas-renderers', 'files': example})
+            if compact25 or check27_tail:
                 # Skipping the renderer browser must not silently drop its build
                 # side effect: these two files are forced into the wheel.
                 def reader_example_proof():
@@ -4622,6 +4835,8 @@ def main():
                                 frozen['files']['examples/shell-reader/manifest.json']['sha256'],
                             'Independent reader build omitted/changed its canonical outputs')
                     save('reader-example-build/outputs.json', files)
+                    if check27_tail:
+                        save('reader-example-build.json', {'executedBy': 'reader-example-build', 'files': files})
                 run('reader-example-build', [NODE, 'scripts/build-reader-example.mjs'],
                     cap=60, verify=reader_example_proof)
             # The renderer test builds its independent example, NOT the bundled app.
@@ -4689,10 +4904,10 @@ def main():
                             and tree(package / 'amplifier_web/static') == {
                                 name.removeprefix('amplifier_web/static/'): digest for name, digest in expected['static'].items()}
                             and tree(OUT / 'static-before') == read(OUT / 'static-before.json')
-                            and report['phases']['frontend-build']['status'] == ('REUSED' if compact23 else 'passed')
-                            and report['phases']['frontend-build']['executed'] is (not compact23)
+                            and report['phases']['frontend-build']['status'] == ('REUSED' if compact23 or check27_tail else 'passed')
+                            and report['phases']['frontend-build']['executed'] is (not (compact23 or check27_tail))
                             and {name for name, row in report['phases'].items() if row['status'] == 'REUSED'} ==
-                                (set(CHECK26_UNIT_PHASES) if focus_return else
+                                (set(CHECK26_UNIT_PHASES) | (set(CHECK27_REUSED_PHASES) if check27_tail else set()) if focus_return else
                                  set(COMPACT23_REUSED_PHASES) | (set(COMPACT25_REUSED_PHASES) if compact25 else set())
                                  if compact23 else set()),
                             'Compact full qualification lost fresh-build/source/installed identity')
@@ -4705,9 +4920,20 @@ def main():
                                     and report['phases'][name]['executed'] is True
                                     for name in ('mobile-navigation-focus', 'peer-preview-focus')),
                                 'Shared modal-focus seams were not freshly qualified')
+                    if check27_tail:
+                        phases |= {'check27-reuse', 'reader-example-build'}
+                        require(report['phases']['reader-example-build']['status'] == 'passed'
+                                and report['phases']['reader-example-build']['executed'] is True
+                                and all(report['phases'][n]['executed'] is False for n in CHECK27_REUSED_PHASES)
+                                and all(sha(folder / name) == digest
+                                    for folder in (CHECK27_ROOT, OUT / 'prior-check27')
+                                    for name, digest in reused27['proofFiles'].items())
+                                and tree(CHECK27_STATIC) == {n.removeprefix('amplifier_web/static/'): h
+                                    for n, h in expected['static'].items()}, 'Check-27 reuse changed or phases replayed')
                     require(set(report['phases']) == phases and all(
                         row['status'] == ('running' if name == 'final-integrity' else
-                                         'REUSED' if focus_return and name in CHECK26_UNIT_PHASES else 'passed')
+                                         'REUSED' if (focus_return and name in CHECK26_UNIT_PHASES
+                                                      or check27_tail and name in CHECK27_REUSED_PHASES) else 'passed')
                         for name, row in report['phases'].items())
                         and all(report['phases'][name]['executed'] is True for name in (
                             'frontend-build', 'frontend-build-parity', 'python-tests', 'frontend-units',
@@ -4715,7 +4941,8 @@ def main():
                             'canvas-usability', 'standard-ux-canvas-files', 'canvas-refresh-catchup',
                             'wheel-build', 'fresh-venv', 'install-wheel', 'installed-readiness',
                             'topology-installed', 'generated-installed')
-                            if not (focus_return and name in CHECK26_UNIT_PHASES))
+                            if not (focus_return and name in CHECK26_UNIT_PHASES
+                                    or check27_tail and name in CHECK27_REUSED_PHASES))
                         and read(OUT / 'frontend-build/first-static.json') ==
                             {n.removeprefix('amplifier_web/static/'): h for n, h in expected['static'].items()}
                         and tree(ROOT / 'examples/shell-reader/dist') == read(OUT / 'reader-example-build.json')['files'],
