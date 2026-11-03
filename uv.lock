@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -204,7 +204,7 @@ wheels = [
 [[package]]
 name = "amplifier-foundation"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#8d26eceb9b7cafe6e93346f8f4294596bd45dcd1" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#c716df3cea84b2539aabdfea58a69ae676a1e853" }
 dependencies = [
     { name = "amplifier-core" },
     { name = "filelock" },
@@ -219,7 +219,7 @@ source = { git = "https://github.com/microsoft/amplifier-lib-decisions?rev=main#
 [[package]]
 name = "amplifier-memory"
 version = "0.1.0"
-source = { git = "https://github.com/microsoft/amplifier-bundle-memory?rev=main#b011380b2edd2e7038051ab8ba7d665f752d8cc7" }
+source = { git = "https://github.com/microsoft/amplifier-bundle-memory?rev=main#5ac75ac85b9972e06936630e347023af107fd364" }
 dependencies = [
     { name = "amplifier-core" },
     { name = "amplifier-foundation" },
@@ -247,12 +247,12 @@ dependencies = [
 [[package]]
 name = "amplifier-module-hooks-session-naming"
 version = "0.2.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=main#8d26eceb9b7cafe6e93346f8f4294596bd45dcd1" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=main#c716df3cea84b2539aabdfea58a69ae676a1e853" }
 
 [[package]]
 name = "amplifier-module-loop-live"
 version = "0.2.0"
-source = { git = "https://github.com/microsoft/amplifier-module-loop-live?rev=670f405f711658c3c38e81dbd50a35d3d8c2ac3c#670f405f711658c3c38e81dbd50a35d3d8c2ac3c" }
+source = { git = "https://github.com/microsoft/amplifier-module-loop-live?rev=d4b1e69e3222780ccebdfdb7c07915fdcd5d161f#d4b1e69e3222780ccebdfdb7c07915fdcd5d161f" }
 dependencies = [
     { name = "amplifier-module-loop-streaming" },
     { name = "jsonschema" },
@@ -437,7 +437,7 @@ artifacts = [
 dev = [
     { name = "amplifier-module-context-simple", git = "https://github.com/microsoft/amplifier-module-context-simple?rev=db641363013ff906b656f49498a87ab01f5c506f" },
     { name = "amplifier-module-hook-context-intelligence", git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?subdirectory=modules%2Fhook-context-intelligence&rev=a80ce69d0e96e9a343501f238dcd867350dd9aa2" },
-    { name = "amplifier-module-loop-live", git = "https://github.com/microsoft/amplifier-module-loop-live?rev=670f405f711658c3c38e81dbd50a35d3d8c2ac3c" },
+    { name = "amplifier-module-loop-live", git = "https://github.com/microsoft/amplifier-module-loop-live?rev=d4b1e69e3222780ccebdfdb7c07915fdcd5d161f" },
     { name = "amplifier-module-tool-filesystem", git = "https://github.com/microsoft/amplifier-module-tool-filesystem?rev=663f26a878ae71e136f439fa73ded52b2eb24174" },
     { name = "amplifier-module-tool-skills", git = "https://github.com/microsoft/amplifier-bundle-skills?subdirectory=modules%2Ftool-skills&rev=2f58408a879535df36da5c92d2b073f49271ade4" },
     { name = "hatchling", specifier = ">=1.27" },

@@ -12,6 +12,86 @@ from amplifier_web.runtime import RuntimeManager
 from amplifier_web.updates import active_release
 
 
+@pytest.mark.parametrize('unsafe', [False, True])
+def test_windows_prepare_project_routes_creation_and_payload_through_pins(tmp_path, monkeypatch, unsafe):
+    from contextlib import contextmanager
+    from amplifier_web import windows_files
+    home = tmp_path / 'app'
+    project = home / 'runtime' / 'candidate'
+    receipt = tmp_path / 'recorded.lock'
+    receipt.write_bytes(b'version = 1\n')
+    writes, objects = [], {}
+    @contextmanager
+    def directory(path, *, owned_root, create=False):
+        assert owned_root == home
+        if unsafe:
+            raise PermissionError('unsafe existing directory')
+        class Pinned:
+            def read_private(self, name, *, limit):
+                assert limit == 1024 * 1024
+                if (path, name) not in objects:
+                    raise FileNotFoundError(name)
+                return objects[path, name]
+            def publish_private(self, name, value, *, replace=False):
+                writes.append((path, name, value, replace))
+                objects[path, name] = value
+        yield Pinned()
+    monkeypatch.setattr(environments, '_WINDOWS', True)
+    monkeypatch.setattr(environments, 'project_path', lambda *args, **kwargs: project)
+    monkeypatch.setattr(environments, 'receipt_directory', lambda *args: receipt.parent)
+    # Its explicit recorded path is runtime.lock.
+    (receipt.parent / 'runtime.lock').write_bytes(receipt.read_bytes())
+    objects[receipt.parent, 'runtime.lock'] = receipt.read_bytes()
+    monkeypatch.setattr(windows_files, 'directory', directory)
+    monkeypatch.setattr(Path, 'mkdir', lambda *args, **kwargs: pytest.fail('ordinary mkdir before private creation'))
+    if unsafe:
+        with pytest.raises(PermissionError):
+            environments.prepare_project(home, content=b'[project]\n')
+        assert not writes
+    else:
+        assert environments.prepare_project(home, content=b'[project]\n') == project
+        assert writes == [(project, 'pyproject.toml', b'[project]\n', True),
+                          (project, 'uv.lock', b'version = 1\n', False)]
+        assert environments.prepare_project(home, content=b'[project]\n') == project
+        assert len(writes) == 2
+        objects[project, 'uv.lock'] = b'changed'
+        with pytest.raises(ValueError, match='recorded worker lock changed'):
+            environments.prepare_project(home, content=b'[project]\n')
+        assert objects[project, 'uv.lock'] == b'changed'
+
+
+@pytest.mark.skipif(__import__('os').name != 'nt', reason='native Windows runtime private files')
+def test_native_windows_prepare_project_private_before_payload_and_refuse_unsafe(tmp_path):
+    from amplifier_web import windows_files
+    import uuid
+    home = tmp_path.resolve() / ('runtime-app-' + uuid.uuid4().hex)
+    project = environments.prepare_project(home, content=b'[project]\nname="native-fixture"\n')
+    with windows_files.directory(project, owned_root=home) as pinned:
+        assert pinned.read_private('pyproject.toml', limit=1024) == b'[project]\nname="native-fixture"\n'
+    # Ordinary existing creation is not promoted to private or repaired.
+    unsafe = tmp_path.resolve() / ('ordinary-' + uuid.uuid4().hex)
+    unsafe.mkdir()
+    # Set an explicitly readable ACL (not an ownership-dependent mkdir guess).
+    from amplifier_web.windows_files import _API
+    import ctypes
+    api = _API()
+    descriptor = ctypes.c_void_p()
+    api.ok(api.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        f'O:{api.sid}D:P(A;;FA;;;{api.sid})(A;;FR;;;WD)', 1,
+        ctypes.byref(descriptor), None))
+    try:
+        # This is synthetic fixture setup, never repair of an application root.
+        set_security = ctypes.WinDLL('advapi32', use_last_error=True).SetFileSecurityW
+        set_security.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_void_p]
+        set_security.restype = ctypes.c_int32
+        api.ok(set_security(str(unsafe), 4 | 0x80000000, descriptor))
+    finally:
+        api.LocalFree(descriptor)
+    with pytest.raises(PermissionError):
+        environments.prepare_project(unsafe, content=b'must-not-publish')
+    assert not (unsafe / 'runtime').exists()
+
+
 def git(path, *args):
     return subprocess.check_output(['git', *args], cwd=path, text=True, stderr=subprocess.DEVNULL).strip()
 
