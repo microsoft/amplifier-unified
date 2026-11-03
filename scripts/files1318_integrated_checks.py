@@ -1,5 +1,11 @@
 """ONE Files1318 cycle in the prepared browser-test runner; never run on the host.
 
+Pinned Main 6fe / 0.50.0: files1318-current0500-manifest.json. Reuse only the
+unchanged 80/84 Python cases, 19 Node cases and seven component checks from the
+accepted check30 lineage. Run four affected Files/worktree cases plus three
+maintained clean-commit cases, fresh build/parity, source and installed native
+journeys, new wheel and final integrity. No old assets, wheel or whole-tree CI reuse.
+
 Pinned Main 6a / 0.49.0 composition: files1318-current0490-manifest.json.
 Fresh 84/19 units, build/parity, source native journey, reader build, wheel,
 isolated install/Node resolver, installed native journey and final integrity.
@@ -449,6 +455,24 @@ CURRENT0490_BINDING = {
 CURRENT0490_COMPONENTS = ('canvas-renderers', 'renderer-stalled-response', 'canvas-usability',
                          'standard-ux-canvas-files', 'mobile-navigation-focus', 'peer-preview-focus',
                          'canvas-refresh-catchup')
+CURRENT0500_MANIFEST = ROOT / 'output/files1318-current0500-manifest.json'
+CHECK30_ROOT = ROOT / 'output/files1318-check30-dcfeb'
+CURRENT0500_BINDING = {
+    'baselineRevision': '6fe7ed600583197b924f0f6eb4eac5e20527c5c6',
+    'baselineTree': '64359095c445eddf453b1f35862aabb664ea5a6a',
+    'filesRevision': '0678c1763cd412ef56862082cbea60cbad5ff7ff',
+    'filesTree': '00f390f371920379f51ccf1a2adc4ce47137928d',
+    'unbuiltCompositionTree': 'ae9f33452cff7d1f7b9b4d9963a4af8445adfcce',
+    'nonDriverClosureSha256': 'b514c2770f25dc24544c896172218a0efa6dad44f99fcbb04235008ce028c604',
+    'trackedCount': 3351, 'version': '0.50.0',
+    'check30Revision': 'dcfeb2611e2283f6ce917d4f00a89c6a7d82d1d1',
+    'check30Tree': 'c69e7bd862582858e513de36354d71dbaed7293c',
+    'indexSha256': '4a20bbbe733b6ecbdd20dd3c59c07cc2a528b1d036900432199fcc444acba841',
+    'reportSha256': '61c46a789e1d6aed9a32ec9299894d9fdf7790647bb0cf7b551a8ba68d2a8086',
+    'manifestSha256': 'c168a27862825185e390c419bd735a9c1b70b2e50cedde7ee2dda0cc35fa49db',
+    'evidenceSha256': '75011501e71c73f2009bf2f8c14ce39417c41a960eb085a4fe2b66feb9b1b844',
+    'originalContractSha256': '1f91ca4027408756c59cf1dbe73df3794f8f555bcc745ec1d7f5de36f8f1c1a2',
+}
 HARNESS = OUT / 'harness'
 VENV = OUT / 'installed'
 DRIVER = 'scripts/files1318_integrated_checks.py'
@@ -643,6 +667,12 @@ CURRENT0481_PYTEST_NODES = (*PYTEST_NODES,
             'load_version_refuses_agent_stale_missing_and_dirty_before_replacement',
             'same_artifact_select_requires_ui_reset_for_different_executable_version') for kind in ('html', 'babylon')),
         'load_version_is_primary_executable_only_and_preserves_historical_intent'))
+CURRENT0500_FRESH_EXISTING = tuple(n for n in CURRENT0481_PYTEST_NODES if n.startswith('tests/test_worktrees.py::'))
+CURRENT0500_PYTEST_NODES = (*CURRENT0500_FRESH_EXISTING, *nodes('test_worktrees',
+    'clean_commit_does_not_scan_or_copy_dirty_and_oversized_untracked_source',
+    'clean_binding_ref_movement_and_snapshot_compatibility',
+    'clean_after_admission_failure_is_never_claimed_not_started'))
+CURRENT0500_REUSED_PYTEST_NODES = tuple(n for n in CURRENT0481_PYTEST_NODES if n not in CURRENT0500_FRESH_EXISTING)
 
 
 def require(value, message):
@@ -703,7 +733,7 @@ def frozen_inputs(frozen, *, built=False):
                                  COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST,
                                  CURRENT0481_MANIFEST, CURRENT0482_MANIFEST, FOCUS_RETURN_MANIFEST,
                                  FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST, CHECK27_V2_MANIFEST,
-                                 CHECK28_MANIFEST, CURRENT0490_MANIFEST), 'Unsafe frozen path')
+                                 CHECK28_MANIFEST, CURRENT0490_MANIFEST, CURRENT0500_MANIFEST), 'Unsafe frozen path')
         require(path.parent.resolve().is_relative_to(ROOT), 'Frozen path escapes snapshot')
         require(expected['mode'] in ('100644', '100755', '120000')
                 and re.fullmatch('[a-f0-9]{64}', expected['sha256']), 'Invalid frozen identity')
@@ -780,22 +810,23 @@ def check27_snapshot(frozen, *, settled_host=False):
             'Check-27 tail changed outside its exact harness correction')
 
 
-def current0490_snapshot(frozen):
+def current0490_snapshot(frozen, *, current0500=False):
+    binding, key = (CURRENT0500_BINDING, 'current0500Binding') if current0500 else (CURRENT0490_BINDING, 'current0490Binding')
     require(set(frozen) == {'schemaVersion', 'baselineRevision', 'baselineTree', 'revision', 'tree',
-                            'reviewed', 'changedPaths', 'files', 'current0490Binding'}
-            and frozen['current0490Binding'] == CURRENT0490_BINDING
-            and frozen['baselineRevision'] == CURRENT0490_BINDING['baselineRevision']
-            and frozen['baselineTree'] == CURRENT0490_BINDING['baselineTree']
-            and len(frozen['files']) == CURRENT0490_BINDING['trackedCount']
+                            'reviewed', 'changedPaths', 'files', key}
+            and frozen[key] == binding
+            and frozen['baselineRevision'] == binding['baselineRevision']
+            and frozen['baselineTree'] == binding['baselineTree']
+            and len(frozen['files']) == binding['trackedCount']
             and set(frozen['changedPaths']) == set(CURRENT0481_CHANGES) |
                 {'frontend/src/responsive-navigation.jsx'} | set(FOCUS_RETURN_V2_ADDITIONAL),
             'Pinned Main 6a composition/scope differs')
     closure = {n: v for n, v in frozen['files'].items() if n != DRIVER}
     require(hashlib.sha256(json.dumps(closure, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-            == CURRENT0490_BINDING['nonDriverClosureSha256'], 'Current Main/Files non-driver inputs changed')
+            == binding['nonDriverClosureSha256'], 'Current Main/Files non-driver inputs changed')
     project, lock = (tomllib.loads((ROOT / n).read_text()) for n in ('pyproject.toml', 'uv.lock'))
     local, = [p for p in lock['package'] if p['name'] == 'amplifier-unified']
-    require(project['project']['version'] == local['version'] == CURRENT0490_BINDING['version'],
+    require(project['project']['version'] == local['version'] == binding['version'],
             'Qualification preserves pinned Main version; no release-version selection')
     project['project']['version'] = local['version'] = '<local-project-version>'
     for value, key in ((project, 'normalizedProjectSha256'), (lock, 'normalizedLockSha256')):
@@ -803,13 +834,14 @@ def current0490_snapshot(frozen):
                 == CURRENT0490_BINDING[key], 'External dependency graph/config changed; component reuse unavailable')
 
 
-def current0490_environment(prior, frozen):
+def current0490_environment(prior, frozen, *, current0500=False, old_version='0.48.2'):
     """Explicit version-only normalization, NOT the historical whole-lock reuse guard."""
     old, current = read(prior / 'runtime-readiness.json'), read(OUT / 'runtime-readiness.json')
     before, after = dict(old), dict(current)
-    for value, version in ((before, '0.48.2'), (after, '0.49.0')):
+    version = '0.50.0' if current0500 else '0.49.0'
+    for value, expected_version in ((before, old_version), (after, version)):
         local, = [r for r in value['distributions'] if r['name'] == 'amplifier-unified']
-        require(local == {'name': 'amplifier-unified', 'version': version,
+        require(local == {'name': 'amplifier-unified', 'version': expected_version,
                           'direct': {'url': 'file:///workspace', 'dir_info': {'editable': False}}},
                 'Unexpected local project installation/provenance')
         value['distributions'] = [r for r in value['distributions'] if r['name'] != 'amplifier-unified']
@@ -836,13 +868,14 @@ def current0490_environment(prior, frozen):
     a, b = read(prior / 'prepared-plan.json'), read(OUT / 'prepared-plan.json')
     require(all(a[k] == b[k] for k in ('profileId', 'baseImage', 'nodeDirectory', 'nodeKey',
                                       'playwrightVersion', 'pythonProject')), 'Preparation owner/profile changed')
-    save('current0490-environment.json', {'externalRuntimeExact': True, 'actualNodeBrowserExact': True,
-        'oldVersion': '0.48.2', 'currentVersion': '0.49.0', 'wholeLockEquality': False,
+    save(('current0500' if current0500 else 'current0490') + '-environment.json', {
+        'externalRuntimeExact': True, 'actualNodeBrowserExact': True,
+        'oldVersion': old_version, 'currentVersion': version, 'wholeLockEquality': False,
         'oldRuntimeSha256': sha(prior / 'runtime-readiness.json'),
         'currentRuntimeSha256': sha(OUT / 'runtime-readiness.json')})
 
 
-def current0490_components(frozen):
+def current0490_components(frozen, *, current0500=False):
     """Revalidate accepted component evidence only; never restore old assets or wheel."""
     folders, packets = {}, {}
     for number, source, index_hash, count in (
@@ -915,7 +948,7 @@ def current0490_components(frozen):
     owners.discard('tests/fixtures/collaboration_native_probe.py')
     require(all(frozen['files'].get(n) == previous['files'][n] for n in owners),
             'Component owner/helper/fixture/Node input changed')
-    current0490_environment(folders[29], frozen)
+    current0490_environment(folders[29], frozen, current0500=current0500)
     renderer_proof(startup=True, live_route_cleanup=True, evidence_root=folders[27])
     renderer_proof(True, startup=True, live_route_cleanup=True, evidence_root=folders[27])
     usability_proof(folders[27])
@@ -940,12 +973,13 @@ def current0490_components(frozen):
     return value
 
 
-def current0490_host_boundary(frozen):
+def current0490_host_boundary(frozen, *, current0500=False):
     """Compare real source fixture imports, acknowledging Main's changed host modules."""
-    previous = read(OUT / 'prior-check27/parent-manifest.json')
+    prior = 'prior-check30' if current0500 else 'prior-check27'
+    previous = read(OUT / prior / 'parent-manifest.json')
     changes = []
     for when in ('before', 'after'):
-        old = read(OUT / f'prior-check27/source-fixture-origins-{when}.json')['modules']
+        old = read(OUT / prior / f'source-fixture-origins-{when}.json')['modules']
         current = read(OUT / f'source-fixture-origins-{when}.json')['modules']
         changed = {}
         for name in old.keys() | current.keys():
@@ -967,8 +1001,81 @@ def current0490_host_boundary(frozen):
                         'Actual module changed without a pinned source change')
             changed[name] = {'before': a, 'current': b}
         changes.append({'when': when, 'changedImports': changed, 'oldCount': len(old), 'currentCount': len(current)})
-    save('current0490-host-imports.json', {'sourceBoundaryFresh': True, 'observations': changes,
+    save(('current0500' if current0500 else 'current0490') + '-host-imports.json', {
+        'sourceBoundaryFresh': True, 'observations': changes,
         'nativeCommissioningOrFullRefitQualified': False})
+
+
+def current0500_units(frozen, components):
+    """Partial reuse is named: old 84 passed; only 80 carry, seven run freshly."""
+    require(sha(CHECK30_ROOT / 'INDEX.json') == CURRENT0500_BINDING['indexSha256'], 'Check30 index differs')
+    index = read(CHECK30_ROOT / 'INDEX.json')
+    require(index['selectedOnly'] is True and len(index['files']) == 212, 'Unexpected check30 packet')
+    bindings = {'INDEX.json': CURRENT0500_BINDING['indexSha256'],
+                **{n: row['sha256'] for n, row in index['files'].items()}}
+    require(bindings['report.json'] == CURRENT0500_BINDING['reportSha256']
+            and bindings['parent-manifest.json'] == CURRENT0500_BINDING['manifestSha256']
+            and bindings['evidence-manifest.json'] == CURRENT0500_BINDING['evidenceSha256'], 'Check30 anchors differ')
+    prior = OUT / 'prior-check30'
+    prior.mkdir()
+    for name, digest in bindings.items():
+        source, target = CHECK30_ROOT / name, prior / name
+        require(not Path(name).is_absolute() and '..' not in Path(name).parts and str(Path(name)) == name
+                and source.resolve() == source and stat.S_ISREG(source.lstat().st_mode)
+                and sha(source) == digest, 'Changed/unsafe check30 proof')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        require(sha(target) == digest, 'Copied check30 proof differs')
+    old, previous, evidence = read(prior / 'report.json'), read(prior / 'parent-manifest.json'), read(prior / 'evidence-manifest.json')
+    require(old['passed'] is True and old['complete'] is True and old['finalization'] == {'status': 'passed'}
+            and old['qualification'] == 'current0490-focused'
+            and previous['revision'] == CURRENT0500_BINDING['check30Revision']
+            and previous['tree'] == CURRENT0500_BINDING['check30Tree']
+            and old['manifestSha256'] == CURRENT0500_BINDING['manifestSha256']
+            and old['evidenceManifestSha256'] == CURRENT0500_BINDING['evidenceSha256'],
+            'Check30 accepted outcome/source differs')
+    for name, digest in bindings.items():
+        if name not in ('INDEX.json', 'report.json', 'evidence-manifest.json') and not name.startswith('host-'):
+            require(evidence[name] == digest, 'Check30 original evidence digest differs')
+    require(read(prior / 'current0490-components.json') == components,
+            'Seven components lost their accepted check30 lineage')
+    provenance = {'revision': previous['revision'], 'tree': previous['tree'],
+        'baselineRevision': previous['baselineRevision'], 'baselineTree': previous['baselineTree'],
+        'manifestSha256': CURRENT0500_BINDING['manifestSha256'],
+        'contractSha256': CURRENT0500_BINDING['originalContractSha256']}
+    commands = {'python-tests': [str(PYTHON), '-I', '-B', str(ROOT / DRIVER), '--python-tests'],
+                'frontend-units': [str(NODE), '--test', '--test-reporter=tap', *(str(ROOT / n) for n in UNIT_FILES)]}
+    for name, command in commands.items():
+        result, row = read(prior / name / 'results.json'), old['phases'][name]
+        raw, = result['scenarios']
+        require(result['source'] == provenance and result['complete'] is True and result['passed'] is True
+                and raw == row['process'] and raw['id'] == name and row['executed'] is True
+                and raw['status'] == row['status'] == row['verdict'] == 'passed'
+                and raw['command'] == row['command'] == command and raw['env'] == row['env']
+                and raw['cleanup'] == CLEAN and type(raw['exitCode']) is int and raw['exitCode'] == 0
+                and raw['reason'] is row['reason'] is None and row['cwd'] == str(ROOT / 'frontend'),
+                'Check30 unit process/provenance/cleanup differs')
+    require(junit(prior, current=True) == read(prior / 'python-counts.json')
+            and read(prior / 'pytest-call.json') == {'call': 'pytest.main', 'args': pytest_arguments(OUT, current=True)},
+            'Original84 exact collection/outcome differs')
+    unit_proof(prior)
+    require(len(CURRENT0500_FRESH_EXISTING) == 4 and len(CURRENT0500_PYTEST_NODES) == 7
+            and len(set(CURRENT0500_REUSED_PYTEST_NODES)) == 80
+            and set(CURRENT0500_REUSED_PYTEST_NODES) | set(CURRENT0500_FRESH_EXISTING) == set(CURRENT0481_PYTEST_NODES)
+            and not set(CURRENT0500_REUSED_PYTEST_NODES) & set(CURRENT0500_PYTEST_NODES),
+            'Partial reuse/fresh worktree selection overlaps or loses original coverage')
+    owners = {n.split('::')[0] for n in CURRENT0500_REUSED_PYTEST_NODES} | {'tests/conftest.py', *UNIT_FILES}
+    owners |= {n for n in previous['files'] if n.startswith(('frontend/', 'amplifier_web/canvas',
+                                                           'amplifier_web/artifact', 'amplifier_web/renderers/'))}
+    require(all(frozen['files'].get(n) == previous['files'][n] for n in owners), 'Reused unit owners/helpers changed')
+    current0490_environment(prior, frozen, current0500=True, old_version='0.49.0')
+    value = {'sourceRevision': previous['revision'], 'sourceTree': previous['tree'], 'priorPassed': True,
+        'originalPythonCases': 84, 'reusedPythonCases': list(CURRENT0500_REUSED_PYTEST_NODES),
+        'freshExistingCases': list(CURRENT0500_FRESH_EXISTING), 'freshCases': list(CURRENT0500_PYTEST_NODES),
+        'reusedNodeCases': 19, 'proofFiles': bindings, 'ownerCount': len(owners),
+        'sharedChangedHostQualifiedSeparately': True, 'oldWholeTreeQualifiedForCurrentMain': False}
+    save('check30-unit-reuse.json', value)
+    return value
 
 
 def check28_snapshot(frozen):
@@ -2287,7 +2394,9 @@ def runtime_readiness():
 
 def pytest_process():
     current = os.environ.get('FILES1318_CURRENT_QUALIFICATION') == '1'
-    selection = CURRENT0481_PYTEST_NODES if current else PYTEST_NODES
+    current0500 = os.environ.get('FILES1318_CURRENT0500_QUALIFICATION') == '1'
+    require(not current0500 or current, 'Current0500 child must retain current full-journey scope')
+    selection = CURRENT0500_PYTEST_NODES if current0500 else CURRENT0481_PYTEST_NODES if current else PYTEST_NODES
     sys.path[:0] = [str(ROOT), str(ROOT / 'tests')]
     import pytest
     import amplifier_web.server
@@ -2300,7 +2409,7 @@ def pytest_process():
             if Counter(collected) != Counter(selection):
                 raise pytest.UsageError('Files1318 exact collection mismatch')
 
-    args = pytest_arguments(OUT, current=current)
+    args = pytest_arguments(OUT, current=current, current0500=current0500)
     save('pytest-call.json', {'call': 'pytest.main', 'args': args})
     try:
         code = pytest.main(args, plugins=[Collection()])
@@ -2309,12 +2418,13 @@ def pytest_process():
     return int(code)
 
 
-def pytest_arguments(folder, *, current=False):
+def pytest_arguments(folder, *, current=False, current0500=False):
     return ['-c', '/dev/null', '--rootdir=/workspace', '--import-mode=importlib',
             '-p', 'no:cacheprovider', '-p', 'pytest_asyncio.plugin', '-p', 'pytest_aiohttp.plugin',
             '--asyncio-mode=auto', '-x', '-v', '--tb=short',
             '--junitxml=' + str(folder / 'python.xml'),
-            *[str(ROOT / n) for n in (CURRENT0481_PYTEST_NODES if current else PYTEST_NODES)]]
+            *[str(ROOT / n) for n in (CURRENT0500_PYTEST_NODES if current0500 else
+                                      CURRENT0481_PYTEST_NODES if current else PYTEST_NODES)]]
 
 
 def fixture_process(mode):
@@ -2359,8 +2469,8 @@ def installed_readiness():
                                    'wheel': wheel_proof(package.parent)})
 
 
-def junit(folder=None, *, current=False):
-    selection = CURRENT0481_PYTEST_NODES if current else PYTEST_NODES
+def junit(folder=None, *, current=False, current0500=False):
+    selection = CURRENT0500_PYTEST_NODES if current0500 else CURRENT0481_PYTEST_NODES if current else PYTEST_NODES
     root = ET.parse((folder or OUT) / 'python.xml').getroot()
     cases = root.findall('.//testcase')
     counts = {'tests': len(cases), **{tag: len(root.findall('.//' + tag))
@@ -4620,7 +4730,8 @@ def main():
                                  FOCUS_CONTRAST_SETTLED_MANIFEST, COMPACT_BUTTON_MANIFEST,
                                  COMPACT23_MANIFEST, COMPACT24_MANIFEST, COMPACT25_MANIFEST,
                                  CURRENT0481_MANIFEST, CURRENT0482_MANIFEST, FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST,
-                                 CHECK27_MANIFEST, CHECK27_V2_MANIFEST, CHECK28_MANIFEST, CURRENT0490_MANIFEST])
+                                 CHECK27_MANIFEST, CHECK27_V2_MANIFEST, CHECK28_MANIFEST,
+                                 CURRENT0490_MANIFEST, CURRENT0500_MANIFEST])
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--corner-diagnostic', action='store_true')
     modes.add_argument('--contour-qualification', action='store_true')
@@ -4650,14 +4761,15 @@ def main():
                       if args.focus_contrast else (MANIFEST, COMPACT_BUTTON_MANIFEST, COMPACT23_MANIFEST,
                           COMPACT24_MANIFEST, COMPACT25_MANIFEST, CURRENT0481_MANIFEST, CURRENT0482_MANIFEST,
                           FOCUS_RETURN_MANIFEST, FOCUS_RETURN_V2_MANIFEST, CHECK27_MANIFEST, CHECK27_V2_MANIFEST,
-                          CHECK28_MANIFEST, CURRENT0490_MANIFEST)
+                          CHECK28_MANIFEST, CURRENT0490_MANIFEST, CURRENT0500_MANIFEST)
                       if manifest_path == MANIFEST else (manifest_path,))
     if args.manifest not in manifest_paths:
         parser.error('The manifest must match the selected qualification mode')
     compact25 = args.manifest == COMPACT25_MANIFEST
     current0481 = args.manifest == CURRENT0481_MANIFEST
     current0482 = args.manifest == CURRENT0482_MANIFEST
-    current0490 = args.manifest == CURRENT0490_MANIFEST
+    current0500 = args.manifest == CURRENT0500_MANIFEST
+    current0490 = current0500 or args.manifest == CURRENT0490_MANIFEST
     installed_tail = args.manifest == CHECK28_MANIFEST
     copied_node = installed_tail or current0490
     settled_host = args.manifest in (CHECK27_V2_MANIFEST, CHECK28_MANIFEST)
@@ -4757,6 +4869,16 @@ def main():
             'Seven unchanged component checks retain check27/28 raw identity and accepted29 lineage; no old assets/wheel reused.',
             'External graph equivalence is separately checked; current root lock bytes and actual host imports remain distinct.',
             'No provider/native commissioning/Full-refit, physical-device, full-suite or independent pixel acceptance.']
+    if current0500:
+        report.update(qualification='current0500-focused', priorChecksConsumed=30,
+                      currentSource=CURRENT0500_BINDING, historicalProofReuse='80-python-19-node-and-seven-components')
+        report['phases']['check30-unit-reuse'] = {'status': 'unrun', 'reason': 'not_started'}
+        report['phases']['python-tests80'] = {'status': 'unrun', 'reason': 'reuse_pending_80_of_84_original_cases'}
+        report['phases']['frontend-units']['reason'] = 'reuse_pending_exact_check30_node_cases'
+        report['limits'][0] = 'Pinned Main 6fe / 0.50.0 composition; not publication or a new release-version decision.'
+        report['limits'][1] = ('Fresh seven worktree cases (four affected Files, three maintained Main), canonical build/parity, '
+                               'source and installed native journeys, new wheel and final integrity. '
+                               'Only80 original Python cases and19 Node cases carry forward by exact input/runtime validation.')
     if compact23:
         report.update(continuationOf=COMPACT23_BEFORE, priorPrelaunchNotRunsRetained=2)
         report['phases']['compact23-reuse'] = {'status': 'unrun', 'reason': 'not_started'}
@@ -4881,7 +5003,7 @@ def main():
             frozen = read(args.manifest)
             require(frozen['schemaVersion'] == 2, 'Wrong manifest schema')
             if current0490:
-                current0490_snapshot(frozen)
+                current0490_snapshot(frozen, current0500=current0500)
             elif installed_tail:
                 check28_snapshot(frozen)
             elif check27_tail:
@@ -5043,6 +5165,8 @@ def main():
             # Required by real shell package validation in maintained renderer
             # fixtures; this is the prepared Node tree, never host dependencies.
             env['AMPLIFIER_SHELL_NODE_MODULES'] = str(ROOT / 'frontend/node_modules')
+        if current0500:
+            env['FILES1318_CURRENT0500_QUALIFICATION'] = '1'
         if args.corner_diagnostic:
             env['FILES1318_CORNER_DIAGNOSTIC'] = '1'  # Fixed child evidence destination only.
         elif args.focus_contrast:
@@ -5147,11 +5271,21 @@ def main():
         run('browser-readiness', [NODE, '--input-type=module', '-e',
             BROWSER_READY.replace('/artifacts/files1318-qualified', str(OUT))], cap=45)
         if current0490:
-            reused_components = step('current0490-component-reuse', lambda: current0490_components(frozen))
+            reused_components = step('current0490-component-reuse', lambda: current0490_components(
+                frozen, current0500=current0500))
             for name, provenance in reused_components['rows'].items():
                 report['phases'][name].update(status='REUSED', executed=False, **provenance,
                     reason='unchanged_component_inputs_external_runtime_and_accepted29_lineage_verified',
                     verdict='expected_stalled_response_failure' if name == 'renderer-stalled-response' else 'passed')
+            save('report.json', report)
+        if current0500:
+            reused30 = step('check30-unit-reuse', lambda: current0500_units(frozen, reused_components))
+            for name, old_name, cases in (('python-tests80', 'python-tests', 80), ('frontend-units', 'frontend-units', 19)):
+                report['phases'][name].update(status='REUSED', executed=False,
+                    reason='unchanged_selected_owners_and_actual_external_runtime_verified', reusedCases=cases,
+                    sourceRevision=reused30['sourceRevision'], sourceTree=reused30['sourceTree'],
+                    priorEvidence=f'prior-check30/{old_name}/results.json',
+                    priorEvidenceSha256=reused30['proofFiles'][f'{old_name}/results.json'])
             save('report.json', report)
         if focus_return:
             reused26 = step('check26-unit-reuse', lambda: check26_units(frozen, shared_focus=shared_focus))
@@ -5299,9 +5433,10 @@ def main():
             save('report.json', report)
         if not checkpoint_mode and not reuse_mode and not args.coarse_toolbar_qualification and not compact23 and not focus_return:
             run('python-tests', [PYTHON, '-I', '-B', ROOT / DRIVER, '--python-tests'], cap=180,
-                verify=lambda: junit(current=current_full))
-            run('frontend-units', [NODE, '--test', '--test-reporter=tap',
-                                  *(ROOT / name for name in UNIT_FILES)], cap=60, verify=unit_proof)
+                verify=lambda: junit(current=current_full, current0500=current0500))
+            if not current0500:
+                run('frontend-units', [NODE, '--test', '--test-reporter=tap',
+                                      *(ROOT / name for name in UNIT_FILES)], cap=60, verify=unit_proof)
 
         def generated(mode):
             root = HARNESS if mode == 'installed' else ROOT
@@ -5464,7 +5599,7 @@ def main():
                             and report['phases']['frontend-build']['status'] == ('REUSED' if compact23 or check27_tail else 'passed')
                             and report['phases']['frontend-build']['executed'] is (not (compact23 or check27_tail))
                             and {name for name, row in report['phases'].items() if row['status'] == 'REUSED'} ==
-                                (set(CURRENT0490_COMPONENTS) if current0490 else
+                                (set(CURRENT0490_COMPONENTS) | ({'python-tests80', 'frontend-units'} if current0500 else set()) if current0490 else
                                  set(CHECK26_UNIT_PHASES) | (set(CHECK27_REUSED_PHASES) if check27_tail else set()) |
                                  (set(CHECK28_REUSED_PHASES) if installed_tail else set()) if focus_return else
                                  set(COMPACT23_REUSED_PHASES) | (set(COMPACT25_REUSED_PHASES) if compact25 else set())
@@ -5509,14 +5644,25 @@ def main():
                                         for folder in (source, OUT / f'prior-check{number}')
                                         for name, digest in reused_components['packets'][str(number)].items()),
                                 'Current component attribution changed or fresh package/resolver phase missing')
-                        current0490_host_boundary(frozen)
+                        current0490_host_boundary(frozen, current0500=current0500)
                         installed_node_proof()
+                    if current0500:
+                        phases |= {'check30-unit-reuse', 'python-tests80'}
+                        require(all(report['phases'][n]['status'] == 'REUSED' and report['phases'][n]['executed'] is False
+                                    for n in ('python-tests80', 'frontend-units'))
+                                and report['phases']['python-tests80']['reusedCases'] == 80
+                                and report['phases']['frontend-units']['reusedCases'] == 19
+                                and read(OUT / 'python-counts.json') == {'tests': 7, 'failure': 0, 'error': 0, 'skipped': 0}
+                                and all(sha(folder / n) == digest for folder in (CHECK30_ROOT, OUT / 'prior-check30')
+                                        for n, digest in reused30['proofFiles'].items()),
+                                'Partial unit reuse changed, missing fresh seven cases or old evidence modified')
                     require(set(report['phases']) == phases and all(
                         row['status'] == ('running' if name == 'final-integrity' else
                                          'REUSED' if (focus_return and name in CHECK26_UNIT_PHASES
                                                       or check27_tail and name in CHECK27_REUSED_PHASES
                                                       or installed_tail and name in CHECK28_REUSED_PHASES
-                                                      or current0490 and name in CURRENT0490_COMPONENTS) else 'passed')
+                                                      or current0490 and name in CURRENT0490_COMPONENTS
+                                                      or current0500 and name in ('python-tests80', 'frontend-units')) else 'passed')
                         for name, row in report['phases'].items())
                         and all(report['phases'][name]['executed'] is True for name in (
                             'frontend-build', 'frontend-build-parity', 'python-tests', 'frontend-units',
@@ -5527,7 +5673,8 @@ def main():
                             if not (focus_return and name in CHECK26_UNIT_PHASES
                                     or check27_tail and name in CHECK27_REUSED_PHASES
                                     or installed_tail and name in CHECK28_REUSED_PHASES
-                                    or current0490 and name in CURRENT0490_COMPONENTS))
+                                    or current0490 and name in CURRENT0490_COMPONENTS
+                                    or current0500 and name == 'frontend-units'))
                         and read(OUT / 'frontend-build/first-static.json') ==
                             {n.removeprefix('amplifier_web/static/'): h for n, h in expected['static'].items()}
                         and tree(ROOT / 'examples/shell-reader/dist') == read(OUT / 'reader-example-build.json')['files'],
