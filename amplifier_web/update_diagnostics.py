@@ -259,7 +259,9 @@ class UpdateDiagnostics:
             return
         batch = self.state.get('batch', {})
         active = self.state.setdefault('activeFailures', {})
-        covered = {**batch.get('recoveringFailures', {}), **batch.get('verifiedBrowserFailures', {})}
+        covered = dict(batch.get('recoveringFailures', {}))
+        if phase == 'restart-ack':
+            covered.update(batch.get('verifiedBrowserFailures', {}))
         for key, observed in covered.items():
             group = active.get(key)
             # Only failures covered when this exact attempt began. A later

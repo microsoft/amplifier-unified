@@ -428,6 +428,17 @@ def test_browser_recovery_never_adopts_a_later_failure_or_another_attempt(tmp_pa
     assert len(active(state)) == 1, 'The next attempt needs its own blank launch'
 
 
+@pytest.mark.parametrize('phase', ['restart-reconcile','restart-superseded'])
+def test_browser_qualification_of_superseded_candidate_is_not_current_browser_proof(tmp_path,phase):
+    state, diagnostics = fixture(tmp_path)
+    diagnostics.begin('application', 'a'*40, application_extras=['managed-browser'])
+    diagnostics.record('managed-browser-install','failed',errorType='CommandFailure')
+    diagnostics.begin('application', 'b'*40, application_extras=['managed-browser'])
+    diagnostics.browser_qualified()
+    diagnostics.record(phase,'succeeded')
+    assert len(active(state)) == 1
+
+
 async def test_real_attention_read_and_restart_preserve_unresolved_failure(tmp_path):
     from amplifier_web.service import AppService
     from amplifier_web.updates import UpdateManager
