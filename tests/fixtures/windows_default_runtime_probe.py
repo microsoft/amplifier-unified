@@ -37,7 +37,7 @@ CHECKPOINTS = frozenset({
     "installed_import", "installed_distribution", "installed_direct_url", "installed_origin",
     "installed_members", "installed_manifest", "journey", "complete",
     "outer_run", "outer_close", "parent_output_json", "parent_output_schema",
-    "inner_report_schema",
+    "inner_report_schema", "runtime_start",
 })
 ERROR_CLASSES = {kind: kind.__name__ for kind in (
     AssertionError, OSError, PermissionError, FileNotFoundError, NotADirectoryError,
@@ -50,10 +50,18 @@ CODE_LABELS = {
     "cold_journey": (__name__, "journey"),
     "cold_installed_host": (__name__, "installed_host"),
     "cold_outer": (__name__, "run_owned_probe"),
+    "cold_start": (__name__, "observe_default_start"),
     "private_directory": ("amplifier_web.windows_files", "PinnedDirectory.__init__"),
     "private_acl": ("amplifier_web.windows_files", "_API.validate_acl"),
     "private_file_info": ("amplifier_web.windows_files", "_API.info"),
+    "runtime_start": ("amplifier_web.runtime", "RuntimeManager.start"),
+    "runtime_start_locked": ("amplifier_web.runtime", "RuntimeManager._start_locked"),
+    "runtime_identify": ("amplifier_web.runtime", "_WindowsWorkerOwner.identify"),
+    "runtime_readline": ("amplifier_web.runtime", "_BoundedWorkerLines.readline"),
+    "runtime_write": ("amplifier_web.runtime", "RuntimeManager._write"),
+    "runtime_profiles": ("amplifier_web.runtime_profiles", "ensure"),
 }
+STARTUP_PHASES = frozenset({"runtime-setup", "bundle-preparation", "session-mount", "ready"})
 # Retain the outer lifeline and its scratch identity when the primitive cannot
 # confirm cleanup. A public FAIL record never authorizes a retry or deletion.
 FAILED_OUTER_OWNERS = []
@@ -216,9 +224,20 @@ def parse_inner_output(raw, *, outer_failure=None):
 def validate_inner_report(report):
     """Only bounded fixed fields may leave the private test directory."""
     assert type(report) is dict
-    assert set(report) - {"diagnostic"} == set(empty_inner_report())
+    assert set(report) - {"diagnostic", "startup"} == set(empty_inner_report())
     if "diagnostic" in report:
         validate_diagnostic(report["diagnostic"])
+    if "startup" in report:
+        startup = report["startup"]
+        assert type(startup) is dict and set(startup) == {
+            "diagnosticStatus", "verifiedWorkerObserved", "phases",
+            "projectManifestExists", "lockExists", "venvPythonExists"}
+        assert type(startup["diagnosticStatus"]) is str and startup["diagnosticStatus"] in {"PENDING", "PASS", "FAIL"}
+        assert type(startup["phases"]) is list and len(startup["phases"]) <= len(STARTUP_PHASES)
+        assert all(type(phase) is str and phase in STARTUP_PHASES for phase in startup["phases"])
+        assert len(set(startup["phases"])) == len(startup["phases"])
+        assert all(type(startup[key]) is bool for key in (
+            "verifiedWorkerObserved", "projectManifestExists", "lockExists", "venvPythonExists"))
     assert report["schema"] == 1 and report["status"] in {"PASS", "FAIL"}
     assert report["stage"] in {"preflight", "fixture", "preparation", "turn", "stop", "complete"}
     assert set(report["checks"]) == set(CHECKS)
@@ -234,6 +253,7 @@ def validate_inner_report(report):
         assert row["commit"] is None or re.fullmatch(r"[0-9a-f]{40,64}", row["commit"])
         assert re.fullmatch(r"[0-9a-f]{64}", row["sha256"])
     if report["status"] == "PASS":
+        assert "startup" not in report or report["startup"]["diagnosticStatus"] == "PASS"
         assert "diagnostic" not in report or not report["diagnostic"]["errors"]
         assert all(report["checks"].values()) and report["stage"] == "complete"
         assert all(report[name] is not None for name in ("wheelSha256", "manifestSha256", "lockSha256"))
@@ -243,7 +263,7 @@ def validate_inner_report(report):
 
 def validate_report(report):
     """The public result requires parent-observed cleanup, not child testimony."""
-    assert set(report) - {"diagnostic"} == set(empty_inner_report()) | {"outerJob"}
+    assert set(report) - {"diagnostic", "startup"} == set(empty_inner_report()) | {"outerJob"}
     assert report["schema"] == 2
     validate_inner_report({key: (1 if key == "schema" else report[key])
                            for key in report if key != "outerJob"})
@@ -404,6 +424,50 @@ def prepare_fixture_home(root):
         XDG_CONFIG_HOME=str(user), XDG_CACHE_HOME=str(user / "cache"))
 
 
+async def observe_default_start(runtime, session, emit, report, project):
+    """Observe the unchanged default start, never replace its result or failure.
+
+    A verified owner is recorded only after production's identity check has
+    assigned its worker PID. The first bundle-preparation phase is the existing
+    worker-start bootstrap marker on that same protocol, not a new entrypoint.
+    File existence is merely a preparation breadcrumb, not installed provenance.
+    """
+    facts = {"diagnosticStatus": "PENDING", "verifiedWorkerObserved": False, "phases": [],
+             "projectManifestExists": False, "lockExists": False, "venvPythonExists": False}
+    report["startup"] = facts
+    failed = False
+
+    def observe_row():
+        owner = runtime.workers.get(session["id"], {}).get("windows_owner")
+        if owner is not None and type(owner.process.pid) is int and owner.process.pid > 0:
+            facts["verifiedWorkerObserved"] = True
+
+    async def observed_emit(kind, data):
+        nonlocal failed
+        try:
+            observe_row()
+            if kind == "runtime.status":
+                phase = data.get("phase")
+                if type(phase) is str and phase in STARTUP_PHASES and phase not in facts["phases"]:
+                    facts["phases"].append(phase)
+        except BaseException:
+            failed = True
+        # Observation cannot suppress a callback, its return, error or cancel.
+        return await emit(kind, data)
+
+    try:
+        return await runtime.start(session, observed_emit)
+    finally:
+        try:
+            observe_row()
+            facts["projectManifestExists"] = (project / "pyproject.toml").is_file()
+            facts["lockExists"] = (project / "uv.lock").is_file()
+            facts["venvPythonExists"] = (project / ".venv/Scripts/python.exe").is_file()
+        except BaseException:
+            failed = True
+        facts["diagnosticStatus"] = "FAIL" if failed else "PASS"
+
+
 async def journey(root, wheel, report):
     checkpoint(report, "fixture_home")
     prepare_fixture_home(root)
@@ -458,7 +522,10 @@ async def journey(root, wheel, report):
         # Exercise the actual legacy no-generation ensure branch, not a stub.
         assert await ensure(home, None, session) is None
         report["stage"] = "preparation"
-        await runtime.start(session, service.on_runtime_event)
+        checkpoint(report, "runtime_start")
+        await observe_default_start(runtime, session, service.on_runtime_event, report, project)
+        assert report["startup"]["diagnosticStatus"] == "PASS"
+        checkpoint(report, "journey")
         row = runtime.workers[sid]
         owner = row["windows_owner"]
         owners.append(owner)

@@ -1963,6 +1963,132 @@ def test_default_runtime_probe_preflight_failure_facts_distinguish_boundaries(mo
     assert bool(opened) == (boundary in {'private_log', 'journey_imports', 'installed_direct_url'})
 
 
+@pytest.mark.parametrize('identity', [False, True])
+async def test_default_runtime_probe_startup_distinguishes_identity_from_ready_timeout(
+        windows_runtime_model, tmp_path, monkeypatch, identity):
+    """Real host start/identity/write/wait, with only the existing inert job."""
+    fixture = _default_runtime_probe_module()
+    monkeypatch.setitem(sys.modules, fixture.__name__, fixture)
+    model = windows_runtime_model
+    model.manager.startup_timeout = .02
+    if identity:
+        model.identify()
+    original_write = model.job.write
+
+    def not_ready(raw):
+        data = json.loads(raw)
+        if data['op'] == 'start':
+            model.job.writes.append(data)
+            model.job.stdout.feed_data(json.dumps({
+                'type': 'runtime.progress', 'phase': 'bundle-preparation',
+                'detail': 'private URL and token must not enter the diagnostic',
+            }).encode() + b'\n')
+        else:
+            original_write(raw)
+
+    monkeypatch.setattr(model.job, 'write', not_ready)
+    report = fixture.empty_inner_report()
+    fixture.checkpoint(report, 'runtime_start')
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            await fixture.observe_default_start(
+                model.manager, {'id': 'cold-start-model'}, model.emit, report, tmp_path)
+        facts = fixture.failure_facts(caught.value, 'runtime_start')
+        fixture.validate_diagnostic(facts)
+        sources = {frame['source'] for row in facts['errors'] for frame in row['frames']}
+        assert {'cold_start', 'runtime_start', 'runtime_start_locked'} <= sources
+        assert ('runtime_identify' in sources) is not identity
+        assert facts['errors'][0]['class'] == ('RuntimeError' if identity else 'other')
+        assert any(row['class'] == 'TimeoutError' for row in facts['errors'])
+        startup = report['startup']
+        assert startup['diagnosticStatus'] == 'PASS'
+        assert startup['verifiedWorkerObserved'] is identity
+        assert ('bundle-preparation' in startup['phases']) is identity
+        assert not any(startup[key] for key in (
+            'projectManifestExists', 'lockExists', 'venvPythonExists'))
+        fixture.validate_inner_report(report)
+        assert 'private' not in json.dumps(report)
+        assert model.job.done.is_set() and model.job.tree_empty and model.job.io_finalized
+        assert not model.manager.workers and not model.manager._preparations
+        assert not any(data['op'] == 'send' for data in model.job.writes)
+    finally:
+        await model.manager.close()
+
+
+@pytest.mark.parametrize('outcome', ['return', 'error', 'cancel', 'callback-error', 'callback-cancel'])
+@pytest.mark.parametrize('observer_fault', [False, True])
+async def test_default_runtime_probe_start_observer_preserves_original_behavior(
+        tmp_path, outcome, observer_fault):
+    fixture = _default_runtime_probe_module()
+    report = fixture.empty_inner_report()
+    token = object()
+    error = (asyncio.CancelledError('private cancellation') if 'cancel' in outcome
+             else ValueError('private startup error'))
+    callbacks = []
+
+    class Rows:
+        def get(self, *args):
+            raise OSError('private diagnostic fault')
+
+    class Runtime:
+        workers = Rows() if observer_fault else {}
+
+        async def start(self, session, emit):
+            assert session == {'id': 'fixed-synthetic-session'}
+            assert await emit('runtime.status', {'phase': 'private-path-or-symbol'}) is token
+            assert await emit('runtime.status', {'phase': 'session-mount'}) is token
+            assert await emit('runtime.status', {'phase': 'session-mount'}) is token
+            if outcome == 'return':
+                return token
+            raise error
+
+    async def emit(kind, data):
+        callbacks.append((kind, data))
+        if outcome.startswith('callback-'):
+            raise error
+        return token
+
+    for name in ('pyproject.toml', 'uv.lock', '.venv/Scripts/python.exe'):
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'synthetic existence only, not provenance')
+    call = fixture.observe_default_start(
+        Runtime(), {'id': 'fixed-synthetic-session'}, emit, report, tmp_path)
+    if outcome == 'return':
+        assert await call is token
+    else:
+        with pytest.raises(type(error)) as caught:
+            await call
+        assert caught.value is error
+    assert len(callbacks) == (1 if outcome.startswith('callback-') else 3)
+    assert callbacks[0][1]['phase'] == 'private-path-or-symbol'
+    facts = report['startup']
+    assert facts['diagnosticStatus'] == ('FAIL' if observer_fault else 'PASS')
+    assert facts['phases'] == ([] if observer_fault or outcome.startswith('callback-') else ['session-mount'])
+    assert all(facts[key] for key in ('projectManifestExists', 'lockExists', 'venvPythonExists')) is not observer_fault
+    fixture.validate_inner_report(report)
+    assert 'private' not in json.dumps(report)
+
+
+def test_default_runtime_probe_startup_snapshot_schema_is_closed():
+    fixture = _default_runtime_probe_module()
+    valid = {'diagnosticStatus': 'PASS', 'verifiedWorkerObserved': False,
+             'phases': ['runtime-setup', 'bundle-preparation'],
+             'projectManifestExists': True, 'lockExists': False, 'venvPythonExists': False}
+    report = {**fixture.empty_inner_report(), 'startup': valid}
+    fixture.validate_inner_report(report)
+    assert fixture.parse_inner_output(json.dumps(report)) == report
+    fixture.validate_report({**report, 'schema': 2, 'outerJob': {
+        'status': 'confirmed', 'activeProcesses': 0, 'treeEmpty': True,
+        'ioFinalized': True, 'timedOut': False, 'outputDiscarded': False}})
+    for patch in ({'diagnosticStatus': 'private-exception'}, {'privatePath': 'private'},
+                  {'verifiedWorkerObserved': 1234}, {'phases': ['private-phase']},
+                  {'phases': ['ready', 'ready']}, {'phases': ['ready'] * 100},
+                  {'lockExists': 1}, {'stderr': 'private-log'}):
+        with pytest.raises(AssertionError):
+            fixture.validate_inner_report({**report, 'startup': {**valid, **patch}})
+
+
 @pytest.mark.parametrize('fault,checkpoint', [
     (None, 'installed_members'), ('distribution', 'installed_distribution'),
     ('direct-url', 'installed_direct_url'), ('editable', 'installed_direct_url'),
