@@ -281,6 +281,13 @@ async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path,
     async def overrides(project, target): return target
     class Diagnostics:
         async def run(self, phase, function, *command, **kwargs):
+            if function is reconciliation.reconcile:
+                assert phase == 'ecosystem-source-policy' and not kwargs
+                assert command[:3] == (manager, receipt, project)
+                assert len(command) == 4 and callable(command[3])
+                result = await function(*command, **kwargs)
+                completed.append('reconcile')
+                return result
             if phase == 'ecosystem-runtime-policy':
                 return await function(*command, **kwargs)
             if phase == 'ecosystem-source-preflight':
@@ -331,6 +338,10 @@ async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path,
                 await asyncio.sleep(.01)
                 completed.append(key)
             finally: counts[key] -= 1
+    async def inventory(home):
+        assert home == tmp_path
+        return []  # This profile-concurrency fixture has no installed runtime.
+    monkeypatch.setattr(runtime_environment, 'update_inventory', inventory)
     monkeypatch.setattr(runtime_environment, 'stage', stage)
     monkeypatch.setattr(runtime_qualification, 'freeze', freeze)
     monkeypatch.setattr(runtime_qualification, 'prepare_overrides', overrides)
@@ -349,7 +360,8 @@ async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path,
         assert json.loads((receipt/'profiles-qualified.json').read_text())['profiles'] == sorted(checked_profiles)
     assert completed.count('prepare') == 1 and peaks['prepare'] == 1
     assert completed.count('sync')==1
-    assert completed[:5] == ['sync', 'collect', 'align', 'prepare', 'freeze']
+    assert completed[:6] == ['sync', 'reconcile', 'collect', 'align', 'prepare', 'freeze']
+    assert completed.count('reconcile') == 1
     assert completed.count('collect') == 1
     assert counts == {'prepare': 0, 'check': 0}  # No orphan probes after a failure.
     preparation=[row['probeProgress'] for row in published if row.get('probeProgress',{} ) is not None and row.get('probeProgress',{}).get('phase')=='prepare']

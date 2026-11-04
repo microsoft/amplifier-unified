@@ -529,3 +529,25 @@ async def test_relative_host_module_keeps_its_observed_git_behavior_policy(selec
     assert report['packages'][NAME]['status'] == 'selected'
     assert report['packages'][NAME]['ref'] == 'main'
     assert not s.collector.local_sources
+
+
+@pytest.mark.parametrize('package_count', [0, 256])
+async def test_no_legacy_policy_reads_one_inventory_without_collecting(selected, monkeypatch, package_count):
+    s = selected
+    rows = [row(package='fixture-kept-' + str(index), ref='main', current=s.old)
+            for index in range(package_count)]
+    reads = []
+    async def inventory(home):
+        assert home == s.home
+        reads.append(home)
+        return rows
+    async def unexpected_collection():
+        raise AssertionError('No legacy policy must not collect or install a batch')
+    monkeypatch.setattr(environments, 'update_inventory', inventory)
+    project = s.home / 'runtime/unused'
+    before = s.marker.read_bytes()
+    assert await migration.reconcile(s.manager, s.stage, project, unexpected_collection) is None
+    assert reads == [s.home]
+    assert s.marker.read_bytes() == before
+    assert not project.exists()
+    assert not (s.stage / migration.RECEIPT).exists()
