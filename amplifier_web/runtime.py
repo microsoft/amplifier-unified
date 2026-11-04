@@ -548,7 +548,7 @@ class RuntimeManager:
         row["heartbeat"] = asyncio.create_task(self._progress(sid, row))
         # The worker restores normal history from its checkpoint. Sending the
         # browser's execution logs, catalogs and attachment history is redundant.
-        config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','interruptionRevision','bundle','selection','forkContext','replaceSavedSelection','bundleReplacement') if key in session}
+        config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','interruptionRevision','bundle','selection','forkContext','replaceSavedSelection','bundleReplacement','externalRequest') if key in session}
         config['id'] = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
         config['configurationPendingRevision'] = session.get('configurationPendingRevision', 0)
         config['ownerSessionId'] = sid  # Identity only; workers read current standing policy themselves.
@@ -1167,6 +1167,8 @@ class RuntimeManager:
         configuration_guard = await self._start_for_input(session, emit,
             **({'admission_check': admission_check} if admission_check else {}))
         def guard():
+            if admission_check:
+                admission_check()
             update_gate(session['id'], input_id)
             message = next((m for m in session.get('messages', []) if m.get('inputId') == input_id), {})
             getattr(self, 'update_message_guard', lambda sid, message: None)(session['id'], message)

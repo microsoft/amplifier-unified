@@ -27,6 +27,11 @@ def challenge(verifier):
 
 async def permits_companion(request):
     """Fail closed before dispatch; never grant a generic action capability."""
+    external = r'/api/sessions/[^/]+/external-requests'
+    if request.method == 'GET' and re.fullmatch(external + r'/[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}', request.path):
+        return True  # Exact parent/device binding is checked by the owner.
+    if request.method == 'POST' and re.fullmatch(external, request.path):
+        return True  # No bind, generic actions, creation or configuration grant.
     if request.method == 'GET':
         if request.path in {'/api/companion', '/api/activity'}:
             return True

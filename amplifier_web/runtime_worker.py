@@ -894,12 +894,13 @@ class Worker:
             with startup_timing.phase('manager.prepare'):
                 self.session, self.runtime, report = await prepare_manager(workspace,
                     runtime=self.runtime, bundle=config.get("bundle") or None, ask=self.ask,
-                    resume=True, application_host="Amplifier Web", selection=selection or None,
+                    resume=not bool(config.get('externalRequest')), application_host="Amplifier Web", selection=selection or None,
                     report_dir=report_directory, shared_handle=self.shared_handle,
                     shared_handle_getter=lambda: self.shared_handle,
                     write_guard=self.activation_gate.check_current, resolved_root=resolved_root,
                     execution_workspace=config.get("workingDirectory"), install_overrides=install_overrides,
                     owner_session_id=config.get("ownerSessionId"),
+                    external_request=bool(config.get('externalRequest')),
                     startup_timing=startup_timing)
             if qualified_overrides is not None:
                 active_install_overrides(self.home, str(qualified_overrides))
@@ -937,7 +938,8 @@ class Worker:
             host = self
             from amplifier_web.app_guidance import install_app_access
             with startup_timing.phase('worker.app.access'):
-                await install_app_access(self.session.coordinator, self.app_access_bridge(self.session.coordinator))
+                if not config.get('externalRequest'):
+                    await install_app_access(self.session.coordinator, self.app_access_bridge(self.session.coordinator))
                 self.install_collaboration_checkpoint(self.session.coordinator)
             original_host = self.session.coordinator.get_capability("live.host")
             class ObservedHost:
@@ -948,6 +950,8 @@ class Worker:
                     if coordinator:
                         host.install_activity(coordinator)
                         host.install_collaboration_checkpoint(coordinator)
+                        if config.get('externalRequest'):
+                            return result
                         await install_app_access(coordinator, host.app_access_bridge(coordinator))
                         from amplifier_web.host.session import SelectedProvider
                         transform = coordinator.get_capability('web.provider_transform')
@@ -1554,6 +1558,9 @@ class Worker:
                     except Exception:
                         pass  # The retained owner reports failure and keeps uncertainty.
                 return
+            if (self.start_config or {}).get('externalRequest'):
+                from amplifier_web.external_requests import admit_command
+                admit_command(self, op, data)
             if op == "resume":
                 if not self.session or not self.execution or self.execution.done():
                     raise RuntimeError('The session has not finished loading successfully.')

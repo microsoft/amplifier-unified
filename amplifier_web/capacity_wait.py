@@ -19,6 +19,11 @@ async def admit(service, sid, args):
     has_child_scope = '_childOrigin' in binding
     child_scope = copy.deepcopy(binding.get('_childOrigin'))
     def child_guard(current):
+        if record := service.external_requests.for_execution(sid):
+            try:
+                service.external_requests.guard(record)
+            except Exception:
+                return 'External-request authority changed; no provider request was sent.'
         if not has_child_scope:
             return None
         live = child_execution(service, current, child_id=row.get('sessionId'))

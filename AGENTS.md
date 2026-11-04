@@ -1,5 +1,14 @@
 # Contributor operating guidance
 
+External-request ingress is response-only. Keep its explicit companion-to-parent
+binding, one fresh internal identity/input per payload, no private capability
+mounts, and native final-message sealing. Unknown outcomes never replay. Qualify
+changes with `tests/test_external_requests.py` and the affected companion,
+response-completion and runtime admission tests.
+Provider config is an execution boundary too: external ingress refuses opaque
+request overrides before reservation; retain the locked real-assembler canary in
+`tests/test_external_provider_safety.py` without changing provider wire settings.
+
 For source discovery, use the [source and ownership map](docs/source-context.md).
 `python scripts/source_context.py` summarizes tracked inputs without reading
 their bodies; select relevant owners, contracts and tests before expanding context.
