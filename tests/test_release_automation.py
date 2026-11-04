@@ -11,6 +11,7 @@ import tomllib
 import zipfile
 
 import pytest
+import yaml
 
 spec=importlib.util.spec_from_file_location('application_release',Path(__file__).parents[1]/'scripts/release.py')
 release=importlib.util.module_from_spec(spec);spec.loader.exec_module(release)
@@ -161,6 +162,16 @@ def test_prepare_cli_produces_metadata_without_installing_or_building(preparatio
     assert payload['version'] == '1.2.4'
     assert payload['buildStatus'] == 'not-run'
     assert payload['buildCommand'] == ['npm','run','build','--prefix','frontend']
+
+
+def test_automatic_publication_only_watches_the_dedicated_version_owner():
+    workflow = yaml.load((Path(__file__).parents[1]/'.github/workflows/release.yml').read_text(),
+                         Loader=yaml.BaseLoader)
+    assert workflow['on']['push'] == {'branches':['main'], 'paths':['amplifier_web/__init__.py']}
+    assert 'release_revision' in workflow['on']['workflow_dispatch']['inputs']
+    resolution = next(step for step in workflow['jobs']['prepare']['steps'] if step.get('id') == 'release')
+    assert resolution['env']['SELECTED_RELEASE_REVISION'] == '${{ inputs.release_revision }}'
+    assert 'plan --revision "$SELECTED_RELEASE_REVISION"' in resolution['run']
 
 
 @pytest.mark.parametrize('annotated',[False,True])

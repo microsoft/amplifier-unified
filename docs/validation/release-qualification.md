@@ -116,6 +116,9 @@ missing or stale. Include the four prepared metadata files and all resulting
 `amplifier_web/static` changes in the release commit: a version-only edit still
 changes generated bundle hashes. The command does not replace review of the
 authored release scope or the normal unused-version check.
+Automatic publication watches the dedicated `amplifier_web/__init__.py` version
+owner. Dependency or release-tool edits alone do not start a publisher; explicit
+manual dispatch remains available with the same immutable identity checks.
 
 Reuse focused behavior evidence for unchanged tested inputs. Do not add a local
 full frontend suite or a second manual build solely for a version change.
