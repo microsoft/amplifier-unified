@@ -1168,7 +1168,7 @@ class UpdateManager:
                     if not task.done(): task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
         if fresh:
-            from .runtime_policy_reconciliation import reconcile, legacy_candidates, RECEIPT
+            from .runtime_policy_reconciliation import reconcile
             from .runtime_source_alignment import align_checked_sources
             async def collect_source_policy():
                 target = stage / 'selected-source-declarations.json'
@@ -1180,9 +1180,9 @@ class UpdateManager:
                     '--install-overrides', str(overrides), '--global-only', '--profiles', str(profiles_file),
                     '--source-policy-only', str(target), env=env, timeout=900)
                 return json.loads(target.read_text())
-            previous = receipt_directory(self.home, active_release(self.home).get('current'))
-            if legacy_candidates(self.inventory) or (previous / RECEIPT).exists():
-                await self.diagnostics.run('ecosystem-source-policy', reconcile, self, stage, project, collect_source_policy)
+            # Availability can predate later worker installs. Reconciliation
+            # reads the current runtime and applies its own source protections.
+            await self.diagnostics.run('ecosystem-source-policy', reconcile, self, stage, project, collect_source_policy)
             # Source paths first materialized during composition were absent
             # from the early cache scan. Align them before a fresh composition;
             # never install the batch captured before a binding/checkout moved.

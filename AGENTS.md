@@ -23,6 +23,14 @@ Amplifier Agent is separate from Unified's Core/Foundation runtime.
 - Keep unrelated upstream improvements separate from Unified release gates.
   Close out-of-scope tracking and correct misleading reviews when discovered.
 
+## Recheck current component policy during qualification
+
+The availability inventory can predate later worker installs. Fresh update
+qualification must let reconciliation inspect the current runtime before source
+preflight, preserving its pin, local-source and identity guards. The focused
+`updater-policy-reconciliation` Python suite covers this scheduling boundary;
+its synthetic profile adapter does not qualify real conversation mounts.
+
 ## Make performance changes reviewable
 
 For changes to repeated reads, publication, persistence, runtime preparation or

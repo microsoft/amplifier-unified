@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from amplifier_web import runtime_environment, runtime_qualification, updates
+from amplifier_web import runtime_policy_reconciliation as reconciliation
 from amplifier_web.updates import UpdateManager
 
 
@@ -35,6 +36,14 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
         calls.append('verify')
     class Diagnostics:
         async def run(self, phase, function, *command, **kwargs):
+            if function is reconciliation.reconcile:
+                # This lifecycle test has no installed runtime. The real
+                # reconcile/uv/freeze path is covered by the sibling fixture.
+                assert phase == 'ecosystem-source-policy'
+                assert command[:3] == (manager, receipt, first)
+                assert len(command) == 4 and callable(command[3])
+                calls.append('reconcile')
+                return
             if phase == 'ecosystem-source-preflight':
                 assert calls[-1] == 'collect'
                 assert kwargs == {'selection': selection}
@@ -72,7 +81,7 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
     manager = SimpleNamespace(home=tmp_path, inventory=[], diagnostics=Diagnostics(),publish=AsyncMock(),
         service=SimpleNamespace(get_state=lambda: {'sessions': [], 'settings': {'workspace': str(tmp_path), 'bundle': 'work'}}))
     await UpdateManager.validate(manager, receipt, release)
-    assert calls == ['stage', 'runtime-sync', ('overrides', first), 'collect', 'source-alignment', ('overrides', first), ('probe', True), 'freeze', 'verify', ('overrides', frozen), ('probe', False), ('probe', False), ('probe', False), ('probe', False), 'verify']
+    assert calls == ['stage', 'runtime-sync', 'reconcile', ('overrides', first), 'collect', 'source-alignment', ('overrides', first), ('probe', True), 'freeze', 'verify', ('overrides', frozen), ('probe', False), ('probe', False), ('probe', False), ('probe', False), 'verify']
 
 
 async def test_historical_receipt_never_gets_refresh_or_new_foundation_arguments(tmp_path, monkeypatch):
