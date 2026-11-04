@@ -302,10 +302,14 @@ def cleanup_refusal_code(exc):
         'The local cleanup executor changed during inspection. No removal was started.': 'cleanup_executor_changed',
         'The fresh cleanup inspection changed before admission.': 'cleanup_qualification_changed',
         'The original cleanup owner or receipt changed.': 'original_cleanup_changed',
+        'The original removal remains unresolved. Inspect its retained evidence; a new request cannot repeat it.': 'original_cleanup_unresolved',
+        'The original removal admission cannot be rebound or replayed.': 'cleanup_admission_changed',
         'Choose this environment’s confirmed pre-removal failure.': 'prior_cleanup_unverified',
         'The previous cleanup does not establish a safe pre-removal failure.': 'prior_cleanup_unverified',
         'The task moved or stopped before environment admission.': 'task_authority_changed',
         'The approved test environment configuration changed.': 'backend_configuration_changed',
+        'The approved backend changed. Restore its exact configuration before managing this environment.': 'backend_configuration_changed',
+        'The retained environment directory changed; no external action was attempted.': 'environment_directory_changed',
     }.get(str(exc), 'cleanup_admission_refused')
 
 

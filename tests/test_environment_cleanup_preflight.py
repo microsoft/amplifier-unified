@@ -170,6 +170,10 @@ async def test_cleanup_helper_loss_with_retained_preparation_remains_unknown(app
 @pytest.mark.parametrize('message,code', [
     ('The local cleanup executor changed during inspection. No removal was started.', 'cleanup_executor_changed'),
     ('The fresh cleanup inspection changed before admission.', 'cleanup_qualification_changed'),
+    ('The original removal remains unresolved. Inspect its retained evidence; a new request cannot repeat it.', 'original_cleanup_unresolved'),
+    ('The original removal admission cannot be rebound or replayed.', 'cleanup_admission_changed'),
+    ('The approved backend changed. Restore its exact configuration before managing this environment.', 'backend_configuration_changed'),
+    ('The retained environment directory changed; no external action was attempted.', 'environment_directory_changed'),
     ('private /source/path or credential-like detail', 'cleanup_admission_refused'),
 ])
 async def test_unstarted_cleanup_has_bounded_refusal_reason(app, backend, monkeypatch, message, code):
