@@ -72,6 +72,10 @@ and package checks isolated, but do not provision and finalize a fresh test
 environment for each release when the existing dependencies and toolchain match.
 The publication workflow owns the fresh exact-candidate installed-package proof;
 a version change alone does not require rebuilding the local environment.
+The in-app `workspace.tests.submit` path still freezes each new source; its
+existing manual execute action does not refresh that source for a later
+candidate. Queued callers reuse dependency layers until their owner provides a
+supported prepared-source update path; do not invent a raw-host workaround.
 
 Browser fixture launchers honor `AMPLIFIER_TEST_PYTHON` as one executable path.
 Use the prepared environment's Python path when source and dependencies live
