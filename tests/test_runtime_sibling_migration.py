@@ -365,7 +365,8 @@ async def test_real_legacy_local_sibling_refuses_before_checkout_or_install(lega
     c.assert_preserved()
 
 
-async def test_validate_orders_real_legacy_sibling_collection_and_single_install(legacy_siblings, monkeypatch):
+@pytest.mark.parametrize('inventory_snapshot', ['current', 'missing-packages'])
+async def test_validate_orders_real_legacy_sibling_collection_and_single_install(legacy_siblings, monkeypatch, inventory_snapshot):
     """Real validate/reconcile/uv/freeze; adapt only the profile probe boundary.
 
     The synthetic sibling modules have no provider or conversation loop. The
@@ -374,7 +375,11 @@ async def test_validate_orders_real_legacy_sibling_collection_and_single_install
     from amplifier_web import bundles, update_sources
     from amplifier_web.host import config as host_config
     c = legacy_siblings
-    c.manager.inventory = await environments.update_inventory(c.home)
+    current = await environments.update_inventory(c.home)
+    assert set(migration.legacy_candidates(current)) == set(PACKAGES)
+    # Availability may predate a worker installing these packages. Staging
+    # already reads the live runtime; reconciliation must do the same.
+    c.manager.inventory = current if inventory_snapshot == 'current' else []
     monkeypatch.setattr(bundles, 'profile_candidates', lambda config: ['fixture'])
     monkeypatch.setattr(bundles, 'offered_profiles', lambda config: ['fixture'])
     monkeypatch.setattr(host_config, 'read_config', lambda *args, **kwargs: c.config)

@@ -25,6 +25,7 @@ on:
           - updater-omitted-ref
           - updater-synthetic-acquisition
           - updater-expanded-lock
+          - updater-policy-reconciliation
           - native-child-fixtures
       core_wheels:
         description: Qualify published Core wheels and real runtime on both Linux architectures
@@ -75,6 +76,7 @@ jobs:
               'shared-work-native': ['tests/test_native_provider.py', 'tests/test_coordination_delivery.py', 'tests/test_work_native_effects.py', 'tests/test_work_origin.py', 'tests/test_capacity.py', 'tests/test_release_qualification.py'],
               'manager-exception-boundary': ['tests/test_manager_exception_boundary.py', 'tests/test_manager_failure_details.py', 'tests/test_session_health.py', 'tests/test_retained_failure_recovery.py', 'tests/test_runtime.py'],
               'native-child-fixtures': ['tests/test_child_app_assignment_capture.py', 'tests/test_history_scope_native.py', 'tests/test_file_source_native_children.py'],
+              'updater-policy-reconciliation': ['tests/test_runtime_qualification.py', 'tests/test_runtime_policy_reconciliation.py', 'tests/test_runtime_sibling_migration.py', 'tests/test_runtime_checked_cache.py', 'tests/test_runtime_cache_ref_policy.py', 'tests/test_runtime_updates.py', 'tests/test_runtime_ref_identity.py'],
           }
           selection = os.environ['CHECK_SUITE']
           if selection not in suites:
