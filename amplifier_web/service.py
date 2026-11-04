@@ -772,6 +772,8 @@ class AppService:
         self.access_mode = AccessMode(self)
         from .assignments import Assignments
         self.assignments = Assignments(self)
+        from .external_requests import ExternalRequests
+        self.external_requests = ExternalRequests(self)
         from .workspace_work import WorkspaceWork
         self.workspace_work = WorkspaceWork(self)
         from .workspace_work_invocation import WorkInvocation
@@ -1945,6 +1947,11 @@ class AppService:
                 raise AppError('Select a chat first.', 404)
         if action == 'runtime.control' and args.get('operation', '').startswith(('kernels.', 'operations.')):
             raise AppError('Use the shared computation and operation actions; their ownership and dependency checks cannot be bypassed.', 403)
+        if action in {'conversation.send', 'conversation.retry', 'worker.spawn', 'runtime.control',
+                      'conversation.steer', 'session.warm', 'bundle.switch', 'bundle.fork'}:
+            target = args.get('sessionId') or args.get('id') or self.state.get('selectedSessionId')
+            if target and self.external_requests.for_execution(target):
+                raise AppError('External execution accepts only its one reserved input.', 403)
         if action == 'runtime.control' and args.get('operation', '').startswith('context.recovery.'):
             if origin == 'agent' and (not caller_session_id or args.get('sessionId') != caller_session_id):
                 raise AppError('Context recovery belongs to the calling conversation.', 409)
@@ -4437,6 +4444,7 @@ class AppService:
         # The Stop revision is already durable. Release invalidated inbox slots
         # even while the actual worker interruption is slow or unavailable.
         await self.collaboration.drain(sid)
+        await self.external_requests.stop(sid)
         if self.runtime:
             await self.runtime.stop(sid)
         await self.on_runtime_event("runtime.status", {"sessionId": sid, "status": "stopped"})
@@ -4812,6 +4820,7 @@ class AppService:
                 session["generations"] = session["generations"][-200:]
                 from .response_completion import apply as apply_response_completion
                 apply_response_completion(session, payload)
+                self.external_requests.event(session, payload)
                 root_generation = (payload.get('sessionId', session['id']) == session['id']
                     and payload.get('rootSessionId', session['id']) == session['id'])
                 if root_generation and payload.get('event') == 'generation.started':
@@ -5159,6 +5168,11 @@ class AppService:
             return await self._app_bridge(operation, args, session_id, input_origin=origin)
 
     async def _app_bridge(self, operation, args, session_id, *, input_origin=None):
+        if record := self.external_requests.for_execution(session_id):
+            if operation not in {'capacity.admit', 'capacity.abandoned'}:
+                raise AppError('External execution has no app, history or configuration access.', 403)
+            if operation == 'capacity.admit':
+                self.external_requests.guard(record)
         if operation == 'ui.use':
             return await self.ui_use.call(session_id, args.get('operation'), args.get('args', {}))
         if operation == 'context.prepare':

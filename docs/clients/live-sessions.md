@@ -66,6 +66,74 @@ are independent of observation support.
 
 ## Session operations
 
+### Response-only isolated external requests
+
+The optional companion ingress does not send input into the visible parent.
+The host owner first calls
+`POST /api/sessions/{parent}/external-requests/bind` with `{"deviceId":"..."}`.
+Only an existing companion device can be bound, to one fixed parent; a companion
+cannot bind itself or rebind to another parent. This does not expand its generic
+action permissions. Ordinary authentication and device-owned client attachment
+still apply.
+
+The bound companion submits
+`POST /api/sessions/{parent}/external-requests` with exactly:
+
+```json
+{"requestId":"stable-source-event-id","source":{"kind":"slack","channelId":"C1","threadTs":"1.2"},"text":"One prepared request, including any explicitly supplied room context"}
+```
+
+`requestId` is 1–200 safe identifier characters; text is nonempty and at most
+100,000 characters. Source contains 1–16 string entries, at most 512 characters
+each and 8 KiB encoded. The complete canonical payload is hashed. Exact repeats
+return the original record; different payloads under the same ID return 409.
+The 202 response is a durable reservation, not completion.
+
+`GET /api/sessions/{parent}/external-requests/{requestId}` returns `requestId`,
+`parentSessionId`, `executionSessionId`, `inputId`, `payloadSha256`, `source`,
+`status`, optional fixed `reason`, and nullable `result`. Only `status:completed`
+has an exportable result: `text`, its UTF-8 `sha256`, `executionSessionId`,
+`generationId`, exact `inputIds`, exact `finalMessageIds`, and `sealedAt`.
+The immutable result is at most 32,000 UTF-8 bytes; oversized or unqualified
+output is refused, never truncated or inferred from idle/latest message text.
+Consumers must verify this exact result and must not scrape parent messages.
+
+Each reservation uses a fresh hidden/internal session, no parent transcript,
+fork/native continuation, or additional input. Parent local messages can proceed
+concurrently. Only qualified native final-message provenance for the reserved
+single input can seal a result. Other states (`reserved`, `running`, `unknown`,
+`unqualified`, `failed`, `blocked`) have no exportable output. Restart marks
+unfinished records unknown and never restarts or resends them; GET and duplicate
+POST are passive even for unknown effects.
+
+This initial ingress is deliberately response-only: ordinary tools, hooks,
+agents, instruction-file context and app access are not mounted. History, recall,
+memory, private outputs, shell/files/network tools and configuration widening
+are unavailable. Provider/model identity follows inherited settings, without
+provider wire changes. Trusted provider/context/loop code still runs on the host:
+this is a model-capability ceiling, not an operating-system sandbox. Requests
+requiring actions need a separately reviewed execution contract.
+
+Provider options are also part of the response-only boundary. Before reserving
+an execution or dispatching runtime input, ingress validates **all** inherited
+provider rows against reviewed scalar connection/model/generation controls.
+Unknown options, provider-side tools/retrieval, continuation, replacement
+instructions/input and opaque request overrides return 409. This includes
+nonempty `extra_request_params` (including nested `extra_body`); an empty mapping
+is a proven no-op. Admission never strips, rewrites or substitutes provider
+settings or the selected model. The composed and materialized worker plans are
+checked again before provider mounting, covering credential/environment rebinding.
+Unreviewed options are a deliberate compatibility refusal, even if a particular
+provider currently ignores them. Trusted provider code and the configured
+transport endpoint remain outside this model-capability ceiling.
+
+Parent Stop interrupts outstanding executions; device/access revocation and
+assignment Stop fence future model admission and sealing. Existing assignment
+limits apply through normal membership. A finite parent root token/cost budget
+is currently refused (409), rather than cloned with reset cumulative usage.
+Source configuration must already be prepared; missing configuration is a
+reported pre-admission blocker, not permission to start the parent.
+
 | Endpoint | Contract |
 | --- | --- |
 | `GET /api/sessions?offset=0&limit=100` | Bounded summaries, optional exact `workspace` path and `kind=root` filter, and `nextOffset`. Filters apply before pagination; omitting `kind` includes all session kinds. |

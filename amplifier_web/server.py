@@ -724,6 +724,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     setup_observations(app)
     from .companion import setup_routes as setup_companion
     setup_companion(app)
+    from .external_requests import setup_routes as setup_external_requests
+    setup_external_requests(app)
 
     async def shell_state(request):
         from .shell_modules import IDENTITY

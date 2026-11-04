@@ -980,7 +980,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                           application_host="Amplifier Unified", shared_handle=None,
                           shared_handle_getter=None, shared_snapshot=None,
                           write_guard=None, resolved_root=None, execution_workspace=None, owner_session_id=None,
-                          refresh_dependencies=False, install_overrides=None, qualification_readonly=False, global_only=False, runtime_plan=None, startup_timing=None, **kwargs):
+                          refresh_dependencies=False, install_overrides=None, qualification_readonly=False, global_only=False, runtime_plan=None, startup_timing=None, external_request=False, **kwargs):
     from ..worker_diagnostics import StartupTimings
     startup_timing = startup_timing or StartupTimings()
     if refresh_dependencies and resume:
@@ -1055,10 +1055,13 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         if runtime_plan is not None or edited_path.exists():
             edited = runtime_plan if runtime_plan is not None else json.loads(edited_path.read_text())
             loaded = apply_runtime_plan(loaded, edited, config, execution_workspace)
-        if not snapshot:
+        if not snapshot and not external_request:
             from .mentions import include_instruction_files
             loaded = include_instruction_files(loaded, config_home=config.settings_file.parent,
                                                execution_workspace=execution_workspace)
+        if external_request:
+            from ..external_requests import ceiling
+            ceiling(loaded)
         baseline = loaded.to_mount_plan()
         from ..provider_recording import apply_provider_recording
         apply_provider_recording(baseline, home=config.home)
@@ -1100,6 +1103,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         prepared.resolver = ComponentResolver(prepared.resolver, components)
     with startup_timing.phase('manager.providers'):
         await materialize_bundle_providers(loaded, prepared, **({"isolation": isolation} if isolation else {}))
+        if external_request:
+            from ..external_requests import validate_external_providers
+            validate_external_providers(prepared.mount_plan.get('providers', []))
         # Bound child plans inherit an exact parent selection, including image
         # capability. Do not discover a new account outside that inherited plan.
         if not snapshot and not getattr(loaded, '_host_provider_credentials_bound', False):
@@ -1190,7 +1196,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             if messages is not None:
                 await coordinator.get("context").set_messages(messages)
         with startup_timing.phase('manager.children'):
-            await install_children(session, prepared, runtime, store, approvals, host_adapter=adapter)
+            if not external_request:
+                await install_children(session, prepared, runtime, store, approvals, host_adapter=adapter)
         configurator = SessionConfigurator(session, prepared)
         coordinator.register_capability("web.configurator", configurator)
         coordinator.register_capability("web.prepared", prepared)
@@ -1200,7 +1207,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         coordinator.register_capability("web.agent_definitions",
                                         copy.deepcopy(coordinator.config.get("agents", {})))
         with startup_timing.phase('manager.settings'):
-            if not snapshot:
+            if not snapshot and not external_request:
                 await configurator.apply_saved_settings(config.settings.get("configurator") or {})
             configurator.take_snapshot()
         providers = coordinator.get("providers") or {}
