@@ -175,6 +175,28 @@ def test_windows_keys_merge_reads_after_lock_acquisition(windows_key_storage):
     assert state.files['keys.env'] == b'OTHER=concurrent-writer\nTARGET=replacement\n'
 
 
+def test_windows_keys_invalid_environment_batch_cannot_publish_or_partially_apply(windows_key_storage):
+    state = windows_key_storage
+    state.files['keys.env'] = b'TARGET=previous\n'
+    class Environment(dict):
+        def __setitem__(self, name, value):
+            if '\x00' in value:
+                raise ValueError('embedded null character')
+            super().__setitem__(name, value)
+        def update(self, values):
+            for name, value in values.items():
+                self[name] = value
+    state.environment = Environment(TARGET='previous')
+    from amplifier_web import setup
+    setup.os.environ = state.environment
+    state.cache['TARGET'] = 'previous'
+    with pytest.raises(ValueError, match='Invalid Windows'):
+        state.manager._keys({'ADDED': 'valid-first', 'TARGET': 'invalid\x00value'})
+    assert state.files == {'keys.env': b'TARGET=previous\n'}
+    assert state.environment == state.cache == {'TARGET': 'previous'}
+    assert state.events == ['authority']
+
+
 @pytest.mark.parametrize('unsafe', ['directory', 'keys.env.lock', 'keys.env'])
 def test_windows_keys_refuse_unsafe_existing_without_repair_or_cache_update(windows_key_storage, unsafe):
     state = windows_key_storage

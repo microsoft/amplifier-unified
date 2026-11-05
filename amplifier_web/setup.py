@@ -356,6 +356,9 @@ class SetupManager:
     def _keys(self,updates):
         from .configuration_authority import check_current
         check_current()
+        if _WINDOWS:
+            from .host.config import validate_key_environment
+            validate_key_environment(updates)
         path=self.store.shared_home/'keys.env'
         with ExitStack() as stack:
             if _WINDOWS:

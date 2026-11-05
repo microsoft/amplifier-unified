@@ -95,6 +95,8 @@ def _load_keys(path):
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
             parsed = shlex.split(value, comments=True)
             values[name] = " ".join(parsed)
+    if os.name == "nt":
+        validate_key_environment(values)
     # Keep explicitly supplied process environment authoritative, while values
     # this loader previously installed are refreshed (or removed) on remount.
     for name, previous in tuple(_KEY_FILE_VALUES.items()):
@@ -106,6 +108,18 @@ def _load_keys(path):
         if name not in os.environ or (previous is not None and os.environ.get(name) == previous):
             os.environ[name] = value
             _KEY_FILE_VALUES[name] = value
+
+
+def validate_key_environment(values):
+    """Reject an invalid complete Windows batch before file/cache mutation."""
+    for name, value in values.items():
+        if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+                or not isinstance(value, str) or "\x00" in value):
+            raise ValueError("Invalid Windows credential environment value")
+        # Windows environment blocks use UTF-16. Do not publish strings that
+        # cannot reach the worker environment after the private write.
+        name.encode("utf-16-le")
+        value.encode("utf-16-le")
 
 
 def worker_environment():

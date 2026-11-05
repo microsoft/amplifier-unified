@@ -202,6 +202,22 @@ def test_windows_load_keys_refuses_other_shared_filenames(windows_loaded_keys):
     assert state.cache == state.before_cache
 
 
+def test_windows_load_keys_invalid_environment_keeps_previous_batch(windows_loaded_keys):
+    state = windows_loaded_keys
+    class Environment(dict):
+        def __setitem__(self, name, value):
+            if '\x00' in value:
+                raise ValueError('embedded null character')
+            super().__setitem__(name, value)
+    state.environment = Environment(state.environment)
+    state.config.os.environ = state.environment
+    state.content = b"ADDED=valid-first\nFILE_MANAGED='invalid\x00value'\n"
+    with pytest.raises(ValueError, match='Invalid Windows'):
+        state.load()
+    assert state.environment == state.before_environment
+    assert state.cache == state.before_cache
+
+
 @pytest.mark.parametrize("legacy_home", [None, r"C:\LegacyOwner\Shared"])
 def test_windows_load_keys_load_config_preserves_declared_shared_address(
         windows_loaded_keys, tmp_path, monkeypatch, legacy_home):
