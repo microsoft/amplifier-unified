@@ -172,6 +172,30 @@ def test_asset_only_change_and_diverged_base_do_not_hide_runtime_work(release_re
     advanced_base = repo.commit()
     # Compare against the actual merge base, not unrelated later base contents.
     assert checks.select_revision_lanes(advanced_base, release) == []
+    assert checks.frontend_test_scope(advanced_base, release) == 'full'
+
+
+@pytest.mark.parametrize('base_changed', [False, True])
+def test_frontend_scope_uses_exact_shallow_pr_trees_without_history_fetch(
+        release_repository, monkeypatch, base_changed):
+    repo = release_repository
+    repo.commit()
+    repo.write('docs/release.md', 'Second release preparation commit\n')
+    head = repo.commit()
+    repo.git('checkout', '-qb', 'pr-merge', repo.base)
+    if base_changed:
+        repo.write('amplifier_web/service.py', '# changed base runtime\n')
+        base = repo.commit()
+    else:
+        base = repo.base
+    repo.git('merge', '--no-ff', '-qm', 'tested merge', head)
+    clone = repo.root.parent / (repo.root.name + '-shallow')
+    subprocess.check_call(['git', 'clone', '-q', '--depth=2', repo.root.as_uri(), str(clone)])
+    monkeypatch.setattr(checks, 'ROOT', clone)
+    # Depth two has both merge parents, but not their full common ancestry.
+    assert subprocess.run(['git', 'merge-base', base, head], cwd=clone).returncode != 0
+    assert checks.frontend_test_scope(base, head) == ('full' if base_changed else 'release-smoke')
+    assert checks.frontend_test_scope(base, '0' * 40) == 'full'
 
 
 @pytest.mark.parametrize('path', ['frontend/src/app.js', 'frontend/package-lock.json',

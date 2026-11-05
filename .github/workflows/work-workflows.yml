@@ -12,7 +12,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          fetch-depth: 0
+          # The PR merge commit and its exact base/head trees are sufficient.
+          fetch-depth: 2
       - name: Record the checked-out build source
         id: build-source
         run: |

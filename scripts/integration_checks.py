@@ -75,12 +75,13 @@ def release_only_changes(changed, base, head):
         return False  # Missing/malformed comparison keeps the ordinary owners.
 
 
-def revision_changes(base, head):
+def revision_changes(base, head, *, merge_base=True):
     """Return a proven PR comparison, or None when it is unavailable."""
     if not all(re.fullmatch(r'[0-9a-f]{40}', value or '') for value in (base, head)):
         return None
     try:
-        ancestor = subprocess.check_output(['git', 'merge-base', base, head], cwd=ROOT, text=True).strip()
+        ancestor = (subprocess.check_output(['git', 'merge-base', base, head], cwd=ROOT, text=True).strip()
+                    if merge_base else base)
         changed = subprocess.check_output(
             ['git', 'diff', '--no-renames', '--name-only', '-z', ancestor, head], cwd=ROOT).decode().split('\0')
         changed = [path for path in changed if path]
@@ -101,7 +102,9 @@ def select_revision_lanes(base, head, *, include_manual=False):
 
 
 def frontend_test_scope(base, head):
-    comparison = revision_changes(base, head)
+    # Exact trees suffice in a shallow PR merge checkout. A changed newer base
+    # conservatively keeps full tests instead of requiring historical ancestry.
+    comparison = revision_changes(base, head, merge_base=False)
     if comparison is not None and release_only_changes(*comparison, head):
         return 'release-smoke'
     return 'full'

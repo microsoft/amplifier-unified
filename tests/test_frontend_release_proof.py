@@ -329,7 +329,7 @@ def test_workflow_retains_successful_build_before_committed_asset_failure():
     steps = job['steps']
     source = next(step for step in steps if step.get('id') == 'build-source')
     assert steps[0] == {'uses': 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
-                        'with': {'fetch-depth': '0'}} and steps[1] == source
+                        'with': {'fetch-depth': '2'}} and steps[1] == source
     assert source['run'].splitlines() == [
         'echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"',
         'echo "tree=$(git rev-parse HEAD^{tree})" >> "$GITHUB_OUTPUT"',
@@ -393,6 +393,8 @@ def test_lookup_preserves_smoke_scope_without_claiming_full_tests(lookup):
 def test_fast_scope_selection_and_single_full_nightly_owner():
     load = lambda name: yaml.load((ROOT / '.github/workflows' / name).read_text(), Loader=yaml.BaseLoader)
     fast = load('work-workflows.yml')['jobs']['integration']['steps']
+    checkout = next(step for step in fast if step.get('uses', '').startswith('actions/checkout@'))
+    assert checkout['with']['fetch-depth'] == '2'
     test = next(step for step in fast if step.get('name') == 'Test frontend')
     assert test['env'] == {'PR_BASE': '${{ github.event.pull_request.base.sha }}',
                            'PR_HEAD': '${{ github.event.pull_request.head.sha }}'}
