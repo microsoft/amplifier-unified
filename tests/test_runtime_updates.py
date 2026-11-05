@@ -173,6 +173,11 @@ def write_fixture_project(path, name, dependencies=()):
 def environment(tmp_path, monkeypatch):
     # This fixture exercises one synthetic Git dependency, independently of the
     # real support packs installed in the interpreter running the test suite.
+    # uv forbids --refresh-package together with UV_OFFLINE even for file://
+    # repositories. Permit local Git refresh, but keep registry access disabled;
+    # the fixture backend has no build requirements or network dependencies.
+    monkeypatch.setenv('UV_OFFLINE', 'false')
+    monkeypatch.setenv('UV_NO_INDEX', 'true')
     monkeypatch.setattr('amplifier_web.app_updates.installed_extras', lambda: [])
     repo = tmp_path / 'remote'
     repo.mkdir()

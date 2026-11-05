@@ -66,8 +66,21 @@ def merge(base, overlay):
 
 
 def _load_keys(path):
+    """Load keys.env from the caller's declared shared home, never create it."""
     values = {}
-    if path.exists():
+    if os.name == "nt":
+        from ..windows_files import address, directory
+        path = address(path)
+        if path.name != "keys.env":
+            raise ValueError("Windows shared credentials require keys.env")
+        try:
+            with directory(path.parent, owned_root=path.parent, create=False) as pinned:
+                content = pinned.read_private(path.name, limit=1024 * 1024)
+        except FileNotFoundError:
+            lines = ()
+        else:
+            lines = content.decode("utf-8").splitlines()
+    elif path.exists():
         lines = path.read_text().splitlines()
     else:
         lines = ()
@@ -248,7 +261,13 @@ def configure_skill_cache(bundle, registry_home):
 
 def load_config(workspace, *, home=None, legacy_home=None, session_id=None, global_only=False, owner_session_id=None):
     workspace = Path(workspace).expanduser().resolve(strict=True)
-    shared = Path(legacy_home or amplifier_home()).expanduser().resolve()
+    if os.name == "nt":
+        from ..windows_files import address
+        # amplifier_home() resolves paths. Keep the declared shared-home spelling
+        # for the private reader, so a junction/alias cannot disappear first.
+        shared = address(legacy_home or os.environ.get("AMPLIFIER_HOME") or Path.home() / ".amplifier")
+    else:
+        shared = Path(legacy_home or amplifier_home()).expanduser().resolve()
     _load_keys(shared / "keys.env")
     return read_config(workspace, home=home, shared_home=shared, session_id=session_id, global_only=global_only, owner_session_id=owner_session_id)
 
