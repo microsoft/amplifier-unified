@@ -37,9 +37,10 @@ reload -> same saved output; no new generation
    vendor rankings. Discovery never generates; absent support leaves chat usable.
    Image unavailability stays visible; native internals are not generic-host dependencies.
 
-2. **IUNI2 — Retire selection machinery only after qualified migration.** The target
-   removes `image_defaults.py` / `image_setup.py` selection and image settings menus
-   only after execution/migration pass in both hosts. Use generic scoped routing
+2. **IUNI2 — Qualify the replacement before shipping it.** This source candidate
+   removes `image_defaults.py` / `image_setup.py` selection, the image settings menus
+   and `providers.configureImages`. Shipment requires execution/migration acceptance
+   in both hosts. Use generic scoped routing
    overrides/diagnostics, not replacement image settings. Version the non-destructive
    migration; retain source, scope, provenance, result and rollback evidence. Reruns cannot broaden access.
 
@@ -71,7 +72,11 @@ reload -> same saved output; no new generation
 
 ## Not in v1
 
-This draft removes no settings, menus or code. Rankings, transport and schemas remain
+Draft status applies to this contract's ratification, not to the source delta.
+The candidate removes the image-only code and controls named in IUNI2. Existing
+saved settings are not deleted automatically: fresh-plan translation preserves
+their restrictions and pins, while explicit scoped reconciliation can remove only
+a confirmed retained Off preference. Rankings, transport and schemas remain
 externally owned. New host selection, dropped historical intent or changed ratified
 boundaries needs a proposal; progressive streaming needs lifecycle/UI qualification.
 

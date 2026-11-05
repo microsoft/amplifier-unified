@@ -93,7 +93,9 @@ qualification apply. Git access to the bundle repository is required to resolve 
 an inaccessible source is a setup failure, not proof of a missing image account.
 Saved snapshots remain complete plans and are not injected with new behaviors.
 Active worker generations keep their mounted capabilities until normal refresh.
-No production settings are changed by the implementation or acceptance scripts.
+Fresh-plan translation does not write saved settings. The explicit scoped
+reconciliation action below does change its confirmed source preference.
+Acceptance fixtures use isolated settings, not production settings.
 
 ## Legacy intent: fresh-plan translation, not settings migration
 
@@ -123,6 +125,19 @@ credentials. This is an
 effective-plan receipt, not a replacement for original scoped source records.
 Reruns are intended to preserve the same plan and receipt; exact idempotence and
 scope preservation require the candidate's migration checks.
+
+### Explicit reconciliation of a retained Off preference
+
+**AI connections** and **Modules & sources** show scoped capability diagnostics.
+`modules.diagnostics` reports retained restrictions without changing them.
+`modules.reconcile` requires the exact source scope, a fresh diagnostic revision
+and explicit confirmation. Its supported `inherit` resolution removes only that
+scope's retained `image_generation.mode: off`; it preserves other fields,
+provider/model pins and restrictions from other scopes. Unknown intent refuses.
+
+This action does not grant paid access, select an account, or refresh an existing
+conversation. New chats use the remaining composed policy. A stale diagnostic,
+missing confirmation or refused configuration authority leaves the source intact.
 
 ## Generation, edit and delivery
 
