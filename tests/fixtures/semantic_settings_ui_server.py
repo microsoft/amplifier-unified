@@ -50,7 +50,8 @@ async def main(home):
         data = await request.json()
         result = await service.app_bridge('dispatch', {
             'responseMode': 'receipt', 'action': data['action'],
-            'args': {**data.get('args', {}), 'clientId': data['clientId']},
+            'args': {**data.get('args', {}), **(
+                {'clientId': data['clientId']} if data['action'].startswith('settings.') else {})},
             **({'id': data['id']} if data.get('id') else {}),
         }, service._session()['id'])
         return web.json_response(result)

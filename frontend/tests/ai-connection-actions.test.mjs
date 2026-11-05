@@ -5,7 +5,7 @@ import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 import {readFile} from 'node:fs/promises';
 const vite=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {AIConnections}=await vite.ssrLoadModule('/src/ai-connections.jsx');
+const {AIConnections,readCredentialCompletion}=await vite.ssrLoadModule('/src/ai-connections.jsx');
 const {ConfigurationBoundary}=await vite.ssrLoadModule('/src/configuration-scope.jsx');
 const {SettingsDraftProvider}=await vite.ssrLoadModule('/src/settings-drafts.jsx');
 const {aiServices}=await vite.ssrLoadModule('/src/ai-connections-data.js');
@@ -143,6 +143,19 @@ test('private intent survives an empty edit before the shared choice acknowledge
  }finally{await act(async()=>root?.unmount())}
 });
 
+test('exact credential completion reader treats only absent R as unfinished',async()=>{
+ const paths=[];
+ const read=async path=>{paths.push(path);throw Object.assign(Error('Invalid request: That state path does not exist.'),{status:400})};
+ assert.equal(await readCredentialCompletion('read/R~1',{read}),null);
+ assert.equal(new URL(paths[0],'http://fixture.invalid').searchParams.get('path'),'/managementResults/read~1R~01');
+ assert.equal(new URL(paths[0],'http://fixture.invalid').searchParams.get('limit'),'2');
+ for(const [status,message] of [[401,'Invalid request: That state path does not exist.'],[400,'Different validation error'],[503,'Unavailable']]){
+  await assert.rejects(readCredentialCompletion('R',{read:async()=>{throw Object.assign(Error(message),{status})}}),{message});
+ }
+ assert.deepEqual(await readCredentialCompletion('R',{read:async()=>({
+  path:'/managementResults/R',type:'object',nextOffset:null,items:[{key:'phase',value:'ready'},{key:'error',value:null}]})}),{phase:'ready',error:null});
+});
+
 for(const finalPhase of ['ready','error'])test(`a credential retry superseded by a same-owner read settles when newer read is ${finalPhase}`,async()=>{
  let root,calls=[],reads=[],current=state({step:'connect',id:'openai-draft',module:'provider-openai',credentialMode:'auto'});
  let resolveCompletion;
@@ -169,12 +182,12 @@ for(const finalPhase of ['ready','error'])test(`a credential retry superseded by
   const back=root.root.findAllByType('button').find(node=>node.children.includes('Back'));
   assert.equal(Boolean(back.props.disabled),false,'supersession cannot strand the editor in busy');
   assert.ok(!JSON.stringify(root.toJSON()).includes('Working on this connection'));
+  assert.deepEqual(reads,['R'],'only the exact superseded read receipt is queried');
   if(finalPhase==='error'){
    const again=root.root.findAllByType('button').find(node=>node.children.join('')==='Check host key again');
    const before=calls.length;await act(async()=>again.props.onClick());
    assert.equal(calls.length,before+1,'sending fence is released for an explicit new read');
   }else assert.equal(root.root.findAllByProps({type:'password'}).length,1);
-  assert.deepEqual(reads,['R'],'only the exact superseded read receipt is queried');
   assert.equal(calls.some(([action])=>['providers.save','providers.models','providers.login'].includes(action)),false);
  }finally{await act(async()=>root?.unmount())}
 });

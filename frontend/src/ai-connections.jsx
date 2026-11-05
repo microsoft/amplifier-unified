@@ -18,9 +18,14 @@ import {providerOptions} from './provider-options';
 import {aiServices,aiService,matchingSetupOperation,setupPending} from './ai-connections-data';
 import {request as apiRequest} from './api';
 
-async function readCredentialCompletion(id,{signal}){
+export async function readCredentialCompletion(id,{signal,read=apiRequest}={}){
  const path='/managementResults/'+id.replaceAll('~','~0').replaceAll('/','~1');
- const result=await apiRequest('/api/state/detail?'+new URLSearchParams({path,limit:'2'}),{signal});
+ let result;
+ try{result=await read('/api/state/detail?'+new URLSearchParams({path,limit:'2'}),{signal})}
+ catch(error){
+  if(error.status===400&&error.message==='Invalid request: That state path does not exist.')return null;
+  throw error;
+ }
  if(result.path!==path||result.type!=='object'||result.nextOffset!==null)return null;
  const value=Object.fromEntries((result.items||[]).map(item=>[item.key,item.value]));
  return ['ready','error'].includes(value.phase)?value:null;
