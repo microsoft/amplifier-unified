@@ -38,6 +38,31 @@ WORK_ATTEMPT = ContextVar('unified_work_delivery_attempt', default=None)
 WORK_NESTED = ContextVar('unified_work_nested_origin', default=None)
 WORK_EXECUTION = ContextVar('unified_work_tool_execution', default=None)
 
+
+def nested_checkpoint(coordinator, data):
+    """Only our active, verified dispatch child belongs to its parent's save.
+
+    Event fields alone are not proof. The native lease and private task-local
+    observation were established before the tool ran. This is a persistence
+    boundary, never permission to run a tool or replay an uncertain result.
+    """
+    nested = WORK_NESTED.get()
+    if not nested or not nested['active'] or not nested['verified']:
+        return False
+    lease = nested['lease']
+    source = data.get('dispatch_source')
+    if not isinstance(source, dict):
+        return False
+    return (not lease.closed and lease.scope.active and lease.scope.run.active
+            and lease.scope.run.coordinator is coordinator
+            and source.get('session_id') == coordinator.session_id
+            and source.get('run_id') == lease.scope.run.identity
+            and source.get('parent_tool_call_id') == nested['parent']['tool_call_id']
+            and data.get('parent_tool_call_id') == nested['parent']['tool_call_id']
+            and source.get('tool_call_id') == data.get('tool_call_id') == nested['callId']
+            and source.get('tool_name') == data.get('tool_name') == nested['name']
+            and ('tool_input' not in data or _same_json(data['tool_input'], nested['arguments'])))
+
 @dataclass(frozen=True)
 class InvocationOrigin:
     """Private host value, never reconstructed from tool arguments."""
@@ -580,6 +605,8 @@ class CoordinationDelivery:
         unavailable = {'complete': False, 'effectAuthorized': False, 'status': 'unavailable'}
         nested = WORK_NESTED.get()
         if nested and nested['delivery'] is self:
+            if not nested.get('coverageEligible'):
+                return {**unavailable, 'reason': 'Nested causal delivery is not qualified.'}
             source = nested['lease']
             if (not nested['active'] or source.closed or not source.scope.active
                     or not source.scope.run.active or not nested['verified']
@@ -718,12 +745,16 @@ class CoordinationDelivery:
                 execution = WORK_EXECUTION.get()
                 if execution and execution['delivery'] is delivery:
                     eligible = (execution['active'] and not execution['leaseIssued']
-                                and execution['proof'].get('complete') is True
                                 and _same_json(execution['data'], {**dispatch, **parent}))
+                    # Full can execute without complete Work assurance. Native
+                    # nesting still shares its parent's transcript checkpoint;
+                    # it must not acquire the assurance that execution lacked.
+                    coverage_eligible = eligible and execution['proof'].get('complete') is True
                     execution['leaseIssued'] = True
                 else:
                     eligible = (dispatch.get('tool_call_id') == call.id
                                 and not delivery.call_consumed(call.id))
+                    coverage_eligible = eligible
                 if eligible and not execution:
                     delivery.executed_calls.add(call.id)
                 class BoundLease:
@@ -734,7 +765,8 @@ class CoordinationDelivery:
                             return await lease.call(name, arguments, request_id=request_id)
                         nested = {'delivery': delivery, 'lease': lease, 'parent': parent,
                                   'name': name, 'arguments': copy.deepcopy(arguments),
-                                  'active': True, 'verified': False, 'callId': None}
+                                  'active': True, 'verified': False, 'callId': None,
+                                  'coverageEligible': coverage_eligible}
                         token = WORK_NESTED.set(nested)
                         execution_token = WORK_EXECUTION.set(None)
                         try:

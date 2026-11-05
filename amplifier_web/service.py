@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, nullcontext
 import hashlib
 import json
 import logging
@@ -22,7 +22,7 @@ from .execution import ensure_turn, ingest as ingest_execution, finish as finish
 from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, work_paused
 from .managed_chats import LOCATION
 from .attachments import MAX_ENCODED_BYTES
-from .performance_diagnostics import PerformanceDiagnostics, measured, TimedLock
+from .performance_diagnostics import PerformanceDiagnostics, measure, measured, TimedLock
 from .action_schema import schema, string
 
 
@@ -1945,6 +1945,12 @@ class AppService:
                 raise AppError('Select a chat first.', 404)
         if action == 'runtime.control' and args.get('operation', '').startswith(('kernels.', 'operations.')):
             raise AppError('Use the shared computation and operation actions; their ownership and dependency checks cannot be bypassed.', 403)
+        if action == 'runtime.control' and args.get('operation', '').startswith('context.recovery.'):
+            if origin == 'agent' and (not caller_session_id or args.get('sessionId') != caller_session_id):
+                raise AppError('Context recovery belongs to the calling conversation.', 409)
+            from .collaboration import PRINCIPAL
+            if origin == 'agent' and PRINCIPAL.get() not in {None, caller_session_id}:
+                raise AppError('A child cannot borrow its parent context recovery authority.', 403)
         if action == 'runtime.control' and args.get('operation') == 'tool.invoke':
             if origin == 'agent' and (not caller_session_id or args.get('sessionId') != caller_session_id):
                 raise AppError('Tool invocation must target the calling conversation.', 409)
@@ -2353,11 +2359,13 @@ class AppService:
                 checked_session = sid
                 implicit_session = not (args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.recover', 'session.takeover', 'session.naming', 'configuration.inspect', 'configuration.apply'} else None))
                 try:
-                    await self.history.ensure_loaded(sid)
+                    with measure(self, 'input.history', session_id=sid) if action in {'conversation.send', 'conversation.retry'} else nullcontext():
+                        await self.history.ensure_loaded(sid)
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
                 if action in {'conversation.send','conversation.retry','worker.spawn','call.start','runtime.control','configuration.inspect','configuration.apply','bundle.save','bundle.export','bundle.preview','bundle.switch','bundle.fork'}:
-                    await self.refresh_configuration(sid)
+                    with measure(self, 'input.configuration', session_id=sid) if action in {'conversation.send', 'conversation.retry'} else nullcontext():
+                        await self.refresh_configuration(sid)
                     current=self._session(sid)
                     if current.get('configurationPending') and current.get('configurationRefresh',{}).get('phase')=='error':
                         raise AppError(current['configurationRefresh']['error'],409)
@@ -2541,7 +2549,7 @@ class AppService:
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from None
         pending = []
-        async with self.lock:
+        async with self.lock, AsyncExitStack() as recovery_boundary:
             if action == 'session.select' and 'peerPreview' in args:
                 self.peer_preview.select(args, origin)
                 self.canvas_views.guard_transition(action, args)
@@ -3322,11 +3330,10 @@ class AppService:
                 if ('expectedConfigurationRevision' in args
                         and args['expectedConfigurationRevision'] != session.get('nextMessageRevision', 0)):
                     raise AppError('Next message settings changed. Review them before sending.', 409)
-                from .conversation_steering import target as steering_target
+                from .conversation_steering import target as steering_target, recover_failed_generation
                 # A run ending before delivery must not turn this correction
                 # into new work under a policy that is awaiting replacement.
                 allow_next_turn = args.get('allowNextTurn') is True and not session.get('fileAccessPending')
-                target_generation = None if update_message else steering_target(session, args.get('expectedGenerationId'), allow_next_turn)
                 # Whitespace can carry Markdown meaning; validate blank input
                 # separately without changing the saved or delivered message.
                 text = args["text"]
@@ -3348,6 +3355,9 @@ class AppService:
                     text = 'Please review the attached files.'
                 if not self.runtime:
                     raise AppError("The Amplifier runtime is unavailable.")
+                stopped_generation = (recover_failed_generation(self, session, recovery_boundary)
+                    if origin == 'ui' and not update_message and args.get('expectedGenerationId') is None else None)
+                target_generation = None if update_message else steering_target(session, args.get('expectedGenerationId'), allow_next_turn)
                 input_id = command_id or str(uuid.uuid4())
                 from .chat_navigation import recent_activity, prepare_human_post, promote_human_post
                 # Origin is chosen by the host adapter, never role/via/action args.
@@ -3663,6 +3673,11 @@ class AppService:
                     values += ({'origin': origin, 'callerSessionId': caller_session_id,
                         'generation': copy.deepcopy(target.get('collaborationGeneration')),
                         'target': self.management.configuration_target_binding(target)},)
+                elif action == 'runtime.control' and args.get('operation') == 'context.recovery.request':
+                    # Capture before the queue. A Stop or configuration change
+                    # cannot lend new authority to this older command.
+                    target = self._session(args['sessionId'])
+                    values += ({'recovery': self.management.recovery_admission_binding(target)},)
                 pending.append((self.management.command, values))
             elif action == "updates.failureDisposition":
                 if origin not in {'ui', 'user'}:
@@ -3862,6 +3877,8 @@ class AppService:
                 receipt['actor'] = self.handoffs.actor(handoff)
             if action == 'conversation.send':
                 receipt.update(delivery=message['delivery']['status'], sessionId=session['id'], inputId=input_id)
+                if stopped_generation is not None:
+                    receipt['stoppedGenerationRecovery'] = stopped_generation
                 if message.get('navigationPost'):
                     receipt['navigationPost'] = copy.deepcopy(message['navigationPost'])
             if action == 'conversation.retry':receipt['result']={'delivery':'sending', 'message':'The saved message is being checked and sent. No additional resend was started.'}
@@ -4381,17 +4398,18 @@ class AppService:
                     'error': 'Message delivery could not be confirmed. The conversation worker is unavailable. Work was not automatically replayed.',
                 })
             raise
-        async with self.lock:
-            current = self._session(session["id"])
-            self._delivery(current, input_id, 'accepted')
-            sent = next((row for row in session["messages"] if row.get("inputId") == input_id), {})
-            self._clear_sent_draft(current, sent, text, preserve_draft)
-            current.pop("lockOwner", None)
-            # A bound client's draft/reply/attachments are saved by clients.save,
-            # not the shared legacy view. Delivery changes only this owner unless
-            # the existing save guard finds changed status/navigation/attention.
-            self._publish_changes(sessions={session['id']}, detail_only=True,
-                                  globals={'view'} if self.clients.record() is None else ())
+        with measure(self, 'input.delivery.publish', session_id=session['id']):
+            async with self.lock:
+                current = self._session(session["id"])
+                self._delivery(current, input_id, 'accepted')
+                sent = next((row for row in session["messages"] if row.get("inputId") == input_id), {})
+                self._clear_sent_draft(current, sent, text, preserve_draft)
+                current.pop("lockOwner", None)
+                # A bound client's draft/reply/attachments are saved by clients.save,
+                # not the shared legacy view. Delivery changes only this owner unless
+                # the existing save guard finds changed status/navigation/attention.
+                self._publish_changes(sessions={session['id']}, detail_only=True,
+                                      globals={'view'} if self.clients.record() is None else ())
         return send_result
 
     def _clear_sent_draft(self, current, sent, text, preserve_draft):
@@ -5336,7 +5354,7 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Worktree actions must target the calling task.', 409)
                 action_args['sessionId'] = session_id
-            if args['action'] == 'runtime.control' and str(action_args.get('operation', '')).startswith('native.'):
+            if args['action'] == 'runtime.control' and str(action_args.get('operation', '')).startswith(('native.', 'context.recovery.')):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Native provider actions belong to the calling conversation.', 409)
                 action_args['sessionId'] = session_id

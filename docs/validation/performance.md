@@ -52,6 +52,15 @@ message before committing. The output tests guard against unrelated history
 traversal and exercise changes during that read; do not replace these fences with
 a full conversation snapshot.
 
+A selected saved-image set shares one off-thread body/hash/PNG conversion pass
+(two for chunk-manifest lookup), not a separate event-loop resume for every
+image and conversion. Keep SQLite access on its owner thread and recheck the
+entire set's current reader relationships after the read, including pretransport
+validation. `test_output_image_preparation.py` measures these work bounds and
+injects loaded-loop resume delay under the existing image deadline. Temporary
+context unavailability suppresses image delivery but does not manufacture a new
+input identity or silently discard the selection; a verified input change does.
+
 ## Keep a meaningful regression check
 
 Choose a small case and a representative larger case for the affected operation.
@@ -104,6 +113,18 @@ it can change the conclusion. Keep diagnostic collection bounded and sensitive
 receipts private. Public evidence uses synthetic data, counts and hashes rather
 than transcript bodies, credentials or private environment details.
 
+`AMPLIFIER_RUNTIME_TIMING=1` is a startup-only, explicit opt-in for content-free
+worker preparation and checkpoint phases in the existing bounded timing ring.
+It records context view/factory, surface preparation, provider budget/refit and
+checkpoint read/save boundaries. Native provider-hook start/end observations are
+separate: correlate only a proven single request window with matching session,
+generation and iteration; a short-circuit need not reach the end observer.
+Worker phase marks and host receipt marks separate execution from event delivery
+only when their `clockDomain` and `hostClockDomain` match. Never subtract wall
+clocks or add nested spans. This observes existing behavior, does not change
+timeouts or enable request-body recording, and cannot explain earlier unrecorded
+work. Activation and any required live worker remount remain an adoption decision.
+
 For disposable query workers, measure delivery as well as worker calculation.
 Separate executor handoffs for tiny cleanup operations can repeatedly incur a busy
 event loop's scheduling delay. Keep one owned result-consumption/cleanup handoff;
@@ -115,7 +136,7 @@ CPU time. These checks do not establish a bound on unrelated host persistence wo
 
 ## Keep qualification proportional to risk
 
-Follow the [fast publication policy](release-qualification.md#local-first-fast-publication-policy-updated-october-14-2026).
+Follow the [fast publication policy](release-qualification.md#local-first-fast-publication-policy-updated-november-4-2026).
 Run the affected regression and changed user flow; use installed built assets when
 the claim depends on packaging or browser/server integration. Reuse exact applicable
 receipts rather than repeating unrelated suites. Broad post-release checks remain
@@ -169,6 +190,30 @@ Hold active work fixed while growing *that same owner's* completed history. Also
 current subscribers and concurrent owners independently when validating publication.
 Passing a recent-message window test does not establish bounded saves, admission,
 agent reads or model context. Measure those boundaries separately.
+
+`tests/fixtures/execution_publication_scaling.py` keeps three large owners active
+in one actual service. It distinguishes cold saves, scalar/token saves, nested
+execution changes, current-placement changes with unchanged retired accounting,
+and worker-report updates, checks exact durable readback and
+records wall/CPU time plus the existing preparation budgets. Run it inside an
+owned DTU with `python tests/fixtures/execution_publication_scaling.py --output DIR`;
+`--source PATH` selects a frozen comparison checkout. A single-owner cache hit
+cannot qualify concurrent-owner behavior or hide eviction churn.
+Use `--reservation-bytes 512` to exceed a single accounting witness's size with
+synthetic retained assignment details, and vary `--owners 1` through `--owners 3`
+separately. This is a stress shape, not a measured live receipt schema. Keep the
+same total preparation budgets in both runs: a larger history becoming cacheable
+can still make concurrent owners slower through eviction and repeated bookkeeping.
+Measure cold misses, current-placement changes and nested accounting changes;
+unchanged whole-execution reuse alone would hide those costs. Retain rejected
+comparisons when a proposed cache change improves one owner but regresses several.
+
+Unchanged execution may reuse its existing committed projection only after the
+original content, owner and resource evidence match; input digests and pending
+flags promote with the same successful pointer commit. The content comparison
+still visits the retained execution bytes. This short-term reduction in repeated
+conversion is not proof of history-independent work under WS5. Keep measuring
+that remaining cost; do not increase retention limits to make a benchmark pass.
 
 ## Agent preparation and tool reads
 
@@ -250,6 +295,39 @@ across resume, compaction, authorized retrieval and pending tool pairs before
 adoption. See the [provider audit](provider-cache-audit-20261031.md) for the current
 source checks and remaining limitations; it is not a runtime capability registry.
 
+## Locating input acknowledgement delays
+
+The existing bounded host performance snapshot records six fixed input phases:
+
+- `input.history`: the send/retry dispatch's history-loading check, including a
+  cold load or a warm no-op.
+- `input.configuration`: that dispatch's configuration refresh.
+- `input.runtime.prepare`: next-message configuration, worker readiness and any
+  pending model selection. A mounted worker may make this a warm no-op.
+- `input.runtime.admit`: waiting for the worker admission lock, any intervening
+  retirement/restart, authority checks and the transport write for send/retry.
+- `input.runtime.ack`: waiting for the native send/retry reply after admission.
+- `input.delivery.publish`: successful delivery settlement, including the host
+  state-lock wait, draft settlement, persistence and publication.
+
+These use `operations` and the existing bounded `slowOperations` ring; they do not
+require `AMPLIFIER_RUNTIME_TIMING`. The only correlation metadata is the existing
+bounded conversation ID. They retain no input IDs, bodies, settings or exceptions.
+Each completed phase is measured on error/cancellation too; a recorded duration
+is not proof of success, delivery or replay safety. The final publication phase
+is reached only after a successful native reply. Deferred input, steering and
+passive delivery checks do not acquire new native send/retry phases.
+
+Durations are inclusive wall time, including event-loop scheduling. In particular,
+ACK time is not native CPU time, and publication includes lock waiting. History,
+configuration, preparation and admission can contain other diagnostic operations;
+do not add their totals to nested history/save/serialize/publication measurements.
+These phases do not cover every dispatch step, concurrent inputs are not individually
+correlated, and operation totals aggregate since startup. Use recent bounded samples
+alongside the HTTP timing and current session state; an absent sample can mean a
+phase was not reached or fell below the slow-sample threshold. This instrumentation
+locates delays; it neither fixes them nor establishes a live latency guarantee.
+
 ## Maintained client smoke
 
 `frontend/tests/client-traffic-browser.mjs` uses the real server and built client
@@ -307,3 +385,16 @@ The additive Extended browser registration runs after publication. The separate
 runs; it is not a required status or a publication dependency. Run it locally in
 the owned test environment with the production client built. Its synthetic runtime
 does not qualify native recovery, model calls or installed-package provenance.
+
+For nested programmatic tools, retain a large-row history work-count regression
+(at least 36,000 rows, seven child completions): no full history read, native
+store save or continuity export for verified inner completion, while each
+control/writer check still runs. Qualify the actual Core/Live dispatcher and
+ordered parent append, failed child results, context mutation, compaction and
+Stop during a nested call. Untrusted or unavailable dispatch attribution takes
+the full-save path. Ordinary direct-tool full-save counts must match the baseline;
+do not add a second durable-append callback that doubles their persistence work.
+Include actual Work-wrapped Full/incomplete-assurance children sharing the enclosing
+checkpoint, and verify that their assurance eligibility remains unchanged.
+This reduces nested completion work without eliminating the remaining enclosing
+transcript persistence cost or adding a stronger crash-recovery guarantee.

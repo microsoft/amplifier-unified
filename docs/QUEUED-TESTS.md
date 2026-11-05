@@ -25,7 +25,10 @@ The user and agent use the same actions. The workspace's existing test section
 shows waiting and completed checks; there is no new chat-header control. User
 submission does not automatically start a model turn. Agent submission defaults
 to a guarded completion notification and can use `notify:false` for inspection
-only. A busy chat receives that notification at its ordinary idle boundary.
+only. A busy chat receives that automatic notification at its next supported
+native model-request boundary, or as ordinary input when idle. A positive
+no-effect boundary refusal keeps the same notification queued; Stop and current
+admission controls still apply.
 The result does not satisfy a shared-task dependency or prove product acceptance.
 
 ## Lifecycle and ownership
@@ -388,3 +391,14 @@ If a recorded reusable image is absent, unavailable or malformed at native
 observation, the check uses ordinary cold preparation without modifying or
 rebuilding that uncertain cache entry. Saved owner/receipt corruption still
 requires inspection.
+
+### Temporary workspace retention
+
+New queued checks can inherit Storage's optional temporary-workspace expiry.
+The returned `workspaceArchivePolicy` is captured at submission and survives
+restart; later policy changes do not shorten that promise. Export useful patches,
+reports and generated results to `/artifacts` before finishing, or submit
+`keepWorkspace: true` when the full workspace remains needed. There is no extra
+approval round. Initial source and results remain retained after workspace expiry.
+Keep dependency installations and large pytest basetemp fixtures outside
+`/artifacts`; copy only useful reports there. See [Storage](STORAGE.md#temporary-queued-test-workspace-copies).

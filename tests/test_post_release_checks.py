@@ -400,5 +400,134 @@ def test_fast_required_check_runs_on_every_pr_without_exhaustive_suites():
     for name in ('test_post_release_checks.py', 'test_browser_check_runner.py',
                  'test_active_client_diagnostics.py'):
         assert name in commands
-    assert 'npm test' in commands and 'git diff --exit-code' in commands
+    assert 'scripts/integration_checks.py frontend-test' in commands
+    assets = next(step for step in job['steps'] if step.get('name') == 'Verify committed frontend assets')
+    assert 'git diff --exit-code' in assets['run'] and 'if' not in assets
     assert 'playwright' not in commands and 'node tests/' not in commands
+
+
+def test_nightly_freezes_latest_published_release_and_verifies_its_publisher(publication, monkeypatch):
+    repository = checks.REPOSITORY
+    monkeypatch.setenv('GITHUB_EVENT_NAME', 'schedule')
+    publication['responses'][('release', 'view', '--repo', repository,
+                              '--json', 'tagName,isDraft,isPrerelease,publishedAt')] = publication['release']
+    publication['responses'][('api', f'repos/{repository}/actions/workflows/release.yml/runs'
+                              '?branch=main&status=success&per_page=1')] = {'workflow_runs': [publication['run']]}
+    checks.main()
+    assert publication['output'].read_text().endswith('revision=' + 'a' * 40 + '\n')
+    assert len(publication['downloads']) == 1
+    # Frozen release, exact attempt, retained candidate and actual tag; never main HEAD.
+    assert publication['calls'][0][0:2] == ('release', 'view')
+    assert ('api', publication['prefix'] + '/attempts/2') in publication['calls']
+    assert publication['calls'][-1][-1].endswith('/git/ref/tags/v0.41.0')
+
+
+def test_nightly_refuses_a_successful_historical_publisher_for_newer_latest_release(publication, monkeypatch):
+    repository = checks.REPOSITORY
+    monkeypatch.setenv('GITHUB_EVENT_NAME', 'schedule')
+    publication['responses'][('release', 'view', '--repo', repository,
+                              '--json', 'tagName,isDraft,isPrerelease,publishedAt')] = {
+                                  **publication['release'], 'tagName': 'v0.42.0'}
+    publication['responses'][('api', f'repos/{repository}/actions/workflows/release.yml/runs'
+                              '?branch=main&status=success&per_page=1')] = {'workflow_runs': [publication['run']]}
+    with pytest.raises(ValueError, match='does not match the latest published release'):
+        checks.main()
+    assert 'revision=' not in publication['output'].read_text()
+    assert not any('git/ref/tags/' in str(call) for call in publication['calls'])
+
+
+@pytest.mark.parametrize('ref,runs', [('refs/heads/feature', [{}]), ('refs/heads/main', [])])
+def test_nightly_cannot_fall_back_to_arbitrary_main_or_missing_publisher(monkeypatch, ref, runs):
+    monkeypatch.setattr(checks, 'gh', lambda *args: {'workflow_runs': runs})
+    with pytest.raises(ValueError):
+        checks.resolve_publication(checks.REPOSITORY, 'schedule', ref, {})
+
+
+def test_smoke_skips_broad_without_claiming_or_closing_broad_success(monkeypatch):
+    value = {name: {'result': 'skipped'} for name in checks.CHECKS}
+    for name in checks.SMOKE_CHECKS:
+        value[name]['result'] = 'success'
+    value['resolve']['outputs'] = {'tag': 'v1.2.3', 'revision': 'a' * 40}
+    broad = checks.build_report(value, 'owner/app', '11', '10', scope='broad')
+    smoke = checks.build_report(value, 'owner/app', '12', '10', scope='smoke')
+    assert smoke['failed'] == []
+    assert broad['failed'] == ['readiness', 'python', 'browser', 'integrations']
+    assert smoke['marker'] != broad['marker']
+    assert '- browser:' not in smoke['body'] and 'separately tracked' in smoke['body']
+    calls = []
+    def gh(*args, payload=None):
+        calls.append((args, payload))
+        assert payload is None
+        return [[{'number': 10, 'body': broad['body'], 'state': 'open'}]]
+    monkeypatch.setattr(checks, 'gh', gh)
+    checks.track_report('owner/app', smoke)
+    assert len(calls) == 1  # A smoke pass leaves the legacy broad failure untouched.
+
+
+@pytest.mark.parametrize('outcome', ['failure', 'cancelled', 'skipped', None])
+def test_smoke_requires_actual_installed_package_success(outcome):
+    value = results()
+    if outcome is None:
+        value.pop('installed-package')
+    else:
+        value['installed-package']['result'] = outcome
+    assert checks.build_report(value, 'owner/app', '12', '11', scope='smoke')['failed'] == ['installed-package']
+
+
+def test_broad_report_preserves_independent_success_after_install_failure():
+    value = results()
+    del value['installed-package']
+    value['resolve'] = {'result': 'failure', 'outputs': {
+        'tag': 'v1.2.3', 'revision': 'a' * 40,
+        'identity_result': 'success', 'install_result': 'failure'}}
+    report = checks.build_report(value, 'owner/app', '12', '11', scope='broad')
+    assert report['failed'] == ['installed-package']
+    assert '- resolve: success' in report['body']
+    assert '- browser: success' in report['body']
+
+
+def test_unknown_scope_cannot_downgrade_required_checks():
+    with pytest.raises(ValueError, match='scope'):
+        checks.build_report(results(), 'owner/app', '12', '11', scope='typo')
+
+
+@pytest.mark.parametrize('identity,install,job,failed', [
+    ('success', 'success', 'success', []),
+    ('success', 'failure', 'failure', ['installed-package']),
+    ('success', 'cancelled', 'cancelled', ['installed-package']),
+    ('success', 'skipped', 'failure', ['installed-package']),
+    ('failure', 'skipped', 'failure', ['resolve', 'installed-package']),
+    ('success', 'success', 'failure', ['installed-package']),  # Artifact/summary failure.
+])
+def test_combined_smoke_job_preserves_each_outcome(identity, install, job, failed):
+    value = results()
+    del value['installed-package']
+    value['resolve'] = {'result': job, 'outputs': {
+        'tag': 'v1.2.3', 'revision': 'a' * 40,
+        'identity_result': identity, 'install_result': install}}
+    report = checks.build_report(value, 'owner/app', '12', '11', scope='smoke')
+    assert report['failed'] == failed
+    assert f'- resolve: {identity}' in report['body']
+    assert 'v1.2.3' in report['body']
+
+
+@pytest.mark.parametrize('outcome', ['success', 'failure', 'cancelled', 'skipped'])
+def test_read_only_summary_never_calls_issue_api_but_keeps_failures(monkeypatch, tmp_path, outcome):
+    value = results()
+    value['installed-package']['result'] = outcome
+    for key, content in {'GITHUB_REPOSITORY': 'owner/app', 'GITHUB_RUN_ID': '12',
+                         'RELEASE_RUN_ID': '11', 'RELEASE_RESULTS': json.dumps(value),
+                         'VERIFICATION_SCOPE': 'smoke',
+                         'GITHUB_STEP_SUMMARY': str(tmp_path / 'summary')}.items():
+        monkeypatch.setenv(key, content)
+    monkeypatch.setattr(sys, 'argv', ['post_release_checks.py', 'report', '--summary-only'])
+    monkeypatch.setattr(checks, 'gh', lambda *a, **k: pytest.fail('Read-only summary called GitHub'))
+    if outcome == 'success':
+        checks.main()
+    else:
+        with pytest.raises(SystemExit) as stopped:
+            checks.main()
+        assert stopped.value.code == 1
+    summary = (tmp_path / 'summary').read_text()
+    assert f'- installed-package: {outcome}' in summary
+    assert 'Broad suites were not run' in summary

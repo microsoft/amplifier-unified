@@ -1,10 +1,14 @@
 """Source-only qualification of the pinned diagnostic subset and its adapter.
 
-Intended invocation, ONLY in the parent's admitted clean Python 3.13 guest:
+Direct invocation in a clean Python guest:
   <absolute-python> -I -S -B -m unittest discover -s tests \
       -p test_uv_diagnostic_forms.py -v
 Environment: PATH=<python-directory>:/usr/bin:/bin LANG=C.UTF-8. Do not add
-TMPDIR: the expanded fixture deliberately rejects it. Test files use /artifacts.
+TMPDIR: the expanded fixture deliberately rejects it.
+
+Ordinary pytest delegates each unchanged unittest case to that clean interpreter.
+The parent never loads the guarded fixture or patches its process functions.
+Synthetic temporary files use the interpreter's default temporary directory.
 
 Definitions are compiled directly from source, never through a bytecode loader.
 The expanded fixture's startup guard is not patched. Its main is exercised only
@@ -29,6 +33,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -95,16 +100,37 @@ def definitions(name, relative):
     return module
 
 
+_module_guards = None
+
+
 def setUpModule():
-    global forms, expanded, forbidden_run
-    for target in ("Popen", "run"):
-        guard = patch.object(subprocess, target, side_effect=AssertionError("Real process forbidden"))
-        guarded = guard.start()
-        unittest.addModuleCleanup(guard.stop)
-        if target == "run":
-            forbidden_run = guarded
-    forms = definitions("qualified_uv_forms", "scripts/uv_diagnostic_forms.py")
-    expanded = definitions("qualified_expanded_lock", "tests/fixtures/omitted_ref_expanded_lock.py")
+    global forms, expanded, forbidden_run, _module_guards
+    if "pytest" in sys.modules:
+        # Pytest's site imports/environment cannot satisfy the fixture's guard.
+        # Assertions below execute each case in a fresh isolated interpreter.
+        return
+    guards = ExitStack()
+    try:
+        for target in ("Popen", "run"):
+            guarded = guards.enter_context(patch.object(
+                subprocess, target, side_effect=AssertionError("Real process forbidden")))
+            if target == "run":
+                forbidden_run = guarded
+        forms = definitions("qualified_uv_forms", "scripts/uv_diagnostic_forms.py")
+        expanded = definitions("qualified_expanded_lock", "tests/fixtures/omitted_ref_expanded_lock.py")
+    except BaseException:
+        # Pytest does not run unittest's module-cleanup registry after setup fails.
+        # In particular, the isolated fixture can reject startup with SystemExit.
+        guards.close()
+        raise
+    _module_guards = guards
+
+
+def tearDownModule():
+    global _module_guards
+    guards, _module_guards = _module_guards, None
+    if guards is not None:
+        guards.close()
 
 
 def expected(health="recognized", kind="resolution-unsatisfiable"):
@@ -131,6 +157,28 @@ def facts(payload, code=23, complete=True):
 
 
 class Assertions(unittest.TestCase):
+    def _callSetUp(self):
+        if "pytest" not in sys.modules:
+            super()._callSetUp()
+
+    def _callTestMethod(self, method):
+        if "pytest" not in sys.modules:
+            return super()._callTestMethod(method)
+        python = str(Path(sys.executable).absolute())
+        result = subprocess.run(
+            [python, "-I", "-S", "-B", str(Path(__file__).resolve()),
+             f"{type(self).__name__}.{self._testMethodName}"],
+            env={"PATH": str(Path(python).parent) + ":/usr/bin:/bin", "LANG": "C.UTF-8"},
+            cwd=ROOT, capture_output=True, text=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Ran 1 test", result.stderr)
+        self.assertTrue(result.stderr.endswith("\nOK\n"), result.stderr)
+
+    def _callTearDown(self):
+        if "pytest" not in sys.modules:
+            super()._callTearDown()
+
     def assert_private(self, value, extra=()):
         rendered = json.dumps(value, sort_keys=True)
         for marker in (*MARKERS, *extra):
@@ -412,7 +460,7 @@ class ValidateFormTests(Assertions):
 
 class ExpandedAdapterTests(Assertions):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="uv-forms-unit-", dir="/artifacts")
+        self.temporary = tempfile.TemporaryDirectory(prefix="uv-forms-unit-")
         self.addCleanup(self.temporary.cleanup)
         self.base = Path(self.temporary.name).resolve()
         self.log = self.base / "stderr.private"

@@ -5,6 +5,7 @@ not delete files itself, and never treats source/result archives as a cache.
 """
 import asyncio
 import json
+import sqlite3
 from pathlib import Path
 import time
 import uuid
@@ -12,7 +13,7 @@ import uuid
 from amplifier_operations.coordination import fingerprint
 from .errors import AppError
 
-DEFAULTS = {'revision': 0, 'enabled': True, 'keepDays': 7, 'maxUnusedBytes': 10 * 1024**3}
+DEFAULTS = {'revision': 0, 'enabled': True, 'keepDays': 7, 'maxUnusedBytes': 10 * 1024**3, 'workspaceArchiveKeepDays': None}
 POLICY = 'storage-cleanup-policy'
 OBSERVATION = 'storage-cleanup-observation'
 LATEST = 'storage-cleanup-latest'
@@ -22,10 +23,11 @@ def definitions(schema, string):
     return {
         'storage.cleanup.read': ('Read global automatic cleanup settings and the last receipt without scanning or starting work.', schema({}, [])),
         'storage.cleanup.evidence': ('Read one bounded page of recorded saved test sizes. Does not measure current files, connect to machines, start work or delete evidence.', schema({'before': {'type': 'integer', 'minimum': 1, 'maximum': 2**53-1}}, [])),
-        'storage.cleanup.save': ('Save global unused component/test-runner code retention under standing Full or user control. Saved test sources, results, chats and working folders are always kept.', schema({
+        'storage.cleanup.save': ('Save global unused component/test-runner code retention under standing Full or user control. Sources, results, chats and project folders stay. Optional temporary queued-test workspace expiry applies only to newly submitted checks.', schema({
             'expectedRevision': {'type': 'integer', 'minimum': 0}, 'enabled': {'type': 'boolean'},
             'keepDays': {'type': 'integer', 'minimum': 0, 'maximum': 3650},
             'maxUnusedBytes': {'type': 'integer', 'minimum': 0, 'maximum': 2**53-1},
+            'workspaceArchiveKeepDays': {'type': ['integer', 'null'], 'minimum': 1, 'maximum': 3650},
         }, ['expectedRevision', 'enabled', 'keepDays', 'maxUnusedBytes'])),
         'storage.cleanup.preview': ('Measure a bounded set of unused code copies and protected storage. Never starts workers or deletes files. Incomplete measurements are reported.', schema({}, [])),
         'storage.cleanup.run': ('Apply the saved cleanup policy under standing Full or user control. Each owner rechecks unused code before removal. Reuse the request ID to observe an uncertain outcome without replay.', schema({
@@ -54,7 +56,7 @@ def public(value):
 
 def read(app):
     return {'policy': policy(app), 'lastCleanup': public(record(app, LATEST)),
-            'scope': 'All workspaces on this Amplifier installation. Only unused component code, test runner code, and qualified reusable test dependencies are eligible.',
+            'scope': 'All workspaces on this Amplifier installation. Unused code and dependencies, plus explicitly temporary retired test workspace copies when enabled, are eligible.',
             'preserved': 'Chats, working folders, saved test sources and results, other dependency stores, current and rollback versions, and uncertain work are kept.'}
 
 
@@ -160,16 +162,39 @@ def unresolved(app):
     held = set()
     for value, in app.db.execute("SELECT receipt FROM commands WHERE id LIKE 'storage-cleanup-run:%' AND json_extract(receipt,'$.result.status') IN ('running','interrupted','needs-inspection')"):
         for effect in json.loads(value)["result"].get("effects", []):
-            if effect.get("status") == "attempting":
+            if effect.get("status") == "attempting" and effect.get('recovery', {}).get('disposition') not in {'removed', 'not-detached'}:
                 held.add((effect["kind"], effect["id"]))
     return held
 
 
+def runtime_recovery(app, item):
+    """Append exact detached-payload resolution; preserve the failed command."""
+    resolution = {key: item[key] for key in ('retirementId', 'disposition')}
+    resolution['resolvedAt'] = time.time()
+    for key, raw in app.db.execute("SELECT id,receipt FROM commands WHERE id LIKE 'storage-cleanup-run:%' AND json_extract(receipt,'$.result.status') IN ('running','interrupted','needs-inspection')").fetchall():
+        saved = json.loads(raw)['result']
+        matched = False
+        for effect in saved.get('effects', []):
+            if (effect.get('status') == 'attempting' and effect.get('kind') == 'runtime-environment'
+                    and effect.get('id') == item.get('project') and effect.get('stamp') == item.get('stamp')):
+                effect['recovery'] = resolution
+                matched = True
+        if matched:
+            store(app, key, saved)
+
+
 async def preview(app):
-    from . import update_retention, managed_runner_updates, test_dependency_layers
+    from . import update_retention, managed_runner_updates, test_dependency_layers, workspace_archive_retention, runtime_environment_retention
     manager = app.update_manager
     settings = policy(app)
+    # Restore only scan position, never a prior eligibility decision. Preview
+    # remains read-only; the policy run persists its next cursor in its receipt.
+    saved = record(app, LATEST, {}) or {}
+    for key, attribute in (('generationCursor', '_retention_cursor'), ('retiredCursor', '_retired_cursor'), ('runtimeCursor', '_runtime_environment_retention_cursor')):
+        if not hasattr(manager, attribute) and isinstance(saved.get(key), str):
+            setattr(manager, attribute, saved[key])
     generations = await update_retention.reclaim(manager, inspect_only=True)
+    runtimes = await runtime_environment_retention.reclaim(manager, inspect_only=True)
     runner_inspection = {'protectedIds': [], 'complete': True}
     try:
         runners = await asyncio.wait_for(managed_runner_updates.retire(app, inspect_only=True, inspection=runner_inspection), 15)
@@ -180,29 +205,47 @@ async def preview(app):
         dependencies = await asyncio.to_thread(test_dependency_layers.inspect, app.data_dir)
     except (TimeoutError, ValueError, OSError):
         dependencies = {'candidates': [], 'protectedIds': [], 'complete': False}
+    try:
+        archives = await asyncio.to_thread(workspace_archive_retention.inspect, app.data_dir, settings, saved.get('workspaceArchiveCursor', 0))
+    except (TimeoutError, ValueError, OSError, sqlite3.Error):
+        archives = {'candidates': [], 'complete': False, 'workspaceArchiveCursor': saved.get('workspaceArchiveCursor', 0)}
     held = unresolved(app)
-    candidates = [row for row in generations.get('candidates', []) + (runners or []) + dependencies['candidates'] if (row['kind'], row['id']) not in held]
+    candidates = [row for row in generations.get('candidates', []) + runtimes['candidates'] + (runners or []) + dependencies['candidates'] if (row['kind'], row['id']) not in held]
     now = time.time()
     observed_protected = (['ecosystem:' + key for key in generations.get('protectedIds', [])]
+        + [runtime_environment_retention.KIND + ':' + key for key in runtimes['protectedIds']]
         + ['runner:' + key for key in runner_inspection['protectedIds']]
         + ['test-dependencies:' + key for key in dependencies['protectedIds']]
         + [kind + ':' + identity for kind, identity in held])
     folders = update_retention._folders(manager)
     present = {'ecosystem': {'ecosystem:' + row.name for row in folders},
                'runner': {'runner:' + row['id'] for row in app.smart_tools.state.get('installations', [])}}
+    if 'presentIds' in runtimes:
+        present[runtime_environment_retention.KIND] = {runtime_environment_retention.KIND + ':' + key for key in runtimes['presentIds']}
     if dependencies['complete']:
         present['test-dependencies'] = {'test-dependencies:' + row['id'] for row in dependencies['candidates']} | {
             'test-dependencies:' + key for key in dependencies['protectedIds']}
     seen = observations(record(app, OBSERVATION, {}) or {}, candidates, now,
                         protected=observed_protected, present=present)
     rows = plan(candidates, settings, seen, now)
+    # Workspace promises have their own captured duration, never code-cache pressure.
+    rows.extend(row for row in archives['candidates'] if (row['kind'], row['id']) not in held)
     protected = []
     eligible = {(row['kind'], row['id']) for row in rows}
     # This is metadata enumeration, not a scan of workspaces or chat history.
     for folder in folders:
         if ('ecosystem', folder.name) not in eligible:
+            code = generations.get('retentionReasons', {}).get(folder.name)
+            reasons = {
+                'unverified_generation': 'The installed component generation could not be verified',
+                'unverified_source': 'The recorded source download or tracked files could not be verified',
+                'local_source_changes': 'Local source edits or unpublished commits are kept',
+                'unverified_generated_files': 'Extra files could not be proved disposable installation output',
+                'changed_during_inspection': 'References or files changed, or their final check could not finish',
+            }
             protected.append({'kind': 'ecosystem', 'id': folder.name, 'label': 'Component version kept',
-                              'reason': 'Current, rollback, referenced, changed, or not fully verified'})
+                              'reason': reasons.get(code, 'Current, rollback, referenced, changed, or not fully verified'),
+                              **({'reasonCode': code} if code in reasons else {})})
     for item in app.smart_tools.state.get('installations', []):
         if item.get('runnerCandidate') and ('runner', item['id']) not in eligible:
             protected.append({'kind': 'runner', 'id': item['id'], 'label': 'Test runner version kept',
@@ -210,19 +253,22 @@ async def preview(app):
     for identity in dependencies['protectedIds']:
         protected.append({'kind': 'test-dependencies', 'id': identity, 'label': 'Reusable test dependencies kept',
                           'reason': 'Referenced, changed, or not fully verified'})
+    for identity in runtimes['protectedIds']:
+        protected.append({'kind': runtime_environment_retention.KIND, 'id': identity, 'label': 'Worker dependencies kept',
+                          'reason': 'Referenced, modified, or not fully verified'})
     # Preserve all test artifacts and engine roots. A terminal chat is not
     # proof that a native launch cannot still finish, nor an archive grant.
     for row in protected:
         if (row['kind'], row.get('id')) in held:
             row['reason'] = 'An earlier cleanup has an unconfirmed outcome; its files are kept for inspection'
     protected.append({'kind': 'evidence', 'label': 'Saved work and test evidence',
-                      'reason': 'Source/result archives, working folders and histories are never cleanup targets'})
+                      'reason': 'Source and result archives, project folders, histories, legacy/manual workspaces and uncertain work stay protected'})
     protected_measured = 0
     protected_complete = True
     measured_paths = {path for row in candidates for path in row.get('paths', [])}
     from .runtime_environment import project_path
     for index, row in enumerate(protected):
-        if not row.get('id') or index >= 4 or row['kind'] == 'test-dependencies':
+        if not row.get('id') or index >= 4 or row['kind'] in {'test-dependencies', runtime_environment_retention.KIND}:
             row['fileBytes'] = None
             protected_complete = False
             continue
@@ -237,8 +283,11 @@ async def preview(app):
         except (ValueError, OSError, TimeoutError):
             row['fileBytes'] = None
             protected_complete = False
-    complete = generations.get('complete', False) and runner_complete and dependencies['complete']
-    return {'policy': settings, 'rows': [{k: v for k, v in row.items() if k not in {'paths', 'stamp'}} for row in rows],
+    complete = generations.get('complete', False) and runtimes['complete'] and runner_complete and dependencies['complete'] and archives['complete']
+    return {'policy': settings, 'workspaceArchiveCursor': archives['workspaceArchiveCursor'], 'rows': [{k: v for k, v in row.items() if k not in {'paths', 'stamp'}} for row in rows],
+            **{key: generations[key] for key in ('generationCursor', 'retiredCursor') if key in generations},
+            **({'runtimeCursor': runtimes['runtimeCursor']} if 'runtimeCursor' in runtimes else {}),
+            **({'retentionReasons': generations['retentionReasons']} if generations.get('retentionReasons') else {}),
             'protected': protected[:128], 'protectedCount': len(protected),
             'observedProtected': observed_protected,
             '_observations': seen,
@@ -254,7 +303,7 @@ async def preview(app):
 
 
 async def run(app, identity, *, expected_revision=None, automatic=False, authority=None):
-    from . import update_retention, managed_runner_updates, test_dependency_layers
+    from . import update_retention, managed_runner_updates, test_dependency_layers, workspace_archive_retention, runtime_environment_retention
     async with lock(app):
         key = 'storage-cleanup-run:' + identity
         previous = retained_run(app, identity, expected_revision, (authority or {}).get('sessionId'))
@@ -277,6 +326,7 @@ async def run(app, identity, *, expected_revision=None, automatic=False, authori
                                 protected=report.get('observedProtected', []))
         store(app, OBSERVATION, seen)
         result = {'id': identity, 'expectedRevision': expected_revision, 'status': 'running', 'startedAt': now, 'policy': settings,
+                  **{key: report[key] for key in ('generationCursor', 'retiredCursor', 'runtimeCursor', 'retentionReasons', 'workspaceArchiveCursor') if key in report},
                   'selectedFileBytes': report['selectedFileBytes'], 'removedFileBytes': 0,
                   'effects': [], 'completeInspection': report['complete']}
         if authority is not None:
@@ -285,6 +335,12 @@ async def run(app, identity, *, expected_revision=None, automatic=False, authori
         store(app, LATEST, result)
         chosen = {(row['kind'], row['id']): row for row in report['rows'] if row['selected']}
         def evidence(status, item):
+            if status == 'reconciled':
+                runtime_recovery(app, item)
+                result.setdefault('recoveries', []).append({key: item[key] for key in ('kind', 'project', 'retirementId', 'disposition')})
+                store(app, key, result)
+                store(app, LATEST, result)
+                return
             if status == 'attempting':
                 try:
                     check(app, authority)
@@ -308,6 +364,9 @@ async def run(app, identity, *, expected_revision=None, automatic=False, authori
             await update_retention.reclaim(app.update_manager,
                 selected={identity for kind, identity in chosen if kind == 'ecosystem'}, evidence=evidence)
             if result['status'] == 'running' and policy(app) == settings:
+                await runtime_environment_retention.reclaim(app.update_manager,
+                    selected={identity for kind, identity in chosen if kind == runtime_environment_retention.KIND}, evidence=evidence)
+            if result['status'] == 'running' and policy(app) == settings:
                 await managed_runner_updates.retire(app,
                     selected={identity for kind, identity in chosen if kind == 'runner'}, evidence=evidence)
             if result['status'] == 'running' and policy(app) == settings:
@@ -320,6 +379,21 @@ async def run(app, identity, *, expected_revision=None, automatic=False, authori
                     asyncio.run_coroutine_threadsafe(dependency_evidence(status, item), loop).result(timeout=10)
                 await asyncio.to_thread(test_dependency_layers.retire, app.data_dir,
                     {identity: row for (kind, identity), row in chosen.items() if kind == 'test-dependencies'}, record_dependency)
+            if result['status'] == 'running' and policy(app) == settings:
+                loop = asyncio.get_running_loop()
+                async def archive_callback(status, item):
+                    if result['status'] != 'running':
+                        raise ValueError('Storage cleanup stopped before workspace expiry.')
+                    if status == 'guard':
+                        from .task_environments import require_resolved_removal
+                        require_resolved_removal(app, item)
+                    else:
+                        evidence(status, item)
+                def archive_record(status, item):
+                    asyncio.run_coroutine_threadsafe(archive_callback(status, item), loop).result(timeout=10)
+                await asyncio.to_thread(workspace_archive_retention.retire, app.data_dir, settings,
+                    {identity: row for (kind, identity), row in chosen.items() if kind == 'test-workspace'},
+                    archive_record, lambda row: archive_record('guard', row))
             if result['status'] == 'running':
                 result['status'] = 'needs-inspection' if any(row['status'] == 'attempting' for row in result['effects']) else 'completed'
         finally:
@@ -379,6 +453,10 @@ async def dispatch(app, action, args, origin, command_id, caller_session_id=None
         if (type(value['enabled']) is not bool or type(value['keepDays']) is not int or not 0 <= value['keepDays'] <= 3650
                 or type(value['maxUnusedBytes']) is not int or not 0 <= value['maxUnusedBytes'] <= 2**53-1):
             raise AppError('Choose valid cleanup settings.', 400)
+        days = args.get('workspaceArchiveKeepDays', current.get('workspaceArchiveKeepDays'))
+        if days is not None and (type(days) is not int or not 1 <= days <= 3650):
+            raise AppError('Choose a temporary test workspace retention between 1 and 3650 days, or disable it.', 400)
+        value['workspaceArchiveKeepDays'] = days
         value['revision'] = current['revision'] + 1
         receipt = {'accepted': True, 'commandAction': action, 'result': {**read(app), 'policy': value}}
         if authority is not None:

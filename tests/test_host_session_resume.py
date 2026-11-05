@@ -142,6 +142,36 @@ async def test_checkpoints_persist_tools_without_republishing_unchanged_message_
     assert h.runtime.emit.await_count == 4
 
 
+async def test_checkpoint_hook_timing_retains_recovery_writer_guard(mounted_host, monkeypatch):
+    from amplifier_web import performance_diagnostics
+    h = mounted_host
+    writer = Mock()
+    emit = Mock()
+    h.runtime.generation = {'id': 'timed-generation'}
+    monkeypatch.setattr(performance_diagnostics, 'TIMING_ENABLED', True)
+    h.capabilities['web.performance.emit'] = emit
+    await h.prepare(write_guard=writer)
+    adapter = h.capabilities['web.continuity.recovery']
+    writer.reset_mock()
+    h.held.check.reset_mock()
+    adapter._check_writer()
+    writer.assert_called_once_with()
+    h.held.check.assert_called_once_with()
+    hook = next(call.args[1] for call in h.session.coordinator.hooks.register.call_args_list
+                if call.args[0] == 'tool:post'
+                and call.kwargs.get('name') == 'unified-checkpoint-tool:post')
+    h.context.messages.append({'role': 'tool', 'tool_call_id': 'timed-tool',
+                               'content': 'Completed once; preserve this result.'})
+    await hook('tool:post', {'session_id': h.runtime.session_id, 'tool_call_id': 'timed-tool'})
+    emit.assert_called_once()
+    assert 'Completed once; preserve this result.' in h.path.read_text()
+    saved = h.path.read_bytes()
+    writer.side_effect = RuntimeError('Writer released')
+    with pytest.raises(RuntimeError, match='Writer released'):
+        adapter._check_writer()
+    assert h.path.read_bytes() == saved
+
+
 @pytest.mark.parametrize('failure', [RuntimeError('pipe failed'), asyncio.CancelledError()])
 async def test_failed_anchor_notification_is_retried_on_next_checkpoint(mounted_host, failure):
     h = mounted_host
@@ -531,3 +561,106 @@ async def test_execution_write_policy_follows_checkout_on_all_prepare_routes(mou
     assert report['execution_workspace'] == str(checkout)
     assert h.path.read_bytes() == original
     h.session.execute.assert_not_called()
+
+
+def nested_checkpoint_scope(h):
+    from amplifier_web.coordination_delivery import WORK_NESTED
+    coordinator = h.session.coordinator
+    coordinator.session_id = h.runtime.session_id
+    parent = {'tool_call_id': 'parent'}
+    source = {'session_id': h.runtime.session_id, 'run_id': 'run',
+              'parent_tool_call_id': 'parent', 'tool_call_id': 'nested', 'tool_name': 'read'}
+    data = {'session_id': h.runtime.session_id, 'dispatch_source': source,
+            'parent_tool_call_id': 'parent', 'tool_call_id': 'nested', 'tool_name': 'read', 'tool_input': {}}
+    lease = SimpleNamespace(closed=False, scope=SimpleNamespace(active=True,
+        run=SimpleNamespace(active=True, coordinator=coordinator, identity='run')))
+    token = WORK_NESTED.set({'active': True, 'verified': True, 'lease': lease,
+        'parent': parent, 'callId': 'nested', 'name': 'read', 'arguments': {}})
+    return token, data, lease
+
+
+async def test_nested_checkpoint_avoids_full_history_work_and_retains_all_guards(mounted_host, monkeypatch):
+    from amplifier_web.coordination_delivery import WORK_NESTED
+    h = mounted_host
+    writer, controls = Mock(), Mock()
+    rows = [{'role': 'user', 'content': f'historical-{n}'} for n in range(36_000)]
+    await h.prepare(snapshot(rows), write_guard=writer)
+    h.capabilities['web.controls.persist'] = controls
+    h.context.get_messages = AsyncMock(wraps=h.context.get_messages)
+    store_save = Mock(wraps=SessionStore.save)
+    monkeypatch.setattr(SessionStore, 'save', lambda *a, **k: store_save(*a, **k))
+    continuity = h.capabilities['web.continuity.recovery']
+    continuity.save = Mock(wraps=continuity.save)
+    writer.reset_mock(); h.held.check.reset_mock()
+    hook = next(call.args[1] for call in h.session.coordinator.hooks.register.call_args_list
+                if call.kwargs.get('name') == 'unified-checkpoint-tool:post')
+    token, data, lease = nested_checkpoint_scope(h)
+    try:
+        for _ in range(7):
+            await hook('tool:post', data)
+        h.context.get_messages.assert_not_awaited()
+        store_save.assert_not_called()
+        continuity.save.assert_not_called()
+        assert writer.call_count == controls.call_count == h.held.check.call_count == 7
+        # Mutations during the batch must reach the existing enclosing save.
+        h.context.messages[-1]['content'] = 'changed within nested transaction'
+        await hook('tool:post', {'session_id': h.runtime.session_id, 'tool_call_id': 'parent'})
+        assert 'changed within nested transaction' in h.path.read_text()
+        assert store_save.call_count == continuity.save.call_count == 1
+        writer.side_effect = RuntimeError('Writer released')
+        with pytest.raises(RuntimeError, match='Writer released'):
+            await hook('tool:post', data)
+        writer.side_effect = None
+        h.held.check.side_effect = RuntimeError('Native owner changed')
+        with pytest.raises(RuntimeError, match='Native owner changed'):
+            await hook('tool:post', data)
+    finally:
+        WORK_NESTED.reset(token)
+
+
+@pytest.mark.parametrize('fault', ['absent_scope', 'closed_lease', 'inactive_run', 'wrong_coordinator',
+    'wrong_parent', 'wrong_call', 'changed_arguments', 'malformed_source', 'unverified', 'inactive_scope', 'inactive_lease', 'compaction', 'complete'])
+async def test_untrusted_or_non_tool_boundary_still_saves_full_transcript(mounted_host, fault):
+    from amplifier_web.coordination_delivery import WORK_NESTED
+    h = mounted_host
+    await h.prepare()
+    hook = next(call.args[1] for call in h.session.coordinator.hooks.register.call_args_list
+                if call.kwargs.get('name') == 'unified-checkpoint-tool:post')
+    token, data, lease = nested_checkpoint_scope(h)
+    event = 'tool:post'
+    if fault == 'absent_scope': WORK_NESTED.set(None)
+    elif fault == 'closed_lease': lease.closed = True
+    elif fault == 'inactive_run': lease.scope.run.active = False
+    elif fault == 'wrong_coordinator': lease.scope.run.coordinator = object()
+    elif fault == 'wrong_parent': data['parent_tool_call_id'] = 'other'
+    elif fault == 'wrong_call': data['tool_call_id'] = 'other'
+    elif fault == 'changed_arguments': data['tool_input'] = {'changed': True}
+    elif fault == 'malformed_source': data['dispatch_source'] = 'untrusted'
+    elif fault == 'unverified': WORK_NESTED.get()['verified'] = False
+    elif fault == 'inactive_scope': WORK_NESTED.get()['active'] = False
+    elif fault == 'inactive_lease': lease.scope.active = False
+    elif fault == 'compaction': event = 'context:compaction_finished'
+    elif fault == 'complete': event = 'orchestrator:complete'
+    h.context.messages.append({'role': 'tool', 'content': fault})
+    try:
+        await hook(event, data)
+        assert fault in h.path.read_text()
+    finally:
+        WORK_NESTED.reset(token)
+
+
+async def test_nested_checkpoint_still_rejects_changed_native_transcript(mounted_host):
+    from amplifier_web.coordination_delivery import WORK_NESTED
+    h = mounted_host
+    await h.prepare()
+    hook = next(call.args[1] for call in h.session.coordinator.hooks.register.call_args_list
+                if call.kwargs.get('name') == 'unified-checkpoint-tool:post')
+    token, data, _ = nested_checkpoint_scope(h)
+    h.path.write_text(h.path.read_text() + '{"role":"user","content":"other writer"}\n')
+    before = h.path.read_bytes()
+    try:
+        with pytest.raises(Exception, match='changed|ownership|writer'):
+            await hook('tool:post', data)
+        assert h.path.read_bytes() == before
+    finally:
+        WORK_NESTED.reset(token)

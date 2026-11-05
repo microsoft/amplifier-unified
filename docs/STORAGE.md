@@ -277,15 +277,21 @@ rollback versions, live generation leases, configurations, observed process
 references, local source edits/untracked files/unpublished commits, and uncertain
 operations protect a copy. Conventional untracked Python import caches in
 `__pycache__` are disposable when their regular tracked source is unchanged:
-the verified installed graph or the cache's recorded, remotely retained Git
-commit must prove the complete tracked tree. This includes on-disk content that
+the verified installed graph or the cache's recorded Git commit must prove the
+complete tracked tree. An uninstalled cache also needs a remote-containing ref
+or the exact commit-and-source `FETCH_HEAD` receipt left by the updater's normal
+detached SHA download. This includes on-disk content that
 Git index flags could otherwise hide. Supported CPython 3.12–3.14 cache names
 must match their header, have a nonempty payload, and remain regular files beside
 the tracked module; symbolic links are never accepted. A cache payload can be
 stale, damaged or hand-edited and is still disposable under this rule. Inspection
 never imports source, starts its interpreter, or deserializes cached code.
-Unknown names/producers, files outside this convention, packaging metadata and
-nested environments remain protected. Owners repeat their checks at removal admission;
+Regular files in `build/lib` are also disposable when byte-identical to a proven
+tracked source file at the repository root or under `src`; their conventional
+import caches follow the same header checks. Unique or edited build output,
+unknown names/producers, files outside these conventions, packaging metadata and
+nested environments remain protected. Names alone never establish that a file
+is disposable. Owners repeat their checks at removal admission;
 links are not followed as cleanup targets. Ecosystem qualification is bound to
 a bounded inventory captured before its source checks; a changed inventory or
 runtime-sharing decision defers that candidate. The same inventory follows the
@@ -296,7 +302,11 @@ receipts remain visible and are not permission to repeat an uncertain effect.
 read performs no scan and starts no worker. Each pass inspects at most four
 ecosystem candidates, eight purpose-installed runner candidates and eight
 qualified dependency layers, with time
-limits and a retained cursor. Incomplete inspection is labeled; uninspected
+limits and a retained cursor. The cleanup policy saves that cursor in its durable
+receipt and restores it after restart; a scan position is never deletion authority.
+Protected copies include bounded reasons distinguishing unverified source,
+unverified extra files, local edits, and a changed or incomplete final check.
+Incomplete inspection is labeled; uninspected
 copies stay put. File-content measurements are not physical disk-allocation
 promises: hard links, shared runtimes and copy-on-write blocks can retain storage.
 The size target uses the existing observation ledger's latest measured sizes
@@ -328,6 +338,25 @@ after a lost save/cleanup acknowledgment, real owner removal, saved evidence
 preservation, and desktop/narrow draft protection. It makes no claim that a
 production installation or a remote runner has been cleaned.
 
+### Orphaned generated worker environments
+
+The same policy also discovers generated runtime `.venv` directories that no
+longer have a release or baseline reference. Its bounded inspection retains
+current/rollback/leased generations, all surviving release aliases, saved module
+source references, installer locks, running processes and changed or unknown
+installed files. Only an unused generated environment is detached for removal;
+its project source, manifest, lock, qualification and failed-attempt records stay.
+The normal age/size policy applies, and a final reference/identity check occurs
+at the existing runtime lifecycle boundary. Interrupted removal keeps the same
+retirement receipt. A later policy pass can settle that exact detached payload
+after matching its saved identity, or settle an empty pre-rename attempt without
+replaying the rename. Changed or missing evidence stays held. Original failed
+outcomes remain recorded with any subsequent resolution; a new live environment
+is never a continuation target. Configuration discovery and content inventories
+run outside runtime admission; only their final metadata witnesses are checked
+inside it. Ordinary event/history writes do not invalidate source settings.
+This is part of existing maintenance, not a new background scanner or scheduler.
+
 ### Reusable isolated-test dependencies
 
 The same global automatic cleanup policy also owns qualified source-free Python
@@ -342,6 +371,12 @@ source, output and test evidence are never dependency-cache cleanup targets.
 Docker measurements exclude the exact immutable base image; shared blocks may
 still remain after removal. Other dependency stores retain their existing
 ownership and preservation rules.
+
+Reuse identity excludes only the static application's own version in its Python
+project and root lock entry; dependencies, source pins, build configuration,
+toolchain and browser manifests still distinguish images. The root application
+is absent from the reusable image. Every task installs its current source and
+retains exact original manifest hashes and its own package qualification.
 
 ### Saved test evidence
 
@@ -365,4 +400,45 @@ existing ledger, opened read-only, with a query deadline. It never reads archive
 contents, recursively measures directories, loads chat history, starts a worker,
 connects to another machine, changes retention, or deletes files. Recorded file
 bytes are historical evidence, not current allocated disk space or an estimate
-of reclaimable storage. Automatic cleanup continues to protect these files.
+of reclaimable storage. Source and result archives stay protected. An explicitly temporary final workspace may expire under the policy below; its original size remains historical accounting.
+
+### Temporary queued-test workspace copies
+
+**Expire temporary test workspace copies** is an optional Storage policy, off
+until enabled. Seven days is recommended. It applies only to checks newly
+submitted through `workspace.tests.submit`; the duration is captured in the
+existing job/allocation receipt. `keepWorkspace: true` preserves a check's full
+workspace, for example when it contains final edits not exported as results.
+Manual environments and existing records without that explicit temporary
+choice remain protected. This is one standing policy, not a model approval per
+archive. Disabling it pauses expiry; extending the duration also extends earlier
+promises, while shortening it applies only to new checks.
+
+The existing Storage maintenance pass inspects at most eight allocation records
+and expires at most two exact local `workspace.tar` copies per pass after the
+captured duration following confirmed environment removal. Cache size pressure
+cannot shorten this duration. Unresolved removal, active preparation, remote
+custody, combined full-environment archives, changed/missing source or results,
+and incomplete receipts remain protected. Final custody verification runs off
+the app loop under the existing environment lock; no archive bodies are read
+during inspection. The existing cleanup attempt records preserve uncertainty
+across interruption instead of replaying an unlink.
+
+Automatic verification protects any individual retained file over 8 GiB, or a
+file whose verification takes over 60 seconds. Those copies require explicit
+inspection; this policy does not promise automatic expiry of every large archive.
+
+Original `source.tar`, `artifacts.tar`, removal receipts and historical hashes
+remain. A separate expiry field reports current workspace availability; it does
+not rewrite the original successful preservation receipt or pretend its original
+byte count is current disk usage. Obsolete legacy full copies may still be
+removed by a separately authorized, ownership-checked cleanup; their age alone
+is not the new policy's authorization.
+
+Test preparation should keep installed dependencies and pytest `--basetemp`
+outside `/artifacts`, and outside the source checkout where practical. Put useful
+reports, patches and outputs in `/artifacts`, not entire test installations,
+large synthetic archive fixtures or copies of previous evidence directories.
+Do not bundle earlier `workspace-resources`, qualification archives or `output`
+packets into a new source snapshot. Source exports must continue to respect Git
+ignore rules; do not blanket-filter tracked files or potential final edits.

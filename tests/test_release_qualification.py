@@ -1,4 +1,4 @@
-"""Parallel release jobs must qualify and publish one immutable candidate."""
+"""Release checks must qualify and publish one immutable candidate."""
 import importlib.util
 import json
 from pathlib import Path
@@ -62,7 +62,7 @@ def qualified(selected, monkeypatch):
     return root, evidence, expected, receipts, dist, runtime, snapshot
 
 
-def test_all_three_jobs_and_unchanged_distributions_are_required(qualified):
+def test_all_three_receipts_and_unchanged_distributions_are_required(qualified):
     root, evidence, expected, receipts, dist, *_ = qualified
     qualification.verify_receipts(root, evidence, expected, receipts, dist)
     (receipts / 'frontend.json').unlink()
@@ -192,28 +192,39 @@ def test_runtime_project_constrains_the_recorded_build_backend(tmp_path, monkeyp
     assert (runtime / 'build-constraints.txt').read_text() == 'maturin==1.9.0\n'
 
 
-def test_workflow_requires_parallel_lanes_before_write_permission():
-    jobs = yaml.load((ROOT / '.github/workflows/release.yml').read_text(), Loader=yaml.BaseLoader)['jobs']
-    for lane in qualification.LANES:
-        assert jobs[lane]['needs'] == 'prepare'
-        # Proof lookup needs Actions artifact reads, never write permission.
-        if lane == 'frontend':
-            assert jobs[lane]['permissions'] == {'contents': 'read', 'actions': 'read'}
-        else:
-            assert 'permissions' not in jobs[lane]
-    assert set(jobs['release']['needs']) == {'prepare', *qualification.LANES}
+def test_workflow_consolidates_checks_without_sharing_publication_credentials():
+    workflow = yaml.load((ROOT / '.github/workflows/release.yml').read_text(), Loader=yaml.BaseLoader)
+    jobs = workflow['jobs']
+    assert set(jobs) == {'prepare', 'release'}
+    assert workflow['permissions'] == {'contents': 'read'}
+    assert jobs['prepare']['permissions'] == {'contents': 'read', 'actions': 'read'}
+    assert jobs['release']['needs'] == 'prepare'
     assert jobs['release']['permissions'] == {'contents': 'write'}
+    steps = jobs['prepare']['steps']
+    commands = '\n'.join(step.get('run', '') for step in steps)
+    assert commands.count('uv sync --locked --group dev --group artifacts') == 1
+    assert 'Restore and verify the exact candidate host graph' not in str(steps)
+    for lane in qualification.LANES:
+        assert f'--lane {lane}' in commands
+    # Distribution bytes and their receipt are frozen before isolated native setup.
+    assert commands.index('uv build') < commands.index('--lane package') < commands.index('runtime-project')
+    assert commands.index('--lane frontend') < commands.index('runtime-project')
+    assert commands.count('qualify_host_dependencies.py --verify') == 3
+    assert steps[0]['with']['fetch-depth'] == "${{ inputs.release_revision != '' && '0' || '1' }}"
+    assert 'plan --revision "$SELECTED_RELEASE_REVISION" --fetch-tag' in commands
+    private = next(s for s in steps if s.get('with', {}).get('repository') == 'microsoft/amplifier-module-loop-live')
+    assert private['with']['persist-credentials'] == 'false'
+    assert private['with']['ssh-key'] == '${{ secrets.LOOP_LIVE_CI_READ_KEY }}'
     steps = jobs['release']['steps']
     assert steps[0]['with'] == {
         'ref': '${{ needs.prepare.outputs.revision }}', 'fetch-depth': '1'}
-    # Prepare retains history for explicit historical release ancestry checks.
-    assert jobs['prepare']['steps'][0]['with']['fetch-depth'] == '0'
+    assert all('pytest' not in s.get('run', '') and 'uv pip install' not in s.get('run', '') for s in steps)
     verify = next(i for i, step in enumerate(steps) if 'verify-receipts' in step.get('run', ''))
     publish = next(i for i, step in enumerate(steps) if 'publish --tag' in step.get('run', ''))
     assert verify < publish
 
 
-def test_exhaustive_checks_follow_publication_at_the_exact_released_source():
+def test_broad_checks_are_nightly_or_explicit_and_keep_distinct_package_boundaries():
     workflows = ROOT / '.github/workflows'
     manual = yaml.load((workflows / 'browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert set(manual['on']) == {'workflow_dispatch', 'workflow_call'}
@@ -232,23 +243,45 @@ def test_exhaustive_checks_follow_publication_at_the_exact_released_source():
     steps = critical['jobs']['critical']['steps']
     assert steps[0]['with']['ref'] == '${{ inputs.revision || github.sha }}'
     commands = '\n'.join(step.get('run', '') for step in steps)
-    for check in ('pytest', 'test_bundle_selection.py', 'test_service.py', 'test_browser_detail.py',
-                  'npm test', 'recovery-group-browser.mjs', 'chat-menu-browser.mjs', 'public-first-chat-browser.mjs'):
+    # Unit subsets duplicate the full Python lane / qualified frontend graph.
+    assert 'pytest' not in commands and 'npm test' not in commands
+    for check in ('recovery-group-browser.mjs', 'chat-menu-browser.mjs', 'public-first-chat-browser.mjs',
+                  'inline-media-browser.mjs', 'uv pip install'):
         assert check in commands
+    installed_media = next(step for step in steps if step.get('name') == 'Check retained inline media in installed package')
+    assert installed_media['env']['INLINE_MEDIA_MODE'] == 'installed'
     release = yaml.load((workflows / 'release.yml').read_text(), Loader=yaml.BaseLoader)
     assert 'public-readiness' not in release['jobs']
     post = yaml.load((workflows / 'post-release.yml').read_text(), Loader=yaml.BaseLoader)
-    assert set(post['on']) == {'workflow_run', 'workflow_dispatch'}
+    assert set(post['on']) == {'workflow_run', 'workflow_dispatch', 'schedule'}
+    assert post['on']['schedule'] == [{'cron': '0 1 * * *', 'timezone': 'America/Los_Angeles'}]
+    # One broad schedule; unrelated maintenance schedules remain permitted.
+    broad_owners = {'public-readiness.yml', 'python-checks.yml', 'browser-checks.yml', 'integration-checks.yml'}
+    scheduled = []
+    for path in workflows.glob('*.yml'):
+        workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
+        callees = {Path(job.get('uses', '')).name for job in workflow.get('jobs', {}).values()}
+        if 'schedule' in workflow.get('on', {}) and (path.name in broad_owners or callees & broad_owners):
+            scheduled.append(path.name)
+    assert scheduled == ['post-release.yml']
     assert post['on']['workflow_run'] == {'workflows': ['Publish application release'], 'types': ['completed']}
     assert post['on']['workflow_dispatch']['inputs'] == {'publication_run_id': {
         'description': 'Successful main publisher run whose existing release will be verified',
-        'required': 'true', 'type': 'string'}}
+        'required': 'true', 'type': 'string'}, 'broad': {
+        'description': 'Explicit broad investigation; ordinary releases run installed-package smoke only',
+        'required': 'false', 'type': 'boolean', 'default': 'false'}}
     assert post['permissions'] == {'contents': 'read'}
-    for lane in ('readiness', 'python', 'browser'):
+    for lane in ('readiness', 'python', 'browser', 'integrations'):
+        # An independently verified identity permits nightly diagnostics even if
+        # the installed-package smoke fails; cancelled/unresolved runs do not.
+        assert ' '.join(post['jobs'][lane]['if'].split()) == (
+            "${{ !cancelled() && needs.resolve.outputs.identity_result == 'success' && "
+            "(github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.broad)) }}")
         assert post['jobs'][lane]['needs'] == 'resolve'
         assert post['jobs'][lane]['with']['revision'] == '${{ needs.resolve.outputs.revision }}'
-        if lane == 'python':
-            assert post['jobs'][lane]['permissions'] == {'contents': 'read', 'actions': 'read'}
+        if lane in ('python', 'integrations'):
+            if lane == 'python':
+                assert post['jobs'][lane]['permissions'] == {'contents': 'read', 'actions': 'read'}
             assert post['jobs'][lane]['secrets'] == {
                 'LOOP_LIVE_CI_READ_KEY': '${{ secrets.LOOP_LIVE_CI_READ_KEY }}'}
         else:
@@ -257,13 +290,17 @@ def test_exhaustive_checks_follow_publication_at_the_exact_released_source():
     assert "conclusion == 'success'" in resolve['if']
     assert 'head_repository.full_name == github.repository' in resolve['if']
     assert 'head_branch' in resolve['if']
-    assert resolve['steps'][-1]['run'] == 'python scripts/post_release_checks.py resolve --output "$GITHUB_OUTPUT"'
-    assert resolve['steps'][-1]['env'] == {'GH_TOKEN': '${{ github.token }}'}
+    identity = next(s for s in resolve['steps'] if s.get('id') == 'release')
+    assert identity['run'] == 'python scripts/post_release_checks.py resolve --output "$GITHUB_OUTPUT"'
+    assert identity['env'] == {'GH_TOKEN': '${{ github.token }}'}
+    assert resolve['steps'][-1]['run'] == 'python scripts/post_release_checks.py report --summary-only'
+    assert any(s.get('id') == 'install' for s in resolve['steps'])
+    assert 'installed-package' not in post['jobs']
     assert release['jobs']['prepare']['steps'][-1]['with']['name'] == 'host-source-resolution'
     assert post['jobs']['report']['permissions'] == {'contents': 'read', 'issues': 'write'}
     assert 'always()' in post['jobs']['report']['if']
-    assert set(post['jobs']['report']['needs']) == {'resolve', 'installed-package', 'readiness', 'python', 'browser', 'integrations'}
-    frontend = '\n'.join(step.get('run', '') for step in release['jobs']['frontend']['steps'])
+    assert set(post['jobs']['report']['needs']) == {'resolve', 'readiness', 'python', 'browser', 'integrations'}
+    frontend = '\n'.join(step.get('run', '') for step in release['jobs']['prepare']['steps'])
     assert 'npm test --prefix frontend' in frontend
     assert 'npm run build --prefix frontend' in frontend
     assert 'git diff --exit-code -- amplifier_web/static' in frontend
@@ -299,16 +336,23 @@ def test_post_release_manual_guard_and_report_share_verified_identity():
                  "github.event.workflow_run.head_branch == 'main' && "
                  "github.event.workflow_run.head_repository.full_name == github.repository")
     manual = "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'"
-    assert ' '.join(resolve['if'].split()) == f'({manual}) || ({automatic})'
-    assert ' '.join(report['if'].split()) == f'always() && (({manual}) || ({automatic}))'
+    nightly = "github.event_name == 'schedule' && github.ref == 'refs/heads/main'"
+    assert ' '.join(resolve['if'].split()) == f'({nightly}) || ({manual}) || ({automatic})'
+    assert ' '.join(report['if'].split()) == (
+        f"always() && (needs.resolve.result != 'success' || github.event_name != 'workflow_run') && "
+        f'(({nightly}) || ({manual}) || ({automatic}))')
     assert resolve['outputs'] == {
-        name: '${{ steps.release.outputs.' + name + ' }}'
-        for name in ('publication_run_id', 'publication_run_attempt', 'revision', 'tag', 'version')}
+        **{name: '${{ steps.release.outputs.' + name + ' }}'
+           for name in ('publication_run_id', 'publication_run_attempt', 'revision', 'tag', 'version')},
+        'identity_result': '${{ steps.release.outcome }}',
+        'install_result': '${{ steps.install.outcome }}'}
     assert post['concurrency'] == {
-        'group': 'post-release-${{ github.event.workflow_run.id || github.run_id }}', 'cancel-in-progress': 'false'}
+        'group': "post-release-${{ github.event_name == 'schedule' && 'nightly' || github.event.workflow_run.id || github.run_id }}", 'cancel-in-progress': 'false'}
     assert report['concurrency'] == {
         'group': 'post-release-report-${{ needs.resolve.outputs.tag || needs.resolve.outputs.publication_run_id || github.run_id }}',
         'cancel-in-progress': 'false'}
+    assert report['steps'][-1]['env']['VERIFICATION_SCOPE'] == (
+        "${{ (github.event_name == 'schedule' || inputs.broad) && 'broad' || 'smoke' }}")
     assert report['steps'][-1]['env']['RELEASE_RUN_ID'] == '${{ needs.resolve.outputs.publication_run_id }}'
     assert report['steps'][-1]['env']['RELEASE_RESULTS'] == '${{ toJSON(needs) }}'
     assert report['steps'][-1]['run'] == 'python scripts/post_release_checks.py report'
@@ -460,10 +504,10 @@ def test_full_python_suite_is_post_release_or_manual_but_fast_proofs_remain():
                     if ' pytest -' in line or ' -m pytest ' in line:
                         assert 'tests/' in line, (filename, line)
     release = yaml.load((workflows / 'release.yml').read_text(), Loader=yaml.BaseLoader)
-    package = '\n'.join(step.get('run', '') for step in release['jobs']['package']['steps'])
+    package = '\n'.join(step.get('run', '') for step in release['jobs']['prepare']['steps'])
     assert 'uv build' in package and 'release.py" verify' in package
     assert 'dist/*.whl' in package and 'from amplifier_web.app_updates import PROBE' in package
-    runtime = '\n'.join(step.get('run', '') for step in release['jobs']['runtime']['steps'])
+    runtime = '\n'.join(step.get('run', '') for step in release['jobs']['prepare']['steps'])
     assert 'tests/test_runtime_module_cache.py' in runtime
 
 
@@ -1684,7 +1728,7 @@ def test_permissions_history_selection_comes_from_actual_source(permissions_chec
     node = module.node_selection(ROOT)
     assert set(node) == set(module.NODE_TESTS)
     assert {name: len(names) for name, names in node.items()} == {
-        'tests/approval-card.test.mjs': 27, 'tests/settings-action-queue.test.mjs': 7,
+        'tests/approval-card.test.mjs': 27, 'tests/settings-action-queue.test.mjs': 9,
         'tests/pending-view.test.mjs': 9, 'tests/conversation-navigation.test.mjs': 16,
         'tests/fixture-lifecycle.test.mjs': 5}
     approval = node['tests/approval-card.test.mjs']
@@ -1884,7 +1928,7 @@ def test_compact_composer_is_fixed_manual_only_with_independent_failure_evidence
 
 def test_runtime_cache_is_selected_after_fresh_resolution_without_fallback():
     jobs = yaml.load((ROOT / '.github/workflows/release.yml').read_text(), Loader=yaml.BaseLoader)['jobs']
-    steps = jobs['runtime']['steps']
+    steps = jobs['prepare']['steps']
     resolve = next(i for i, step in enumerate(steps) if 'uv lock ' in step.get('run', ''))
     key = next(i for i, step in enumerate(steps) if ' cache-key ' in step.get('run', ''))
     restore = next(i for i, step in enumerate(steps) if step.get('uses') == 'actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830')
@@ -1935,7 +1979,7 @@ def test_native_core_qualification_is_manual_and_cannot_publish():
 @pytest.mark.parametrize('workflow', ['release.yml', 'core-wheels.yml'])
 def test_recipe_probe_installs_its_declared_module_before_freezing_runtime(workflow):
     jobs = yaml.load((ROOT / '.github/workflows' / workflow).read_text(), Loader=yaml.BaseLoader)['jobs']
-    commands = '\n'.join(step.get('run', '') for step in jobs['runtime']['steps'])
+    commands = '\n'.join(step.get('run', '') for step in jobs['prepare' if workflow == 'release.yml' else 'runtime']['steps'])
     recipe = next(line for line in commands.splitlines()
                   if 'uv add ' in line and '.ci/recipes/modules/tool-recipes' in line)
     assert '--frozen --editable' in recipe

@@ -37,6 +37,7 @@ class SurfaceDelivery:
         self.notices = {}
         self.focus = None
         self.epoch = None
+        self.epoch_available = False
         self.last_delivery = {}
 
     async def read(self, args):
@@ -94,8 +95,11 @@ class SurfaceDelivery:
             manifest = await asyncio.wait_for(self.bridge('context.manifest', {}), 1.5)
         except Exception:
             manifest = {'surfaces': [], 'unavailable': True}
-        epoch = manifest.get('inputIds', [])
-        if self.epoch != epoch:
+        self.epoch_available = not manifest.get('unavailable')
+        # An unavailable read is not a new empty input. Keep the last known
+        # identity, but deliver no selected evidence until it is checked again.
+        epoch = manifest.get('inputIds', []) if self.epoch_available else self.epoch
+        if self.epoch_available and self.epoch != epoch:
             self.epoch = epoch
             self.focus = None
             self.images = {k: v for k, v in self.images.items() if v['epoch'] == epoch}
@@ -176,11 +180,16 @@ class SurfaceDelivery:
 
 class SurfaceProvider:
     """Same augmentation for budget checks, complete and streaming protocols."""
-    def __init__(self, original, delivery):
+    def __init__(self, original, delivery, *, coordinator=None):
         self.original, self.delivery = original, delivery
         self.prepared = []
         self.refused = []
         self.refusal_overflow = False
+        from .performance_diagnostics import TIMING_ENABLED, time_preparation
+        self.timing_coordinator = coordinator if TIMING_ENABLED else None
+        if self.timing_coordinator is not None:
+            self._prepare = time_preparation(coordinator, 'surface.prepare', self._prepare)
+            self.refit_request = time_preparation(coordinator, 'provider.refit', self.refit_request)
 
     async def _prepare(self, request, commit=False, *, explicit_budget=False, refit_binding=None):
         entry = next((row for row in self.prepared if row[0] is request), None)
@@ -326,7 +335,11 @@ class SurfaceProvider:
         if name == 'request_budget' and callable(method):
             async def budget(request, *, request_options=None, **kwargs):
                 request = await self._prepare(request, explicit_budget=True)
-                return await self._budget(method, request, request_options=request_options, **kwargs)
+                actual = self._budget
+                if self.timing_coordinator is not None:
+                    from .performance_diagnostics import time_preparation
+                    actual = time_preparation(self.timing_coordinator, 'provider.budget', actual)
+                return await actual(method, request, request_options=request_options, **kwargs)
             return budget
         return method
 
