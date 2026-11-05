@@ -25,6 +25,16 @@ try{
  });
  page.on('request',request=>{if(request.method()==='POST'&&request.url().includes('/api/actions'))requests.push(request.postDataJSON());});
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
+ const closeSettingsDialog=async()=>{
+  const dialog=page.getByRole('dialog',{name:'Settings',exact:true});
+  await expect(dialog).toBeVisible();
+  // Compact Settings owns its close button; desktop uses the dialog header.
+  const compactClose=dialog.getByRole('button',{name:'Close settings',exact:true});
+  const close=await compactClose.isVisible()?compactClose:dialog.getByRole('button',{name:'Close panel',exact:true});
+  await expect(close).toBeVisible();
+  await close.click();
+  await expect(dialog).toBeHidden();
+ };
  const files=async()=>await (await page.request.get(base+'/fixture/configuration-files')).json();
  const savedModel=settings=>settings.config.providers.find(row=>row.id==='one').config.default_model;
  const noImageSettings=async()=>{
@@ -67,7 +77,8 @@ try{
   await openSettingsPage(page,destination);
   assert.equal(await content().locator('option[value="project"],option[value="local"]').count(),0,destination);
  }
- await action('view.update',{patch:{panel:null,workSurface:'workspace',workWorkspaceId:otherWorkspaceId,workWorkspaceTab:'details'}});
+ await closeSettingsDialog();
+ await action('view.update',{patch:{workSurface:'workspace',workWorkspaceId:otherWorkspaceId,workWorkspaceTab:'details'}});
  const workspace=page.getByRole('region',{name:'Workspace configuration',exact:true});
  await workspace.getByRole('group',{name:'Workspace settings pages',exact:true})
   .getByRole('button',{name:'AI connections',exact:true}).click();
@@ -107,7 +118,8 @@ try{
  await page.screenshot({path:'/tmp/settings-scope-global.png'});
  // The same global settings must survive rendering beside a help chat. A
  // canvas used to lose configurationTarget in the browser demand projection.
- await action('view.update',{patch:{panel:null,workSurface:'chat'}});
+ await closeSettingsDialog();
+ await action('view.update',{patch:{workSurface:'chat'}});
  await action('canvas.show',{kind:'settings'});
  const canvas=page.locator('.a-settings-canvas');
  await expect(canvas.getByText('global-saved-model',{exact:false})).toBeVisible();
@@ -162,7 +174,8 @@ try{
  await expect(page.getByRole('alert')).toHaveCount(0);
  await page.screenshot({path:(process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp')+'/reconcile-global-narrow.png'});
  await page.setViewportSize({width:1440,height:1000});
- await action('view.update',{patch:{panel:null,workSurface:'workspace',workWorkspaceId:otherWorkspaceId,workWorkspaceTab:'details',workWorkspaceSettings:'registries'}});
+ await closeSettingsDialog();
+ await action('view.update',{patch:{workSurface:'workspace',workWorkspaceId:otherWorkspaceId,workWorkspaceTab:'details',workWorkspaceSettings:'registries'}});
  const scoped=workspace.getByRole('region',{name:'Capability configuration diagnostics'});
  await expect(scoped.locator('.a-config-diagnostic')).toHaveCount(2);
  await scoped.getByRole('checkbox').check();
