@@ -365,6 +365,87 @@ Before giving a resolved paste to another user, retain these focused results:
    nonzero-host-error reporting. Keep native product/device/live-provider,
    clean-machine bootstrap and installer/background/Scheduler claims separate.
 
+### Prepared real-prerequisite CI check — not dispatched
+
+`.github/workflows/windows-prototype-cold.yml` is a **manual-only, single-job**
+driver for the real `pinned-vcs` installation with `-NoOpen`. It is not the
+offline command-model job and does not run any broad platform/app/runtime suite.
+The original installer remains byte-identical to `d9752da50d4afe16c5fb1e67b499bae146a48cd2`.
+The driver requires its exact reviewed checkout SHA, the published manifest URL
+and its reviewed SHA-256. No moving `main`/`latest` asset or unreviewed candidate
+is admitted.
+
+The assembled candidate supplied for review is a **53,046,193-byte** capsule,
+SHA-256 `c35e1a66b4de88aebc871bd8a6b025eb8475c0f6f525adc44455fd0688fa58f8`,
+and a **443-byte** manifest, SHA-256
+`a54ea968ba1c9f0bb1fb5f182edee3a3c53c707de8cddb3533bee2fae5935b57`.
+Its ordinary managed Python selection is **3.13.15**, supported by the pinned
+uv download metadata but not yet executed by this driver. These are assembled
+input identities, **not publication or cold-install evidence**.
+
+The planned release path is
+`releases/download/windows-prototype-1c4-d9752da5/windows-prototype.json` and its
+matching `windows-prototype.zip`. Both remain **unpublished planning locations**
+until the publication owner supplies the actual immutable release/asset receipt.
+The driver first makes one bounded unauthenticated HTTPS GET and verifies the
+exact manifest bytes. Missing or different assets refuse before installation.
+Do not dispatch merely because the plan names a URL.
+
+**Runner readiness is a separate delivery dependency.** The unchanged installer
+refuses Windows Server, build numbers below 22000, non-x64 processors and elevated
+tokens. The current `windows-latest` workflow target must not be presented as a
+successful-install route: hosted runner facts can violate that gate. Preflight
+records product type, processor architecture, elevation and refusal reasons and
+fails **before installation** on an ineligible host. A future authorized owner
+must select a confirmed Windows 11 client x64 runner operating with an ordinary
+non-elevated token; this local preparation does not provision or enroll one.
+Do not change the installer, bypass its gate, demote a process or create a user
+merely to obtain a green result.
+
+After source review, publication/availability verification, conforming runner
+selection and authorization of the one future run, the responsible owner can use:
+
+```sh
+gh workflow run windows-prototype-cold.yml --repo microsoft/amplifier-unified --ref REVIEWED_DRIVER_BRANCH -f expected_head=EXACT_REVIEWED_DRIVER_COMMIT -f manifest_url=ACTUAL_PUBLISHED_EXACT_MANIFEST_URL -f manifest_sha256=a54ea968ba1c9f0bb1fb5f182edee3a3c53c707de8cddb3533bee2fae5935b57
+```
+
+That is a future operator template, not an instruction for an information worker
+and not a command executed during driver preparation.
+
+1. The setup Python/Git belong only to the controller. The actual PowerShell
+   5.1 installer child has **only System32 and Windows on PATH**, with standard
+   `USERPROFILE`/`HOMEDRIVE`/`HOMEPATH` retained. Runner tokens, provider keys and
+   package-manager overrides are not passed. Discovery must show no Python,
+   launcher, Git, uv or PowerShell 7 on this PATH. OS-provided curl/WSL may still
+   exist and are reported without invocation. No global tool is uninstalled.
+2. The unmodified installer performs the real private helper downloads, managed
+   Python installation, 60 hashed wheel installs and five isolated Git builds.
+   The driver verifies the actual 65-distribution metadata, Git origins,
+   backend/runtime inputs, retained helper hashes/notices, absolute CLI version,
+   actual COM shortcut target/arguments and a fresh child `launch.py --check`.
+   It does not serve the app, open a browser, configure TLS, read provider keys,
+   change trust or prepare a worker.
+3. Each phase uses the maintained native Job owner, explicit controller
+   `sys._base_executable`, finite deadlines and bounded private pipe capture.
+   Receipts are saved **before** process admission. Deadline/forced descendant
+   cleanup/truncated output/unknown custody cannot become PASS. Failed partial
+   installation roots and private diagnostics are not automatically removed or
+   replayed. CI runner disposal is not a cleanup check or durable log retention.
+4. Successful disposal is limited to the one newly observed direct LocalAppData
+   install root after native owner/ACL/reparse validation, unchanged file
+   identity, zero retained Job processes and a separate process-absence check.
+   No prior root is adopted or deleted. Only bounded fixed-field `result.json`
+   is uploaded; private root addresses, process IDs, SID and raw logs are not.
+
+This is a prepared future CI check, not a completed installation. An elevated or
+Server runner is an **explicit prerequisite refusal**, not a weaker PASS with
+disclaimers. A conforming runner can still have permissive execution policy and
+developer tools outside the child PATH; **restricted-PATH CI does not establish
+a pristine machine**.
+Execution-policy refusal stays failure; no bypass, alternate script route,
+unblock, elevation or policy mutation is permitted. Native PS5.1 grammar and
+real installer behavior remain pending until the reviewed driver actually runs.
+
 ## Conditional foreground trial runbook
 
 **Proposed instructions, not yet cleared for a user trial.** Commands below are
