@@ -85,6 +85,8 @@ dev = [
     # source shared with the optional decisions extra.
     "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@12166f8effb5e26737bb5f9f7885cbb9bd4cdf43#subdirectory=modules/context-managed",
     "amplifier-module-provider-openai @ git+https://github.com/microsoft/amplifier-module-provider-openai@main",
+    # Same real QuickJS dispatcher used by the maintained native-check workflow.
+    "amplifier-module-tool-exec @ git+https://github.com/microsoft/amplifier-module-tool-exec@f267548ccd1b38a236a46afb96252bb6dd474dcd",
     # Ordinary-root switch fixtures retain the real local capture hook offline.
     "amplifier-module-hook-context-intelligence @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@a80ce69d0e96e9a343501f238dcd867350dd9aa2#subdirectory=modules/hook-context-intelligence",
     # Installed skills checks exercise the real loader and companion-file tool.
