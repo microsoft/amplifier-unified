@@ -284,6 +284,8 @@ def test_original_public_cause_survives_a_metadata_only_collector(tmp_path):
 def test_unknown_or_truncated_scope_cannot_claim_recovery(tmp_path, components):
     state, diagnostics = fixture(tmp_path)
     diagnostics.begin('ecosystem', components=components)
+    # Legacy receipts retained only the first five component names.
+    diagnostics.state['batch']['components'] = components[:5]
     diagnostics.record('ecosystem-validation', 'failed', errorType='ValueError')
     diagnostics.begin('ecosystem', components=components)
     diagnostics.record('ecosystem-activation', 'succeeded')
@@ -294,11 +296,113 @@ def test_wrong_application_target_cannot_claim_recovery(tmp_path):
     state, diagnostics = fixture(tmp_path)
     fail(diagnostics, kind='application')
     diagnostics.begin('application', 'd' * 40, application_extras=[])
+    diagnostics.record('stage', 'succeeded')
     diagnostics.record('restart-ack', 'succeeded')
     assert len(active(state)) == 1
     diagnostics.begin('application', 'c' * 40, application_extras=[])
     diagnostics.record('restart-ack', 'succeeded')
     assert active(state) == []
+
+
+@pytest.mark.parametrize('reason', ['disk-full', 'disk-quota-exceeded',
+                                  'storage-permission-denied', 'read-only-storage'])
+def test_new_application_recovers_prior_storage_failure_after_staging_and_ack(tmp_path, reason):
+    state, diagnostics = fixture(tmp_path)
+    extras = ['decisions-jev', 'managed-browser']
+    diagnostics.begin('application', 'a' * 40, application_extras=extras)
+    failure = diagnostics.record('background-update', 'failed', errorType='OSError', reason=reason)
+    attempt = diagnostics.begin('application', 'b' * 40, application_extras=extras)
+    diagnostics.record('candidate-probe', 'succeeded')
+    diagnostics.record('stage', 'succeeded')
+    assert len(active(state)) == 1, 'Staging is not successful activation'
+    state, diagnostics = fixture(tmp_path, state['updates'])
+    diagnostics.begin('application', 'b' * 40, attempt, application_extras=extras)
+    diagnostics.record('restart-ack', 'succeeded')
+    assert active(state) == []
+    assert failure in diagnostics.state['events']
+    assert failure['id'] in diagnostics.path.read_text()
+
+
+@pytest.mark.parametrize('old_extras,new_extras', [
+    (None, []), ([], None), (['managed-browser'], []),
+    ([], ['managed-browser']), (['tui'], ['managed-browser']),
+])
+def test_new_application_storage_recovery_requires_exact_known_features(tmp_path, old_extras, new_extras):
+    state, diagnostics = fixture(tmp_path)
+    diagnostics.begin('application', 'a' * 40, application_extras=old_extras)
+    diagnostics.record('candidate-install', 'failed', errorType='OSError', reason='disk-full')
+    diagnostics.begin('application', 'b' * 40, application_extras=new_extras)
+    diagnostics.record('stage', 'succeeded')
+    diagnostics.record('restart-ack', 'succeeded')
+    assert len(active(state)) == 1
+
+
+@pytest.mark.parametrize('phase', ['restart-reconcile', 'restart-superseded', 'restart-ack'])
+def test_application_storage_recovery_requires_qualified_current_attempt(tmp_path, phase):
+    state, diagnostics = fixture(tmp_path)
+    diagnostics.begin('application', 'a' * 40, application_extras=[])
+    diagnostics.record('candidate-install', 'failed', errorType='OSError', reason='disk-full')
+    diagnostics.begin('application', 'b' * 40, application_extras=[])
+    if phase != 'restart-ack':
+        diagnostics.record('stage', 'succeeded')
+    diagnostics.record(phase, 'succeeded')
+    assert len(active(state)) == 1
+
+
+@pytest.mark.parametrize('changed', ['late-occurrence', 'new-attempt'])
+def test_application_storage_recovery_does_not_adopt_late_or_unqualified_failures(tmp_path, changed):
+    state, diagnostics = fixture(tmp_path)
+    diagnostics.begin('application', 'a' * 40, application_extras=[])
+    diagnostics.record('background-update', 'failed', errorType='OSError', reason='disk-full')
+    attempt = diagnostics.begin('application', 'b' * 40, application_extras=[])
+    diagnostics.record('stage', 'succeeded')
+    if changed == 'late-occurrence':
+        group = next(iter(diagnostics.state['activeFailures'].values()))
+        group['latest'] = {**group['latest'], 'id': 'late-storage-failure'}
+    diagnostics.begin('application', 'b' * 40,
+                      attempt if changed == 'late-occurrence' else None, application_extras=[])
+    diagnostics.record('restart-ack', 'succeeded')
+    assert len(active(state)) == 1
+
+
+@pytest.mark.parametrize('changed', [None, 'missing-start', 'missing-success', 'duplicate-stage',
+    'wrong-attempt', 'wrong-revision', 'unknown-extras', 'different-extras', 'later-failure',
+    'reversed-time', 'new-attempt', 'known-unqualified-snapshot'])
+def test_old_updater_storage_recovery_requires_exact_retained_stage(tmp_path, changed):
+    state, diagnostics = fixture(tmp_path)
+    extras = ['managed-browser']
+    diagnostics.begin('application', 'a' * 40, application_extras=extras)
+    failure = diagnostics.record('candidate-install', 'failed', errorType='OSError', reason='disk-full')
+    attempt = diagnostics.begin('application', 'b' * 40, application_extras=extras)
+    started = diagnostics.record('stage', 'started')
+    succeeded = diagnostics.record('stage', 'succeeded')
+    # Old activation re-entered begin(), moving startedAt past the stage. Neither
+    # outgoing begin() nor record() had the new storage snapshot fields.
+    diagnostics.begin('application', 'b' * 40, attempt, application_extras=extras)
+    batch = diagnostics.state['batch']
+    batch.pop('storageFailures')
+    batch.pop('verifiedStorageFailures')
+    assert batch['startedAt'] >= succeeded['at']
+    if changed == 'missing-start': diagnostics.state['events'].remove(started)
+    if changed == 'missing-success': diagnostics.state['events'].remove(succeeded)
+    if changed == 'duplicate-stage': diagnostics.state['events'].append(dict(succeeded))
+    if changed == 'wrong-attempt': succeeded['attemptId'] = 'c' * 32
+    if changed == 'wrong-revision': succeeded['revision'] = 'c' * 40
+    if changed == 'unknown-extras': succeeded.pop('applicationExtras')
+    if changed == 'different-extras': succeeded['applicationExtras'] = []
+    if changed == 'later-failure':
+        group = next(iter(diagnostics.state['activeFailures'].values()))
+        group['latest'] = {**failure, 'id': 'later-failure', 'at': succeeded['at']}
+    if changed == 'reversed-time': succeeded['at'] = started['at'] - 1
+    if changed == 'known-unqualified-snapshot':
+        batch.update(storageFailures={}, verifiedStorageFailures={})
+    state, diagnostics = fixture(tmp_path, state['updates'])
+    diagnostics.begin('application', 'b' * 40, None if changed == 'new-attempt' else attempt,
+                      application_extras=extras)
+    assert len(active(state)) == 1, 'Old stage proof alone is not activation'
+    diagnostics.record('restart-ack', 'succeeded')
+    assert len(active(state)) == (0 if changed is None else 1)
+    assert failure['id'] in diagnostics.path.read_text()
 
 
 def test_migration_keeps_unrelated_current_error_and_ecosystem_failure(tmp_path):
@@ -380,6 +484,63 @@ def test_application_groups_keep_revision_and_exact_feature_scope(tmp_path):
     diagnostics.begin('application', 'a'*40, application_extras=['tui'])
     diagnostics.record('restart-ack', 'succeeded')
     assert len(active(state)) == 3
+
+
+def test_verified_browser_launch_and_completed_restart_recover_only_prior_browser_failures(tmp_path):
+    state, diagnostics = fixture(tmp_path)
+    diagnostics.begin('application', 'a'*40, application_extras=['managed-browser'])
+    old = diagnostics.record('managed-browser-install', 'failed', errorType='CommandFailure')
+    unrelated = diagnostics.record('candidate-install', 'failed', errorType='CommandFailure')
+    diagnostics.begin('application', 'b'*40, application_extras=['decisions-jev','managed-browser'])
+    assert diagnostics.state['batch']['recoveringFailures'] == {}
+    diagnostics.browser_qualified()
+    assert len(active(state)) == 2, 'Qualification is not activation'
+    attempt = diagnostics.state['attemptId']
+    # Activation re-enters this exact candidate; retain its original snapshot.
+    diagnostics.begin('application', 'b'*40, attempt, application_extras=['decisions-jev','managed-browser'])
+    diagnostics.record('restart-ack', 'succeeded')
+    failures = list(diagnostics.state['activeFailures'].values())
+    assert len(failures) == 1 and failures[0]['latest']['id'] == unrelated['id']
+    assert old['id'] in diagnostics.path.read_text(), 'Keep the original failure history'
+
+
+@pytest.mark.parametrize('scope', [None, [], ['managed-browser']])
+def test_restart_without_verified_browser_launch_does_not_clear_old_revision(tmp_path, scope):
+    state, diagnostics = fixture(tmp_path)
+    diagnostics.begin('application', 'a'*40, application_extras=scope)
+    diagnostics.record('managed-browser-install', 'failed', errorType='CommandFailure')
+    diagnostics.begin('application', 'b'*40, application_extras=['managed-browser'])
+    if scope != ['managed-browser']:
+        diagnostics.browser_qualified()  # Missing/unknown old scope is never inferred.
+    diagnostics.record('restart-ack', 'succeeded')
+    assert len(active(state)) == 1
+
+
+def test_browser_recovery_never_adopts_a_later_failure_or_another_attempt(tmp_path):
+    state, diagnostics = fixture(tmp_path)
+    diagnostics.begin('application', 'a'*40, application_extras=['managed-browser'])
+    diagnostics.record('managed-browser-probe', 'failed', errorType='CommandFailure')
+    diagnostics.begin('application', 'b'*40, application_extras=['managed-browser'])
+    diagnostics.browser_qualified()
+    # A late occurrence for the old cause is outside this attempt's evidence.
+    old_group = next(iter(diagnostics.state['activeFailures'].values()))
+    old_group['latest'] = {**old_group['latest'], 'id':'late-occurrence'}
+    diagnostics.record('restart-ack', 'succeeded')
+    assert len(active(state)) == 1
+    diagnostics.begin('application', 'c'*40, application_extras=['managed-browser'])
+    diagnostics.record('restart-ack', 'succeeded')
+    assert len(active(state)) == 1, 'The next attempt needs its own blank launch'
+
+
+@pytest.mark.parametrize('phase', ['restart-reconcile','restart-superseded'])
+def test_browser_qualification_of_superseded_candidate_is_not_current_browser_proof(tmp_path,phase):
+    state, diagnostics = fixture(tmp_path)
+    diagnostics.begin('application', 'a'*40, application_extras=['managed-browser'])
+    diagnostics.record('managed-browser-install','failed',errorType='CommandFailure')
+    diagnostics.begin('application', 'b'*40, application_extras=['managed-browser'])
+    diagnostics.browser_qualified()
+    diagnostics.record(phase,'succeeded')
+    assert len(active(state)) == 1
 
 
 async def test_real_attention_read_and_restart_preserve_unresolved_failure(tmp_path):

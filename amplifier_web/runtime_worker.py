@@ -598,9 +598,13 @@ class Worker:
                 'generation.failed': 'error',
                 'generation.detached': 'interrupted',
             }[event['type']]
+            generation = getattr(self.runtime, 'generation', None)
             self.failed_generation = (
-                {key: event.get(key) for key in ('generation_id', 'input_ids', 'error_type', 'error_category', 'error_stage')}
-                if event['type'] == 'generation.failed' else None)
+                {**{key: event.get(key) for key in ('generation_id', 'input_ids', 'error_type', 'error_category', 'error_stage')},
+                 '_runtime': self.runtime, '_generation': generation, '_stopRevision': self.stop_revision}
+                if event['type'] == 'generation.failed' and generation
+                    and generation.get('id') == event.get('generation_id')
+                    and generation.get('input_ids') == event.get('input_ids') else None)
         if self.controls:
             from amplifier_web.scheduled_input import finish as finish_scheduled_input
             finish_scheduled_input(self.controls, event)
@@ -674,6 +678,10 @@ class Worker:
 
     def install_activity(self, coordinator):
         from amplifier_core import HookResult
+        # ask_user is delivered over the host's durable approval channel even
+        # though this worker has no terminal. This advertises transport only;
+        # each request still waits for its own explicit client response.
+        coordinator.register_capability("approval.interactive", True)
         if coordinator.get_capability("web.activity"):
             # Live provider edits may mount a new immutable instance after the
             # hooks were installed. Preserve its admission wrapper as well.
@@ -684,6 +692,8 @@ class Worker:
                         run_id=coordinator.get_capability("web.worker_run"))
             return
         coordinator.register_capability("web.activity", True)
+        from amplifier_web.performance_diagnostics import install_preparation_timing
+        install_preparation_timing(coordinator)
         if self.session is not None and coordinator is self.session.coordinator:
             async def response_block(event, data):
                 from amplifier_web.execution_events import CALL_PURPOSE
@@ -969,6 +979,7 @@ class Worker:
             self.session.coordinator.register_capability("live.host", ObservedHost())
             self.session.coordinator.register_capability("web.activity.install", self.install_activity)
             self.session.coordinator.register_capability("live.activation", self.activation_gate)
+            self.session.coordinator.register_capability("web.context_recovery.epoch", lambda: self.stop_revision)
             self.session.coordinator.register_capability("live.park", self.park)
             from amplifier_web.host.naming import LiveSessionNaming
             completed=[identity for event in config.get('generations',[]) if event.get('event')=='generation.finished' for identity in event.get('input_ids',[]) if identity in {t['id'] for t in config.get('execution',{}).get('turns',[])}]
@@ -1266,27 +1277,48 @@ class Worker:
         @wraps(original)
         async def execute(*args, **kwargs):
             epoch = self.stop_revision
+            runtime = self.runtime
+            previous_failure = self.failed_generation
             try:
                 return await original(*args, **kwargs)
             except Exception as error:
                 try:
                     from amplifier_web.support_diagnostics import exception_chain, terminal_exception_capture
                     terminal = self.failed_generation or {}
-                    # Only the exact known loop wrapper with its original cause
-                    # is supported. Never parse flattened exception messages.
-                    if (type(error).__module__ == 'amplifier_module_loop_live.failures'
-                            and type(error).__name__ == 'ManagerTurnError'
-                            and isinstance(getattr(error, 'failure', None), dict)
-                            and all(error.failure.get(key) == terminal.get(key) for key in
+                    generation = getattr(runtime, 'generation', None)
+                    # Cleanup can replace the escaping wrapper. Only inspect the
+                    # bounded actual exception chain, never flattened messages.
+                    primary, secondary, seen = error, [], set()
+                    while (isinstance(primary, Exception) and id(primary) not in seen
+                           and len(secondary) < 4):
+                        seen.add(id(primary))
+                        if (type(primary).__module__ == 'amplifier_module_loop_live.failures'
+                                and type(primary).__name__ == 'ManagerTurnError'):
+                            break
+                        secondary.append(exception_chain(primary)[0])
+                        primary = primary.__cause__ or primary.__context__
+                    if (type(primary).__module__ == 'amplifier_module_loop_live.failures'
+                            and type(primary).__name__ == 'ManagerTurnError'
+                            and isinstance(getattr(primary, 'failure', None), dict)
+                            and all(primary.failure.get(key) == terminal.get(key) for key in
                                     ('error_type', 'error_category', 'error_stage'))
+                            and terminal is not previous_failure
                             and terminal.get('error_category') == 'unknown'
                             and terminal.get('error_stage') == 'manager_turn'
-                            and error.__cause__ is not None and self.stop_revision == epoch
-                            and not self.runtime.stop_requested
+                            and primary.__cause__ is not None and self.stop_revision == epoch
+                            and self.runtime is runtime and not runtime.stop_requested
+                            and terminal.get('_runtime') is runtime and terminal.get('_stopRevision') == epoch
+                            and terminal['_generation'].get('id') == terminal.get('generation_id')
+                            and terminal['_generation'].get('input_ids') == terminal.get('input_ids')
+                            # The loop clears its generation after the terminal
+                            # observation. A replacement is never this failure.
+                            and (generation is None or generation is terminal.get('_generation'))
                             and not self.remounting and not self.ownership.yielding):
                         capture = terminal_exception_capture({
                             'generationId': terminal.get('generation_id'), 'inputIds': terminal.get('input_ids'),
-                            'errorType': terminal.get('error_type'), 'exceptionChain': exception_chain(error)})
+                            'errorType': terminal.get('error_type'), 'exceptionChain': exception_chain(primary),
+                            **({'secondaryFailure': {'stage': 'loop_exit', 'exceptionChain': secondary}}
+                               if secondary else {})})
                         if capture:
                             publish({'type': 'runtime.error', 'error': 'The manager turn failed. Work was not replayed.',
                                      'terminalFailure': capture})

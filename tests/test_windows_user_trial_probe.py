@@ -33,6 +33,20 @@ def test_fixture_and_embedded_provider_compile_and_require_maintained_modules():
     assert any(value.startswith("amplifier-module-context-simple @") for value in requirements)
 
 
+def test_current_default_ui_use_graph_remains_declared_and_audited():
+    import tomllib
+    host = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    worker = tomllib.loads((ROOT / "amplifier_web/runtime_deps/pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert any(value.startswith("amplifier-bundle-ui-use @ ") for value in host["dependencies"])
+    assert any(value.startswith("amplifier-bundle-ui-use @ ") for value in worker["dependencies"])
+    assert any(value.startswith("qrcode") for value in host["dependencies"])
+    for name in ("amplifier_ui_use", "amplifier_module_tool_ui_use"):
+        assert probe.IMPORTS[name] == "amplifier-bundle-ui-use"
+    assert probe.IMPORTS["qrcode"] == "qrcode"
+    # This is installed-package provenance, not a claim that the UI-use tool or
+    # optional browser/decision backend was mounted or exercised on Windows.
+
+
 def test_scripted_provider_passes_real_metadata_constructor_before_mount(monkeypatch):
     from amplifier_web.provider_environment import provider_class, provider_config_schema
     module = types.ModuleType("amplifier_module_provider_fixture")
@@ -1474,7 +1488,7 @@ def test_unknown_or_failed_cleanup_never_permits_scratch_deletion(field):
 
 def report():
     return {"candidate": {"head": "a"*40, "tree": "b"*40}, "status": "FAIL",
-        "stage": "first", "checks": {}, "qualification": "private-adapter-candidate-only",
+        "stage": "first", "checks": {}, "qualification": "public-entry-scripted-provider-not-device",
         "publicAcceptance": False, "runtimePreparation": "separate-private-project-api-plus-preinstalled-worker",
         "outerJobsSettled": False, "scratchRemoved": False, "python": [3, 13, 11], "windowsBuild": 26100}
 
@@ -2213,6 +2227,7 @@ def test_workflow_keeps_old_lane_commands_and_bounded_installed_candidate_job():
               "windows-private-config-tls": "7e73ef72ea372e123ecff0c8a5b3831268a629faf2a22054877241b9b9128c29"}
     for name, expected in golden.items():
         job = copy.deepcopy(workflow["jobs"][name])
+        assert job.pop("if") == "${{ !inputs.foreground_only }}"
         if name == "windows-private-config-tls":
             job["steps"][-1]["run"] = job["steps"][-1]["run"].rstrip("\n")
         assert hashlib.sha256(json.dumps(job, sort_keys=True).encode()).hexdigest() == expected
@@ -2231,7 +2246,8 @@ def test_workflow_keeps_old_lane_commands_and_bounded_installed_candidate_job():
 def cold_ci_runner():
     workflow = yaml.safe_load((ROOT / ".github/workflows/platform-mechanisms.yml").read_text())
     job = workflow["jobs"]["windows-default-runtime"]
-    text = job["steps"][-2]["run"]
+    text = next(step["run"] for step in job["steps"]
+                if step.get("name", "").startswith("Require one native cold"))
     code = text.split("$check = @'\n", 1)[1].split("\n'@", 1)[0]
     return workflow, job, ast.parse(code)
 
@@ -2239,10 +2255,12 @@ def cold_ci_runner():
 def test_default_command_job_is_separate_finite_and_requires_real_native_node():
     workflow, job, runner = cold_ci_runner()
     assert job["needs"] == "windows-user-trial" and job["runs-on"] == "windows-latest"
-    assert job["timeout-minutes"] == 30
-    assert job["steps"][-3]["timeout-minutes"] + job["steps"][-2]["timeout-minutes"] < job["timeout-minutes"]
+    assert job["timeout-minutes"] == 34
+    assert sum(step.get("timeout-minutes", 0) for step in job["steps"]) < job["timeout-minutes"]
     offline = workflow["jobs"]["windows-user-trial"]
-    assert hashlib.sha256(json.dumps(offline, sort_keys=True).encode()).hexdigest() == (
+    preserved_offline = copy.deepcopy(offline)
+    assert preserved_offline.pop("if") == "${{ !inputs.foreground_only }}"
+    assert hashlib.sha256(json.dumps(preserved_offline, sort_keys=True).encode()).hexdigest() == (
         "63f6f5e0f127cad785dd9946d6d0558362fecf7f13f8afadf39c6853e6fc0eb8")
     assert offline["timeout-minutes"] == 15
     commands = "\n".join(step.get("run", "") for step in job["steps"])
@@ -2266,7 +2284,8 @@ def test_default_command_job_is_separate_finite_and_requires_real_native_node():
                 and call.func.attr in {"run", "run_owned_probe"}
                 for keyword in call.keywords if keyword.arg == "timeout"]
     assert timeouts == [1200]
-    assert job["steps"][-2]["timeout-minutes"] * 60 >= 1200 + 60
+    cold_step = next(step for step in job["steps"] if step.get("name", "").startswith("Require one native cold"))
+    assert cold_step["timeout-minutes"] * 60 >= 1200 + 60
     compile(runner, "<cold-ci-check>", "exec")
     assert sum(isinstance(part, ast.Call) and isinstance(part.func, ast.Attribute)
                and part.func.attr == "installed" for part in ast.walk(runner)) == 2
@@ -2277,7 +2296,7 @@ def test_default_command_job_is_separate_finite_and_requires_real_native_node():
                for part in ast.walk(runner))
     assert any(isinstance(part, ast.Call) and isinstance(part.func, ast.Attribute)
                and part.func.attr == "validate_report" for part in ast.walk(runner))
-    upload = job["steps"][-1]
+    upload = next(step for step in job["steps"] if step.get("name") == "Upload only the bounded default-runtime result")
     assert upload["if"] == "always()" and upload["with"]["name"] == "windows-default-runtime"
     assert upload["with"]["path"] == "${{ runner.temp }}/dr-ci/evidence/publicresult.json"
     assert "*" not in upload["with"]["path"] and "private" not in upload["with"]["path"]
@@ -2313,3 +2332,507 @@ def test_default_command_ci_result_requires_exact_real_call_pass(fault):
             row.wasxfail = "not acceptance"
         result.pytest_runtest_logreport(row)
     assert result.passed(1 if fault == "exit-code" else 0) is (fault is None)
+
+
+def test_public_journey_has_no_private_adapter_or_manual_reinitialization():
+    tree = ast.parse(Path(SPEC.origin).read_text(encoding="utf-8"))
+    journey = next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef) and node.name == "journey")
+    text = ast.unparse(journey)
+    assert "_read_private_owner_control_token" not in text and "publicGateClosed" not in text
+    assert "entry.initialize" not in text and "read_owner_control_token =" not in text
+    assert 'assert app["browser_entry"] is not None' in text or "assert app['browser_entry'] is not None" in text
+    assert "publicOwnerEntryInitialized" in text
+    assert probe.validate_public(report())
+    obsolete = report()
+    obsolete["qualification"] = "private-adapter-candidate-only"
+    with pytest.raises(AssertionError):
+        probe.validate_public(obsolete)
+
+
+@pytest.mark.parametrize("mode", probe.CLI_MODES)
+def test_foreground_cli_exact_parser_arguments(mode):
+    root = Path("/synthetic/café 日本語")
+    arguments = probe.cli_arguments(mode, root, 8942)
+    assert arguments[:4] == ["--data-dir", str(root / "app"),
+                             "--workspace", str(root / "workspace café 日本語")]
+    if mode in {"serve", "open"}:
+        assert arguments[4:8] == ["--bind", "127.0.0.1", "--port", "8942"]
+        assert arguments[8:] == (["--no-open", "serve"] if mode == "serve" else ["open"])
+    else:
+        assert arguments[4:] == ["setup-tls", *([] if mode == "setup" else [mode])]
+
+
+def test_foreground_cli_output_is_private_bounded_and_preserves_export_bytes():
+    output = probe.CliOutput()
+    content = b"-----BEGIN CERTIFICATE-----\r\nsynthetic\r\n-----END CERTIFICATE-----\r\n"
+    assert output.write(content) == len(content) and output.getvalue() == content
+    output.write(b"x" * (65536 - len(content)))
+    with pytest.raises(AssertionError):
+        output.write(b"private-overflow")
+    assert len(output.getvalue()) == 65536
+
+
+@pytest.mark.parametrize("fault", [None, "wrong-code", "wrong-object", "wrong-port", "repeat", "not-serve"])
+def test_foreground_cli_bind_guard_is_exact_real_asyncio_socket_only(tmp_path, monkeypatch, fault):
+    guard = probe.CliNetworkGuard(tmp_path / "network.jsonl", 8942, serve=fault != "not-serve")
+    stream = types.SimpleNamespace(family=socket.AF_INET, type=socket.SOCK_STREAM)
+    code = probe.asyncio.BaseEventLoop.create_server.__code__
+    frame = types.SimpleNamespace(f_code=code, f_locals={"sock": stream})
+    if fault == "wrong-code":
+        frame.f_code = (lambda: None).__code__
+    if fault == "wrong-object":
+        frame.f_locals["sock"] = object()
+    if fault == "repeat":
+        guard.listener = object()
+    # No socket, loop, process or real network event is emitted by this model.
+    with monkeypatch.context() as patch:
+        patch.setattr(probe.sys, "_getframe", lambda *a: frame)
+        if fault is None:
+            guard.audit("socket.bind", (stream, ("127.0.0.1", 8942)))
+            assert guard.listener is stream and guard.blocked == 0
+        else:
+            with pytest.raises(PermissionError):
+                guard.audit("socket.bind", (stream, ("127.0.0.1", 8943 if fault == "wrong-port" else 8942)))
+    assert guard.port is None  # Serving never admits outbound app networking.
+    if fault:
+        assert guard.blocked == 1 and tmp_path.joinpath("network.jsonl").exists()
+
+
+@pytest.mark.parametrize("event", ["socket.getaddrinfo", "socket.gethostbyname",
+                                  "socket.gethostbyaddr", "socket.getnameinfo", "socket.sendto"])
+def test_foreground_cli_guard_never_adds_dns_or_udp_exemption(tmp_path, event):
+    guard = probe.CliNetworkGuard(tmp_path / "network.jsonl", 8942, connect=True)
+    with pytest.raises(PermissionError):
+        guard.audit(event, ("private-invalid-host",))
+    assert guard.blocked == 1
+    assert "private-invalid-host" not in (tmp_path / "network.jsonl").read_text()
+
+
+def cli_public_report():
+    installed = {"wheelSha256": "a"*64, "verifiedMembers": 868,
+        "imports": {name: {"origin": "installed", "sha256": "b"*64} for name in probe.IMPORTS},
+        "graph": [{"name": "amplifier-core", "version": "2.0.2"}]}
+    value = {"schema": 1, "qualification": "installed-foreground-cli-no-preload-not-device",
+        "publicAcceptance": False, "candidate": {"head": "a"*40, "tree": "b"*40},
+        "status": "PASS", "stage": "complete", "checks": {
+            "cookieCsrfReplay": "PASS", "exportFingerprint": "PASS"},
+        "children": [], "outerJobsSettled": True, "scratchRemoved": True, "unknownNetworkAttempts": 0}
+    required = {
+        "setup": ["mainReturned"],
+        "status": ["mainReturned", "tlsMaterialStable"],
+        "export": ["mainReturned", "tlsMaterialStable", "exportMatchesCa"],
+        "serve": ["mainReturned", "tlsMaterialStable", "defaultRuntime", "publicEntryInitialized",
+                  "updatesDisabled", "appCleanup", "repairLockReleased", "listenerClosed"],
+        "open": ["mainReturned", "tlsMaterialStable", "browserDelivered"]}
+    for mode in probe.CLI_MODES:
+        value["children"].append({"mode": mode, "status": "PASS", "installed": copy.deepcopy(installed),
+            "checks": dict.fromkeys(required[mode], "PASS"),
+            "network": {"blockedOptionalIpv6Probes": 0, "unknownAttempts": 0}})
+    return value
+
+
+@pytest.mark.parametrize("fault", [None, "missing-child", "missing-public-reader", "forced-only",
+    "no-lock-release", "no-main-return", "open-without-delivery", "unknown-network",
+    "graph-drift", "cleanup-unknown", "scratch-retained", "export-unchecked",
+    "ticket", "raw-error", "public-acceptance", "bad-graph-name", "extra-installed-field", "parent-network"])
+def test_foreground_cli_receipt_rejects_missing_proof_and_private_fields(fault):
+    value = cli_public_report()
+    serve, opened = value["children"][3:]
+    if fault == "missing-child":
+        value["children"].pop()
+    elif fault == "missing-public-reader":
+        del serve["checks"]["publicEntryInitialized"]
+    elif fault == "forced-only":
+        del serve["checks"]["appCleanup"]
+    elif fault == "no-lock-release":
+        del serve["checks"]["repairLockReleased"]
+    elif fault == "no-main-return":
+        del serve["checks"]["mainReturned"]
+    elif fault == "open-without-delivery":
+        del opened["checks"]["browserDelivered"]
+    elif fault == "unknown-network":
+        opened["network"]["unknownAttempts"] = 1
+    elif fault == "parent-network":
+        value["unknownNetworkAttempts"] = 1
+    elif fault == "graph-drift":
+        opened["installed"]["graph"][0]["version"] = "2.0.3"
+    elif fault == "cleanup-unknown":
+        value["outerJobsSettled"] = False
+    elif fault == "scratch-retained":
+        value["scratchRemoved"] = False
+    elif fault == "export-unchecked":
+        del value["checks"]["exportFingerprint"]
+    elif fault in {"ticket", "raw-error"}:
+        opened[fault] = "/private/credential"
+    elif fault == "public-acceptance":
+        value["publicAcceptance"] = True
+    elif fault == "bad-graph-name":
+        opened["installed"]["graph"][0]["name"] = "/private/credential"
+    elif fault == "extra-installed-field":
+        opened["installed"]["imports"]["amplifier_web"]["path"] = "/private"
+    if fault is None:
+        assert probe.validate_cli_public(value) is value
+    else:
+        with pytest.raises(AssertionError):
+            probe.validate_cli_public(value)
+
+
+@pytest.mark.parametrize("closed", [False, True])
+@pytest.mark.parametrize("dispatch_failure", [False, True])
+@pytest.mark.parametrize("fixture_scope", ["fresh", "wrong-home", "existing-session"])
+def test_foreground_cli_actual_startup_wrapper_uses_real_settings_action_and_no_fake_runtime(
+        monkeypatch, tmp_path, closed, dispatch_failure, fixture_scope):
+    """Inert app/loop model only; execute the actual fixture wrapper, never a host."""
+    from amplifier_web.configuration_authority import ConfigurationAuthority
+    authority = ConfigurationAuthority.__new__(ConfigurationAuthority)
+    collaboration_tree = ast.parse((ROOT / "amplifier_web/collaboration.py").read_text(encoding="utf-8"))
+    declaration = next(node for node in collaboration_tree.body
+                       if isinstance(node, ast.ClassDef) and node.name == "Collaboration")
+    source = next(node for node in declaration.body if isinstance(node, ast.FunctionDef) and node.name == "source")
+    namespace = {}
+    exec(compile(ast.Module(body=[source], type_ignores=[]), "<actual-collaboration-source>", "exec"), namespace)
+    class MissingCaller(RuntimeError):
+        pass
+    def rejected(*args):
+        raise MissingCaller("No fixture-owned agent conversation exists")
+    collaboration = types.SimpleNamespace(error=rejected)
+    collaboration.source = types.MethodType(namespace["source"], collaboration)
+    authority.service = types.SimpleNamespace(collaboration=collaboration)
+    patch = {"patch": {"updates": {"autoCheck": False, "autoInstall": False}}}
+    # Actual capture -> _capture -> source -> Collaboration.source refuses the
+    # original unowned system call before any configuration mutation/grant.
+    with pytest.raises(MissingCaller):
+        authority.capture("settings.update", patch, "system", None)
+    assert authority.capture("settings.update", patch, "user", None) is None
+    parent = types.ModuleType("amplifier_web")
+    parent.__path__ = []
+    server = types.ModuleType("amplifier_web.server")
+    runtime = types.ModuleType("amplifier_web.runtime")
+    class Runtime:
+        workers = {}
+    runtime.RuntimeManager = Runtime
+    service = types.SimpleNamespace(runtime=Runtime(), data_dir=tmp_path / "app",
+                                    state={"settings": {"updates": {}}, "sessions": []})
+    if fixture_scope == "wrong-home":
+        service.data_dir = tmp_path / "unowned"
+    elif fixture_scope == "existing-session":
+        service.state["sessions"].append({"id": "synthetic-existing"})
+    calls = []
+    sentinel = PermissionError("Synthetic private failure must not be disclosed")
+    async def dispatch(name, args, **kwargs):
+        calls.append((name, args, kwargs))
+        authority.check(authority.capture(name, args, kwargs["origin"], None))
+        if dispatch_failure:
+            raise sentinel
+        service.state["settings"]["updates"].update(args["patch"]["updates"])
+    service.dispatch = dispatch
+    app = {"service": service, "browser_entry": None if closed else object()}
+    class App(dict):
+        on_startup, on_cleanup = [], []
+    app = App(app)
+    async def create(*args, **kwargs):
+        calls.append(("create", args, kwargs))
+        return app
+    server.create_app = create
+    parent.server = server
+    monkeypatch.setitem(sys.modules, "amplifier_web", parent)
+    monkeypatch.setitem(sys.modules, "amplifier_web.server", server)
+    monkeypatch.setitem(sys.modules, "amplifier_web.runtime", runtime)
+    checks = {}
+    observation = {}
+    guard = types.SimpleNamespace(codes={})
+    with probe.cli_application(tmp_path, checks, observation, guard):
+        coroutine = server.create_app(tmp_path / "app", workspace="synthetic", server_config={})
+        if closed:
+            with pytest.raises(AssertionError):
+                immediate(coroutine)
+            assert "publicEntryInitialized" not in checks and len(calls) == 1
+            assert observation["step"] == "app_create"
+        elif fixture_scope != "fresh":
+            with pytest.raises(AssertionError):
+                immediate(coroutine)
+            assert observation["step"] == "app_create" and len(calls) == 1
+            assert "updatesDisabled" not in checks
+        elif dispatch_failure:
+            with pytest.raises(PermissionError) as error:
+                immediate(coroutine)
+            assert error.value is sentinel
+            assert observation["step"] == "settings_update"
+            assert set(checks) == {"defaultRuntime", "publicEntryInitialized"}
+        else:
+            assert immediate(coroutine) is app
+            assert calls[0] == ("create", (tmp_path / "app",),
+                {"workspace": "synthetic", "server_config": {}, "preload_providers": False})
+            assert calls[1] == ("settings.update",
+                {"patch": {"updates": {"autoCheck": False, "autoInstall": False}}},
+                {"origin": "user", "include_state": False})
+            assert checks == {"defaultRuntime": "PASS", "publicEntryInitialized": "PASS", "updatesDisabled": "PASS"}
+            assert observation["step"] == "updates_check"
+            assert len(app.on_startup) == len(app.on_cleanup) == 1
+            # Drive the actual stop observer with an inert loop/task model.
+            # It schedules aiohttp's real GracefulExit, not a replacement server.
+            callbacks, cancelled = [], []
+            async def until(predicate):
+                assert predicate()
+            (tmp_path / "cli-stop").touch()
+            monkeypatch.setattr(probe, "until", until)
+            monkeypatch.setattr(probe.asyncio, "get_running_loop",
+                                lambda: types.SimpleNamespace(call_soon=callbacks.append))
+            task = types.SimpleNamespace(done=lambda: True, cancel=lambda: cancelled.append(True))
+            def create_task(coroutine):
+                immediate(coroutine)
+                return task
+            async def gather(*args, **kwargs):
+                assert args == (task,) and kwargs == {"return_exceptions": True}
+            monkeypatch.setattr(probe.asyncio, "create_task", create_task)
+            monkeypatch.setattr(probe.asyncio, "gather", gather)
+            immediate(app.on_startup[0](app))
+            from aiohttp import web
+            assert len(callbacks) == 1 and not cancelled
+            with pytest.raises(web.GracefulExit):
+                callbacks[0]()
+            immediate(app.on_cleanup[0](app))
+            assert checks["appCleanup"] == "PASS"
+    assert server.create_app is create
+    assert set(guard.codes.values()) == {"cli_app_create"}
+
+
+def test_foreground_cli_source_and_workflow_preserve_entry_cleanup_budget_and_cold_boundary():
+    workflow, job, _ = cold_ci_runner()
+    steps = job["steps"]
+    cold = next(i for i, s in enumerate(steps) if s.get("name", "").startswith("Require one native cold"))
+    foreground = next(i for i, s in enumerate(steps) if s.get("name", "").startswith("Require installed foreground"))
+    step = steps[foreground]
+    assert foreground == cold + 1 and step.get("if", "success()") == "success()"
+    assert step["timeout-minutes"] == 4 and "--cli-run" in step["run"]
+    assert '"$base/env/Scripts/python.exe" -I -B $probe' in step["run"]
+    assert "--candidate-receipt" in step["run"] and "uv " not in step["run"]
+    upload = steps[-1]
+    assert upload["if"] == "always()" and upload["with"]["name"] == "windows-foreground-cli"
+    assert upload["with"]["path"] == "${{ runner.temp }}/dr-ci/evidence/foreground.json"
+    source = Path(SPEC.origin).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    functions = {n.name: ast.unparse(n) for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    child, hosts, application, run = (functions[name] for name in ("cli_child", "cli_hosts", "cli_application", "cli_run"))
+    assert child.count("installed(wheel)") == 2 and child.count("runpy.run_module(") == 2
+    assert "cli_arguments(mode, root, port)" in child and "sys.argv" in child
+    for forbidden in ("web.run_app =", "RuntimeManager(", "read_owner_control_token =", "entry.initialize",
+                      "_read_private_owner_control_token", "runtime.command", "prepare_project"):
+        assert forbidden not in child + hosts + application + run
+    assert "original(*args, **kwargs, preload_providers=False)" in application
+    assert "web.GracefulExit()" in application and "call_soon(exit_loop)" in application
+    assert "app.on_cleanup.append(cleaned)" in application
+    assert 'shared=False' in child and "guard.listener.fileno() == -1" in child
+    assert "job.wait()" in hosts and "job.close()" in hosts and "job.tree_empty" in hosts and "job.io_finalized" in hosts
+    assert "asyncio.timeout(150)" in run
+    assert "sanitize(root)" in run and "canonical_temp(" in run and "report['outerJobsSettled']" in run
+    assert "shutil.rmtree(root)" in run and run.index("sanitize(root)") < run.index("asyncio.run(")
+    assert "validate_cli_public(report)" in run
+    assert "origin='user'" in application and "origin='system'" not in application
+    assert "service.data_dir == root / 'app' and (not service.state['sessions'])" in application
+    compile(tree, SPEC.origin, "exec")
+
+
+def test_foreground_cli_only_dispatch_preserves_accepted_cells_and_normal_admission():
+    workflow, job, _ = cold_ci_runner()
+    event = workflow.get("on", workflow.get(True))  # YAML 1.1 treats 'on' as True.
+    assert event["workflow_dispatch"]["inputs"]["foreground_only"] == {
+        "description": "Run only installed foreground CLI diagnosis; reuses accepted public/cold evidence, does not requalify it",
+        "type": "boolean", "default": False}
+    for name in ("passive-process-check", "windows-private-config-tls", "windows-user-trial"):
+        assert workflow["jobs"][name]["if"] == "${{ !inputs.foreground_only }}"
+    assert job["needs"] == "windows-user-trial"
+    assert job["if"] == "${{ !cancelled() && (inputs.foreground_only || needs.windows-user-trial.result == 'success') }}"
+    cold = next(s for s in job["steps"] if s.get("name", "").startswith("Require one native cold"))
+    assert cold["if"] == "${{ !inputs.foreground_only }}" and cold["timeout-minutes"] == 21
+    cli = next(s for s in job["steps"] if s.get("name", "").startswith("Require installed foreground"))
+    assert "if" not in cli and cli["timeout-minutes"] == 4
+    # Ordinary PR/manual-default behavior is unchanged; isolated diagnosis never
+    # treats skipped accepted cells as newly passing checks.
+    for requested, public_result, cancelled, expected in (
+            (False, "success", False, True), (False, "failure", False, False),
+            (True, "skipped", False, True), (True, "failure", True, False)):
+        assert (not cancelled and (requested or public_result == "success")) is expected
+
+
+@pytest.mark.parametrize("private_source", [False, True])
+def test_foreground_cli_child_retains_denied_method_and_exact_known_code_without_network(
+        tmp_path, monkeypatch, private_source):
+    root = tmp_path
+    (root / "cli-port").write_text("8942", encoding="ascii")
+    monkeypatch.setenv("WINDOWS_TRIAL_ROOT", str(root))
+    monkeypatch.setattr(probe, "require_ci", lambda: None)
+    monkeypatch.setattr(sys, "addaudithook", lambda callback: None)
+    evidence = cli_public_report()["children"][0]["installed"]
+    monkeypatch.setattr(probe, "installed", lambda wheel: evidence)
+    monkeypatch.setattr(probe, "cli_material", lambda root: {"synthetic": "a"*64})
+    parent = types.ModuleType("amplifier_web")
+    parent.__path__ = []
+    cli = types.ModuleType("amplifier_web.cli")
+    cli.webbrowser = types.SimpleNamespace(open=lambda url: True)
+    deployment = types.ModuleType("amplifier_web.deployment")
+    deployment.write_private = lambda *args, **kwargs: pytest.fail("No private grant was requested")
+    tls = types.ModuleType("amplifier_web.tls")
+    tls.ca_fingerprint = lambda home: "00"
+    parent.cli, parent.deployment = cli, deployment
+    monkeypatch.setitem(sys.modules, "amplifier_web", parent)
+    monkeypatch.setitem(sys.modules, "amplifier_web.cli", cli)
+    monkeypatch.setitem(sys.modules, "amplifier_web.deployment", deployment)
+    monkeypatch.setitem(sys.modules, "amplifier_web.tls", tls)
+    observed = []
+    original_guard = probe.CliNetworkGuard
+    def guard(*args, **kwargs):
+        value = original_guard(*args, **kwargs)
+        observed.append(value)
+        return value
+    monkeypatch.setattr(probe, "CliNetworkGuard", guard)
+    # Actual stdlib getfqdn source body. Replace ONLY the native resolver call;
+    # this test emits no DNS/socket/thread/process, and the real guard denies it.
+    def resolver(*args):
+        observed[0].audit("socket.gethostbyaddr", args)
+    monkeypatch.setattr(socket, "gethostbyaddr", resolver)
+    def main(*args, **kwargs):
+        assert args == ("amplifier_web",) and kwargs == {"run_name": "__main__"}
+        if private_source:
+            # The private caller's name, filename and code hash must not escape.
+            namespace = {"audit": observed[0].audit}
+            exec(compile("def private_customer_function():\n audit('socket.gethostbyname', ('private-host',))",
+                         "/private/customer/secret.py", "exec"), namespace)
+            namespace["private_customer_function"]()
+        else:
+            socket.getfqdn("synthetic.invalid")
+            print("Local CA: configured\nTLS listener: ready\n00")
+    monkeypatch.setattr(probe.runpy, "run_module", main)
+    assert probe.cli_child(root / "synthetic.whl", "status") == 1
+    child = json.loads((root / "cli-status.json").read_text())
+    assert child["status"] == "FAIL" and child["step"] == ("main" if private_source else "status")
+    assert child["network"]["unknownAttempts"] == 1
+    attempts = child["networkDiagnostics"]["attempts"]
+    assert len(attempts) == 1 and attempts[0]["count"] == 1
+    assert attempts[0]["event"] == ("socket.gethostbyname" if private_source else "socket.gethostbyaddr")
+    assert attempts[0]["source"] == ("other" if private_source else "socket_getfqdn")
+    if private_source:
+        assert set(attempts[0]) == {"event", "case", "phase", "source", "count"}
+    else:
+        assert attempts[0]["codeSha256"] == probe.digest(socket.getfqdn.__code__.co_code)
+    probe.validate_cli_diagnostics(child)
+    public = json.dumps(child)
+    assert all(secret not in public for secret in (
+        "private_customer_function", "synthetic.invalid", "private-host", "/private", "secret.py"))
+    # The old receipt retained only the count; the new one has a discriminating
+    # method/known-code fact while preserving the same FAIL.
+    # getfqdn catches resolver OSError; the denied event still survives and
+    # qualification fails, even when the original library swallows that error.
+    assert child["errors"][0]["class"] == ("PermissionError" if private_source else "AssertionError")
+
+
+@pytest.mark.parametrize("fault", [None, "raw-source", "unknown-hash", "private-class", "raw-message",
+    "raw-address", "raw-port", "mismatch-count", "too-many", "private-step", "success-with-error"])
+def test_foreground_cli_diagnostics_are_bounded_and_fail_closed(fault):
+    child = {"status": "FAIL", "step": "settings_update",
+        "network": {"unknownAttempts": 1},
+        "errors": [{"class": "PermissionError", "frames": []}],
+        "networkDiagnostics": {"attempts": [{"event": "socket.gethostbyname", "source": "other",
+            "case": "outside", "phase": "outside", "count": 1}], "overflow": 0}}
+    attempt = child["networkDiagnostics"]["attempts"][0]
+    if fault == "raw-source": attempt["source"] = "private_customer_function"
+    elif fault == "unknown-hash": attempt["codeSha256"] = "a"*64
+    elif fault == "private-class": child["errors"][0]["class"] = "CustomerPrivateException"
+    elif fault == "raw-message": child["errors"][0]["message"] = "private"
+    elif fault == "raw-address": attempt["address"] = "private"
+    elif fault == "raw-port": attempt["port"] = 8942
+    elif fault == "mismatch-count": child["network"]["unknownAttempts"] = 2
+    elif fault == "too-many": child["networkDiagnostics"]["attempts"] *= 33
+    elif fault == "private-step": child["step"] = "/private"
+    elif fault == "success-with-error": child["status"] = "PASS"
+    if fault is None:
+        probe.validate_cli_diagnostics(child)
+    else:
+        with pytest.raises(AssertionError):
+            probe.validate_cli_diagnostics(child)
+
+
+@pytest.mark.parametrize("cli_guard", [False, True])
+@pytest.mark.parametrize("fault", [None, "wrong-code", "wrong-module", "wrong-file",
+                                  "wrong-host", "wrong-family", "repeat"])
+def test_foreground_cli_attested_optional_probe_keeps_real_caller_through_adapter(
+        tmp_path, monkeypatch, cli_guard, fault):
+    """Execute exact installed probe code with an inert socket, never a bind."""
+    guard = (probe.CliNetworkGuard(tmp_path / "network.jsonl", 8942) if cli_guard else
+             probe.NetworkGuard(tmp_path / "network.jsonl"))
+    streams = []
+    class Stream:
+        family = socket.AF_INET if fault == "wrong-family" else socket.AF_INET6
+        closed = False
+        def bind(self, address):
+            guard.audit("socket.bind", (self, address))
+        def close(self):
+            self.closed = True
+        def fileno(self):
+            return -1 if self.closed else 77
+    def create(*args):
+        stream = Stream()
+        streams.append(stream)
+        return stream
+    original_frame = sys._getframe
+    def frame(depth=0):
+        value = original_frame(depth + 1)
+        # Native socket.bind is C and contributes no Python caller frame.
+        # Remove only this inert transport shim, not the CLI audit adapter.
+        if value.f_code is Stream.bind.__code__:
+            return value.f_back
+        if (value.f_code is probe.CliNetworkGuard.audit.__code__
+                and value.f_back.f_code is Stream.bind.__code__):
+            return types.SimpleNamespace(f_code=value.f_code, f_locals=value.f_locals,
+                f_globals=value.f_globals, f_lineno=value.f_lineno, f_back=value.f_back.f_back)
+        return value
+    monkeypatch.setattr(sys, "_getframe", frame)
+    namespace = {"__name__": "urllib3.util.connection", "__file__": str(guard.probe_path),
+        "socket": types.SimpleNamespace(has_ipv6=True, socket=create, AF_INET6=socket.AF_INET6)}
+    if fault == "wrong-module":
+        namespace["__name__"] = "private_unknown_module"
+    elif fault == "wrong-file":
+        namespace["__file__"] = str(tmp_path / "private_unknown_module.py")
+    code = guard.probe_code.replace(co_name="private_unknown_function") if fault == "wrong-code" else guard.probe_code
+    function = types.FunctionType(code, namespace)
+    assert function("::2" if fault == "wrong-host" else "::1") is False
+    if fault == "repeat":
+        assert function("::1") is False
+    assert all(stream.closed for stream in streams) and len(streams) == (2 if fault == "repeat" else 1)
+    assert guard.probes == (1 if fault in {None, "repeat"} else 0)
+    assert guard.blocked == (0 if fault is None else 1)
+    log = tmp_path / "network.jsonl"
+    assert log.exists() is (fault is not None)
+    if fault:
+        assert "private_unknown" not in log.read_text()
+
+
+@pytest.mark.parametrize("unknown", [False, True])
+def test_foreground_cli_actual_outer_cleanup_retains_unknown_owned_jobs(tmp_path, monkeypatch, unknown):
+    candidate = tmp_path / "candidate.json"
+    probe.write_json(candidate, {"candidate": {"head": "a"*40, "tree": "b"*40}})
+    receipt = tmp_path / "receipt.json"
+    seen = []
+    monkeypatch.setattr(probe, "require_ci", lambda: None)
+    monkeypatch.setenv("TEMP", str(tmp_path))
+    monkeypatch.setattr(probe, "canonical_temp", lambda path: Path(path))
+    monkeypatch.setattr(probe, "private_directory", lambda path, root: path.mkdir(parents=True, exist_ok=True))
+    monkeypatch.setattr(probe, "sanitize", lambda root: seen.append(root))
+    class Timeout:
+        async def __aenter__(self): pass
+        async def __aexit__(self, *args): pass
+    monkeypatch.setattr(probe.asyncio, "timeout", lambda seconds: Timeout())
+    monkeypatch.setattr(probe.asyncio, "run", immediate)
+    async def hosts(root, wheel, report):
+        report["outerJobsSettled"] = not unknown
+        (root / "private-marker").write_text("synthetic")
+        raise AssertionError("Synthetic failed qualification, never product execution")
+    monkeypatch.setattr(probe, "cli_hosts", hosts)
+    assert probe.cli_run(tmp_path / "wheel.whl", receipt, candidate) == 1
+    result = json.loads(receipt.read_text())
+    assert result["status"] == "FAIL" and result["outerJobsSettled"] is not unknown
+    assert result["scratchRemoved"] is not unknown
+    assert seen[0].exists() is unknown
+    if unknown:
+        assert (seen[0] / "private-marker").read_text() == "synthetic"
+    probe.validate_cli_public(result)

@@ -5,10 +5,13 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tarfile
+import tomllib
 import zipfile
 
 import pytest
+import yaml
 
 spec=importlib.util.spec_from_file_location('application_release',Path(__file__).parents[1]/'scripts/release.py')
 release=importlib.util.module_from_spec(spec);spec.loader.exec_module(release)
@@ -44,6 +47,133 @@ def distributions(root):
     return dist
 
 
+@pytest.fixture
+def preparation(repository):
+    (repository/'uv.lock').write_text('''version = 1
+revision = 3
+[[package]]
+name = "amplifier-unified"
+version = "1.2.3" # root only
+source = { editable = "." }
+[[package]]
+name = "other-dependency"
+version = "1.2.3"
+source = { registry = "https://pypi.org/simple" }
+''')
+    notes = repository/'authored-notes.json'
+    notes.write_text(json.dumps({'version':'1.2.4','title':'Clearer release preparation',
+                                'changes':['Prepare versions and authored notes together.']}))
+    return repository, notes
+
+
+def test_prepare_preserves_dirty_work_and_dependency_versions_without_git(preparation):
+    root, notes = preparation
+    project = root/'pyproject.toml'
+    project.write_text(project.read_text() + 'description = "Uncommitted source change"\n')
+    module = root/'amplifier_web/__init__.py'
+    module.write_text(module.read_text() + 'CUSTOM = "Uncommitted source change"\n')
+    history = json.loads((root/'amplifier_web/release-notes.json').read_text())
+    history['releases'][0]['notices'][0]['previousTitles'] = ['Older editorial title']
+    (root/'amplifier_web/release-notes.json').write_text(json.dumps(history))
+    before = {name:(root/name).read_text() for name in ('pyproject.toml','amplifier_web/__init__.py','uv.lock')}
+    shutil.rmtree(root/'.git')  # Queued source snapshots do not need Git metadata.
+    result = release.prepare(root, '1.2.4', notes)
+    assert result['buildStatus'] == 'not-run'
+    assert len(result['changedFiles']) == 4
+    for name in ('pyproject.toml','amplifier_web/__init__.py'):
+        assert (root/name).read_text() == before[name].replace('1.2.3','1.2.4')
+    assert (root/'uv.lock').read_text() == before['uv.lock'].replace('version = "1.2.3" # root only', 'version = "1.2.4" # root only')
+    assert tomllib.loads((root/'uv.lock').read_text())['package'][1]['version'] == '1.2.3'
+    updated = json.loads((root/'amplifier_web/release-notes.json').read_text())
+    assert updated['releases'][1:] == history['releases']
+    assert updated['releases'][0] == json.loads(notes.read_text())
+    saved = {name:((root/name).read_bytes(), (root/name).stat().st_mtime_ns) for name in result['changedFiles']}
+    assert release.prepare(root, '1.2.4', notes)['changedFiles'] == []
+    assert saved == {name:((root/name).read_bytes(), (root/name).stat().st_mtime_ns) for name in saved}
+
+
+@pytest.mark.parametrize('invalid', ['notes-version','empty-changes','existing-notes','future-history',
+                                    'downgrade','stale-lock','duplicate-root','malformed-lock'])
+def test_prepare_rejects_invalid_inputs_before_any_write(preparation, invalid):
+    root, notes = preparation
+    version = '1.2.4'
+    entry = json.loads(notes.read_text())
+    if invalid == 'notes-version':
+        entry['version'] = '1.2.5'
+    elif invalid == 'empty-changes':
+        entry['changes'] = []
+    elif invalid in {'existing-notes','future-history'}:
+        path = root/'amplifier_web/release-notes.json'
+        history = json.loads(path.read_text())
+        history['releases'].insert(0, {**entry, 'version':'1.2.4' if invalid == 'existing-notes' else '1.2.5',
+                                      'title':'Previously authored different notes'})
+        path.write_text(json.dumps(history))
+    elif invalid == 'downgrade':
+        version = entry['version'] = '1.2.2'
+    else:
+        path = root/'uv.lock'
+        content = path.read_text()
+        if invalid == 'stale-lock':
+            content = content.replace('"1.2.3" # root only', '"1.2.2" # root only')
+        elif invalid == 'duplicate-root':
+            content += '\n[[package]]\nname="amplifier-unified"\nversion="1.2.3"\nsource={virtual="."}\n'
+        else:
+            content = 'invalid preamble\n' + content
+        path.write_text(content)
+    notes.write_text(json.dumps(entry))
+    names = ('pyproject.toml','amplifier_web/__init__.py','uv.lock','amplifier_web/release-notes.json')
+    before = {name:(root/name).read_bytes() for name in names}
+    with pytest.raises(ValueError):
+        release.prepare(root, version, notes)
+    assert before == {name:(root/name).read_bytes() for name in names}
+
+
+@pytest.mark.parametrize('outcome', ['passed','failed','stale-version'])
+def test_prepare_optional_build_runs_only_the_existing_build_once(preparation, monkeypatch, outcome):
+    root, notes = preparation
+    calls = []
+    def build(command, cwd):
+        calls.append((command, cwd))
+        (root/'amplifier_web/static/build.json').write_text(json.dumps({
+            'version':'1.2.3' if outcome == 'stale-version' else '1.2.4','id':'fixture-build'}))
+        return subprocess.CompletedProcess(command, 9 if outcome == 'failed' else 0)
+    monkeypatch.setattr(release.subprocess, 'run', build)
+    if outcome == 'passed':
+        result = release.prepare(root, '1.2.4', notes, build=True)
+        assert result['buildStatus'] == 'passed'
+        assert result['build']['version'] == '1.2.4'
+    else:
+        with pytest.raises(ValueError, match='prepared metadata retained' if outcome == 'failed' else 'does not match'):
+            release.prepare(root, '1.2.4', notes, build=True)
+        assert release.prepare(root, '1.2.4', notes)['changedFiles'] == []
+    assert calls == [(['npm','run','build','--prefix','frontend'], root)]
+    assert release.version_at(root) == '1.2.4'
+
+
+def test_prepare_cli_produces_metadata_without_installing_or_building(preparation):
+    root, notes = preparation
+    command = [sys.executable, str(Path(__file__).parents[1]/'scripts/release.py'), 'prepare']
+    missing = subprocess.run(command, cwd=root, capture_output=True, text=True)
+    assert missing.returncode == 2
+    assert 'prepare requires --version and --notes-file' in missing.stderr
+    result = subprocess.run([*command, '--version','1.2.4','--notes-file',str(notes)],
+                            cwd=root, capture_output=True, text=True, check=True)
+    payload = json.loads(result.stdout)
+    assert payload['version'] == '1.2.4'
+    assert payload['buildStatus'] == 'not-run'
+    assert payload['buildCommand'] == ['npm','run','build','--prefix','frontend']
+
+
+def test_automatic_publication_only_watches_the_dedicated_version_owner():
+    workflow = yaml.load((Path(__file__).parents[1]/'.github/workflows/release.yml').read_text(),
+                         Loader=yaml.BaseLoader)
+    assert workflow['on']['push'] == {'branches':['main'], 'paths':['amplifier_web/__init__.py']}
+    assert 'release_revision' in workflow['on']['workflow_dispatch']['inputs']
+    resolution = next(step for step in workflow['jobs']['prepare']['steps'] if step.get('id') == 'release')
+    assert resolution['env']['SELECTED_RELEASE_REVISION'] == '${{ inputs.release_revision }}'
+    assert 'plan --revision "$SELECTED_RELEASE_REVISION"' in resolution['run']
+
+
 @pytest.mark.parametrize('annotated',[False,True])
 def test_release_plan_resumes_only_the_selected_commit(repository,annotated):
     original=git(repository,'rev-parse','HEAD')
@@ -66,6 +196,38 @@ def test_release_refuses_a_tag_on_a_different_package_version(repository):
     (repository/'pyproject.toml').write_text('[project]\nversion="1.2.4"\n')
     (repository/'amplifier_web/__init__.py').write_text('__version__="1.2.4"\n')
     with pytest.raises(ValueError,match='immutable release tag'):release.plan(repository)
+
+
+@pytest.mark.parametrize('annotated', [False, True])
+@pytest.mark.parametrize('position', ['absent', 'same', 'older'])
+def test_shallow_publication_fetches_only_exact_tag_and_preserves_identity(repository, annotated, position):
+    original = git(repository, 'rev-parse', 'HEAD')
+    git(repository, 'tag', 'unrelated-old-tag')
+    (repository/'README.md').write_text('A later commit')
+    git(repository, 'add', '.');git(repository, 'commit', '-m', 'later')
+    current = git(repository, 'rev-parse', 'HEAD')
+    git(repository, 'tag', 'unrelated-current-tag')
+    if position != 'absent':
+        git(repository, 'tag', *(['-a', '-m', 'release'] if annotated else []),
+            'v1.2.3', original if position == 'older' else current)
+    clone = repository.parent/(repository.name+'-shallow')
+    subprocess.check_call(['git', 'clone', '-q', '--depth=1', '--no-tags', repository.as_uri(), str(clone)])
+    assert git(clone, 'rev-parse', '--is-shallow-repository') == 'true'
+    assert git(clone, 'tag', '--list') == ''
+    if position == 'older':
+        with pytest.raises(ValueError, match='selected commit'):
+            release.plan(clone, fetch_tag=True)
+    else:
+        assert release.plan(clone, fetch_tag=True) == {
+            'version':'1.2.3', 'tag':'v1.2.3', 'revision':current, 'existing_tag':position == 'same'}
+    assert git(clone, 'tag', '--list').splitlines() == ([] if position == 'absent' else ['v1.2.3'])
+    assert git(clone, 'rev-parse', 'HEAD') == current
+
+
+def test_remote_tag_lookup_failure_is_not_treated_as_a_new_release(repository):
+    git(repository, 'remote', 'add', 'origin', (repository/'unavailable.git').as_uri())
+    with pytest.raises(ValueError, match='Release command failed: git ls-remote'):
+        release.plan(repository, fetch_tag=True)
 
 
 def test_manual_plan_can_qualify_merged_maintenance_commit_after_main_advances(repository):
@@ -208,6 +370,45 @@ def test_new_release_publishes_only_after_draft_assets_are_uploaded(repository,m
     assert 'What to do:' in (dist/'RELEASE_NOTES.md').read_text()
     assert '--draft=false' in mutations[-1] and '--latest=true' in mutations[-1]
     assert not any('--force' in call for call in calls)
+
+
+@pytest.mark.parametrize('remote_tag', ['absent', 'matching', 'different'])
+def test_shallow_publication_preserves_remote_tag_identity(repository, monkeypatch, remote_tag):
+    earlier = git(repository, 'rev-parse', 'HEAD')
+    (repository / 'README.md').write_text('The already-qualified release commit')
+    git(repository, 'add', '.'); git(repository, 'commit', '-m', 'candidate')
+    revision = git(repository, 'rev-parse', 'HEAD')
+    if remote_tag != 'absent':
+        git(repository, 'tag', 'v1.2.3', revision if remote_tag == 'matching' else earlier)
+    remote = repository / 'remote.git'
+    git(repository, 'clone', '--bare', str(repository), str(remote))
+    shallow = repository / 'publisher'
+    git(repository, 'clone', '--depth=1', '--no-tags', remote.as_uri(), str(shallow))
+    git(shallow, 'checkout', '--detach', revision)
+    assert git(shallow, 'rev-parse', '--is-shallow-repository') == 'true'
+    assert git(shallow, 'rev-list', '--count', 'HEAD') == '1'
+    assert git(shallow, 'tag', '--list') == ''
+    calls = []
+    original_run = release.run
+
+    def run(*args, **kwargs):
+        if args[0] == 'gh':
+            calls.append(args)
+            return '[]' if args[:3] == ('gh', 'release', 'list') else ''
+        return original_run(*args, **kwargs)
+
+    monkeypatch.setattr(release, 'run', run)
+    dist = distributions(shallow)
+    if remote_tag == 'different':
+        with pytest.raises(ValueError, match='refusing to move an immutable tag'):
+            release.publish(shallow, 'example/app', 'v1.2.3', revision, dist)
+        assert git(remote, 'rev-parse', 'v1.2.3^{commit}') == earlier
+        assert not calls
+    else:
+        release.publish(shallow, 'example/app', 'v1.2.3', revision, dist)
+        assert git(remote, 'rev-parse', 'v1.2.3^{commit}') == revision
+        assert calls[-1][-2:] == ('--draft=false', '--latest=true')
+    assert git(shallow, 'rev-parse', 'HEAD') == revision
 
 
 def test_invalid_package_never_creates_a_tag_or_release(repository,monkeypatch):

@@ -66,6 +66,21 @@ spacing and ASCII escaping do not discard otherwise valid saved notes.
 
 ## Preparing a version change
 
+Measure the five-minute routine release target from the start of version, notes
+and build preparation through publication and the installed-package smoke,
+including required CI and runner queues.
+
+Build and package routine version-only changes in an already-owned prepared
+release DTU, or in a qualified author DTU through its owner. Keep candidate source
+and package checks isolated, but do not provision and finalize a fresh test
+environment for each release when the existing dependencies and toolchain match.
+The publication workflow owns the fresh exact-candidate installed-package proof;
+a version change alone does not require rebuilding the local environment.
+The in-app `workspace.tests.submit` path still freezes each new source; its
+existing manual execute action does not refresh that source for a later
+candidate. Queued callers reuse dependency layers until their owner provides a
+supported prepared-source update path; do not invent a raw-host workaround.
+
 Browser fixture launchers honor `AMPLIFIER_TEST_PYTHON` as one executable path.
 Use the prepared environment's Python path when source and dependencies live
 separately; a checkout-local `.venv` is not required. Pass the path as an environment
@@ -76,22 +91,71 @@ checkout-local path. New launchers should use `fixturePython` from
 `frontend/tests/fixture-python.mjs`. This chooses only the interpreter; readiness,
 fixture arguments, browser installation and product assertions stay separate.
 
-The frontend embeds the package version from `pyproject.toml` in both its
-JavaScript bundle and `static/build.json`. After updating the Python package
-versions (including the local `amplifier-unified` entry in `uv.lock`) and release
-notes, verify `uv sync --locked --dry-run --group dev --group artifacts` in the
-owned environment, then run `npm ci --prefix frontend`,
-`npm test --prefix frontend`, and `npm run build --prefix frontend`. Include all
-resulting `amplifier_web/static` changes in the release commit. Rebuild once more
-and require `git diff --exit-code -- amplifier_web/static` to pass before merging
-the release candidate; a version-only edit still changes generated bundle hashes.
-Keep the release workflow's committed-assets comparison enabled when a matching
-trusted PR proof is unavailable; a reused proof includes that same comparison.
+Choose the version and author one complete release-entry JSON object (the same
+`version`, `title`, `changes` and optional `notices` fields used in
+`amplifier_web/release-notes.json`). Then use the maintained preparation command:
+
+```sh
+python scripts/release.py prepare --version X.Y.Z --notes-file /path/to/authored-entry.json
+```
+
+It validates the notes and three version owners before changing them, preserves
+unrelated edits and historical notice identities, and refuses conflicting notes
+already saved for that version. An identical retry changes nothing. It neither
+installs dependencies nor commits, tags or publishes. Run with `--build` in the
+owned prepared DTU to perform the single canonical frontend build in that same
+invocation; otherwise its output gives the build command for the environment
+owner. Complete routine preparation in one invocation, then commit, push and open
+the release PR; avoid separate model/tool turns for each version field, hash or
+repeated readback. A failed build retains the prepared metadata: fix the reported build
+failure and rerun that build, rather than reconstructing the candidate by hand.
+
+The frontend embeds the package version in both its JavaScript bundle and
+`static/build.json`. Verify `uv sync --locked --dry-run --group dev --group artifacts`
+in the owned environment. Reuse installed dependencies that match the current
+lockfiles and toolchain; run `npm ci --prefix frontend` only when preparation is
+missing or stale. Include the four prepared metadata files and all resulting
+`amplifier_web/static` changes in the release commit: a version-only edit still
+changes generated bundle hashes. The command does not replace review of the
+authored release scope or the normal unused-version check.
+Automatic publication watches the dedicated `amplifier_web/__init__.py` version
+owner. Dependency or release-tool edits alone do not start a publisher; explicit
+manual dispatch remains available with the same immutable identity checks.
+Ordinary publisher pushes fetch only the candidate tree and its exact version
+tag. An explicitly selected older manual target retains full ancestry to prove
+that it was merged; remote lookup failures and conflicting tags remain failures.
+
+Reuse focused behavior evidence for unchanged tested inputs. Do not add a local
+full frontend suite or a second manual build solely for a version change.
+Reuse independent review of the exact accepted feature source; the release
+owner reviews the new integration/version/notes/assets delta rather than reading
+every unchanged feature file and artifact again. Keep downloaded releases,
+source archives and earlier test evidence outside the release source checkout:
+snapshots correctly include untracked, nonignored files, so old output packets
+otherwise become inputs to every later preparation. Preserve genuine untracked
+source edits; use a clean task-owned release checkout when necessary.
+**Fast release checks** still tests, builds and compares committed assets for the
+candidate. A semantically verified version-only PR runs the maintained asset/build
+smoke tests; source/dependency changes and unknown or manual comparisons run all
+frontend unit tests. The proof names its actual test scope, never a skipped full suite. The publisher reuses only its verified exact-source PR proof, or runs
+the frontend checks itself when that proof is unavailable; an earlier version's
+proof does not qualify the new version. Package/native qualification and candidate
+receipts remain fresh under the existing publication workflow.
+
+Routine release verification ends after the hosted published-package smoke.
+Absent a concrete failure, do not repeat its exact-candidate wheel, source or
+asset checks manually after publication. Record the workflow result and finish
+owned cleanup; live adoption remains a separate authorized operation.
 
 The installed-wheel probe also loads worker-owned app packages in a fresh
 `-I -S` child outside the checkout. A successful host import is not worker
 qualification: sibling app packages must be exposed by the explicit bootstrap
 without adding host site-packages or distribution metadata to the runtime.
+
+When adding or changing optional runtime packages, refresh their entries in the
+committed lock against accepted public sources and run the installed probe with
+the affected extras. A default-host lock check does not qualify optional imports;
+keep locked-install evidence distinct from fresh public-source resolution.
 
 ### Recovering a successful frontend build after asset parity fails
 
@@ -126,59 +190,62 @@ still applies when editing source through that tool; it is not a requirement to
 read each generated file before a checked archive import. Preserve local changes
 and reject changed inputs, unexpected paths or links before copying.
 
-### Efficient post-release monitoring
+### Release completion and follow-up
 
-Assign one monitor the exact published source and workflow run IDs. Passive
-watching should wait for completion, not wake a model for each progress line.
-With Bash, use a direct `action: run` with an explicit supported timeout and a
-bounded/private progress log, then read the exact GitHub conclusion. Managed
-`wait` wakes on output as well as completion; `wait_ms` does not extend the
-process's start-time lifetime. Do not nest a long wait inside a shorter
-`tool_exec` deadline. If the lifetime expires, inspect that exact remote run
-before renewing within the original task deadline. Keep actual failures and
-cancellation visible. This is a bounded tool call, not a durable detached watch
-or authority to retry publishing, replay work or adopt the release on a host.
+Routine release work ends after immutable publication and the short published
+asset/install smoke. Do not create a per-release model monitor, full-suite task,
+or broad acceptance campaign. GitHub records conclusions and tracks failures;
+assign an owner only when a failure needs investigation. A skipped nightly suite
+is not evidence that it passed, and a smoke success cannot close its failure issue.
 
-## Local-first, fast publication policy (updated October 14, 2026)
+## Local-first, fast publication policy (updated November 4, 2026)
 
-The development loop depends on published releases reaching local development
-installations quickly. Target roughly two minutes for a warm publication run;
-this is an operating target, not a guarantee about GitHub queues, downloads or
-cold dependency builds. Exhaustive testing must not silently become a publication
-or merge prerequisite again.
+Target **five minutes or less in total for a ready candidate's routine release**:
+reuse matching focused PR/DTU evidence, run the existing short publication graph,
+and verify the published package. This replaces automatic broad testing after
+every publication; putting hours in the background does not meet the policy.
+The observed warm publisher took 175 seconds; resolving its published identity,
+install smoke and reporting took about 48 seconds, roughly 3 minutes 43 seconds
+combined. These measurements exclude scheduling delay and are not a guarantee.
+Report queue, cold-build and required-check overhead separately. An overrun is a
+measurement to address, never permission to skip a required check or claim success.
 
-Before requesting merge, run the affected backend and frontend tests locally,
-and exercise changed user flows in an owned DTU with synthetic state. Reuse owned
-dependencies where appropriate. Aim for 1–3 minutes of focused local checks and
-about five minutes for the normal foreground budget. The full local suite is not
-a merge or release prerequisite, including for substantial integrations. Select
-specific pre-release checks for material risks such as destructive migrations or
-authorization changes. Fix failures attributable to the candidate's changed
-behavior before publishing; record the exact source, commands, results, skips and
-limits in the PR. Unrelated broad-suite findings remain visible follow-up work.
-A green GitHub check is not a substitute for focused qualification. Follow
-workspace DTU rules; never use a shared application installation as a test target.
+Before requesting merge, qualify affected backend/frontend behavior and changed
+user flows in an owned DTU with synthetic state. Reuse dependencies and exact
+qualified inputs; do not rerun unrelated suites or paid acceptance solely for a
+version change. Select specific checks for material risks such as destructive
+migrations or authorization changes. Fix candidate-related failures before
+publication and retain source, commands, outcomes and limits. A green CI check
+is not a substitute for focused qualification. Follow workspace DTU rules.
+
+Broad coverage runs once nightly around **01:00 America/Los_Angeles** from the
+single schedule in `post-release.yml`, or by explicit manual investigation. It
+must not also run automatically per release, PR or main push. Affected integration
+lanes on PRs remain path-scoped. Remove duplication only with an identified
+coverage owner; retain distinct installed-package, platform and media boundaries.
 
 For changes affecting repeated reads, publication, persistence or preparation,
 apply [performance validation](performance.md) to the affected workload. Retain
 measured budgets and semantic checks; this adds no blanket benchmark or exhaustive
 suite requirement to merge or publication.
 
-Typical local commands, inside the owned test environment:
+Illustrative local commands, selected as needed inside the owned test environment;
+this is not a mandatory every-release checklist:
 
 ```sh
+# Prepare dependencies only when the existing environment does not match.
 uv sync --locked --group dev --group artifacts
-uv run --no-sync pytest -q --tb=short tests/test_affected_feature.py
 npm ci --prefix frontend
-npm test --prefix frontend
+# Qualify changed behavior; reuse matching prior evidence for unchanged inputs.
+uv run --no-sync pytest -q --tb=short tests/test_affected_feature.py
+(cd frontend && node --test tests/affected-feature.test.mjs)
+# Build changed client/version inputs once, then review and commit generated assets.
 npm run build --prefix frontend
-git diff --exit-code -- amplifier_web/static
 # Select relevant browser scripts from frontend/package.json.
-# Optional broader local coverage runs separately in the background:
-# uv run --no-sync pytest -v --tb=short
+# Full suites and committed-assets comparison remain with their CI owners.
 ```
 
-Replace the illustrative test filename with the actual affected suite. Real
+Replace the illustrative test filenames with the actual affected suites. Real
 runtime checks require their declared runtime dependencies; report host-only
 skips accurately. Keep source, state, services and ports isolated and clean up
 owned temporary resources after evidence is retained.
@@ -265,29 +332,70 @@ It does not qualify live accounts, provider transport, real host desktop input,
 browser consent or all desktop platforms. Do not substitute this suite for those
 boundaries when a change affects them.
 
-GitHub's required **Fast release checks** runs on every PR. It checks release
-identity/reporting contracts, frontend unit tests, the build and committed assets.
+GitHub's required **Fast release checks** runs on every PR. Only the existing
+release-only comparison can select the small identity/notes and asset/build smoke:
+it must prove all three application versions agree and no dependency, build
+metadata or executable source changed. It then avoids repeating unchanged
+release/reporting-harness and access tests. Other PRs, manual runs and unknown
+comparisons retain those checks and the full frontend suite. All paths rebuild
+and compare committed assets; package/native/publication proof stays unchanged.
+The unfiltered nightly/manual browser owner also runs the full frontend suite
+once, using its already-required frontend dependencies.
 Path-scoped contract workflows remain available for affected components. The
-publication graph retains only prepare, package, frontend, native runtime and
-publish. Matching candidate/dependency receipts, fresh installed-wheel probing,
+publication graph uses one read-only qualification runner for preparation, package,
+frontend and native-runtime checks, then an isolated write-enabled publisher.
+Matching candidate/dependency receipts, fresh installed-wheel probing,
 immutable tags, checksums and the short real-runtime regression suite still gate
 publication. The exhaustive readiness suite no longer runs on PRs or main pushes.
 
-**Post-release verification** starts from successful completion of the publisher,
-including publishers using `GITHUB_TOKEN`. It reads that run's retained candidate,
-checks the actual published stable tag resolves to the candidate commit, and uses
-that immutable revision for all broad tests. It does not substitute the current
-main head or whichever release happens to be latest. The installed-package lane
-downloads both published distributions, verifies their checksums, and installs
-and probes the wheel outside the source checkout. The full Python, broad readiness, extended browser, and owned integration
-suites run in independent jobs after publication. The [integration ownership
-checklist](integration-coverage.md) maps optional-dependency skips to configured
-execution lanes, runs affected lanes on PRs, and rejects unexpected skips. The
-existing publication runtime group is not duplicated in that matrix.
+**Release smoke** starts after a successful publisher, including publishers using
+`GITHUB_TOKEN`. It verifies that run's retained candidate and actual published
+stable tag. The installed-package lane downloads both distributions, verifies
+checksums, then installs and probes the wheel outside the source checkout. These
+are the only automatic per-release checks after publication. Identity resolution
+and installation share one read-only runner. Successful automatic smoke writes
+its summary there and finishes; issue reporting gets a separate write-enabled
+runner only for failures or explicit manual/nightly verification. Manual smoke
+can resolve a previously reported smoke failure; broad and smoke failures remain
+separate.
+
+Nightly/manual broad lanes require the verified immutable release identity, not
+successful installation. They can diagnose an install failure independently;
+cancelled or unresolved runs stay skipped and unverified in the report.
+
+**Nightly verification** freezes the latest actual published release and verifies
+the latest successful canonical publisher's candidate/attempt against it. A
+historical rerun mismatch fails visibly and can be corrected by dispatching the
+matching publisher explicitly; it never silently tests an older release or moving
+main. All broad lanes receive the same verified immutable revision. Manual
+`post-release.yml` dispatch defaults to smoke; `broad: true` explicitly requests
+readiness, full Python, registered browsers and owned integrations as well.
+
+Readiness retains its distinct browser and installed-media checks; duplicate
+Python subsets now belong to the full Python lane. Full frontend units belong to
+the unfiltered browser lane; readiness does not repeat them. The [integration ownership
+checklist](integration-coverage.md) assigns optional dependencies and rejects
+unexpected skips. The short publication runtime group is not duplicated there.
 The full Python lane has a 90-minute limit and prints each test's identity as it
 runs, so a timeout does not conceal failed or unfinished test identities.
 It retains the verbose log and, when pytest completes, JUnit results. A partial
 log or absent JUnit file is not a successful or complete suite.
+The full-Python runner retains XML up to 8 MiB as `junit.xml`. Larger reports
+use lossless `junit.xml.gz`, still capped at 8 MiB retained, with a streaming
+validation pass capped at 32 MiB of source XML and a checked five-second scan
+deadline. The 32 MiB scan budget accommodates the observed multi-megabyte
+parameter identities plus ordinary suite cases without building a larger XML
+tree. Unfinished XML tokens are bounded to 8 MiB plus one 64 KiB read; parser
+attributes can temporarily occupy that bound. The receipt names the encoding,
+file, retained hash and, for gzip, exact source bytes/hash. Compression omits
+no identities, outcome elements or diagnostic content; it is not a summary
+promoted to full JUnit. Declared counts must match observed structure through
+valid EOF. Invalid, incomplete, over-budget or unsafe evidence never supplies
+authoritative counts. Exit, interruption and cleanup still determine session
+completion independently. The deadline is checked between bounded operations,
+not hard preemption of filesystem/parser calls. These are finalization and
+retention bounds, not limits on pytest's existing in-process XML construction
+or pending-file growth. The verbose log retains its separate head/tail bound.
 
 Extended browser checks use the explicit `frontend/tests/browser-checks.json`
 plan, preserving distinct flags and modes. Scenarios run serially in separate
@@ -321,8 +429,7 @@ probe (that has its own lane). Canonical Work explicitly selects multiprocess
 Chromium there; its extended default is also multiprocess. Empty-host failure and
 lost-response modes and the four session-health modes in the extended plan remain
 separate because their arguments exercise different behavior. The full Python
-suite remains the complete source oracle; readiness's focused Python checks are
-retained as earlier recovery diagnostics, not a substitute for full-suite success.
+lane owns source-unit coverage; readiness no longer repeats its Python subsets.
 
 Do not infer complete history from DOM Work-group counts. The reusable
 `scripts/browser_dom_recorder.js` probe reports grouped headers and standalone
@@ -339,22 +446,20 @@ can raise or lower header counts without adding or losing work. Historical
 captures made with older counting semantics must retain that limitation.
 
 The reporting job writes a run summary and opens or updates one tracked issue per
-release when any expected lane fails, is cancelled, is skipped or is missing.
+release and scope (smoke or broad) when any expected lane fails, is cancelled, is skipped or is missing.
 A successful rerun closes its existing failure issue; green releases create no
 issue. Test jobs have read-only repository access; only the isolated reporting
 job can write issues. A failure does not withdraw the release, change its bytes,
 replay work or modify installed hosts. Investigate it and ship a corrective release
 when needed. Published and exhaustively verified remain distinct states.
 
-Publication completion is the foreground handoff. Delegate monitoring and triage
-of broad local and post-release verification, and continue the next task without
-waiting for those jobs. Notify on actionable findings, not unchanged polling.
-When a next release is already in progress, incorporate relevant corrections
-there; otherwise address findings directly while idle. Newly discovered urgent
-regressions still receive prompt attention. Reusing earlier qualification requires
-matching the exact tested inputs; affected checks run again when those inputs
-change. The frontend lane implements the exact-input reuse described below;
-other passing runs are not blanket waivers for a later candidate.
+Publication plus installed-package smoke is the routine handoff. Broad suites
+belong to the nightly/manual owner, without per-release model polling. Follow up
+on actionable failures, combining corrections with the next release when
+appropriate; urgent regressions still warrant prompt attention. Reusing evidence
+requires matching tested inputs; affected checks rerun when those inputs change.
+The frontend lane implements the exact-input reuse described below; other passing
+runs are not blanket waivers for a later candidate.
 
 The broad suites also remain manually runnable. Changing this policy requires an
 explicit decision and an update to this document, tests and repository rules.
@@ -365,11 +470,14 @@ other review, deletion and history protections remain separate and unchanged.
 
 `prepare` selects the same immutable merged application commit as before,
 resolves current host dependencies once, and records their exact requirements.
-Package, frontend, and runtime jobs then run independently against that commit
-and restored host graph. Each verifies the graph before and after its checks.
-The publication job requires all three jobs to succeed and checks their
-candidate identifiers plus the original wheel/source/checksum bytes before
-calling the existing immutable-tag publication implementation.
+Package, frontend and runtime checks share this read-only runner and host graph,
+retaining separate candidate-bound receipts. Package bytes are built and recorded
+before native checks prepare their separate environment; later source or dependency
+changes still fail receipt verification. The isolated publication job requires
+qualification to succeed and checks all three receipts plus the original
+wheel/source/checksum bytes before immutable-tag publication. Build/test code
+never receives repository-write credentials. This removes repeated runner queues
+and host installation without removing checks or changing branch protection.
 
 Qualification tools come from the workflow revision, copied before selecting a
 historical application commit. They are transferred as an artifact within this
@@ -379,12 +487,18 @@ The frontend lane may reuse an immutable artifact from successful **Fast release
 checks** for the same-repository PR whose merge commit is this publishing main
 commit. Reuse binds the entire tracked Git tree (a conservative superset of
 frontend code, tests, scripts, lockfiles, version and build configuration), the
-actual committed-assets digest, Node/npm and runner image identities. GitHub's
+actual committed-assets digest, exact Node/npm, OS/architecture and runner image
+family. Hosted-image patch versions are recorded separately for both runs but do
+not invalidate frontend-only proof reuse; native build/cache identity is unchanged.
+GitHub's
 run, attempt, PR association, tested merge commit/tree, job/step success and
 artifact archive digest are independently checked; the qualifying workflow and
-proof helper must match the release checkout. A green check name or a JSON claim
+proof helper and release-only classifier must match the release checkout. A green
+check name or a JSON claim
 of success alone is insufficient. The proof is emitted only after tests, build
-and committed-assets verification, then retained seven days.
+and committed-assets verification, then retained seven days. It records `full` or
+`release-smoke` explicitly; publisher reuse preserves that scope and never claims
+full units ran for a version-only preparation.
 
 When GitHub explicitly returns an empty run PR-association list, the verifier may
 confirm the exact run-head commit's associated PR instead. That independently
@@ -401,7 +515,7 @@ always use that fallback. Backend-only changes can also cause a conservative
 whole-tree mismatch; avoiding duplicated work never takes priority over exact
 evidence. The frontend lane still issues a fresh receipt for the current release
 candidate and retains a separate artifact stating whether and which proof was
-reused. Broad post-release coverage is unchanged.
+reused. Broad coverage remains in the nightly/manual owner.
 
 The runtime job checks out the declared loop-live source and current recipe
 source as before. It resolves a new runtime lock with refresh and upgrade before
@@ -424,10 +538,10 @@ the dedicated-key checkout does not grant other cache readers its package build.
 
 | Previous serial stage | Job |
 |---|---|
-| Full pytest suite | Local, manual and automatic post-release workflows |
+| Full pytest suite | Affected local checks, explicit manual and nightly workflows |
 | Distribution verification, isolated wheel install and import/assets/login probe | Package |
 | npm tests, frontend build and committed-assets comparison | Frontend |
-| Browser scenarios and their conditional file guards | Local, manual and automatic post-release workflows |
+| Browser scenarios and their conditional file guards | Affected local checks, explicit manual and nightly workflows |
 | Real Core/loop-live surface, child, component and cache tests | Runtime |
 | Immutable tag/asset checks and publication | Release, after all jobs |
 

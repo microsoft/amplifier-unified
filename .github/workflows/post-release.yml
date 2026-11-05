@@ -1,5 +1,8 @@
-name: Post-release verification
+name: Release smoke and nightly verification
 on:
+  schedule:
+    - cron: '0 1 * * *'
+      timezone: America/Los_Angeles
   workflow_run:
     workflows: [Publish application release]
     types: [completed]
@@ -9,15 +12,21 @@ on:
         description: Successful main publisher run whose existing release will be verified
         required: true
         type: string
+      broad:
+        description: Explicit broad investigation; ordinary releases run installed-package smoke only
+        required: false
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
   # Manual input is untrusted until resolve; reports use verified identity below.
-  group: post-release-${{ github.event.workflow_run.id || github.run_id }}
+  group: post-release-${{ github.event_name == 'schedule' && 'nightly' || github.event.workflow_run.id || github.run_id }}
   cancel-in-progress: false
 jobs:
   resolve:
     if: >-
+      (github.event_name == 'schedule' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'success' &&
@@ -33,29 +42,25 @@ jobs:
       revision: ${{ steps.release.outputs.revision }}
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
+      identity_result: ${{ steps.release.outcome }}
+      install_result: ${{ steps.install.outcome }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
+      # Nightly selects one successful publisher once; all lanes use its verified immutable release.
       - name: Resolve the release actually published by this run
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
         run: python scripts/post_release_checks.py resolve --output "$GITHUB_OUTPUT"
-  installed-package:
-    needs: resolve
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: '3.13'
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - name: Verify and install the published assets outside the checkout
+        id: install
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
           python scripts/post_release_checks.py download --version "$RELEASE_VERSION" --destination "$RUNNER_TEMP/published-assets"
           uv venv "$RUNNER_TEMP/published-install"
@@ -68,12 +73,26 @@ jobs:
           name: published-asset-verification
           path: ${{ runner.temp }}/published-assets/verification.json
           if-no-files-found: ignore
+      - name: Summarize installed-package smoke on the same runner
+        if: always()
+        env:
+          VERIFICATION_SCOPE: smoke
+          RELEASE_RUN_ID: ${{ steps.release.outputs.publication_run_id }}
+          RELEASE_RESULTS: >-
+            {"resolve":{"result":"${{ steps.release.outcome }}","outputs":${{ toJSON(steps.release.outputs) }}},"installed-package":{"result":"${{ steps.install.outcome }}"}}
+        run: python scripts/post_release_checks.py report --summary-only
   readiness:
+    if: >-
+      ${{ !cancelled() && needs.resolve.outputs.identity_result == 'success' &&
+          (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.broad)) }}
     needs: resolve
     uses: ./.github/workflows/public-readiness.yml
     with:
       revision: ${{ needs.resolve.outputs.revision }}
   python:
+    if: >-
+      ${{ !cancelled() && needs.resolve.outputs.identity_result == 'success' &&
+          (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.broad)) }}
     needs: resolve
     permissions:
       contents: read
@@ -84,11 +103,17 @@ jobs:
     with:
       revision: ${{ needs.resolve.outputs.revision }}
   browser:
+    if: >-
+      ${{ !cancelled() && needs.resolve.outputs.identity_result == 'success' &&
+          (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.broad)) }}
     needs: resolve
     uses: ./.github/workflows/browser-checks.yml
     with:
       revision: ${{ needs.resolve.outputs.revision }}
   integrations:
+    if: >-
+      ${{ !cancelled() && needs.resolve.outputs.identity_result == 'success' &&
+          (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.broad)) }}
     needs: resolve
     uses: ./.github/workflows/integration-checks.yml
     secrets:
@@ -98,12 +123,14 @@ jobs:
   report:
     if: >-
       always() &&
-      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (needs.resolve.result != 'success' || github.event_name != 'workflow_run') &&
+      ((github.event_name == 'schedule' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
        (github.event_name == 'workflow_run' &&
         github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.head_branch == 'main' &&
         github.event.workflow_run.head_repository.full_name == github.repository))
-    needs: [resolve, installed-package, readiness, python, browser, integrations]
+    needs: [resolve, readiness, python, browser, integrations]
     runs-on: ubuntu-latest
     concurrency:
       group: post-release-report-${{ needs.resolve.outputs.tag || needs.resolve.outputs.publication_run_id || github.run_id }}
@@ -119,6 +146,7 @@ jobs:
       - name: Report results and track failures without changing the release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERIFICATION_SCOPE: ${{ (github.event_name == 'schedule' || inputs.broad) && 'broad' || 'smoke' }}
           RELEASE_RESULTS: ${{ toJSON(needs) }}
           RELEASE_RUN_ID: ${{ needs.resolve.outputs.publication_run_id }}
         run: python scripts/post_release_checks.py report

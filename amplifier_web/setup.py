@@ -1,7 +1,7 @@
 """Provider and routing editors for shared Amplifier configuration."""
 from __future__ import annotations
 import copy
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import asyncio
 import json
 import signal
@@ -22,6 +22,8 @@ from .shared_settings import atomic_write, routing_dirs, overlay
 from .host.config import credential_environment_source, expand_environment, load_config, write_private
 from .bundles import SECRET_KEYS, validate_uri
 
+_WINDOWS = os.name == 'nt'
+
 KNOWN_PROVIDER_SOURCES=json.loads(Path(__file__).with_name('provider_sources.json').read_text())
 
 NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}')
@@ -31,6 +33,8 @@ ROUTING_BUNDLE = 'git+https://github.com/microsoft/amplifier-bundle-routing-matr
 ENV_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
 PROVIDER_ENV = {
     'provider-openai': ('OPENAI_API_KEY',),
+    'provider-jev': ('TYPESAFE_API_KEY',),
+    'provider-local-decisions': ('LOCAL_DECISIONS_API_KEY',),
     'provider-azure-openai': ('AZURE_OPENAI_API_KEY',),
     'provider-chat-completions': ('CHAT_COMPLETIONS_API_KEY',),
     'provider-anthropic': ('ANTHROPIC_API_KEY',),
@@ -352,14 +356,37 @@ class SetupManager:
     def _keys(self,updates):
         from .configuration_authority import check_current
         check_current()
+        if _WINDOWS:
+            from .host.config import validate_key_environment
+            validate_key_environment(updates)
         path=self.store.shared_home/'keys.env'
-        path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
-        with FileLock(str(path)+'.lock',timeout=10):
-            lines=path.read_text().splitlines() if path.exists() else []
+        with ExitStack() as stack:
+            if _WINDOWS:
+                from .windows_files import directory
+                pinned=stack.enter_context(directory(path.parent,owned_root=self.store.shared_home,create=True))
+                # FileLock must not create an unvalidated public lock first.
+                # No replacement: another process may be using this lock.
+                # publish_private validates existing objects before collision.
+                try:pinned.publish_private(path.name+'.lock',b'',replace=False)
+                except FileExistsError:pass
+            else:
+                path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+            # Keep the directory pinned until after FileLock releases; serialize
+            # the complete read/merge/publication, not just the final rename.
+            stack.enter_context(FileLock(str(path)+'.lock',timeout=10))
+            if _WINDOWS:
+                try:lines=pinned.read_private(path.name,limit=1024*1024).decode('utf-8').splitlines()
+                except FileNotFoundError:lines=[]
+            else:
+                lines=path.read_text().splitlines() if path.exists() else []
             names=set(updates)
             lines=[line for line in lines if line.removeprefix('export ').split('=',1)[0].strip() not in names]
             lines.extend(name+'='+shlex.quote(value) for name,value in updates.items())
-            atomic_write(path,'\n'.join(lines)+'\n',private=True)
+            text='\n'.join(lines)+'\n'
+            if _WINDOWS:
+                pinned.publish_private(path.name,text.encode('utf-8'),replace=True)
+            else:
+                atomic_write(path,text,private=True)
         from .host.config import _KEY_FILE_VALUES
         _KEY_FILE_VALUES.update(updates)
         # A long-running backend must see edited keys immediately. Child host
@@ -455,7 +482,18 @@ class SetupManager:
         with self.read_snapshot(workspace):
             current=self.config(workspace)
             changed=before!=signature(current)
-            return {'providers':self.provider_rows(workspace),'takesEffect':'new_sessions','scope':scope,'configurationChanged':changed}
+            from .decision_settings import describe
+            # Publish saved accounts and their decision choices together. A
+            # later catalog request must not be needed to finish connecting.
+            result={'providers':self.provider_rows(workspace),
+                'takesEffect':'new_sessions','scope':scope,'configurationChanged':changed}
+            try:
+                result.update(decisionModels=describe(current.settings,current.providers),decisionModelsError=None)
+            except Exception:
+                # Optional metadata cannot turn an already committed account
+                # write into a reported save failure or expose provider errors.
+                result['decisionModelsError']='Refresh choices to try again.'
+            return result
 
     def _routing_dirs(self,workspace):
         # Same first-hit precedence as the mounted routing hook.
@@ -572,6 +610,13 @@ class SetupManager:
             cli=bool(await asyncio.to_thread(github_cli_token)) if args['module']=='provider-github-copilot' else False
             self.config(workspace) # Load app-owned keys as well as the launch environment.
             return {'credentialCheck':{**environment_credential(args['module'],env_var=args.get('envVar')), 'githubCliAvailable':cli,'requestedEnvVar':args.get('envVar',''), 'checkedAt':time.time()}}
+        if action=='providers.decisionModels':
+            from .decision_settings import describe
+            effective = self.config(workspace)
+            return {'decisionModels': describe(effective.settings, effective.providers), 'decisionModelsError': None}
+        if action=='providers.configureDecisions':
+            from .decision_settings import configure
+            return configure(self, args, workspace, scope)
         if action=='providers.list':
             from .image_defaults import preference
             config = self.config(workspace)

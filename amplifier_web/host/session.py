@@ -397,6 +397,10 @@ def _apply_settings(bundle, config):
                 if routing.get("overrides"):
                     patch["overrides"] = routing["overrides"]
                 hook["config"] = merge(hook.get("config", {}), patch)
+    from ..decision_settings import apply as apply_decisions
+    apply_decisions(bundle, settings)
+    from .ui_use_config import configure_bundle
+    configure_bundle(bundle)
     overrides = settings.get("overrides", {})
     for kind in ("providers", "tools", "hooks"):
         values = []
@@ -455,6 +459,8 @@ def _apply_settings(bundle, config):
         if isinstance(row, dict):
             override = overrides.get(row.get("module"), {})
             bundle.session[kind] = merge(row, {key: value for key, value in override.items() if key in {"source", "config"}})
+    from ..decision_accounts import bind_sources
+    bind_sources({"providers": bundle.providers, "agents": bundle.agents}, getattr(config, "module_sources", {}))
     return bundle
 
 
@@ -863,6 +869,8 @@ class ResolvedRoot:
 
 def apply_runtime_plan(loaded, edited, config, execution_workspace):
     from ..runtime_controls import validate_plan
+    from ..decision_accounts import logical_plan
+    edited = logical_plan(edited)
     validate_plan(edited)
     if "hooks" in edited:
         # Even a same-valued balanced selection is explicit. An effective saved
@@ -930,6 +938,41 @@ async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None
         **({'install_overrides': Path(install_overrides)} if install_overrides is not None else {}),
         cache_dir=config.registry_home / 'cache',
         source_resolver=lambda module, source: module_source(config, snapshot, module, source, components))
+
+
+def install_checkpoint_hooks(coordinator, runtime, checkpoint):
+    """Keep automatic nested completion cheap; enclosing saves are unchanged."""
+    import asyncio
+    from amplifier_core import HookResult
+    async def checkpoint_hook(event, data):
+        if data.get("session_id", runtime.session_id) == runtime.session_id:
+            from ..performance_diagnostics import PhaseTiming, TIMING_ENABLED
+            emit = coordinator.get_capability('web.performance.emit')
+            timing = (PhaseTiming(kind='checkpoint', toolCallId=data.get('tool_call_id'),
+                runtimeSessionId=runtime.session_id,
+                generationId=(runtime.generation or {}).get('id'))
+                if TIMING_ENABLED and callable(emit) else None)
+            outcome = 'completed'
+            if timing:
+                timing.mark('checkpoint.start')
+            try:
+                from ..coordination_delivery import nested_checkpoint
+                await checkpoint(timing=timing, transcript_required=not (
+                    event in {"tool:post", "tool:error"}
+                    and nested_checkpoint(coordinator, data)))
+            except BaseException as exc:
+                outcome = 'cancelled' if isinstance(exc, asyncio.CancelledError) else 'failed'
+                raise
+            finally:
+                if timing:
+                    timing.mark('checkpoint.end')
+                    try:
+                        emit(timing.snapshot(outcome))
+                    except Exception:
+                        pass
+        return HookResult()
+    for event in ("tool:post", "tool:error", "orchestrator:complete", "context:compaction_finished"):
+        coordinator.hooks.register(event, checkpoint_hook, name="unified-checkpoint-" + event)
 
 
 async def prepare_manager(workspace, *, runtime=None, bundle=None, background_delegate=True,
@@ -1070,6 +1113,12 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 if isolation.failure(row):
                     row["enabled"] = False
         apply_provider_environment(environment_plan)
+    from ..decision_accounts import DecisionAccounts, AccountResolver, logical_plan
+    decision_accounts = DecisionAccounts(prepared.mount_plan, isolation,
+        lambda module, source: module_source(config, snapshot, module, source, components))
+    prepared.mount_plan = decision_accounts.plan
+    if decision_accounts.aliases:
+        prepared.resolver = AccountResolver(prepared.resolver, decision_accounts.aliases)
     from ..session_files import project_slug
     prepared.mount_plan.update(application_host=application_host, root_session_id=runtime.session_id,
         project_slug=project_slug(config.workspace),
@@ -1097,17 +1146,23 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         routing_policy = ({"before_initialize": partial(
             prepare_default_routing, automatic=getattr(loaded, "_host_automatic_routing", False))}
                           if not snapshot and any(row.get("module") == "hooks-routing" for row in loaded.hooks) else {})
-        if isolation:
+        if isolation or decision_accounts.records:
             routing_callback = routing_policy.get("before_initialize")
-            async def initialize_with_isolation(session):
-                await isolation.before_initialize(session)
+            async def initialize_with_isolation(constructing):
+                nonlocal session
+                session = constructing  # Retain cleanup ownership if initialize raises.
+                if isolation:
+                    await isolation.before_initialize(constructing)
+                if decision_accounts.records:
+                    await decision_accounts.before_initialize(constructing)
                 if routing_callback:
-                    await routing_callback(session)
+                    await routing_callback(constructing)
             routing_policy["before_initialize"] = initialize_with_isolation
         with startup_timing.phase('manager.session.create'):
             session = await prepared.create_session(session_id=runtime.session_id,
                 session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None,
                 **routing_policy)
+        decision_accounts.require_complete()
         coordinator = session.coordinator
         coordinator.register_capability("approval.interactive", approvals.interactive)
         from ..read_policy import validate_mounted_read_policy
@@ -1117,7 +1172,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         install_request_redaction(coordinator, directory=capture_dir(config.workspace, runtime.session_id))
         coordinator.register_capability('web.history_workspace', str(config.workspace))
         coordinator.register_capability('web.provider_credentials_bound',
-                                        getattr(loaded, '_host_provider_credentials_bound', False))
+                                        bool(decision_accounts.records) or getattr(loaded, '_host_provider_credentials_bound', False))
         # Freeze credential/file/source/generation identity before provider
         # construction. A later rotation cannot relabel an old mounted result.
         coordinator.register_capability('web.provider_catalog', {
@@ -1140,6 +1195,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         coordinator.register_capability("web.configurator", configurator)
         coordinator.register_capability("web.prepared", prepared)
         coordinator.register_capability("web.registry", registry)
+        # Foundation removes disabled agents from the live map. Retain the
+        # exact mounted declarations before shared settings can disable them.
+        coordinator.register_capability("web.agent_definitions",
+                                        copy.deepcopy(coordinator.config.get("agents", {})))
         with startup_timing.phase('manager.settings'):
             if not snapshot:
                 await configurator.apply_saved_settings(config.settings.get("configurator") or {})
@@ -1178,29 +1237,55 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             "session_id": runtime.session_id, "parent_id": None,
             "bundle_name": bundle_identity, "working_dir": str(config.workspace),
             "created": (saved[1].get("created") if saved else None) or datetime.now(UTC).isoformat(),
-            "application_host": application_host, "config": redact(session.config)}
+            "application_host": application_host, "config": redact(logical_plan(session.config))}
         continuity = None
         published_anchors = None
-        async def checkpoint(status="in_progress"):
+        def recovery_write_guard():
+            # A recovery write uses the same native ownership checks, without
+            # saving active state over a separately verified candidate.
+            if write_guard:
+                write_guard()
+            held = shared_handle_getter() if shared_handle_getter else shared_handle
+            if shared_handle_getter and held is None:
+                raise RuntimeError("Native writer ownership is unavailable")
+            native_guard.check()
+            if held is not None:
+                held.check()
+        async def checkpoint(status="in_progress", *, timing=None, transcript_required=True):
             nonlocal published_anchors
             if write_guard:
                 write_guard()
             persist_controls = coordinator.get_capability("web.controls.persist")
             if persist_controls:
                 persist_controls()
+            if not transcript_required:
+                # Inner tools have not appended a conversation result. Keep
+                # authority and control persistence at every boundary; the
+                # existing enclosing/terminal saves retain context changes.
+                held = shared_handle_getter() if shared_handle_getter else shared_handle
+                native_guard.check()
+                if held is not None:
+                    held.check()
+                return
+            if timing:timing.mark('context.start')
             transcript = await coordinator.get("context").get_messages()
+            if timing:timing.mark('context.end')
             held = shared_handle_getter() if shared_handle_getter else shared_handle
             native_guard.check()
             if held is not None:
                 # Cross-host ownership remains Foundation's responsibility;
                 # native transcript/metadata are the only newly written history.
                 held.check()
+            if timing:timing.mark('store.start')
             canonical = store.save(runtime.session_id, transcript, {**metadata, "status": status,
                 "last_updated": datetime.now(UTC).isoformat(),
                 "turn_count": sum(row.get("role") == "user" for row in transcript)})
+            if timing:timing.mark('store.end')
             native_guard.saved()
             if continuity:
+                if timing:timing.mark('continuity.start')
                 continuity.save()
+                if timing:timing.mark('continuity.end')
             from ..collaboration_input import checkpoint_anchors
             anchors = checkpoint_anchors(canonical, runtime)
             if anchors and anchors != published_anchors:
@@ -1213,33 +1298,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             return canonical
         coordinator.register_capability("live.checkpoint", checkpoint)
         from ..context_continuity import install as install_continuity
-        continuity = install_continuity(coordinator, runtime.session_id, edited_path.parent, checkpoint)
-        async def checkpoint_hook(event, data):
-            if data.get("session_id", runtime.session_id) == runtime.session_id:
-                from ..performance_diagnostics import PhaseTiming, TIMING_ENABLED
-                emit = coordinator.get_capability('web.performance.emit')
-                timing = (PhaseTiming(kind='checkpoint', toolCallId=data.get('tool_call_id'),
-                    runtimeSessionId=runtime.session_id,
-                    generationId=(runtime.generation or {}).get('id'))
-                    if TIMING_ENABLED and callable(emit) else None)
-                outcome = 'completed'
-                if timing:
-                    timing.mark('checkpoint.start')
-                try:
-                    await checkpoint()
-                except BaseException as exc:
-                    outcome = 'cancelled' if isinstance(exc, asyncio.CancelledError) else 'failed'
-                    raise
-                finally:
-                    if timing:
-                        timing.mark('checkpoint.end')
-                        try:
-                            emit(timing.snapshot(outcome))
-                        except Exception:
-                            pass
-            return HookResult()
-        for event in ("tool:post", "tool:error", "orchestrator:complete", "context:compaction_finished"):
-            coordinator.hooks.register(event, checkpoint_hook, name="unified-checkpoint-" + event)
+        continuity = install_continuity(coordinator, runtime.session_id, edited_path.parent,
+                                       checkpoint, writer_guard=recovery_write_guard)
+        install_checkpoint_hooks(coordinator, runtime, checkpoint)
         async def cleanup_jobs():
             jobs.close()
         coordinator.register_cleanup(cleanup_jobs)
@@ -1276,7 +1337,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             "capabilities": {name: coordinator.get_capability(name) is not None for name in
                 ("session.spawn", "session.resume", "mention_resolver", "model_role_resolver")},
             "module_load_failures": fatal_failures,
-            "provider_failures": isolation.outcomes(coordinator) if isolation else []}
+            "provider_failures": isolation.outcomes(coordinator) if isolation else [],
+            "decision_account_failures": decision_accounts.failures}
         report["config_inputs"] = config_inputs
         report["history_source"] = history_source
         report["execution_workspace"] = str(execution_workspace)

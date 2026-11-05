@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, nullcontext
 import hashlib
 import json
 import logging
@@ -22,7 +22,7 @@ from .execution import ensure_turn, ingest as ingest_execution, finish as finish
 from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, work_paused
 from .managed_chats import LOCATION
 from .attachments import MAX_ENCODED_BYTES
-from .performance_diagnostics import PerformanceDiagnostics, measured, TimedLock
+from .performance_diagnostics import PerformanceDiagnostics, measure, measured, TimedLock
 from .action_schema import schema, string
 
 
@@ -162,6 +162,8 @@ ACTION_DEFINITIONS = {
     "providers.list": ("List provider connections and setup status without creating a conversation",schema({"refresh":{"type":"boolean"},"location": LOCATION,"sessionId":string(200),"workspace":string(4000)},[])),
     "providers.save": ("Add or edit a provider connection",schema({"sessionId":string(200),"id":string(200),"module":string(200),"source":string(4000),"config":{"type":"object"},"apiKey":string(16000),"apiKeyEnv":string(200),"useGitHubCli":{"type":"boolean"},"scope":{"enum":["global","project","local"]}},["module","config"])),
     "providers.finishSetup": ("Save a connection's default model while preserving provider fields and existing model rules. Optionally initialize general and fast rules only for the first connection without custom routing.",schema({"sessionId":string(200),"id":string(200),"model":string(200),"scope":{"enum":["global","project","local"]},"initializeRouting":{"type":"boolean"}},["id","model"])),
+    "providers.decisionModels": ("List installed optional decision backends and saved per-surface preferences. No inference or credential discovery.", schema({"sessionId":string(200),"workspace":string(4000),"location":LOCATION}, [])),
+    "providers.configureDecisions": ("Save an explicit browser, computer, or both selection preference for new sessions. Both saves the same choice for the two independent purposes atomically. Standard remains the default. Requires separately composed UI-use tools; decision selection also requires a decision backend. Does not install or enable tools or change approvals.", schema({"sessionId":string(200),"purpose":{"enum":["browser","computer","both"]},"mode":{"enum":["standard","decision"]},"allowExternalState":{"type":"boolean"},"backend":schema({"provider":string(100),"model":string(200),"endpoint":string(2000)},["provider","model"]),"scope":{"enum":["global","project","local"]}},["purpose","mode","scope"])),
     "providers.configureImages": ("Choose automatic provider-priority image selection (mode=automatic), turn images off (mode=off), or select an existing connection with id, enabled, and a catalog model. Set exclusive=true when choosing the single image connection: the previous image choices are disabled atomically in the selected scope. Preserve chat models, credentials and tool permissions. No image request is sent.",schema({"sessionId":string(200),"id":string(200),"enabled":{"type":"boolean"},"exclusive":{"type":"boolean"},"mode":{"enum":["automatic","off"]},"model":string(200),"scope":{"enum":["global","project","local"]}},[])),
     "providers.imageModels": ("Discover compatible image models through a saved connection without generating an image",schema({"location":LOCATION,"id":string(200),"sessionId":string(200),"workspace":string(4000),"refresh":{"type":"boolean"}},["id"])),
     "providers.remove": ("Remove a provider connection",schema({"sessionId":string(200),"id":string(200),"scope":{"enum":["global","project","local"]}},["id"])),
@@ -221,7 +223,7 @@ ACTION_DEFINITIONS = {
     "maintenance.reset": ("Preview or reset selected app data with a retained private backup",schema({"parts":{"type":"array","items":{"enum":["runtime","cache","settings","conversations"]}},"apply":{"type":"boolean"},"confirmation":string(20)},["parts"])),
     "maintenance.repair": ("Repair runtime dependency installation while idle",schema()),
     "updates.app": ("Stage a published application release and restart when idle",schema()),
-    "updates.featureInstall": ("Explicitly add native-desktop to the same serving app revision, preserving installed dependencies and extras. Qualifies an isolated candidate, installs and restarts through existing idle/queue guards. Does not grant OS permission or desktop control. Inspect updates.featureResults for the durable outcome; do not replay an unknown result.", schema({"feature":{"enum":["native-desktop"]},"hostInstanceId":string(200)})),
+    "updates.featureInstall": ("Explicitly add optional browser, decision-provider or native observation support to the same serving app revision, preserving installed dependencies and extras. Qualifies an isolated candidate, installs and restarts through existing idle/queue guards. Does not configure a model, grant OS permission or grant control. Inspect updates.featureResults for the durable outcome; do not replay an unknown result.", schema({"feature":{"enum":["native-desktop","managed-browser","decisions-openai","decisions-azure","decisions-jev","decisions-local"]},"hostInstanceId":string(200)})),
     "updates.smartToolRollback": ("Restore the previous installed Smart Tool revision when idle; preserves conversation history.", schema({"id":string(200)},["id"])),
     "updates.smartToolRetry": ("Retry one failed Smart Tool update using its current update resultId (or previous installation ID when no resultId is present). Healthy tools are not repeated.", schema({"id":string(200)},["id"])),
     "updates.smartToolSkip": ("Skip one failed Smart Tool revision using its current update resultId (or previous installation ID when no resultId is present). Retain the current installation; newer revisions remain eligible.", schema({"id":string(200)},["id"])),
@@ -450,7 +452,7 @@ for _access, _actions in {
         "session.inspect", "session.titlePreview", "session.history", "session.deletePreview", "session.export",
         "session.exportDeliver", "session.sharePreview", "session.shareRead", "session.shareList",
         "message.copy", "history.export", "conversation.delivery", "runtime.dependencies",
-        "permissions.get", "providers.credentials", "providers.schema", "providers.list",
+        "permissions.get", "providers.credentials", "providers.schema", "providers.list", "providers.decisionModels",
         "diagnostics.records", "task.get", "task.history", "task.detail", "task.receipt",
         "capacity.read", "modelCapacity.read", "question.list", "question.read",
         "schedule.list", "schedule.read", "schedule.overview", "session.plans", "storage.inspect", "workspace.deleteFilesPreview", "feedback.destination",
@@ -1943,6 +1945,12 @@ class AppService:
                 raise AppError('Select a chat first.', 404)
         if action == 'runtime.control' and args.get('operation', '').startswith(('kernels.', 'operations.')):
             raise AppError('Use the shared computation and operation actions; their ownership and dependency checks cannot be bypassed.', 403)
+        if action == 'runtime.control' and args.get('operation', '').startswith('context.recovery.'):
+            if origin == 'agent' and (not caller_session_id or args.get('sessionId') != caller_session_id):
+                raise AppError('Context recovery belongs to the calling conversation.', 409)
+            from .collaboration import PRINCIPAL
+            if origin == 'agent' and PRINCIPAL.get() not in {None, caller_session_id}:
+                raise AppError('A child cannot borrow its parent context recovery authority.', 403)
         if action == 'runtime.control' and args.get('operation') == 'tool.invoke':
             if origin == 'agent' and (not caller_session_id or args.get('sessionId') != caller_session_id):
                 raise AppError('Tool invocation must target the calling conversation.', 409)
@@ -2351,11 +2359,13 @@ class AppService:
                 checked_session = sid
                 implicit_session = not (args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.recover', 'session.takeover', 'session.naming', 'configuration.inspect', 'configuration.apply'} else None))
                 try:
-                    await self.history.ensure_loaded(sid)
+                    with measure(self, 'input.history', session_id=sid) if action in {'conversation.send', 'conversation.retry'} else nullcontext():
+                        await self.history.ensure_loaded(sid)
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
                 if action in {'conversation.send','conversation.retry','worker.spawn','call.start','runtime.control','configuration.inspect','configuration.apply','bundle.save','bundle.export','bundle.preview','bundle.switch','bundle.fork'}:
-                    await self.refresh_configuration(sid)
+                    with measure(self, 'input.configuration', session_id=sid) if action in {'conversation.send', 'conversation.retry'} else nullcontext():
+                        await self.refresh_configuration(sid)
                     current=self._session(sid)
                     if current.get('configurationPending') and current.get('configurationRefresh',{}).get('phase')=='error':
                         raise AppError(current['configurationRefresh']['error'],409)
@@ -2539,7 +2549,7 @@ class AppService:
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from None
         pending = []
-        async with self.lock:
+        async with self.lock, AsyncExitStack() as recovery_boundary:
             if action == 'session.select' and 'peerPreview' in args:
                 self.peer_preview.select(args, origin)
                 self.canvas_views.guard_transition(action, args)
@@ -3320,11 +3330,10 @@ class AppService:
                 if ('expectedConfigurationRevision' in args
                         and args['expectedConfigurationRevision'] != session.get('nextMessageRevision', 0)):
                     raise AppError('Next message settings changed. Review them before sending.', 409)
-                from .conversation_steering import target as steering_target
+                from .conversation_steering import target as steering_target, recover_failed_generation
                 # A run ending before delivery must not turn this correction
                 # into new work under a policy that is awaiting replacement.
                 allow_next_turn = args.get('allowNextTurn') is True and not session.get('fileAccessPending')
-                target_generation = None if update_message else steering_target(session, args.get('expectedGenerationId'), allow_next_turn)
                 # Whitespace can carry Markdown meaning; validate blank input
                 # separately without changing the saved or delivered message.
                 text = args["text"]
@@ -3346,6 +3355,9 @@ class AppService:
                     text = 'Please review the attached files.'
                 if not self.runtime:
                     raise AppError("The Amplifier runtime is unavailable.")
+                stopped_generation = (recover_failed_generation(self, session, recovery_boundary)
+                    if origin == 'ui' and not update_message and args.get('expectedGenerationId') is None else None)
+                target_generation = None if update_message else steering_target(session, args.get('expectedGenerationId'), allow_next_turn)
                 input_id = command_id or str(uuid.uuid4())
                 from .chat_navigation import recent_activity, prepare_human_post, promote_human_post
                 # Origin is chosen by the host adapter, never role/via/action args.
@@ -3465,6 +3477,11 @@ class AppService:
                 if origin not in {"ui", "user"}:
                     raise AppError("This tool requested user approval. It must be answered by the user.", 403)
                 decision = "allow" if args["decision"] in {"allow", "approve"} else "deny"
+                offered = approval.get("options") or ["allow", "deny"]
+                selected = next((value for value in offered
+                    if isinstance(value, str) and value.casefold() == decision), None)
+                if selected is None:
+                    raise AppError("This permission request does not offer that decision.", 409)
                 approval["status"] = decision
                 comment = args.get('comment', '').strip()
                 if comment:
@@ -3472,7 +3489,7 @@ class AppService:
                     self._message(session, 'user', f'Permission {decision}:\n\n{comment}', 'permission',
                                   approvalId=args['id'], inputOrigin='approval')
                 if self.runtime:
-                    values = (session["id"], args["id"], decision) + ((comment,) if comment else ())
+                    values = (session["id"], args["id"], selected) + ((comment,) if comment else ())
                     pending.append((self.runtime.approval, values))
             elif action == "attention.read":
                 from .attention import snapshot
@@ -3656,6 +3673,11 @@ class AppService:
                     values += ({'origin': origin, 'callerSessionId': caller_session_id,
                         'generation': copy.deepcopy(target.get('collaborationGeneration')),
                         'target': self.management.configuration_target_binding(target)},)
+                elif action == 'runtime.control' and args.get('operation') == 'context.recovery.request':
+                    # Capture before the queue. A Stop or configuration change
+                    # cannot lend new authority to this older command.
+                    target = self._session(args['sessionId'])
+                    values += ({'recovery': self.management.recovery_admission_binding(target)},)
                 pending.append((self.management.command, values))
             elif action == "updates.failureDisposition":
                 if origin not in {'ui', 'user'}:
@@ -3855,6 +3877,8 @@ class AppService:
                 receipt['actor'] = self.handoffs.actor(handoff)
             if action == 'conversation.send':
                 receipt.update(delivery=message['delivery']['status'], sessionId=session['id'], inputId=input_id)
+                if stopped_generation is not None:
+                    receipt['stoppedGenerationRecovery'] = stopped_generation
                 if message.get('navigationPost'):
                     receipt['navigationPost'] = copy.deepcopy(message['navigationPost'])
             if action == 'conversation.retry':receipt['result']={'delivery':'sending', 'message':'The saved message is being checked and sent. No additional resend was started.'}
@@ -4374,17 +4398,18 @@ class AppService:
                     'error': 'Message delivery could not be confirmed. The conversation worker is unavailable. Work was not automatically replayed.',
                 })
             raise
-        async with self.lock:
-            current = self._session(session["id"])
-            self._delivery(current, input_id, 'accepted')
-            sent = next((row for row in session["messages"] if row.get("inputId") == input_id), {})
-            self._clear_sent_draft(current, sent, text, preserve_draft)
-            current.pop("lockOwner", None)
-            # A bound client's draft/reply/attachments are saved by clients.save,
-            # not the shared legacy view. Delivery changes only this owner unless
-            # the existing save guard finds changed status/navigation/attention.
-            self._publish_changes(sessions={session['id']}, detail_only=True,
-                                  globals={'view'} if self.clients.record() is None else ())
+        with measure(self, 'input.delivery.publish', session_id=session['id']):
+            async with self.lock:
+                current = self._session(session["id"])
+                self._delivery(current, input_id, 'accepted')
+                sent = next((row for row in session["messages"] if row.get("inputId") == input_id), {})
+                self._clear_sent_draft(current, sent, text, preserve_draft)
+                current.pop("lockOwner", None)
+                # A bound client's draft/reply/attachments are saved by clients.save,
+                # not the shared legacy view. Delivery changes only this owner unless
+                # the existing save guard finds changed status/navigation/attention.
+                self._publish_changes(sessions={session['id']}, detail_only=True,
+                                      globals={'view'} if self.clients.record() is None else ())
         return send_result
 
     def _clear_sent_draft(self, current, sent, text, preserve_draft):
@@ -5141,6 +5166,8 @@ class AppService:
             return await self._app_bridge(operation, args, session_id, input_origin=origin)
 
     async def _app_bridge(self, operation, args, session_id, *, input_origin=None):
+        if operation == 'ui.use':
+            return await self.ui_use.call(session_id, args.get('operation'), args.get('args', {}))
         if operation == 'context.prepare':
             from .preparation_context import OPERATIONS, SECTION_TIMEOUT
             async def read(name):
@@ -5327,7 +5354,7 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Worktree actions must target the calling task.', 409)
                 action_args['sessionId'] = session_id
-            if args['action'] == 'runtime.control' and str(action_args.get('operation', '')).startswith('native.'):
+            if args['action'] == 'runtime.control' and str(action_args.get('operation', '')).startswith(('native.', 'context.recovery.')):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Native provider actions belong to the calling conversation.', 409)
                 action_args['sessionId'] = session_id

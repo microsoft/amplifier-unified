@@ -121,6 +121,17 @@ then run offline for twenty minutes by default (thirty maximum). Preparation
 does not receive host credentials or source mounts. Remote browser preview
 routing and general multi-service deployment remain unqualified.
 
+Test commands default to a private disposable `HOME` and `XDG_CACHE_HOME` under
+`/tmp/unified-test`, created as the unprivileged workload user. They are outside
+the retained source/results roots and can be recreated after a guest restart.
+Docker's existing profile temporary-space limit applies; Incus uses its guest
+temporary filesystem. Explicit command environment overrides remain available.
+Keep useful reports, final patches and chosen build outputs in `/artifacts`
+(`AMPLIFIER_TEST_ARTIFACTS`); keep package/browser caches, installed harnesses and
+pytest temporary fixture trees outside it. Removing an environment still exports
+the complete `/workspace` and `/artifacts`; no file filtering or report deletion
+is introduced by these defaults.
+
 Stop retains containers and volumes. Remove requires observed stopped work and
 successful bounded exports of both `/workspace` and `/artifacts`; failed export
 blocks destruction. Archives are retained without extraction on the host. Local
@@ -180,10 +191,16 @@ browser tests and real Docker qualification remain separate evidence.
 not a retry of the test. It takes the resource identity and revision, a new stable
 request identity, and `previousRequestId` naming this owner's confirmed failure
 before teardown. The prior receipt must explicitly record no removal effect,
-and either the preservation or verification phase with a safe failure code, or
+and either the preservation or verification phase with a safe failure code
+(including `preserving` / `retention_storage` when retention space was unavailable), or
 the `preparing` phase and `cleanup_helper_not_started` code proving that no
 cleanup helper started. Once `Popen` returns, a lost response or helper process
 failure remains uncertain; it is not covered by this preflight exception.
+A local refusal before the new cleanup helper is invoked stays a failed request;
+retained dependency preparation from an earlier start does not make it an unknown
+removal. Known local refusal boundaries have bounded reason codes; arbitrary
+exception details are not published. This does not settle any earlier UNKNOWN
+receipt or change its ownership.
 This adds no automatic replay or new automatic continuation.
 Stopped inventory alone does not qualify. An unresolved removal or cleanup
 executor, including an unbound journal entry, blocks a new destructive identity.
@@ -356,3 +373,9 @@ are byte-verified, never extracted on the host, and ownership/stopped state is
 rechecked before deletion. Insufficient disk space, invalid archives or an
 uncertain removal retain the environment. Older receipts retain their original
 policy and existing `finishCleanup` recovery path.
+
+Routine queued checks may explicitly inherit the global Storage temporary-workspace
+policy at submission. Their full local workspace export can expire only after
+confirmed removal and the captured duration; initial source, results and receipts
+stay. Manual environments, legacy records, `keepWorkspace` checks and uncertain
+cleanup remain protected. See [temporary workspace retention](../STORAGE.md#temporary-queued-test-workspace-copies).

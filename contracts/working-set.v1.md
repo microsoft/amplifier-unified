@@ -51,7 +51,10 @@ accepted execution -> runtime admission -> working -> safely evictable when idle
 5. **WS5 — Charge updates to dependencies.** A resource update touches its record,
    actual dependents and subscribers. No request performs historical global scan,
    projection, hash or checkpoint to process a draft, scalar read or unrelated chat delta.
-   Review includes work before response filtering and serialization. A required
+   Review includes work before response filtering and serialization, including
+   conversion performed before an encoding-cache hit. Reusing unchanged execution
+   must avoid repeating its projection; changed content, failed commits and cold
+   services must still preserve exact receipts and pending-work facts. A required
    full-history operation, such as recovery validation, declares its trigger and
    scaling inputs; it must not become repeated background work for unrelated updates.
    This also applies within one long-lived conversation: a current token or scalar
@@ -67,6 +70,20 @@ accepted execution -> runtime admission -> working -> safely evictable when idle
    discovery hints after durable changes. Bounded reconciliation recovers missed hints;
    initial migration can scan in the background with visible progress and throttling.
    Broken: every refresh parses every events file or missing a watcher loses a session forever. Affected: legacy users.
+
+### Nested tool checkpoint boundary
+
+A verified active `tools.dispatch` child does not append a conversation result.
+Its automatic completion boundary persists control changes and validates the
+current native writer without copying, encoding or checkpointing the full
+transcript. Existing enclosing tool, explicit checkpoint, compaction and terminal
+error/cancellation boundaries still save context changes. The loop retains
+ownership of ordered parent-result append; this optimization adds no new durable
+append callback or stronger crash-recovery guarantee. Unknown or expired dispatch
+attribution uses the existing full checkpoint. Observed effects are never inferred
+to have rolled back or replayed merely because the parent is interrupted.
+Production Work-wrapped children under Full access with incomplete assurance share
+the enclosing transcript checkpoint without changing their assurance eligibility.
 
 ## Not in v1
 
@@ -100,3 +117,9 @@ Which directory freshness policy handles offline mounts without noisy catalog ch
 | 2026-10-29 | Clarify current-state/history projection and accountable full-history work in WS3/WS5. | [Performance validation](../docs/validation/performance.md); user-requested guardrails. |
 | 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
 | 2026-10-02 | Initial WS1–6. | [Scale requirements and measurements](../docs/architecture/evidence.md). |
+
+The separately authorized Storage temporary-test retention policy may expire a
+new queued check's explicitly disposable, retired local workspace export. It
+uses bounded ledger inspection and the existing cleanup/ownership boundary; it
+does not authorize source/results/history deletion or apply retroactively to
+legacy records. See [temporary test workspace copies](../docs/STORAGE.md#temporary-queued-test-workspace-copies).

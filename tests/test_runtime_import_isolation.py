@@ -1,5 +1,8 @@
 """Exercise direct-script imports in a wheel-like host/runtime layout."""
+import json
+import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -8,6 +11,37 @@ import textwrap
 import pytest
 
 PACKAGE = Path(__file__).resolve().parents[1] / "amplifier_web"
+
+
+def test_apply_settings_does_not_require_server_dependencies():
+    # Use a fresh interpreter so a server module imported by another test cannot
+    # mask an accidental dependency. Workers intentionally do not install aiohttp.
+    runner = textwrap.dedent("""
+        import importlib.util, sys
+        from types import SimpleNamespace
+        sys.path.insert(0, sys.argv[1])
+        sys.modules['aiohttp'] = None
+        assert importlib.util.find_spec('aiohttp') is None
+        from amplifier_web.host.session import _apply_settings
+        config = SimpleNamespace(settings={}, providers=[])
+        ordinary = SimpleNamespace(tools=[], providers=[], hooks=[], session={}, agents={})
+        assert _apply_settings(ordinary, config).tools == []
+        configured = SimpleNamespace(
+            tools=[{'module': 'tool-ui-use'}, {'module': 'tool-computer-use'}],
+            providers=[], hooks=[], session={}, agents={},
+        )
+        result = _apply_settings(configured, config)
+        assert result.tools[0]['config']['browser']['host_adapter'] is True
+        assert result.tools[1]['config']['observed_control'] is True
+        assert sys.modules['aiohttp'] is None
+        assert 'amplifier_web.ui_use' not in sys.modules
+        assert 'amplifier_web.device_connections' not in sys.modules
+    """)
+    result = subprocess.run(
+        [sys.executable, '-I', '-c', runner, str(PACKAGE.parent)],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
 
 
 @pytest.mark.parametrize("entrypoint,refresh", [("update_probe.py", False), ("update_probe.py", True), ("runtime_worker.py", False)])
@@ -107,8 +141,19 @@ def installed_app(tmp_path_factory):
     wheel_dir = root / "wheels"
     uv = shutil.which("uv")
     assert uv is not None, "Installed-wheel isolation checks require uv"
+    command = [uv, "build", "--wheel", "--out-dir", str(wheel_dir)]
+    contract_path = os.environ.get("AMPLIFIER_TEST_CONTRACT")
+    if contract_path:
+        contract = json.loads(Path(contract_path).read_text())
+        configured = contract.get("pythonBuild", {}).get("command")
+        if configured is not None:
+            # Use the host's prepared backend environment and isolation choice.
+            # Only the output directory belongs to this fixture. A malformed
+            # contract or failed build must fail, never trigger another builder.
+            command = shlex.split(configured)
+            command[command.index("--outdir") + 1] = str(wheel_dir)
     subprocess.run(
-        [uv, "build", "--wheel", "--out-dir", str(wheel_dir)],
+        command,
         cwd=PACKAGE.parent, check=True, capture_output=True, text=True, timeout=60,
     )
     wheels = list(wheel_dir.glob("*.whl"))

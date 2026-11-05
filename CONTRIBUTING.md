@@ -26,9 +26,16 @@ For performance-sensitive changes, use [performance validation](docs/validation/
 at design and review. Describe the affected operation, scaling inputs, measured
 budget and semantic checks in the PR; distinguish source tests from installed or
 live evidence. Select checks for the changed risk under the
-[release policy](docs/validation/release-qualification.md#local-first-fast-publication-policy-updated-october-14-2026).
+[release policy](docs/validation/release-qualification.md#local-first-fast-publication-policy-updated-november-4-2026).
 
 For release acceptance, use the [platform and first-use checklist](docs/validation/release-acceptance.md).
+
+Keep native test dependencies in the development group. When a fixture package
+and its dependency declare the same source, align their authored refs and retain
+the exact qualified commits in `uv.lock`; do not resolve a test-only conflict with
+a root `[tool.uv].override-dependencies` entry, which affects the whole resolver.
+Check the shipped-source policy and affected real native fixtures after changing
+these declarations. Runtime selections retain their separate source policy.
 
 For changes to cross-surface artifact controls, routing or presentation actions,
 update the affected [control inventory entry](docs/canvas.md#artifact-controls-and-reuse)

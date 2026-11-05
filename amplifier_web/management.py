@@ -259,7 +259,7 @@ class Management:
             return await self.list_bundles(args, command_id)
         if action == 'providers.list':
             return await self.list_providers(args, command_id)
-        independent=(action in {'bundle.preview','configuration.defaults','providers.list','providers.credentials','providers.schema','providers.models','providers.imageModels','providers.test','providers.testMessage','routing.list','routing.show'}
+        independent=(action in {'bundle.preview','configuration.defaults','providers.list','providers.decisionModels','providers.credentials','providers.schema','providers.models','providers.imageModels','providers.test','providers.testMessage','routing.list','routing.show'}
                      or action == 'runtime.control' and args.get('operation') == 'configuration.catalog')
         try:
             if not independent and self.lock.locked():
@@ -521,6 +521,20 @@ class Management:
             'workingDirectory': session.get('workingDirectory'),
             'executionRevision': session.get('executionRevision', 0),
             'interruptionRevision': session.get('interruptionRevision', 0)}
+
+    def recovery_admission_binding(self, session):
+        """Bind a deferred control before its management-queue wait."""
+        from .configuration_authority import fingerprint
+        controls = self.service.state.get('runtimeControl', {}).get(session['id'], {})
+        return {**self.configuration_target_binding(session),
+            'configurationRevision': self.service.state.get('configurationRevision', 0),
+            'controlRevision': session.get('recoveryControlRevision', 0),
+            'contractSha256': fingerprint({
+                'bundle': session.get('bundle'), 'selection': session.get('selection'),
+                'configurationPendingRevision': session.get('configurationPendingRevision'),
+                'controls': {key: controls.get(key) for key in (
+                    'configuration.apply', 'configuration.toggle', 'provider.select',
+                    'provider.reset', 'mode.set', 'mode.clear', 'budget.set', 'budget.clear')}})}
 
     def settle_configuration_fence(self, session, operation):
         """Only the operation that acquired this fence can release it."""
@@ -841,9 +855,9 @@ class Management:
             from .managed_chats import is_managed
             from .configuration_target import resolve
             target=resolve(self.service,args)
-            managed_draft = target['global_only'] if target else action in {'providers.list','providers.models','providers.imageModels'} and is_managed(args)
+            managed_draft = target['global_only'] if target else action in {'providers.list','providers.decisionModels','providers.models','providers.imageModels'} and is_managed(args)
             session=({'workspace':str(self.service.data_dir)} if managed_draft else {'workspace':str(Path(args['workspace']).expanduser().resolve())}
-                     if managed_draft or action in {'providers.list','providers.models','providers.imageModels'} and args.get('workspace')
+                     if managed_draft or action in {'providers.list','providers.decisionModels','providers.models','providers.imageModels'} and args.get('workspace')
                      else self.configuration_session(args))
             async def runtime_operation(operation,values):
                 current=self.session(args)
@@ -871,7 +885,7 @@ class Management:
             else:
                 persistent.runtime_operation=runtime_operation
                 persistent.progress=progress
-            manager=SetupManager(self.service.data_dir,catalog=self.provider_catalog,allow_missing_workspace=bool(args.get('workspace')),global_only=managed_draft) if action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.imageModels','providers.test','providers.testMessage','routing.list','routing.show'} else persistent
+            manager=SetupManager(self.service.data_dir,catalog=self.provider_catalog,allow_missing_workspace=bool(args.get('workspace')),global_only=managed_draft) if action in {'providers.list','providers.decisionModels','providers.credentials','providers.schema','providers.models','providers.imageModels','providers.test','providers.testMessage','routing.list','routing.show'} else persistent
             probe_key=manager.catalog_key(args,session['workspace']) if action in {'providers.models','providers.imageModels','providers.schema'} else None
             routing_before = None
             if action in {'routing.save', 'routing.use'}:
@@ -927,8 +941,8 @@ class Management:
                     state_for(self.service,'setup',args).update(providers=manager.provider_rows(session['workspace']),providersWorkspace=session['workspace'],providersLoadedAt=time.time(), providersLocation={'kind':'managed' if managed_draft else 'workspace'}, configurationTarget=args.get('configurationTarget'), imagePreference=preference(image_config.settings, image_config.providers))
                     self.service._publish_progress(session_ids=set(), record_only=True, global_keys={'setup'})
                 self.background(self.warm_providers(manager,session['workspace']))
-            if action in {'providers.save','providers.finishSetup','providers.configureImages','providers.remove','providers.move','providers.reorder','routing.save','routing.use'} and result.get('configurationChanged',True):
-                await self.invalidate_configuration(publish=False,warm=action not in {'providers.save','providers.finishSetup','providers.configureImages','providers.remove','providers.move','providers.reorder','routing.save','routing.use'},session_ids=routing_sessions)
+            if action in {'providers.save','providers.finishSetup','providers.configureImages','providers.configureDecisions','providers.remove','providers.move','providers.reorder','routing.save','routing.use'} and result.get('configurationChanged',True):
+                await self.invalidate_configuration(publish=False,warm=action not in {'providers.save','providers.finishSetup','providers.configureImages','providers.configureDecisions','providers.remove','providers.move','providers.reorder','routing.save','routing.use'},session_ids=set() if action=='providers.configureDecisions' else routing_sessions)
         elif action in {'bundle.preview', 'bundle.switch', 'bundle.fork'}:
             from .bundle_actions import perform
             await perform(self, action, args)
@@ -1059,11 +1073,24 @@ class Management:
                     {'id': args['sessionId'], 'config': args.get('args', {}).get('config')},
                     command_id=command_id, authority=authority, source=source)
             session=self.session(args)
+            recovery_request = args['operation'] == 'context.recovery.request'
+            recovery_binding = (source or {}).get('recovery') if recovery_request else None
+            if recovery_request:
+                if not isinstance(command_id, str) or not command_id:
+                    raise ValueError('Explicit recovery requires a stable host command identity')
+                if not isinstance(recovery_binding, dict):
+                    raise ValueError('Explicit recovery requires its original host admission binding')
+                if set(args.get('args', {})) - {'targetBytes'}:
+                    raise ValueError('Recovery arguments cannot supply host identity or authority')
             def operation_guard():
                 check_current()
+                if recovery_request and recovery_binding != self.recovery_admission_binding(
+                        self.service._session(session['id'])):
+                    raise ValueError('The recovery target was stopped, moved or reconfigured after admission. No delayed recovery was armed.')
                 if configuration_operation is not None:
                     self.check_configuration_operation(self.service._session(session['id']),
                         self.configuration_record(session['id'], configuration_operation))
+            operation_guard()
             if args['operation']=='configuration.catalog':
                 from .conversation_models import request_browse
                 await request_browse(self,session,refresh=args.get('args',{}).get('refresh',False))
@@ -1074,10 +1101,15 @@ class Management:
                 return
             if await self.recover_provider_catalog(session, args['operation'], args.get('args', {})):
                 return
-            mutating=placement or args['operation'] in {'configuration.apply','configuration.toggle','context.clear','provider.select','provider.reset','native.compact'}
+            mutating=placement or recovery_request or args['operation'] in {'configuration.apply','configuration.toggle','context.clear','provider.select','provider.reset','native.compact'}
+            recovery_contract_change = placement or args['operation'] in {
+                'configuration.apply', 'configuration.toggle', 'context.clear',
+                'provider.select', 'provider.reset', 'native.compact',
+                'mode.set', 'mode.clear', 'budget.set', 'budget.clear'}
             if mutating:
                 async with self.service.lock:
                     current=self.service._session(session['id'])
+                    operation_guard()
                     owns_fence = (args['operation'] in {'configuration.apply', 'configuration.patchPlacement.bind'} and configuration_operation is not None
                         and current.get('pendingConfiguration', {}).get('operationId') == configuration_operation
                         and current.get('configurationBusy')
@@ -1100,8 +1132,9 @@ class Management:
                     await self.ensure_runtime(session, selection_override=selected)
                 else:
                     await self.ensure_runtime(session,
-                        **({'restart_guard': operation_guard} if configuration_operation is not None else {}),
+                        **({'restart_guard': operation_guard} if configuration_operation is not None or recovery_request else {}),
                         **({'preserve_configuration': True} if placement else {}))
+                operation_guard()
                 if args['operation']=='configuration.providerModels':
                     provider_id=args.get('args',{}).get('instance') or args.get('args',{}).get('provider')
                     mounted=await self.service.runtime.control(session['id'],'configuration.providers',{})
@@ -1115,6 +1148,10 @@ class Management:
                 else:
                     check_current()
                     native_arguments = args.get('args', {})
+                    if recovery_request:
+                        native_arguments = {**native_arguments, '_recoveryCommand': {
+                            'id': command_id,
+                            'interruptionRevision': recovery_binding['interruptionRevision']}}
                     if configuration_operation is not None:
                         async with self.service.lock:
                             current = self.service._session(session['id'])
@@ -1128,7 +1165,7 @@ class Management:
                             native_arguments = {**native_arguments, '_configurationAttempt': attempt}
                             self.service._publish_changes(sessions={current['id']})
                     result=await self.service.runtime.control(session['id'],args['operation'],native_arguments,
-                        **({'guard': operation_guard} if configuration_operation is not None else {}))
+                        **({'guard': operation_guard} if configuration_operation is not None or recovery_request else {}))
                     if configuration_operation is not None and result.get('requiresRestart'):
                         from .configuration_recovery import evidence
                         native = evidence(attempt, home=self.service.data_dir)
@@ -1200,14 +1237,18 @@ class Management:
                 provider_info=result if args['operation']=='configuration.providers' else refreshed.get('configuration.providers')
                 if provider_info is not None:self.background(self.warm_runtime_models(session['id'],provider_info.get('providers',[]),provider_info.get('catalogRevision')))
             finally:
-                if mutating:
+                if mutating or recovery_contract_change:
                     async with self.service.lock:
                         current = self.service._session(session['id'])
+                        if recovery_contract_change:
+                            # Every attempt invalidates a recovery queued during
+                            # it, including lost mutation/readback acknowledgements.
+                            current['recoveryControlRevision'] = current.get('recoveryControlRevision', 0) + 1
                         pending = current.get('pendingConfiguration', {})
                         # The outer operation releases only after its result is
                         # committed. Preparation refusals are known no-effect;
                         # dispatched/partially saved failures stay fenced.
-                        if configuration_operation is None:
+                        if mutating and configuration_operation is None:
                             current['configurationBusy'] = False
                         self.service._publish_progress(session_ids={session['id']}, record_only=True)
         elif action=='notifications.get':

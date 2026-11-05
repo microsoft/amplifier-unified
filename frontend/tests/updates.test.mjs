@@ -559,3 +559,45 @@ test('authored constraint names the source check without claiming local edits',(
  const receipt=JSON.parse(diagnosticReceipt(diagnostics));
  assert.equal(receipt.lastFailure.reason,'runtime-source-constraint');
 });
+
+
+test('unresolved component attention opens details consistently without downgrading the installed app',()=>{
+ const initial=state({phase:'checked',sequence:{stage:'complete'}});
+ initial.attention={items:[{id:'updates:failure:old',page:'updates',actionRequired:true,read:true,
+  title:'Component update needs attention',detail:'A saved component failure is unresolved.'}]};
+ const html=renderToStaticMarkup(React.createElement(UpdateSettings,{state:initial,act:()=>{}}));
+ assert.match(html,/data-part="ecosystem-update-details" open=""/);
+ assert.match(html,/Advanced details · review issue/);
+ assert.match(html,/Component update needs attention/);
+ assert.match(html,/Latest release installed/);
+ assert.doesNotMatch(html,/You’re up to date|Ready for new work/);
+});
+test('batch presentation bounds full recovery scopes without altering the canonical receipt',()=>{
+ const components=Array.from({length:8},(_,i)=>`component-${i+1}`);
+ const batch={attemptId:'batch',kind:'ecosystem',tier:'other',components,componentCount:8,startedAt:1};
+ const updates={phase:'validating',sequence:{stage:'other'},diagnostics:{attemptId:'batch',batch,
+  completedBatches:[{...batch,attemptId:'complete',completedAt:2}]}};
+ const before=JSON.stringify(updates),html=render(updates);
+ assert.match(html,/component-1, component-2, component-3, component-4, component-5 and 3 more/);
+ assert.doesNotMatch(html,/component-6|component-7|component-8/);
+ assert.equal(JSON.stringify(updates),before);
+});
+
+test('failed optional tool preserves retry and skip while app check and installation remain usable',async()=>{
+ const failed={previous:'stories-old',resultId:'stories-attempt',failure:{reason:'smart-tool-update-failed'}};
+ const calls=[];let root;
+ const act=(name,args)=>calls.push([name,args]);
+ await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:state({phase:'error',error:'Tool update failed',pendingSmartTools:[failed]}),act}))});
+ assert.equal(root.root.findByProps({'data-action':'updates.check'}).props.disabled,false);
+ const available={phase:'available',application:{status:'update',current:'0.20.205',latest:'v0.20.207'},pendingSmartTools:[failed]};
+ await renderAct(async()=>root.update(React.createElement(UpdateSettings,{state:state(available),act})));
+ for(const name of ['updates.install','updates.check','updates.smartToolRetry','updates.smartToolSkip']){
+  const button=root.root.findByProps({'data-action':name});assert.equal(button.props.disabled,false);
+  await renderAct(async()=>button.props.onClick());
+ }
+ assert.deepEqual(calls,[['updates.install',undefined],['updates.check',undefined],['updates.smartToolRetry',{id:'stories-attempt'}],['updates.smartToolSkip',{id:'stories-attempt'}]]);
+ await renderAct(async()=>root.update(React.createElement(UpdateSettings,{state:state({...available,phase:'app-staged',pendingApp:{latest:'v0.20.207'}}),act})));
+ assert.equal(root.root.findByProps({'data-action':'updates.check'}).props.disabled,false);
+ assert.equal(root.root.findAllByProps({'data-action':'updates.install'}).length,0);
+ await renderAct(async()=>root.unmount());
+});

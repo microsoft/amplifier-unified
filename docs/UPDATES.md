@@ -92,6 +92,14 @@ installation. Explicit pins and local selections are not permission to refresh
 their sources. Final installed-source verification remains mandatory; a failed
 comparison reports bounded checked and observed commit IDs when available.
 
+The Foundation package batch uses `uv pip install --no-sources` without
+`--group`. Its source comparison therefore excludes contributor dependency
+groups (including default/included groups and legacy uv dev dependencies) before
+interpreting their pins, markers or extras. Project dependencies, optional
+dependencies and explicit source restrictions still participate; no manifest or
+checked selection is rewritten. Generic project sync/freeze policy keeps its
+existing group rules.
+
 Application activation also verifies that the running host and the executable on PATH belong to the same uv tool installation. A development checkout or a different launcher cannot replace another installed tool. Candidate and installed-package probes use isolated Python imports, reject packages outside that environment, and cannot accidentally validate a checkout from the launch directory or PYTHONPATH. The installed package is checked again after replacement; a failed check leaves the running host up for recovery. The restart helper uses the separate validated environment, and new work remains blocked until restart. It preserves the effective bind addresses, public origins, TLS certificate/key, session lifetime, port, workspace and data directory without writing CLI overrides into saved server settings. The replacement host acknowledges the pending restart only after an authenticated HTTP request to its live listener confirms the expected version, exact installed Git revision, data directory identity, and a different process instance. Package probes and application construction alone cannot acknowledge a restart. Smart Tool servers are reported disconnected after restart and can be reconnected explicitly. The recovery record stores the actual prior installation source when available, rather than assuming an older release tag exists. Repeated installation requests reuse a pending validated generation. Cache symlinks remain symlinks while staging; external workspace trees are not copied into the update.
 
 ## Optional app features
@@ -178,9 +186,9 @@ The release validator requires an entry for the package version, rejects future 
 
 ### Release workflow
 
-The **Publish application release** GitHub Actions workflow runs when the package version or release tooling changes on main, and can also be started manually on main. A release requires the same stable `X.Y.Z` version in `pyproject.toml` and `amplifier_web/__init__.py`, with the lockfile updated. Build the frontend and commit the resulting `amplifier_web/static` assets before merging; Git-based installs consume those checked-in files.
+The **Publish application release** GitHub Actions workflow runs when the dedicated version owner `amplifier_web/__init__.py` changes on main, and can also be started manually on main. Dependency or release-tooling changes alone do not start publication. A release requires the same stable `X.Y.Z` version in `pyproject.toml` and `amplifier_web/__init__.py`, with the lockfile updated. Build the frontend and commit the resulting `amplifier_web/static` assets before merging; Git-based installs consume those checked-in files.
 
-The workflow follows the [short publication graph](validation/release-qualification.md): prepare, package, frontend, native runtime and publish. It verifies the wheel/source identity, canonical assets and required runtime behavior, then creates the immutable `vX.Y.Z` tag and a draft release, attaches both distributions and SHA-256 checksums, and publishes. Broad verification runs afterward. Publication happens only after qualification and asset upload, so incomplete drafts are invisible to the updater. The workflow uses the repository's GitHub Actions token with contents-write permission; no additional provider credentials or paid model calls are needed.
+The workflow follows the [short publication graph](validation/release-qualification.md): one read-only runner prepares and qualifies the package, frontend and native runtime; an isolated write-enabled runner publishes. It verifies the wheel/source identity, canonical assets and required runtime behavior, then creates the immutable `vX.Y.Z` tag and a draft release, attaches both distributions and SHA-256 checksums, and publishes. One published-package smoke follows; broad verification runs nightly or by explicit request. Publication happens only after qualification and asset upload, so incomplete drafts are invisible to the updater. The workflow uses the repository's GitHub Actions token with contents-write permission; no additional provider credentials or paid model calls are needed.
 
 Manual reruns can resume a draft and replace incomplete draft assets only when the selected commit exactly matches the existing tag's commit. A dispatch from a later commit with the same package version fails with instructions to increment the version; it never silently checks out the older release. A published release and its assets remain unchanged. Existing tags are never moved; a tag/package mismatch or conflicting remote revision fails the run. Releasing an older version does not replace a newer stable release as Latest. To ship additional code, increment the version and merge again.
 
@@ -207,7 +215,26 @@ do not block chat or the update page while settings are inspected.
 
 ## Update diagnostics
 
-Each application update now has an attempt ID and a separate receipt for candidate installation, candidate probe, installed-tool discovery, runtime shutdown, tool replacement, installed-package probe/version comparison, and restart. Ecosystem copying, fetching, checkout, compatibility probes and activation use the same receipt format. Failed phases remain visible in `updates.diagnostics.lastFailure`; successful staging or restart clears the current failure while retaining recent history. The user and agent read the same state.
+Each application update has an attempt ID and separate receipts for candidate installation, candidate probe, installed-tool discovery, runtime shutdown, tool replacement, installed-package probe/version comparison, and restart. Ecosystem copying, fetching, checkout, compatibility probes and activation use the same receipt format. Failure history remains available independently of present installation health. Staging, checking, or dismissing a notice does not establish recovery. The user and agent read the same state.
+
+For component source-policy failures, recovery follows the qualified active
+generation, including after reload. Its exact activation receipt, validation and
+installed dependency graph must cover the older failure's complete component
+scope and update tier. A dependency package need not share its parent bundle's
+name. The existing diagnostic journal records which original occurrences were
+resolved; no install or conversation work is repeated to clear the warning.
+Unknown, truncated legacy scope, unrelated activations and newer failures remain
+unresolved. Keep full component scope in canonical receipts; truncate only the
+displayed preview, never the data used to decide recovery.
+
+The client has one update-status projection for the headline, status icon,
+application result, details disclosure and operation notice. A current operation
+or an unconfirmed restart takes precedence over older failure attention; those
+unresolved occurrences remain visible alongside it. When no operation is active,
+canonical actionable attention prevents an all-current presentation. Rendering
+must not resolve failures, recheck installation identity, or reinterpret a
+successful application update as success of its later component batch. Reload
+uses the same projection of saved host state, not a client recovery cache.
 
 The main update card identifies the current component batch and shows successful
 configuration checks out of the total admitted for that attempt. Preparation and

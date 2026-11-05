@@ -66,8 +66,21 @@ def merge(base, overlay):
 
 
 def _load_keys(path):
+    """Load keys.env from the caller's declared shared home, never create it."""
     values = {}
-    if path.exists():
+    if os.name == "nt":
+        from ..windows_files import address, directory
+        path = address(path)
+        if path.name != "keys.env":
+            raise ValueError("Windows shared credentials require keys.env")
+        try:
+            with directory(path.parent, owned_root=path.parent, create=False) as pinned:
+                content = pinned.read_private(path.name, limit=1024 * 1024)
+        except FileNotFoundError:
+            lines = ()
+        else:
+            lines = content.decode("utf-8").splitlines()
+    elif path.exists():
         lines = path.read_text().splitlines()
     else:
         lines = ()
@@ -82,6 +95,8 @@ def _load_keys(path):
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
             parsed = shlex.split(value, comments=True)
             values[name] = " ".join(parsed)
+    if os.name == "nt":
+        validate_key_environment(values)
     # Keep explicitly supplied process environment authoritative, while values
     # this loader previously installed are refreshed (or removed) on remount.
     for name, previous in tuple(_KEY_FILE_VALUES.items()):
@@ -93,6 +108,18 @@ def _load_keys(path):
         if name not in os.environ or (previous is not None and os.environ.get(name) == previous):
             os.environ[name] = value
             _KEY_FILE_VALUES[name] = value
+
+
+def validate_key_environment(values):
+    """Reject an invalid complete Windows batch before file/cache mutation."""
+    for name, value in values.items():
+        if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+                or not isinstance(value, str) or "\x00" in value):
+            raise ValueError("Invalid Windows credential environment value")
+        # Windows environment blocks use UTF-16. Do not publish strings that
+        # cannot reach the worker environment after the private write.
+        name.encode("utf-16-le")
+        value.encode("utf-16-le")
 
 
 def worker_environment():
@@ -248,7 +275,13 @@ def configure_skill_cache(bundle, registry_home):
 
 def load_config(workspace, *, home=None, legacy_home=None, session_id=None, global_only=False, owner_session_id=None):
     workspace = Path(workspace).expanduser().resolve(strict=True)
-    shared = Path(legacy_home or amplifier_home()).expanduser().resolve()
+    if os.name == "nt":
+        from ..windows_files import address
+        # amplifier_home() resolves paths. Keep the declared shared-home spelling
+        # for the private reader, so a junction/alias cannot disappear first.
+        shared = address(legacy_home or os.environ.get("AMPLIFIER_HOME") or Path.home() / ".amplifier")
+    else:
+        shared = Path(legacy_home or amplifier_home()).expanduser().resolve()
     _load_keys(shared / "keys.env")
     return read_config(workspace, home=home, shared_home=shared, session_id=session_id, global_only=global_only, owner_session_id=owner_session_id)
 

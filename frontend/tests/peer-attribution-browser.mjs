@@ -2,11 +2,12 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {mkdirSync} from 'node:fs';
+import {mkdirSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 // ROOT may set this only with the installed candidate interpreter. The fixture
 // refuses a checkout import and this path never serves Vite source as a wheel.
 const installedStatic=process.env.AMPLIFIER_TEST_INSTALLED_STATIC==='1';
@@ -14,7 +15,33 @@ const builtStatic=process.env.AMPLIFIER_TEST_BUILT_STATIC==='1',staticClient=ins
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[
  fileURLToPath(new URL('../../tests/fixtures/peer_attribution_ui_server.py',import.meta.url)),fileURLToPath(new URL('../../',import.meta.url))
 ],{stdio:['ignore','pipe','inherit']});
-let browser,vite;
+const stopFixture=ownFixture(fixture,{label:'Peer attribution fixture'});
+let browser,vite,page,failure;
+const retainBoundary=facts=>{
+ const evidence=Object.fromEntries(['starts','sends','nativeSubmits','probeAttempts','expectedBoundary','boundaryCalls','notificationReceipt'].map(key=>[key,facts[key]]));
+ console.log('PEER_BOUNDARY_EVIDENCE '+JSON.stringify(evidence));
+ if(process.env.AMPLIFIER_PROOF_DIR){mkdirSync(process.env.AMPLIFIER_PROOF_DIR,{recursive:true});writeFileSync(join(process.env.AMPLIFIER_PROOF_DIR,'peer-boundary.json'),JSON.stringify(evidence,null,2))}
+};
+const readFacts=async()=>{const response=await page.request.get(new URL('/api/fixture/peerFacts',page.url()).href);assert.ok(response.ok());return response.json()};
+const assertBoundary=facts=>{
+ assert.equal(facts.starts,0);assert.equal(facts.sends,0);assert.equal(facts.nativeSubmits,0);assert.deepEqual(facts.probeAttempts,[]);
+ const expected=facts.expectedBoundary,receipt=facts.notificationReceipt;
+ assert.ok(facts.boundaryCalls.length>0,'The expected watch boundary must actually be attempted');
+ assert.equal(expected.recipientId,'receiving');assert.equal(expected.generationId,'fixture-observer-generation');assert.equal(expected.watchId,'visible-watch');
+ assert.equal(receipt.inputId,expected.inputId);assert.equal(receipt.requestId,expected.inputId);
+ assert.equal(receipt.origin,'system');assert.equal(receipt.mode,'auto');assert.equal(receipt.delivery,'queued');
+ assert.equal(receipt.dependencyRequestId,expected.watchId);assert.equal(receipt.dependencyOutcomeRevision,1);assert.equal(receipt.dependencySatisfied,false);
+ const waiting={accepted:false,effect:'none',waitingForBoundary:true,reason:'Waiting for a supported recipient boundary.'};
+ assert.deepEqual(receipt.admission,waiting);
+ for(const call of facts.boundaryCalls){
+  assert.equal(call.method,'collaboration_input');assert.equal(call.fatal,undefined);
+  assert.equal(call.sessionId,expected.recipientId);assert.equal(call.arguments.inputId,expected.inputId);assert.equal(call.arguments.automaticDelivery,true);
+  assert.deepEqual(call.authorizations,[{guardReason:null,admitted:true,currentGenerationId:expected.generationId},{guardReason:null,admitted:true,currentGenerationId:expected.generationId}]);
+  assert.equal(call.receipt.delivery,'submitting');assert.equal(call.receipt.inputId,expected.inputId);
+  assert.equal(call.receipt.origin,'system');assert.equal(call.receipt.mode,'auto');assert.equal(call.receipt.dependencyRequestId,expected.watchId);
+  assert.deepEqual(call.result,waiting);
+ }
+};
 try{
  const target=await new Promise((resolve,reject)=>{
   const timer=setTimeout(()=>reject(Error('Peer fixture timed out')),15000);let output='';
@@ -31,10 +58,19 @@ try{
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]});
  const context=await browser.newContext({viewport:{width:390,height:844},extraHTTPHeaders:{Authorization:'Bearer fixture-peer-attribution'}});
  await context.grantPermissions(['clipboard-read','clipboard-write']);
- const page=await context.newPage(),errors=[],detailReads=[];page.on('pageerror',error=>errors.push(error.message));
+ page=await context.newPage();const errors=[],detailReads=[];page.on('pageerror',error=>errors.push(error.message));
  page.on('request',request=>{const url=new URL(request.url());if(url.pathname==='/api/conversation/detail'&&url.searchParams.get('field')==='text')detailReads.push(request.url())});
  await page.goto(staticClient?target:vite.resolvedUrls.local[0]);await showFixtureConversation(page);await page.waitForSelector('#amp-one');
- const facts=await (await page.request.get(new URL('/api/fixture/peerFacts',page.url()).href)).json();
+ // Wait for the host to retain a positive no-effect receipt, not merely for a
+ // frame or a counter. Unknown/accepted/unexpected calls fail instead of retrying.
+ await expect.poll(async()=>{
+  const observed=await readFacts();
+  assert.equal(observed.starts,0);assert.equal(observed.sends,0);assert.equal(observed.nativeSubmits,0);assert.deepEqual(observed.probeAttempts,[]);
+  assert.ok(observed.boundaryCalls.every(call=>!call.fatal),JSON.stringify(observed.boundaryCalls));
+  assert.ok(['queued','submitting'].includes(observed.notificationReceipt.delivery),JSON.stringify(observed.notificationReceipt));
+  return observed.notificationReceipt.delivery==='queued'&&observed.notificationReceipt.admission?.waitingForBoundary===true;
+ }).toBe(true);
+ const facts=await readFacts();retainBoundary(facts);assertBoundary(facts);
  assert.equal(facts.installedStatic,installedStatic);
  const article=id=>page.locator(`article[data-message-id="${id}"]`);
  const caption='Sent by Amplifier from another chat';
@@ -67,11 +103,33 @@ try{
  assert.equal(detailReads.length,0,'Collapsed peer must not fetch its full payload');
  await summary.press('Enter');await expect(summary).toHaveAttribute('aria-expanded','true');
  await expect(summary).toBeFocused();
- await expect(peer.locator('.a-delegate-markdown')).toContainText('Exact α 🐈');
+   await expect(peer.locator('.a-message-body .a-markdown')).toContainText('Exact α 🐈');
  assert.equal(detailReads.length,0,'Expanding a preview does not eagerly fetch long text');
  await peer.getByRole('button',{name:'Show full text',exact:true}).click();
  await expect(peer.getByRole('button',{name:'Show full text',exact:true})).toHaveCount(0);
  assert.equal(detailReads.length,1);
+ const typography=async region=>region.locator('.a-markdown').evaluate(el=>{
+  const paragraphs=[...el.querySelectorAll(':scope > p')];
+  return {font:getComputedStyle(el).fontSize,
+   paragraphs:paragraphs.slice(0,2).map(p=>({text:p.textContent,font:getComputedStyle(p).fontSize,
+    lineHeight:getComputedStyle(p).lineHeight,margin:getComputedStyle(p).marginBottom,
+    whiteSpace:getComputedStyle(p).whiteSpace})),
+   list:el.querySelectorAll('ul > li').length,code:el.querySelector('pre code')?.textContent};
+ });
+ const peerType=await typography(peer),userType=await typography(article(facts.ordinaryMarkdown));
+ assert.deepEqual(peerType.paragraphs,userType.paragraphs,'Peer paragraphs use ordinary user typography and source line breaks');
+ assert.equal(peerType.font,userType.font);assert.equal(peerType.list,2);
+ assert.match(peerType.code,/unchanged  \n/);
+ for(const id of [facts.ordinaryMarkdown,facts.assistantMarkdown]){
+  const type=await typography(article(id));assert.equal(type.paragraphs.length,2);assert.equal(type.list,2);
+  assert.ok(parseFloat(type.paragraphs[0].margin)>0,'Real paragraph spacing remains visible');
+ }
+ if(process.env.AMPLIFIER_PROOF_DIR){
+  writeFileSync(join(process.env.AMPLIFIER_PROOF_DIR,'peer-markdown-parity.json'),JSON.stringify({peer:peerType,user:userType},null,2));
+  const firstParagraph=peer.locator('.a-markdown > p').first();
+  await firstParagraph.scrollIntoViewIfNeeded();await expect(firstParagraph).toBeInViewport();
+  await page.screenshot({path:join(process.env.AMPLIFIER_PROOF_DIR,'peer-markdown-parity.png')});
+ }
  await peer.getByRole('button',{name:'Copy peer message as Markdown'}).click();
  await expect(peer.getByText('Copied Markdown',{exact:true})).toBeVisible();
  const clipboard=await page.evaluate(()=>navigator.clipboard.readText());
@@ -167,7 +225,10 @@ try{
  assert.deepEqual(await page.evaluate(()=>{const state=window.amplifier.getState();return {
   selectedSessionId:state.selectedSessionId,draft:state.view.draft
  }}),preserved);
- const finalFacts=await (await page.request.get(new URL('/api/fixture/peerFacts',page.url()).href)).json();
- assert.equal(finalFacts.starts,0);assert.equal(finalFacts.sends,0);assert.deepEqual(finalFacts.probeAttempts,[]);assert.deepEqual(errors,[]);
+ const finalFacts=await readFacts();retainBoundary(finalFacts);assertBoundary(finalFacts);assert.deepEqual(errors,[]);
  console.log(`${installedStatic?'Installed-static':builtStatic?'Built-source':'Vite-source'} peer collapse, actor-owned reactions, and peer attribution receiving fixture: visible caption, actor distinction, forgeries, reload, older/focused pages, committed 320/390px light/dark 200% zoom, draft/selection preserved; zero model/provider starts; ${finalFacts.queryWorkers} isolated shell query helpers.`);
-}finally{await browser?.close();await vite?.close();fixture.kill()}
+}catch(error){
+ failure=error;
+ if(page)try{retainBoundary(await readFacts())}catch(diagnosticError){console.error('Peer boundary evidence unavailable:',diagnosticError.message)}
+ throw error;
+}finally{await finishFixture({label:'Peer attribution fixture',close:[['Peer browser',()=>browser?.close()],['Peer Vite server',()=>vite?.close()]],stop:stopFixture,originalError:failure})}

@@ -96,9 +96,16 @@ async def test_handled_module_error_keeps_private_receipt_even_without_stderr(tm
 @pytest.mark.asyncio
 async def test_receipt_write_failure_keeps_original_module_failure(tmp_path, monkeypatch):
     from amplifier_web.module_failures import ConfiguredModuleError
+    from amplifier_web.host.config import write_private
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
-    def fail(*_, **kwargs):
-        raise OSError('synthetic disk error')
+    failed_receipts = []
+    def fail(path, *args, **kwargs):
+        # Fail diagnostic publication only. Generation leases must still be
+        # writable so the intended handled worker failure can actually occur.
+        if path.parent == tmp_path / 'logs/workers':
+            failed_receipts.append(path)
+            raise OSError('synthetic disk error')
+        return write_private(path, *args, **kwargs)
     monkeypatch.setattr('amplifier_web.host.config.write_private', fail)
     manager = RuntimeManager(command=[sys.executable, '-c', handled_worker(stderr='failed check')])
     events = []
@@ -107,6 +114,7 @@ async def test_receipt_write_failure_keeps_original_module_failure(tmp_path, mon
         with pytest.raises(ConfiguredModuleError, match='tool-fixture') as error:
             await manager.start({'id': 'disk-failure'}, emit)
         assert not hasattr(error.value, 'diagnostic_path')
+        assert failed_receipts
         assert 'diagnosticReceipt' not in next(data for kind, data in events if kind == 'runtime.error')
         assert 'synthetic disk error' not in json.dumps(events)
     finally:

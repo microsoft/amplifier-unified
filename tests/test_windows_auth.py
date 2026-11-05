@@ -117,13 +117,13 @@ def test_uncertain_publication_is_not_replayed(tmp_path, private_files):
 def test_owner_reader_existing_only_both_credentials_one_pin(tmp_path, private_files):
     private_files.content[tmp_path / "config/auth/session-secret"] = b"s" * 64 + b"\n"
     private_files.content[tmp_path / "config/auth/control-token"] = b"c" * 64 + b"\n"
-    assert entry._read_private_owner_control_token(tmp_path, SID) == "c" * 64
+    assert entry.read_owner_control_token(tmp_path, SID) == "c" * 64
     assert private_files.events == [
         ("directory", tmp_path / "config/auth", tmp_path, False),
         ("read", "session-secret", 65), ("read", "control-token", 65), ("close",)]
     private_files.events.clear()
     with pytest.raises(entry.BrowserEntryUnavailable):
-        entry._read_private_owner_control_token(tmp_path, "S-1-5-21-999")
+        entry.read_owner_control_token(tmp_path, "S-1-5-21-999")
     assert private_files.events == []
 
 
@@ -133,22 +133,39 @@ def test_owner_reader_refuses_missing_or_invalid_either(tmp_path, private_files,
     private_files.content[tmp_path / "config/auth/control-token"] = b"c" * 64
     private_files.content[tmp_path / "config/auth" / which] = b""
     with pytest.raises(entry.BrowserEntryUnavailable):
-        entry._read_private_owner_control_token(tmp_path, SID)
+        entry.read_owner_control_token(tmp_path, SID)
     del private_files.content[tmp_path / "config/auth" / which]
     with pytest.raises(entry.BrowserEntryUnavailable):
-        entry._read_private_owner_control_token(tmp_path, SID)
+        entry.read_owner_control_token(tmp_path, SID)
     assert not any(e[0] == "publish" for e in private_files.events)
 
 
-def test_activation_gate_closed_even_with_safe_credentials(tmp_path, private_files, monkeypatch):
+def test_public_owner_read_initializes_only_matching_existing_credentials(tmp_path, private_files, monkeypatch):
     monkeypatch.setattr(entry, "is_windows", lambda: True)
     private_files.content[tmp_path / "config/auth/session-secret"] = b"s" * 64
     private_files.content[tmp_path / "config/auth/control-token"] = b"c" * 64
-    with pytest.raises(entry.BrowserEntryUnavailable, match="combined-flow"):
+    assert entry.read_owner_control_token(tmp_path, SID) == "c" * 64
+    app = {"service": type("Service", (), {"data_dir": tmp_path})(), "control_token": "c" * 64}
+    entry.initialize(app)
+    assert isinstance(app["browser_entry"], entry.GrantStore)
+    app["control_token"] = "different-control"
+    entry.initialize(app)
+    assert app["browser_entry"] is None
+    assert not any(e[0] == "publish" for e in private_files.events)
+
+
+@pytest.mark.parametrize("failure", [PermissionError("unsafe ACL"), OSError("sharing failure")])
+def test_public_owner_read_never_repairs_or_falls_back(tmp_path, private_files, monkeypatch, failure):
+    monkeypatch.setattr(entry, "is_windows", lambda: True)
+    monkeypatch.setenv("AMPLIFIER_UNIFIED_TOKEN", "c" * 64)
+    monkeypatch.setattr(auth.os, "chmod", lambda *a: pytest.fail("No ACL repair"))
+    private_files.read_error = failure
+    with pytest.raises(entry.BrowserEntryUnavailable, match="private owner credentials"):
         entry.read_owner_control_token(tmp_path, SID)
     app = {"service": type("Service", (), {"data_dir": tmp_path})(), "control_token": "c" * 64}
     entry.initialize(app)
     assert app["browser_entry"] is None
+    assert not any(e[0] == "publish" for e in private_files.events)
 
 
 def test_original_cli_and_identity_address_preserved(tmp_path, private_files, monkeypatch):
@@ -223,7 +240,7 @@ def test_native_credentials_converge_and_existing_read(native_root):
     assert len(set(tokens)) == 1
     auth.session_secret(native_root)
     assert entry.current_owner_sid() == windows_files.current_process_sid()
-    assert entry._read_private_owner_control_token(native_root, entry.current_owner_sid()) == tokens[0]
+    assert entry.read_owner_control_token(native_root, entry.current_owner_sid()) == tokens[0]
     assert {p.name for p in (native_root / "config/auth").iterdir()} == {"session-secret", "control-token"}
 
 

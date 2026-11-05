@@ -19,6 +19,15 @@ progress; work and calls must be idle for activation. A fresh process must prove
 its installation before component checks continue. Rollback cancels continuation
 and retains the existing rule that automatic installation is disabled.
 
+A failed optional Smart Tool update retains its current installation, failure
+receipt and explicit Retry/Skip controls. It must not block checking or staging
+a newer application, or silently retry when the application sequence resumes.
+Unfinished ordinary tool activation still owns its existing admission gate;
+independent runner qualification keeps its own owner. Later checks exclude
+retained failed installations until explicit recovery, and unrelated healthy
+tools may proceed. `tests/test_failed_tool_update_independence.py` covers these
+boundaries, including restart retention and preservation of foreground app state.
+
 Native child/job activity is bound to the runtime process that reported its
 lifecycle. After that exact process exits, unfinished owned rows become
 interrupted, including persistent children that were idle. An early closed
@@ -48,6 +57,26 @@ separation, reload, narrow layout, stale app identity, and unconfirmed restart,
 alongside its existing progress/preferences/no-install-effects checks. Readiness
 tests cover actual result creation and service reload after diagnostic retention
 has advanced beyond the app batch.
+
+`tests/test_update_dependency_recovery.py` covers component source failures whose
+package is a transitive dependency of an updated bundle. It checks activation
+and reload against the existing active pointer, qualified worker generation,
+installed graph and complete batch scope, including a sanitized observed receipt.
+More than five components retain full recovery scope while the UI keeps its
+bounded preview. Unrelated generations, data-only reuse, missing qualification,
+legacy truncated scope and newer failure occurrences cannot establish recovery.
+Original failure evidence remains in the existing journal after settlement.
+
+Application storage failures can also recover when a newer release with the
+same known optional features completes staging and verified restart. Capture the
+prior occurrence before staging and preserve it across activation/restart;
+checking, partial preparation, listener-only reconciliation, changed or unknown
+features, and later failure occurrences do not clear it. Preserve the original
+failure in update history. Target-specific non-storage failures keep their
+existing recovery requirements. When the outgoing updater predates this snapshot,
+the same attempt's retained stage-start and success receipts must prove matching
+revision/features and an earlier exact failure occurrence; incomplete or ambiguous
+receipts do not establish recovery.
 
 Validation covers app-first early return, empty-tier progression, included-check
 failures, explicit install intent after a verified restart, missing-source

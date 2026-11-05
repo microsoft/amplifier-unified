@@ -17,7 +17,8 @@ CI = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CI)
 OLD_JOBS = ("passive-process-check", "windows-private-config-tls",
             "windows-user-trial", "windows-default-runtime")
-OLD_GUARD = "${{ !inputs.bootstrap_only }}"
+OLD_GUARD = "${{ !inputs.bootstrap_only && !inputs.foreground_only }}"
+DEFAULT_GUARD = "${{ !inputs.bootstrap_only && !cancelled() && (inputs.foreground_only || needs.windows-user-trial.result == 'success') }}"
 NEW_GUARD = "${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap_only }}"
 
 
@@ -28,16 +29,22 @@ class RouteTests(unittest.TestCase):
                           source.split("\njobs:\n", 1)[1], re.M | re.S)
         self.assertEqual([name for name, _ in jobs], [*OLD_JOBS, "windows-bootstrap-offline"])
         for name, body in jobs:
-            expected = NEW_GUARD if name == "windows-bootstrap-offline" else OLD_GUARD
+            expected = (NEW_GUARD if name == "windows-bootstrap-offline" else
+                        DEFAULT_GUARD if name == "windows-default-runtime" else OLD_GUARD)
             self.assertEqual(re.search(r"^    if: (.*)$", body, re.M).group(1), expected)
-        for event, flag, selected in (
-            ("workflow_dispatch", True, ["windows-bootstrap-offline"]),
-            ("workflow_dispatch", False, list(OLD_JOBS)),
-            ("pull_request", False, list(OLD_JOBS)),
+        for event, bootstrap, foreground, selected in (
+            ("workflow_dispatch", True, False, ["windows-bootstrap-offline"]),
+            ("workflow_dispatch", True, True, ["windows-bootstrap-offline"]),
+            ("workflow_dispatch", False, False, list(OLD_JOBS)),
+            ("workflow_dispatch", False, True, ["windows-default-runtime"]),
+            ("pull_request", False, False, list(OLD_JOBS)),
         ):
-            # Exact two allowed expressions above map to this complete truth table.
+            # For the dependent job, retain 1c4's success/cancellation sequencing.
+            # The ordinary table assumes the required user-trial job succeeded.
             observed = [name for name, _ in jobs if
-                        (event == "workflow_dispatch" and flag if name == "windows-bootstrap-offline" else not flag)]
+                        (event == "workflow_dispatch" and bootstrap if name == "windows-bootstrap-offline"
+                         else not bootstrap if name == "windows-default-runtime"
+                         else not bootstrap and not foreground)]
             self.assertEqual(observed, selected)
         self.assertRegex(source, r"(?s)workflow_dispatch:\n    inputs:\n      bootstrap_only:.*?type: boolean.*?default: false")
 

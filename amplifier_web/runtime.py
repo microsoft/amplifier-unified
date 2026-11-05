@@ -6,9 +6,10 @@ app-owned Foundation lifecycle and standalone Amplifier configuration.
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager, contextmanager, nullcontext
 from dataclasses import dataclass
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -19,8 +20,10 @@ import uuid
 from typing import Any, Awaitable, Callable
 
 from .runtime_protocol import MAX_MESSAGE_BYTES, encode_message
+from .performance_diagnostics import measure, measured
 
 _CURRENT_GENERATION = object()
+_LOG = logging.getLogger(__name__)
 _WINDOWS = os.name == 'nt'
 _WINDOWS_STOP_SECONDS = 15.0
 
@@ -1204,11 +1207,15 @@ class RuntimeManager:
                 row["ready"].set_exception(RuntimeError(error))
             if cleanup_error is not None:
                 raise cleanup_error
-            if row.get('windows_owner'):
-                # The owner has now proven zero processes AND finalized I/O.
-                # Settle native/background calls at this boundary, not at some
-                # later user Stop. Failed cleanup above must never reach here.
-                await self._execution_ended(sid, row, "stopped" if row["closing"] else "interrupted")
+            # A reader/publication failure can skip the normal EOF path even
+            # after the exact process has exited. Settle its routing authority
+            # through the same owner-bound event; an exception alone is not
+            # process-death evidence and must never terminate surviving work.
+            # The Windows observation publishes a returncode only after its
+            # owner proves zero processes AND finalized I/O; failed cleanup
+            # above must never reach this boundary.
+            if row['process'].returncode is not None:
+                await self._execution_ended(sid, row, 'stopped' if row['closing'] else 'interrupted')
         finally:
             try:
                 await finish_owned(lines.close())
@@ -1239,21 +1246,23 @@ class RuntimeManager:
             return await self._request_unlocked(sid, op, **args)
         # The admission portion holds the same lock as retirement. Waiting for
         # replies does not: a tool control may itself await an approval/bridge.
-        async with self._admission(sid):
-            if guard is not None: guard()
-            if sid not in self.workers and sid in self._retired and op in {"send", "retry", "control", "resume"} and not (op == "control" and (args.get("operation", "").startswith(("operations.", "kernels.")))):
-                session, emit = self._retired[sid]
-                # Retirement can occur after preservation-aware preparation but
-                # before this control. Keep its original host guard and startup
-                # preservation; the native attempt still checks the old PID.
-                placement = op == 'control' and args.get('operation') == 'configuration.patchPlacement.bind'
-                await self._start_locked(session, emit, **({'guard': guard} if guard is not None else {}),
-                    **({'preserve_configuration': True} if placement else {}))
-            # No suspension between this authority check and _admit's transport
-            # write. The callback is host-only and is never serialized.
-            if guard is not None: guard()
-            pending = await self._admit(sid, op, args)
-        return await self._reply(*pending, op=op, args=args)
+        with measure(self, 'input.runtime.admit', session_id=sid) if op in {'send', 'retry'} else nullcontext():
+            async with self._admission(sid):
+                if guard is not None: guard()
+                if sid not in self.workers and sid in self._retired and op in {"send", "retry", "control", "resume"} and not (op == "control" and (args.get("operation", "").startswith(("operations.", "kernels.")))):
+                    session, emit = self._retired[sid]
+                    # Retirement can occur after preservation-aware preparation but
+                    # before this control. Keep its original host guard and startup
+                    # preservation; the native attempt still checks the old PID.
+                    placement = op == 'control' and args.get('operation') == 'configuration.patchPlacement.bind'
+                    await self._start_locked(session, emit, **({'guard': guard} if guard is not None else {}),
+                        **({'preserve_configuration': True} if placement else {}))
+                # No suspension between this authority check and _admit's transport
+                # write. The callback is host-only and is never serialized.
+                if guard is not None: guard()
+                pending = await self._admit(sid, op, args)
+        with measure(self, 'input.runtime.ack', session_id=sid) if op in {'send', 'retry'} else nullcontext():
+            return await self._reply(*pending, op=op, args=args)
 
     async def _request_unlocked(self, sid, op, **args):
         return await self._reply(*await self._admit(sid, op, args), op=op, args=args)
@@ -1456,6 +1465,7 @@ class RuntimeManager:
         return await self._request_unlocked(session_id, "coordination.approval", prompt=prompt,
             **({"approval_id": approval_id} if approval_id else {}))
 
+    @measured('input.runtime.prepare', session=True)
     async def _start_for_input(self, session, emit, *, admission_check=None):
         try:
             guard = None
@@ -1834,6 +1844,16 @@ class RuntimeManager:
         if retirement and retirement is not asyncio.current_task() and not retirement.done():
             retirement.cancel()
             await asyncio.gather(retirement, return_exceptions=True)
+        previous = row.get('stop_task')
+        if previous and previous.done() and row['process'].returncode is not None:
+            failure = None if previous.cancelled() else previous.exception()
+            if previous.cancelled() or failure is not None:
+                # Retry only settlement for this confirmed-dead process, never
+                # another stop/input against a process whose outcome is unknown.
+                _LOG.warning('Retrying stopped worker settlement for %s after %s', session_id,
+                             'cancellation' if previous.cancelled() else 'failure',
+                             exc_info=(type(failure), failure, failure.__traceback__) if failure else None)
+                row.pop('stop_task')
         if "stop_task" not in row:
             row["stop_task"] = asyncio.create_task(self._stop_row(session_id, row))
         await asyncio.shield(row["stop_task"])
@@ -1842,7 +1862,17 @@ class RuntimeManager:
         # An exit already observed before the shutdown boundary is still a
         # crash. Let its reader record that evidence before cancelling readers.
         if row['process'].returncode is not None and not row['closing']:
-            await asyncio.shield(row['reader'])
+            try:
+                await asyncio.shield(row['reader'])
+            except asyncio.CancelledError:
+                if asyncio.current_task().cancelling():
+                    raise
+                _LOG.warning('Settling exited worker %s after its reader was cancelled', session_id)
+            except Exception:
+                # A failed reader (including failed error publication) cannot
+                # keep a reaped process mounted forever. Preserve its exception
+                # and still require successful owner-bound settlement below.
+                _LOG.warning('Settling exited worker %s after reader failure', session_id, exc_info=True)
         row["closing"] = True
         if not row["ready"].done():
             row["ready"].cancel()

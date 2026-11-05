@@ -36,6 +36,18 @@ def wheel(path, name="amplifier-unified", version="0.54.5"):
                         f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n")
 
 
+def model_inventory(base, wheels):
+    """Synthetic inventory for packaging tests, not a production closure audit."""
+    path = base / "inventory.json"
+    packages = {}
+    for item in wheels.glob("*.whl"):
+        name, version = capsule.wheel_identity(item)
+        packages[name] = {"version": version, "sha256": capsule.sha256(item)}
+    path.write_text(json.dumps({"schema": 1, "source": "a" * 40,
+                               "lockSha256": "b" * 64, "packages": packages}))
+    return path
+
+
 class CapsuleTests(unittest.TestCase):
     def test_reproducible_hashed_capsule_and_fresh_output_only(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -44,7 +56,8 @@ class CapsuleTests(unittest.TestCase):
             wheels.mkdir()
             wheel(wheels / "amplifier_unified-0.54.5-py3-none-any.whl")
             wheel(wheels / "dependency-1-py3-none-any.whl", "dependency", "1")
-            args = dict(source="a" * 40, version="0.54.5", python="3.13.8",
+            args = dict(inventory=model_inventory(base, wheels),
+                        source="a" * 40, version="0.54.5", python="3.13.8",
                         url="https://github.com/microsoft/amplifier-unified/releases/download/prototype-abc/windows-prototype.zip")
             first = capsule.build(wheels, base / "first", **args)
             second = capsule.build(wheels, base / "second", **args)
@@ -56,6 +69,7 @@ class CapsuleTests(unittest.TestCase):
                 requirements = archive.read("requirements.txt").decode()
                 self.assertEqual(requirements.count("--hash=sha256:"), 2)
                 self.assertNotIn("git+", requirements)
+                self.assertEqual(archive.read("inventory.json"), args["inventory"].read_bytes())
                 self.assertEqual(archive.read("launch.py"),
                                  (ROOT / "scripts/windows_prototype_launch.py").read_bytes())
                 for entry in archive.infolist():
@@ -69,7 +83,8 @@ class CapsuleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             wheel(base / "other-1-py3-none-any.whl", "other", "1")
-            args = dict(source="a" * 40, version="0.54.5", python="3.13.8",
+            args = dict(inventory=model_inventory(base, base),
+                        source="a" * 40, version="0.54.5", python="3.13.8",
                         url="https://github.com/microsoft/amplifier-unified/releases/download/prototype-abc/windows-prototype.zip")
             with self.assertRaisesRegex(ValueError, "selected app"):
                 capsule.build(base, base / "out", **args)
@@ -88,17 +103,67 @@ class CapsuleTests(unittest.TestCase):
             wheel(base / "real-0.54.5-py3-none-any.whl")
             (base / "link-0.54.5-py3-none-any.whl").symlink_to(base / "real-0.54.5-py3-none-any.whl")
             with self.assertRaisesRegex(ValueError, "Unsafe"):
-                capsule.build(base, base / "out", source="a"*40, version="0.54.5", python="3.13.8",
+                capsule.build(base, base / "out", inventory=base / "unused.json",
+                              source="a"*40, version="0.54.5", python="3.13.8",
                               url="https://github.com/microsoft/amplifier-unified/releases/download/prototype-abc/windows-prototype.zip")
 
     def test_wrong_platform_and_free_threaded_wheels_refuse(self):
         with tempfile.TemporaryDirectory() as temporary:
             for name in ("pkg-1-cp313-cp313-manylinux_x86_64.whl",
-                         "pkg-1-cp313t-cp313t-win_amd64.whl"):
+                         "pkg-1-cp313t-cp313t-win_amd64.whl",
+                         "pkg-1-cp314-cp314-win_amd64.whl",
+                         "pkg-1-cp314-abi3-win_amd64.whl",
+                         "pkg-1-py314-none-any.whl"):
                 path = Path(temporary) / name
                 wheel(path, "pkg", "1")
                 with self.assertRaisesRegex(ValueError, "ordinary Windows"):
                     capsule.wheel_identity(path)
+
+    def test_ordinary_cp313_accepts_compatible_abi3_and_pure_tags(self):
+        for tag in (("cp313", "cp313", "win_amd64"),
+                    ("cp311", "abi3", "win_amd64"),
+                    ("cp310", "abi3", "win_amd64"),
+                    ("py3", "none", "win_amd64"), ("py3", "none", "any")):
+            with self.subTest(tag=tag):
+                self.assertTrue(capsule.compatible_tag(*tag))
+
+    def test_inventory_rejects_extra_missing_wrong_version_or_changed_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            wheels = base / "wheels"
+            wheels.mkdir()
+            app = wheels / "amplifier_unified-0.54.5-py3-none-any.whl"
+            wheel(app)
+            inventory = model_inventory(base, wheels)
+            args = dict(inventory=inventory, source="a" * 40, version="0.54.5", python="3.13.8",
+                        url="https://github.com/microsoft/amplifier-unified/releases/download/prototype-abc/windows-prototype.zip")
+            dev = wheels / "pytest-9-py3-none-any.whl"
+            wheel(dev, "pytest", "9")
+            with self.assertRaisesRegex(ValueError, "reviewed production inventory"):
+                capsule.build(wheels, base / "extra", **args)
+            # Change the reviewed expected set, not the wheel inputs.
+            record = json.loads(inventory.read_text())
+            record["packages"]["required-dependency"] = {"version": "1", "sha256": "c" * 64}
+            record["packages"]["pytest"] = {"version": "9", "sha256": capsule.sha256(dev)}
+            inventory.write_text(json.dumps(record))
+            with self.assertRaisesRegex(ValueError, "reviewed production inventory"):
+                capsule.build(wheels, base / "missing", **args)
+            record["packages"].pop("required-dependency")
+            record["packages"]["pytest"]["version"] = "8"
+            inventory.write_text(json.dumps(record))
+            with self.assertRaisesRegex(ValueError, "reviewed production inventory"):
+                capsule.build(wheels, base / "version", **args)
+            record["packages"]["pytest"]["version"] = "9"
+            record["packages"]["amplifier-unified"]["sha256"] = "0" * 64
+            inventory.write_text(json.dumps(record))
+            with self.assertRaisesRegex(ValueError, "reviewed production inventory"):
+                capsule.build(wheels, base / "bytes", **args)
+            record["source"] = "c" * 40
+            inventory.write_text(json.dumps(record))
+            with self.assertRaisesRegex(ValueError, "source/lock inventory"):
+                capsule.build(wheels, base / "source", **args)
+            self.assertFalse(any((base / name).exists()
+                                 for name in ("extra", "missing", "version", "bytes", "source")))
 
 
 class LauncherTests(unittest.TestCase):

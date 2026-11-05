@@ -61,17 +61,127 @@ installation or publication. For example, with the selected candidate's actual
 values and an absent output directory:
 
 ```sh
-python scripts/windows_bootstrap_capsule.py --wheelhouse /path/to/qualified-wheels --output /path/to/new-output --source EXACT_40_HEX_COMMIT --version EXACT_APP_VERSION --python EXACT_3.13_PATCH --url https://github.com/microsoft/amplifier-unified/releases/download/EXACT_PROTOTYPE_TAG/windows-prototype.zip
+python scripts/windows_bootstrap_capsule.py --wheelhouse /path/to/qualified-wheels --inventory /path/to/reviewed-inventory.json --output /path/to/new-output --source EXACT_APP_40_HEX_COMMIT --version EXACT_APP_VERSION --python EXACT_3.13_PATCH --url https://github.com/microsoft/amplifier-unified/releases/download/EXACT_PROTOTYPE_TAG/windows-prototype.zip
 ```
 
-The capsule contains `capsule.json` (source/version), `requirements.txt` with
+The capsule contains `capsule.json` (app source/version), `requirements.txt` with
 every wheel's SHA-256, `wheels/`, and this candidate's
-`windows_prototype_launch.py` as `launch.py`. The builder emits
+`windows_prototype_launch.py` as `launch.py`, plus the reviewed `inventory.json`.
+The builder emits
 `windows-prototype.json` with schema 1, status `prototype`, exact source/version,
 architecture `x86_64`, Python patch and capsule URL/SHA-256. Output is create-new
-only; duplicate distributions, missing app identity and symlink inputs refuse.
-The owner must verify package closure and exact-source provenance; a manifest
-label is not evidence that wheels came from that source.
+only; duplicate distributions, missing app identity, incompatible CPython tags,
+symlinks, and any name/version/hash difference from the reviewed inventory refuse
+before output creation. The inventory is a separate reviewed input, **not** a
+list generated from whatever happens to be in the wheel directory:
+
+```json
+{
+  "schema": 1,
+  "source": "EXACT_APP_40_HEX_COMMIT",
+  "lockSha256": "EXACT_LOCK_64_HEX_SHA256",
+  "packages": {
+    "amplifier-unified": {
+      "version": "EXACT_APP_VERSION",
+      "sha256": "EXACT_ORIGINAL_WHEEL_64_HEX_SHA256"
+    }
+  }
+}
+```
+
+This abbreviated schema example is deliberately invalid until resolved; a real
+inventory must contain the **entire** reviewed production set. Do not self-certify
+closure by hashing arbitrary input wheels. The owner first checks actual
+`METADATA`, active Windows markers/extras, source/build receipts and licenses.
+The builder only enforces equality with that reviewed selection. Neither a
+manifest label nor `pip check` establishes source provenance or selected extras.
+
+#### Frozen 0.54.5 production inputs — provisional packaging plan
+
+The app input is `1c4ac3b4f9ed5d2d3f588f6fa6c74a119e439153`, tree
+`9657754b48f03f518fc421861738a82f8864baf7`, version **0.54.5**. Preserve the
+already accepted original app wheel, **10,218,316 bytes**, SHA-256
+`de950fe6dcf43e9944bfae4c45b6adeedc4b2fdbee4eda565443516a3ffcc9f5`.
+Do not rebuild it, rename it as a different source, or label it with the host
+application's newer version. A bootstrap join is a separate code identity:
+record that commit and the exact builder, launcher and installer hashes alongside
+the capsule. `--source` remains the **app** source above.
+
+The frozen `uv.lock` SHA-256 is
+`02ca2a403cb6546238e1e3b1eed2b07e2b848f7f1edc301fc67f4cc956f89c45`.
+The retained production requirements export is **2,047 bytes**, SHA-256
+`4013b4a681ce2e7729c7763069a0fc621d46b34e5bc0511c17fa074f1bafa6a0`.
+It has 65 cross-platform dependency lines, excluding the app. Windows CPython
+3.13 activates **64 dependencies plus the app = 65 distributions**. It is not a
+hash-required wheelhouse manifest and must not be given directly to the offline
+installer. A sanitized native installed-host audit verifies this production
+selection from actual metadata; its SHA-256 is
+`a7dbcf604af61d65edba22d5a17ad415e7b2b77d21916abaf90674337fa2db7d`.
+That evidence does not establish an offline capsule installation.
+
+Select only the app's base dependencies, including its explicit
+`amplifier-bundle-context-intelligence[client]` and transitive `pyjwt[crypto]`.
+Evaluate Windows markers: include `colorama` and `pywin32`; exclude
+`httpx2-jsfetch` (`emscripten` only). Keep unconditionally declared `python-pam`
+and `six`. Exclude dev/artifacts groups, app optional extras, pytest, tool-exec,
+QuickJS, custom runtime fixtures, optional provider modules and browser/desktop
+automation. Do not copy the producer's 87-distribution development environment.
+
+The 64 dependencies consist of **59 registry wheels and five VCS wheels**:
+
+| Production source | Exact input |
+| --- | --- |
+| Core | `2.0.2`, registry `amplifier_core-2.0.2-cp311-abi3-win_amd64.whl`, SHA-256 `a784e9f0382c471794e429818d9e55360625523bc62c54cae56be172364c936c` |
+| Foundation | `c716df3cea84b2539aabdfea58a69ae676a1e853`, repository root |
+| Session naming | Same Foundation commit, `modules/hooks-session-naming` |
+| Memory | `5ac75ac85b9972e06936630e347023af107fd364`, repository root |
+| UI Use / Context Intelligence | `5e3b08b8e06a6095314200476d387508ddb32f67` / `a80ce69d0e96e9a343501f238dcd867350dd9aa2`, respective repository roots |
+
+For each registry package, use its exact selected version, Windows-compatible
+wheel URL and SHA-256 in the frozen lock. All 59 have compatible wheel candidates
+in that lock; this is metadata availability, not a download result. Accept
+ordinary `cp313-cp313-win_amd64`, compatible older `cp3N-abi3-win_amd64` (for
+example Core's `cp311-abi3`), and compatible pure Python wheels. Reject sdists,
+free-threaded/other-platform/newer-interpreter wheels. Never compile Core.
+Keep the private bootstrap uv **0.12.18** separate from the production
+`uv==0.13.4` dependency pulled in by Memory.
+
+The reproducible packaging procedure, **not executed by this local join**, is:
+
+1. Obtain the exact original app wheel through the supported artifact transfer.
+   Verify its size/hash before use. Reuse the accepted production export and
+   exact lock; do not resolve moving `main` or repeat the installed-host audit.
+2. In an authorized build environment, collect the 59 registry wheels using the
+   lock's URLs/hashes. Obtain or build the five VCS wheels at the full commits
+   above, with `python -m build --wheel --no-isolation --outdir <new-dir>
+   <exact-checkout-or-subdirectory>`. Record build-tool versions and build inputs;
+   build dependencies stay outside the host wheelhouse. Do not run this command
+   on the information worker's box. Preserve each wheel's licenses/notices.
+3. Verify actual wheel metadata and compatible tags against the accepted
+   production set: exactly 65 names/versions, no missing or extra distributions.
+   Match the five build receipts to the exact repository/commit/subdirectory;
+   check all registry wheel hashes against the lock and the app against its
+   original digest. Create the reviewed inventory with these **actual** hashes,
+   retain its review/source receipts, then run the builder above into a new output.
+4. Before delivery, qualify actual offline installation with the existing
+   hash-required/binary-only/no-deps commands. Verify installed provenance as well
+   as the graph: local wheel installs may record archive `direct_url.json`, not
+   the original Git commit. `app_component_graph`, update identity and selected
+   dependency recovery consume this information. Do **not** manufacture Git
+   provenance records, remove those checks or treat `pip check` as their proof.
+5. Only after those checks and the missing ordinary-user bootstrap checks below,
+   publish immutable prototype assets through the publication owner. Supply their
+   real digests and one resolved paste. No capsule, digest, public URL or native
+   support record is asserted by this plan.
+
+**Remaining inputs:** a materialized complete Windows wheelhouse and its reviewed
+hash inventory/build receipts; verified installed-wheel provenance behavior;
+exact managed Python patch supported by pinned uv; and eventual publication
+locations. The accepted app wheel and native host graph already exist, but this
+local packaging checkout does not receive binaries merely by reading their
+retained identities. The first actual worker graph remains **unprepared**.
+UI/onboarding work proceeds independently; a later app correction requires a
+new exact app input, not relabeling this candidate.
 
 After publication and review, the owner supplies one **fully resolved** paste,
 not placeholders for the information worker to assemble. The following is its
@@ -99,7 +209,13 @@ package manager, running a `.ps1` through a policy override or installing a
 machine-wide prerequisite. The downloaded script runs only after its reviewed
 hash matches. Enterprise script/language restrictions remain authoritative:
 if policy blocks this flow or `Add-Type`, stop and report the policy restriction,
-not a bypass. Windows 11 x64, a normal non-admin token, usable PowerShell/.NET,
+not a bypass. In particular, after a `.ps1` is denied as scripts disabled, do not
+retry its contents through `ScriptBlock`, dot-sourcing, `-Command`, `Unblock-File`,
+elevation or execution-policy changes. Report the effective policy and ask the
+organization's administrator for an approved software delivery route; do not ask
+the information worker to weaken policy. The existing Restricted-policy refusal
+is not cleared by an elevated CI runner's permissive policy.
+Windows 11 x64, a normal non-admin token, usable PowerShell/.NET,
 local fixed NTFS storage and permitted official HTTPS downloads are still
 environment requirements. No silent proxy or certificate exception is added.
 
@@ -149,10 +265,14 @@ and data deletion are never automatic.
 Portable capsule/command-model tests are not absent-prerequisite Windows proof.
 Before giving a resolved paste to another user, retain these focused results:
 
-1. Run `tests/fixtures/windows_bootstrap_prototype.ps1` through native PS5.1
-   and PS7 when available, plus the existing native installer storage/download/
-   archive fixture. No execution-policy override. Example:
-   `powershell.exe -NoProfile -NonInteractive -File tests/fixtures/windows_bootstrap_prototype.ps1 -Installer scripts/install.ps1`.
+1. Reuse unchanged native offline mechanism evidence from
+   [run 42057508481](https://github.com/microsoft/amplifier-unified/actions/runs/42057508481)
+   at `bf3e851a191907165f0a2e01b3ee6b8cf94fcd59`: both standalone fixtures
+   under PS5.1/PS7, plus two PATH cases and observed fixture cleanup. Its tokens
+   were elevated, Desktop policy Unrestricted and Core RemoteSigned. These are
+   native mechanism/model checks, not downloads, ordinary-user policy or app
+   installation. Changed capsule inventory/tag checks have portable evidence
+   only; this join does not claim another native run.
 2. On an authorized disposable ordinary Windows account, run the exact published
    paste with no developer tools on PATH. Check helper hashes/licenses, managed
    Python identity, complete offline host graph, spaces/Unicode and restart from
@@ -171,8 +291,10 @@ source-checked against `4f59da50639ad80c87f9201736f58fecddd0cf7d`; that is a
 candidate, not public-activation acceptance. The Windows trial owner must supply
 an exact qualified commit with owner-browser entry activated before use.
 Do not substitute `main`, a moving branch, or the current public release.
-At this checkpoint browser entry deliberately refuses. Never remove that gate,
-relax ACLs, disable ownership, or put the control token in a browser URL.
+The source-checked `4f59` checkpoint deliberately refuses browser entry. Later
+integration candidates include the public existing-only credential reader, but
+that source change is not foreground CLI or device acceptance. Never bypass a
+refusal, relax ACLs, disable ownership, or put the control token in a browser URL.
 
 This is an ordinary-user **foreground** path for Windows 11 x64, Windows
 PowerShell 5.1 or PowerShell 7, and Edge or Chrome. It needs no WSL, administrator

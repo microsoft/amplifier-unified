@@ -3048,7 +3048,7 @@ async def test_default_runtime_probe_uninstrumented_journey_keeps_real_acceptanc
                 target.write_bytes(manifest.read_bytes() if name == 'pyproject.toml' else
                     b'version = 1\n' if name == 'uv.lock' else b'synthetic Python')
             with (project / 'uv.lock').open('a', encoding='utf-8') as stream:
-                for name in fixture.IMPORTS.values():
+                for name in dict.fromkeys(fixture.IMPORTS.values()):
                     stream.write('[[package]]\nname = "' + name + '"\nversion = "1.0"\nsource = {registry = "https://example.invalid/simple"}\n')
             self.workers[session['id']] = row
             if failure != 'not-ready':
@@ -3448,7 +3448,8 @@ def test_default_runtime_probe_installed_audit_checkpoints_do_not_bypass_audit(
     host = tmp_path / 'host'
     app, wheel = host / 'amplifier_web', tmp_path / 'candidate.whl'
     members = {name: ('synthetic:' + name).encode() for name in (
-        *fixture.APP_FILES, 'runtime_deps/pyproject.toml', 'runtime_deps/compatibility.txt')}
+        *fixture.APP_FILES, 'runtime_deps/pyproject.toml', 'runtime_deps/compatibility.txt',
+        'runtime_deps/features.toml')}
     for name, raw in members.items():
         path = app / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -3716,20 +3717,25 @@ def test_default_runtime_probe_public_pass_requires_outer_cleanup_proof():
             fixture.validate_report({**public, 'outerJob': {**outer, **patch}})
 
 
-@pytest.mark.parametrize('mismatch', [None, 'version', 'commit'])
+@pytest.mark.parametrize('mismatch', [None, 'version', 'commit', 'ui-use-version', 'ui-use-commit'])
 def test_default_runtime_probe_binds_imports_to_real_lock(tmp_path, mismatch):
     fixture = _default_runtime_probe_module()
     rows, imports = [], {}
     for package, distribution in fixture.IMPORTS.items():
         source = 'registry = "https://pypi.org/simple"' if package == 'amplifier_core' else (
             'git = "https://example.invalid/module#' + 'a' * 40 + '"')
-        rows.append('[[package]]\nname = "' + distribution + '"\nversion = "2.0.2"\nsource = {' + source + '}\n')
+        if distribution not in {fixture.IMPORTS[name] for name in imports}:
+            rows.append('[[package]]\nname = "' + distribution + '"\nversion = "2.0.2"\nsource = {' + source + '}\n')
         imports[package] = {'version': '2.0.2', 'commit': None if package == 'amplifier_core' else 'a' * 40}
     (tmp_path / 'uv.lock').write_text('\n'.join(rows), encoding='utf-8')
     if mismatch == 'version':
         imports['amplifier_foundation']['version'] = '2.0.3'
     elif mismatch == 'commit':
         imports['amplifier_foundation']['commit'] = 'b' * 40
+    elif mismatch == 'ui-use-version':
+        imports['amplifier_ui_use']['version'] = '2.0.3'
+    elif mismatch == 'ui-use-commit':
+        imports['amplifier_module_tool_ui_use']['commit'] = 'b' * 40
     if mismatch:
         with pytest.raises(AssertionError):
             fixture.verify_worker_lock(tmp_path, imports)

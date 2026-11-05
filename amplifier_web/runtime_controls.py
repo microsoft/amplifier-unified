@@ -37,7 +37,8 @@ def public_config(value, *, module=None, metadata=False):
                 else public_config(item, module=value.get("module") if key == "config" else None,
                                    metadata=metadata)
                 for key, item in value.items()
-                if not (metadata and value.get("field_type") == "secret" and key in {"default", "value"})}
+                if key not in {"_decision_account", "_decision_accounts"}
+                and not (metadata and value.get("field_type") == "secret" and key in {"default", "value"})}
     if isinstance(value, (list, tuple)):
         return [public_config(item, metadata=metadata) for item in value]
     if isinstance(value, (str, int, float, bool)) or value is None:
@@ -131,6 +132,9 @@ class RuntimeControls:
         self.coordinator = session.coordinator
         self.configurator = self.coordinator.get_capability("web.configurator")
         self.prepared = self.coordinator.get_capability("web.prepared")
+        self.agent_definitions = copy.deepcopy({
+            **(self.coordinator.get_capability("web.agent_definitions") or {}),
+            **self.coordinator.config.get("agents", {})})
         self.lock = asyncio.Lock()
         self.selection = None
         # Session preparation has already applied the new-chat root choice.
@@ -152,6 +156,7 @@ class RuntimeControls:
         self.model_catalog=ProviderCatalog()
         self.catalog_revision=str(uuid.uuid4())
         self.coordinator.register_capability("web.controls.persist", self.persist)
+        self.coordinator.register_capability("web.context_recovery.contract", self.recovery_contract)
         from .task_continuity import TaskController
         self.tasks = TaskController(self)
         from .capacity import CapacityController
@@ -231,6 +236,18 @@ class RuntimeControls:
         if task_only:
             return
         plan = {key:value for key,value in self.coordinator.config.items() if key in PLAN_KEYS}
+        disabled_agents = snapshot.get("agents", {}).get("disabled", [])
+        if disabled_agents:
+            # This is a restorable configuration, not the live availability
+            # map. Never temporarily enable an agent or persist a redacted
+            # inspector summary in place of its exact declaration.
+            plan["agents"] = dict(plan.get("agents", {}))
+            for name in disabled_agents:
+                if name not in self.agent_definitions:
+                    raise ValueError(f"Disabled agent {name!r} has no retained definition")
+                plan["agents"][name] = self.agent_definitions[name]
+        from .decision_accounts import logical_plan
+        plan = logical_plan(plan)
         if self.coordinator.get_capability("web.provider_credentials_bound"):
             from .provider_environment import credential_bindings
             plan = credential_bindings(plan)
@@ -246,8 +263,25 @@ class RuntimeControls:
         if children and any(row.get("status") in {"starting", "running", "working", "idle"} for row in children.rows.values()):
             raise ValueError("Finish or stop the active workers before changing session configuration")
 
+    def recovery_contract(self):
+        """Exact durable choices; only their digest is stored by recovery."""
+        from .decision_accounts import logical_plan
+        loop, context = self.coordinator.get("orchestrator"), self.coordinator.get("context")
+        return copy.deepcopy({
+            # Decision-account projection binds a fresh UUID on every mount.
+            # Validate and recover the logical declaration, retaining its exact
+            # account, source, credentials and settings, not a redacted view.
+            "plan": logical_plan(self.coordinator.config),
+            "selection": self.selection,
+            "maxOutputTokens": self.max_output_tokens,
+            "context": getattr(context, "config", {}),
+            "loop": getattr(loop, "config", {}),
+            "mode": self.coordinator.session_state.get("active_mode"),
+        })
+
     def configuration(self):
-        plan = copy.deepcopy(self.coordinator.config)
+        from .decision_accounts import logical_plan
+        plan = logical_plan(self.coordinator.config)
         stored = override_path(self.session.session_id)
         saved = json.loads(stored.read_text()) if stored.exists() else None
         if saved:
@@ -331,7 +365,8 @@ class RuntimeControls:
             return await self._perform(operation, args)
 
     def prepare_configuration(self, config):
-        previous = copy.deepcopy(self.coordinator.config)
+        from .decision_accounts import logical_plan
+        previous = logical_plan(self.coordinator.config)
         stored = override_path(self.session.session_id)
         if stored.exists():
             saved = json.loads(stored.read_text())
@@ -363,6 +398,22 @@ class RuntimeControls:
         write_private(override_path(self.session.session_id), json.dumps(plan, indent=2))
 
     async def _perform(self, operation, args):
+        if operation in {"context.recovery.request", "context.recovery.status"}:
+            continuity = self.coordinator.get_capability("web.continuity.recovery")
+            if continuity is None:
+                raise ValueError("Explicit context recovery is unavailable in this runtime")
+            if operation == "context.recovery.status":
+                return continuity.recovery_status()
+            self.require_idle()
+            trusted = args.get("_recoveryCommand")
+            if (not isinstance(trusted, dict) or not isinstance(trusted.get("id"), str)
+                    or not trusted["id"] or type(trusted.get("interruptionRevision")) is not int):
+                raise ValueError("Recovery requires the original host command and Stop binding")
+            if set(args) - {"_recoveryCommand", "targetBytes"}:
+                raise ValueError("Unsupported recovery arguments")
+            return await continuity.request_recovery(
+                trusted["id"], trusted["interruptionRevision"],
+                target_bytes=args.get("targetBytes", 1_500_000))
         if operation == 'memory.consolidate':
             from .memory_consolidation import generate
             return await generate(self, args)
@@ -410,6 +461,9 @@ class RuntimeControls:
                 function = getattr(self.configurator,"tool" + suffix + "_module")
             else:
                 function = getattr(self.configurator, singular + suffix)
+            if section == "agents" and not enabled and name in self.coordinator.config.get("agents", {}):
+                # Retain runtime edits/additions, not only the initial bundle.
+                self.agent_definitions[name] = copy.deepcopy(self.coordinator.config["agents"][name])
             result = function(name)
             if inspect.isawaitable(result):
                 await result
