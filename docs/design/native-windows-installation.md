@@ -2,6 +2,168 @@
 
 Status: implementation design and trial preparation; **not a native Windows support claim**.
 
+## Zero-prerequisite bootstrap prototype
+
+The requested direction is a single PowerShell paste for an ordinary Windows
+information worker, with **no curl, Git, Python, uv, WSL, PowerShell 7 or winget
+assumed**. `scripts/install.ps1` now has a separate explicit prototype entry:
+`-PrototypeManifestUrl` plus `-PrototypeManifestSha256`. The no-argument public
+release installer still requires its native-support record and retains its
+closed activation gate. A prototype manifest has `status: prototype`; it is
+not a native-support record and cannot enable that public path.
+
+**Not yet a released installation command.** The Windows trial owner must first
+join the exact native candidate, build its complete Windows host wheelhouse,
+publish the immutable prototype assets and provide their digests. This code
+candidate does not claim those artifacts exist or that absent-prerequisite
+installation has run on a clean Windows account.
+
+### Chosen prerequisite strategy
+
+1. Reuse a compatible, ACL-validated existing uv/Git executable when available.
+   Otherwise acquire exact official uv **0.12.18** and standard **MinGit
+   2.56.0.windows.4** ZIPs. Verify pinned SHA-256 before extraction/execution;
+   retain whole distributions, licenses and receipts.
+2. Use uv's managed ordinary **CPython 3.13**, selecting an exact supported patch
+   in the prototype plan. Download into this installation's private Python
+   directory with `--no-bin --no-registry`. Store aliases and a system Python
+   3.15 are neither invoked nor replaced. No compiler is installed.
+3. Install a complete **offline, hash-required wheelhouse**, including prebuilt
+   wheels for Git-sourced host dependencies, into a new noneditable venv.
+   No VCS resolution or source build occurs during host installation. Git remains
+   necessary for the application's separately prepared worker/bundle sources.
+4. Use an absolute Python/launcher and retained helper paths on every relaunch.
+   No user/machine PATH, shell profile, default Python, registry registration,
+   service or Scheduler mutation is needed.
+
+Official references: [uv standalone installation](https://docs.astral.sh/uv/getting-started/installation/),
+[uv unmanaged installer options](https://docs.astral.sh/uv/reference/installer/),
+[managed Python provenance](https://docs.astral.sh/uv/concepts/python-versions/),
+and [MinGit's non-interactive application distribution](https://gitforwindows.org/mingit).
+The [Scoop installer](https://github.com/ScoopInstaller/Install) demonstrates
+non-admin PowerShell setup but adds a package-manager and policy surface; it is
+not installed here. [rustup's installation methods](https://rust-lang.github.io/rustup/installation/other.html)
+are a useful architecture/checksum precedent, not a dependency.
+Do not copy execution-policy bypasses from other projects.
+
+Pinned helper digests are those reported by the publishers' exact
+[uv release metadata](https://api.github.com/repos/astral-sh/uv/releases/tags/0.12.18)
+and [Git for Windows metadata](https://api.github.com/repos/git-for-windows/git/releases/tags/v2.56.0.windows.4).
+Publisher-served digests establish integrity, not independent signatures.
+uv verifies its own pinned python-build-standalone download digest; the exact
+Python patch and resulting interpreter still need native candidate checks.
+
+### Build and delivery interface — trial owner only
+
+`scripts/windows_bootstrap_capsule.py` packages an **already-built**, complete
+Windows x64/CPython 3.13 host wheelhouse. It performs no dependency resolution,
+installation or publication. For example, with the selected candidate's actual
+values and an absent output directory:
+
+```sh
+python scripts/windows_bootstrap_capsule.py --wheelhouse /path/to/qualified-wheels --output /path/to/new-output --source EXACT_40_HEX_COMMIT --version EXACT_APP_VERSION --python EXACT_3.13_PATCH --url https://github.com/microsoft/amplifier-unified/releases/download/EXACT_PROTOTYPE_TAG/windows-prototype.zip
+```
+
+The capsule contains `capsule.json` (source/version), `requirements.txt` with
+every wheel's SHA-256, `wheels/`, and this candidate's
+`windows_prototype_launch.py` as `launch.py`. The builder emits
+`windows-prototype.json` with schema 1, status `prototype`, exact source/version,
+architecture `x86_64`, Python patch and capsule URL/SHA-256. Output is create-new
+only; duplicate distributions, missing app identity and symlink inputs refuse.
+The owner must verify package closure and exact-source provenance; a manifest
+label is not evidence that wheels came from that source.
+
+After publication and review, the owner supplies one **fully resolved** paste,
+not placeholders for the information worker to assemble. The following is its
+reviewable template; its guards refuse until real exact values replace them:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$BootstrapRef = 'EXACT_40_HEX_BOOTSTRAP_COMMIT'
+$BootstrapHash = 'EXACT_64_HEX_SCRIPT_SHA256'
+$PlanUrl = 'https://github.com/microsoft/amplifier-unified/releases/download/EXACT_PROTOTYPE_TAG/windows-prototype.json'
+$PlanHash = 'EXACT_64_HEX_MANIFEST_SHA256'
+if ($BootstrapRef -notmatch '^[0-9a-f]{40}$' -or $BootstrapHash -notmatch '^[0-9a-f]{64}$' -or $PlanHash -notmatch '^[0-9a-f]{64}$') { throw 'Obtain the resolved candidate paste from the trial owner.' }
+$SetupText = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Uri "https://raw.githubusercontent.com/microsoft/amplifier-unified/$BootstrapRef/scripts/install.ps1").Content
+$SetupBytes = [Text.Encoding]::UTF8.GetBytes($SetupText)
+if ($SetupBytes.Length -gt 1048576) { throw 'Setup script exceeds its size budget.' }
+$Hash = [Security.Cryptography.SHA256]::Create()
+try { $ObservedHash = ([BitConverter]::ToString($Hash.ComputeHash($SetupBytes))).Replace('-', '').ToLowerInvariant() } finally { $Hash.Dispose() }
+if ($ObservedHash -cne $BootstrapHash) { throw 'Setup script identity mismatch; no setup was run.' }
+. ([scriptblock]::Create($SetupText))
+Invoke-UnifiedPrototype $PlanUrl $PlanHash $false
+```
+
+This uses built-in Windows PowerShell 5.1 and .NET, without downloading another
+package manager, running a `.ps1` through a policy override or installing a
+machine-wide prerequisite. The downloaded script runs only after its reviewed
+hash matches. Enterprise script/language restrictions remain authoritative:
+if policy blocks this flow or `Add-Type`, stop and report the policy restriction,
+not a bypass. Windows 11 x64, a normal non-admin token, usable PowerShell/.NET,
+local fixed NTFS storage and permitted official HTTPS downloads are still
+environment requirements. No silent proxy or certificate exception is added.
+
+### Installation and restoration effects
+
+| Effect | Owned location / recovery |
+| --- | --- |
+| Setup artifacts and helpers | New private `LocalAppData/amplifier-install-<random>` root, owner/SYSTEM DACL at creation. Existing roots are never adopted or ACL-repaired. |
+| Python, host and caches | Root-local `python`, `python-bin`, `host`, `cache`, child `TEMP`/`TMP` in `temp`; host install uses `--no-index --require-hashes --only-binary :all: --no-deps`, followed by `uv pip check`. |
+| App, history and ownership | Distinct root-local `app`, `shared`, `ownership`; capture `shared/projects`, import `shared`, empty trial `workspace`. No personal history/config/keys copying. Inherited environment/tool-specific OAuth and external files remain outside this isolation. |
+| Launch and TLS | Private `Launch Unified.lnk`, exact venv Python and retained uv/Git paths. Normal CLI migration/TLS/ownership chain, numeric HTTPS loopback 8942, `serve --no-open`, then real owner `open`. Public CA export only; CurrentUser trust is the user's explicit certificate-viewer action, never an agent/installer import. |
+| Failure and rollback | No old install, pointer or global launcher is replaced. Failed partial root is retained with stage-only private log; no mutation retry. Download-only retry is bounded. Use the previous launcher to roll back. |
+
+Bootstrap directory pins permit WRITE sharing only for its own private tool
+mutation parents (`root`, `python`, `python-bin`, `cache`, `temp`) so uv can atomically
+rename staged downloads. ACL/handle identity validation and no-DELETE sharing
+remain; traversal ancestors and downloaded/extracted artifact files retain their
+strict sharing. The native offline fixture checks this exact rename boundary.
+
+Setup reruns are **side-by-side**, not an in-place updater: each gets a new
+private root and leaves previous roots intact. Do not repeat setup to relaunch;
+use the printed private shortcut. Relaunch restores helper/root settings and,
+when port 8942 is already occupied, attempts only real pinned owner entry; it
+does not reconfigure, adopt or stop that listener. A refusal stays a refusal.
+If setup failed, retain the printed root and stage before choosing a fresh retry.
+
+Keep the foreground console open; **Ctrl+C** requests normal host shutdown and
+the launcher retains the exact child until exit. Closing the browser does not
+stop it. There is no sign-in startup or background-lifetime promise.
+If TLS trust is missing, the launcher prints the public CA path and SHA-256,
+explains the scope, and offers `REVIEW` to open the certificate viewer.
+The user chooses Current User / Trusted Root only when policy permits; the
+launcher rechecks trust before real owner entry. It never bypasses a warning
+or requests a password/Hello PIN. Complete standard AI connections/model
+onboarding in the web UI; inherited API keys are not automatically configured
+connections, and a ChatGPT subscription is not OpenAI API billing.
+
+Uninstall is deliberately data-preserving until chosen: stop the foreground
+host, remove only the exact trial CA entry **yourself** if you imported it and
+no longer need it (see the manual runbook below), then remove only the printed
+private prototype directory when its data is no longer needed. No registry,
+PATH, startup task or global tool restoration should be necessary. Trust removal
+and data deletion are never automatic.
+
+### Qualification still required
+
+Portable capsule/command-model tests are not absent-prerequisite Windows proof.
+Before giving a resolved paste to another user, retain these focused results:
+
+1. Run `tests/fixtures/windows_bootstrap_prototype.ps1` through native PS5.1
+   and PS7 when available, plus the existing native installer storage/download/
+   archive fixture. No execution-policy override. Example:
+   `powershell.exe -NoProfile -NonInteractive -File tests/fixtures/windows_bootstrap_prototype.ps1 -Installer scripts/install.ps1`.
+2. On an authorized disposable ordinary Windows account, run the exact published
+   paste with no developer tools on PATH. Check helper hashes/licenses, managed
+   Python identity, complete offline host graph, spaces/Unicode and restart from
+   the private shortcut without tool PATH.
+3. Exercise bad hash, blocked proxy/policy, partial package failure and duplicate
+   setup without replacing prior installs. Confirm listener conflict refusal,
+   user-controlled CA trust, real owner entry and standard onboarding.
+4. Confirm Stop/owned-descendant cleanup, Ctrl+C, saved-history relaunch and
+   nonzero-host-error reporting. Keep native product/device/live-provider,
+   clean-machine bootstrap and installer/background/Scheduler claims separate.
+
 ## Conditional foreground trial runbook
 
 **Proposed instructions, not yet cleared for a user trial.** Commands below are

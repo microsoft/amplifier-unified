@@ -118,6 +118,10 @@ describes an isolated PowerShell trial **without WSL**, but awaits an exact
 qualified, browser-activated candidate from the Windows trial owner. It is not
 a command to run the current public release. The native installer, default
 background launcher and Task Scheduler path remain unqualified.
+For the zero-developer-tool-prerequisite work, see the
+[explicit Windows bootstrap prototype](docs/design/native-windows-installation.md#zero-prerequisite-bootstrap-prototype).
+It uses a reviewed candidate manifest and private portable tools, not a claim
+that the public Windows installer is enabled.
 
 <details>
 <summary><strong>Linux</strong></summary>
