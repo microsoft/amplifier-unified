@@ -11,17 +11,21 @@ const sections=[['tools','Tools'],['hooks','Hooks'],['providers','Providers'],['
 export function ConfigurationDiagnostics({state,act,scope,navigate}){
  const [confirmed,setConfirmed]=useState('');
  const diagnostic=state.registry?.diagnostics;
+ const readStatus=state.actionStatus?.['modules.diagnostics'];
+ const reading=['queued','working'].includes(readStatus?.phase);
+ const readError=readStatus?.phase==='error';
  const status=state.actionStatus?.['modules.reconcile'];
  const busy=['queued','working'].includes(status?.phase);
  useEffect(()=>{act('modules.diagnostics',{scope});setConfirmed('');},[scope]);
- const rows=diagnostic?.scope===scope?diagnostic.items||[]:[];
+ const available=!reading&&!readError&&diagnostic?.scope===scope&&Array.isArray(diagnostic.items);
+ const rows=available?diagnostic.items:[];
  const signature=JSON.stringify(rows.map(row=>[row.sourceScope,row.revision]));
  useEffect(()=>setConfirmed(''),[signature]);
  return <section aria-label="Capability configuration diagnostics">
   <h4>Capability configuration</h4>
   <p className="a-caption">Retained restrictions apply to new chats. Existing chats keep their configuration. Removing a preference does not grant paid access or change an account or model.</p>
   <button type="button" className="a-soft" disabled={busy} onClick={()=>act('modules.diagnostics',{scope})}>Refresh capability diagnostics</button>
-  {!diagnostic?<p role="status">Loading configuration diagnostics…</p>:rows.length===0?<p role="status">No retained preferences need reconciliation in this scope.</p>:rows.map(row=>{
+  {readError?<p role="alert">{readStatus.error||'Configuration diagnostics are unavailable. Refresh to try again.'}</p>:!available?<p role="status">Loading configuration diagnostics for {scope}…</p>:rows.length===0?<p role="status">No retained preferences need reconciliation in this scope.</p>:rows.map(row=>{
    const key=row.sourceScope+':'+row.id+':'+row.revision;
    return <div key={key} className="a-config-diagnostic">
     <p><strong>{row.module}</strong> · {row.state==='disabled'?'Disabled':'Needs review'} · {row.sourceScope}</p>
