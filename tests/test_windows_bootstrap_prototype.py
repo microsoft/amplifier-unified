@@ -116,7 +116,11 @@ class LauncherTests(unittest.TestCase):
             self.assertNotIn("OPENAI_API_KEY", env)
             self.assertNotIn("HOME", env)
             self.assertNotIn("USERPROFILE", env)
-            self.assertEqual(env["PATH"], "/private/tools:/private/git/bin:/old/path")
+            self.assertEqual(env["PATH"], launcher.os.pathsep.join([
+                str(Path(receipt["uv"]).parent),
+                str(Path(receipt["git"]).parent),
+                before["PATH"],
+            ]))
             self.assertEqual(dict(os_environ), before)
 
     def test_cli_commands_use_list_argv_and_hide_sensitive_child_errors(self):
