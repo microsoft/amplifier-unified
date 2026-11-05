@@ -115,11 +115,58 @@ try{
  assert.deepEqual(check.target,{kind:'global'});assert.equal(check.phase,'ready');
  assert.equal(check.check.available,false);assert.ok(check.check.checkedAt>0);
  assert.equal(check.check.commandId,check.commandId);
+ // Read-only R can be superseded by normal agent read S without permanently
+ // keeping this browser busy, or displaying R as the current credential result.
+ await credentialMode('error');
+ await agent('settings.connection.select',{module:'provider-openai'},'before-supersession');
+ const connection=settings.locator('[data-part=ai-connections]');
+ await expect(connection.getByRole('button',{name:'Check host key again',exact:true})).toBeVisible();
+ await credentialMode('hold');
+ await connection.getByRole('button',{name:'Check host key again',exact:true}).click();
+ const readKey='global\nproviders.credentials:provider-openai';
+ await expect.poll(()=>page.evaluate(key=>window.amplifier.getState().setup.operations[key]?.phase,readKey)).toBe('working');
+ const R=await page.evaluate(key=>window.amplifier.getState().setup.operations[key].commandId,readKey);
+ const S=await agent('providers.credentials',{module:'provider-openai',
+  configurationTarget:{kind:'global'},envVar:'SYNTHETIC_SUPERSEDING_KEY'},'superseding-read');
+ await expect.poll(()=>page.evaluate(key=>window.amplifier.getState().setup.operations[key]?.phase,readKey)).toBe('ready');
+ await expect(connection.getByRole('button',{name:'Back',exact:true})).toBeDisabled();
+ await expect(connection.getByLabel('API key',{exact:true})).toBeVisible();
+ assert.notEqual(R,S.operationId);
+ await credentialMode('available');
+ await expect(connection.getByRole('button',{name:'Back',exact:true})).toBeEnabled();
+ assert.equal(await page.evaluate(key=>window.amplifier.getState().setup.credentialCheck.commandId,readKey),S.operationId);
+ await expect(connection.getByText('Use the key already on this host',{exact:true})).toHaveCount(0);
+ await expect(connection.getByRole('button',{name:'Back',exact:true})).toBeEnabled();
+ // The normal Copilot negative-auto path must preserve typed private intent
+ // across pending/error/positive rechecks, without exporting the private token.
+ await credentialMode('missing');
+ await agent('settings.connection.select',{module:'provider-github-copilot'},'private-copilot');
+ const token=connection.getByLabel('GitHub token',{exact:true});
+ await expect(token).toBeVisible();
+ await token.fill('synthetic-private-review-token');
+ await credentialMode('hold');
+ await connection.getByText('Help connecting GitHub Copilot',{exact:true}).click();
+ await connection.getByRole('button',{name:'Check host sign-in again',exact:true}).click();
+ await expect(connection.getByText('Checking this host for an existing key…',{exact:true})).toBeVisible();
+ await expect(token).toBeVisible();await expect(token).toBeEnabled();
+ await expect(token).toHaveValue('synthetic-private-review-token');
+ await token.fill('synthetic-private-review-token-edited');
+ await credentialMode('error');
+ await expect(connection.getByText('Synthetic credential store could not be read.',{exact:true})).toBeVisible();
+ await expect(token).toHaveValue('synthetic-private-review-token-edited');
+ await expect(token).toBeEnabled();
+ await expect(connection.getByRole('button',{name:'Save and check connection',exact:true})).toBeEnabled();
+ await credentialMode('available');
+ await connection.getByRole('button',{name:'Check host key again',exact:true}).click();
+ await expect(connection.getByText('Use the key already on this host',{exact:true})).toBeVisible();
+ await expect(connection.getByRole('radio',{name:/Use a different key/})).toBeChecked();
+ await expect(token).toHaveValue('synthetic-private-review-token-edited');
+ assert.equal(requests.some(row=>row.body?.includes('synthetic-private-review-token')),false);
  assert.equal(requests.some(row=>row.body?.includes('private-browser-only-draft')),false,'private input never leaves the browser');
  assert.equal(requests.some(row=>row.body?.includes('private-workspace-only-draft')),false);
  const final=await inspect();assert.equal(final.savedSettingsUnchanged,true);
  assert.equal(final.calls.filter(row=>['providers.save','providers.login','providers.test','providers.testMessage'].includes(row.action)).length,0);
  assert.deepEqual(errors,[]);
- console.log('PASS: semantic Settings, exact credential command/owner completion, pending/error/false/true distinction and retry, private drafts, unchanged configuration and no model/auth calls.');
+ console.log('PASS: semantic Settings, typed private choice retained across pending/error/positive checks, same-owner retry supersession and late completion, exact command/owner credentials, private drafts, unchanged configuration and no model/auth calls.');
 }catch(error){failure=error;throw error}
 finally{await finishFixture({label:'Semantic Settings',close:[['Browser',()=>browser?.close()]],stop,originalError:failure})}

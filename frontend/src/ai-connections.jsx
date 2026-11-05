@@ -16,8 +16,17 @@ import {ImageGenerationSettings} from './image-generation-settings';
 import {AIConnectionDetail} from './ai-connection-detail';
 import {providerOptions} from './provider-options';
 import {aiServices,aiService,matchingSetupOperation,setupPending} from './ai-connections-data';
+import {request as apiRequest} from './api';
 
-export function AIConnections({state,session,act,navigate,onReturnToChat,imagesOnly=false}){
+async function readCredentialCompletion(id,{signal}){
+ const path='/managementResults/'+id.replaceAll('~','~0').replaceAll('/','~1');
+ const result=await apiRequest('/api/state/detail?'+new URLSearchParams({path,limit:'2'}),{signal});
+ if(result.path!==path||result.type!=='object'||result.nextOffset!==null)return null;
+ const value=Object.fromEntries((result.items||[]).map(item=>[item.key,item.value]));
+ return ['ready','error'].includes(value.phase)?value:null;
+}
+
+export function AIConnections({state,session,act,navigate,onReturnToChat,imagesOnly=false,readCompletion=readCredentialCompletion}){
  const [decisionSettingsOpened,setDecisionSettingsOpened]=useState(false);
  const layout=useContext(SettingsLayoutContext);
  const setup=state.setup||{},providers=(setup.providers||[]).filter(p=>p.enabled!==false);
@@ -44,6 +53,11 @@ export function AIConnections({state,session,act,navigate,onReturnToChat,imagesO
  // mounted. A private key belongs only to the exact editor that received it.
  const key=privateKey?.identity===draftIdentity?privateKey.value:'';
  const setKey=value=>setPrivateKey({identity:draftIdentity,value});
+ const privateChoice=d.credentialMode==='private'||(privateKey?.identity===draftIdentity&&privateKey.privateChoice);
+ const typeKey=value=>{
+  setPrivateKey({identity:draftIdentity,value,privateChoice:true});
+  if(d.credentialMode!=='private')edit({credentialMode:'private'});
+ };
  const editor=useRef(requested),transition=useRef(0);editor.current=requested;
  const sending=useRef(false),context=useRef(session?.workspace),requestVersion=useRef(0),alive=useRef(true);
  const edit=patch=>act('view.update',{patch:{[editorKey]:{...d,...patch}}});
@@ -61,7 +75,31 @@ export function AIConnections({state,session,act,navigate,onReturnToChat,imagesO
   }catch(e){if(alive.current&&version===requestVersion.current){setError(e.message);setPending(null);sending.current=false;}}
  }
  const credentialOperation=setup.operations?.['providers.credentials:'+d.module];
- const operation=matchingSetupOperation(state,pending),busy=!!pending||transitionPending||setupPending(credentialOperation);
+ // Credential discovery is read-only. Another client may replace its operation
+ // slot; settle our exact completed read without qualifying that client's result
+ // or relaxing command matching for any mutation.
+ const operation=matchingSetupOperation(state,pending);
+ const busy=!!pending||transitionPending||setupPending(credentialOperation);
+ const privateBusy=transitionPending||!!pending&&pending.action!=='providers.credentials';
+ useEffect(()=>{
+  if(pending?.action!=='providers.credentials'||!pending.commandId||pending.id!==d.module
+    ||!credentialOperation?.commandId||credentialOperation.commandId===pending.commandId)return;
+  // Past completions are intentionally absent from browser snapshots. Read only
+  // R's exact bounded receipt; S's slot or an older Q is never proof R completed.
+  let active=true,timer;const controller=new AbortController();
+  const settle=message=>{if(!active)return;setPending(null);sending.current=false;if(message)setError(message)};
+  const deadline=setTimeout(()=>{controller.abort();settle('The earlier host key check could not be confirmed. Check again to refresh this host.');},10000);
+  const read=async()=>{
+   try{
+    const result=await readCompletion(pending.commandId,{signal:controller.signal});
+    if(!active)return;
+    if(result&&['ready','error'].includes(result.phase)){settle(result.phase==='error'?(result.error||'The host key check did not finish.'):'');return;}
+    timer=setTimeout(read,250);
+   }catch{if(!controller.signal.aborted)settle('The earlier host key check could not be confirmed. Check again to refresh this host.');}
+  };
+  void read();
+  return()=>{active=false;clearTimeout(timer);clearTimeout(deadline);controller.abort()};
+ },[pending?.action,pending?.commandId,pending?.id,credentialOperation?.commandId,d.module,readCompletion]);
  const listOperation=setup.operations?.['providers.list:'];
  const providersLoaded=!!setup.providersLoadedAt;
  const loadError=listOperation?.phase==='error'?listOperation.error:' ';
@@ -96,7 +134,7 @@ export function AIConnections({state,session,act,navigate,onReturnToChat,imagesO
   &&setup.credentialCheck?.commandId===credentialOperation.commandId
   &&setup.credentialCheck?.module===d.module&&setup.credentialCheck.checkedAt?setup.credentialCheck:null;
  const credentialUnknown=service.auth!=='signin'&&!credential;
- const credentialMode=d.credentialMode==='auto'?(credential?.githubCliAvailable?'github-cli':credential?.available?'environment':'private'):(d.credentialMode||'private');
+ const credentialMode=privateChoice?'private':d.credentialMode==='auto'?(credential?.githubCliAvailable?'github-cli':credential?.available?'environment':'private'):(d.credentialMode||'private');
  const scanCredentials=module=>{if(serviceFor(module).auth!=='signin')run('providers.credentials',{module});};
  async function changeConnection(action,args={}){
   if(sending.current||transitionPending)return;
@@ -154,9 +192,9 @@ export function AIConnections({state,session,act,navigate,onReturnToChat,imagesO
        <label><input type="radio" name="ai-credential" checked={credentialMode==='private'} onChange={()=>edit({credentialMode:'private'})}/><span><strong>Use a different key</strong><small>Connect another account or enter a key yourself.</small></span></label>
       </fieldset>}
       {credentialMode==='environment'&&<ProviderKeyPreview credential={credential}/>}
-      {credentialMode==='private'&&(!credentialUnknown||d.credentialMode==='private')&&<><label htmlFor={configId('ai-private-key')}>{service.auth==='token'?'GitHub token':service.auth==='optional-key'?'API key (optional)':'API key'}</label><input id={configId('ai-private-key')} type="password" autoComplete="off" spellCheck={false} value={key} onChange={e=>setKey(e.target.value)} disabled={busy}/><p className="a-caption">{service.credential_hint||(service.auth==='optional-key'?'Leave blank if your local service does not need a key.':'Stored privately for this connection. Other accounts keep their own keys.')}</p></>}
+      {credentialMode==='private'&&(!credentialUnknown||privateChoice)&&<><label htmlFor={configId('ai-private-key')}>{service.auth==='token'?'GitHub token':service.auth==='optional-key'?'API key (optional)':'API key'}</label><input id={configId('ai-private-key')} type="password" autoComplete="off" spellCheck={false} value={key} onChange={e=>typeKey(e.target.value)} disabled={privateBusy}/><p className="a-caption">{service.credential_hint||(service.auth==='optional-key'?'Leave blank if your local service does not need a key.':'Stored privately for this connection. Other accounts keep their own keys.')}</p></>}
       {service.auth==='token'&&!credential?.githubCliAvailable&&!credential?.available&&<details className="a-everyday-disclosure"><summary>Help connecting GitHub Copilot</summary><div><p>Sign in to GitHub CLI on the computer running Amplifier, then check again. Or use a GitHub token for an account with Copilot access.</p><a href="https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli" target="_blank" rel="noreferrer">GitHub setup guide</a><button className="a-link" disabled={busy} onClick={()=>scanCredentials(d.module)}>Check host sign-in again</button></div></details>}
-      <SettingsActions><button className="a-primary" data-action="providers.save" disabled={busy||(credentialUnknown&&d.credentialMode!=='private')||(needsEndpoint&&!/^https?:\/\/[^\s]+$/.test(d.baseUrl||''))||(credentialMode==='environment'?!credential?.available:credentialMode==='github-cli'?!credential?.githubCliAvailable:service.auth!=='optional-key'&&!key.trim())} onClick={saveConnection}>{busy?'Connecting…':service.decisionOnly?'Save connection':'Save and check connection'}</button></SettingsActions>
+      <SettingsActions><button className="a-primary" data-action="providers.save" disabled={busy||(credentialUnknown&&!privateChoice)||(needsEndpoint&&!/^https?:\/\/[^\s]+$/.test(d.baseUrl||''))||(credentialMode==='environment'?!credential?.available:credentialMode==='github-cli'?!credential?.githubCliAvailable:service.auth!=='optional-key'&&!key.trim())} onClick={saveConnection}>{busy?'Connecting…':service.decisionOnly?'Save connection':'Save and check connection'}</button></SettingsActions>
      </>}
     </>:step==='model'?<>
      {login?.status==='completed'&&<DeviceSignIn login={login} chooseModel welcomeDismissed={d.welcomedLoginId===login.loginId} onWelcomeDismiss={()=>edit({welcomedLoginId:login.loginId})}/>}<p>Choose from the models available through this connection.</p>

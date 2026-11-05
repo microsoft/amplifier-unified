@@ -86,6 +86,115 @@ test('automatic credential choice waits for a completed check and offers retry a
  }finally{await act(async()=>root?.unmount())}
 });
 
+test('typing after a negative automatic check keeps the private choice through host rechecks',async()=>{
+ let root,calls=[],current=state({step:'connect',id:'copilot-draft',module:'provider-github-copilot',credentialMode:'auto'});
+ const update=async(phase,positive=false)=>{
+  current={...current,setup:{...current.setup,
+   operations:{'providers.credentials:provider-github-copilot':{phase,commandId:'recheck',error:phase==='error'?'Synthetic read failed':null}},
+   credentialCheck:{module:'provider-github-copilot',commandId:'recheck',checkedAt:1,available:false,githubCliAvailable:positive}}};
+  await act(async()=>root?.update(render()));
+ };
+ const dispatch=async(action,args)=>{
+  calls.push([action,args]);
+  if(action==='view.update'){current={...current,view:{...current.view,...args.patch}};root.update(render())}
+  return {accepted:true,operationId:'recheck'};
+ };
+ const render=()=>React.createElement(AIConnections,{state:current,act:dispatch,navigate:()=>{}});
+ const password=()=>root.root.findAllByProps({type:'password'});
+ try{
+  await update('ready');await act(async()=>{root=create(render())});
+  await act(async()=>password()[0].props.onChange({target:{value:'synthetic-private-token-only'}}));
+  const recheck=root.root.findAllByType('button').find(node=>node.children.join('')==='Check host sign-in again');
+  await act(async()=>recheck.props.onClick());
+  await update('working');
+  assert.equal(password().length,1,'rechecking cannot hide a typed private token');
+  assert.equal(password()[0].props.value,'synthetic-private-token-only');
+  assert.equal(Boolean(password()[0].props.disabled),false,'read-only discovery does not lock private editing');
+  await update('error');
+  assert.ok(JSON.stringify(root.toJSON()).includes('Synthetic read failed'));
+  assert.equal(password()[0].props.value,'synthetic-private-token-only');
+  assert.equal(Boolean(root.root.findByProps({'data-action':'providers.save'}).props.disabled),false);
+  await update('ready',true);
+  assert.equal(password()[0].props.value,'synthetic-private-token-only');
+  assert.equal(current.view.aiConnectionEditor.credentialMode,'private');
+  const radios=root.root.findAllByProps({type:'radio'});
+  assert.equal(radios.at(-1).props.checked,true,'a later host sign-in cannot replace private intent');
+  assert.ok(!JSON.stringify(calls).includes('synthetic-private-token-only'),'only the choice, never its key, reaches view updates');
+  assert.equal(calls.some(([action])=>['providers.save','providers.models','providers.login'].includes(action)),false);
+ }finally{await act(async()=>root?.unmount())}
+});
+
+test('private intent survives an empty edit before the shared choice acknowledgement',async()=>{
+ let root,calls=[],current=state({step:'connect',id:'unacknowledged',module:'provider-openai',credentialMode:'auto'});
+ current.setup={...current.setup,operations:{'providers.credentials:provider-openai':{phase:'ready',commandId:'initial'}},
+  credentialCheck:{module:'provider-openai',commandId:'initial',checkedAt:1,available:false}};
+ const render=()=>React.createElement(AIConnections,{state:current,act:async(...args)=>{calls.push(args);return {accepted:true}},navigate:()=>{}});
+ try{
+  await act(async()=>{root=create(render())});
+  await act(async()=>root.root.findByProps({type:'password'}).props.onChange({target:{value:'synthetic-unacknowledged-key'}}));
+  await act(async()=>root.root.findByProps({type:'password'}).props.onChange({target:{value:''}}));
+  current={...current,setup:{...current.setup,operations:{'providers.credentials:provider-openai':{phase:'working',commandId:'new'}}}};
+  await act(async()=>root.update(render()));
+  assert.equal(root.root.findByProps({type:'password'}).props.value,'');
+  assert.equal(Boolean(root.root.findByProps({type:'password'}).props.disabled),false);
+  assert.equal(current.view.aiConnectionEditor.credentialMode,'auto','shared acknowledgement is deliberately delayed');
+  assert.equal(calls.filter(([action])=>action==='view.update').at(-1)[1].patch.aiConnectionEditor.credentialMode,'private');
+  assert.ok(!JSON.stringify(calls).includes('synthetic-unacknowledged-key'));
+ }finally{await act(async()=>root?.unmount())}
+});
+
+for(const finalPhase of ['ready','error'])test(`a credential retry superseded by a same-owner read settles when newer read is ${finalPhase}`,async()=>{
+ let root,calls=[],reads=[],current=state({step:'connect',id:'openai-draft',module:'provider-openai',credentialMode:'auto'});
+ let resolveCompletion;
+ const readCompletion=id=>{reads.push(id);return new Promise(resolve=>{resolveCompletion=resolve})};
+ const render=()=>React.createElement(AIConnections,{state:current,
+  act:async(...args)=>{calls.push(args);return {accepted:true,operationId:'R'}},navigate:()=>{},readCompletion});
+ const update=async(commandId,phase,check,completed=false)=>{
+  current={...current,setup:{...current.setup,credentialCheck:check,
+   operations:{'providers.credentials:provider-openai':{commandId,phase}}},
+   managementResults:completed?{R:{phase:'ready'}}:{}};
+  await act(async()=>root.update(render()));
+ };
+ try{
+  await act(async()=>{root=create(render())});
+  const retry=root.root.findAllByType('button').find(node=>node.children.join('')==='Check host key again');
+  await act(async()=>retry.props.onClick());
+  await update('R','working');
+  await update('S','working',{commandId:'R',module:'provider-openai',checkedAt:1,available:true});
+  assert.ok(!JSON.stringify(root.toJSON()).includes('Use the key already on this host'),'old R completion is not S credential state');
+  await update('S',finalPhase,finalPhase==='ready'?{commandId:'S',module:'provider-openai',checkedAt:2,available:false}:undefined);
+  assert.equal(Boolean(root.root.findAllByType('button').find(node=>node.children.includes('Back')).props.disabled),true,'S settling is not proof R completed');
+  await update('S',finalPhase,current.setup.credentialCheck,true);
+  await act(async()=>resolveCompletion({phase:'ready'}));
+  const back=root.root.findAllByType('button').find(node=>node.children.includes('Back'));
+  assert.equal(Boolean(back.props.disabled),false,'supersession cannot strand the editor in busy');
+  assert.ok(!JSON.stringify(root.toJSON()).includes('Working on this connection'));
+  if(finalPhase==='error'){
+   const again=root.root.findAllByType('button').find(node=>node.children.join('')==='Check host key again');
+   const before=calls.length;await act(async()=>again.props.onClick());
+   assert.equal(calls.length,before+1,'sending fence is released for an explicit new read');
+  }else assert.equal(root.root.findAllByProps({type:'password'}).length,1);
+  assert.deepEqual(reads,['R'],'only the exact superseded read receipt is queried');
+  assert.equal(calls.some(([action])=>['providers.save','providers.models','providers.login'].includes(action)),false);
+ }finally{await act(async()=>root?.unmount())}
+});
+
+test('supersession recovery does not relax mutation command matching',async()=>{
+ let root,reads=0,current=state({step:'connect',id:'private-save',module:'provider-openai',credentialMode:'private'});
+ const render=()=>React.createElement(AIConnections,{state:current,act:async()=>({accepted:true,operationId:'save-R'}),
+  navigate:()=>{},readCompletion:async()=>{reads++;return {phase:'ready'}}});
+ try{
+  await act(async()=>{root=create(render())});
+  await act(async()=>root.root.findByProps({type:'password'}).props.onChange({target:{value:'synthetic-save-only-key'}}));
+  await act(async()=>root.root.findByProps({'data-action':'providers.save'}).props.onClick());
+  current={...current,setup:{...current.setup,operations:{'providers.save:private-save':{phase:'ready',commandId:'save-S'}}},
+   managementResults:{'save-R':{phase:'ready'}}};
+  await act(async()=>root.update(render()));
+  assert.equal(reads,0);
+  assert.equal(Boolean(root.root.findByProps({'data-action':'providers.save'}).props.disabled),true);
+ }finally{await act(async()=>root?.unmount())}
+});
+
 test('external connection selection keeps a private key until review or discard, never transfers it',async()=>{
  let root,current=state({step:'connect',id:'old',module:'provider-openai',credentialMode:'private'}),resolve,entry,calls=[];
  const registry={register:(_,value)=>{entry=value},remove:()=>{},hasUnsaved:()=>entry?.dirty,confirmClose:()=>new Promise(done=>resolve=done)};
