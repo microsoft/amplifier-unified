@@ -108,9 +108,8 @@ def browser_trust_ready() -> bool:
         return False
 
 
-def keep_foreground(server) -> None:
+def keep_foreground(server, *, interrupted: bool = False) -> None:
     """Retain custody of the exact console child until real exit, never kill by port."""
-    interrupted = False
     while server.poll() is None:
         try:
             server.wait(timeout=0.25)
@@ -180,6 +179,7 @@ def launch(root: Path, receipt: dict) -> None:
     print("Trial CA SHA-256: " + ":".join(f"{byte:02X}" for byte in fingerprint), flush=True)
     print(f"Public CA for review: {ca}", flush=True)
     server = subprocess.Popen([str(launcher), *connection_args(root), "--no-open", "serve"], env=env)
+    interrupted = False
     try:
         wait_for_listener(server, ca)
         if not browser_trust_ready():
@@ -203,6 +203,7 @@ def launch(root: Path, receipt: dict) -> None:
             print("Browser entry is pending trusted HTTPS. No credential was sent by this launcher.", flush=True)
         print("Keep this window open. Ctrl+C stops this foreground host. Relaunch uses the same private state.", flush=True)
     except KeyboardInterrupt:
+        interrupted = True
         print("\nWaiting for ordinary foreground shutdown...", flush=True)
     except (OSError, RuntimeError, EOFError, subprocess.SubprocessError):
         if server.poll() is None:
@@ -213,7 +214,7 @@ def launch(root: Path, receipt: dict) -> None:
                   file=sys.stderr, flush=True)
             keep_foreground(server)
         raise
-    keep_foreground(server)
+    keep_foreground(server, interrupted=interrupted)
 
 
 def main() -> int:

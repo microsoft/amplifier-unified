@@ -173,6 +173,14 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(server.wait.call_count, 2)
         server.kill.assert_not_called()
 
+    def test_ctrl_c_during_browser_setup_retains_normal_exit_classification(self):
+        server = mock.Mock()
+        server.poll.return_value = 130
+        server.returncode = 130
+        launcher.keep_foreground(server, interrupted=True)
+        with self.assertRaisesRegex(RuntimeError, "did not complete normally"):
+            launcher.keep_foreground(server)
+
     def test_browser_refusal_is_pending_without_shutdown_wait(self):
         with mock.patch.object(launcher, "run_cli", side_effect=RuntimeError("closed")), \
              mock.patch.object(launcher, "keep_foreground") as keep:
