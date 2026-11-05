@@ -68,8 +68,9 @@ try{
   assert.equal(await content().locator('option[value="project"],option[value="local"]').count(),0,destination);
  }
  await action('view.update',{patch:{panel:null,workSurface:'workspace',workWorkspaceId:otherWorkspaceId,workWorkspaceTab:'details'}});
- await page.getByRole('button',{name:'AI connections',exact:true}).click();
- const workspace=page.getByRole('region',{name:'Workspace configuration'});
+ const workspace=page.getByRole('region',{name:'Workspace configuration',exact:true});
+ await workspace.getByRole('group',{name:'Workspace settings pages',exact:true})
+  .getByRole('button',{name:'AI connections',exact:true}).click();
  await expect(workspace.getByText('other-only-model',{exact:false})).toBeVisible();
  await noImageSettings();
  await workspace.getByRole('button',{name:'Advanced connection settings',exact:true}).click();
