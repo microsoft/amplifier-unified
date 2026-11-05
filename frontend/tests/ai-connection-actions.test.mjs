@@ -51,6 +51,41 @@ test('semantic connection actions retain explicit workspace ownership and scoped
  }finally{await act(async()=>root?.unmount())}
 });
 
+test('automatic credential choice waits for a completed check and offers retry after failure',async()=>{
+ let root,calls=[],current=state({step:'connect',id:'new-openai',module:'provider-openai',credentialMode:'auto'});
+ const render=()=>React.createElement(AIConnections,{state:current,
+  act:async(...args)=>{calls.push(args);return {accepted:true,operationId:'retry-credentials'}},navigate:()=>{}});
+ const update=async(phase,credentialCheck)=>{
+  current={...current,setup:{...current.setup,
+   credentialCheck:credentialCheck&&{commandId:'retry-credentials',...credentialCheck},
+   operations:phase?{'providers.credentials:provider-openai':{phase,commandId:'retry-credentials'}}:{}}};
+  await act(async()=>root.update(render()));
+ };
+ const password=()=>root.root.findAllByProps({type:'password'});
+ try{
+  await act(async()=>{root=create(render())});
+  assert.equal(password().length,0,'an unobserved check must not become the private-key choice');
+  assert.ok(JSON.stringify(root.toJSON()).includes('Checking this host'));
+  await update('working',{module:'provider-openai',available:false});
+  assert.equal(password().length,0);
+  await update('error',{module:'provider-openai',available:true,envVar:'OPENAI_API_KEY',checkedAt:1});
+  assert.ok(!JSON.stringify(root.toJSON()).includes('Use the key already on this host'),'an earlier positive result cannot survive a failed recheck');
+  await update('ready',{module:'provider-openai',commandId:'old-command',available:true,checkedAt:1});
+  assert.equal(password().length,0,'a stale result is not a completed negative read');
+  assert.ok(!JSON.stringify(root.toJSON()).includes('Use the key already on this host'));
+  await update('error',undefined);
+  const retry=root.root.findAllByType('button').find(node=>node.children.join('')==='Check host key again');
+  assert.ok(retry,'a failed host read has an ordinary in-place recovery');
+  await act(async()=>retry.props.onClick());
+  assert.ok(calls.some(([action,args])=>action==='providers.credentials'&&args.module==='provider-openai'));
+  await update('ready',{module:'provider-openai',available:false,checkedAt:1});
+  assert.equal(password().length,1,'a completed negative check permits private entry');
+  await update('ready',{module:'provider-openai',available:true,envVar:'OPENAI_API_KEY',checkedAt:2});
+  assert.equal(password().length,0);
+  assert.ok(JSON.stringify(root.toJSON()).includes('Use the key already on this host'));
+ }finally{await act(async()=>root?.unmount())}
+});
+
 test('external connection selection keeps a private key until review or discard, never transfers it',async()=>{
  let root,current=state({step:'connect',id:'old',module:'provider-openai',credentialMode:'private'}),resolve,entry,calls=[];
  const registry={register:(_,value)=>{entry=value},remove:()=>{},hasUnsaved:()=>entry?.dirty,confirmClose:()=>new Promise(done=>resolve=done)};

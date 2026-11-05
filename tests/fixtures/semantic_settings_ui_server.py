@@ -17,6 +17,18 @@ async def main(home):
     service = app['service']
     calls = []
     original_command = service.management.command
+    original_perform = fixture.SetupManager.perform
+    credential_mode, release = 'available', asyncio.Event()
+    release.set()
+
+    async def perform(manager, action, args):
+        if action == 'providers.credentials':
+            await asyncio.wait_for(release.wait(), 10)
+            if credential_mode == 'error':
+                raise ValueError('Synthetic credential store could not be read.')
+        return await original_perform(manager, action, args)
+
+    fixture.SetupManager.perform = perform
 
     async def command(action, args, command_id=None, authority=None):
         calls.append({'action': action, 'configurationTarget': args.get('configurationTarget'),
@@ -40,8 +52,23 @@ async def main(home):
         return web.json_response({'calls': calls,
             'savedSettingsUnchanged': original_settings == hashlib.sha256(settings_path.read_bytes()).hexdigest()})
 
+    async def credentials(request):
+        nonlocal credential_mode
+        credential_mode = (await request.json())['mode']
+        assert credential_mode in {'hold', 'available', 'missing', 'error'}
+        if credential_mode == 'hold':
+            release.clear()
+        else:
+            if credential_mode == 'missing':
+                os.environ.pop('OPENAI_API_KEY', None)
+            else:
+                os.environ['OPENAI_API_KEY'] = 'synthetic-openai-browser-fixture-key'
+            release.set()
+        return web.json_response({'mode': credential_mode})
+
     app.router.add_post('/fixture/semantic-settings-agent', agent)
     app.router.add_get('/fixture/semantic-settings', inspect)
+    app.router.add_post('/fixture/semantic-credentials', credentials)
     return app
 
 
