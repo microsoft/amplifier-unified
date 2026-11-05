@@ -385,10 +385,14 @@ async def test_prepare_manager_forwards_filtered_override_image_intent(tmp_path,
             'version': 1, 'sourceMode': 'automatic', 'result': 'ambiguous_requires_review',
             'source': [{'providerInstance': 'blue',
                         'image': {'enabled': True, 'id': 'saved-blue', 'model': 'pinned'}}],
+            'scopes': [{'mode': 'automatic', 'scope': 'global'}],
         }
     else:
         assert 'routing_blocked' not in image
-        assert receipt == {'version': 1, 'sourceMode': 'automatic', 'source': [], 'result': 'preserved'}
+        assert receipt == {
+            'version': 1, 'sourceMode': 'automatic', 'source': [], 'result': 'preserved',
+            'scopes': [{'mode': 'automatic', 'scope': 'global'}],
+        }
     assert 'hidden-' not in json.dumps(receipt) and 'api_key' not in json.dumps(receipt)
     assert {path: path.read_bytes() for path in original_bytes} == original_bytes
 
