@@ -687,6 +687,19 @@ function Invoke-InstallChild([string] $Executable, [string[]] $Arguments, [hasht
         $info.EnvironmentVariables['GIT_CONFIG_KEY_1'] = 'core.askPass'
         $info.EnvironmentVariables['GIT_CONFIG_VALUE_1'] = ''
     }
+    if ($script:InstallStage -like 'prototype*' -or $Environment.ContainsKey('UV_TOOL_DIR')) {
+        # Keep the ordinary Windows profile identity. Discard only package/tool
+        # overrides that could redirect a frozen install into another graph/root.
+        foreach ($key in @($info.EnvironmentVariables.Keys)) {
+            if ($key -like 'UV_*' -or $key -like 'PIP_*' -or
+                $key -like '*_API_KEY' -or $key -like '*_TOKEN' -or
+                $key -in @('PYTHONHOME', 'PYTHONPATH', 'VIRTUAL_ENV', 'GIT_SSL_NO_VERIFY',
+                    'GIT_EXEC_PATH', 'GIT_TEMPLATE_DIR',
+                    'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AZURE_CLIENT_SECRET')) {
+                $info.EnvironmentVariables.Remove($key)
+            }
+        }
+    }
     foreach ($key in $Environment.Keys) { $info.EnvironmentVariables[$key] = $Environment[$key] }
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $info
@@ -914,7 +927,21 @@ function Read-PrototypeManifest($Record) {
         $uri.AbsolutePath -match '/(latest|main)/') {
         throw 'Prototype capsule must name an exact official HTTPS release asset.'
     }
+    $mode = Get-PrototypeSourceMode $Record
+    if ($mode -eq 'pinned-vcs' -and ($Record.source -cne '1c4ac3b4f9ed5d2d3f588f6fa6c74a119e439153' -or
+        $Record.version -cne '0.54.5')) {
+        throw 'The pinned VCS prototype is bound to the frozen 0.54.5 candidate.'
+    }
     return $Record
+}
+
+function Get-PrototypeSourceMode($Record) {
+    # The original schema-1 offline prototype did not include a mode.
+    $mode = if ($Record.PSObject.Properties.Name -contains 'sourceMode') { $Record.sourceMode } else { 'offline-wheels' }
+    if ($mode -cne 'offline-wheels' -and $mode -cne 'pinned-vcs') {
+        throw 'Unsupported prototype source mode.'
+    }
+    return $mode
 }
 
 function Get-PrototypeEnvironment([string] $Root, [string] $Uv, [string] $Git) {
@@ -925,8 +952,11 @@ function Get-PrototypeEnvironment([string] $Root, [string] $Uv, [string] $Git) {
         PYTHONUTF8 = '1'; PYTHONDONTWRITEBYTECODE = '1'
         UV_NO_CONFIG = '1'; UV_NO_PROGRESS = '1'; UV_NO_BUILD_PACKAGE = 'amplifier-core'
         UV_CACHE_DIR = Join-Path $Root 'cache'
+        UV_TOOL_DIR = Join-Path $Root 'tools'
+        UV_TOOL_BIN_DIR = Join-Path $Root 'tool-bin'
         UV_PYTHON_INSTALL_DIR = Join-Path $Root 'python'
         UV_PYTHON_BIN_DIR = Join-Path $Root 'python-bin'
+        UV_HTTP_TIMEOUT = '30'; UV_HTTP_RETRIES = '2'
         TEMP = Join-Path $Root 'temp'; TMP = Join-Path $Root 'temp'
         AMPLIFIER_WEB_HOME = Join-Path $Root 'app'
         AMPLIFIER_HOME = Join-Path $Root 'shared'
@@ -976,6 +1006,7 @@ function Invoke-UnifiedPrototype([string] $ManifestUrl, [string] $ManifestHash, 
         Get-BoundedDownload $ManifestUrl $planPath 1048576
         Assert-FileChecksum $planPath $ManifestHash
         $plan = Read-PrototypeManifest (Get-Content -LiteralPath $planPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+        $mode = Get-PrototypeSourceMode $plan
         Write-Host "Candidate $($plan.source), app $($plan.version), CPython $($plan.python)."
         $script:InstallStage = 'verified candidate capsule'
         $archive = Join-Path $script:InstallWork 'capsule.zip'
@@ -990,24 +1021,48 @@ function Invoke-UnifiedPrototype([string] $ManifestUrl, [string] $ManifestHash, 
         if ($identity.source -cne $plan.source -or $identity.version -cne $plan.version) {
             throw 'Prototype capsule identity mismatch. No package was installed.'
         }
+        if ((Get-PrototypeSourceMode $identity) -cne $mode) {
+            throw 'Prototype source mode differs from the reviewed plan.'
+        }
+        if ($mode -eq 'pinned-vcs') {
+            foreach ($name in @('source_install.py', 'source-spec.json', 'uv.lock',
+                'production-requirements.txt', 'git-requirements.txt', 'build-constraints.txt')) {
+                $script:InstallStorage.HoldFile((Join-Path $capsule $name), $false)
+            }
+        }
         foreach ($relative in @('app', 'shared', 'ownership', 'shared\projects', 'workspace',
-            'export', 'cache', 'python', 'python-bin', 'temp')) {
+            'export', 'cache', 'python', 'python-bin', 'tools', 'tool-bin', 'temp')) {
             $script:InstallStorage.EnsureDirectory((Join-Path $script:InstallWork $relative))
         }
         # These are tool-owned mutation parents, not download/executable paths.
         # uv's absolute-target atomic renames otherwise conflict with our pins.
-        foreach ($relative in @('', 'cache', 'python', 'python-bin', 'temp')) {
+        foreach ($relative in @('', 'cache', 'python', 'python-bin', 'tools', 'tool-bin', 'temp')) {
             $path = if ($relative) { Join-Path $script:InstallWork $relative } else { $script:InstallWork }
             $script:InstallStorage.EnableToolWrites($path)
         }
         $script:InstallStage = 'verified portable tools'
-        Write-Host '[1/3] Finding compatible helpers; downloading private portable copies only if needed.'
+        if ($mode -eq 'pinned-vcs') {
+            Write-Host '[1/3] Acquiring verified private uv and standard MinGit; no developer tools required.'
+        } else {
+            Write-Host '[1/3] Finding compatible helpers; downloading private portable copies only if needed.'
+        }
         $probeEnv = @{ PYTHONUTF8 = '1'; UV_NO_CONFIG = '1'; UV_NO_PROGRESS = '1' }
-        $uv = Find-InstallHelper 'uv' $probeEnv
-        if (-not $uv) { $uv = Install-VerifiedHelper 'uv' }
-        $git = Find-InstallHelper 'git' $probeEnv
-        if (-not $git) { $git = Install-VerifiedHelper 'git' }
+        if ($mode -eq 'pinned-vcs') {
+            # The online source recipe is written against this exact private
+            # helper, not whichever developer tool happens to be on PATH.
+            $uv = Install-VerifiedHelper 'uv'
+            $git = Install-VerifiedHelper 'git'
+        } else {
+            $uv = Find-InstallHelper 'uv' $probeEnv
+            if (-not $uv) { $uv = Install-VerifiedHelper 'uv' }
+            $git = Find-InstallHelper 'git' $probeEnv
+            if (-not $git) { $git = Install-VerifiedHelper 'git' }
+        }
         $childEnv = Get-PrototypeEnvironment $script:InstallWork $uv $git
+        if ($mode -eq 'pinned-vcs') {
+            $uvVersion = Invoke-InstallChild $uv @('--version') $childEnv
+            if ($uvVersion -cnotmatch '^uv 0\.12\.18(?:\s|$)') { throw 'Pinned bootstrap uv identity mismatch.' }
+        }
         $script:InstallStage = 'private ordinary CPython'
         Write-Host '[2/3] Preparing ordinary CPython 3.13 without changing the system Python.'
         # uv checks its pinned python-build-standalone digest. No registry/bin links.
@@ -1019,6 +1074,11 @@ function Invoke-UnifiedPrototype([string] $ManifestUrl, [string] $ManifestHash, 
         $null = Invoke-InstallChild $python @('-I', '-S', '-B', '-c',
             'import sys,sysconfig,struct; assert sys.platform=="win32" and ".".join(map(str,sys.version_info[:3]))==sys.argv[1] and sys.version_info[:2]==(3,13) and struct.calcsize("P")==8 and not sysconfig.get_config_var("Py_GIL_DISABLED")',
             $plan.python) $childEnv
+        if ($mode -eq 'pinned-vcs') {
+            $script:InstallStage = 'prototype source payload validation'
+            $null = Invoke-InstallChild $python @('-I', '-S', '-B',
+                (Join-Path $capsule 'source_install.py'), '--validate-source', $capsule) $childEnv
+        }
         $script:InstallStage = 'offline immutable host installation'
         Write-Host '[3/3] Installing the verified host wheelhouse into a separate, noneditable environment.'
         $venv = Join-Path $script:InstallWork 'host'
@@ -1027,12 +1087,28 @@ function Invoke-UnifiedPrototype([string] $ManifestUrl, [string] $ManifestHash, 
         $null = Invoke-InstallChild $uv @('pip', 'install', '--python', $hostPython,
             '--no-index', '--no-deps', '--require-hashes', '--only-binary', ':all:',
             '--find-links', (Join-Path $capsule 'wheels'), '-r', (Join-Path $capsule 'requirements.txt')) $childEnv
+        if ($mode -eq 'pinned-vcs') {
+            $script:InstallStage = 'prototype exact Git dependencies'
+            Write-Host 'Building five frozen Python packages with private Git and pinned isolated backend wheels.'
+            $gitNames = 'amplifier-foundation,amplifier-module-hooks-session-naming,amplifier-memory,amplifier-bundle-ui-use,amplifier-bundle-context-intelligence'
+            $null = Invoke-InstallChild $uv @('pip', 'install', '--python', $hostPython,
+                '--no-index', '--no-deps', '--no-require-hashes', '--verify-hashes',
+                '--only-binary', ':all:', '--no-binary', $gitNames,
+                '--find-links', (Join-Path $capsule 'build-wheels'),
+                '--build-constraint', (Join-Path $capsule 'build-constraints.txt'),
+                '-r', (Join-Path $capsule 'git-requirements.txt')) $childEnv
+            $script:InstallStage = 'prototype installed source audit'
+            $null = Invoke-InstallChild $hostPython @('-I', '-B',
+                (Join-Path $capsule 'source_install.py'), '--audit-source', $capsule) $childEnv
+        }
         $null = Invoke-InstallChild $uv @('pip', 'check', '--python', $hostPython) $childEnv
         $launcher = Join-Path $capsule 'launch.py'
         Write-InstallReceipt (Join-Path $script:InstallWork 'prototype.json') @{
             schemaVersion = 1; status = 'prototype'; source = $plan.source; version = $plan.version
             manifestSha256 = $ManifestHash; capsuleSha256 = $plan.capsule.sha256
             python = $hostPython; uv = $uv; git = $git
+            sourceMode = $mode
+            bootstrapUv = if ($mode -eq 'pinned-vcs') { '0.12.18' } else { 'reused-or-private' }
         }
         $null = Invoke-InstallChild $hostPython @('-I', '-B', $launcher, '--check') $childEnv
         $shortcutPath = Write-PrototypeShortcut $hostPython $launcher

@@ -76,7 +76,8 @@ try {
         param($Archive,$Destination)
         [IO.Directory]::CreateDirectory($Destination) | Out-Null
         [IO.File]::WriteAllText((Join-Path $Destination 'capsule.json'),
-            (@{source=$script:Plan.source;version=$script:Plan.version} | ConvertTo-Json))
+            (@{source=$script:Plan.source;version=$script:Plan.version;
+                sourceMode=$(if ($script:Plan.ContainsKey('sourceMode')) {$script:Plan.sourceMode} else {'offline-wheels'})} | ConvertTo-Json))
     }
     function Find-InstallHelper {
         param($Name,$Environment)
@@ -91,6 +92,7 @@ try {
     function Invoke-InstallChild {
         param($Executable,$Arguments,$Environment)
         $script:Children += ,@($Executable,$Arguments,$Environment)
+        if ($Arguments.Count -eq 1 -and $Arguments[0] -eq '--version') { return 'uv 0.12.18' }
         if ($Arguments[0] -eq 'python' -and $Arguments[1] -eq 'find') {
             return (Join-Path $script:InstallWork 'python\cpython-3.13.8\python.exe')
         }
@@ -133,6 +135,46 @@ try {
     Invoke-UnifiedPrototype 'https://github.com/microsoft/amplifier-unified/releases/download/prototype-abc/plan.json' ('c'*64) $true
     Need ($script:Helpers.Count -eq 0) 'compatible tools were not reused'
     Need ($script:Links.Count -eq 1) 'reusable-tool path did not prepare relaunch'
+
+    Reset-Model
+    $script:Plan.source='1c4ac3b4f9ed5d2d3f588f6fa6c74a119e439153'
+    $script:Plan.sourceMode='pinned-vcs'
+    $script:UseExisting=$true
+    Invoke-UnifiedPrototype 'https://github.com/microsoft/amplifier-unified/releases/download/prototype-abc/plan.json' ('c'*64) $true
+    Need ($script:Helpers.Count -eq 2) 'source mode must use pinned private tools even with developer tools present'
+    $installs=@($script:Children | Where-Object { $_[1][0] -eq 'pip' -and $_[1][1] -eq 'install' })
+    Need ($installs.Count -eq 2) 'source mode must separate hashed wheels from exact Git'
+    Need ($installs[0][1] -contains '--require-hashes') 'registry/app phase lost hash enforcement'
+    Need (-not ($installs[1][1] -contains '--require-hashes')) 'Git phase must not claim wheel hashes for source'
+    foreach ($flag in @('--no-deps','--no-index','--no-require-hashes','--verify-hashes',
+        '--only-binary','--no-binary','--build-constraint','--find-links')) {
+        Need ($installs[1][1] -contains $flag) "source phase missing $flag"
+    }
+    $validations=@($script:Children | Where-Object { $_[1] -contains '--validate-source' })
+    $audits=@($script:Children | Where-Object { $_[1] -contains '--audit-source' })
+    Need ($validations.Count -eq 1 -and $audits.Count -eq 1) 'source payload and installed origins both require validation'
+    Need ($script:Receipts[0].bootstrapUv -ceq '0.12.18') 'bootstrap uv phase identity missing'
+    Need ($script:Receipts[0].sourceMode -ceq 'pinned-vcs') 'prepared receipt source mode missing'
+    Need ($env:PATH -ceq $beforePath) 'source mode changed parent PATH'
+    $inherited = @{}
+    foreach ($name in @('USERPROFILE','HOMEDRIVE','HOMEPATH')) {
+        $inherited[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+    }
+    $modelEnvironment = Get-PrototypeEnvironment $script:InstallWork 'C:\private tools\uv.exe' 'C:\private git\cmd\git.exe'
+    foreach ($name in $inherited.Keys) {
+        Need (-not $modelEnvironment.ContainsKey($name)) "standard profile override emitted for $name"
+        Need ([Environment]::GetEnvironmentVariable($name, 'Process') -ceq $inherited[$name]) "parent profile changed for $name"
+    }
+    Need ($modelEnvironment.UV_TOOL_DIR -ceq (Join-Path $script:InstallWork 'tools')) 'private tool root missing'
+    Need ($modelEnvironment.UV_TOOL_BIN_DIR -ceq (Join-Path $script:InstallWork 'tool-bin')) 'private tool bin root missing'
+
+    Reset-Model
+    $script:Plan.sourceMode='pinned-vcs'
+    $failed=$false
+    try { Invoke-UnifiedPrototype 'https://github.com/microsoft/amplifier-unified/releases/download/prototype-abc/plan.json' ('c'*64) $true }
+    catch { $failed=$true }
+    Need $failed 'source mode accepted an app commit outside the frozen plan'
+    Need ($script:Helpers.Count -eq 0 -and $script:Children.Count -eq 0) 'source identity refusal executed helpers'
 
     Reset-Model
     $script:BadHash=$true

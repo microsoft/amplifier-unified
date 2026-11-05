@@ -13,25 +13,28 @@ closed activation gate. A prototype manifest has `status: prototype`; it is
 not a native-support record and cannot enable that public path.
 
 **Not yet a released installation command.** The Windows trial owner must first
-join the exact native candidate, build its complete Windows host wheelhouse,
+join the exact native candidate, collect its verified prototype inputs,
 publish the immutable prototype assets and provide their digests. This code
 candidate does not claim those artifacts exist or that absent-prerequisite
 installation has run on a clean Windows account.
 
 ### Chosen prerequisite strategy
 
-1. Reuse a compatible, ACL-validated existing uv/Git executable when available.
-   Otherwise acquire exact official uv **0.12.18** and standard **MinGit
+1. The selected `pinned-vcs` mode always acquires root-local official uv
+   **0.12.18** and standard **MinGit
    2.56.0.windows.4** ZIPs. Verify pinned SHA-256 before extraction/execution;
-   retain whole distributions, licenses and receipts.
+   retain whole distributions, licenses and receipts. It does not rely on
+   preinstalled developer tools. The retained `offline-wheels` mode may reuse
+   compatible, ACL-validated existing helpers.
 2. Use uv's managed ordinary **CPython 3.13**, selecting an exact supported patch
    in the prototype plan. Download into this installation's private Python
    directory with `--no-bin --no-registry`. Store aliases and a system Python
    3.15 are neither invoked nor replaced. No compiler is installed.
-3. Install a complete **offline, hash-required wheelhouse**, including prebuilt
-   wheels for Git-sourced host dependencies, into a new noneditable venv.
-   No VCS resolution or source build occurs during host installation. Git remains
-   necessary for the application's separately prepared worker/bundle sources.
+3. Install the original app plus 59 registry wheels by hash, without dependency
+   resolution or source-build fallback. Then install **five full-commit Git
+   requirements** noneditably using normal uv semantics and six pinned isolated
+   Hatchling backend wheels. This online step preserves honest installed Git
+   origins; it does not replace them with locally built dependency wheels.
 4. Use an absolute Python/launcher and retained helper paths on every relaunch.
    No user/machine PATH, shell profile, default Python, registry registration,
    service or Scheduler mutation is needed.
@@ -54,6 +57,82 @@ uv verifies its own pinned python-build-standalone download digest; the exact
 Python patch and resulting interpreter still need native candidate checks.
 
 ### Build and delivery interface — trial owner only
+
+#### Selected online frozen-VCS mode
+
+The short path is now `--source-mode pinned-vcs`. A completely offline capsule
+was an engineering option, not a product promise. The original offline packager
+(`--source-mode offline`, or the unchanged default) below remains for review and
+prior evidence, but does **not** establish
+accepted Git origins. No canonical provenance facility or fabricated
+`direct_url.json` is introduced.
+
+Supply the unchanged app wheel plus **59** actual registry wheels in the runtime
+wheel directory, the **six** build-only wheels in a separate directory, the exact
+frozen lock and retained production requirements, and a reviewed inventory for
+the 60 runtime wheel inputs. The builder validates the frozen source/lock/export,
+actual wheel identities, original app hash/size/metadata, registry lock hashes,
+five canonical full Git refs and the separate backend closure before creating
+output. The source-mode manifest and capsule identity must agree.
+
+```sh
+python scripts/windows_bootstrap_capsule.py --source-mode pinned-vcs --wheelhouse /path/to/60-runtime-wheels --build-wheelhouse /path/to/6-build-wheels --lock /path/to/frozen/uv.lock --production-requirements /path/to/production-requirements.txt --inventory /path/to/reviewed-runtime-inventory.json --output /path/to/new-output --source 1c4ac3b4f9ed5d2d3f588f6fa6c74a119e439153 --version 0.54.5 --python EXACT_3.13_PATCH --url https://github.com/microsoft/amplifier-unified/releases/download/EXACT_PROTOTYPE_TAG/windows-prototype.zip
+```
+
+That is an owner-side build template, not a usable installation command or a
+claim that those wheel bytes/public assets are present here. Runtime inputs
+exclude the five Git wheels. Build-only pins from the exact lock are
+`hatchling==1.32.4`, `packaging==26.3`, `pathspec==1.1.1`, `pluggy==1.6.0`,
+`tomlkit==0.15.2`, and `trove-classifiers==2026.9.21.13`; all must be verified
+pure-Python wheels. They do not become target host dependencies merely because
+they build the five source packages.
+
+The installer validates the extracted source payload using the private managed
+Python **before** venv creation or package installation. It reconstructs the
+requirements/constraints from the frozen inputs and refuses injected options,
+wrong refs/subdirectories, missing/extra wheels or changed hashes. It then uses:
+
+1. `uv pip install --no-index --no-deps --require-hashes --only-binary :all:`
+   with the local runtime wheel directory and the 60 generated hashed requirements.
+2. `uv pip install --no-index --no-deps --no-require-hashes --verify-hashes
+   --only-binary :all: --no-binary <the-five-Git-names> --find-links <build-wheels>
+   --build-constraint <build-constraints.txt> -r <git-requirements.txt>`.
+   The named exceptions permit only the five trusted source builds. Git fetching
+   stays online; isolated backend resolution has only the verified local wheels.
+3. Read-only installed metadata auditing for exactly 65 distributions, no
+   editables, all five real repository/commit/subdirectory origins and expected
+   versions, then `uv pip check`, normal launcher validation and shortcut creation.
+
+These flags were checked against
+[uv 0.12.18 CLI definitions](https://raw.githubusercontent.com/astral-sh/uv/0.12.18/crates/uv-cli/src/lib.rs),
+[build policy](https://raw.githubusercontent.com/astral-sh/uv/0.12.18/crates/uv-configuration/src/build_options.rs),
+[hash modes](https://raw.githubusercontent.com/astral-sh/uv/0.12.18/crates/uv-configuration/src/hash.rs),
+and [pip installation](https://raw.githubusercontent.com/astral-sh/uv/0.12.18/crates/uv/src/commands/pip/install.rs).
+`--no-require-hashes` alone disables hash checking in this version; pairing it
+with `--verify-hashes` retains supplied build-constraint hash verification.
+`--no-deps` skips runtime dependency resolution, not isolated backend setup.
+Constraints are not themselves an allowlist; complete local wheel-set validation
+is also required. `--no-index` does not prohibit Git URLs or network calls made
+by trusted build code. Build isolation is not an OS security sandbox.
+
+Installer child processes clear inherited `UV_*`, `PIP_*`, `PYTHONHOME`,
+`PYTHONPATH` and virtualenv overrides before applying the private layout.
+They also discard Git executable/template redirects so inherited
+`GIT_EXEC_PATH` or `GIT_TEMPLATE_DIR` cannot substitute another installation's
+helpers or hooks. The pinned-mode relaunch environment applies the same redirect
+removal while keeping the caller's provider credentials inherited, not saved.
+Anonymous Git access disables credential helpers/configuration. Ordinary
+`USERPROFILE`, `HOMEDRIVE` and `HOMEPATH` stay inherited, not removed or redirected.
+No credentials are saved in the plan/receipt. On relaunch the wrapper restores
+root-local cache, tools, Python and absolute helper PATH. Bootstrap phase uv is
+**0.12.18**; the installed host's `uv==0.13.4` dependency is a distinct artifact,
+not silently substituted into the install phase.
+
+The original app wheel is a narrow allowed root artifact; this does not grant
+verified app Git identity for later optional-feature addition. Keep that
+limitation and the actual worker-graph/onboarding acceptance separate.
+
+#### Retained all-wheel mode (`offline`)
 
 `scripts/windows_bootstrap_capsule.py` packages an **already-built**, complete
 Windows x64/CPython 3.13 host wheelhouse. It performs no dependency resolution,
@@ -146,7 +225,9 @@ free-threaded/other-platform/newer-interpreter wheels. Never compile Core.
 Keep the private bootstrap uv **0.12.18** separate from the production
 `uv==0.13.4` dependency pulled in by Memory.
 
-The reproducible packaging procedure, **not executed by this local join**, is:
+The retained all-wheel packaging procedure, **not executed by this local join**,
+is below. Its installed Git-origin boundary remains unresolved; it is **not**
+the selected short path above:
 
 1. Obtain the exact original app wheel through the supported artifact transfer.
    Verify its size/hash before use. Reuse the accepted production export and
@@ -174,8 +255,8 @@ The reproducible packaging procedure, **not executed by this local join**, is:
    real digests and one resolved paste. No capsule, digest, public URL or native
    support record is asserted by this plan.
 
-**Remaining inputs:** a materialized complete Windows wheelhouse and its reviewed
-hash inventory/build receipts; verified installed-wheel provenance behavior;
+**Remaining all-wheel inputs:** a materialized complete Windows wheelhouse and its
+reviewed hash inventory/build receipts; verified installed-wheel provenance behavior;
 exact managed Python patch supported by pinned uv; and eventual publication
 locations. The accepted app wheel and native host graph already exist, but this
 local packaging checkout does not receive binaries merely by reading their

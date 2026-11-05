@@ -29,6 +29,15 @@ def connection_args(root: Path) -> list[str]:
 
 def child_environment(root: Path, receipt: dict) -> dict[str, str]:
     result = dict(os.environ)
+    if receipt.get("sourceMode") == "pinned-vcs":
+        # Preserve the real Windows profile and the caller's provider credential
+        # environment, but do not let package-manager redirects defeat this root.
+        for name in list(result):
+            if name.upper().startswith(("UV_", "PIP_")) or name.upper() in {
+                "PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV", "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR",
+            }:
+                del result[name]
+        result["UV_NO_CONFIG"] = "1"
     result.update({
         "AMPLIFIER_WEB_HOME": str(root / "app"),
         "AMPLIFIER_HOME": str(root / "shared"),
@@ -38,6 +47,8 @@ def child_environment(root: Path, receipt: dict) -> dict[str, str]:
         "UV_PYTHON_INSTALL_DIR": str(root / "python"),
         "UV_PYTHON_BIN_DIR": str(root / "python-bin"),
         "UV_CACHE_DIR": str(root / "cache"),
+        "UV_TOOL_DIR": str(root / "tools"),
+        "UV_TOOL_BIN_DIR": str(root / "tool-bin"),
         "TEMP": str(root / "temp"), "TMP": str(root / "temp"),
         "PYTHONUTF8": "1", "PYTHONDONTWRITEBYTECODE": "1",
     })
