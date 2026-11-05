@@ -155,7 +155,7 @@ try{
  await expect(connection.getByText('Synthetic credential store could not be read.',{exact:true})).toBeVisible();
  await expect(token).toHaveValue('synthetic-private-review-token-edited');
  await expect(token).toBeEnabled();
- await expect(connection.getByRole('button',{name:'Save and check connection',exact:true})).toBeEnabled();
+ await expect(settings.getByRole('button',{name:'Save and check connection',exact:true})).toBeEnabled();
  await credentialMode('available');
  await connection.getByRole('button',{name:'Check host key again',exact:true}).click();
  await expect(connection.getByText('Use the key already on this host',{exact:true})).toBeVisible();
