@@ -98,7 +98,7 @@ try{
  await expect(settings.getByText('Use the key already on this host',{exact:true})).toBeVisible();
  await credentialMode('error');
  await agent('settings.connection.select',{module:'provider-openai'},'failed-openai');
- await expect(settings.getByText('Synthetic credential store could not be read.',{exact:true})).toBeVisible();
+ await expect(settings.locator('[data-part=ai-connections]').getByText('Synthetic credential store could not be read.',{exact:true})).toBeVisible();
  await expect(settings.getByText('Use the key already on this host',{exact:true})).toHaveCount(0);
  await expect(settings.getByLabel('API key',{exact:true})).toHaveCount(0);
  await credentialMode('available');
