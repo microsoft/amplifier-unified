@@ -215,17 +215,17 @@ async def test_runtime_rejects_same_id_different_account_before_selecting():
     from amplifier_web.runtime_controls import RuntimeControls
     loop=SimpleNamespace(root_provider=None)
     mounted={'one':object()}
-    capabilities={'web.provider_catalog':{'keys':{'one':'mounted-account'}}}
+    capabilities={'web.provider_catalog':{'connectionKeys':{'one':'mounted-account'}}}
     co=SimpleNamespace(config={},get=lambda name: {'providers':mounted,'orchestrator':loop}.get(name),
         get_capability=capabilities.get,register_capability=capabilities.__setitem__)
     controls=RuntimeControls(SimpleNamespace(coordinator=co,session_id='chat',config={}),
         SimpleNamespace(generation=None,queued_inputs=0))
     try:
         with pytest.raises(ValueError,match='mounted connection differs'):
-            await controls.perform('provider.select',{'instance':'one','model':'same-model','expectedCatalogKey':'configured-account'})
+            await controls.perform('provider.select',{'instance':'one','model':'same-model','expectedConnectionKey':'configured-account'})
         assert loop.root_provider is None
         with pytest.raises(ValueError,match='mounted connection differs'):
-            await controls.perform('provider.verifyConnection',{'instance':'one','expectedCatalogKey':'configured-account'})
+            await controls.perform('provider.verifyConnection',{'instance':'one','expectedConnectionKey':'configured-account'})
     finally:await controls.close()
 
 

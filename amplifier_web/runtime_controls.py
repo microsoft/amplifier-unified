@@ -563,7 +563,7 @@ class RuntimeControls:
             return {'selection':None,'scope':'main session'}
         if operation == "provider.verifyConnection":
             from .provider_catalog import require_mounted_binding
-            require_mounted_binding(self.coordinator, args.get('instance'), args.get('expectedCatalogKey'))
+            require_mounted_binding(self.coordinator, args.get('instance'), args.get('expectedConnectionKey'))
             return {'verified':True}
         if operation == "provider.select":
             self.require_idle()
@@ -576,7 +576,7 @@ class RuntimeControls:
             from .provider_isolation import require_available
             require_available(self.coordinator, args["instance"])
             from .provider_catalog import require_mounted_binding
-            require_mounted_binding(self.coordinator, args["instance"], args.get('expectedCatalogKey'))
+            require_mounted_binding(self.coordinator, args["instance"], args.get('expectedConnectionKey'))
             selected = {key:args[key] for key in ("instance","model","effort") if key in args}
             effective = {**selected, **({"max_output_tokens":self.max_output_tokens} if self.max_output_tokens else {})}
             self.coordinator.get("orchestrator").root_provider = SelectedProvider(providers[args["instance"]], effective,self.coordinator.get_capability('web.provider_transform'))
@@ -608,6 +608,8 @@ class RuntimeControls:
                 catalog_key=fingerprint([self.catalog_revision,name,mounted or getattr(provider,'config',{}),public_config(info, metadata=True)])
                 shared={}
                 captured=self.coordinator.get_capability('web.provider_catalog')
+                if isinstance(captured,dict) and name in captured.get('connectionKeys',{}):
+                    shared['connectionKey']=captured['connectionKeys'][name]
                 if mounted and isinstance(captured,dict) and name in captured.get('keys',{}):
                     from .provider_catalog import configuration_key
                     current=configuration_key(captured['workspace'],mounted['module'],mounted.get('config',{}),captured['sources'][name],home=captured['home'])
@@ -634,7 +636,7 @@ class RuntimeControls:
         if operation == "configuration.providerModels":
             from .provider_probe import discovered_models, ProbeFailure
             from .provider_catalog import require_mounted_binding
-            require_mounted_binding(self.coordinator, name, args.get('expectedCatalogKey'))
+            require_mounted_binding(self.coordinator, name, args.get('expectedCatalogKey'), catalog=True)
             # The host owns connection-bound caching. Do not let a mounted
             # provider's legacy/static list seed that same shared identity.
             try:

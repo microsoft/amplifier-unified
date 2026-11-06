@@ -199,9 +199,9 @@ async def prepare(service, captured):
             validate_selection(selection, resolved)
             provider = next(row for row in resolved['providers'] if row['id']==selection['instance'])
             expected = session.get('modelConnectionKey')
-            if expected and expected != provider.get('sharedCatalogKey'):
+            if expected and expected != provider.get('connectionKey'):
                 raise ValueError('The configured connection changed after this choice was saved. Review the connection and save the model again.')
-            session['modelConnectionKey'] = provider.get('sharedCatalogKey')
+            session['modelConnectionKey'] = provider.get('connectionKey')
         if pending:
             # Existing warm ownership must settle before fresh-process bundle
             # replacement. A cold conversation has nothing to retire.

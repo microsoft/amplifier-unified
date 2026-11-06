@@ -45,6 +45,8 @@ PROVIDER_ENV = {
 def credential_field(module):
     return 'github_token' if module=='provider-github-copilot' else 'api_key'
 
+COPILOT_ENV_ORDER = ('COPILOT_AGENT_TOKEN', 'COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')
+
 
 def key_preview(module, value, env_name, *, configured=False):
     """Identify the service's configured key, never serialize a complete secret.
@@ -61,7 +63,7 @@ def key_preview(module, value, env_name, *, configured=False):
     if configured:
         if not value:
             defaults = {
-                'provider-github-copilot': ('COPILOT_AGENT_TOKEN', 'COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN'),
+                'provider-github-copilot': COPILOT_ENV_ORDER,
                 'provider-azure-openai': ('AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_KEY'),
                 'provider-ollama': ('OLLAMA_API_KEY',),
                 'provider-vllm': ('VLLM_API_KEY',),
@@ -97,11 +99,14 @@ def environment_credential(module,raw=None,env_var=None):
     configured=raw is not None and env_var is None
     raw=raw or {}
     defaults=PROVIDER_ENV.get(module,())
+    # Keep the setup recommendation separate from effective SDK precedence.
+    # Discovery and identity must use the same account as an unpinned mount.
+    effective_defaults = COPILOT_ENV_ORDER if configured and module=='provider-github-copilot' else defaults
     value=raw.get(credential_field(module))
     reference=re.fullmatch(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}',value) if isinstance(value,str) else None
     if env_var is not None and (not isinstance(env_var,str) or not ENV_NAME.fullmatch(env_var)):
         raise ValueError('Use an environment variable name containing letters, numbers and underscores, starting with a letter or underscore.')
-    chosen=env_var or (reference.group(1) if reference else next((name for name in defaults if os.environ.get(name)),defaults[0] if defaults else ''))
+    chosen=env_var or (reference.group(1) if reference else next((name for name in effective_defaults if os.environ.get(name)),defaults[0] if defaults else ''))
     return {'module':module,'field':credential_field(module),'defaultEnvVar':defaults[0] if defaults else '',
             'alternatives':list(defaults[1:]),'envVar':chosen,'available':bool(chosen and os.environ.get(chosen)),
             'explicit':bool(reference),'hasStoredKey':bool(value and not reference),
@@ -283,6 +288,7 @@ class SetupManager:
             rows = [row for row in self.provider_rows(workspace) if row['enabled']]
             for row in rows:
                 row['sharedCatalogKey'] = self.catalog_key({'id': row['id']}, workspace)
+                row['connectionKey'] = self.catalog_key({'id': row['id']}, workspace, binding=True)
         if instance is not None and not any(row['id'] == instance for row in rows):
             raise ValueError('Choose a configured connection to refresh.')
 
@@ -313,16 +319,18 @@ class SetupManager:
             row['info'] = metadata.get('info', {})
         return {'providers': rows, 'catalogs': entries}
 
-    def catalog_key(self,args,workspace):
-        from .provider_catalog import configuration_key
+    def catalog_key(self,args,workspace,*,binding=False):
+        from .provider_catalog import configuration_key, connection_key
         config=self.config(workspace)
         row=next((row for row in config.configured_connections if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==args.get('id')),None)
         module=args.get('module') or (row or {}).get('module')
         raw=(row or {}).get('config',{})
-        return configuration_key(workspace,module,raw,(row or {}).get('source') or getattr(config,'module_sources',{}).get(module),home=self.home)
+        identity = connection_key if binding else configuration_key
+        return identity(workspace,module,raw,(row or {}).get('source') or getattr(config,'module_sources',{}).get(module),home=self.home)
 
     async def cached_probe(self,action,args,workspace):
         from .provider_catalog import model_key, CatalogInvalidated, public_failure
+        from .probe_diagnostics import ProbeProcessFailure
         identity=self.catalog_key(args,workspace)
         key=model_key(identity) if action=='providers.models' else (action,identity)
         if action=='providers.schema' and not args.get('refresh') and self.catalog.fresh(model_key(identity)):
@@ -339,7 +347,7 @@ class SetupManager:
                 if identity!=self.catalog_key(args,workspace):
                     raise CatalogInvalidated('Provider configuration changed during discovery.')
                 return result
-            except CatalogInvalidated:
+            except (CatalogInvalidated, ProbeProcessFailure):
                 raise
             except Exception as exc:
                 message, diagnostic = public_failure(exc)
@@ -377,7 +385,9 @@ class SetupManager:
         from .provider_health import generation
         credential_generation=generation(module,raw)
         env={**os.environ,'AMPLIFIER_WEB_HOME':str(self.home)}
-        if module=='provider-github-copilot' and config.get('github_token'):env['COPILOT_AGENT_TOKEN']=config['github_token']
+        # provider_probe promotes Copilot's credential AFTER materialization.
+        # Overwriting this environment first can turn ${COPILOT_AGENT_TOKEN}
+        # into a self-reference and send different bytes than the cache key.
         return {'module':module,'raw':copy.deepcopy(raw),'config':config,'env':env,
                 'credentialGeneration':credential_generation,
                 'source':(row or {}).get('source') or getattr(configured,'module_sources',{}).get(module),
@@ -393,7 +403,7 @@ class SetupManager:
         probe_workspace=Path(workspace)
         while not probe_workspace.is_dir() and probe_workspace.parent!=probe_workspace:
             probe_workspace=probe_workspace.parent
-        from .probe_diagnostics import communicate, stderr_tail, failure_detail
+        from .probe_diagnostics import communicate, stderr_tail, ProbeProcessFailure
         from .probe_process import spawn, stop
         process=await spawn(*command,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,env=env,cwd=probe_workspace)
         stderr_task=asyncio.create_task(stderr_tail(process.stderr))
@@ -404,10 +414,7 @@ class SetupManager:
                 raise ValueError('Provider check timed out after 90 seconds. Check connectivity and credentials, then retry.') from None
             try:result=json.loads(output)
             except (ValueError,UnicodeError):
-                raise ValueError(
-                    f'The provider check ended without a valid result (exit code {process.returncode}). '
-                    + failure_detail(stderr)
-                ) from None
+                raise ProbeProcessFailure(process.returncode, stderr) from None
             if action!='providers.schema' and generation(module,raw)==credential_generation:
                 if not result.get('error') or result.get('authenticationRequired') is True:
                     record(self.home,args['id'],credential_generation,authentication_required=result.get('authenticationRequired') is True)
@@ -415,7 +422,7 @@ class SetupManager:
                 error = ValueError(result['error'])
                 error.diagnostic = result.get('diagnostic', {'stage':'probe','category':'ProviderError'})
                 raise error
-            if process.returncode:raise ValueError(f'The provider check could not finish (exit code {process.returncode}). '+failure_detail(stderr))
+            if process.returncode:raise ProbeProcessFailure(process.returncode, stderr)
             if action=='naming.complete':
                 if result.get('naming',{}).get('error'):raise ValueError(result['naming']['error'])
                 return {'text':result.get('naming',{}).get('text','')}

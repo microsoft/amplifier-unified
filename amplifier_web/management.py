@@ -1276,7 +1276,7 @@ class Management:
                         selected=result['selection']
                         mounted=next((row for row in refreshed.get('configuration.providers',{}).get('providers',[])
                             if selected and row['id']==selected['instance']),{})
-                        current['modelConnectionKey']=mounted.get('sharedCatalogKey') if selected else None
+                        current['modelConnectionKey']=mounted.get('connectionKey') if selected else None
                     if args['operation'] in {'configuration.inspect','configuration.apply','configuration.toggle'}:
                         configuration=result.get('configuration',result)
                         self.service._session(session['id'])['configuration']=configuration

@@ -19,6 +19,9 @@ class CatalogInvalidated(ValueError):
 def public_failure(exc):
     """Only bounded categories/stages, never provider exception bodies."""
     import re
+    from .probe_diagnostics import ProbeProcessFailure
+    if isinstance(exc, ProbeProcessFailure):
+        return exc.public_message, dict(exc.diagnostic)
     supplied = getattr(exc, 'diagnostic', {}) or {}
     stage = supplied.get('stage', 'models')
     if stage not in {'preparation','import','schema','configuration','construction','metadata','models','probe'}:
@@ -88,15 +91,15 @@ def _qualified_provider_sources(home,identity):
     except (OSError,ValueError,TypeError,KeyError,AttributeError):return {}
 
 
-def configuration_key(workspace, module, config, source=None, *, home=None):
-    """Private, conservative identity shared by probes and mounted providers.
+def connection_key(workspace, module, config, source=None, *, home=None):
+    """Stable private connection binding shared by host and worker processes.
 
     The strict discovery seam ignores selection defaults and priority. Every other provider
     setting, effective credential, credential file and source remains isolated.
     Missing environment values retain their reference, never match a mounted
     provider with a different materialized value, and never leak in the digest.
     """
-    from .setup import PROVIDER_ENV, environment_credential
+    from .setup import PROVIDER_ENV, environment_credential, chatgpt_token_path
     from .host.config import expand_environment
     raw = copy.deepcopy(config or {})
     for name in ('priority', 'model', 'default_model', 'reasoning_effort'):
@@ -110,9 +113,17 @@ def configuration_key(workspace, module, config, source=None, *, home=None):
         try:return expand_environment(value)
         except ValueError:return value
     raw = materialize(raw)
+    if module == 'provider-openai-chatgpt':
+        # Existing OAuth/Plan configurations may omit the constructor default.
+        # Both implicit and explicit paths must observe rotation and removal.
+        raw['token_file_path'] = chatgpt_token_path(raw)
     # Ambient fallback credentials can affect providers even with an explicit
     # constructor field. Preserve those dependencies in both caller processes.
     environment = {name:os.environ.get(name) for name in PROVIDER_ENV.get(module, ())}
+    if module == 'provider-github-copilot' and raw.get('github_token'):
+        # apply_provider_environment promotes this exact effective credential
+        # before mounting. Normalize that same promotion without mutating env.
+        environment['COPILOT_AGENT_TOKEN'] = raw['github_token']
     def fields(value, prefix=''):
         if isinstance(value, dict):
             for name, item in value.items():yield from fields(item, prefix+'.'+name)
@@ -140,12 +151,25 @@ def configuration_key(workspace, module, config, source=None, *, home=None):
     relative=any(isinstance(value,str) and value and not Path(value).expanduser().is_absolute()
                  for name,value in leaves if any(part in name for part in ('path','file','directory')))
     scope=str(Path(workspace).resolve()) if relative or source and not str(source).startswith(('git+','https://','http://','/')) else None
-    return fingerprint(['provider-catalog-v5',scope,module,source,generation,raw,environment,files])
+    return fingerprint(['provider-connection-v1',scope,module,source,raw,environment,files])
 
 
-def mounted_catalog_keys(home,workspace,rows,sources):
+def configuration_key(workspace, module, config, source=None, *, home=None):
+    """Discovery reuse additionally requires the same qualified runtime.
+
+    An unqualified process keeps its private cache salt: it must not reuse
+    another process's discovery as evidence about an unknown implementation.
+    That salt is deliberately NOT the identity used to admit a selection.
+    """
+    return fingerprint(['provider-catalog-v6',
+        connection_key(workspace,module,config,source,home=home),
+        generation_identity(home) if home is not None else None])
+
+
+def mounted_catalog_keys(home,workspace,rows,sources,*,binding=False):
+    identity = connection_key if binding else configuration_key
     return {row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-'):
-        configuration_key(workspace,row['module'],row.get('config',{}),
+        identity(workspace,row['module'],row.get('config',{}),
             sources[row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-')],home=home)
         for row in rows}
 
@@ -159,7 +183,7 @@ def configured_binding(home, workspace, instance, *, global_only=False):
     with manager.read_snapshot(workspace):
         if not any(row['id'] == instance and row['enabled'] for row in manager.provider_rows(workspace)):
             return None
-        return manager.catalog_key({'id':instance}, workspace)
+        return manager.catalog_key({'id':instance}, workspace, binding=True)
 
 
 def conversation_bindings(home, workspace, session_id, providers, *, global_only=False):
@@ -183,19 +207,19 @@ def conversation_bindings(home, workspace, session_id, providers, *, global_only
         if row is None or row.get('enabled') is False:
             result[provider['id']] = {'eligible':False,'reason':'This conversation does not include this configured connection.'}
             continue
-        key = configuration_key(workspace,row['module'],row.get('config',{}),
+        key = connection_key(workspace,row['module'],row.get('config',{}),
             row.get('source') or config.module_sources.get(row['module']),home=home)
-        if key != provider['sharedCatalogKey']:
+        if key != provider.get('connectionKey'):
             result[provider['id']] = {'eligible':False,
                 'reason':'This conversation overrides this connection. Its saved account or endpoint differs from the configured connection.'}
     return result
 
 
-def require_mounted_binding(coordinator, instance, expected):
+def require_mounted_binding(coordinator, instance, expected, *, catalog=False):
     if not expected:
         return
     captured = coordinator.get_capability('web.provider_catalog') or {}
-    if captured.get('keys',{}).get(instance) != expected:
+    if captured.get('keys' if catalog else 'connectionKeys',{}).get(instance) != expected:
         raise ValueError('The mounted connection differs from the selected configured connection. No input was sent; review the conversation connection override.')
 
 

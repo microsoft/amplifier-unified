@@ -119,6 +119,11 @@ known mismatches separately instead of treating an equal instance name as equal
 credentials. A newly saved configured selection is bound to that connection's
 identity; input admission checks the actual mounted identity and refuses a
 mismatch without sending or substituting another account.
+This connection binding is stable across host and worker processes and distinct
+from the runtime-qualified discovery cache identity. Unqualified processes may
+agree on a connection without sharing discovery across restarts. Effective
+Copilot credential promotion and implicit ChatGPT OAuth/Plan token files are
+included; token-file replacement or removal invalidates the affected identity.
 
 The cache is bounded by entry count and encoded bytes. Eviction is not a history
 policy. Relative credential/configuration paths retain their workspace scope.
