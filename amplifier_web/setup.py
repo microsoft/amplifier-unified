@@ -246,7 +246,7 @@ class SetupManager:
     def provider_rows(self,workspace):
         config=self.config(workspace)
         rows=[]
-        for value in config.providers:
+        for value in config.configured_connections:
             identity=value.get('id') or value.get('instance_id') or value['module'].removeprefix('provider-')
             raw=value.get('config',{})
             refs=[]
@@ -316,10 +316,10 @@ class SetupManager:
     def catalog_key(self,args,workspace):
         from .provider_catalog import configuration_key
         config=self.config(workspace)
-        row=next((row for row in config.providers if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==args.get('id')),None)
+        row=next((row for row in config.configured_connections if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==args.get('id')),None)
         module=args.get('module') or (row or {}).get('module')
         raw=(row or {}).get('config',{})
-        return configuration_key(workspace,module,raw,getattr(config,'module_sources',{}).get(module) or (row or {}).get('source'),home=self.home)
+        return configuration_key(workspace,module,raw,(row or {}).get('source') or getattr(config,'module_sources',{}).get(module),home=self.home)
 
     async def cached_probe(self,action,args,workspace):
         from .provider_catalog import model_key, CatalogInvalidated, public_failure
@@ -359,9 +359,11 @@ class SetupManager:
     def probe_snapshot(self, action, args, workspace):
         """Freeze credentials/config/source before waiting for discovery capacity."""
         configured=self.config(workspace)
-        row=next((row for row in configured.providers if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==args.get('id')),None)
+        row=next((row for row in configured.configured_connections if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==args.get('id')),None)
         module=args.get('module') if action=='providers.schema' else (row or {}).get('module')
         if not module:raise ValueError('Save this provider before discovering models or testing it.')
+        if action!='providers.schema' and row.get('enabled') is False:
+            raise ValueError('This configured connection is disabled.')
         safe_name(module)
         raw=(row or {}).get('config',{}) if row and row['module']==module else {}
         # Metadata may need this exact instance's endpoint, never its secrets.
@@ -378,7 +380,7 @@ class SetupManager:
         if module=='provider-github-copilot' and config.get('github_token'):env['COPILOT_AGENT_TOKEN']=config['github_token']
         return {'module':module,'raw':copy.deepcopy(raw),'config':config,'env':env,
                 'credentialGeneration':credential_generation,
-                'source':getattr(configured,'module_sources',{}).get(module) or (row or {}).get('source'),
+                'source':(row or {}).get('source') or getattr(configured,'module_sources',{}).get(module),
                 'registryHome':str(getattr(configured,'registry_home',self.home/'foundation'))}
 
     async def probe(self,action,args,workspace):

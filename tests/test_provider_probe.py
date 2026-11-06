@@ -117,6 +117,7 @@ async def test_legacy_static_list_is_never_promoted_to_discovery():
 
 
 @pytest.mark.parametrize('payload', [
+    {'version':True,'source':'provider-api','models':[{'id':'unqualified'}]},
     {'source':'provider-api','models':[{'id':'real'}]},
     {'version':1,'source':'cache','models':[{'id':'static'}]},
     {'version':1,'source':'unsupported','models':[{'id':'invented'}]},

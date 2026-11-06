@@ -152,6 +152,8 @@ for(const [name,entry,notice] of [
   const input=root.root.findByType('input');
   assert.equal(input.props.id,'manual-choice');
   assert.equal(input.props.value,'saved-model');
+  await renderAct(async()=>input.props.onBlur({target:{value:'saved-model'}}));
+  assert.deepEqual(committed,[],'Focusing and leaving an inherited manual value must not create a pin');
   assert.match(JSON.stringify(root.toJSON()),notice);
   assert.match(JSON.stringify(root.toJSON()),/not verified by discovery/);
   await renderAct(async()=>input.props.onChange({target:{value:' deployment-id '}}));

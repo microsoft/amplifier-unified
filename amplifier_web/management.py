@@ -150,12 +150,27 @@ class Management:
 
     async def runtime_models(self,session_id,row,revision=None,*,refresh=False):
         key=self.runtime_catalog_key(session_id,row,revision)
+        async def check_binding():
+            if not row.get('sharedCatalogKey'):
+                return
+            from .provider_catalog import CatalogInvalidated
+            current=await self.service.runtime.control(session_id,'configuration.providers',{})
+            current_row=next((item for item in current.get('providers',[]) if item['id']==row['id']),None)
+            if (current_row is None or current_row.get('sharedCatalogKey')!=row['sharedCatalogKey']
+                    or revision and current.get('catalogRevision')!=revision):
+                raise CatalogInvalidated('Mounted connection changed during discovery.')
         async def load():
             # The host owns expiry/manual refresh; a second worker cache must
             # not extend the host's TTL after it decides a refresh is needed.
-            result=await self.service.runtime.control(session_id,'configuration.providerModels',{
-                'instance':row['id'],'refresh':True,
-                **({'expectedCatalogKey':row['sharedCatalogKey']} if row.get('sharedCatalogKey') else {})})
+            await check_binding()
+            try:
+                result=await self.service.runtime.control(session_id,'configuration.providerModels',{
+                    'instance':row['id'],'refresh':True,
+                    **({'expectedCatalogKey':row['sharedCatalogKey']} if row.get('sharedCatalogKey') else {})})
+            except Exception:
+                await check_binding()
+                raise
+            await check_binding()
             if row.get('module') and 'info' in row and 'configSchema' in row:
                 info=copy.deepcopy(row['info'])
                 for name in ('model','default_model','reasoning_effort','priority'):
@@ -1256,7 +1271,12 @@ class Management:
                     self.service.state.setdefault('runtimeControl',{}).setdefault(session['id'],{}).update(refreshed)
                     self.service.state.setdefault('runtimeControl',{}).setdefault(session['id'],{})[args['operation']]=result
                     if args['operation'] in {'provider.select', 'provider.reset'}:
-                        self.service._session(session['id'])['selection'] = copy.deepcopy(result['selection'])
+                        current=self.service._session(session['id'])
+                        current['selection'] = copy.deepcopy(result['selection'])
+                        selected=result['selection']
+                        mounted=next((row for row in refreshed.get('configuration.providers',{}).get('providers',[])
+                            if selected and row['id']==selected['instance']),{})
+                        current['modelConnectionKey']=mounted.get('sharedCatalogKey') if selected else None
                     if args['operation'] in {'configuration.inspect','configuration.apply','configuration.toggle'}:
                         configuration=result.get('configuration',result)
                         self.service._session(session['id'])['configuration']=configuration

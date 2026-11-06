@@ -44,7 +44,7 @@ async def discovered_models(provider):
     result = method()
     if inspect.isawaitable(result):
         result = await result
-    if (not isinstance(result, dict) or result.get('version') != 1
+    if (not isinstance(result, dict) or type(result.get('version')) is not int or result.get('version') != 1
             or result.get('source') not in {'provider-api', 'unsupported'}
             or not isinstance(result.get('models'), list)):
         raise ValueError('Invalid provider discovery provenance')

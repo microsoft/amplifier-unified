@@ -68,11 +68,23 @@ async def browse(management, session, *, refresh=False, instance=None):
         service.state['settings'].get('appBundle'), session_id=session.get('runtimeSessionId') or session.get('nativeIdentity') or sid,
         catalog=True, refresh=refresh, instance=instance, catalog_cache=management.provider_catalog,
         desired_bundle=bool(pending_bundle), global_only=session.get('location',{}).get('kind')=='managed')
-    if pending_bundle and (pending_bundle.get('resetModel') or not session.get('selection')):
-        defaults = await resolve_defaults(service.data_dir, session['workspace'], pending_bundle['bundle'],
-            service.state['settings'].get('appBundle'), desired_bundle=True,
-            global_only=session.get('location',{}).get('kind')=='managed')
-        result['effective'] = defaults.get('effective', {})
+    if result.get('providers') and not (session.get('pendingModelSelection') or session.get('selection') or reported_selection(service, session) or result.get('effective')):
+        previous=service.state.get('runtimeControl',{}).get(sid,{}).get('configuration.catalog',{})
+        if (previous.get('configurationRevision')==revision and previous.get('nextMessageRevision',0)==desired_revision
+                and previous.get('defaultsResolved')):
+            result.update(effective=previous.get('effective',{}),defaultsResolved=True)
+        else:
+            try:
+                defaults = await resolve_defaults(service.data_dir, session['workspace'],
+                    pending_bundle['bundle'] if pending_bundle else session.get('bundle'),
+                    service.state['settings'].get('appBundle'), desired_bundle=bool(pending_bundle),
+                    session_id=session.get('runtimeSessionId') or session.get('nativeIdentity') or sid,
+                    global_only=session.get('location',{}).get('kind')=='managed')
+                result.update(effective=defaults.get('effective', {}),defaultsResolved=True)
+            except Exception:
+                # Default inspection is not inventory discovery. One failure
+                # must not erase usable configured connections and model lists.
+                result.update(defaultsResolved=True, defaultError='The current bundle default could not be read. Choose an explicit connection and model.')
     entries = result.pop('catalogs', {})
     from .provider_catalog import conversation_bindings
     result['connectionScope'] = 'global' if session.get('location',{}).get('kind')=='managed' else 'workspace'
@@ -110,6 +122,9 @@ async def select(management, session, requested):
             raise ValueError('Finish active work before changing this conversation model')
         # Validation of mounted capabilities and compaction happens on Send.
         # Persist the explicit intent before touching any worker.
+        from .provider_catalog import configured_binding
+        current['modelConnectionKey']=configured_binding(service.data_dir,current['workspace'],selected['instance'],
+            global_only=current.get('location',{}).get('kind')=='managed')
         current['selection'] = copy.deepcopy(selected)
         current['pendingModelSelection'] = copy.deepcopy(selected)
         current['nextMessageRevision'] = current.get('nextMessageRevision', 0) + 1
@@ -136,21 +151,25 @@ async def request_browse(management, session, *, refresh=False, instance=None):
         requested=management.conversation_catalog_demand={}
     demand=(service.state.get('configurationRevision',0),refresh,session.get('nextMessageRevision',0),instance)
     if sid in pending:
-        if requested.get(sid)!=demand:
-            requested[sid]=demand
+        queue=requested[sid]
+        if demand not in queue:
+            # Plain observation cannot replace a requested forced refresh.
+            if refresh or not any(item[0]==demand[0] and item[2]==demand[2] for item in queue):
+                queue.append(demand)
         return
-    requested[sid]=demand
+    requested[sid]=[demand]
     async def run():
         try:
             while True:
-                observed=requested[sid]
+                observed=requested[sid][0]
                 try:
                     await browse(management,service._session(sid),refresh=observed[1],instance=observed[3])
                 except asyncio.CancelledError:
                     raise
                 except Exception:
                     # A failing obsolete read cannot poison a newer request.
-                    if requested[sid]!=observed:
+                    if len(requested[sid])>1:
+                        requested[sid].pop(0)
                         continue
                     async with service.lock:
                         if (observed[0]==service.state.get('configurationRevision',0)
@@ -158,7 +177,8 @@ async def request_browse(management, session, *, refresh=False, instance=None):
                             control=service.state.setdefault('runtimeControl',{}).setdefault(sid,{})
                             control.setdefault('configuration.catalog',{}).update(phase='error',error='Could not load model settings. Your selection is preserved. Refresh models to retry.')
                             service._publish_changes(sessions={sid})
-                if requested[sid]==observed:
+                requested[sid].pop(0)
+                if not requested[sid]:
                     break
         finally:
             pending.pop(sid,None)

@@ -70,7 +70,8 @@ async def test_mounted_connection_cache_miss_resolves_and_hit_does_not_probe(app
     from amplifier_web.session_files import amplifier_home
     from amplifier_web.setup import SetupManager
     session=app._session(app.state['selectedSessionId'])
-    session['runtimeReport']={'provider_choices':[{'id':'one','sharedCatalogKey':'account-one','model':'model','effort':'high'}]}
+    session['runtimeReport']={'effective_selection':{'instance':'one','model':'model','effort':'high'},
+        'provider_choices':[{'id':'one','sharedCatalogKey':'account-one','model':'model','effort':'high'}]}
     calls=[]
     write_private(amplifier_home()/'settings.yaml', yaml.safe_dump({'config':{'providers':[
         {'id':'one','module':'provider-fixture','config':{}}]}}))
@@ -132,6 +133,8 @@ async def test_inflight_catalog_keeps_new_revision_and_refresh_demand(app,monkey
     from amplifier_web import draft_defaults
     entered=asyncio.Event();finish=asyncio.Event();calls=[]
     async def resolve(*args,**kwargs):
+        if not kwargs.get('catalog'):
+            return {'effective':{'instance':'resolved','model':'default'}}
         calls.append((app.state.get('configurationRevision',0),kwargs['refresh']))
         if len(calls)==1:
             entered.set()
@@ -148,3 +151,42 @@ async def test_inflight_catalog_keeps_new_revision_and_refresh_demand(app,monkey
     assert calls==[(0,False),(1,True)]
     result=app.state['runtimeControl'][session['id']]['configuration.catalog']
     assert result['configurationRevision']==1 and result['providers']==[{'id':'1'}]
+
+
+async def test_pending_refresh_targets_survive_other_refresh_and_browse(app, monkeypatch):
+    from amplifier_web import conversation_models
+    entered,release=asyncio.Event(),asyncio.Event();calls=[]
+    async def held(management,session,*,refresh=False,instance=None):
+        calls.append((refresh,instance))
+        if len(calls)==1:
+            entered.set();await release.wait()
+    monkeypatch.setattr(conversation_models,'browse',held)
+    await request_browse(app.management,app._session())
+    await entered.wait()
+    await request_browse(app.management,app._session(),refresh=True,instance='one')
+    await request_browse(app.management,app._session(),refresh=True,instance='two')
+    await request_browse(app.management,app._session())
+    await request_browse(app.management,app._session(),refresh=True,instance='one')
+    release.set()
+    await asyncio.gather(*app.management.conversation_catalog_requests.values())
+    assert calls==[(False,None),(True,'one'),(True,'two')]
+
+
+async def test_unpinned_defaults_are_separate_from_inventory_and_not_reprobed(app, monkeypatch):
+    from amplifier_web import draft_defaults
+    calls=[]
+    async def resolve(*args,**kwargs):
+        calls.append(kwargs.get('catalog',False))
+        if kwargs.get('catalog'):
+            return {'providers':[{'id':'one','sharedCatalogKey':'key'}],
+                'catalogs':{'key':{'phase':'ready','models':[{'id':'real'}],'supported':True}}}
+        return {'effective':{'instance':'one','model':'configured-but-unlisted'}}
+    monkeypatch.setattr(draft_defaults,'resolve_defaults',resolve)
+    await browse(app.management,app._session())
+    await browse(app.management,app._session())
+    result=app.state['runtimeControl'][app._session()['id']]['configuration.catalog']
+    assert result['effective']['model']=='configured-but-unlisted'
+    assert result['pinned'] is False
+    assert app.state['modelCatalogs']['key']['models']==[{'id':'real'}]
+    assert calls==[True,False,True]
+    assert not app._session().get('selection')

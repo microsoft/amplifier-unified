@@ -170,7 +170,7 @@ def conversation_bindings(home, workspace, session_id, providers, *, global_only
     """
     from .host.config import load_config
     config = load_config(workspace, home=home, session_id=session_id, global_only=global_only)
-    rows = config.providers
+    rows = config.configured_connections
     path = Path(home)/'sessions'/session_id/'configuration.json'
     if path.exists():
         saved = json.loads(path.read_text())
@@ -180,11 +180,11 @@ def conversation_bindings(home, workspace, session_id, providers, *, global_only
     result = {}
     for provider in providers:
         row = by_id.get(provider['id'])
-        if row is None:
+        if row is None or row.get('enabled') is False:
             result[provider['id']] = {'eligible':False,'reason':'This conversation does not include this configured connection.'}
             continue
         key = configuration_key(workspace,row['module'],row.get('config',{}),
-            config.module_sources.get(row['module']) or row.get('source'),home=home)
+            row.get('source') or config.module_sources.get(row['module']),home=home)
         if key != provider['sharedCatalogKey']:
             result[provider['id']] = {'eligible':False,
                 'reason':'This conversation overrides this connection. Its saved account or endpoint differs from the configured connection.'}

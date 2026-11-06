@@ -28,6 +28,7 @@ async def catalog_app(tmp_path, monkeypatch):
     service.management = Management(service)
     for title in ('first', 'second'):
         await service.dispatch('session.create', {'title': title})
+        service._session()['selection']={'instance':'one','model':'one-real'}
     calls = Counter()
     state = {'failure': False, 'empty': False}
     async def probe(self, action, args, workspace):
@@ -226,3 +227,35 @@ async def test_runtime_rejects_same_id_different_account_before_selecting():
         with pytest.raises(ValueError,match='mounted connection differs'):
             await controls.perform('provider.verifyConnection',{'instance':'one','expectedCatalogKey':'configured-account'})
     finally:await controls.close()
+
+
+async def test_discovery_applies_effective_overrides_without_adding_connections(catalog_app, monkeypatch):
+    service, _, _, rows=catalog_app
+    write_private(amplifier_home()/'settings.yaml',yaml.safe_dump({'config':{'providers':rows},
+        'overrides':{'provider-fixture':{'config':{'extra':'discovery-option'}},
+                     'one':{'config':{'base_url':'https://override.test'}},
+                     'two':{'enabled':False},
+                     'not-configured':{'config':{'base_url':'https://not-an-option.test'}}}}))
+    manager=SetupManager(service.data_dir,catalog=service.management.provider_catalog)
+    snapshots=[]
+    async def probe(self,action,args,workspace):
+        snapshots.append(self.probe_snapshot(action,args,workspace))
+        return {'models':[],'modelsSupported':True}
+    monkeypatch.setattr(SetupManager,'probe',probe)
+    result=await manager.discover_catalog(service.default_workspace)
+    assert [row['id'] for row in result['providers']]==['one','broken']
+    assert {row['config']['base_url'] for row in snapshots}=={'https://override.test','https://broken.test'}
+    assert all(row['config']['extra']=='discovery-option' for row in snapshots)
+    assert result['providers'][0]['sharedCatalogKey']==manager.catalog_key({'id':'one'},service.default_workspace)
+
+
+async def test_queued_selection_updates_configured_binding(catalog_app):
+    from amplifier_web.conversation_models import select
+    from amplifier_web.provider_catalog import configured_binding
+    service, _, _, _=catalog_app
+    chat=service._session()
+    await select(service.management,chat,{'instance':'one','model':'one-real'})
+    first=chat['modelConnectionKey']
+    await select(service.management,chat,{'instance':'two','model':'two-real'})
+    assert chat['modelConnectionKey']!=first
+    assert chat['modelConnectionKey']==configured_binding(service.data_dir,chat['workspace'],'two')

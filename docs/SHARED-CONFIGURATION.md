@@ -89,6 +89,9 @@ Mounted reports and saved/default selections are separate facts, not extra
 connection or model options. Managed chats use global settings only.
 Connection labels and order come from this roster; accounts/endpoints remain
 separate even when they use the same provider implementation.
+Supported module/instance overrides are resolved before discovery, including
+disabled connections and endpoint/configuration overrides. They do not introduce
+additional bundle-only connections into the shared roster.
 
 Unified consumes an optional provider-owned `discover_models()` method. Its
 version-1 result is `{version: 1, source: "provider-api", models: [...]}`, with

@@ -6,7 +6,8 @@ import {useListFilter} from './list-filter.jsx';
 // Only the host's exact connection entry supplies options. Saved/default IDs
 // are displayed separately and never promoted into discovery results.
 export function ModelSelect({id,label='Model',value='',onChange,onCommit,entry,models:provided,state,act,disabled=false,placeholder='Enter an exact model or deployment ID',editable=false}){
- const loading=entry?.phase==='working'||entry?.phase==='queued',region=useRef(null);
+ const loading=entry?.phase==='working'||entry?.phase==='queued',region=useRef(null),edited=useRef(false),identity=useRef(entry?.sharedCatalogKey);
+ if(identity.current!==entry?.sharedCatalogKey){edited.current=false;identity.current=entry?.sharedCatalogKey}
  const models=modelOptions(entry?.models??provided??[]);
  const manual=editable||entry?.supported===false||entry?.phase==='error'||(!loading&&!models.length);
  const listed=models.some(row=>row.id===value);
@@ -17,7 +18,7 @@ export function ModelSelect({id,label='Model',value='',onChange,onCommit,entry,m
   {models.length>0&&<>{filter}<select id={manual?id+'-catalog':id} aria-label={manual?'Choose '+label.toLowerCase()+' from catalog':label} value={shown.some(row=>row.id===value)?value:''} disabled={disabled} data-action="view.update" onChange={e=>{if(e.target.value){onChange(e.target.value);onCommit?.(e.target.value)}}}>
    <option value="">Choose a discovered model…</option>{shown.map(row=><option key={row.id} value={row.id}>{row.name}</option>)}
   </select></>}
-  {manual?<><label htmlFor={id}>Exact model ID</label><input id={id} aria-label={label} value={value} disabled={disabled} placeholder={placeholder} data-action="view.update" onChange={e=>onChange(e.target.value)} onBlur={e=>{if(e.target.value.trim())onCommit?.(e.target.value.trim())}} onKeyDown={e=>{if(e.key==='Enter'&&e.currentTarget.value.trim()){e.preventDefault();onCommit?.(e.currentTarget.value.trim())}}}/><small>Manual ID — not verified by discovery. The connection checks it when you send.</small></>:!models.length&&<small role="status">Loading provider models…</small>}
+  {manual?<><label htmlFor={id}>Exact model ID</label><input id={id} aria-label={label} value={value} disabled={disabled} placeholder={placeholder} data-action="view.update" onChange={e=>{edited.current=true;onChange(e.target.value)}} onBlur={e=>{if(edited.current&&e.target.value.trim()){edited.current=false;onCommit?.(e.target.value.trim())}}} onKeyDown={e=>{if(e.key==='Enter'&&e.currentTarget.value.trim()){e.preventDefault();edited.current=false;onCommit?.(e.currentTarget.value.trim())}}}/><small>Manual ID — not verified by discovery. The connection checks it when you send.</small></>:!models.length&&<small role="status">Loading provider models…</small>}
   {entry?.error&&<small className="a-danger" role="status">{entry.error}</small>}
   {entry?.phase==='error'&&!entry.error&&<small className="a-danger" role="status">Model list unavailable. Enter a model ID or refresh this connection.</small>}
   {entry?.loadedAt!=null&&<small>Last successful refresh: {new Date(entry.loadedAt*1000).toLocaleString()}</small>}

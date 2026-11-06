@@ -487,6 +487,7 @@ async def test_unsupported_model_listing_stays_unsupported_after_cached_browse(a
         {'id':'one','module':'provider-fixture','config':{}}]}}))
     resolver = AsyncMock(return_value={'models':[], 'modelsSupported':False, 'providerMetadata':{}})
     monkeypatch.setattr(SetupManager, 'probe', resolver)
+    app._session()['selection']={'instance':'one','model':'chosen'}
     await browse(app.management, deepcopy(app._session()))
     await browse(app.management, deepcopy(app._session()))
     assert resolver.await_count == 1
