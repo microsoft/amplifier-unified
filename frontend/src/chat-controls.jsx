@@ -182,11 +182,10 @@ export function ModelControl({state,session,act,working,embedded=false,compact=f
   {!embedded&&<button type="button" className="a-model-trigger" aria-label="Model and reasoning settings" aria-haspopup={compact?'dialog':undefined} disabled={unavailable} aria-expanded={!!open} aria-busy={checkingDefaults||undefined} title={checkingDefaults?`${modelLabel} · Checking bundle settings…`:modelLabel} data-action="view.update" onClick={show}><span>{!effective.model&&(delayed||failure)?'Model settings unavailable':compact?modelAndEffort:modelLabel}</span>{(session?.pendingModelSelection||pendingBundle)&&<small>Next message</small>}<ChevronDown/></button>}
   {open&&renderPanel(<section ref={panelRef} className={embedded?"a-embedded-model":`a-model-popover a-compact-popover${compact?' a-composer-options-panel':''}`} style={embedded?undefined:position} role="dialog" aria-label="Model for this chat" aria-describedby={`${descriptionId}-heading`}>
    <div className="a-settings-row a-composer-options-heading"><strong id={`${descriptionId}-heading`}>Model for this chat</strong>{!embedded&&<button type="button" className="a-icon" aria-label={compact?'Close chat options':'Close model settings'} data-action="view.update" onClick={close}><X/></button>}</div>
-   <p className="a-caption">Selected: {modelLabel}. Changes apply to your next human message.</p>
-   {!isDraft&&catalog?.connectionScope&&<small>Configured connections: {catalog.connectionScope} settings.</small>}
+   <p className="a-caption">Selected: {modelLabel}</p>
    {binding?.eligible===false&&<p role="status">{binding.reason} The existing selection is preserved.</p>}
    <div data-composer-page="provider">
-   <label htmlFor="chat-provider">Connection</label><select id="chat-provider" value={selected?draft.instance:''} data-action={isDraft?'view.update':'conversation.configure'} disabled={blocked} onChange={e=>chooseProvider(e.target.value)}>
+   <label htmlFor="chat-provider">Connection{!isDraft&&catalog?.connectionScope&&<small> · {catalog.connectionScope} settings</small>}</label><select id="chat-provider" value={selected?draft.instance:''} data-action={isDraft?'view.update':'conversation.configure'} disabled={blocked} onChange={e=>chooseProvider(e.target.value)}>
     <option value="" disabled>{providers.length?'Choose a connection':noProviders?'No connections configured':failure||delayed?'Connections unavailable':'Loading connections…'}</option>{options.map(row=><option key={row.id} value={row.id} disabled={providers.find(p=>p.id===row.id)?.config?.chat_enabled===false}>{row.label}</option>)}
    </select>
    {draft.instance&&!selected&&<small>Saved connection {draft.instance} is not available in this configuration scope.</small>}
