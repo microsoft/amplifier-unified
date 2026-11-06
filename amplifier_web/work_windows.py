@@ -71,6 +71,9 @@ class WorkWindows:
         self.closed = False
         self.projector = None
         self.retry_at = {}
+        # Only in-flight latest reads, not retained reporting history. A newer
+        # read marks the prior token permanently, even after it settles/evicts.
+        self._active_reads = {}
         from .work_diagnostics import WorkDiagnostics
         self.diagnostics = WorkDiagnostics()
         from .resident_work_pages import ResidentWorkPages
@@ -121,12 +124,12 @@ class WorkWindows:
             event._notify_work(identity)
 
     def _state(self, identity, value, *, notify=True, _attempt=None):
-        if _attempt is not None and self.diagnostics.records.get(identity) is not _attempt:
+        if _attempt is not None and _attempt.get('_superseded'):
             return
         changed = self.status.get(identity) != value
         self.status.pop(identity, None)
         self.status[identity] = value
-        if _attempt is not None and self.diagnostics.records.get(identity) is _attempt:
+        if _attempt is not None:
             _attempt['projection'] = value
         while len(self.status) > MAX_PAGES:
             retired, _ = self.status.popitem(last=False)
@@ -174,8 +177,7 @@ class WorkWindows:
                     except _SupersededRead:
                         return None
                 attempt = capture.get('attempt')
-                latest = self.diagnostics.records.get(identity)
-                if attempt is not None and latest is not attempt:
+                if attempt is not None and attempt.get('_superseded'):
                     return None
                 # The inner reader may already have published a more specific
                 # retry and deadline (for example source_changed/one second).
@@ -229,9 +231,15 @@ class WorkWindows:
 
     async def read(self, identity, before=None, *, _initial=False, _capture=None):
         owner = self._owner(identity)
-        source, fence = source_identity(owner), self._fence(owner['id'])
+        canonical = owner['id']
+        source, fence = source_identity(owner), self._fence(canonical)
         # Older pages must not replace the current projection's diagnostic.
-        attempt = self.diagnostics.begin(owner['id'], owner, source, fence) if before is None else {}
+        attempt = self.diagnostics.begin(canonical, owner, source, fence) if before is None else {}
+        if before is None:
+            prior = self._active_reads.get(canonical)
+            if prior is not None:
+                prior['_superseded'] = True
+            self._active_reads[canonical] = attempt
         if _capture is not None:
             _capture['attempt'] = attempt
         try:
@@ -250,6 +258,9 @@ class WorkWindows:
                 from .work_diagnostics import failure
                 attempt.update(status='retrying', reason='worker_failed', **failure(error))
             raise
+        finally:
+            if self._active_reads.get(canonical) is attempt:
+                self._active_reads.pop(canonical, None)
 
     async def _read(self, identity, before=None, *, _initial=False, _attempt):
         if self.closed or getattr(self.service, 'closed', False):
@@ -272,7 +283,7 @@ class WorkWindows:
             accepted_reference = deepcopy(accepted_page.get('savedExecutionReference'))
             matches = await asyncio.to_thread(self._matches, source, accepted_page.get('revisions'))
             self._check_current(identity, owner, source, fence)
-            if self.diagnostics.records.get(identity) is not _attempt:
+            if _attempt.get('_superseded'):
                 raise _SupersededRead('The requested conversation changed. Open it again.')
             if (self.pages.get(prior) is not accepted_page
                     or raw(owner).get('_coldFields', {}).get('execution') != accepted_reference):
@@ -295,7 +306,7 @@ class WorkWindows:
             'windowKey': window_key, 'before': before, 'cursorKey': self.key.hex()},
             key=identity + ':' + str(before or 'latest'))
         self._check_current(identity, owner, source, fence)
-        if before is None and self.diagnostics.records.get(identity) is not _attempt:
+        if _attempt.get('_superseded'):
             raise _SupersededRead('The requested conversation changed. Open it again.')
         if result.get('status') != 'complete':
             from .work_diagnostics import closed
@@ -311,7 +322,7 @@ class WorkWindows:
         _attempt['stage'] = 'source'
         matches = await asyncio.to_thread(self._matches, source, page.get('revisions'))
         self._check_current(identity, owner, source, fence)
-        if before is None and self.diagnostics.records.get(identity) is not _attempt:
+        if _attempt.get('_superseded'):
             raise _SupersededRead('The requested conversation changed. Open it again.')
         if not matches:
             _attempt.update(status='retrying', reason='source_changed')
@@ -343,13 +354,15 @@ class WorkWindows:
                 return tree
             tree = await asyncio.to_thread(saved_work)
             self._check_current(identity, owner, source, fence)
+            if _attempt.get('_superseded'):
+                raise _SupersededRead('The requested conversation changed. Open it again.')
             if (raw(owner).get('_coldFields', {}).get('execution') != saved_reference
                     or 'execution' in raw(owner)):
                 raise _SupersededRead('The requested conversation changed. Open it again.')
             _attempt['stage'] = 'source'
             matches = await asyncio.to_thread(self._matches, source, page.get('revisions'))
             self._check_current(identity, owner, source, fence)
-            if before is None and self.diagnostics.records.get(identity) is not _attempt:
+            if _attempt.get('_superseded'):
                 raise _SupersededRead('The requested conversation changed. Open it again.')
             if (not matches or raw(owner).get('_coldFields', {}).get('execution') != saved_reference
                     or 'execution' in raw(owner)):
@@ -635,3 +648,4 @@ class WorkWindows:
         self.pages.clear(); self.current.clear(); self.status.clear()
         self.epochs.clear(); self.retry_at.clear()
         self.diagnostics.records.clear()
+        self._active_reads.clear()

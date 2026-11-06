@@ -76,6 +76,231 @@ def test_process_decoder_only_retains_closed_diagnostic(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('background', [False, True], ids=['direct', 'request'])
+async def test_diagnostic_eviction_does_not_discard_valid_inflight_read(tmp_path, monkeypatch, background):
+    """Reporting LRU pressure is not same-conversation supersession."""
+    windows, session, _, service = fixture(tmp_path, monkeypatch, count=1)
+    owners = {'s': session}
+    for index in range(8):
+        identity = 'other-' + str(index)
+        owners[identity] = {**session, 'id': identity, 'nativeIdentity': identity}
+        path = tmp_path / 'native/projects/p/sessions' / identity / 'context-intelligence/events.jsonl'
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({'event': 'tool:post', 'timestamp': 1,
+            'session_id': identity, 'data': {'tool_call_id': identity,
+            'tool_name': 'read', 'result': 'synthetic'}}) + '\n')
+    service._session = lambda identity, hydrate=False: owners[identity]
+    entered, release = asyncio.Event(), asyncio.Event()
+    real = windows.projector.project
+    active, peak = 0, 0
+    async def held(inputs, *, key):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        try:
+            if inputs['session']['id'] == 's':
+                entered.set()
+                await release.wait()
+            return await real(inputs, key=key)
+        finally:
+            active -= 1
+    windows.projector.project = held
+    task = windows.request('s') if background else asyncio.create_task(windows.read('s'))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        for identity in list(owners)[1:]:
+            await windows.read(identity)
+        assert len(windows.diagnostics.records) == 8 and 's' not in windows.diagnostics.records
+        assert len(windows.epochs) == 9 and peak == 2
+        release.set()
+        page = await asyncio.wait_for(task, 5)
+        assert page and page['items'], 'Valid inflight read was discarded by reporting-cache eviction'
+        assert windows.status['s']['status'] == 'ready' and windows.status['s']['current']
+        assert windows.current['s'] == page['items'][0]['id']
+        assert windows.nodes('s', page['items'][0]['id'])['items']
+        # Evicted diagnostics can be unknown without invalidating the real read.
+        value = windows.diagnostic(session)
+        check_shape(value)
+        assert value['status'] == 'unknown' and value['attempt'] is None
+        assert not windows._active_reads
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await windows.close()
+
+
+async def other_owner_reads(windows, session, service):
+    owners = {'s': session}
+    service._session = lambda identity, hydrate=False: owners[identity]
+    for index in range(8):
+        identity = 'missing-source-' + str(index)
+        owners[identity] = {**session, 'id': identity, 'nativeIdentity': identity}
+        # Real missing sources are valid ready/empty windows, not synthetic
+        # projector results. They have distinct owner/window identities.
+        await windows.read(identity)
+    assert len(windows.diagnostics.records) == 8 and 's' not in windows.diagnostics.records
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('source_changed', [False, True])
+async def test_evicted_current_failure_still_publishes_retry_and_settles(tmp_path, monkeypatch, source_changed):
+    import amplifier_web.work_windows as module
+    from types import SimpleNamespace
+    windows, session, _, service = fixture(tmp_path, monkeypatch, count=1)
+    monkeypatch.setattr(module, 'time', SimpleNamespace(monotonic=lambda: 100))
+    entered, release = asyncio.Event(), asyncio.Event()
+    real = windows.projector.project
+    async def held(inputs, *, key):
+        if inputs['session']['id'] == 's':
+            entered.set()
+            await release.wait()
+            if not source_changed:
+                raise PermissionError(13, CANARY)
+        return await real(inputs, key=key)
+    windows.projector.project = held
+    if source_changed:
+        matches = windows._matches
+        monkeypatch.setattr(windows, '_matches',
+            lambda source, revisions: False if source['id'] == 's' else matches(source, revisions))
+    task = windows.request('s')
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        await other_owner_reads(windows, session, service)
+        release.set()
+        assert await asyncio.wait_for(task, 5) is None
+        assert windows.status['s'] == {'status': 'retrying', 'current': False,
+            'reason': 'source_changed' if source_changed else 'worker_failed'}
+        assert windows.retry_at['s'] == (101 if source_changed else 105)
+        assert windows.diagnostic(session)['status'] == 'unknown'
+        assert not windows._active_reads
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await windows.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('outcome', ['complete', 'retry', 'exception'])
+async def test_same_owner_supersession_survives_newer_settlement_and_report_eviction(
+        tmp_path, monkeypatch, outcome):
+    windows, session, _, service = fixture(tmp_path, monkeypatch, count=1)
+    entered, release = asyncio.Event(), asyncio.Event()
+    real = windows.projector.project
+    calls = 0
+    async def held(inputs, *, key):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            await release.wait()
+            if outcome == 'retry':
+                return {'status': 'retry', 'reason': 'source_changed'}
+            if outcome == 'exception':
+                raise OSError(5, CANARY)
+        return await real(inputs, key=key)
+    windows.projector.project = held
+    old = windows.request('s')
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        await windows.read('s')
+        assert windows.status['s']['status'] == 'ready'
+        assert not windows._active_reads  # Newer S settled; R's token still knows.
+        # Evict reports alone: full reads would also evict S's accepted page
+        # and epoch, masking this assertion behind an unrelated owner fence.
+        from amplifier_web.work_windows import source_identity
+        for number in range(8):
+            windows.diagnostics.begin('report-' + str(number), session,
+                source_identity(session), windows.epochs['s'])
+        assert 's' not in windows.diagnostics.records
+        assert windows.current['s'] in windows.pages and len(windows.epochs) == 1
+        prior_generation = windows.generation
+        prior_state = windows.status['s']
+        release.set()
+        assert await asyncio.wait_for(old, 5) is None
+        assert windows.generation == prior_generation, 'Superseded R republished after S/report eviction'
+        assert windows.status['s'] is prior_state
+        assert windows.current['s'] in windows.pages and 's' not in windows.retry_at
+        assert windows.diagnostic(session)['status'] == 'unknown'
+        assert not windows._active_reads
+    finally:
+        release.set()
+        await asyncio.gather(old, return_exceptions=True)
+        await windows.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('settlement', ['cancel', 'close', 'invalidated'])
+async def test_active_read_tokens_retire_on_every_exit(tmp_path, monkeypatch, settlement):
+    windows, session, _, _ = fixture(tmp_path, monkeypatch, count=1)
+    entered, release = asyncio.Event(), asyncio.Event()
+    real = windows.projector.project
+    async def held(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return await real(*args, **kwargs)
+    windows.projector.project = held
+    task = windows.request('s')
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        assert len(windows._active_reads) == 1
+        if settlement == 'cancel':
+            task.cancel()
+        elif settlement == 'close':
+            await windows.close()
+        else:
+            windows.invalidate({'s'})
+            release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        assert not windows._active_reads
+        assert not windows.current
+    finally:
+        release.set()
+        await windows.close()
+
+
+@pytest.mark.asyncio
+async def test_superseded_read_cleanup_cannot_remove_newer_active_token(tmp_path, monkeypatch):
+    windows, _, _, _ = fixture(tmp_path, monkeypatch, count=1)
+    entered = [asyncio.Event() for _ in range(3)]
+    release = [asyncio.Event() for _ in range(3)]
+    real = windows.projector.project
+    calls = 0
+    async def held(*args, **kwargs):
+        nonlocal calls
+        index = calls
+        calls += 1
+        entered[index].set()
+        await release[index].wait()
+        return await real(*args, **kwargs)
+    windows.projector.project = held
+    tasks = []
+    try:
+        for index in range(2):
+            tasks.append(asyncio.create_task(windows.read('s')))
+            await asyncio.wait_for(entered[index].wait(), 5)
+        newer = windows._active_reads['s']
+        release[0].set()
+        with pytest.raises(ValueError, match='changed'):
+            await tasks[0]
+        assert windows._active_reads['s'] is newer
+        tasks.append(asyncio.create_task(windows.read('s')))
+        await asyncio.wait_for(entered[2].wait(), 5)
+        assert newer['_superseded'] is True
+        release[1].set()
+        with pytest.raises(ValueError, match='changed'):
+            await tasks[1]
+        assert len(windows._active_reads) == 1
+        release[2].set()
+        assert (await tasks[2])['items']
+        assert not windows._active_reads
+    finally:
+        for gate in release:
+            gate.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await windows.close()
+
+
+@pytest.mark.asyncio
 async def test_older_completion_cannot_replace_latest_attempt(tmp_path, monkeypatch):
     windows, session, _, _ = fixture(tmp_path, monkeypatch, count=1)
     entered, release = asyncio.Event(), asyncio.Event()
