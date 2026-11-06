@@ -128,7 +128,7 @@ def definitions(schema, string):
         "coordination.decide": ("Retired. Legacy pending proposals cannot authorize new work.", schema({
             **sid, "proposalId": string(200), "decision": {"enum": ["allow", "deny"]},
         }, ["sessionId", "proposalId", "decision"])),
-        "coordination.send": ("Commit attributed task input to an exact existing root in this user's Unified installation, including other workspaces and managed chats. Discover IDs with coordination.list scope=all. No assignment, permissions, files or resume authority transfers. Auto (the default) delivers at the next supported model request boundary or when idle. Explicit queue waits for idle; notify never wakes. Preparation continues under service ownership. Read results, never replay uncertain input. To resume a commissioned same-workspace member after an explicit human instruction, use queue with resume={sourceMessageId, expectedInterruptionRevision}; the host binds the current human input and exact Stop/task/assignment boundaries. This admits one fresh input without resetting budgets, permissions or replaying old work. For explicit human repair of existing same-workspace schedules, scheduleRepair scopes the sourceMessageId and exact target IDs/revisions; the owner may resume those schedules unchanged.", schema(message, ["sessionId", "text"])),
+        "coordination.send": ("Commit attributed task input to an exact existing root in this user's Unified installation, including other workspaces and managed chats. Discover IDs with coordination.list scope=all. No assignment, permissions, files or resume authority transfers. Auto (the default) delivers at the next supported model request boundary or when idle. Explicit queue waits for idle; notify never wakes. Preparation continues under service ownership. Read results, never replay uncertain input. For an agent-recorded dependency block, use ordinary auto/queue WITHOUT resume or humanInput: the recipient may inspect fresh input and deliberately resume its own task once the dependency is verified resolved. Human blocks, unknown block provenance and actual Stop remain protected. Reserve resume for a stopped/paused/failed commissioned same-workspace member after an explicit human instruction; use queue with resume={sourceMessageId, expectedInterruptionRevision}; the host binds the current human input and exact Stop/task/assignment boundaries. This admits one fresh input without resetting budgets, permissions or replaying old work. For explicit human repair of existing same-workspace schedules, scheduleRepair scopes the sourceMessageId and exact target IDs/revisions; the owner may resume those schedules unchanged.", schema(message, ["sessionId", "text"])),
         "coordination.create": ("Commission one authorized durable worker; repeat independently for as many parallel tasks as needed. Inherits configuration and workspace. Optional execution creates a clean isolated checkout and optional objective installs its saved goal before the first brief can run. A saved return notification reports its outcome. This does not create an independent user chat in a different folder. Inspect this operation's requestId for its initial result. Returns before preparation and does not select the peer. Set returnNotification:false only when no automatic return is wanted.", schema({
             "senderSessionId": string(200), "grantId": string(200), "title": {**string(100), "minLength": 1},
             "text": {**string(16000), "minLength": 1}, "references": references,
@@ -154,6 +154,10 @@ def definitions(schema, string):
         "coordination.artifact": ("Read an exact retained file as an original request participant or Full-access observer, even after its source disappears. Current delegated Full-access reviewers may use this passive read. Observers use workspace/all read scope. Bounded text and download identity; no peer output-library access or work admission. Retained bytes are not proof of correctness.", schema({**sid,
             "requestId": string(200), "reference": string(2000), "scope": {"enum": ["workspace", "all"]}, "responseRevision": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0},
             "limit": {"type": "integer", "minimum": 1, "maximum": 4000}}, ["sessionId", "requestId", "reference"])),
+        "coordination.artifact.save": ("Explicitly save one exact request-authorized retained file, including large binaries, into your current working folder. Supply the responseRevision and reference from coordination.result, and a relative path using / separators with an existing parent folder. Requires current mounted file-write access. Streams verified bytes without HTTP or peer-library access; refuses links, escapes and different existing bytes. Identical existing bytes are hash-verified and reused. After an unknown return inspect the destination; this is not a durable exactly-once operation or correctness qualification.", schema({**sid,
+            "requestId": string(200), "reference": string(2000), "scope": {"enum": ["workspace", "all"]},
+            "responseRevision": {"type": "integer", "minimum": 1}, "path": {**string(2000), "minLength": 1}},
+            ["sessionId", "requestId", "reference", "responseRevision", "path"])),
         "coordination.reply": ("Record a typed reply to your exact delivered request. Optional messageIds name your current-generation assistant output, never the incoming request messageId; omit them when unknown. Retain files using path@sha256:<64 lowercase hex digits> in references. Before ending the turn, check artifactVerification and each artifacts[].status: bytes are saved before this reply is acknowledged; later terminal sealing only qualifies the report. Correct a staged report in the same current generation, or reply from a later current generation after it settles, using expectedResponseRevision from coordination.result. Questions/deferrals stay open; reports are unqualified until separately proven terminal. Exact command IDs deduplicate retries. Meaningful revisions retain the original request identity without a lifetime count limit.", schema({
             "requestId": string(200), "kind": {"enum": ["result", "ack", "defer", "decline", "question", "conflict"]},
             "expectedResponseRevision": {"type": "integer", "minimum": 0},
@@ -969,6 +973,9 @@ class Collaboration:
 
     def pending_continuation(self, sid):
         """Read an outcome-backed, unsubmitted exact wait; never claim or publish."""
+        from .update_drain import owner_waiting
+        if owner_waiting(self.service, sid):
+            return
         for (encoded,) in self.service.db.execute("""SELECT receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='coordination.send'
                 AND json_extract(receipt,'$.target.sessionId')=?
@@ -1092,8 +1099,8 @@ class Collaboration:
                         self.cancel_expiry(identity)
                         continue
                     target = self.service._session(sid)
-                    from .update_drain import held
-                    if held(self.service):
+                    from .update_drain import held, owner_waiting
+                    if held(self.service) or owner_waiting(self.service, sid):
                         break
                     if target.get('fileAccessPending'):
                         break  # Keep queued input until the existing refresh owner retires the old mount.
@@ -1199,8 +1206,8 @@ class Collaboration:
             return {"admitted": False, "reason": "The saved input delivery policy changed."}
         if receipt.get("mode") == "steer" and args.get("targetGenerationId") != receipt.get("targetGenerationId"):
             return {"admitted": False, "reason": "The steering generation anchor changed."}
-        from .update_drain import held
-        if held(self.service) and receipt.get('mode') != 'steer':
+        from .update_drain import held, owner_waiting
+        if (held(self.service) or owner_waiting(self.service, sid)) and receipt.get('mode') != 'steer':
             return {'admitted': False, 'waitingForUpdate': True, 'reason': 'Waiting for the app update.'}
         reason = self.guard(receipt)
         message = next((row for row in self.service._session(sid).get("messages", [])
@@ -1795,7 +1802,7 @@ class Collaboration:
             self.error("A user must explicitly perform peer mutations outside a collaboration send grant.")
         return None
 
-    async def dispatch(self, action, args, origin, command_id, caller):
+    async def dispatch(self, action, args, origin, command_id, caller, *, admission_check=None):
         if action in {'coordination.recap', 'coordination.diagnostics'}:
             from .collaboration_observations import read
             return {'accepted': True, 'result': await read(self, action, args, origin, caller)}
@@ -1804,6 +1811,7 @@ class Collaboration:
         if action in {"coordination.grant", "coordination.decide", "coordination.revoke"}:
             self.error("Coordination approval APIs are retired. Historical records are read-only.", 410)
         source = (self.result_source(args, origin, caller) if action == 'coordination.artifact'
+                  else self.source(args, origin, caller, hydrate=False) if action == 'coordination.artifact.save'
                   else self.source(args, origin, caller) if action not in {"coordination.result", "coordination.read"} else None)
         if action == 'coordination.acknowledge':
             from .outcome_acknowledgement import acknowledge
@@ -1811,6 +1819,9 @@ class Collaboration:
         if action == 'coordination.cancel':
             from .request_cancellation import cancel
             return await cancel(self, source, args, origin, command_id)
+        if action == 'coordination.artifact.save':
+            from .result_artifact_save import save
+            return {'accepted': True, 'result': await save(self, source, args, origin, caller, admission_check=admission_check)}
         if action == 'coordination.artifact':
             if source['id'] != args['sessionId']:
                 self.error('Read a retained result from the calling conversation.')
@@ -2083,12 +2094,14 @@ class Collaboration:
                         'instruction': 'Handle this new peer input within existing authority. The saved objective '
                             'remains blocked. Reconcile the dependency; do not infer approval, resume the goal '
                             'automatically, discard conditions or replay older input. You may reply, defer, decline '
-                            'or make a separately valid owner decision about your own task.'}
+                            'or deliberately call task.resume once you verify the dependency is resolved within your '
+                            'standing scope. That owner decision needs no fresh human approval; actual Stop, '
+                            'unresolved questions and uncertain effects remain in force.'}
                 if completed_followup:
                     envelope['completedTaskHandling'] = {**completed_followup,
-                        'instruction': 'Handle this fresh follow-up from your current assignment owner within '
-                            'the existing scope. Keep the earlier objective and evidence completed. Make the '
-                            'requested correction directly, or use task.create for its follow-up objective; '
+                        'instruction': 'Handle this fresh authorized peer request within your existing authority. '
+                            'Keep the earlier objective and evidence completed. Do the requested work directly, '
+                            'or use task.create for its follow-up objective; '
                             'that successor retains the existing turn allowance and used turns. Report with '
                             'coordination.reply for this exact request. Do not replay older or unknown work.'}
                 if target.get("collaboration"):

@@ -60,6 +60,20 @@ uses ordinary busy-boundary/idle delivery. `notify` is a non-waking note; use it
 only when no continuation is needed. Ordinary collaboration within the assigned
 intent needs no separate approval. Do not enroll independent chats implicitly.
 
+## Continue when a dependency is resolved
+
+For an agent-recorded dependency block, send the new finding to the existing
+owner through ordinary `coordination.send` in auto or queue mode, **without
+`resume`**. The host admits this fresh input while keeping the task blocked.
+The owner verifies the dependency, then deliberately calls `task.resume` within
+its standing scope. No current `humanInput` or fresh human approval is needed.
+Do not hunt for a human message ID merely because work is dependency-blocked.
+
+Use the human-backed `resume` recipe in the reference only for an actual stopped,
+paused or failed commissioned member. Unknown block provenance, unresolved user
+questions and uncertain effects do not become resolved dependencies. Preserve
+the same task, used budget, evidence and actual Stop boundaries.
+
 ## Return a result or a real blocker
 
 Workers normally report at completion, or when another owner/user must resolve
@@ -96,6 +110,22 @@ risk against the original acceptance; a fresh broad test census is not required
 merely because a different manager received the result. A failed focused check
 needs correction, not a new approval to repair it. Send one concrete correction
 request to the same owner when necessary; preserve earlier failed evidence.
+
+Use passive `coordination.artifact` for bounded inspection. To consume the actual
+file, discover `coordination.artifact.save` and supply your `sessionId`, the exact
+`requestId`, `responseRevision` and `reference`, plus a relative destination `path`
+inside your current working folder. Its parent must exist. The host streams and
+verifies large binary files without credentials or peer-library access. Current
+write restrictions still apply; different existing bytes are never overwritten.
+Verify returned size/hash and provenance. After an uncertain return, inspect the
+destination before another explicit save; saved bytes are not test qualification.
+
+When a completed review unblocks another manager and you continue unrelated
+work, send that decision now through `coordination.send` in auto mode. Reference
+the exact reviewed source and evidence, optionally linking the incoming request
+with `replyToRequestId`. Do not wait for your whole turn to end. This attributed
+handoff does not seal a staged result or grant new authority; the recipient still
+applies its acceptance criteria and standing scope.
 
 After accepting a member's exact contribution, use `assignment.task.read` then
 `assignment.task.complete` with current revisions and completion evidence. The

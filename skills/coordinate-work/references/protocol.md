@@ -82,8 +82,11 @@ compare those exact links, not equal message text.
    or a failed turn, and does not replay previously suppressed requests.
    A fresh direct automatic or queued message may be handled while the recipient's own
    agent-recorded dependency block remains in place. The host binds that one
-   input to the exact blocked task; this is not peer task-resume authority.
-   Reconcile the dependency and reply/defer/decline within existing permissions.
+   input to the exact blocked task; omit `resume` and do not require `humanInput`.
+   This is not peer task-resume authority. The recipient verifies the dependency
+   within its standing scope and may deliberately call `task.resume` when resolved,
+   preserving the same objective, used budget and evidence. Otherwise reply/defer/
+   decline within existing permissions without resuming the blocked task.
    Do not treat the message as human approval, remove unresolved conditions or
    replay older input. Human blocks, unknown provenance, explicit Stop and
    paused tasks retain their separate refusal boundaries.
@@ -94,7 +97,8 @@ compare those exact links, not equal message text.
    inherits its prior enforced allowance and used turns; deliberately revise an
    exhausted allowance through `assignment.task.setLimit` when authorized.
    This does not reopen stopped chats, independent peers or older requests.
-   When the human explicitly asks you to resume your commissioned or explicitly adopted chats, inspect
+   For an actual stopped, paused or failed member (not an ordinary dependency block),
+   when the human explicitly asks you to resume your commissioned or explicitly adopted chats, inspect
    their current task, completed effects and `signal.interruptionRevision` through
    `coordination.list`. For each intended unfinished member, send one fresh
    queued request with `resume: {sourceMessageId, expectedInterruptionRevision}`.
@@ -271,8 +275,11 @@ close the request. Earlier revisions remain readable; a pending staged report
 must settle before another declaration. There is no lifetime declaration count
 limit; result views show the latest 32 declarations and older command receipts
 remain retained. Exact command retries retain their original response revision. Optional `coordination.send` with `replyToRequestId` is
-an attributed peer note, not the sealing protocol. Give artifact revision/hash/commit,
-checks and limits.
+an attributed peer note, not the sealing protocol. For an already-completed review
+that unblocks another manager while you continue unrelated work, send the decision
+in auto mode rather than waiting for root termination. Give exact reviewed source,
+evidence, checks and limits; do not label a staged declaration sealed or use the
+note to bypass the recipient's acceptance or authority checks.
 A peer's passing check is not your independent artifact verification.
 
 ### Returning a retained local file

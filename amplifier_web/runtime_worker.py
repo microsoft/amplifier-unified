@@ -744,6 +744,9 @@ class Worker:
             return not CALL_PURPOSE.get()
         coordinator.register_capability("live.public_stream", public_stream)
         if self.telemetry:
+            coordinator.register_capability('image.backend_invoke',
+                lambda backend, arguments: self.telemetry.image_backend_call(
+                    coordinator.session_id, backend, arguments, run_id=activity_run_id))
             coordinator.register_capability('web.provider_observe', lambda provider: self.telemetry.instrument_provider(coordinator.session_id, provider, run_id=activity_run_id))
             coordinator.register_capability('web.provider_call', lambda provider, request, invoke, **kwargs: self.telemetry.provider_call(coordinator.session_id, provider, request, invoke, run_id=activity_run_id, **kwargs))
             registry = coordinator.get_capability("live.children")
@@ -1638,7 +1641,8 @@ class Worker:
                 from amplifier_web.handoff_drain import finish
                 if not data.get('cancel'):
                     await finish(self, data.get('receipt'))
-                result = await inspect(self, data['request_id'], data.get('cancel', False), update=data.get('update') is True)
+                result = await inspect(self, data['request_id'], data.get('cancel', False),
+                    update=data.get('update') is True, expected=(data.get('receipt') or {}).get('updateWait'))
             elif op == "desktop.readiness":
                 if not self.controls:
                     result = {"status": "unavailable", "reason": "Conversation tools are not mounted."}
