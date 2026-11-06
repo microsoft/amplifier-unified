@@ -2,12 +2,12 @@
   "status": "canonical-candidate-not-merged",
   "localProviders": {
     "azure-openai": {
-      "commit": "738a75b16c77f4fddd502a81ecc0035b9f26be15",
-      "archiveSha256": "9b3dc40528f377181d1237e9f1b793f364cca804981eaabf9fb30070fdcd2ac8",
+      "commit": "8c39c8211d9b2724172c717116bb9f651126b052",
+      "archiveSha256": "c7d16009fbb1b4f49316cc3dd1516036cab92a0979f7df7ab02a4032f827c1a3",
       "module": "amplifier_module_provider_azure_openai",
       "source": "configured",
       "files": {
-        "__init__.py": "8827cddc607e90480797c81dec87c923a9c059f7923ebcf6f2765cd27d0a7d13",
+        "__init__.py": "59e8b16795b04c3e625ae07b0ecb44045e583085aaa34bd7a88d6b76e8b205dd",
         "_cost.py": "35ffd319bc2b16343573140e0a6d8de2a6cb7a43e33c073b326cbd2205f223a4",
         "_model_listing.py": "a51d01bd5642c7597dcde0b19ef4e7643f37d181cd2c44ad2f2de314611a0c82",
         "decision_hook.py": "3824c27b29ac6fe2746caeca0b321a474bebdac98a93204ec03001b0d8bd139a",
