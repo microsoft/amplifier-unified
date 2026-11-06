@@ -335,8 +335,8 @@ async def test_storage_wait_cannot_yield_between_final_guard_and_provider_entry(
     observer, _, provider = observed(tmp_path)
     gate, started = threading.Event(), threading.Event()
     original = observer.store.begin
-    def delayed(*args):
-        started.set(); gate.wait(5); return original(*args)
+    def delayed(*args, **kwargs):
+        started.set(); gate.wait(5); return original(*args, **kwargs)
     monkeypatch.setattr(observer.store, 'begin', delayed)
     task = asyncio.create_task(provider.complete(request()))
     try:
@@ -368,3 +368,60 @@ async def test_authenticated_action_and_peer_scope_without_runtime_wake(tmp_path
     assert rejected.status == 403
     with pytest.raises(AppError):
         await app['service'].dispatch('context.inspect', {'sessionId':sid}, origin='agent', caller_session_id='peer')
+
+
+def test_empty_and_adversarial_projection_work_is_bounded():
+    from amplifier_web.context_inspection import MAX_VISITS, MAX_TEXT_CHARS
+    timings = []
+    for size in (100, 10000, 100000):
+        work = {}
+        # Use a non-copying repeated sequence; no fixture hydration cost is
+        # confused with projection work. Empty content must still spend visits.
+        value = SimpleNamespace(messages=[{'role':'user','content':[]}] * size, tools=[])
+        started = time.perf_counter()
+        manifest, _ = projection(value, work=work)
+        timings.append({'messages':size,'seconds':time.perf_counter()-started,'work':work})
+        assert work['messages'] == min(size, MAX_VISITS)
+        assert manifest['bounded'] == (size > MAX_VISITS)
+    work = {}
+    adversarial = '<context_file paths="x">' * 20000  # no closing tag
+    started = time.perf_counter()
+    manifest, _ = projection(SimpleNamespace(messages=[
+        {'role':'system','content':adversarial}] * 10000, tools=[]), work=work)
+    timings.append({'shape':'unclosed repeated wrappers','seconds':time.perf_counter()-started,'work':work})
+    assert work['wrapperCharacters'] <= MAX_TEXT_CHARS
+    assert work['messages'] + work['blocks'] <= MAX_VISITS
+    assert manifest['bounded'] and manifest['estimatedTextTokens'] == 0
+    # With the global content allowance exhausted, schemas must not encode.
+    work = {}
+    blocks = [{'type':'text','text':None}] * 10000
+    projection(SimpleNamespace(messages=[{'role':'user','content':blocks}],tools=[]), work=work)
+    assert work['messages'] + work['blocks'] == MAX_VISITS
+    evidence('bounded-work', {'method':'deterministic visited work; timings descriptive, not a universal gate','cases':timings})
+
+
+def test_expiry_read_policy_and_physical_next_capture_retirement(tmp_path):
+    store = InspectionStore(tmp_path / 'capture')
+    manifest, texts = projection(request('old recorded text'), bodies=True)
+    old = {'callId':'llm:aged','startedAt':time.time()-3*86400,'phase':'running'}
+    store.begin(old, manifest, texts)
+    store.finish(old['callId'], 'completed', {})
+    assert store.index(days=1) == []
+    assert store._path(key(old['callId'])+'.txt').exists(), 'read expiry is not a physical deletion claim'
+    assert len(store.index(days=None)) == 1, 'finish must not orphan an aged indexed body'
+    store.begin({'callId':'llm:new','startedAt':time.time(),'phase':'running'}, *projection(request(),bodies=True), days=1)
+    assert not store._path(key(old['callId'])+'.txt').exists()
+    assert not store._path(key(old['callId'])+'.json').exists()
+    with pytest.raises(ValueError): store.read(call_id=old['callId'], days=1)
+
+
+async def test_astral_pagination_offsets_are_unicode_codepoints(tmp_path):
+    observer, _, provider = observed(tmp_path)
+    await provider.complete(request('😀' * 10000))
+    await observer.drain()
+    result = observer.store.read(bodies=True)
+    item = next(i for i in result['items'] if i['characters'] == 10000)
+    page = observer.store.read(call_id=result['selected']['callId'], item_id=item['id'], bodies=True)
+    assert page['endOffset'] == 6000 and page['nextOffset'] == 6000 and len(page['text']) == 6000
+    page2 = observer.store.read(call_id=result['selected']['callId'], item_id=item['id'], offset=6000, bodies=True)
+    assert page2['endOffset'] == 10000 and page2['nextOffset'] is None and len(page2['text']) == 4000

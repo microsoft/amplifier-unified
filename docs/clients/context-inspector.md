@@ -43,9 +43,13 @@ wrapper paths are labels, not authenticated filesystem provenance. Text hashes b
 the captured redacted copy, not a later disk file. Current recording revocation gates
 content reads and is rechecked after asynchronous file work.
 
-The native diagnostic directory owns a four-request ring, at most 30 days (or the
-shorter diagnostic retention preference). Each snapshot has at most 256 items and
-one million inspected text characters, with at most 120,000 characters per item.
+The native diagnostic directory owns a four-request ring. Read eligibility is at
+most 30 days (or the shorter diagnostic retention preference). Expired indexed
+files are physically removed on the next capture, not by a quiet-session timer;
+native session deletion owns the containing directory. Reads do not delete files.
+This distinction is displayed in the inspector. Each snapshot has at most 256 items and
+one million scanned/inspected text characters, at most 1,024 message/block/tool
+visits (including empty representations), with at most 120,000 characters per item.
 Selected content is returned in 6,000-character pages. A bounded four-write pending
 set can omit observations under storage pressure without limiting model execution.
 The UI reports the last **observed** identity; it does not assert complete coverage

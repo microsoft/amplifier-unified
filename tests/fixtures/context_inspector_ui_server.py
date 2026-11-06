@@ -48,10 +48,15 @@ async def main(home):
             Message(role='tool', tool_call_id='fixture-tool', content='Evidence from selected artifact.\n' * 30),
             Message(role='user', content='Opaque reference', metadata={'openai:compaction': {'output':'NEVER-EXPOSE-OPAQUE'}}),
         ], tools=[ToolSpec(name='read_file', description='Read a selected permitted file.', parameters={'type':'object','properties':{'path':{'type':'string'}}})])
+        if scenario == 'unicode':
+            value.messages[1].content = '😀' * 10000
         if scenario != 'partial':
             await provider.request_budget(value)
         await provider.complete(value)
         await observer.drain()
+        if scenario == 'known-window-no-usage':
+            latest = observer.store.index()[0]
+            observer.store.finish(latest['callId'], 'completed', {})
     await capture()
     service._publish()
     async def scenario(request):

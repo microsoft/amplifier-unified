@@ -80,7 +80,7 @@ class InspectionStore:
         cutoff = time.time() - days * 86400 if days is not None else 0
         return [v for v in values if v.get('startedAt', 0) >= cutoff]
 
-    def begin(self, header, manifest, texts):
+    def begin(self, header, manifest, texts, *, days=30):
         self._path('index.json')
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         identity = key(header['callId'])
@@ -103,7 +103,7 @@ class InspectionStore:
             self._write(identity + '.json', {**manifest, **header})
             rows = [r for r in rows if r['callId'] != header['callId']] + [header]
             rows.sort(key=lambda r: r['startedAt'], reverse=True)
-            eligible = [r for r in rows if r['startedAt'] >= time.time() - 30 * 86400]
+            eligible = [r for r in rows if r['startedAt'] >= time.time() - days * 86400]
             # Keep the last completed request even during many new failures.
             completed = next((r for r in eligible if r['phase'] == 'completed'), None)
             keep = eligible[:MAX_REQUESTS]
@@ -117,7 +117,7 @@ class InspectionStore:
 
     def finish(self, call_id, phase, usage):
         with FileLock(str(self._path('.lock')), timeout=2):
-            rows = self.index()
+            rows = self.index(days=None)
             row = next((r for r in rows if r['callId'] == call_id), None)
             if row is None:
                 return
@@ -132,7 +132,7 @@ class InspectionStore:
             raise ValueError('This request observation expired or is unavailable. Refresh the inspector.')
         result = {'version': 1, 'boundary': 'host-final ChatRequest; not provider wire or hidden state',
                   'requests': rows, 'selected': selected, 'latest': rows[0] if rows else None,
-                  'retention': f'Up to {MAX_REQUESTS} recent observations, at most {days} days.',
+                  'retention': f'Up to {MAX_REQUESTS} observations readable for {days} days. Expired files are removed on the next capture or by session deletion; there is no quiet-session expiry timer.',
                   'status': 'available' if selected else 'no_completed_request'}
         if selected is None:
             return result
@@ -164,7 +164,7 @@ class InspectionStore:
                 raise ValueError('Captured content changed; no current source was substituted.')
             text = raw.decode('utf-8')
             end = min(offset + PAGE_CHARS, len(text))
-            return {**result, 'itemId': item_id, 'text': text[offset:end], 'offset': offset,
+            return {**result, 'itemId': item_id, 'text': text[offset:end], 'offset': offset, 'endOffset': end,
                     'nextOffset': end if end < len(text) else None, 'characters': len(text), 'sha256': item['sha256']}
         visible = []
         for item in items:

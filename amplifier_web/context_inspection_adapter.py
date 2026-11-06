@@ -80,7 +80,7 @@ class ContextInspection:
         # No new await between the final guard and provider entry. Storage runs
         # alongside the call; finish drains this exact write before its outcome.
         # A crash before persistence honestly leaves no retained observation.
-        task = asyncio.create_task(asyncio.to_thread(self.store.begin, header, manifest, texts))
+        task = asyncio.create_task(asyncio.to_thread(self.store.begin, header, manifest, texts, days=config['days']))
         self.pending[row['id']] = task
         def consume_failure(done):
             if not done.cancelled():

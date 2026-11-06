@@ -7,15 +7,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 
 CATEGORIES = (('instructions', 'Instructions & files'), ('conversation', 'Conversation & results'),
               ('summary', 'Compacted summary'), ('reminders', 'Reminders'), ('tools', 'Tools & media'))
 MAX_ITEMS = 256
 MAX_TEXT_CHARS = 1_000_000
 MAX_ITEM_CHARS = 120_000
+MAX_VISITS = 1024
 METHOD = 'ceil(Unicode code points / 4) per text span; not a tokenizer'
-FILE = re.compile(r'<context_file\s+paths="([^"\n]{1,2000})"\s*>(.*?)</context_file>', re.S)
 
 
 def field(value, key, default=None):
@@ -26,9 +25,9 @@ def number(value):
     return value if type(value) is int and 0 <= value <= 10**10 else None
 
 
-def bounded_schema(value):
+def bounded_schema(value, *, limit=MAX_ITEM_CHARS):
     """Encode a schema without first copying or escaping an oversized string."""
-    remaining, nodes = MAX_ITEM_CHARS, 4096
+    remaining, nodes = min(MAX_ITEM_CHARS, limit), 4096
     parts = []
     def emit(text):
         nonlocal remaining
@@ -71,7 +70,7 @@ def bounded_schema(value):
     return ''.join(parts)
 
 
-def projection(request, *, bodies=False):
+def projection(request, *, bodies=False, work=None):
     """One bounded pass over the request's inspectable text, not saved history.
 
     Without body consent, labels are generic and no text/path/hash is retained.
@@ -80,6 +79,9 @@ def projection(request, *, bodies=False):
     from .provider_recording import redact_request
     items, texts = [], {}
     remaining = MAX_TEXT_CHARS
+    scan_remaining, visits = MAX_TEXT_CHARS, MAX_VISITS
+    work = work if work is not None else {}
+    work.update(messages=0, blocks=0, tools=0, wrapperCharacters=0)
     omitted = False
 
     def add(category, label, text=None, *, source=None, unavailable=None):
@@ -121,14 +123,20 @@ def projection(request, *, bodies=False):
         items.append(row)
 
     for index, message in enumerate(field(request, 'messages', ()) or ()):
-        if len(items) >= MAX_ITEMS or remaining <= 0:
+        if len(items) >= MAX_ITEMS or remaining <= 0 or visits <= 0:
             omitted = True
             break
+        visits -= 1
+        work['messages'] += 1
         role = field(message, 'role', '')
         metadata = field(message, 'metadata', {}) or {}
         metadata = metadata if isinstance(metadata, dict) else {}
         # Provider-owned compaction is never decoded or copied into an inspector.
-        if isinstance(metadata, dict) and any('compaction' in str(k) for k in metadata):
+        if len(metadata) > 32:
+            add('tools', 'Unclassified message', unavailable='Message metadata exceeds the observation allowance.')
+            omitted = True
+            continue
+        if any(isinstance(k, str) and 'compaction' in k[:200] for k in metadata):
             add('summary', 'Native compacted state', unavailable='Provider-owned opaque state; not inspectable.')
             continue
         category = ('summary' if metadata.get('source') == 'context-managed'
@@ -140,9 +148,11 @@ def projection(request, *, bodies=False):
             add(category, f'Message {index + 1}', unavailable='Unsupported message representation.')
             continue
         for block in blocks:
-            if len(items) >= MAX_ITEMS:
+            if len(items) >= MAX_ITEMS or remaining <= 0 or visits <= 0:
                 omitted = True
                 break
+            visits -= 1
+            work['blocks'] += 1
             kind = field(block, 'type')
             if kind != 'text':
                 add('tools', 'Opaque or media block', unavailable='Media, reasoning and provider-owned blocks are not recorded or sized.')
@@ -151,34 +161,51 @@ def projection(request, *, bodies=False):
             if not isinstance(text, str):
                 continue
             label = f'{role.title() if role in {"system", "developer", "user", "assistant", "tool"} else "Message"} {index + 1}'
-            # Never regex-scan a giant span. Wrapper parsing is a presentation
-            # aid; labels in prompt text cannot grant file access or authority.
-            matches = list(FILE.finditer(text)) if category == 'instructions' and len(text) <= MAX_TEXT_CHARS else []
+            # Monotonic bounded search, no regex suffix backtracking or eager
+            # match list. Each successful wrapper advances beyond its closing
+            # tag. An incomplete/malformed opening ends wrapper recognition.
+            # All inspected spans share one scan allowance, including empties.
             position = 0
-            for match in matches[:MAX_ITEMS]:
-                if match.start() > position:
-                    add(category, label + ' · instruction text', text[position:match.start()])
-                source = match.group(1)
-                add(category, source if bodies else f'Instruction file {len(items) + 1}', match.group(2), source=source)
-                # Wrapper syntax is framing, excluded from text attribution.
-                position = match.end()
-            if position < len(text) or not matches:
+            if category == 'instructions' and len(text) <= min(scan_remaining, remaining):
+                scan_remaining -= len(text)
+                work['wrapperCharacters'] += len(text)
+                opening, closing = '<context_file paths="', '</context_file>'
+                while len(items) < MAX_ITEMS and remaining > 0:
+                    start = text.find(opening, position)
+                    if start < 0:
+                        break
+                    label_start = start + len(opening)
+                    label_end = text.find('">', label_start, min(len(text), label_start + 2002))
+                    if label_end < 0:
+                        break
+                    body_start = label_end + 2
+                    end = text.find(closing, body_start)
+                    if end < 0:
+                        break
+                    if start > position:
+                        add(category, label + ' · instruction text', text[position:start])
+                    source = text[label_start:label_end]
+                    add(category, source if bodies else f'Instruction file {len(items) + 1}', text[body_start:end], source=source)
+                    position = end + len(closing)
+            if position < len(text) or position == 0:
                 add(category, label, text[position:])
         # Tool call arguments are model context too, but arbitrary arguments
         # may contain secrets. They stay unscaled in this first projection.
         if field(message, 'tool_calls'):
             add('tools', 'Tool call framing & arguments', unavailable='Structured call arguments are not attributed in this projection.')
     for index, tool in enumerate(field(request, 'tools', ()) or ()):
-        if len(items) >= MAX_ITEMS:
+        if len(items) >= MAX_ITEMS or remaining <= 0 or visits <= 0:
             omitted = True
             break
+        visits -= 1
+        work['tools'] += 1
         description = field(tool, 'description', '')
         schema = field(tool, 'parameters', field(tool, 'input_schema', {}))
         # Bounded encoder stops before materializing an unbounded schema.
         try:
-            if not isinstance(description, str) or len(description) > MAX_ITEM_CHARS:
+            if not isinstance(description, str) or len(description) + 1 > min(MAX_ITEM_CHARS, remaining):
                 raise ValueError('oversized schema description')
-            text = description + '\n' + bounded_schema(schema)
+            text = description + '\n' + bounded_schema(schema, limit=min(MAX_ITEM_CHARS, remaining) - len(description) - 1)
             name = field(tool, 'name')
             label = f'Tool · {name}' if bodies and isinstance(name, str) else f'Tool schema {index + 1}'
             add('tools', label, text)
