@@ -37,16 +37,26 @@ SYNTHETIC_KEY = "catalog-fixture-not-a-live-credential"
 SELECTION_ONLY = "selection-only-not-returned-by-api"
 MODEL_IDS = {
     "openai": ["gpt-6", "gpt-6-2026-11-01", "gpt-6-mini", "gpt-4o", "future-unrecognized-family"],
-    "anthropic": ["claude-sonnet-4-5-20250929", "account-only-experimental-model"],
-    "gemini": ["gemini-future-exp", "future-unrecognized-family", "tunedModels/customer-custom"],
+    "anthropic": ["claude-sonnet-5-4", "claude-sonnet-5-5",
+                  "claude-sonnet-5-5-20261101", "claude-sonnet-5-6-preview",
+                  "claude-haiku-5-5", "claude-opus-4-5", "account-only-experimental-model"],
+    "gemini": ["gemini-3.0-pro", "gemini-3.1-pro", "gemini-3.1-pro-2026-11-01",
+               "gemini-3.2-pro-preview", "gemini-3.1-flash", "gemini-3.1-flash-lite",
+               "gemini-3.1-pro-image", "embedding-only", "tunedModels/customer-custom"],
     "chat-completions": ["account-model-one", "future-unrecognized-family"],
     "openai-chatgpt": ["gpt-6", "gpt-6-2026-11-01", "gpt-6-mini", "account-zeta", "literal-fast"],
-    "github-copilot": ["gpt-4.1", "future-unrecognized-family"],
+    "github-copilot": ["gpt-5.4", "gpt-6", "gpt-6-2026-11-01", "gpt-6-mini",
+                       "auto", "future-unrecognized-family"],
 }
 OPENAI_DEFAULT_IDS = ["gpt-6", "gpt-6-mini"]
 CANONICAL_PROVIDERS = tuple(json.loads(Path(__file__).with_name(
     "canonical_model_catalog_candidate.json").read_text())["providers"])
 DEFAULT_IDS = {"openai": OPENAI_DEFAULT_IDS,
+               "anthropic": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-sonnet-5-6-preview"],
+               "gemini": ["gemini-3.1-flash", "gemini-3.1-flash-lite", "gemini-3.1-pro",
+                          "gemini-3.2-pro-preview"],
+               "chat-completions": MODEL_IDS["chat-completions"],
+               "github-copilot": ["auto", "future-unrecognized-family", "gpt-6", "gpt-6-mini"],
                "openai-chatgpt": ["gpt-6", "gpt-6-2026-11-01", "gpt-6-mini"]}
 _installed = False
 
@@ -66,7 +76,7 @@ def _mode():
     return mode
 
 
-def _payload(provider, empty=False):
+def _payload(provider, empty=False, *, lifecycle=None):
     ids = [] if empty else MODEL_IDS[provider]
     if provider in {"openai", "chat-completions"}:
         return {"object": "list", "data": [
@@ -74,14 +84,19 @@ def _payload(provider, empty=False):
             for mid in ids
         ]}
     if provider == "anthropic":
+        stages = {"claude-opus-4-5": "retired"}
+        ids = [mid for mid in ids if stages.get(mid, "active") in (lifecycle or ["active"])]
         return {
             "data": [{"id": mid, "display_name": mid, "type": "model",
+                      "lifecycle": stages.get(mid, "active"),
                       "created_at": "2026-01-01T00:00:00Z"} for mid in ids],
             "has_more": False, "first_id": ids[0] if ids else None,
             "last_id": ids[-1] if ids else None,
         }
     if provider == "gemini":
-        return {"models": [{"name": mid if mid.startswith("tunedModels/") else "models/" + mid}
+        return {"models": [{"name": mid if mid.startswith("tunedModels/") else "models/" + mid,
+                            "supportedGenerationMethods": ["embedContent"] if mid == "embedding-only"
+                            else ["generateContent"]}
                            for mid in ids]}
     if provider == "openai-chatgpt":
         return {"models": [{"slug": mid, "display_name": mid, "visibility": "list",
@@ -116,8 +131,14 @@ def _response(http, request):
     provider = _http_provider(request)
     mode = _mode()
     status = int(os.environ.get("UNIFIED_CATALOG_STATUS", "401")) if mode == "http-error" else 200
+    lifecycle = None
+    if provider == "anthropic":
+        lifecycle = request.url.params.get_list("lifecycle[]")
+        assert lifecycle and set(lifecycle) <= {"active", "deprecated", "retired"}
+        assert request.url.params["limit"] == "1000"
     _record("request", provider=provider, boundary="http", method=request.method,
-            path=request.url.path, mode=mode, status=status)
+            path=request.url.path, mode=mode, status=status,
+            **({"lifecycle": lifecycle} if lifecycle is not None else {}))
     header = "x-goog-api-key" if provider == "gemini" else "x-api-key" if provider == "anthropic" else "authorization"
     expected = SYNTHETIC_KEY if header != "authorization" else "Bearer " + SYNTHETIC_KEY
     if request.headers.get(header) != expected:
@@ -133,7 +154,7 @@ def _response(http, request):
         # Valid JSON with an invalid collection tests strict parsing, not HTTP.
         collection = "models" if provider in {"gemini", "openai-chatgpt"} else "data"
         return http.Response(200, json={collection: "not-a-list", "object": "list", "has_more": False})
-    return http.Response(200, json=_payload(provider, empty=mode == "empty"))
+    return http.Response(200, json=_payload(provider, empty=mode == "empty", lifecycle=lifecycle))
 
 
 def _patch_http(http):
@@ -244,6 +265,9 @@ def class_evidence(provider):
     package_root = Path(importlib.import_module(package).__file__).resolve().parent
     candidate = json.loads(Path(__file__).with_name(
         "canonical_model_catalog_candidate.json").read_text())["providers"][provider]
+    sdk = candidate.get("sdk")
+    if sdk and importlib.metadata.version(sdk["distribution"]) != sdk["qualificationVersion"]:
+        raise AssertionError("Candidate SDK differs from the qualification manifest")
     if candidate["module"] != package or not path.is_relative_to(package_root):
         raise AssertionError("Candidate class is not defined in its installed package")
     for relative, expected in candidate["files"].items():

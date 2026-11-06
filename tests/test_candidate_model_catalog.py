@@ -55,10 +55,6 @@ def _config(provider, tmp_path):
     if provider == "anthropic":
         # Anthropic's SDK appends /v1/models, unlike OpenAI's /models route.
         config["base_url"] = "https://catalog.invalid/anthropic"
-    if provider == "openai":
-        config["hide_dated_models"] = True
-    if provider in {"anthropic", "chat-completions"}:
-        config["filtered"] = True
     if provider == "github-copilot":
         config["github_token"] = "${CATALOG_CANDIDATE_KEY}"
     if provider == "openai-chatgpt":
@@ -242,6 +238,85 @@ async def test_actual_gpt_configured_scopes_share_binding_not_inventory(
             info=result['providerMetadata']['modelListInfo']
             assert info['source']=='provider-api' and info['filters_keyword']=='filters'
         assert len(set(identities))==4 and len(set(bindings))==1
+        assert not _records(candidate_environment,'forbidden')
+    finally:await manager.catalog.close()
+
+
+@pytest.mark.parametrize("provider,custom", [
+    ("chat-completions", {"include": ["ACCOUNT*"]}),
+    ("gemini", {"include": ["GEMINI-3.1*"], "chat_only": True, "latest_per_tier": False,
+                "hide_dated": True}),
+    ("github-copilot", {"include": ["GPT*"], "latest_per_family": False, "hide_dated": True}),
+])
+async def test_actual_provider_specific_selectors_are_opaque_to_host(
+    provider, custom, tmp_path, monkeypatch, candidate_environment,
+):
+    monkeypatch.setenv("UNIFIED_CATALOG_PROVIDER", provider)
+    manager = SetupManager(tmp_path / "host", catalog=ProviderCatalog(tmp_path / "catalog.json"),
+                           probe_command=[sys.executable, str(TRANSPORT_FILE)])
+    row = {"id": "candidate", "module": "provider-" + provider,
+           "config": _config(provider, tmp_path)}
+    custom_ids = {
+        "chat-completions": ["account-model-one"],
+        "gemini": ["gemini-3.1-flash", "gemini-3.1-flash-lite", "gemini-3.1-pro"],
+        "github-copilot": ["gpt-5.4", "gpt-6", "gpt-6-mini"],
+    }
+    keys, bindings = [], []
+    try:
+        for filters, expected in [
+            (None, transport.DEFAULT_IDS[provider]),
+            ({}, sorted(transport.MODEL_IDS[provider])),
+            (custom, custom_ids[provider]),
+            ({"include": []}, []),
+        ]:
+            if filters is None:
+                row["config"].pop("model_filters", None)
+            else:
+                row["config"]["model_filters"] = filters
+            write_private(amplifier_home() / "settings.yaml",
+                          yaml.safe_dump({"config": {"providers": [row]}}))
+            keys.append(manager.catalog_key({"id": "candidate"}, str(tmp_path)))
+            bindings.append(manager.catalog_key({"id": "candidate"}, str(tmp_path), binding=True))
+            result = await manager.cached_probe("providers.models", {"id": "candidate"}, str(tmp_path))
+            assert [model["id"] for model in result["models"]] == expected
+            assert result["modelsProvenance"] == "provider-api"
+            info = result["providerMetadata"]["modelListInfo"]
+            assert set(custom) <= set(info["filters_schema"]["properties"])
+        assert len(set(keys)) == 4 and len(set(bindings)) == 1
+        assert not _records(candidate_environment, "forbidden")
+    finally:
+        await manager.catalog.close()
+
+
+async def test_actual_anthropic_lifecycle_scope_is_provider_owned(
+    tmp_path, monkeypatch, candidate_environment,
+):
+    """Real SDK query fields and local recommendations, not host-side policy."""
+    monkeypatch.setenv('UNIFIED_CATALOG_PROVIDER','anthropic')
+    manager=SetupManager(tmp_path/'host',catalog=ProviderCatalog(tmp_path/'catalog.json'),
+                         probe_command=[sys.executable,str(TRANSPORT_FILE)])
+    row={'id':'candidate','module':'provider-anthropic','config':_config('anthropic',tmp_path)}
+    workspace=str(tmp_path);keys=[];bindings=[]
+    cases=[
+        (None,transport.DEFAULT_IDS['anthropic'],['active']),
+        ({},sorted(transport.MODEL_IDS['anthropic']),['active','deprecated','retired']),
+        ({'lifecycle':['retired']},['claude-opus-4-5'],['retired']),
+        ({'lifecycle':['active'],'include':['CLAUDE-SONNET*'],'exclude':['*preview'],
+          'latest_per_family':False,'hide_dated':False},
+         ['claude-sonnet-5-4','claude-sonnet-5-5','claude-sonnet-5-5-20261101'],['active']),
+    ]
+    try:
+        for filters,expected,lifecycle in cases:
+            if filters is None:row['config'].pop('model_filters',None)
+            else:row['config']['model_filters']=filters
+            write_private(amplifier_home()/'settings.yaml',yaml.safe_dump({'config':{'providers':[row]}}))
+            keys.append(manager.catalog_key({'id':'candidate'},workspace))
+            bindings.append(manager.catalog_key({'id':'candidate'},workspace,binding=True))
+            result=await manager.cached_probe('providers.models',{'id':'candidate'},workspace)
+            assert [m['id'] for m in result['models']]==expected
+            assert result['modelsProvenance']=='provider-api'
+            assert _records(candidate_environment,'request')[-1]['lifecycle']==lifecycle
+        assert len(set(keys))==4 and len(set(bindings))==1
         assert not _records(candidate_environment,'forbidden')
     finally:await manager.catalog.close()
 

@@ -104,9 +104,10 @@ from failure or unsupported listing. Returned IDs are preserved exactly.
 
 Providers own recommendations. Unified calls `list_models()` without keywords,
 preserving that provider's effective configured `model_filters` or defaults.
-Explicit saved `model_filters: {}` requests all models for the canonical OpenAI
-adapter; a custom mapping replaces defaults, not merges with them. OpenAI's
-declared default is `include: ["gpt-6*"]`, `exclude: []`, `hide_dated: true`.
+For adapters declaring `unfiltered: {}` and `override: "replace"`, explicit saved
+`model_filters: {}` requests the full inventory; a custom mapping replaces
+defaults, not merges with them. OpenAI's declared default is
+`include: ["gpt-6*"]`, `exclude: []`, `hide_dated: true`.
 Other providers' policies remain their owners' decisions. Optional v1 metadata
 advertises `filters_keyword`, `filters_schema`, `default_filters`, `unfiltered`
 and `override`; selectors are passed only when advertised. Unified does not copy
@@ -118,6 +119,12 @@ effective `model_filters` mapping participates in catalog identity. Configured,
 deployment, static and simulated lists are not evidence of fresh API inventory;
 this consumer leaves them in unsupported/manual mode rather than relabeling
 their IDs as API-verified. Their exact IDs remain valid selection intent.
+
+The opt-in candidate graph in `tests/fixtures/canonical_model_catalog_candidate.json`
+binds reviewed provider revisions and module hashes, including required SDK versions.
+Its offline checks exercise real installed providers through Unified's probe/cache
+with synthetic HTTP or SDK responses. This is candidate integration evidence, not
+an upstream merge, runtime-lock adoption, live entitlement or inference qualification.
 
 The host's existing private `ProviderCatalog` owns single-flight discovery and
 restart reuse. Explicit Refresh reloads the selected connection once. Reopen,
