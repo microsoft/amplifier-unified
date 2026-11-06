@@ -2,6 +2,450 @@
 
 Status: implementation design and trial preparation; **not a native Windows support claim**.
 
+## Zero-prerequisite bootstrap prototype
+
+The requested direction is a single PowerShell paste for an ordinary Windows
+information worker, with **no curl, Git, Python, uv, WSL, PowerShell 7 or winget
+assumed**. `scripts/install.ps1` now has a separate explicit prototype entry:
+`-PrototypeManifestUrl` plus `-PrototypeManifestSha256`. The no-argument public
+release installer still requires its native-support record and retains its
+closed activation gate. A prototype manifest has `status: prototype`; it is
+not a native-support record and cannot enable that public path.
+
+**Not yet a released installation command.** The Windows trial owner must first
+join the exact native candidate, collect its verified prototype inputs,
+publish the immutable prototype assets and provide their digests. This code
+candidate does not claim those artifacts exist or that absent-prerequisite
+installation has run on a clean Windows account.
+
+### Chosen prerequisite strategy
+
+1. The selected `pinned-vcs` mode always acquires root-local official uv
+   **0.12.18** and standard **MinGit
+   2.56.0.windows.4** ZIPs. Verify pinned SHA-256 before extraction/execution;
+   retain whole distributions, licenses and receipts. It does not rely on
+   preinstalled developer tools. The retained `offline-wheels` mode may reuse
+   compatible, ACL-validated existing helpers.
+2. Use uv's managed ordinary **CPython 3.13**, selecting an exact supported patch
+   in the prototype plan. Download into this installation's private Python
+   directory with `--no-bin --no-registry`. Store aliases and a system Python
+   3.15 are neither invoked nor replaced. No compiler is installed.
+3. Install the original app plus 59 registry wheels by hash, without dependency
+   resolution or source-build fallback. Then install **five full-commit Git
+   requirements** noneditably using normal uv semantics and six pinned isolated
+   Hatchling backend wheels. This online step preserves honest installed Git
+   origins; it does not replace them with locally built dependency wheels.
+4. Use an absolute Python/launcher and retained helper paths on every relaunch.
+   No user/machine PATH, shell profile, default Python, registry registration,
+   service or Scheduler mutation is needed.
+
+Official references: [uv standalone installation](https://docs.astral.sh/uv/getting-started/installation/),
+[uv unmanaged installer options](https://docs.astral.sh/uv/reference/installer/),
+[managed Python provenance](https://docs.astral.sh/uv/concepts/python-versions/),
+and [MinGit's non-interactive application distribution](https://gitforwindows.org/mingit).
+The [Scoop installer](https://github.com/ScoopInstaller/Install) demonstrates
+non-admin PowerShell setup but adds a package-manager and policy surface; it is
+not installed here. [rustup's installation methods](https://rust-lang.github.io/rustup/installation/other.html)
+are a useful architecture/checksum precedent, not a dependency.
+Do not copy execution-policy bypasses from other projects.
+
+Pinned helper digests are those reported by the publishers' exact
+[uv release metadata](https://api.github.com/repos/astral-sh/uv/releases/tags/0.12.18)
+and [Git for Windows metadata](https://api.github.com/repos/git-for-windows/git/releases/tags/v2.56.0.windows.4).
+Publisher-served digests establish integrity, not independent signatures.
+uv verifies its own pinned python-build-standalone download digest; the exact
+Python patch and resulting interpreter still need native candidate checks.
+
+### Build and delivery interface — trial owner only
+
+#### Selected online frozen-VCS mode
+
+The short path is now `--source-mode pinned-vcs`. A completely offline capsule
+was an engineering option, not a product promise. The original offline packager
+(`--source-mode offline`, or the unchanged default) below remains for review and
+prior evidence, but does **not** establish
+accepted Git origins. No canonical provenance facility or fabricated
+`direct_url.json` is introduced.
+
+Supply the unchanged app wheel plus **59** actual registry wheels in the runtime
+wheel directory, the **six** build-only wheels in a separate directory, the exact
+frozen lock and retained production requirements, and a reviewed inventory for
+the 60 runtime wheel inputs. The builder validates the frozen source/lock/export,
+actual wheel identities, original app hash/size/metadata, registry lock hashes,
+five canonical full Git refs and the separate backend closure before creating
+output. The source-mode manifest and capsule identity must agree.
+
+```sh
+python scripts/windows_bootstrap_capsule.py --source-mode pinned-vcs --wheelhouse /path/to/60-runtime-wheels --build-wheelhouse /path/to/6-build-wheels --lock /path/to/frozen/uv.lock --production-requirements /path/to/production-requirements.txt --inventory /path/to/reviewed-runtime-inventory.json --output /path/to/new-output --source 1c4ac3b4f9ed5d2d3f588f6fa6c74a119e439153 --version 0.54.5 --python EXACT_3.13_PATCH --url https://github.com/microsoft/amplifier-unified/releases/download/EXACT_PROTOTYPE_TAG/windows-prototype.zip
+```
+
+That is an owner-side build template, not a usable installation command or a
+claim that those wheel bytes/public assets are present here. Runtime inputs
+exclude the five Git wheels. Build-only pins from the exact lock are
+`hatchling==1.32.4`, `packaging==26.3`, `pathspec==1.1.1`, `pluggy==1.6.0`,
+`tomlkit==0.15.2`, and `trove-classifiers==2026.9.21.13`; all must be verified
+pure-Python wheels. They do not become target host dependencies merely because
+they build the five source packages.
+
+The installer validates the extracted source payload using the private managed
+Python **before** venv creation or package installation. It reconstructs the
+requirements/constraints from the frozen inputs and refuses injected options,
+wrong refs/subdirectories, missing/extra wheels or changed hashes. It then uses:
+
+1. `uv pip install --no-index --no-deps --require-hashes --only-binary :all:`
+   with the local runtime wheel directory and the 60 generated hashed requirements.
+2. `uv pip install --no-index --no-deps --no-require-hashes --verify-hashes
+   --only-binary :all: --no-binary <the-five-Git-names> --find-links <build-wheels>
+   --build-constraint <build-constraints.txt> -r <git-requirements.txt>`.
+   The named exceptions permit only the five trusted source builds. Git fetching
+   stays online; isolated backend resolution has only the verified local wheels.
+3. Read-only installed metadata auditing for exactly 65 distributions, no
+   editables, all five real repository/commit/subdirectory origins and expected
+   versions, then `uv pip check`, normal launcher validation and shortcut creation.
+
+These flags were checked against
+[uv 0.12.18 CLI definitions](https://raw.githubusercontent.com/astral-sh/uv/0.12.18/crates/uv-cli/src/lib.rs),
+[build policy](https://raw.githubusercontent.com/astral-sh/uv/0.12.18/crates/uv-configuration/src/build_options.rs),
+[hash modes](https://raw.githubusercontent.com/astral-sh/uv/0.12.18/crates/uv-configuration/src/hash.rs),
+and [pip installation](https://raw.githubusercontent.com/astral-sh/uv/0.12.18/crates/uv/src/commands/pip/install.rs).
+`--no-require-hashes` alone disables hash checking in this version; pairing it
+with `--verify-hashes` retains supplied build-constraint hash verification.
+`--no-deps` skips runtime dependency resolution, not isolated backend setup.
+Constraints are not themselves an allowlist; complete local wheel-set validation
+is also required. `--no-index` does not prohibit Git URLs or network calls made
+by trusted build code. Build isolation is not an OS security sandbox.
+
+Installer child processes clear inherited `UV_*`, `PIP_*`, `PYTHONHOME`,
+`PYTHONPATH` and virtualenv overrides before applying the private layout.
+They also discard Git executable/template redirects so inherited
+`GIT_EXEC_PATH` or `GIT_TEMPLATE_DIR` cannot substitute another installation's
+helpers or hooks. The pinned-mode relaunch environment applies the same redirect
+removal while keeping the caller's provider credentials inherited, not saved.
+Anonymous Git access disables credential helpers/configuration. Ordinary
+`USERPROFILE`, `HOMEDRIVE` and `HOMEPATH` stay inherited, not removed or redirected.
+No credentials are saved in the plan/receipt. On relaunch the wrapper restores
+root-local cache, tools, Python and absolute helper PATH. Bootstrap phase uv is
+**0.12.18**; the installed host's `uv==0.13.4` dependency is a distinct artifact,
+not silently substituted into the install phase.
+
+The original app wheel is a narrow allowed root artifact; this does not grant
+verified app Git identity for later optional-feature addition. Keep that
+limitation and the actual worker-graph/onboarding acceptance separate.
+
+#### Retained all-wheel mode (`offline`)
+
+`scripts/windows_bootstrap_capsule.py` packages an **already-built**, complete
+Windows x64/CPython 3.13 host wheelhouse. It performs no dependency resolution,
+installation or publication. For example, with the selected candidate's actual
+values and an absent output directory:
+
+```sh
+python scripts/windows_bootstrap_capsule.py --wheelhouse /path/to/qualified-wheels --inventory /path/to/reviewed-inventory.json --output /path/to/new-output --source EXACT_APP_40_HEX_COMMIT --version EXACT_APP_VERSION --python EXACT_3.13_PATCH --url https://github.com/microsoft/amplifier-unified/releases/download/EXACT_PROTOTYPE_TAG/windows-prototype.zip
+```
+
+The capsule contains `capsule.json` (app source/version), `requirements.txt` with
+every wheel's SHA-256, `wheels/`, and this candidate's
+`windows_prototype_launch.py` as `launch.py`, plus the reviewed `inventory.json`.
+The builder emits
+`windows-prototype.json` with schema 1, status `prototype`, exact source/version,
+architecture `x86_64`, Python patch and capsule URL/SHA-256. Output is create-new
+only; duplicate distributions, missing app identity, incompatible CPython tags,
+symlinks, and any name/version/hash difference from the reviewed inventory refuse
+before output creation. The inventory is a separate reviewed input, **not** a
+list generated from whatever happens to be in the wheel directory:
+
+```json
+{
+  "schema": 1,
+  "source": "EXACT_APP_40_HEX_COMMIT",
+  "lockSha256": "EXACT_LOCK_64_HEX_SHA256",
+  "packages": {
+    "amplifier-unified": {
+      "version": "EXACT_APP_VERSION",
+      "sha256": "EXACT_ORIGINAL_WHEEL_64_HEX_SHA256"
+    }
+  }
+}
+```
+
+This abbreviated schema example is deliberately invalid until resolved; a real
+inventory must contain the **entire** reviewed production set. Do not self-certify
+closure by hashing arbitrary input wheels. The owner first checks actual
+`METADATA`, active Windows markers/extras, source/build receipts and licenses.
+The builder only enforces equality with that reviewed selection. Neither a
+manifest label nor `pip check` establishes source provenance or selected extras.
+
+#### Frozen 0.54.5 production inputs — provisional packaging plan
+
+The app input is `1c4ac3b4f9ed5d2d3f588f6fa6c74a119e439153`, tree
+`9657754b48f03f518fc421861738a82f8864baf7`, version **0.54.5**. Preserve the
+already accepted original app wheel, **10,218,316 bytes**, SHA-256
+`de950fe6dcf43e9944bfae4c45b6adeedc4b2fdbee4eda565443516a3ffcc9f5`.
+Do not rebuild it, rename it as a different source, or label it with the host
+application's newer version. A bootstrap join is a separate code identity:
+record that commit and the exact builder, launcher and installer hashes alongside
+the capsule. `--source` remains the **app** source above.
+
+The frozen `uv.lock` SHA-256 is
+`02ca2a403cb6546238e1e3b1eed2b07e2b848f7f1edc301fc67f4cc956f89c45`.
+The retained production requirements export is **2,047 bytes**, SHA-256
+`4013b4a681ce2e7729c7763069a0fc621d46b34e5bc0511c17fa074f1bafa6a0`.
+It has 65 cross-platform dependency lines, excluding the app. Windows CPython
+3.13 activates **64 dependencies plus the app = 65 distributions**. It is not a
+hash-required wheelhouse manifest and must not be given directly to the offline
+installer. A sanitized native installed-host audit verifies this production
+selection from actual metadata; its SHA-256 is
+`a7dbcf604af61d65edba22d5a17ad415e7b2b77d21916abaf90674337fa2db7d`.
+That evidence does not establish an offline capsule installation.
+
+Select only the app's base dependencies, including its explicit
+`amplifier-bundle-context-intelligence[client]` and transitive `pyjwt[crypto]`.
+Evaluate Windows markers: include `colorama` and `pywin32`; exclude
+`httpx2-jsfetch` (`emscripten` only). Keep unconditionally declared `python-pam`
+and `six`. Exclude dev/artifacts groups, app optional extras, pytest, tool-exec,
+QuickJS, custom runtime fixtures, optional provider modules and browser/desktop
+automation. Do not copy the producer's 87-distribution development environment.
+
+The 64 dependencies consist of **59 registry wheels and five VCS wheels**:
+
+| Production source | Exact input |
+| --- | --- |
+| Core | `2.0.2`, registry `amplifier_core-2.0.2-cp311-abi3-win_amd64.whl`, SHA-256 `a784e9f0382c471794e429818d9e55360625523bc62c54cae56be172364c936c` |
+| Foundation | `c716df3cea84b2539aabdfea58a69ae676a1e853`, repository root |
+| Session naming | Same Foundation commit, `modules/hooks-session-naming` |
+| Memory | `5ac75ac85b9972e06936630e347023af107fd364`, repository root |
+| UI Use / Context Intelligence | `5e3b08b8e06a6095314200476d387508ddb32f67` / `a80ce69d0e96e9a343501f238dcd867350dd9aa2`, respective repository roots |
+
+For each registry package, use its exact selected version, Windows-compatible
+wheel URL and SHA-256 in the frozen lock. All 59 have compatible wheel candidates
+in that lock; this is metadata availability, not a download result. Accept
+ordinary `cp313-cp313-win_amd64`, compatible older `cp3N-abi3-win_amd64` (for
+example Core's `cp311-abi3`), and compatible pure Python wheels. Reject sdists,
+free-threaded/other-platform/newer-interpreter wheels. Never compile Core.
+Keep the private bootstrap uv **0.12.18** separate from the production
+`uv==0.13.4` dependency pulled in by Memory.
+
+The retained all-wheel packaging procedure, **not executed by this local join**,
+is below. Its installed Git-origin boundary remains unresolved; it is **not**
+the selected short path above:
+
+1. Obtain the exact original app wheel through the supported artifact transfer.
+   Verify its size/hash before use. Reuse the accepted production export and
+   exact lock; do not resolve moving `main` or repeat the installed-host audit.
+2. In an authorized build environment, collect the 59 registry wheels using the
+   lock's URLs/hashes. Obtain or build the five VCS wheels at the full commits
+   above, with `python -m build --wheel --no-isolation --outdir <new-dir>
+   <exact-checkout-or-subdirectory>`. Record build-tool versions and build inputs;
+   build dependencies stay outside the host wheelhouse. Do not run this command
+   on the information worker's box. Preserve each wheel's licenses/notices.
+3. Verify actual wheel metadata and compatible tags against the accepted
+   production set: exactly 65 names/versions, no missing or extra distributions.
+   Match the five build receipts to the exact repository/commit/subdirectory;
+   check all registry wheel hashes against the lock and the app against its
+   original digest. Create the reviewed inventory with these **actual** hashes,
+   retain its review/source receipts, then run the builder above into a new output.
+4. Before delivery, qualify actual offline installation with the existing
+   hash-required/binary-only/no-deps commands. Verify installed provenance as well
+   as the graph: local wheel installs may record archive `direct_url.json`, not
+   the original Git commit. `app_component_graph`, update identity and selected
+   dependency recovery consume this information. Do **not** manufacture Git
+   provenance records, remove those checks or treat `pip check` as their proof.
+5. Only after those checks and the missing ordinary-user bootstrap checks below,
+   publish immutable prototype assets through the publication owner. Supply their
+   real digests and one resolved paste. No capsule, digest, public URL or native
+   support record is asserted by this plan.
+
+**Remaining all-wheel inputs:** a materialized complete Windows wheelhouse and its
+reviewed hash inventory/build receipts; verified installed-wheel provenance behavior;
+exact managed Python patch supported by pinned uv; and eventual publication
+locations. The accepted app wheel and native host graph already exist, but this
+local packaging checkout does not receive binaries merely by reading their
+retained identities. The first actual worker graph remains **unprepared**.
+UI/onboarding work proceeds independently; a later app correction requires a
+new exact app input, not relabeling this candidate.
+
+After publication and review, the owner supplies one **fully resolved** paste,
+not placeholders for the information worker to assemble. The following is its
+reviewable template; its guards refuse until real exact values replace them:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$BootstrapRef = 'EXACT_40_HEX_BOOTSTRAP_COMMIT'
+$BootstrapHash = 'EXACT_64_HEX_SCRIPT_SHA256'
+$PlanUrl = 'https://github.com/microsoft/amplifier-unified/releases/download/EXACT_PROTOTYPE_TAG/windows-prototype.json'
+$PlanHash = 'EXACT_64_HEX_MANIFEST_SHA256'
+if ($BootstrapRef -notmatch '^[0-9a-f]{40}$' -or $BootstrapHash -notmatch '^[0-9a-f]{64}$' -or $PlanHash -notmatch '^[0-9a-f]{64}$') { throw 'Obtain the resolved candidate paste from the trial owner.' }
+$SetupText = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Uri "https://raw.githubusercontent.com/microsoft/amplifier-unified/$BootstrapRef/scripts/install.ps1").Content
+$SetupBytes = [Text.Encoding]::UTF8.GetBytes($SetupText)
+if ($SetupBytes.Length -gt 1048576) { throw 'Setup script exceeds its size budget.' }
+$Hash = [Security.Cryptography.SHA256]::Create()
+try { $ObservedHash = ([BitConverter]::ToString($Hash.ComputeHash($SetupBytes))).Replace('-', '').ToLowerInvariant() } finally { $Hash.Dispose() }
+if ($ObservedHash -cne $BootstrapHash) { throw 'Setup script identity mismatch; no setup was run.' }
+. ([scriptblock]::Create($SetupText))
+Invoke-UnifiedPrototype $PlanUrl $PlanHash $false
+```
+
+This uses built-in Windows PowerShell 5.1 and .NET, without downloading another
+package manager, running a `.ps1` through a policy override or installing a
+machine-wide prerequisite. The downloaded script runs only after its reviewed
+hash matches. Enterprise script/language restrictions remain authoritative:
+if policy blocks this flow or `Add-Type`, stop and report the policy restriction,
+not a bypass. In particular, after a `.ps1` is denied as scripts disabled, do not
+retry its contents through `ScriptBlock`, dot-sourcing, `-Command`, `Unblock-File`,
+elevation or execution-policy changes. Report the effective policy and ask the
+organization's administrator for an approved software delivery route; do not ask
+the information worker to weaken policy. The existing Restricted-policy refusal
+is not cleared by an elevated CI runner's permissive policy.
+Windows 11 x64, a normal non-admin token, usable PowerShell/.NET,
+local fixed NTFS storage and permitted official HTTPS downloads are still
+environment requirements. No silent proxy or certificate exception is added.
+
+### Installation and restoration effects
+
+| Effect | Owned location / recovery |
+| --- | --- |
+| Setup artifacts and helpers | New private `LocalAppData/amplifier-install-<random>` root, owner/SYSTEM DACL at creation. Existing roots are never adopted or ACL-repaired. |
+| Python, host and caches | Root-local `python`, `python-bin`, `host`, `cache`, child `TEMP`/`TMP` in `temp`; host install uses `--no-index --require-hashes --only-binary :all: --no-deps`, followed by `uv pip check`. |
+| App, history and ownership | Distinct root-local `app`, `shared`, `ownership`; capture `shared/projects`, import `shared`, empty trial `workspace`. No personal history/config/keys copying. Inherited environment/tool-specific OAuth and external files remain outside this isolation. |
+| Launch and TLS | Private `Launch Unified.lnk`, exact venv Python and retained uv/Git paths. Normal CLI migration/TLS/ownership chain, numeric HTTPS loopback 8942, `serve --no-open`, then real owner `open`. Public CA export only; CurrentUser trust is the user's explicit certificate-viewer action, never an agent/installer import. |
+| Failure and rollback | No old install, pointer or global launcher is replaced. Failed partial root is retained with stage-only private log; no mutation retry. Download-only retry is bounded. Use the previous launcher to roll back. |
+
+Bootstrap directory pins permit WRITE sharing only for its own private tool
+mutation parents (`root`, `python`, `python-bin`, `cache`, `temp`) so uv can atomically
+rename staged downloads. ACL/handle identity validation and no-DELETE sharing
+remain; traversal ancestors and downloaded/extracted artifact files retain their
+strict sharing. The native offline fixture checks this exact rename boundary.
+
+Setup reruns are **side-by-side**, not an in-place updater: each gets a new
+private root and leaves previous roots intact. Do not repeat setup to relaunch;
+use the printed private shortcut. Relaunch restores helper/root settings and,
+when port 8942 is already occupied, attempts only real pinned owner entry; it
+does not reconfigure, adopt or stop that listener. A refusal stays a refusal.
+If setup failed, retain the printed root and stage before choosing a fresh retry.
+
+Keep the foreground console open; **Ctrl+C** requests normal host shutdown and
+the launcher retains the exact child until exit. Closing the browser does not
+stop it. There is no sign-in startup or background-lifetime promise.
+If TLS trust is missing, the launcher prints the public CA path and SHA-256,
+explains the scope, and offers `REVIEW` to open the certificate viewer.
+The user chooses Current User / Trusted Root only when policy permits; the
+launcher rechecks trust before real owner entry. It never bypasses a warning
+or requests a password/Hello PIN. Complete standard AI connections/model
+onboarding in the web UI; inherited API keys are not automatically configured
+connections, and a ChatGPT subscription is not OpenAI API billing.
+
+Uninstall is deliberately data-preserving until chosen: stop the foreground
+host, remove only the exact trial CA entry **yourself** if you imported it and
+no longer need it (see the manual runbook below), then remove only the printed
+private prototype directory when its data is no longer needed. No registry,
+PATH, startup task or global tool restoration should be necessary. Trust removal
+and data deletion are never automatic.
+
+### Qualification still required
+
+Portable capsule/command-model tests are not absent-prerequisite Windows proof.
+Before giving a resolved paste to another user, retain these focused results:
+
+1. Reuse unchanged native offline mechanism evidence from
+   [run 42057508481](https://github.com/microsoft/amplifier-unified/actions/runs/42057508481)
+   at `bf3e851a191907165f0a2e01b3ee6b8cf94fcd59`: both standalone fixtures
+   under PS5.1/PS7, plus two PATH cases and observed fixture cleanup. Its tokens
+   were elevated, Desktop policy Unrestricted and Core RemoteSigned. These are
+   native mechanism/model checks, not downloads, ordinary-user policy or app
+   installation. Changed capsule inventory/tag checks have portable evidence
+   only; this join does not claim another native run.
+2. On an authorized disposable ordinary Windows account, run the exact published
+   paste with no developer tools on PATH. Check helper hashes/licenses, managed
+   Python identity, complete offline host graph, spaces/Unicode and restart from
+   the private shortcut without tool PATH.
+3. Exercise bad hash, blocked proxy/policy, partial package failure and duplicate
+   setup without replacing prior installs. Confirm listener conflict refusal,
+   user-controlled CA trust, real owner entry and standard onboarding.
+4. Confirm Stop/owned-descendant cleanup, Ctrl+C, saved-history relaunch and
+   nonzero-host-error reporting. Keep native product/device/live-provider,
+   clean-machine bootstrap and installer/background/Scheduler claims separate.
+
+### Prepared real-prerequisite CI check — not dispatched
+
+`.github/workflows/windows-prototype-cold.yml` is a **manual-only, single-job**
+driver for the real `pinned-vcs` installation with `-NoOpen`. It is not the
+offline command-model job and does not run any broad platform/app/runtime suite.
+The original installer remains byte-identical to `d9752da50d4afe16c5fb1e67b499bae146a48cd2`.
+The driver requires its exact reviewed checkout SHA, the published manifest URL
+and its reviewed SHA-256. No moving `main`/`latest` asset or unreviewed candidate
+is admitted.
+
+The assembled candidate supplied for review is a **53,046,193-byte** capsule,
+SHA-256 `c35e1a66b4de88aebc871bd8a6b025eb8475c0f6f525adc44455fd0688fa58f8`,
+and a **443-byte** manifest, SHA-256
+`a54ea968ba1c9f0bb1fb5f182edee3a3c53c707de8cddb3533bee2fae5935b57`.
+Its ordinary managed Python selection is **3.13.15**, supported by the pinned
+uv download metadata but not yet executed by this driver. These are assembled
+input identities, **not publication or cold-install evidence**.
+
+The planned release path is
+`releases/download/windows-prototype-1c4-d9752da5/windows-prototype.json` and its
+matching `windows-prototype.zip`. Both remain **unpublished planning locations**
+until the publication owner supplies the actual immutable release/asset receipt.
+The driver first makes one bounded unauthenticated HTTPS GET and verifies the
+exact manifest bytes. Missing or different assets refuse before installation.
+Do not dispatch merely because the plan names a URL.
+
+**Runner readiness is a separate delivery dependency.** The unchanged installer
+refuses Windows Server, build numbers below 22000, non-x64 processors and elevated
+tokens. The current `windows-latest` workflow target must not be presented as a
+successful-install route: hosted runner facts can violate that gate. Preflight
+records product type, processor architecture, elevation and refusal reasons and
+fails **before installation** on an ineligible host. A future authorized owner
+must select a confirmed Windows 11 client x64 runner operating with an ordinary
+non-elevated token; this local preparation does not provision or enroll one.
+Do not change the installer, bypass its gate, demote a process or create a user
+merely to obtain a green result.
+
+After source review, publication/availability verification, conforming runner
+selection and authorization of the one future run, the responsible owner can use:
+
+```sh
+gh workflow run windows-prototype-cold.yml --repo microsoft/amplifier-unified --ref REVIEWED_DRIVER_BRANCH -f expected_head=EXACT_REVIEWED_DRIVER_COMMIT -f manifest_url=ACTUAL_PUBLISHED_EXACT_MANIFEST_URL -f manifest_sha256=a54ea968ba1c9f0bb1fb5f182edee3a3c53c707de8cddb3533bee2fae5935b57
+```
+
+That is a future operator template, not an instruction for an information worker
+and not a command executed during driver preparation.
+
+1. The setup Python/Git belong only to the controller. The actual PowerShell
+   5.1 installer child has **only System32 and Windows on PATH**, with standard
+   `USERPROFILE`/`HOMEDRIVE`/`HOMEPATH` retained. Runner tokens, provider keys and
+   package-manager overrides are not passed. Discovery must show no Python,
+   launcher, Git, uv or PowerShell 7 on this PATH. OS-provided curl/WSL may still
+   exist and are reported without invocation. No global tool is uninstalled.
+2. The unmodified installer performs the real private helper downloads, managed
+   Python installation, 60 hashed wheel installs and five isolated Git builds.
+   The driver verifies the actual 65-distribution metadata, Git origins,
+   backend/runtime inputs, retained helper hashes/notices, absolute CLI version,
+   actual COM shortcut target/arguments and a fresh child `launch.py --check`.
+   It does not serve the app, open a browser, configure TLS, read provider keys,
+   change trust or prepare a worker.
+3. Each phase uses the maintained native Job owner, explicit controller
+   `sys._base_executable`, finite deadlines and bounded private pipe capture.
+   Receipts are saved **before** process admission. Deadline/forced descendant
+   cleanup/truncated output/unknown custody cannot become PASS. Failed partial
+   installation roots and private diagnostics are not automatically removed or
+   replayed. CI runner disposal is not a cleanup check or durable log retention.
+4. Successful disposal is limited to the one newly observed direct LocalAppData
+   install root after native owner/ACL/reparse validation, unchanged file
+   identity, zero retained Job processes and a separate process-absence check.
+   No prior root is adopted or deleted. Only bounded fixed-field `result.json`
+   is uploaded; private root addresses, process IDs, SID and raw logs are not.
+
+This is a prepared future CI check, not a completed installation. An elevated or
+Server runner is an **explicit prerequisite refusal**, not a weaker PASS with
+disclaimers. A conforming runner can still have permissive execution policy and
+developer tools outside the child PATH; **restricted-PATH CI does not establish
+a pristine machine**.
+Execution-policy refusal stays failure; no bypass, alternate script route,
+unblock, elevation or policy mutation is permitted. Native PS5.1 grammar and
+real installer behavior remain pending until the reviewed driver actually runs.
+
 ## Conditional foreground trial runbook
 
 **Proposed instructions, not yet cleared for a user trial.** Commands below are

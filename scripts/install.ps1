@@ -6,6 +6,8 @@ Review-first native Windows bootstrap candidate. Not yet qualified for use.
 Save and inspect this file before running it as the signed-in, non-elevated
 owner. Do not change execution policy to run it. Parameters mirror install.sh:
 -Version, -NoOpen, -Anonymous and the built-in -Verbose.
+The separate -PrototypeManifestUrl/-PrototypeManifestSha256 entry prepares an
+explicit unqualified foreground candidate; it does not open the public gate.
 
 Release contract (proposed, owned here until release integration):
 native-windows-support.json must be an asset of the EXACT selected stable
@@ -36,7 +38,11 @@ param(
     [ValidatePattern('^(latest|v?[0-9]+\.[0-9]+\.[0-9]+)$')]
     [string] $Version = 'latest',
     [switch] $NoOpen,
-    [switch] $Anonymous
+    [switch] $Anonymous,
+    # Explicit experimental entry. This never manufactures a public support record.
+    [string] $PrototypeManifestUrl,
+    [ValidatePattern('^([0-9a-f]{64})?$')]
+    [string] $PrototypeManifestSha256
 )
 
 function Assert-NativePlatform {
@@ -289,6 +295,30 @@ namespace UnifiedBootstrap {
             if (pins.TryGetValue(path, out pin)) { Verify(pin); return; }
             EnsureDirectory(Path.GetDirectoryName(path));
             CreateDirectory(path); // Only this context's prior creations can be reused.
+        }
+        public void EnableToolWrites(string path) {
+            // uv publishes by absolute-target rename: the destination directory
+            // must share WRITE, but never DELETE. Only private directories this
+            // exact bootstrap created may opt in; ancestors/files stay strict.
+            path = Address(path);
+            Pin pin;
+            if (!pins.TryGetValue(path, out pin) || !pin.directory ||
+                    !pin.privateAcl || !IsOwnedDirectory(path))
+                throw new IOException("Tool mutation requires this bootstrap's private directory.");
+            Verify(pin);
+            SafeFileHandle replacement = CreateFileW(path, 0x20081u, 3u,
+                IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+            try {
+                if (replacement.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+                Info info = Inspect(new Pin {path=path, handle=replacement, directory=true, privateAcl=true});
+                if (info.volume != pin.volume || info.high != pin.high || info.low != pin.low)
+                    throw new IOException("Tool directory identity changed.");
+                // The replacement is validated before the strict handle closes:
+                // no unpinned interval and still no DELETE sharing.
+                SafeFileHandle previous = pin.handle;
+                pin.handle = replacement; replacement=null;
+                previous.Dispose();
+            } finally { if (replacement != null) replacement.Dispose(); }
         }
         public FileStream CreateFile(string path) {
             path = Address(path); AssertOwnedPath(path);
@@ -657,6 +687,19 @@ function Invoke-InstallChild([string] $Executable, [string[]] $Arguments, [hasht
         $info.EnvironmentVariables['GIT_CONFIG_KEY_1'] = 'core.askPass'
         $info.EnvironmentVariables['GIT_CONFIG_VALUE_1'] = ''
     }
+    if ($script:InstallStage -like 'prototype*' -or $Environment.ContainsKey('UV_TOOL_DIR')) {
+        # Keep the ordinary Windows profile identity. Discard only package/tool
+        # overrides that could redirect a frozen install into another graph/root.
+        foreach ($key in @($info.EnvironmentVariables.Keys)) {
+            if ($key -like 'UV_*' -or $key -like 'PIP_*' -or
+                $key -like '*_API_KEY' -or $key -like '*_TOKEN' -or
+                $key -in @('PYTHONHOME', 'PYTHONPATH', 'VIRTUAL_ENV', 'GIT_SSL_NO_VERIFY',
+                    'GIT_EXEC_PATH', 'GIT_TEMPLATE_DIR',
+                    'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AZURE_CLIENT_SECRET')) {
+                $info.EnvironmentVariables.Remove($key)
+            }
+        }
+    }
     foreach ($key in $Environment.Keys) { $info.EnvironmentVariables[$key] = $Environment[$key] }
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $info
@@ -868,7 +911,245 @@ function Invoke-UnifiedInstall([string] $RequestedVersion, [bool] $SkipOpen, [bo
     }
 }
 
+function Read-PrototypeManifest($Record) {
+    if ($Record.schemaVersion -ne 1 -or $Record.status -cne 'prototype' -or
+        $Record.source -cnotmatch '^[0-9a-f]{40}$' -or
+        $Record.version -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+$' -or
+        $Record.python -cnotmatch '^3\.13\.[0-9]+$' -or
+        $Record.architecture -cne 'x86_64' -or
+        $Record.capsule.sha256 -cnotmatch '^[0-9a-f]{64}$') {
+        throw 'Invalid prototype plan. Obtain an exact candidate plan from the trial owner.'
+    }
+    $uri = [Uri]$Record.capsule.url
+    if ($uri.Scheme -cne 'https' -or $uri.DnsSafeHost -cne 'github.com' -or
+        $uri.Port -ne 443 -or $uri.UserInfo -or $uri.Query -or $uri.Fragment -or
+        $uri.AbsolutePath -cnotmatch '^/microsoft/amplifier-unified/releases/download/[^/]+/[^/]+\.zip$' -or
+        $uri.AbsolutePath -match '/(latest|main)/') {
+        throw 'Prototype capsule must name an exact official HTTPS release asset.'
+    }
+    $mode = Get-PrototypeSourceMode $Record
+    if ($mode -eq 'pinned-vcs' -and ($Record.source -cne '1c4ac3b4f9ed5d2d3f588f6fa6c74a119e439153' -or
+        $Record.version -cne '0.54.5')) {
+        throw 'The pinned VCS prototype is bound to the frozen 0.54.5 candidate.'
+    }
+    return $Record
+}
+
+function Get-PrototypeSourceMode($Record) {
+    # The original schema-1 offline prototype did not include a mode.
+    $mode = if ($Record.PSObject.Properties.Name -contains 'sourceMode') { $Record.sourceMode } else { 'offline-wheels' }
+    if ($mode -cne 'offline-wheels' -and $mode -cne 'pinned-vcs') {
+        throw 'Unsupported prototype source mode.'
+    }
+    return $mode
+}
+
+function Get-PrototypeEnvironment([string] $Root, [string] $Uv, [string] $Git) {
+    # Only child processes see these overrides. Never alter HOME/USERPROFILE or
+    # the global uv tool installation. Git remains necessary for worker VCS sources.
+    return @{
+        PATH = [IO.Path]::GetDirectoryName($Uv) + ';' + [IO.Path]::GetDirectoryName($Git) + ';' + $env:PATH
+        PYTHONUTF8 = '1'; PYTHONDONTWRITEBYTECODE = '1'
+        UV_NO_CONFIG = '1'; UV_NO_PROGRESS = '1'; UV_NO_BUILD_PACKAGE = 'amplifier-core'
+        UV_CACHE_DIR = Join-Path $Root 'cache'
+        UV_TOOL_DIR = Join-Path $Root 'tools'
+        UV_TOOL_BIN_DIR = Join-Path $Root 'tool-bin'
+        UV_PYTHON_INSTALL_DIR = Join-Path $Root 'python'
+        UV_PYTHON_BIN_DIR = Join-Path $Root 'python-bin'
+        UV_HTTP_TIMEOUT = '30'; UV_HTTP_RETRIES = '2'
+        TEMP = Join-Path $Root 'temp'; TMP = Join-Path $Root 'temp'
+        AMPLIFIER_WEB_HOME = Join-Path $Root 'app'
+        AMPLIFIER_HOME = Join-Path $Root 'shared'
+        AMPLIFIER_SESSION_STATE_HOME = Join-Path $Root 'ownership'
+        AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH = Join-Path $Root 'shared\projects'
+        AMPLIFIER_UNIFIED_IMPORT_HOME = Join-Path $Root 'shared'
+    }
+}
+
+function Write-PrototypeShortcut([string] $Python, [string] $Launcher) {
+    # A user-owned link inside the private root, not a global shortcut or PATH edit.
+    $path = Join-Path $script:InstallWork 'Launch Unified.lnk'
+    $empty = $script:InstallStorage.CreateFile($path)
+    $empty.Dispose()
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($path)
+    $shortcut.TargetPath = $Python
+    $shortcut.Arguments = '-I -B ' + (ConvertTo-NativeArgument $Launcher)
+    $shortcut.WorkingDirectory = $script:InstallWork
+    $shortcut.Description = 'Experimental Amplifier Unified - foreground, Ctrl+C to stop'
+    $shortcut.Save()
+    $script:InstallStorage.HoldFile($path, $false)
+    return $path
+}
+
+function Invoke-UnifiedPrototype([string] $ManifestUrl, [string] $ManifestHash, [bool] $SkipLaunch) {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version 2.0
+    # Missing manifest/digest must refuse before any filesystem/network effects.
+    if (-not $ManifestUrl -or $ManifestHash -cnotmatch '^[0-9a-f]{64}$') {
+        throw 'Prototype setup requires its reviewed manifest URL and SHA-256.'
+    }
+    Assert-NativePlatform
+    $script:InstallWork = New-PrivateInstallDirectory
+    $script:InstallLog = Join-Path $script:InstallWork 'install.log'
+    $script:InstallStage = 'prototype plan'
+    $script:UseAnonymous = $true
+    $originalTls = [Net.ServicePointManager]::SecurityProtocol
+    $launchInfo = $null
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = $originalTls -bor [Net.SecurityProtocolType]::Tls12
+        Write-PrivateInstallText $script:InstallLog '' -Mutable
+        Write-Host 'Experimental foreground setup, NOT a qualified public Windows installation.'
+        Write-Host "Private location: $($script:InstallWork)"
+        Write-Host 'Prior installs, PATH, default Python, trust stores and startup tasks stay unchanged.'
+        $planPath = Join-Path $script:InstallWork 'prototype-plan.json'
+        Get-BoundedDownload $ManifestUrl $planPath 1048576
+        Assert-FileChecksum $planPath $ManifestHash
+        $plan = Read-PrototypeManifest (Get-Content -LiteralPath $planPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+        $mode = Get-PrototypeSourceMode $plan
+        Write-Host "Candidate $($plan.source), app $($plan.version), CPython $($plan.python)."
+        $script:InstallStage = 'verified candidate capsule'
+        $archive = Join-Path $script:InstallWork 'capsule.zip'
+        Get-BoundedDownload $plan.capsule.url $archive 134217728
+        Assert-FileChecksum $archive $plan.capsule.sha256
+        $capsule = Join-Path $script:InstallWork 'capsule'
+        Expand-ContainedZip $archive $capsule
+        foreach ($name in @('requirements.txt', 'launch.py', 'capsule.json')) {
+            $script:InstallStorage.HoldFile((Join-Path $capsule $name), $false)
+        }
+        $identity = Get-Content -LiteralPath (Join-Path $capsule 'capsule.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($identity.source -cne $plan.source -or $identity.version -cne $plan.version) {
+            throw 'Prototype capsule identity mismatch. No package was installed.'
+        }
+        if ((Get-PrototypeSourceMode $identity) -cne $mode) {
+            throw 'Prototype source mode differs from the reviewed plan.'
+        }
+        if ($mode -eq 'pinned-vcs') {
+            foreach ($name in @('source_install.py', 'source-spec.json', 'uv.lock',
+                'production-requirements.txt', 'git-requirements.txt', 'build-constraints.txt')) {
+                $script:InstallStorage.HoldFile((Join-Path $capsule $name), $false)
+            }
+        }
+        foreach ($relative in @('app', 'shared', 'ownership', 'shared\projects', 'workspace',
+            'export', 'cache', 'python', 'python-bin', 'tools', 'tool-bin', 'temp')) {
+            $script:InstallStorage.EnsureDirectory((Join-Path $script:InstallWork $relative))
+        }
+        # These are tool-owned mutation parents, not download/executable paths.
+        # uv's absolute-target atomic renames otherwise conflict with our pins.
+        foreach ($relative in @('', 'cache', 'python', 'python-bin', 'tools', 'tool-bin', 'temp')) {
+            $path = if ($relative) { Join-Path $script:InstallWork $relative } else { $script:InstallWork }
+            $script:InstallStorage.EnableToolWrites($path)
+        }
+        $script:InstallStage = 'verified portable tools'
+        if ($mode -eq 'pinned-vcs') {
+            Write-Host '[1/3] Acquiring verified private uv and standard MinGit; no developer tools required.'
+        } else {
+            Write-Host '[1/3] Finding compatible helpers; downloading private portable copies only if needed.'
+        }
+        $probeEnv = @{ PYTHONUTF8 = '1'; UV_NO_CONFIG = '1'; UV_NO_PROGRESS = '1' }
+        if ($mode -eq 'pinned-vcs') {
+            # The online source recipe is written against this exact private
+            # helper, not whichever developer tool happens to be on PATH.
+            $uv = Install-VerifiedHelper 'uv'
+            $git = Install-VerifiedHelper 'git'
+        } else {
+            $uv = Find-InstallHelper 'uv' $probeEnv
+            if (-not $uv) { $uv = Install-VerifiedHelper 'uv' }
+            $git = Find-InstallHelper 'git' $probeEnv
+            if (-not $git) { $git = Install-VerifiedHelper 'git' }
+        }
+        $childEnv = Get-PrototypeEnvironment $script:InstallWork $uv $git
+        if ($mode -eq 'pinned-vcs') {
+            $uvVersion = Invoke-InstallChild $uv @('--version') $childEnv
+            if ($uvVersion -cnotmatch '^uv 0\.12\.18(?:\s|$)') { throw 'Pinned bootstrap uv identity mismatch.' }
+        }
+        $script:InstallStage = 'private ordinary CPython'
+        Write-Host '[2/3] Preparing ordinary CPython 3.13 without changing the system Python.'
+        # uv checks its pinned python-build-standalone digest. No registry/bin links.
+        $null = Invoke-InstallChild $uv @('python', 'install', $plan.python, '--no-bin', '--no-registry') $childEnv
+        $python = Invoke-InstallChild $uv @('python', 'find', '--no-project', '--managed-python', $plan.python) $childEnv
+        if (-not $python.StartsWith((Join-Path $script:InstallWork 'python') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Managed interpreter escaped the private prototype root.'
+        }
+        $null = Invoke-InstallChild $python @('-I', '-S', '-B', '-c',
+            'import sys,sysconfig,struct; assert sys.platform=="win32" and ".".join(map(str,sys.version_info[:3]))==sys.argv[1] and sys.version_info[:2]==(3,13) and struct.calcsize("P")==8 and not sysconfig.get_config_var("Py_GIL_DISABLED")',
+            $plan.python) $childEnv
+        if ($mode -eq 'pinned-vcs') {
+            $script:InstallStage = 'prototype source payload validation'
+            $null = Invoke-InstallChild $python @('-I', '-S', '-B',
+                (Join-Path $capsule 'source_install.py'), '--validate-source', $capsule) $childEnv
+        }
+        $script:InstallStage = 'offline immutable host installation'
+        Write-Host '[3/3] Installing the verified host wheelhouse into a separate, noneditable environment.'
+        $venv = Join-Path $script:InstallWork 'host'
+        $null = Invoke-InstallChild $uv @('venv', '--python', $python, $venv) $childEnv
+        $hostPython = Join-Path $venv 'Scripts\python.exe'
+        $null = Invoke-InstallChild $uv @('pip', 'install', '--python', $hostPython,
+            '--no-index', '--no-deps', '--require-hashes', '--only-binary', ':all:',
+            '--find-links', (Join-Path $capsule 'wheels'), '-r', (Join-Path $capsule 'requirements.txt')) $childEnv
+        if ($mode -eq 'pinned-vcs') {
+            $script:InstallStage = 'prototype exact Git dependencies'
+            Write-Host 'Building five frozen Python packages with private Git and pinned isolated backend wheels.'
+            $gitNames = 'amplifier-foundation,amplifier-module-hooks-session-naming,amplifier-memory,amplifier-bundle-ui-use,amplifier-bundle-context-intelligence'
+            $null = Invoke-InstallChild $uv @('pip', 'install', '--python', $hostPython,
+                '--no-index', '--no-deps', '--no-require-hashes', '--verify-hashes',
+                '--only-binary', ':all:', '--no-binary', $gitNames,
+                '--find-links', (Join-Path $capsule 'build-wheels'),
+                '--build-constraint', (Join-Path $capsule 'build-constraints.txt'),
+                '-r', (Join-Path $capsule 'git-requirements.txt')) $childEnv
+            $script:InstallStage = 'prototype installed source audit'
+            $null = Invoke-InstallChild $hostPython @('-I', '-B',
+                (Join-Path $capsule 'source_install.py'), '--audit-source', $capsule) $childEnv
+        }
+        $null = Invoke-InstallChild $uv @('pip', 'check', '--python', $hostPython) $childEnv
+        $launcher = Join-Path $capsule 'launch.py'
+        Write-InstallReceipt (Join-Path $script:InstallWork 'prototype.json') @{
+            schemaVersion = 1; status = 'prototype'; source = $plan.source; version = $plan.version
+            manifestSha256 = $ManifestHash; capsuleSha256 = $plan.capsule.sha256
+            python = $hostPython; uv = $uv; git = $git
+            sourceMode = $mode
+            bootstrapUv = if ($mode -eq 'pinned-vcs') { '0.12.18' } else { 'reused-or-private' }
+        }
+        $null = Invoke-InstallChild $hostPython @('-I', '-B', $launcher, '--check') $childEnv
+        $shortcutPath = Write-PrototypeShortcut $hostPython $launcher
+        Write-Host "Setup prepared. Open this shortcut to launch or relaunch: $shortcutPath"
+        Write-Host 'The first launch explains the CA trust decision; it never adds trust silently.'
+        Write-Host 'Stop: Ctrl+C in the Unified window. Uninstall: stop, review/remove trial CA trust yourself, then remove only this printed private directory.'
+        Write-Host 'Rollback: the previous installation was not replaced; keep using its original launcher.'
+        if (-not $SkipLaunch) {
+            $info = New-Object Diagnostics.ProcessStartInfo
+            $info.FileName = $hostPython
+            $info.Arguments = '-I -B ' + (ConvertTo-NativeArgument $launcher)
+            $info.WorkingDirectory = $script:InstallWork
+            $info.UseShellExecute = $true
+            # Normal app filesystem owners take over after bootstrap validation;
+            # no initializer races the bootstrap's strict app/state directory pins.
+            $script:InstallStorage.Validate()
+            $launchInfo = $info
+        }
+    } catch {
+        # No raw exceptions or subprocess output: they may contain credentials.
+        Write-PrivateInstallText $script:InstallLog "$($script:InstallStage): stopped; no automatic mutation retry.`r`n" -Append
+        throw "Prototype stopped at $($script:InstallStage). Existing installs remain unchanged. Keep $($script:InstallWork) for review before retrying; partial files are retained."
+    } finally {
+        [Net.ServicePointManager]::SecurityProtocol = $originalTls
+        $script:InstallStorage.Dispose()
+    }
+    if ($null -ne $launchInfo) {
+        try {
+            $null = [Diagnostics.Process]::Start($launchInfo)
+            Write-Host 'Foreground launcher requested. Browser onboarding and first response are separate checks.'
+        } catch {
+            throw "Setup is prepared, but the launch request failed. Open the private shortcut yourself: $shortcutPath"
+        }
+    }
+}
+
 # Dot sourcing is only for offline function fixtures; it performs no setup.
 if ($MyInvocation.InvocationName -ne '.') {
-    Invoke-UnifiedInstall $Version ([bool]$NoOpen) ([bool]$Anonymous)
+    if ($PrototypeManifestUrl -or $PrototypeManifestSha256) {
+        Invoke-UnifiedPrototype $PrototypeManifestUrl $PrototypeManifestSha256 ([bool]$NoOpen)
+    } else {
+        Invoke-UnifiedInstall $Version ([bool]$NoOpen) ([bool]$Anonymous)
+    }
 }
