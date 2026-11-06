@@ -1,0 +1,339 @@
+"""Opt-in actual-six-adapter qualification, with synthetic transport only.
+
+The managed runner must install the exact reviewed candidate dependency graph.
+Run explicitly: UNIFIED_CATALOG_CANDIDATES=1 python -m pytest -s \
+    tests/test_candidate_model_catalog.py
+
+This file never installs packages or calls a live service. It exercises the
+actual SetupManager subprocess protocol and disk-backed host catalog. Captured
+JSON/JUnit properties identify loaded class files/hashes, provenance and request
+counts. The helper verifies installed Python bytes against the parent's retained
+model_catalog_candidates.json manifest before admitting each probe.
+The separate synthetic unsupported test is NOT seventh-adapter evidence.
+"""
+from __future__ import annotations
+
+from copy import deepcopy
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+
+import pytest
+import yaml
+
+from amplifier_web.host.config import write_private
+from amplifier_web.next_message_configuration import validate_selection
+from amplifier_web.provider_catalog import ProviderCatalog, model_key
+from amplifier_web.session_files import amplifier_home
+from amplifier_web.setup import SetupManager
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get("UNIFIED_CATALOG_CANDIDATES") != "1",
+    reason="Requires the explicitly installed six reviewed provider candidates",
+)
+TRANSPORT_FILE = Path(__file__).resolve().with_name("fixtures") / "catalog_candidate_transports.py"
+_spec = importlib.util.spec_from_file_location("catalog_candidate_transports", TRANSPORT_FILE)
+transport = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(transport)  # Definitions only; install() runs ONLY in children.
+
+
+def _records(path, event=None):
+    rows = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+    return rows if event is None else [row for row in rows if row["event"] == event]
+
+
+def _config(provider, tmp_path):
+    config = {"model": transport.SELECTION_ONLY, "default_model": transport.SELECTION_ONLY,
+              "priority": 7, "max_retries": 0, "retry_jitter": False}
+    if provider in {"openai", "anthropic", "gemini", "chat-completions"}:
+        config["api_key"] = "${CATALOG_CANDIDATE_KEY}"
+    if provider in {"openai", "anthropic", "chat-completions"}:
+        config["base_url"] = f"https://catalog.invalid/{provider}/v1"
+    if provider == "anthropic":
+        # Anthropic's SDK appends /v1/models, unlike OpenAI's /models route.
+        config["base_url"] = "https://catalog.invalid/anthropic"
+    if provider == "openai":
+        config["hide_dated_models"] = True
+    if provider in {"anthropic", "chat-completions"}:
+        config["filtered"] = True
+    if provider == "github-copilot":
+        config["github_token"] = "${CATALOG_CANDIDATE_KEY}"
+    if provider == "openai-chatgpt":
+        token_path = tmp_path / "synthetic-chatgpt-tokens.json"
+        write_private(token_path, json.dumps({
+            "auth_mode": "oauth", "access_token": transport.SYNTHETIC_KEY,
+            "account_id": "catalog-fixture-account", "plan_type": "plus",
+            "expires_at": "2999-01-01T00:00:00+00:00",
+        }))
+        config.update(auth_mode="chatgpt_codex", token_file_path=str(token_path),
+                      models_client_version="catalog-qualification")
+    return config
+
+
+@pytest.fixture
+def candidate_environment(tmp_path, monkeypatch):
+    # A test command must not inherit host account choices, token paths, proxies
+    # or SDK routing defaults. Only synthetic credentials are handed to probes.
+    prefixes = ("OPENAI_", "ANTHROPIC_", "GOOGLE_", "GEMINI_", "CHATGPT_",
+                "CHAT_COMPLETIONS_", "COPILOT_", "GITHUB_", "GH_", "AZURE_",
+                "AMPLIFIER_PROVIDER_GITHUB_COPILOT_", "AMPLIFIER_GITHUB_COPILOT_")
+    for name in list(os.environ):
+        if name.startswith(prefixes) or name in {
+            "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy",
+            "all_proxy", "SKIP_SDK_CHECK",
+        }:
+            monkeypatch.delenv(name, raising=False)
+    for name, folder in {
+        "HOME": "home", "XDG_CONFIG_HOME": "config", "XDG_CACHE_HOME": "cache",
+        "XDG_DATA_HOME": "data", "CODEX_HOME": "codex",
+    }.items():
+        path = tmp_path / folder
+        path.mkdir()
+        monkeypatch.setenv(name, str(path))
+    monkeypatch.setenv("CATALOG_CANDIDATE_KEY", transport.SYNTHETIC_KEY)
+    monkeypatch.setenv("UNIFIED_CATALOG_MODE", "success")
+    monkeypatch.setenv("UNIFIED_CATALOG_STATUS", "401")
+    log = tmp_path / "transport.jsonl"
+    monkeypatch.setenv("UNIFIED_CATALOG_LOG", str(log))
+    return log
+
+
+@pytest.mark.parametrize("provider", transport.PROVIDERS)
+async def test_actual_adapter_probe_cache_restart_refresh_empty_and_errors(
+    provider, tmp_path, monkeypatch, candidate_environment, record_property,
+):
+    """One bounded lifecycle per real adapter; no patched probe/discovery/cache."""
+    log = candidate_environment
+    monkeypatch.setenv("UNIFIED_CATALOG_PROVIDER", provider)
+    row = {"id": "candidate", "module": "provider-" + provider,
+           "config": _config(provider, tmp_path)}
+    write_private(amplifier_home() / "settings.yaml", yaml.safe_dump({"config": {"providers": [row]}}))
+    home, cache_path = tmp_path / "host", tmp_path / "catalog.json"
+    caches = []
+
+    def manager():
+        cache = ProviderCatalog(cache_path)
+        caches.append(cache)
+        return SetupManager(home, catalog=cache, probe_command=[sys.executable, str(TRANSPORT_FILE)])
+
+    def requests(expected):
+        rows = _records(log, "request")
+        assert len(rows) == expected, rows
+        assert {entry["provider"] for entry in rows} <= {provider}
+        assert not _records(log, "forbidden"), _records(log, "forbidden")
+        return rows
+
+    current = manager()
+    args = {"id": "candidate"}
+    workspace = str(tmp_path)
+    try:
+        schema = await current.probe("providers.schema", {**args, "module": row["module"]}, workspace)
+        assert isinstance(schema["providerMetadata"]["configSchema"], dict)
+        requests(0)  # Metadata/schema must not make a catalog or inference call.
+
+        result = await current.cached_probe("providers.models", args, workspace)
+        expected_ids = transport.MODEL_IDS[provider]
+        assert [model["id"] for model in result["models"]] == expected_ids
+        assert result["modelsProvenance"] == "provider-api"
+        assert result["modelsSupported"] is True
+        assert transport.SELECTION_ONLY not in expected_ids
+        assert transport.SYNTHETIC_KEY not in json.dumps(result)
+        requests(1)
+        identity = current.catalog_key(args, workspace)
+        key = model_key(identity)
+        selected = {"instance": "candidate", "model": transport.SELECTION_ONLY}
+        with pytest.raises(ValueError, match="not in this connection"):
+            validate_selection(selected, {"providers": [{"id": "candidate", "sharedCatalogKey": identity}],
+                                          "catalogs": {identity: current.catalog.entry(key)}})
+
+        assert await current.cached_probe("providers.models", args, workspace) == result
+        requests(1)
+        await current.catalog.close()
+        current = manager()  # Disk reload, not a reused in-memory cache object.
+        assert await current.cached_probe("providers.models", args, workspace) == result
+        requests(1)
+        refreshed = await current.cached_probe("providers.models", {**args, "refresh": True}, workspace)
+        assert refreshed == result
+        requests(2)
+
+        # A failed refresh is visibly failed, never returned as legacy fallback.
+        # The last good rows are retained as history, not relabeled fresh success.
+        for index, (mode, status) in enumerate(
+            [("http-error", "401"), ("http-error", "503"), ("malformed", "200")], start=3,
+        ):
+            monkeypatch.setenv("UNIFIED_CATALOG_MODE", mode)
+            monkeypatch.setenv("UNIFIED_CATALOG_STATUS", status)
+            with pytest.raises(ValueError) as raised:
+                await current.cached_probe("providers.models", {**args, "refresh": True}, workspace)
+            assert transport.SYNTHETIC_KEY not in str(raised.value)
+            entry = current.catalog.entry(key)
+            assert entry["phase"] == "error"
+            assert entry["models"] == result["models"]
+            assert entry["diagnostic"]["stage"] == "models", entry
+            assert "Synthetic catalog failure" not in entry["error"]
+            requests(index)
+            with pytest.raises(ValueError):
+                await current.cached_probe("providers.models", args, workspace)
+            requests(index)  # Reopen does not silently retry an error.
+
+        monkeypatch.setenv("UNIFIED_CATALOG_MODE", "empty")
+        empty = await current.cached_probe("providers.models", {**args, "refresh": True}, workspace)
+        assert empty["models"] == []
+        assert empty["modelsSupported"] is True and empty["modelsProvenance"] == "provider-api"
+        assert current.catalog.entry(key)["phase"] == "ready"
+        requests(6)
+        await current.catalog.close()
+        current = manager()
+        assert (await current.cached_probe("providers.models", args, workspace))["models"] == []
+        requests(6)  # Genuine empty replaces success on disk too.
+
+        evidence = _records(log, "provider-class")
+        assert evidence
+        assert all(item["module"].startswith(item["package"]) for item in evidence)
+        assert all(item["discoveryDefinedBy"].startswith(item["package"]) for item in evidence)
+        assert len({(item["class"], item["file"], item["sha256"]) for item in evidence}) == 1
+        assert len({item["pid"] for item in evidence}) == 7  # Schema + six actual subprocess probes.
+        assert all(item["pid"] != os.getpid() for item in evidence)
+        assert all(len(item["sha256"]) == 64 for item in evidence)
+        assert all(len(item["candidateCommit"]) == 40 and item["verifiedSourceFiles"] > 0 for item in evidence)
+        assert transport.SYNTHETIC_KEY not in log.read_text()
+        report = {"provider": provider, "classEvidence": evidence[0],
+                  "provenance": "provider-api", "transportRequests": requests(6),
+                  "scope": "synthetic transport; real installed adapter and Unified probe/cache",
+                  "limits": "No service entitlement, inference, GUI or Copilot CLI/wire validation"}
+        record_property("candidate_catalog_evidence", json.dumps(report, sort_keys=True))
+        print("CANDIDATE_CATALOG_EVIDENCE " + json.dumps(report, sort_keys=True))
+    finally:
+        for cache in caches:
+            await cache.close()
+
+
+async def test_synthetic_unsupported_manual_selection_is_not_six_adapter_evidence(
+    tmp_path, candidate_environment, record_property,
+):
+    """Real host probe/cache with a synthetic legacy-only provider, NOT Azure."""
+    log = tmp_path / "legacy-events.jsonl"
+    module = tmp_path / "amplifier_module_provider_catalog_legacy_fixture.py"
+    write_private(module, r'''
+import json
+import os
+from pathlib import Path
+
+def record(event):
+    with Path(__file__).with_name("legacy-events.jsonl").open("a") as stream:
+        stream.write(json.dumps({"event": event, "pid": os.getpid()}) + "\n")
+
+class LegacyOnlyProvider:
+    def __init__(self, config=None):
+        self.config = config or {}
+        record("construct")
+
+    def get_info(self):
+        return {"id": "catalog-legacy-fixture", "config_fields": [],
+                "defaults": {"model": self.config.get("default_model")}}
+
+    async def list_models(self):
+        record("legacy-list")
+        raise AssertionError("Unsupported discovery must not call legacy listing")
+
+    async def close(self):
+        record("close")
+''')
+    launcher = tmp_path / "legacy-probe.py"
+    write_private(launcher, r'''
+import json
+import os
+from pathlib import Path
+import socket
+import sys
+
+log = Path(__file__).with_name("legacy-events.jsonl")
+def record(event):
+    with log.open("a") as stream:
+        stream.write(json.dumps({"event": event, "pid": os.getpid()}) + "\n")
+
+def forbid_network(event, args):
+    if event == "socket.getaddrinfo" or (
+        event in {"socket.connect", "socket.sendto"}
+        and args[0].family in {socket.AF_INET, socket.AF_INET6}
+    ):
+        record("forbidden-network")
+        raise AssertionError("No network in synthetic unsupported qualification")
+
+sys.addaudithook(forbid_network)
+sys.path.insert(0, sys.argv[1])
+record("probe-start")
+from amplifier_web.provider_probe import main
+main()
+''')
+    write_private(amplifier_home() / "settings.yaml", yaml.safe_dump({"config": {"providers": [{
+        "id": "manual", "module": "provider-catalog-legacy-fixture",
+        "config": {"default_model": "configured-not-discovered"},
+    }]}}))
+    home, cache_path = tmp_path / "host", tmp_path / "legacy-catalog.json"
+    caches = []
+
+    def manager():
+        cache = ProviderCatalog(cache_path)
+        caches.append(cache)
+        return SetupManager(home, catalog=cache, probe_command=[
+            sys.executable, str(launcher), str(TRANSPORT_FILE.parents[2]),
+        ])
+
+    current = manager()
+    workspace = str(tmp_path)
+    selected = {"instance": "manual", "model": "explicit-deployment"}
+    original = deepcopy(selected)
+    try:
+        # Actual cached_probe invokes actual probe, whose child imports the
+        # temporary provider through the unmodified provider_class resolver.
+        result = await current.cached_probe("providers.models", {"id": "manual"}, workspace)
+        assert result["models"] == []
+        assert result["modelsSupported"] is False
+        assert result["modelsProvenance"] == "unsupported"
+        events = _records(log)
+        assert [row["event"] for row in events] == [
+            "probe-start", "construct", "close", "construct", "close",
+        ], events
+        assert len({row["pid"] for row in events}) == 1
+        assert events[0]["pid"] != os.getpid()
+
+        catalog = await current.discover_catalog(workspace)
+        assert [row["id"] for row in catalog["providers"]] == ["manual"]
+        identity = catalog["providers"][0]["sharedCatalogKey"]
+        entry = catalog["catalogs"][identity]
+        assert entry["phase"] == "ready"
+        assert entry["supported"] is False and entry["provenance"] == "unsupported"
+        assert entry["models"] == []
+        validate_selection(selected, catalog)
+        assert selected == original
+        # This provider advertises a known schema with no reasoning field.
+        # Manual ID admission must not invent a reasoning capability.
+        with pytest.raises(ValueError, match="reasoning effort"):
+            validate_selection({**selected, "effort": "not-advertised"}, catalog)
+        assert _records(log) == events  # Warm host reads do not start another probe.
+
+        persisted = json.loads(cache_path.read_text())
+        assert persisted["version"] == 2 and len(persisted["entries"]) == 1
+        saved = next(iter(persisted["entries"].values()))
+        assert saved["result"] == result
+        assert not saved.get("error")
+        await current.catalog.close()
+        current = manager()  # New host cache object reads the actual saved file.
+        reloaded = await current.discover_catalog(workspace)
+        assert reloaded["catalogs"][identity] == entry
+        assert (await current.cached_probe("providers.models", {"id": "manual"}, workspace)) == result
+        validate_selection(selected, reloaded)
+        assert selected == original
+        assert _records(log) == events  # Persistence/reload also makes zero probes.
+        record_property("synthetic_unsupported_evidence", json.dumps({
+            "scope": "synthetic legacy-only provider; NOT real Azure adapter evidence",
+            "provenance": reloaded["catalogs"][identity]["provenance"],
+            "probeProcesses": 1, "legacyListCalls": 0,
+            "cacheReloadVerified": True, "manualSelection": selected,
+        }, sort_keys=True))
+    finally:
+        for cache in caches:
+            await cache.close()
