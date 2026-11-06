@@ -29,6 +29,7 @@ try{
  const initial=await panel.getAttribute('data-selected-call');assert.ok(initial.startsWith('llm:'));
  assert.equal(await panel.locator('.a-context-stack').innerText(),'');record('clean bar has no painted numeric labels');
  await expect(panel.locator('.a-context-legend')).toContainText('of known text');
+ await page.screenshot({path:path.join(artifacts,'overview-light.png'),fullPage:true,animations:'disabled'});
  await panel.locator('.a-context-category').filter({hasText:'Instructions & files'}).click();
  await panel.locator('.a-context-item').filter({hasText:'AGENTS.md'}).click();
  await expect(panel.getByLabel('Captured text')).toContainText('Keep original documents.');

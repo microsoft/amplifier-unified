@@ -727,7 +727,8 @@ class Worker:
             return not CALL_PURPOSE.get()
         coordinator.register_capability("live.public_stream", public_stream)
         if self.telemetry:
-            if (coordinator.session_id == self.runtime.session_id
+            if (self.home is not None and self.workspace is not None
+                    and coordinator.session_id == self.runtime.session_id
                     and coordinator.session_id not in self.telemetry.context_inspectors):
                 from amplifier_web.context_inspection_adapter import ContextInspection
                 from amplifier_web.session_files import capture_dir
