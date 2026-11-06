@@ -133,6 +133,10 @@ async def test_legacy_static_list_cannot_claim_a_reachable_connection(monkeypatc
     {'version':2,'source':'provider-api'},
     {'version':1,'source':'cache'},
     {'version':1,'source':'unsupported'},
+    {'version':1,'source':'configured'},
+    {'version':1,'source':'deployment'},
+    {'version':1,'source':'static'},
+    {'version':1,'source':'simulated'},
     {'version':1,'filters_keyword':'filters'},
 ])
 async def test_unqualified_listing_is_not_promoted_to_strict(info):
@@ -189,3 +193,27 @@ async def test_selector_keyword_is_never_guessed_and_failures_keep_their_type():
         await provider_probe.listed_models(Provider(),filters={})
     with pytest.raises(TimeoutError):
         await provider_probe.listed_models(Provider())
+
+
+async def test_provider_specific_selector_schema_and_fields_are_not_openai_policy():
+    from copy import deepcopy
+    schema={'type':'object','properties':{
+        'supported_generation_methods':{'type':'array','items':{'type':'string'}},
+        'chat_only':{'type':'boolean'},'include_preview':{'type':'boolean'}}}
+    defaults={'supported_generation_methods':['generateContent'],'chat_only':True}
+    info={'version':1,'source':'provider-api','filters_keyword':'filters',
+          'filters_schema':schema,'default_filters':defaults,'unfiltered':{},'override':'replace'}
+    before=deepcopy(info);calls=[]
+    class Provider:
+        def get_model_list_info(self):return info
+        async def list_models(self, **kwargs):
+            calls.append(deepcopy(kwargs))
+            return [{'id':'Provider/Exact-ID'}]
+    provider=Provider()
+    assert (await provider_probe.listed_models(provider))['modelListInfo']==before
+    override={'include_preview':True,'supported_generation_methods':[]}
+    assert (await provider_probe.listed_models(provider,filters=override))['models']==[
+        {'id':'Provider/Exact-ID'}]
+    await provider_probe.listed_models(provider,filters={})
+    assert calls==[{}, {'filters':override}, {'filters':{}}]
+    assert info==before, 'Inspection does not rewrite provider schema/defaults'

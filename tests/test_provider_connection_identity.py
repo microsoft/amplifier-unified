@@ -12,21 +12,26 @@ from amplifier_web.provider_catalog import ProviderCatalog, model_key
 from amplifier_web.setup import SetupManager, chatgpt_token_path
 
 
-def test_recommendation_scope_invalidates_catalog_not_saved_account_binding(tmp_path, monkeypatch):
+@pytest.mark.parametrize('module,filters', [
+    ('provider-openai', {'include':['custom*']}),
+    ('provider-fixture', {'supported_generation_methods':['generateContent']}),
+    ('provider-fixture', {'chat_only':True,'include_preview':False}),
+])
+def test_recommendation_scope_invalidates_catalog_not_saved_account_binding(tmp_path, monkeypatch, module, filters):
     from amplifier_web.provider_catalog import connection_key, configuration_key
     base={'api_key':'synthetic-account','base_url':'https://fixture.invalid'}
     scopes=[base, {**base,'model_filters':{}},
-            {**base,'model_filters':{'include':['custom*']}},
+            {**base,'model_filters':filters},
             {**base,'model_filters':{'include':[]}}]
-    assert len({configuration_key(tmp_path,'provider-openai',row) for row in scopes})==4
-    assert len({connection_key(tmp_path,'provider-openai',row) for row in scopes})==1
-    assert connection_key(tmp_path,'provider-openai',base)!=connection_key(
-        tmp_path,'provider-openai',{**base,'api_key':'different-account'})
+    assert len({configuration_key(tmp_path,module,row) for row in scopes})==4
+    assert len({connection_key(tmp_path,module,row) for row in scopes})==1
+    assert connection_key(tmp_path,module,base)!=connection_key(
+        tmp_path,module,{**base,'api_key':'different-account'})
     indirect={**base,'model_filters':{'include':['${LIST_PATTERN}']}}
     monkeypatch.setenv('LIST_PATTERN','first*')
-    before=configuration_key(tmp_path,'provider-openai',indirect)
+    before=configuration_key(tmp_path,module,indirect)
     monkeypatch.setenv('LIST_PATTERN','second*')
-    assert configuration_key(tmp_path,'provider-openai',indirect)!=before
+    assert configuration_key(tmp_path,module,indirect)!=before
 
 
 _PROCESS = r'''

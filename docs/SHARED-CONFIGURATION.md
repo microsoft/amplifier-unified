@@ -112,6 +112,12 @@ advertises `filters_keyword`, `filters_schema`, `default_filters`, `unfiltered`
 and `override`; selectors are passed only when advertised. Unified does not copy
 the recommendation algorithm, mutate private provider fields or maintain a
 second unfiltered catalog.
+Provider-specific fields remain opaque to Unified: it neither restricts a
+selector to OpenAI's field names nor fills omitted fields itself. The entire
+effective `model_filters` mapping participates in catalog identity. Configured,
+deployment, static and simulated lists are not evidence of fresh API inventory;
+this consumer leaves them in unsupported/manual mode rather than relabeling
+their IDs as API-verified. Their exact IDs remain valid selection intent.
 
 The host's existing private `ProviderCatalog` owns single-flight discovery and
 restart reuse. Explicit Refresh reloads the selected connection once. Reopen,

@@ -40,10 +40,14 @@ MODEL_IDS = {
     "anthropic": ["claude-sonnet-4-5-20250929", "account-only-experimental-model"],
     "gemini": ["gemini-future-exp", "future-unrecognized-family", "tunedModels/customer-custom"],
     "chat-completions": ["account-model-one", "future-unrecognized-family"],
-    "openai-chatgpt": ["account-zeta", "literal-fast"],
+    "openai-chatgpt": ["gpt-6", "gpt-6-2026-11-01", "gpt-6-mini", "account-zeta", "literal-fast"],
     "github-copilot": ["gpt-4.1", "future-unrecognized-family"],
 }
 OPENAI_DEFAULT_IDS = ["gpt-6", "gpt-6-mini"]
+CANONICAL_PROVIDERS = tuple(json.loads(Path(__file__).with_name(
+    "canonical_model_catalog_candidate.json").read_text())["providers"])
+DEFAULT_IDS = {"openai": OPENAI_DEFAULT_IDS,
+               "openai-chatgpt": ["gpt-6", "gpt-6-2026-11-01", "gpt-6-mini"]}
 _installed = False
 
 
@@ -82,7 +86,8 @@ def _payload(provider, empty=False):
     if provider == "openai-chatgpt":
         return {"models": [{"slug": mid, "display_name": mid, "visibility": "list",
                             "supported_in_api": True, "context_window": 64000,
-                            "max_output_tokens": 8000} for mid in ids]}
+                            "max_output_tokens": 8000, "additional_speed_tiers": ["fast"]}
+                           for mid in ids]}
     raise ValueError("Provider has no HTTP fixture")
 
 
@@ -237,8 +242,8 @@ def class_evidence(provider):
     path = Path(inspect.getfile(cls)).resolve()
     package = "amplifier_module_provider_" + provider.replace("-", "_")
     package_root = Path(importlib.import_module(package).__file__).resolve().parent
-    manifest = "canonical_model_catalog_candidate.json" if provider == "openai" else "model_catalog_candidates.json"
-    candidate = json.loads(Path(__file__).with_name(manifest).read_text())["providers"][provider]
+    candidate = json.loads(Path(__file__).with_name(
+        "canonical_model_catalog_candidate.json").read_text())["providers"][provider]
     if candidate["module"] != package or not path.is_relative_to(package_root):
         raise AssertionError("Candidate class is not defined in its installed package")
     for relative, expected in candidate["files"].items():
@@ -267,9 +272,9 @@ def install():
     if os.environ.get("UNIFIED_CATALOG_CANDIDATES") != "1":
         raise RuntimeError("Candidate transport requires explicit test opt-in")
     selected = os.environ.get("UNIFIED_CATALOG_PROVIDER")
-    providers = (selected,) if selected else PROVIDERS
-    if any(provider not in PROVIDERS for provider in providers):
-        raise ValueError("Unknown candidate provider")
+    providers = (selected,) if selected else CANONICAL_PROVIDERS
+    if any(provider not in CANONICAL_PROVIDERS for provider in providers):
+        raise ValueError("Provider has no immutable canonical candidate in this graph")
     if not _installed:
         sys.addaudithook(_forbid_network)
         import httpx

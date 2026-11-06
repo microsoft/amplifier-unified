@@ -29,6 +29,21 @@
         "native_checkpoint.py": "f6974b3b25d67ae710a806609855c7bf05529fb9d4fe2cd51eeaf51423b05264",
         "neutral_computer.py": "925bbf03af1816c3bcc134df74840327dcc12c58bdab8b95b2be9a06998f987e"
       }
+    },
+    "openai-chatgpt": {
+      "commit": "43c31aa30c757560173e82f83acf18db4b0fa349",
+      "archiveSha256": "e79d569bbf1a33409bac7ea53ab2d76bc6b97b31b170d8d476ad97c17cf2447e",
+      "module": "amplifier_module_provider_openai_chatgpt",
+      "files": {
+        "__init__.py": "a0b855a217f2f3fdeb94e055ee8bc3cfee8a56899a998bce99949cd528d5e5b4",
+        "_model_listing.py": "295c67a0f12662b3268c16a98e0302c8cec6b70a1d025ce029a9fa063b328529",
+        "_plan_request.py": "81d4dfd93fd9fd0fb5bbd47f1c8634af84f73ba5c5d4b3e5f37c7dd6dba27246",
+        "_sse.py": "16cf9b7ac8908821e3e9efff602c05a9ec31e8bace67bf40a748f94227847a70",
+        "models.py": "10f810f66ccb43c08e1956ac37a4dc7702210c0af6fc94444e4b3b20b1f8a15c",
+        "oauth.py": "9ad4fd021889fc51b271a249afa2247d9d025d9bd6135ced03efeeaced36e8b5",
+        "plan_auth.py": "f2f1f10291924a0e00100012aff43fa54c1578e6433bd58b9a2c2e72fa251db0",
+        "provider.py": "3d4ba5776ca07057286c27ef1cdb1d91356e15a16b08919dfa21c6ad32ee9d7e"
+      }
     }
   }
 }

@@ -1,4 +1,4 @@
-"""Opt-in canonical OpenAI candidate qualification, with synthetic transport only.
+"""Opt-in canonical provider candidate qualification, with synthetic transport only.
 
 The managed runner must install the exact reviewed candidate dependency graph.
 Run explicitly: UNIFIED_CATALOG_CANDIDATES=1 python -m pytest -s \
@@ -32,7 +32,7 @@ from amplifier_web.setup import SetupManager
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("UNIFIED_CATALOG_CANDIDATES") != "1",
-    reason="Requires the explicitly installed canonical OpenAI candidate",
+    reason="Requires the explicitly installed immutable canonical provider graph",
 )
 TRANSPORT_FILE = Path(__file__).resolve().with_name("fixtures") / "catalog_candidate_transports.py"
 _spec = importlib.util.spec_from_file_location("catalog_candidate_transports", TRANSPORT_FILE)
@@ -101,7 +101,7 @@ def candidate_environment(tmp_path, monkeypatch):
     return log
 
 
-@pytest.mark.parametrize("provider", ["openai"])
+@pytest.mark.parametrize("provider", transport.CANONICAL_PROVIDERS)
 async def test_actual_adapter_probe_cache_restart_refresh_empty_and_errors(
     provider, tmp_path, monkeypatch, candidate_environment, record_property,
 ):
@@ -135,7 +135,7 @@ async def test_actual_adapter_probe_cache_restart_refresh_empty_and_errors(
         requests(0)  # Metadata/schema must not make a catalog or inference call.
 
         result = await current.cached_probe("providers.models", args, workspace)
-        expected_ids = transport.OPENAI_DEFAULT_IDS
+        expected_ids = transport.DEFAULT_IDS[provider]
         assert [model["id"] for model in result["models"]] == expected_ids
         assert result["modelsProvenance"] == "provider-api"
         assert result["modelsSupported"] is True
@@ -211,24 +211,28 @@ async def test_actual_adapter_probe_cache_restart_refresh_empty_and_errors(
             await cache.close()
 
 
-async def test_actual_openai_configured_scopes_share_binding_not_inventory(
-    tmp_path, monkeypatch, candidate_environment,
+@pytest.mark.parametrize("provider", ["openai", "openai-chatgpt"])
+async def test_actual_gpt_configured_scopes_share_binding_not_inventory(
+    provider, tmp_path, monkeypatch, candidate_environment,
 ):
     """No copied filter algorithm: real provider config selects each inventory."""
-    monkeypatch.setenv('UNIFIED_CATALOG_PROVIDER','openai')
+    monkeypatch.setenv('UNIFIED_CATALOG_PROVIDER',provider)
     manager=SetupManager(tmp_path/'host',catalog=ProviderCatalog(tmp_path/'catalog.json'),
                          probe_command=[sys.executable,str(TRANSPORT_FILE)])
-    row={'id':'candidate','module':'provider-openai','config':_config('openai',tmp_path)}
+    row={'id':'candidate','module':'provider-'+provider,'config':_config(provider,tmp_path)}
     workspace=str(tmp_path)
     identities=[];bindings=[]
     try:
         for filters, expected in [
-            (None,transport.OPENAI_DEFAULT_IDS),
-            ({},sorted(transport.MODEL_IDS['openai'])),
+            (None,transport.DEFAULT_IDS[provider]),
+            ({},sorted(transport.MODEL_IDS[provider]) if provider=='openai' else transport.MODEL_IDS[provider]),
             ({'include':['GPT-6*'],'exclude':['*mini'],'hide_dated':True},['gpt-6']),
             ({'include':[]},[]),
         ]:
-            row['config']['model_filters']=filters
+            if filters is None:
+                row['config'].pop('model_filters',None)
+            else:
+                row['config']['model_filters']=filters
             write_private(amplifier_home()/'settings.yaml',yaml.safe_dump({'config':{'providers':[row]}}))
             identities.append(manager.catalog_key({'id':'candidate'},workspace))
             bindings.append(manager.catalog_key({'id':'candidate'},workspace,binding=True))
