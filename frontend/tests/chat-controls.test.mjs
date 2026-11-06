@@ -11,6 +11,7 @@ const record=calls=>async(name,args)=>{calls.push({name,args});return {accepted:
 // change must exercise both onChange and onCommit on the rendered element.
 const field=(root,id)=>root.root.find(node=>typeof node.type==='string'&&node.props.id===id);
 const optionValues=(root,id)=>field(root,id).findAllByType('option').map(node=>node.props.value);
+const renderedText=node=>typeof node==='string'?node:Array.isArray(node)?node.map(renderedText).join(''):renderedText(node?.children||[]);
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
 test('one compact model panel embeds bundle choices under Advanced and shares its revision chain',async()=>{
@@ -114,7 +115,7 @@ test('late catalogs preserve selector choices and shared provider actions',async
  assert.equal(picker().type,'select');
  assert.equal(picker().props.value,'');
  assert.deepEqual(optionValues(root,'chat-model'),['','first']);
- assert.match(JSON.stringify(root.toJSON()),/Saved selection: .*second.*not in the discovered list/);
+ assert.match(renderedText(root.toJSON()),/Saved selection: .*second.*not in the discovered list/);
  state={...state,modelCatalogs:{'account-openai':{phase:'ready',models:[]}}};
  await renderAct(async()=>root.update(render()));
  assert.equal(picker().type,'input');
@@ -152,7 +153,7 @@ for(const isDraft of [false,true])test('authoritative empty refresh replaces cac
    :{name:'runtime.control',args:{sessionId:'chat',operation:'configuration.catalog',args:{refresh:true,instance:'one'}}});
   entry={phase:'ready',models:[]};await renderAct(async()=>root.update(render()));
   assert.deepEqual(values(),[]);assert.equal(field(root,'chat-model').type,'input');assert.equal(field(root,'chat-model').props.value,'saved');
-  assert.match(JSON.stringify(root.toJSON()),/Saved selection: .*saved.*not in the discovered list/);
+  assert.match(renderedText(root.toJSON()),/Saved selection: .*saved.*not in the discovered list/);
   entry={phase:'ready',modelsDeferred:true};await renderAct(async()=>root.update(render()));assert.deepEqual(values(),[]);
   entry={phase:'ready',models:['fresh']};await renderAct(async()=>root.update(render()));
   assert.deepEqual(values(),['fresh']);assert.equal(field(root,'chat-model').props.value,'');
@@ -269,7 +270,7 @@ test('only the current configured roster and exact shared catalog key supply cho
   assert.deepEqual(optionValues(root,'chat-provider'),['','configured']);
   assert.deepEqual(optionValues(root,'chat-model'),['','real-model']);
   assert.equal(field(root,'chat-model').props.value,'');
-  assert.match(JSON.stringify(root.toJSON()),/Saved selection: .*saved-only.*not in the discovered list/);
+  assert.match(renderedText(root.toJSON()),/Saved selection: .*saved-only.*not in the discovered list/);
   state={...state,configurationRevision:3};
   await renderAct(async()=>root.update(render()));
   assert.deepEqual(optionValues(root,'chat-provider'),[''],'A previous configuration revision is not a roster fallback');

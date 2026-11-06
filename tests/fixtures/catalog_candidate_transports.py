@@ -49,8 +49,9 @@ MODEL_IDS = {
                        "auto", "future-unrecognized-family"],
 }
 OPENAI_DEFAULT_IDS = ["gpt-6", "gpt-6-mini"]
-CANONICAL_PROVIDERS = tuple(json.loads(Path(__file__).with_name(
-    "canonical_model_catalog_candidate.json").read_text())["providers"])
+CANDIDATES = json.loads(Path(__file__).with_name("canonical_model_catalog_candidate.json").read_text())
+CANONICAL_PROVIDERS = tuple(CANDIDATES["providers"])
+LOCAL_PROVIDERS = tuple(CANDIDATES.get("localProviders", {}))
 DEFAULT_IDS = {"openai": OPENAI_DEFAULT_IDS,
                "anthropic": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-sonnet-5-6-preview"],
                "gemini": ["gemini-3.1-flash", "gemini-3.1-flash-lite", "gemini-3.1-pro",
@@ -263,8 +264,7 @@ def class_evidence(provider):
     path = Path(inspect.getfile(cls)).resolve()
     package = "amplifier_module_provider_" + provider.replace("-", "_")
     package_root = Path(importlib.import_module(package).__file__).resolve().parent
-    candidate = json.loads(Path(__file__).with_name(
-        "canonical_model_catalog_candidate.json").read_text())["providers"][provider]
+    candidate = {**CANDIDATES["providers"], **CANDIDATES.get("localProviders", {})}[provider]
     sdk = candidate.get("sdk")
     if sdk and importlib.metadata.version(sdk["distribution"]) != sdk["qualificationVersion"]:
         raise AssertionError("Candidate SDK differs from the qualification manifest")
@@ -297,7 +297,7 @@ def install():
         raise RuntimeError("Candidate transport requires explicit test opt-in")
     selected = os.environ.get("UNIFIED_CATALOG_PROVIDER")
     providers = (selected,) if selected else CANONICAL_PROVIDERS
-    if any(provider not in CANONICAL_PROVIDERS for provider in providers):
+    if any(provider not in CANONICAL_PROVIDERS + LOCAL_PROVIDERS for provider in providers):
         raise ValueError("Provider has no immutable canonical candidate in this graph")
     if not _installed:
         sys.addaudithook(_forbid_network)

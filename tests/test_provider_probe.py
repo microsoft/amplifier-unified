@@ -133,10 +133,7 @@ async def test_legacy_static_list_cannot_claim_a_reachable_connection(monkeypatc
     {'version':2,'source':'provider-api'},
     {'version':1,'source':'cache'},
     {'version':1,'source':'unsupported'},
-    {'version':1,'source':'configured'},
     {'version':1,'source':'deployment'},
-    {'version':1,'source':'static'},
-    {'version':1,'source':'simulated'},
     {'version':1,'filters_keyword':'filters'},
 ])
 async def test_unqualified_listing_is_not_promoted_to_strict(info):
@@ -217,3 +214,36 @@ async def test_provider_specific_selector_schema_and_fields_are_not_openai_polic
     await provider_probe.listed_models(provider,filters={})
     assert calls==[{}, {'filters':override}, {'filters':{}}]
     assert info==before, 'Inspection does not rewrite provider schema/defaults'
+
+
+@pytest.mark.parametrize('source', ['configured', 'static', 'simulated'])
+@pytest.mark.parametrize('models', [[], [{'id':'Exact-Customer/Alias'}]])
+async def test_explicit_origin_is_visible_but_never_connection_verification(source, models, monkeypatch, tmp_path):
+    from amplifier_web.provider_catalog import ProviderCatalog, model_key
+    calls=[]
+    class Provider:
+        def __init__(self, config=None):pass
+        def get_info(self):return {'config_fields':[]}
+        def get_model_list_info(self):return {'version':1,'source':source,'filters_keyword':'filters'}
+        async def list_models(self, **kwargs):
+            calls.append(kwargs)
+            return models
+        async def login(self):raise AssertionError('Browsing never logs in')
+        async def complete(self, request):raise AssertionError('Browsing never infers')
+    monkeypatch.setattr(provider_probe,'provider_class',lambda module:Provider)
+    result=await provider_probe.query({'module':'fixture','action':'providers.models'})
+    assert result['models']==models and result['modelsSupported'] is True
+    assert result['modelsProvenance']==source and calls==[{}]
+    with pytest.raises(provider_probe.ProbeFailure,match='models'):
+        await provider_probe.query({'module':'fixture','action':'providers.test'})
+    assert calls==[{}], 'Connection testing rejects local-origin metadata before listing'
+    cache=ProviderCatalog(tmp_path/'catalog.json')
+    key=model_key(source)
+    cache.put(key,result)
+    before=cache.entry(key)
+    async def failed():raise TimeoutError('failure is not an alternate inventory')
+    with pytest.raises(TimeoutError):await cache.get(key,failed,refresh=True)
+    stale=ProviderCatalog(cache.path).entry(key)
+    assert stale['models']==models and stale['provenance']==source
+    assert stale['loadedAt']==before['loadedAt'] and stale['stale'] and stale['phase']=='error'
+    await cache.close()

@@ -1,5 +1,54 @@
 {
   "status": "canonical-candidate-not-merged",
+  "localProviders": {
+    "azure-openai": {
+      "commit": "738a75b16c77f4fddd502a81ecc0035b9f26be15",
+      "archiveSha256": "9b3dc40528f377181d1237e9f1b793f364cca804981eaabf9fb30070fdcd2ac8",
+      "module": "amplifier_module_provider_azure_openai",
+      "source": "configured",
+      "files": {
+        "__init__.py": "8827cddc607e90480797c81dec87c923a9c059f7923ebcf6f2765cd27d0a7d13",
+        "_cost.py": "35ffd319bc2b16343573140e0a6d8de2a6cb7a43e33c073b326cbd2205f223a4",
+        "_model_listing.py": "a51d01bd5642c7597dcde0b19ef4e7643f37d181cd2c44ad2f2de314611a0c82",
+        "decision_hook.py": "3824c27b29ac6fe2746caeca0b321a474bebdac98a93204ec03001b0d8bd139a",
+        "decisions.py": "4ec2357de8bbeb5e18d6a11fb14d852a14dfbf03a5ca70f08c4499efa272a2e6"
+      }
+    },
+    "litellm": {
+      "commit": "dbf14f60506ad2a50ee8cb971fca2a6e4ffbd17d",
+      "archiveSha256": "2bde08c5b234cdc7ba859e529aa2f60fbc89c0febcd1e3713a26675125c6cc00",
+      "module": "amplifier_module_provider_litellm",
+      "source": "configured",
+      "sdk": {"distribution": "litellm", "requirement": ">=1.50.0", "qualificationVersion": "1.108.1", "wheelSha256": "f1c0778238800a69f7823f80b0a3e5cbb20c8d666824b3602c4ac7ba3a1be405"},
+      "files": {
+        "__init__.py": "0873a25f457d48b79e5bfe8c4574442ec90c3700c00168acb6987a640667f970",
+        "_model_listing.py": "a51d01bd5642c7597dcde0b19ef4e7643f37d181cd2c44ad2f2de314611a0c82",
+        "module.py": "9862e9793b6d1a4480f90ebc375c6f8007ce9e29307f4b882cb4750a70b6d39f",
+        "provider.py": "d5c61a508c91c578a576fb867d2bdb6568191fdf640c9ae5a43aaea8b28fdeb2"
+      }
+    },
+    "perplexity": {
+      "commit": "96ce558aa23b36b03380f85dc947fe97499dac2e",
+      "archiveSha256": "97400114cf53d77f6c5f4302ed92be408edf52a2a9ffce106f7b7fb2f2ac19b0",
+      "module": "amplifier_module_provider_perplexity",
+      "source": "static",
+      "sdk": {"distribution": "perplexityai", "requirement": ">=0.27.0", "qualificationVersion": "0.46.1", "wheelSha256": "78b051eb5530d2aad1dfda2d4a00c31731fb0d61702628ac5e8dd13557409974"},
+      "files": {
+        "__init__.py": "3fd2b69121d7892493cf02169b070335da4490251d372597b77ccb03e3bbd899",
+        "_model_listing.py": "d66901c5cf60fcbaf9a06816560b1af4883eb199ee745b8c8db94c44941b07f9"
+      }
+    },
+    "mock": {
+      "commit": "b487c4bd67c16c1b8c7088536f85044a25be4381",
+      "archiveSha256": "7c7cec8a75fd4ca7dc84b561927b748e85dce675aeec3bb51806d5bf5e5816d7",
+      "module": "amplifier_module_provider_mock",
+      "source": "simulated",
+      "files": {
+        "__init__.py": "7301efcc57d8e1c68d0949155e189eb91a5f6e646c33eaef16be29cca770c58b",
+        "_model_listing.py": "d66901c5cf60fcbaf9a06816560b1af4883eb199ee745b8c8db94c44941b07f9"
+      }
+    }
+  },
   "providers": {
     "openai": {
       "commit": "6392be270a5b391a1228b74df18e463107cc4046",

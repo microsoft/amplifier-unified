@@ -63,6 +63,35 @@ async def test_settings_models_and_metadata_are_reused_by_mounted_controls(app,m
     assert app.state['runtimeControl'][sid]['modelCatalogs'][row['id']]['models']==[{'id':'setup-model'}]
 
 
+@pytest.mark.parametrize('source', ['configured', 'static', 'simulated'])
+async def test_mounted_publication_keeps_origin_on_ready_empty_and_failure(app,monkeypatch,source):
+    manager,row=await configure(app,monkeypatch)
+    sid=app.state['selectedSessionId']
+    mode=['ready']
+    async def control(session_id,operation,args):
+        if operation=='configuration.providers':
+            return {'providers':[row],'catalogRevision':'first'}
+        if mode[0]=='error':raise ValueError('refresh failure')
+        return {'models':[] if mode[0]=='empty' else [{'id':'Local/Alias'}],
+                'modelsSupported':True,'modelsProvenance':source}
+    monkeypatch.setattr(app.runtime,'control',control)
+    await app.management.warm_runtime_models(sid,[row],'first')
+    before=app.state['runtimeControl'][sid]['modelCatalogs'][row['id']]
+    assert before['provenance']==source and not before['stale']
+    mode[0]='error'
+    with pytest.raises(ValueError):
+        await app.management.runtime_models(sid,row,'first',refresh=True)
+    await app.management.warm_runtime_models(sid,[row],'first')
+    failed=app.state['runtimeControl'][sid]['modelCatalogs'][row['id']]
+    assert failed['provenance']==source and failed['stale'] and failed['phase']=='error'
+    assert failed['loadedAt']==before['loadedAt'] and failed['models']==before['models']
+    mode[0]='empty'
+    await app.management.runtime_models(sid,row,'first',refresh=True)
+    await app.management.warm_runtime_models(sid,[row],'first')
+    empty=app.state['runtimeControl'][sid]['modelCatalogs'][row['id']]
+    assert empty['provenance']==source and empty['models']==[] and not empty['stale']
+
+
 async def test_runtime_refresh_updates_shared_models_and_schema(app,monkeypatch):
     manager,row=await configure(app,monkeypatch)
     async def unexpected(*args):raise AssertionError('Equivalent catalog must reuse mounted result')
@@ -75,6 +104,42 @@ async def test_runtime_refresh_updates_shared_models_and_schema(app,monkeypatch)
     await app.management.command('runtime.control',{'sessionId':sid,'operation':'configuration.providerModels','args':{'instance':row['id'],'refresh':True}},'refresh')
     assert app.runtime.calls=={row['id']:2}
     assert app.management.provider_catalog.fresh(model_key(row['sharedCatalogKey']))
+
+
+@pytest.mark.parametrize('source', ['configured', 'static', 'simulated', 'provider-api'])
+async def test_mounted_listing_origin_and_connection_test_are_distinct(tmp_path, source):
+    from types import SimpleNamespace
+    from amplifier_web.runtime_controls import RuntimeControls
+    calls=[]
+    class Provider:
+        name='fixture'
+        def get_info(self):return {'config_fields':[]}
+        def get_model_list_info(self):return {'version':1,'source':source}
+        async def list_models(self):
+            calls.append('list')
+            return [{'id':'Exact/Alias'}]
+    provider=Provider()
+    coordinator=SimpleNamespace(config={'providers':[]},session_state={},
+        get=lambda name: {'one':provider} if name=='providers' else
+            SimpleNamespace(_select_provider=lambda providers:provider),
+        get_capability=lambda name:None, register_capability=lambda *args:None)
+    controls=RuntimeControls(SimpleNamespace(coordinator=coordinator,config={},session_id='fixture'),
+        SimpleNamespace(generation=None,queued_inputs=0))
+    try:
+        metadata=await controls.perform('configuration.providers',{})
+        row=metadata['providers'][0]
+        assert row['supports']['models'] is True
+        assert row['supports']['test'] is (source=='provider-api')
+        result=await controls.perform('configuration.providerModels',{'instance':'one'})
+        assert result['models']==[{'id':'Exact/Alias'}] and result['modelsProvenance']==source
+        if source=='provider-api':
+            assert (await controls.perform('configuration.providerTest',{'instance':'one'}))['reachable']
+            assert calls==['list','list']
+        else:
+            with pytest.raises(ValueError,match='API model listing'):
+                await controls.perform('configuration.providerTest',{'instance':'one'})
+            assert calls==['list']
+    finally:await controls.close()
 
 
 async def test_expired_mounted_cache_refreshes_even_when_ui_phase_is_ready(app):

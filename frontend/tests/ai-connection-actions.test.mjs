@@ -110,3 +110,26 @@ test('new decision-only Azure setup saves its own endpoint without requesting a 
   assert.equal(calls.some(([action])=>action==='providers.models'),false);
  }finally{await act(async()=>root?.unmount())}
 });
+
+test('everyday model setup retains explicit origin and error truth for empty and stale catalogs',async()=>{
+ let root,calls=[];
+ const render=entry=>React.createElement(AIConnections,{state:{
+  ...state({step:'model',id:'one',module:'provider-openai',model:'saved-exact'}),
+  modelCatalogs:{key:entry},
+  setup:{providersLoadedAt:1,providers:[{id:'one',module:'provider-openai',config:{default_model:'saved-exact'}}],
+   providerCatalogs:{one:{sharedCatalogKey:'key'}}}},
+  act:async(...args)=>{calls.push(args);return {accepted:true}},navigate:()=>{}});
+ try{
+  for(const entry of [
+   {phase:'ready',supported:true,provenance:'static',models:[]},
+   {phase:'error',supported:true,provenance:'static',models:['old-model'],stale:true,error:'Refresh failed'}
+  ]){
+   await act(async()=>{if(root)root.update(render(entry));else root=create(render(entry))});
+   assert.equal(root.root.findByProps({'data-model-origin':'static'}).props.children,'Static recommendations — not a live inventory.');
+   assert.equal(root.root.findByProps({id:'ai-model-manual'}).props.value,'saved-exact');
+   if(entry.phase==='error')assert.ok(JSON.stringify(root.toJSON()).includes('Model list is stale'));
+   else assert.ok(JSON.stringify(root.toJSON()).includes('This connection returned no models'));
+  }
+  assert.equal(calls.some(([action])=>['providers.test','providers.login','providers.finishSetup'].includes(action)),false);
+ }finally{await act(async()=>root?.unmount())}
+});

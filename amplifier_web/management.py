@@ -175,7 +175,8 @@ class Management:
                 info=copy.deepcopy(row['info'])
                 for name in ('model','default_model','reasoning_effort','priority'):
                     info.get('defaults',{}).pop(name,None)
-                result={**result,'providerMetadata':{'module':row['module'],'info':info,'configSchema':row['configSchema']}}
+                result={**result,'providerMetadata':{'module':row['module'],'info':info,
+                    'configSchema':row['configSchema'],'modelListInfo':row.get('modelListInfo')}}
             return result
         return await self.provider_catalog.get(key,load,refresh=refresh)
 
@@ -187,6 +188,8 @@ class Management:
             result=result or {}
             return {'phase':phase,'models':result.get('models',[]),
                     'supported':result.get('supported',result.get('modelsSupported',True)),
+                    'provenance':result.get('modelsProvenance'),
+                    'stale':cache_key in self.provider_catalog.loaded_at and not self.provider_catalog._fresh(cache_key),
                     'loadedAt':self.provider_catalog.loaded_at.get(cache_key)}
         pending=[];catalogs={}
         for row in providers:

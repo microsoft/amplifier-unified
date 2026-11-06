@@ -6,6 +6,7 @@ import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {ProviderSettings}=await server.ssrLoadModule('/src/setup.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
+const renderedText=node=>typeof node==='string'?node:Array.isArray(node)?node.map(renderedText).join(''):renderedText(node?.children||[]);
 test.after(()=>server.close());
 
 test('opening settings loads saved configuration and keeps subsequent edits during refresh',async()=>{
@@ -83,7 +84,7 @@ test('model selector searches only discovered models and displays an unlisted sa
   assert.equal(root.root.findByType('input').props.type,'search','A real list has search, not manual ID entry');
   assert.equal(root.root.findByType('select').props.value,'');
   assert.deepEqual(values(),['','catalog-one','catalog-two']);
-  assert.match(JSON.stringify(root.toJSON()),/Saved selection: .*saved-model.*not in the discovered list/);
+  assert.match(renderedText(root.toJSON()),/Saved selection: .*saved-model.*not in the discovered list/);
   await renderAct(async()=>root.root.findByType('input').props.onChange({target:{value:'Second'}}));
   assert.deepEqual(values(),['','catalog-two'],'Search matches display names as well as IDs');
   assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{settingsFilters:{'model-picker-choice':'Second'}}}});
@@ -142,6 +143,31 @@ test('model selector retains only host-supplied refresh data and never unions ea
   entry={phase:'ready',models:['other-connection-model']};await renderAct(async()=>root.update(render()));
   assert.deepEqual(values(),['','other-connection-model']);
   assert.equal(root.root.findByType('select').props.value,'');
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+
+for(const [provenance,label] of [
+ ['configured','Configured models — not checked against the service.'],
+ ['static','Static recommendations — not a live inventory.'],
+ ['simulated','Simulated models — test responses only.']
+])test(provenance+' catalog stays selectable with an honest source in every refresh state',async()=>{
+ const {ModelSelect}=await server.ssrLoadModule('/src/model-select.jsx');
+ const committed=[];let root,entry={provenance,phase:'ready',supported:true,models:[{id:'Exact/Alias'}],loadedAt:1700000000};
+ const render=()=>React.createElement(ModelSelect,{id:'origin',value:'saved-hidden',entry,state:{view:{}},act:async()=>{},onChange:()=>{},onCommit:value=>committed.push(value)});
+ try{
+  await renderAct(async()=>root=create(render()));
+  assert.equal(root.root.findByProps({'data-model-origin':provenance}).props.children,label);
+  assert.match(JSON.stringify(root.toJSON()),/not in the .*catalog/);
+  assert.doesNotMatch(JSON.stringify(root.toJSON()),/Choose a discovered model/);
+  await renderAct(async()=>root.root.findByType('select').props.onChange({target:{value:'Exact/Alias'}}));
+  assert.deepEqual(committed,['Exact/Alias']);
+  for(const patch of [{phase:'working'},{phase:'error',error:'Refresh failed',stale:true},{phase:'ready',error:null,stale:false,models:[]}]){
+   entry={...entry,...patch};await renderAct(async()=>root.update(render()));
+   assert.equal(root.root.findByProps({'data-model-origin':provenance}).props.children,label);
+  }
+  assert.equal(root.root.findAllByType('option').length,0);
+  assert.equal(root.root.findByType('input').props.value,'saved-hidden');
+  assert.deepEqual(committed,['Exact/Alias'],'Refresh never rewrites the saved choice');
  }finally{await renderAct(async()=>root?.unmount())}
 });
 

@@ -115,10 +115,15 @@ the recommendation algorithm, mutate private provider fields or maintain a
 second unfiltered catalog.
 Provider-specific fields remain opaque to Unified: it neither restricts a
 selector to OpenAI's field names nor fills omitted fields itself. The entire
-effective `model_filters` mapping participates in catalog identity. Configured,
-deployment, static and simulated lists are not evidence of fresh API inventory;
-this consumer leaves them in unsupported/manual mode rather than relabeling
-their IDs as API-verified. Their exact IDs remain valid selection intent.
+effective `model_filters` mapping participates in catalog identity. Version 1
+metadata can explicitly declare `configured`, `static` or `simulated` origin.
+Those rows remain useful choices labeled Configured models, Static recommendations
+or Simulated models; none claims fresh API inventory or a reachable account.
+The same origin remains visible after empty success or a stale/error refresh.
+Unknown origins, absent metadata and `unsupported` remain manual-only. A failed
+API listing never falls back to another origin. Connection testing requires
+`provider-api`; browsing configured/static/simulated choices does not test or
+log in to the service. Their exact IDs remain valid selection intent.
 
 The opt-in candidate graph in `tests/fixtures/canonical_model_catalog_candidate.json`
 binds reviewed provider revisions and module hashes, including required SDK versions.

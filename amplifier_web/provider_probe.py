@@ -50,12 +50,12 @@ async def model_list_info(provider):
         raise ValueError('Invalid provider model-list metadata')
     if type(result.get('version')) is not int or result['version'] != 1:
         return None
-    if result.get('source') not in {'provider-api', 'unsupported'}:
+    if result.get('source') not in {'provider-api', 'configured', 'static', 'simulated', 'unsupported'}:
         return None
     return public(dict(result))
 
 
-async def listed_models(provider, *, filters=None):
+async def listed_models(provider, *, filters=None, require_api=False):
     """Consume canonical listing with provider-owned defaults or explicit scope.
 
     No-argument calls preserve provider configuration/defaults. Only advertised
@@ -63,6 +63,8 @@ async def listed_models(provider, *, filters=None):
     defaults. Unified owns caching, not provider recommendation algorithms.
     """
     info = await model_list_info(provider)
+    if require_api and (info is None or info['source'] != 'provider-api'):
+        raise ValueError('Provider does not expose API model listing for connection testing')
     if info is None or info['source'] == 'unsupported':
         return {'models': [], 'modelsSupported': False, 'modelsProvenance': 'unsupported'}
     kwargs = {}
@@ -79,7 +81,7 @@ async def listed_models(provider, *, filters=None):
     if any(not isinstance(row, dict) or not isinstance(row.get('id'), str) or not row['id'] for row in models):
         raise ValueError('Invalid provider model IDs')
     return {'models': models, 'modelsSupported': True,
-            'modelsProvenance': 'provider-api', 'modelListInfo': info}
+            'modelsProvenance': info['source'], 'modelListInfo': info}
 
 
 class ProbeFailure(ValueError):
@@ -152,10 +154,8 @@ async def _query(request, progress):
             result['messageTest'] = await test_message(provider, config, request.get('model'), info)
             return result
         progress['stage'] = 'models'
-        result.update(await listed_models(provider))
+        result.update(await listed_models(provider, require_api=request['action']=='providers.test'))
         if request['action']=='providers.test':
-            if not result['modelsSupported']:
-                raise ValueError('Provider does not expose verified model listing for connection testing')
             result['test']={'reachable':True,'modelCount':len(result['models']),'method':'provider.list_models'}
         return result
     finally:

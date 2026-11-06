@@ -42,7 +42,7 @@ class Provider:
         return [{'id': 'cli-model'}, {'id': 'unified-model'}]
 
     def get_model_list_info(self):
-        return {'version':1,'source':'provider-api'}
+        return {'version':1,'source':self.config.get('catalog_origin','provider-api')}
 
     async def complete(self, request, **kwargs):
         self.calls.append({'model': kwargs.get('model') or request.model or self.default_model,
@@ -142,6 +142,10 @@ class Scenario:
             assert value['id'] in {'cli','unified'}
             assert value['mode'] in {'error','empty','unsupported','ready'}
             self.faults[value['id']]=value['mode']
+            if 'origin' in value:
+                assert value['origin'] in {'provider-api','configured','static','simulated'}
+                next(row for row in self.rows if row['id']==value['id'])['config']['catalog_origin']=value['origin']
+                self.save()
             return web.json_response({'saved':True})
         async def release(request):
             self.gate.set()

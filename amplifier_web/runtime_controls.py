@@ -618,8 +618,8 @@ class RuntimeControls:
                 listing = await model_list_info(provider)
                 rows.append({"id":name,**({"available":False,"failure":provider.failure} if isinstance(provider,UnavailableProvider) else {}),"module":mounted.get('module'),"catalogKey":catalog_key,**shared,"info":public_config(info, metadata=True),"configSchema":public_config(schema, metadata=True),
                     "modelListInfo":listing,
-                    "supports":{"models":bool(listing and listing['source']=='provider-api'),
-                                "test":callable(getattr(provider,"list_models",None)),
+                    "supports":{"models":bool(listing and listing['source']!='unsupported'),
+                                "test":bool(listing and listing['source']=='provider-api'),
                                 "login":callable(getattr(provider,"login",None))}})
             loop=self.coordinator.get('orchestrator')
             selected=loop._select_provider(providers) if providers else None
@@ -641,7 +641,8 @@ class RuntimeControls:
             from .provider_catalog import require_mounted_binding
             require_mounted_binding(self.coordinator, name, args.get('expectedCatalogKey'), catalog=True)
             # The host owns connection-bound caching. Do not let a mounted
-            # provider's legacy/static list seed that same shared identity.
+            # provider's unqualified legacy list seed that same shared identity.
+            # Explicit configured/static/simulated origins retain their labels.
             try:
                 result = await asyncio.wait_for(listed_models(provider), 120)
             except Exception as exc:
@@ -649,9 +650,7 @@ class RuntimeControls:
             return {'provider': name, **result, 'supported': result['modelsSupported']}
         if operation == "configuration.providerTest":
             from .provider_probe import listed_models
-            result=await asyncio.wait_for(listed_models(provider),120)
-            if not result['modelsSupported']:
-                raise ValueError("This provider does not expose verified model listing for connection testing")
+            result=await asyncio.wait_for(listed_models(provider,require_api=True),120)
             return {"provider":name,"reachable":True,"modelCount":len(result['models']),"method":"provider.list_models"}
         method = getattr(provider,"login",None)
         if not callable(method):

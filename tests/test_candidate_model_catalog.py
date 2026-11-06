@@ -385,6 +385,65 @@ async def test_legacy_filtered_selection_changes_catalog_not_pinned_account(
         await service.close()
 
 
+@pytest.mark.parametrize("provider,config,expected,all_ids", [
+    ("azure-openai", {"base_url":"https://catalog.invalid/azure", "deployments":["Customer-Blue", "Research/Alias"]},
+     ["Customer-Blue", "Research/Alias"], ["Customer-Blue", "Research/Alias"]),
+    ("litellm", {"model_list":[{"model_name":"Router-Blue"}, "Team/Alias"]},
+     ["Router-Blue", "Team/Alias"], ["Router-Blue", "Team/Alias"]),
+    ("perplexity", {"api_key":"catalog-fixture-not-a-live-credential"},
+     ["sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"],
+     ["sonar", "sonar-pro", "sonar-reasoning", "sonar-reasoning-pro", "sonar-deep-research", "r1-1776"]),
+    ("mock", {}, ["mock-model"], ["mock-model"]),
+])
+async def test_actual_local_origin_catalog_is_visible_without_api_verification(
+    provider, config, expected, all_ids, tmp_path, monkeypatch, candidate_environment, record_property,
+):
+    from amplifier_web.provider_health import generation, record, issue
+    monkeypatch.setenv("UNIFIED_CATALOG_PROVIDER", provider)
+    # LiteLLM's published opt-out keeps its bundled pricing data offline too;
+    # it is not an alternative model inventory or a patched provider.
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    manager = SetupManager(tmp_path / "host", catalog=ProviderCatalog(tmp_path / "catalog.json"),
+                           probe_command=[sys.executable, str(TRANSPORT_FILE)])
+    row = {"id":"local", "module":"provider-"+provider, "config":deepcopy(config)}
+    origin = transport.CANDIDATES["localProviders"][provider]["source"]
+    keys = []
+    try:
+        for filters, ids in [(None, expected), ({}, all_ids), ({"include":[]}, [])]:
+            if filters is not None:
+                row["config"]["model_filters"] = filters
+            write_private(amplifier_home() / "settings.yaml", yaml.safe_dump({"config":{"providers":[row]}}))
+            record(manager.home, "local", generation(row["module"], row["config"]), authentication_required=True)
+            key = manager.catalog_key({"id":"local"}, str(tmp_path))
+            keys.append(key)
+            result = await manager.cached_probe("providers.models", {"id":"local"}, str(tmp_path))
+            assert [model["id"] for model in result["models"]] == ids
+            assert result["modelsSupported"] is True and result["modelsProvenance"] == origin
+            entry = manager.catalog.entry(model_key(key))
+            assert entry["phase"] == "ready" and entry["provenance"] == origin
+            assert await manager.cached_probe("providers.models", {"id":"local"}, str(tmp_path)) == result
+            assert ProviderCatalog(manager.catalog.path).entry(model_key(key))["provenance"] == origin
+            assert issue(manager.home, "local", row["module"], row["config"]), "Local listing cannot clear a known authentication failure"
+        assert len(set(keys)) == 3
+        with pytest.raises(ValueError, match="models"):
+            await manager.probe("providers.test", {"id":"local"}, str(tmp_path))
+        if provider in {"azure-openai", "litellm"}:
+            row["config"] = {"base_url":"https://catalog.invalid/azure"} if provider=="azure-openai" else {}
+            write_private(amplifier_home() / "settings.yaml", yaml.safe_dump({"config":{"providers":[row]}}))
+            result = await manager.cached_probe("providers.models", {"id":"local"}, str(tmp_path))
+            assert result["models"] == [] and result["modelsSupported"] is False
+            assert result["modelsProvenance"] == "unsupported"
+        assert not _records(candidate_environment, "request")
+        assert not _records(candidate_environment, "forbidden")
+        evidence = _records(candidate_environment, "provider-class")
+        assert evidence
+        record_property("local_origin_evidence", json.dumps({
+            "provider":provider, "source":origin, "classEvidence":evidence[0],
+            "networkRequests":0, "scope":"Installed provider listing, not inference or entitlement"}))
+    finally:
+        await manager.catalog.close()
+
+
 async def test_synthetic_unsupported_manual_selection_is_not_six_adapter_evidence(
     tmp_path, candidate_environment, record_property,
 ):

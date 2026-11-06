@@ -365,6 +365,41 @@ try{
  await page.screenshot({path:`${evidence}/desktop-empty.png`});
  await closeOptions();
  await save('shared-catalog.json',{completed:true,probes:await probeCounts(),manualDispatch:(await requests()).at(-1)});
+ const originChecks=[];
+ for(const [origin,label] of [
+  ['configured','Configured models — not checked against the service.'],
+  ['static','Static recommendations — not a live inventory.'],
+  ['simulated','Simulated models — test responses only.']
+ ]){
+  const response=await page.request.post(url+'/fixture/provider-resolution/fault',{data:{id:'unified',mode:'ready',origin}});
+  assert.equal(response.status(),200);
+  await activate(model);
+  await dialog.getByRole('button',{name:'Refresh this connection',exact:true}).click();
+  await expect(dialog.getByText(label,{exact:true})).toBeVisible();
+  await expect(dialog.locator('option[value="unified-model"]')).toHaveCount(1);
+  await expect(dialog.getByText(/Saved selection: manual-deployment.*catalog/)).toBeVisible();
+  for(const width of [1280,390]){
+   await page.setViewportSize({width,height:900});
+   await expect(dialog.getByText(label,{exact:true})).toBeVisible();
+   assert.equal(await dialog.evaluate(node=>node.scrollWidth<=node.clientWidth+1),true,'Origin label must wrap without horizontal overflow');
+   await page.screenshot({path:`${evidence}/origin-${origin}-${width}.png`});
+  }
+  await fault('error');
+  await dialog.getByRole('button',{name:'Refresh this connection',exact:true}).click();
+  await expect(dialog.getByText(/discovery failed at/)).toBeVisible();
+  await expect(dialog.getByText(label,{exact:true})).toBeVisible();
+  await expect(dialog.locator('option[value="unified-model"]')).toHaveCount(1);
+  await fault('empty');
+  await dialog.getByRole('button',{name:'Refresh this connection',exact:true}).click();
+  await expect(dialog.getByText('This connection returned no models.',{exact:true})).toBeVisible();
+  await expect(dialog.getByText(label,{exact:true})).toBeVisible();
+  const current=await state();
+  assert.equal(current.sessions.find(row=>row.id===current.selectedSessionId)?.selection?.model,'manual-deployment');
+  originChecks.push({origin,label,ready:true,stale:true,empty:true,widths:[1280,390]});
+  await closeOptions();
+ }
+ assert.equal((await requests()).length,sentBefore+1,'Browsing local-origin lists must not send inference');
+ await save('origin-labels.json',{completed:true,checks:originChecks,syntheticFixture:true});
  await bounded(Promise.all(actionSettlements),5000,'Final action receipts');await actionWrites;
  await save('actions.json',actionRows);
  console.log('Provider selection passed: exact pre-send connection/model/effort; wrong-connection label rejected; explicit draft+effort+reload; consecutive inherited chats; delayed bundle truth; narrow touch; synthetic native-selector complete-call recording (not full prepare_manager).');
