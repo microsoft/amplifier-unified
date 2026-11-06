@@ -425,3 +425,47 @@ async def test_astral_pagination_offsets_are_unicode_codepoints(tmp_path):
     assert page['endOffset'] == 6000 and page['nextOffset'] == 6000 and len(page['text']) == 6000
     page2 = observer.store.read(call_id=result['selected']['callId'], item_id=item['id'], offset=6000, bodies=True)
     assert page2['endOffset'] == 10000 and page2['nextOffset'] is None and len(page2['text']) == 4000
+
+
+@pytest.mark.parametrize('failed_stage', ['body', 'manifest', 'index-before', 'index-after'])
+def test_failed_snapshot_write_retains_bounded_transaction_and_no_orphans(tmp_path, monkeypatch, failed_stage):
+    store = InspectionStore(tmp_path / 'capture')
+    original = store._write
+    def fail(name, value):
+        match = (name.endswith('.txt') if failed_stage == 'body' else
+                 name not in {'index.json','transaction.json'} and name.endswith('.json') if failed_stage == 'manifest'
+                 else name == 'index.json')
+        if match:
+            if failed_stage == 'index-after': original(name, value)
+            raise OSError('scripted write acknowledgement failure')
+        return original(name, value)
+    monkeypatch.setattr(store, '_write', fail)
+    for index in range(8):
+        with pytest.raises(OSError):
+            store.begin({'callId':f'llm:failed-{index}','startedAt':time.time(),'phase':'running'},
+                        *projection(request(), bodies=True))
+        files = list(store.directory.glob('*.txt'))
+        assert len(files) == len(store.index(days=None)) <= MAX_REQUESTS
+        assert not store._path('transaction.json').exists()
+    monkeypatch.setattr(store, '_write', original)
+    store.begin({'callId':'llm:healthy','startedAt':time.time(),'phase':'running'}, *projection(request(),bodies=True))
+    assert len(list(store.directory.glob('*.txt'))) <= MAX_REQUESTS
+
+
+def test_cleanup_failure_blocks_new_snapshot_growth_until_reconciled(tmp_path, monkeypatch):
+    store = InspectionStore(tmp_path / 'capture')
+    for index in range(4):
+        store.begin({'callId':f'llm:before-{index}','startedAt':time.time(),'phase':'running'}, *projection(request(),bodies=True))
+    unlink = Path.unlink
+    def refuse(path, *args, **kwargs):
+        if path.name == key('llm:before-0')+'.txt':
+            raise OSError('scripted cleanup failure')
+        return unlink(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'unlink', refuse)
+    for index in range(4, 9):
+        with pytest.raises(OSError):
+            store.begin({'callId':f'llm:after-{index}','startedAt':time.time(),'phase':'running'}, *projection(request(),bodies=True))
+        assert len(list(store.directory.glob('*.txt'))) == MAX_REQUESTS + 1
+    monkeypatch.setattr(Path, 'unlink', unlink)
+    store.begin({'callId':'llm:recovered','startedAt':time.time(),'phase':'running'}, *projection(request(),bodies=True))
+    assert len(list(store.directory.glob('*.txt'))) == MAX_REQUESTS

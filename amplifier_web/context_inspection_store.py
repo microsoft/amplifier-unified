@@ -80,12 +80,33 @@ class InspectionStore:
         cutoff = time.time() - days * 86400 if days is not None else 0
         return [v for v in values if v.get('startedAt', 0) >= cutoff]
 
+    def _settle_transaction(self):
+        """Recover only the one declared write; never scan native capture."""
+        try:
+            transaction = self._read('transaction.json', 2000)
+        except FileNotFoundError:
+            return
+        pending = transaction['new']
+        retired = transaction['retired']
+        if not isinstance(retired, list) or len(retired) > MAX_REQUESTS + 1:
+            raise ValueError('Invalid observation cleanup transaction.')
+        for value in [pending, *retired]:
+            key(value)  # Validate before any deletion.
+        committed = any(row['callId'] == pending for row in self.index(days=None))
+        for call_id in retired if committed else [pending]:
+            for suffix in ('.json', '.txt'):
+                self._path(key(call_id) + suffix).unlink(missing_ok=True)
+        self._path('transaction.json').unlink()
+
     def begin(self, header, manifest, texts, *, days=30):
         self._path('index.json')
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         identity = key(header['callId'])
         with FileLock(str(self._path('.lock')), timeout=2):
+            self._settle_transaction()
             rows = self.index(days=None)
+            if any(r['callId'] == header['callId'] for r in rows):
+                raise ValueError('A captured request is immutable.')
             # One immutable text body per request; manifest carries bounded byte
             # spans. Labels/paths never become file names.
             offset, parts = 0, []
@@ -98,10 +119,7 @@ class InspectionStore:
                     parts.append(text)
             if offset > MAX_BODY_BYTES:
                 raise ValueError('Observation text exceeded its bound.')
-            if parts:
-                self._write(identity + '.txt', ''.join(parts))
-            self._write(identity + '.json', {**manifest, **header})
-            rows = [r for r in rows if r['callId'] != header['callId']] + [header]
+            rows = rows + [header]
             rows.sort(key=lambda r: r['startedAt'], reverse=True)
             eligible = [r for r in rows if r['startedAt'] >= time.time() - days * 86400]
             # Keep the last completed request even during many new failures.
@@ -109,14 +127,25 @@ class InspectionStore:
             keep = eligible[:MAX_REQUESTS]
             if completed and completed not in keep:
                 keep[-1] = completed
-            self._write('index.json', keep)
-            for old in rows:
-                if old not in keep:
-                    for suffix in ('.json', '.txt'):
-                        self._path(key(old['callId']) + suffix).unlink(missing_ok=True)
+            if header not in keep:
+                return
+            # Journal before the first body. Failed/unknown atomic writes are
+            # reconciled by exact index membership, never by blindly replaying.
+            # If cleanup itself fails, the next capture must settle it first:
+            # at most the ring plus this one declared candidate can exist.
+            self._write('transaction.json', {'new': header['callId'],
+                'retired': [r['callId'] for r in rows if r not in keep]})
+            try:
+                if parts:
+                    self._write(identity + '.txt', ''.join(parts))
+                self._write(identity + '.json', {**manifest, **header})
+                self._write('index.json', keep)
+            finally:
+                self._settle_transaction()
 
     def finish(self, call_id, phase, usage):
         with FileLock(str(self._path('.lock')), timeout=2):
+            self._settle_transaction()
             rows = self.index(days=None)
             row = next((r for r in rows if r['callId'] == call_id), None)
             if row is None:

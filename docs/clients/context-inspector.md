@@ -55,6 +55,14 @@ set can omit observations under storage pressure without limiting model executio
 The UI reports the last **observed** identity; it does not assert complete coverage
 of all provider calls. Snapshot loss cannot affect native history or recovery.
 
+This inspector owns physical pruning only inside its own diagnostic subdirectory;
+the diagnostic preference is otherwise “Index days” and does not delete shared CI
+logs. A single write journal names the candidate and retired entries before body
+creation. Failed writes reconcile against the atomic index; cleanup failure blocks
+new snapshot growth until that exact journal settles. Physical storage can retain
+the four-request ring plus one pending candidate during failure, never an unindexed
+sequence of prompt copies. No full capture-directory scan or native-log deletion is used.
+
 The sidebar makes no detail read. Opening reads only a small index and manifest;
 selected content reads one bounded span. Neither path scans the transcript/events,
 loads an agent, reassembles prompts or rereads current source files. Native session
