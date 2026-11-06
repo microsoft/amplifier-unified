@@ -93,15 +93,25 @@ Supported module/instance overrides are resolved before discovery, including
 disabled connections and endpoint/configuration overrides. They do not introduce
 additional bundle-only connections into the shared roster.
 
-Unified consumes an optional provider-owned `discover_models()` method. Its
-version-1 result is `{version: 1, source: "provider-api", models: [...]}`, with
-model IDs from a successful API response for that exact account and endpoint.
-An actual empty list is a successful empty response. Providers without this
-method, or returning `{version: 1, source: "unsupported", models: []}`, expose
-explicit model-ID entry instead. Failed discovery raises an error, not a default
-model or a static list. The independently released `list_models()` contract is
-unchanged and is not evidence of API discovery. Metadata may annotate returned
-IDs but must not invent variants or add configured/saved IDs to the list.
+Unified consumes the existing async `list_models() -> list[ModelInfo]` API.
+Optional `get_model_list_info()` metadata with `version: 1` and
+`source: "provider-api"` declares strict fresh API listing, not account access or
+model entitlement. Missing/unknown metadata or `source: "unsupported"` remains
+unverified and exposes explicit model-ID entry, never a static fallback presented
+as fresh inventory. The superseded `discover_models()` method is not consumed.
+Failed listing raises an error; a genuine empty result is successful and distinct
+from failure or unsupported listing. Returned IDs are preserved exactly.
+
+Providers own recommendations. Unified calls `list_models()` without keywords,
+preserving that provider's effective configured `model_filters` or defaults.
+Explicit saved `model_filters: {}` requests all models for the canonical OpenAI
+adapter; a custom mapping replaces defaults, not merges with them. OpenAI's
+declared default is `include: ["gpt-6*"]`, `exclude: []`, `hide_dated: true`.
+Other providers' policies remain their owners' decisions. Optional v1 metadata
+advertises `filters_keyword`, `filters_schema`, `default_filters`, `unfiltered`
+and `override`; selectors are passed only when advertised. Unified does not copy
+the recommendation algorithm, mutate private provider fields or maintain a
+second unfiltered catalog.
 
 The host's existing private `ProviderCatalog` owns single-flight discovery and
 restart reuse. Explicit Refresh reloads the selected connection once. Reopen,
@@ -111,8 +121,13 @@ error; it does not retry automatically. Successful empty refresh removes previou
 options. Credential, endpoint, discovery configuration, source or qualified
 runtime changes create a distinct identity. Selection-only `model`,
 `default_model`, `reasoning_effort`, priority and connection labels do not affect
-strict discovery. Other provider configuration remains identity-bearing.
+strict discovery. `model_filters` changes the catalog identity, but not the
+account binding of a saved exact model selection. Other provider configuration
+remains identity-bearing.
 Legacy unproven cache entries are not adopted as authentic snapshots.
+Ordinary model display/refresh does not prepare a whole bundle to resolve an
+unknown default label. Saved intent or a current native report supplies that
+label; otherwise the panel states that Send will resolve the bundle default.
 
 Conversation-specific account/endpoint overrides remain intact. The panel marks
 known mismatches separately instead of treating an equal instance name as equal
@@ -131,7 +146,9 @@ Late results cannot be published under a changed connection identity.
 
 An explicit manual ID is saved as intent, not as a discovered option. Unknown
 capabilities do not clear saved reasoning intent. Advertised finite reasoning
-choices still validate it. Sending preserves current authority, Stop, revision,
+choices still validate it. A model hidden by recommendations, absent from a
+successful list, or retained while listing fails remains usable as an exact ID;
+listing is not an unconditional success gate for inference. Sending preserves current authority, Stop, revision,
 connection availability and provider invocation checks; a failed provider
 request is never retried under a different connection or model.
 

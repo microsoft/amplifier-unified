@@ -69,22 +69,10 @@ async def browse(management, session, *, refresh=False, instance=None):
         catalog=True, refresh=refresh, instance=instance, catalog_cache=management.provider_catalog,
         desired_bundle=bool(pending_bundle), global_only=session.get('location',{}).get('kind')=='managed')
     if result.get('providers') and not (session.get('pendingModelSelection') or session.get('selection') or reported_selection(service, session) or result.get('effective')):
-        previous=service.state.get('runtimeControl',{}).get(sid,{}).get('configuration.catalog',{})
-        if (previous.get('configurationRevision')==revision and previous.get('nextMessageRevision',0)==desired_revision
-                and previous.get('defaultsResolved')):
-            result.update(effective=previous.get('effective',{}),defaultsResolved=True)
-        else:
-            try:
-                defaults = await resolve_defaults(service.data_dir, session['workspace'],
-                    pending_bundle['bundle'] if pending_bundle else session.get('bundle'),
-                    service.state['settings'].get('appBundle'), desired_bundle=bool(pending_bundle),
-                    session_id=session.get('runtimeSessionId') or session.get('nativeIdentity') or sid,
-                    global_only=session.get('location',{}).get('kind')=='managed')
-                result.update(effective=defaults.get('effective', {}),defaultsResolved=True)
-            except Exception:
-                # Default inspection is not inventory discovery. One failure
-                # must not erase usable configured connections and model lists.
-                result.update(defaultsResolved=True, defaultError='The current bundle default could not be read. Choose an explicit connection and model.')
+        # Ordinary display/refresh must not prepare a whole bundle just to
+        # fill a default label. Native reports and saved intent remain the
+        # evidence; genuine input resolves the actual bundle selection.
+        result.update(defaultError='The bundle default will be resolved when you send. You can choose an explicit connection and model now.')
     entries = result.pop('catalogs', {})
     from .provider_catalog import conversation_bindings
     result['connectionScope'] = 'global' if session.get('location',{}).get('kind')=='managed' else 'workspace'

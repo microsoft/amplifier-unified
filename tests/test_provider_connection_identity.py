@@ -12,6 +12,23 @@ from amplifier_web.provider_catalog import ProviderCatalog, model_key
 from amplifier_web.setup import SetupManager, chatgpt_token_path
 
 
+def test_recommendation_scope_invalidates_catalog_not_saved_account_binding(tmp_path, monkeypatch):
+    from amplifier_web.provider_catalog import connection_key, configuration_key
+    base={'api_key':'synthetic-account','base_url':'https://fixture.invalid'}
+    scopes=[base, {**base,'model_filters':{}},
+            {**base,'model_filters':{'include':['custom*']}},
+            {**base,'model_filters':{'include':[]}}]
+    assert len({configuration_key(tmp_path,'provider-openai',row) for row in scopes})==4
+    assert len({connection_key(tmp_path,'provider-openai',row) for row in scopes})==1
+    assert connection_key(tmp_path,'provider-openai',base)!=connection_key(
+        tmp_path,'provider-openai',{**base,'api_key':'different-account'})
+    indirect={**base,'model_filters':{'include':['${LIST_PATTERN}']}}
+    monkeypatch.setenv('LIST_PATTERN','first*')
+    before=configuration_key(tmp_path,'provider-openai',indirect)
+    monkeypatch.setenv('LIST_PATTERN','second*')
+    assert configuration_key(tmp_path,'provider-openai',indirect)!=before
+
+
 _PROCESS = r'''
 import asyncio, json, os, sys
 from pathlib import Path

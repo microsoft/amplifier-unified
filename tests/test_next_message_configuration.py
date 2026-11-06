@@ -347,15 +347,15 @@ def test_configured_default_is_not_invented_but_unavailable_discovery_allows_man
                                 'info': {'defaults': {'model': 'other-account-model'}}})
     selected = {'instance': 'one', 'model': 'configured-model', 'effort': 'low'}
     for model in ('configured-model', 'unknown-model', 'other-account-model'):
-        with pytest.raises(ValueError, match='catalog'):
-            validate_selection({**selected, 'model': model}, catalog)
+        validate_selection({**selected, 'model': model}, catalog)
+    assert catalog['catalogs']['one']['models']==[{'id':'chosen'}]
     with pytest.raises(ValueError, match='reasoning effort'):
         validate_selection({**selected, 'model': 'chosen', 'effort': 'unsupported'}, catalog)
     catalog['catalogs']['one']['phase'] = 'error'
     validate_selection(selected, catalog)
 
 
-@pytest.mark.parametrize('fault', ['model', 'effort', 'provider'])
+@pytest.mark.parametrize('fault', ['effort', 'provider'])
 def test_invalid_choices_never_pass_validation(fault):
     from amplifier_web.next_message_configuration import validate_selection
     catalog = valid_catalog()

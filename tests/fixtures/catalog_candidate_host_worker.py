@@ -81,7 +81,7 @@ async def worker(root):
 
 async def run(root, mismatch=False):
     import yaml
-    from catalog_candidate_transports import SYNTHETIC_KEY, MODEL_IDS
+    from catalog_candidate_transports import SYNTHETIC_KEY, MODEL_IDS, OPENAI_DEFAULT_IDS
     root.mkdir(parents=True,exist_ok=False)
     home, workspace, shared=(root/name for name in ('app','workspace','shared'))
     workspace.mkdir();shared.mkdir()
@@ -100,7 +100,7 @@ async def run(root, mismatch=False):
     from amplifier_web.service import AppService
     paths={name:str(Path(importlib.import_module('amplifier_module_'+name.replace('-','_')).__file__).parent)
            for name in ('loop-live','context-simple','provider-openai')}
-    candidate=json.loads((SOURCE/'tests/fixtures/model_catalog_candidates.json').read_text())['providers']['openai']
+    candidate=json.loads((SOURCE/'tests/fixtures/canonical_model_catalog_candidate.json').read_text())['providers']['openai']
     package=Path(paths['provider-openai'])
     for name,sha in candidate['files'].items():
         assert digest(package/name)==sha,(name,'candidate source mismatch')
@@ -124,7 +124,7 @@ async def run(root, mismatch=False):
         await app.on_runtime_event(event,data)
     try:
         response=await app.dispatch('session.create',{'bundle':str(bundle),'title':'Candidate binding',
-            'selection':{'instance':'candidate-openai','model':MODEL_IDS['openai'][0]}},
+            'selection':{'instance':'candidate-openai','model':'gpt-4o'}},
             command_id='candidate-binding-create',include_state=False)
         assert response['accepted'],response
         session=app._session()
@@ -154,7 +154,8 @@ async def run(root, mismatch=False):
             mounted=next(row for row in summary['providers'] if row['id']=='candidate-openai')
             assert mounted['connectionKey']==session['modelConnectionKey']
             discovered=await runtime.control(session['id'],'configuration.providerModels',{'instance':'candidate-openai'})
-            assert [m['id'] for m in discovered['models']]==MODEL_IDS['openai']
+            assert [m['id'] for m in discovered['models']]==OPENAI_DEFAULT_IDS
+            assert summary['effective']['model']=='gpt-4o', 'Recommendations must not reset the hidden exact choice'
             result.update(admission='accepted',models=discovered['models'])
         process=runtime.workers[session['id']]['process']
         witnesses=[json.loads(line) for line in (root/'worker-witness.jsonl').read_text().splitlines()]
@@ -167,6 +168,7 @@ async def run(root, mismatch=False):
         assert not any(row['event']=='forbidden' for row in requests)
         completions=[row for row in requests if row['event']=='completion']
         assert len(completions)==(0 if mismatch else 1),completions
+        if completions:assert completions[0]['model']=='gpt-4o'
         requests=[row for row in requests if row['event']=='request']
         assert len(requests)==(0 if mismatch else 1),requests
         result.update(candidate=candidate['commit'],qualification='focused installed native fixture; no full runtime qualification',

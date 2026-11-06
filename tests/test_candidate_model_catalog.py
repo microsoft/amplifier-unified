@@ -1,4 +1,4 @@
-"""Opt-in actual-six-adapter qualification, with synthetic transport only.
+"""Opt-in canonical OpenAI candidate qualification, with synthetic transport only.
 
 The managed runner must install the exact reviewed candidate dependency graph.
 Run explicitly: UNIFIED_CATALOG_CANDIDATES=1 python -m pytest -s \
@@ -8,8 +8,9 @@ This file never installs packages or calls a live service. It exercises the
 actual SetupManager subprocess protocol and disk-backed host catalog. Captured
 JSON/JUnit properties identify loaded class files/hashes, provenance and request
 counts. The helper verifies installed Python bytes against the parent's retained
-model_catalog_candidates.json manifest before admitting each probe.
-The separate synthetic unsupported test is NOT seventh-adapter evidence.
+canonical_model_catalog_candidate.json manifest before admitting each probe.
+The older six-adapter manifest remains historical evidence, not canonical proof.
+The separate synthetic unsupported test is NOT another migrated adapter.
 """
 from __future__ import annotations
 
@@ -31,7 +32,7 @@ from amplifier_web.setup import SetupManager
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("UNIFIED_CATALOG_CANDIDATES") != "1",
-    reason="Requires the explicitly installed six reviewed provider candidates",
+    reason="Requires the explicitly installed canonical OpenAI candidate",
 )
 TRANSPORT_FILE = Path(__file__).resolve().with_name("fixtures") / "catalog_candidate_transports.py"
 _spec = importlib.util.spec_from_file_location("catalog_candidate_transports", TRANSPORT_FILE)
@@ -100,7 +101,7 @@ def candidate_environment(tmp_path, monkeypatch):
     return log
 
 
-@pytest.mark.parametrize("provider", transport.PROVIDERS)
+@pytest.mark.parametrize("provider", ["openai"])
 async def test_actual_adapter_probe_cache_restart_refresh_empty_and_errors(
     provider, tmp_path, monkeypatch, candidate_environment, record_property,
 ):
@@ -134,7 +135,7 @@ async def test_actual_adapter_probe_cache_restart_refresh_empty_and_errors(
         requests(0)  # Metadata/schema must not make a catalog or inference call.
 
         result = await current.cached_probe("providers.models", args, workspace)
-        expected_ids = transport.MODEL_IDS[provider]
+        expected_ids = transport.OPENAI_DEFAULT_IDS
         assert [model["id"] for model in result["models"]] == expected_ids
         assert result["modelsProvenance"] == "provider-api"
         assert result["modelsSupported"] is True
@@ -144,9 +145,9 @@ async def test_actual_adapter_probe_cache_restart_refresh_empty_and_errors(
         identity = current.catalog_key(args, workspace)
         key = model_key(identity)
         selected = {"instance": "candidate", "model": transport.SELECTION_ONLY}
-        with pytest.raises(ValueError, match="not in this connection"):
-            validate_selection(selected, {"providers": [{"id": "candidate", "sharedCatalogKey": identity}],
-                                          "catalogs": {identity: current.catalog.entry(key)}})
+        validate_selection(selected, {"providers": [{"id": "candidate", "sharedCatalogKey": identity}],
+                                      "catalogs": {identity: current.catalog.entry(key)}})
+        assert transport.SELECTION_ONLY not in [m['id'] for m in current.catalog.entry(key)['models']]
 
         assert await current.cached_probe("providers.models", args, workspace) == result
         requests(1)
@@ -192,7 +193,7 @@ async def test_actual_adapter_probe_cache_restart_refresh_empty_and_errors(
         evidence = _records(log, "provider-class")
         assert evidence
         assert all(item["module"].startswith(item["package"]) for item in evidence)
-        assert all(item["discoveryDefinedBy"].startswith(item["package"]) for item in evidence)
+        assert all(item["listingDefinedBy"].startswith(item["package"]) for item in evidence)
         assert len({(item["class"], item["file"], item["sha256"]) for item in evidence}) == 1
         assert len({item["pid"] for item in evidence}) == 7  # Schema + six actual subprocess probes.
         assert all(item["pid"] != os.getpid() for item in evidence)
@@ -208,6 +209,37 @@ async def test_actual_adapter_probe_cache_restart_refresh_empty_and_errors(
     finally:
         for cache in caches:
             await cache.close()
+
+
+async def test_actual_openai_configured_scopes_share_binding_not_inventory(
+    tmp_path, monkeypatch, candidate_environment,
+):
+    """No copied filter algorithm: real provider config selects each inventory."""
+    monkeypatch.setenv('UNIFIED_CATALOG_PROVIDER','openai')
+    manager=SetupManager(tmp_path/'host',catalog=ProviderCatalog(tmp_path/'catalog.json'),
+                         probe_command=[sys.executable,str(TRANSPORT_FILE)])
+    row={'id':'candidate','module':'provider-openai','config':_config('openai',tmp_path)}
+    workspace=str(tmp_path)
+    identities=[];bindings=[]
+    try:
+        for filters, expected in [
+            (None,transport.OPENAI_DEFAULT_IDS),
+            ({},sorted(transport.MODEL_IDS['openai'])),
+            ({'include':['GPT-6*'],'exclude':['*mini'],'hide_dated':True},['gpt-6']),
+            ({'include':[]},[]),
+        ]:
+            row['config']['model_filters']=filters
+            write_private(amplifier_home()/'settings.yaml',yaml.safe_dump({'config':{'providers':[row]}}))
+            identities.append(manager.catalog_key({'id':'candidate'},workspace))
+            bindings.append(manager.catalog_key({'id':'candidate'},workspace,binding=True))
+            result=await manager.cached_probe('providers.models',{'id':'candidate'},workspace)
+            assert [m['id'] for m in result['models']]==expected
+            assert result['modelsSupported'] is True and result['modelsProvenance']=='provider-api'
+            info=result['providerMetadata']['modelListInfo']
+            assert info['source']=='provider-api' and info['filters_keyword']=='filters'
+        assert len(set(identities))==4 and len(set(bindings))==1
+        assert not _records(candidate_environment,'forbidden')
+    finally:await manager.catalog.close()
 
 
 async def test_synthetic_unsupported_manual_selection_is_not_six_adapter_evidence(
@@ -309,10 +341,12 @@ main()
         assert entry["models"] == []
         validate_selection(selected, catalog)
         assert selected == original
-        # This provider advertises a known schema with no reasoning field.
-        # Manual ID admission must not invent a reasoning capability.
-        with pytest.raises(ValueError, match="reasoning effort"):
-            validate_selection({**selected, "effort": "not-advertised"}, catalog)
+        # No advertised finite choices means unknown, not a rejection or a
+        # synthesized capability. Keep explicit intent for provider invocation.
+        with_effort={**selected,"effort":"not-advertised"}
+        validate_selection(with_effort,catalog)
+        assert with_effort=={**original,"effort":"not-advertised"}
+        assert entry['models']==[]
         assert _records(log) == events  # Warm host reads do not start another probe.
 
         persisted = json.loads(cache_path.read_text())

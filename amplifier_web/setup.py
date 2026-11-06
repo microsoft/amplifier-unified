@@ -428,6 +428,7 @@ class SetupManager:
                 return {'text':result.get('naming',{}).get('text','')}
             metadata={'module':module,'info':result['info'],'configSchema':result['configSchema'],'imageGeneration':result.get('imageGeneration')}
             if action=='providers.models':
+                metadata['modelListInfo']=result.get('modelListInfo')
                 metadata['info']=copy.deepcopy(metadata['info'])
                 defaults=metadata['info'].get('defaults',{})
                 for name in ('model','default_model','reasoning_effort','priority'):

@@ -1,4 +1,4 @@
-"""Offline transport boundary for the six *installed* provider candidates.
+"""Offline transport boundary for *installed* provider candidates.
 
 Run this file as SetupManager's probe_command; stdin/stdout remain the real
 provider_probe protocol. Native-worker fixtures may import and call install().
@@ -36,13 +36,14 @@ PROVIDERS = (
 SYNTHETIC_KEY = "catalog-fixture-not-a-live-credential"
 SELECTION_ONLY = "selection-only-not-returned-by-api"
 MODEL_IDS = {
-    "openai": ["gpt-4o", "future-unrecognized-family"],
+    "openai": ["gpt-6", "gpt-6-2026-11-01", "gpt-6-mini", "gpt-4o", "future-unrecognized-family"],
     "anthropic": ["claude-sonnet-4-5-20250929", "account-only-experimental-model"],
     "gemini": ["gemini-future-exp", "future-unrecognized-family", "tunedModels/customer-custom"],
     "chat-completions": ["account-model-one", "future-unrecognized-family"],
     "openai-chatgpt": ["account-zeta", "literal-fast"],
     "github-copilot": ["gpt-4.1", "future-unrecognized-family"],
 }
+OPENAI_DEFAULT_IDS = ["gpt-6", "gpt-6-mini"]
 _installed = False
 
 
@@ -236,7 +237,8 @@ def class_evidence(provider):
     path = Path(inspect.getfile(cls)).resolve()
     package = "amplifier_module_provider_" + provider.replace("-", "_")
     package_root = Path(importlib.import_module(package).__file__).resolve().parent
-    candidate = json.loads(Path(__file__).with_name("model_catalog_candidates.json").read_text())["providers"][provider]
+    manifest = "canonical_model_catalog_candidate.json" if provider == "openai" else "model_catalog_candidates.json"
+    candidate = json.loads(Path(__file__).with_name(manifest).read_text())["providers"][provider]
     if candidate["module"] != package or not path.is_relative_to(package_root):
         raise AssertionError("Candidate class is not defined in its installed package")
     for relative, expected in candidate["files"].items():
@@ -252,7 +254,7 @@ def class_evidence(provider):
             "package": package, "file": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "candidateCommit": candidate["commit"], "verifiedSourceFiles": len(candidate["files"]),
             "distributionVersion": version,
-            "discoveryDefinedBy": cls.discover_models.__module__}
+            "listingDefinedBy": cls.list_models.__module__}
 
 
 def install():

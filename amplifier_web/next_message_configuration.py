@@ -186,8 +186,8 @@ async def prepare(service, captured):
             elif selection:
                 session['selection'] = copy.deepcopy(selection)
                 session['pendingModelSelection'] = copy.deepcopy(selection)
-        # Catalog validation does not call inference. A failed/unknown lookup
-        # keeps intent and prevents silently sending under a different model.
+        # Listing informs capabilities, not model entitlement. Hidden/manual
+        # exact IDs remain intent; account binding still gates native admission.
         if selection:
             resolved = await resolve_defaults(service.data_dir, session['workspace'], session.get('bundle'),
                 service.state['settings'].get('appBundle'),
@@ -228,12 +228,9 @@ def validate_selection(selected, catalog):
     entry = catalog.get('catalogs', {}).get(provider.get('sharedCatalogKey'), {})
     if provider.get('config', {}).get('chat_enabled') is False:
         raise ValueError('This connection is not enabled for chat.')
-    if entry.get('phase') == 'ready' and entry.get('supported', False) and entry.get('models'):
-        models = {row if isinstance(row, str) else row.get('id') for row in entry.get('models', [])}
-        if selected['model'] not in models:
-            raise ValueError('The saved model is not in this connection’s catalog. Choose a compatible model.')
-    # Unavailable/unsupported discovery is not rejection by the provider. An
-    # explicit model/deployment ID remains intent; invocation still validates
+    # A recommendation filter (even a successful empty list) is not rejection
+    # by the provider. An explicit model/deployment ID remains intent, never an
+    # invented catalog row or an entitlement claim; invocation still validates
     # credentials, endpoint, mounted connection and the provider's response.
     metadata = entry.get('metadata') or {}
     if selected.get('effort') and isinstance(metadata.get('configSchema', {}).get('fields'), list):
@@ -265,7 +262,7 @@ def validate_selection(selected, catalog):
         field = next((field for field in schema.get('fields', [])
             if field.get('id') == 'reasoning_effort' and shown(field)), None)
         choices = field.get('choices', []) if field else []
-        if not field or selected['effort'] not in [row.get('value') if isinstance(row, dict) else row for row in choices]:
+        if choices and selected['effort'] not in [row.get('value') if isinstance(row, dict) else row for row in choices]:
             raise ValueError('The saved reasoning effort is unavailable for this model.')
 
 

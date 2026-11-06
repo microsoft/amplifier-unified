@@ -99,6 +99,13 @@ test('model selector searches only discovered models and displays an unlisted sa
   assert.match(JSON.stringify(root.toJSON()),/No matches/);
   await renderAct(async()=>root.root.findByType('select').props.onChange({target:{value:''}}));
   assert.deepEqual(changed,['catalog-one']);assert.deepEqual(committed,['catalog-one']);
+  await renderAct(async()=>root.root.findAllByType('button').find(node=>node.props.children==='Enter an exact model ID').props.onClick());
+  const exact=root.root.find(node=>node.type==='input'&&node.props.id==='choice');
+  await renderAct(async()=>exact.props.onChange({target:{value:'hidden-exact-id'}}));
+  await renderAct(async()=>exact.props.onKeyDown({key:'Enter',currentTarget:{value:'hidden-exact-id'},preventDefault:()=>{}}));
+  assert.deepEqual(committed,['catalog-one','hidden-exact-id']);
+  assert.deepEqual(values(),[''],'Manual choice never becomes a discovered option');
+  assert.match(JSON.stringify(root.toJSON()),/not verified by discovery/);
  }finally{await renderAct(async()=>root?.unmount())}
 });
 
@@ -113,12 +120,13 @@ test('model selector retains only host-supplied refresh data and never unions ea
   entry={...entry,phase:'working'};await renderAct(async()=>root.update(render()));
   assert.equal(root.root.findByType('select').props.disabled,false);
   assert.deepEqual(values(),['','catalog-model'],'Last successful rows are retained in the shared host entry');
-  entry={...entry,phase:'error',error:'Discovery failed'};await renderAct(async()=>root.update(render()));
+  entry={...entry,phase:'error',error:'Discovery failed',stale:true};await renderAct(async()=>root.update(render()));
   assert.deepEqual(values(),['','catalog-model']);
   assert.equal(root.root.findByType('select').props.id,'choice-catalog');
   assert.equal(root.root.findByType('select').props.value,'');
   assert.match(JSON.stringify(root.toJSON()),/Discovery failed/);
   assert.match(JSON.stringify(root.toJSON()),/Last successful refresh/);
+  assert.match(JSON.stringify(root.toJSON()),/Model list is stale/);
   const manual=root.root.find(node=>node.type==='input'&&node.props.id==='choice');
   await renderAct(async()=>manual.props.onChange({target:{value:'new-model-id'}}));
   assert.deepEqual(committed,[],'Typing alone does not commit a manual ID');

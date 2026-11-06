@@ -127,8 +127,8 @@ def test_manual_model_does_not_need_invented_option_or_clear_unknown_effort(entr
 def test_authentic_list_does_not_add_configured_default():
     row={'id':'one','sharedCatalogKey':'key','info':{'defaults':{'model':'default'}}}
     entry={'phase':'ready','supported':True,'models':[{'id':'real'}],'metadata':{'configSchema':{'fields':[]}}}
-    with pytest.raises(ValueError,match='not in this connection'):
-        validate_selection({'instance':'one','model':'default'}, {'providers':[row],'catalogs':{'key':entry}})
+    validate_selection({'instance':'one','model':'default'}, {'providers':[row],'catalogs':{'key':entry}})
+    assert entry['models']==[{'id':'real'}], 'Manual selection does not invent a catalog row'
 
 
 async def test_cache_cancelled_waiter_does_not_cancel_shared_load_and_refresh_coalesces():
@@ -259,3 +259,24 @@ async def test_queued_selection_updates_configured_binding(catalog_app):
     await select(service.management,chat,{'instance':'two','model':'two-real'})
     assert chat['modelConnectionKey']!=first
     assert chat['modelConnectionKey']==configured_binding(service.data_dir,chat['workspace'],'two')
+
+
+@pytest.mark.parametrize('listing', ['recommendations','empty','failed'])
+async def test_hidden_exact_pending_selection_survives_display_and_input_preparation(catalog_app, listing):
+    from amplifier_web.conversation_models import select
+    from amplifier_web.next_message_configuration import prepare
+    service, _, state, _=catalog_app
+    state.update(empty=listing=='empty',failure=listing=='failed')
+    chat=service._session()
+    chosen={'instance':'one','model':'not-recommended'}
+    await select(service.management,chat,chosen)
+    binding=chat['modelConnectionKey']
+    revision=chat['nextMessageRevision']
+    await browse(service.management,chat,refresh=True)
+    prepared,guard=await prepare(service,chat)
+    guard()
+    assert chat['selection']==chat['pendingModelSelection']==prepared['selection']==chosen
+    assert chat['modelConnectionKey']==binding==prepared['modelConnectionKey']
+    assert chat['nextMessageRevision']==revision
+    assert all(chosen['model'] not in [row['id'] for row in entry['models']]
+               for entry in service.state['modelCatalogs'].values())

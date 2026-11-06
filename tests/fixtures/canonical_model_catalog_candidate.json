@@ -1,0 +1,34 @@
+{
+  "status": "canonical-candidate-not-merged",
+  "providers": {
+    "openai": {
+      "commit": "6392be270a5b391a1228b74df18e463107cc4046",
+      "equivalentHead": "38b7b26d3c5d70acf05a2bf74bbff8862949e96b",
+      "equivalence": "GitHub compare: only tests/test_model_aware_config_gating.py changed; provider and build inputs unchanged",
+      "archiveSha256": "6ea129161706eb6b98816d899c2bb1fa12e819ec47e145665c3a36c4bae6f582",
+      "module": "amplifier_module_provider_openai",
+      "files": {
+        "__init__.py": "afbbd68687577358bd20075dc1d5c63ec42d6ed4df8801282d28e77d73b5e92e",
+        "_capabilities.py": "55aeff5e10d3f333d2889e6e85679fc886964c9fe6a4d4bf65fca35a0d7debba",
+        "_computer_result.py": "2c3d56886b98a57b591683bfe0991689be11b4e026e7471dbc5113e442f63517",
+        "_constants.py": "6ce3b512ea88b229f0333351aa5abdc91d49d8ac975988c86dabef62d71a3049",
+        "_cost.py": "7d23717a4d4d3c20aa0d143ecd114f3fdd827fecd2edbde75954c16a6dcd366c",
+        "_model_listing.py": "8ffdf3ccb9f62e0acd6f35a59a92481f9a3240631ce7ceb887ef5cbbf08e4a80",
+        "_response_handling.py": "f5f63ef27ba8068ec8c92450bd7e01da2b201b6578af8ebeda5f9c0e215c5955",
+        "_single_attempt.py": "2979f2493f6a6d016c93c11d03768c5932cdd230d574def3412acf7df6744f58",
+        "_token_count.py": "58cf433d21c34d6fc928c51acfd85ce76ba72a62adf522fef58bcdcad6f7511d",
+        "_tool_search.py": "6597ad91c8ff4c01d060b54dac3a92dda2473881b103cf73745af7299b8bc096",
+        "_transport.py": "18a5e4446df10463a9a1f5d2660ae6413be4446fdaf8e7fcc4be5d3db87de64a",
+        "compaction.py": "e6a8ba4830b9f7bc58fefc3b4ab159d8d73b00e2a1b11827a5cc0baa4255372f",
+        "computer_history.py": "a459c71bb8fcdaa2adf0503a3ef1bf96c8ef3d4c31c1d1e041fa1ba4a5db862d",
+        "computer_images.py": "501e4533c534efee9c9180425292a40ee7c16ff83c6c0ed74aa441d0b05abb54",
+        "decisions.py": "5d7b2869e3b2d9b54cd2dcf4df141d09c9975c791346e283d8b93aaa7f1c6779",
+        "image_operation.py": "cce72816cffd715053eba27e2ffe06f02cbcd97217526073eef0182d45b8ec9d",
+        "images.py": "97a6155515567dd1da0d4b10c5d6e5d4321599a5cc22a0ec4b3b76cea0045610",
+        "native.py": "a309b2d85bc906f80c0d5a04759f6a639053263f46bf2e3049de17218e2e6ca8",
+        "native_checkpoint.py": "f6974b3b25d67ae710a806609855c7bf05529fb9d4fe2cd51eeaf51423b05264",
+        "neutral_computer.py": "925bbf03af1816c3bcc134df74840327dcc12c58bdab8b95b2be9a06998f987e"
+      }
+    }
+  }
+}

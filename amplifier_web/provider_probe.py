@@ -1,6 +1,7 @@
 """Query a provider's public setup APIs without starting a conversation."""
 from __future__ import annotations
 import asyncio
+from collections.abc import Mapping
 import inspect
 import json
 import os
@@ -32,29 +33,53 @@ def public(value):
     return value
 
 
-async def discovered_models(provider):
-    """Optional versioned adapter seam; list_models may legally be static.
+async def model_list_info(provider):
+    """Read optional facts about the canonical list_models API, never list twice.
 
-    The independently released provider owns API access and provenance. Unified
-    never infers discovery from a module name or repairs it with credential HTTP.
+    Legacy list_models implementations may be static or fall back on errors.
+    Neither their name nor selector support establishes strict API provenance.
+    Unknown metadata versions remain unverified, without guessing new semantics.
     """
-    method = getattr(provider, 'discover_models', None)
-    if not callable(method):
-        return {'models': [], 'modelsSupported': False, 'modelsProvenance': 'unsupported'}
+    method = getattr(provider, 'get_model_list_info', None)
+    if not callable(method) or not callable(getattr(provider, 'list_models', None)):
+        return None
     result = method()
     if inspect.isawaitable(result):
         result = await result
-    if (not isinstance(result, dict) or type(result.get('version')) is not int or result.get('version') != 1
-            or result.get('source') not in {'provider-api', 'unsupported'}
-            or not isinstance(result.get('models'), list)):
-        raise ValueError('Invalid provider discovery provenance')
-    models = public(result['models'])
-    if result['source'] == 'unsupported' and models:
-        raise ValueError('Unsupported discovery cannot supply model choices')
+    if not isinstance(result, Mapping):
+        raise ValueError('Invalid provider model-list metadata')
+    if type(result.get('version')) is not int or result['version'] != 1:
+        return None
+    if result.get('source') not in {'provider-api', 'unsupported'}:
+        return None
+    return public(dict(result))
+
+
+async def listed_models(provider, *, filters=None):
+    """Consume canonical listing with provider-owned defaults or explicit scope.
+
+    No-argument calls preserve provider configuration/defaults. Only advertised
+    selectors receive a keyword; an explicit empty mapping is not replaced by
+    defaults. Unified owns caching, not provider recommendation algorithms.
+    """
+    info = await model_list_info(provider)
+    if info is None or info['source'] == 'unsupported':
+        return {'models': [], 'modelsSupported': False, 'modelsProvenance': 'unsupported'}
+    kwargs = {}
+    if filters is not None:
+        if not isinstance(filters, Mapping) or info.get('filters_keyword') != 'filters':
+            raise ValueError('Provider does not advertise the requested model filters')
+        kwargs['filters'] = dict(filters)
+    result = provider.list_models(**kwargs)
+    if inspect.isawaitable(result):
+        result = await result
+    if not isinstance(result, list):
+        raise ValueError('Invalid provider model list')
+    models = public(result)
     if any(not isinstance(row, dict) or not isinstance(row.get('id'), str) or not row['id'] for row in models):
         raise ValueError('Invalid provider model IDs')
-    return {'models': models, 'modelsSupported': result['source'] == 'provider-api',
-            'modelsProvenance': result['source']}
+    return {'models': models, 'modelsSupported': True,
+            'modelsProvenance': 'provider-api', 'modelListInfo': info}
 
 
 class ProbeFailure(ValueError):
@@ -127,13 +152,10 @@ async def _query(request, progress):
             result['messageTest'] = await test_message(provider, config, request.get('model'), info)
             return result
         progress['stage'] = 'models'
-        if request['action'] == 'providers.models':
-            return {**result, **await discovered_models(provider)}
-        supported=callable(getattr(provider,'list_models',None))
-        result['modelsSupported']=supported
-        if not supported and request['action']=='providers.test':raise ValueError('Provider does not expose model discovery')
-        result['models']=public(await invoke('list_models')) if supported else []
+        result.update(await listed_models(provider))
         if request['action']=='providers.test':
+            if not result['modelsSupported']:
+                raise ValueError('Provider does not expose verified model listing for connection testing')
             result['test']={'reachable':True,'modelCount':len(result['models']),'method':'provider.list_models'}
         return result
     finally:

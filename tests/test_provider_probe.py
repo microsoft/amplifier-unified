@@ -17,7 +17,7 @@ async def test_native_metadata_and_catalog_materialize_config_close_providers_an
                 {'id':'reasoning_effort','field_type':'choice','required':False,'choices':['low','high']},
             ]}
         async def list_models(self):return [{'id':'model','api_key':'private'}]
-        async def discover_models(self):return {'version':1,'source':'provider-api','models':await self.list_models()}
+        def get_model_list_info(self):return {'version':1,'source':'provider-api'}
         async def close(self):closed.append(True)
     monkeypatch.setattr(provider_probe,'provider_class',lambda module:Provider)
     monkeypatch.setenv('TEST_PROBE_KEY','private')
@@ -51,7 +51,7 @@ async def test_failed_catalog_still_closes_provider(monkeypatch):
         def __init__(self,*,api_key=None,config=None):pass
         def get_info(self):return {'config_fields':[]}
         async def list_models(self):raise ValueError('private exception')
-        async def discover_models(self):return {'version':1,'source':'provider-api','models':await self.list_models()}
+        def get_model_list_info(self):return {'version':1,'source':'provider-api'}
         async def close(self):closed.append(True)
     monkeypatch.setattr(provider_probe,'provider_class',lambda module:Provider)
     with pytest.raises(ValueError):await provider_probe.query({'module':'test','action':'providers.models'})
@@ -77,7 +77,7 @@ async def test_endpoint_provider_uses_explicit_unmodified_endpoint_and_metadata_
             assert self.config and action != 'providers.schema'
             calls.append(('models', True))
             return [{'id': 'configured-model'}]
-        async def discover_models(self):return {'version':1,'source':'provider-api','models':await self.list_models()}
+        def get_model_list_info(self):return {'version':1,'source':'provider-api'}
         async def close(self):
             closed.append(True)
     monkeypatch.setattr(provider_probe, 'provider_class', lambda module: Provider)
@@ -112,26 +112,80 @@ async def test_legacy_static_list_is_never_promoted_to_discovery():
     class StaticProvider:
         def list_models(self):
             raise AssertionError('Legacy API must not be called for discovery')
-    assert await provider_probe.discovered_models(StaticProvider()) == {
+    assert await provider_probe.listed_models(StaticProvider()) == {
         'models':[], 'modelsSupported':False, 'modelsProvenance':'unsupported'}
 
 
-@pytest.mark.parametrize('payload', [
-    {'version':True,'source':'provider-api','models':[{'id':'unqualified'}]},
-    {'source':'provider-api','models':[{'id':'real'}]},
-    {'version':1,'source':'cache','models':[{'id':'static'}]},
-    {'version':1,'source':'unsupported','models':[{'id':'invented'}]},
-    {'version':1,'source':'provider-api','models':[{'name':'no id'}]},
+async def test_legacy_static_list_cannot_claim_a_reachable_connection(monkeypatch):
+    class StaticProvider:
+        def __init__(self, config=None):pass
+        def get_info(self):return {'config_fields':[]}
+        async def list_models(self):raise AssertionError('Unverified listing must not be called')
+    monkeypatch.setattr(provider_probe,'provider_class',lambda module:StaticProvider)
+    with pytest.raises(provider_probe.ProbeFailure) as raised:
+        await provider_probe.query({'module':'fixture','action':'providers.test'})
+    assert raised.value.diagnostic['category']=='ValueError'
+
+
+@pytest.mark.parametrize('info', [
+    {'version':True,'source':'provider-api'},
+    {'source':'provider-api'},
+    {'version':2,'source':'provider-api'},
+    {'version':1,'source':'cache'},
+    {'version':1,'source':'unsupported'},
+    {'version':1,'filters_keyword':'filters'},
 ])
-async def test_strict_discovery_rejects_unqualified_results(payload):
+async def test_unqualified_listing_is_not_promoted_to_strict(info):
     class Provider:
-        async def discover_models(self):return payload
+        def get_model_list_info(self):return info
+        async def list_models(self):raise AssertionError('unverified listing')
+        async def discover_models(self):raise AssertionError('superseded API')
+    assert await provider_probe.listed_models(Provider()) == {
+        'models':[], 'modelsSupported':False, 'modelsProvenance':'unsupported'}
+
+
+@pytest.mark.parametrize('payload', [None, {}, 'bad', [{'name':'no id'}], [{'id':''}]])
+async def test_strict_listing_rejects_malformed_results(payload):
+    class Provider:
+        def get_model_list_info(self):return {'version':1,'source':'provider-api'}
+        async def list_models(self):return payload
     with pytest.raises(ValueError):
-        await provider_probe.discovered_models(Provider())
+        await provider_probe.listed_models(Provider())
 
 
 async def test_strict_successful_empty_is_not_failure_or_unsupported():
     class Provider:
-        async def discover_models(self):return {'version':1,'source':'provider-api','models':[]}
-    assert await provider_probe.discovered_models(Provider()) == {
-        'models':[], 'modelsSupported':True, 'modelsProvenance':'provider-api'}
+        def get_model_list_info(self):return {'version':1,'source':'provider-api'}
+        async def list_models(self):return []
+    assert await provider_probe.listed_models(Provider()) == {
+        'models':[], 'modelsSupported':True, 'modelsProvenance':'provider-api',
+        'modelListInfo':{'version':1,'source':'provider-api'}}
+
+
+async def test_provider_owns_default_all_custom_and_empty_filter_scopes():
+    calls=[]
+    class Provider:
+        async def get_model_list_info(self):
+            return {'version':1,'source':'provider-api','filters_keyword':'filters',
+                    'default_filters':{'include':['provider-recommendation']}}
+        async def list_models(self, **kwargs):
+            calls.append(kwargs)
+            # Deliberately not an implementation of the recommendation logic.
+            return [] if kwargs.get('filters') == {'include':[]} else [{'id':'Exact-ID'}]
+        async def discover_models(self):raise AssertionError('superseded API')
+    provider=Provider()
+    for filters in (None, {}, {'include':['Custom*']}, {'include':[]}):
+        result=await provider_probe.listed_models(provider,filters=filters)
+        assert result['modelsSupported'] is True
+        assert result['models'] == ([] if filters=={'include':[]} else [{'id':'Exact-ID'}])
+    assert calls == [{}, {'filters':{}}, {'filters':{'include':['Custom*']}}, {'filters':{'include':[]}}]
+
+
+async def test_selector_keyword_is_never_guessed_and_failures_keep_their_type():
+    class Provider:
+        def get_model_list_info(self):return {'version':1,'source':'provider-api'}
+        async def list_models(self):raise TimeoutError('synthetic failure')
+    with pytest.raises(ValueError,match='advertise'):
+        await provider_probe.listed_models(Provider(),filters={})
+    with pytest.raises(TimeoutError):
+        await provider_probe.listed_models(Provider())

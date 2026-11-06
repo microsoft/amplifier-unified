@@ -221,6 +221,25 @@ async def test_persistent_ttl_failed_refresh_and_private_file(tmp_path):
     assert ProviderCatalog(path).peek(key) is None
 
 
+async def test_failed_refresh_inside_ttl_is_stale_and_retains_success_timestamp(tmp_path):
+    now=[1000.0];key=('providers.models','identity')
+    cache=ProviderCatalog(tmp_path/'catalog.json',ttl=60,clock=lambda:now[0])
+    cache.put(key,{'models':[{'id':'prior'}],'modelsSupported':True,'modelsProvenance':'provider-api'})
+    now[0]+=1
+    async def fail():raise TimeoutError('synthetic')
+    with pytest.raises(TimeoutError):await cache.get(key,fail,refresh=True)
+    assert not cache.fresh(key)
+    entry=cache.entry(key)
+    assert entry['stale'] and entry['phase']=='error'
+    assert entry['loadedAt']==1000 and entry['failedAt']==1001
+    assert entry['models']==[{'id':'prior'}]
+    restarted=ProviderCatalog(cache.path,ttl=60,clock=lambda:now[0])
+    assert restarted.entry(key)==entry
+    cache.put(key,{'models':[],'modelsSupported':True,'modelsProvenance':'provider-api'})
+    assert cache.fresh(key) and not cache.entry(key)['stale']
+    assert cache.entry(key)['models']==[]
+
+
 async def test_provider_priority_does_not_invalidate_models(tmp_path,monkeypatch):
     settings(tmp_path)
     manager=SetupManager(tmp_path,catalog=ProviderCatalog())

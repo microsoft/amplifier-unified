@@ -94,7 +94,7 @@ def _qualified_provider_sources(home,identity):
 def connection_key(workspace, module, config, source=None, *, home=None):
     """Stable private connection binding shared by host and worker processes.
 
-    The strict discovery seam ignores selection defaults and priority. Every other provider
+    The connection binding ignores selection defaults, model filters and priority. Every other provider
     setting, effective credential, credential file and source remains isolated.
     Missing environment values retain their reference, never match a mounted
     provider with a different materialized value, and never leak in the digest.
@@ -102,7 +102,7 @@ def connection_key(workspace, module, config, source=None, *, home=None):
     from .setup import PROVIDER_ENV, environment_credential, chatgpt_token_path
     from .host.config import expand_environment
     raw = copy.deepcopy(config or {})
-    for name in ('priority', 'model', 'default_model', 'reasoning_effort'):
+    for name in ('priority', 'model', 'default_model', 'reasoning_effort', 'model_filters'):
         raw.pop(name, None)
     credential = environment_credential(module, raw)
     if not raw.get(credential['field']) and credential['available']:
@@ -161,8 +161,16 @@ def configuration_key(workspace, module, config, source=None, *, home=None):
     another process's discovery as evidence about an unknown implementation.
     That salt is deliberately NOT the identity used to admit a selection.
     """
-    return fingerprint(['provider-catalog-v6',
+    from .host.config import expand_environment
+    filters = (config or {}).get('model_filters')
+    try:filters = expand_environment(filters)
+    except ValueError:pass  # Preserve unresolved references, as connection_key does.
+    # The selected recommendation scope is cached, not an unfiltered second
+    # catalog. A filter edit invalidates discovery but not the saved account
+    # binding or an exact model ID hidden by the new recommendation scope.
+    return fingerprint(['provider-catalog-v7',
         connection_key(workspace,module,config,source,home=home),
+        filters,
         generation_identity(home) if home is not None else None])
 
 
@@ -305,7 +313,11 @@ class ProviderCatalog:
 
     def fresh(self, key):
         self.peek(key)
-        return key in self.loaded_at and (self.ttl is None or 0 <= self.clock() - self.loaded_at[key] < self.ttl)
+        return self._fresh(key)
+
+    def _fresh(self, key):
+        """Inspect freshness without copying the inventory a second time."""
+        return key not in self.failed_at and key in self.loaded_at and (self.ttl is None or 0 <= self.clock() - self.loaded_at[key] < self.ttl)
 
     def discard(self, key):
         self._forget(key)
@@ -378,6 +390,7 @@ class ProviderCatalog:
             'provenance': value.get('modelsProvenance'),
             'diagnostic': self.saved.get(fingerprint(key), {}).get('diagnostic'),
             'loadedAt': self.loaded_at.get(key), 'failedAt': self.failed_at.get(key),
+            'stale': key in self.loaded_at and not self._fresh(key),
             'phase': 'error' if error else 'ready' if key in self.loaded_at else 'unloaded',
             **({'error': error} if error else {}),
         }

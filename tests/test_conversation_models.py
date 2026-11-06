@@ -172,7 +172,7 @@ async def test_pending_refresh_targets_survive_other_refresh_and_browse(app, mon
     assert calls==[(False,None),(True,'one'),(True,'two')]
 
 
-async def test_unpinned_defaults_are_separate_from_inventory_and_not_reprobed(app, monkeypatch):
+async def test_unpinned_display_and_refresh_never_prepare_bundle_defaults(app, monkeypatch):
     from amplifier_web import draft_defaults
     calls=[]
     async def resolve(*args,**kwargs):
@@ -180,13 +180,15 @@ async def test_unpinned_defaults_are_separate_from_inventory_and_not_reprobed(ap
         if kwargs.get('catalog'):
             return {'providers':[{'id':'one','sharedCatalogKey':'key'}],
                 'catalogs':{'key':{'phase':'ready','models':[{'id':'real'}],'supported':True}}}
-        return {'effective':{'instance':'one','model':'configured-but-unlisted'}}
+        raise AssertionError('Ordinary model display must not prepare the bundle')
     monkeypatch.setattr(draft_defaults,'resolve_defaults',resolve)
     await browse(app.management,app._session())
+    await browse(app.management,app._session(),refresh=True)
     await browse(app.management,app._session())
     result=app.state['runtimeControl'][app._session()['id']]['configuration.catalog']
-    assert result['effective']['model']=='configured-but-unlisted'
+    assert result['effective']=={}
+    assert 'resolved when you send' in result['defaultError']
     assert result['pinned'] is False
     assert app.state['modelCatalogs']['key']['models']==[{'id':'real'}]
-    assert calls==[True,False,True]
+    assert calls==[True,True,True]
     assert not app._session().get('selection')

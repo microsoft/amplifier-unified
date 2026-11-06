@@ -319,6 +319,22 @@ try{
  await expect(dialog.locator('select#chat-model option[value="cli-model"]')).toHaveCount(1);
  await expect(dialog.locator('select#chat-model option[value="unified-model"]')).toHaveCount(1);
  assert.deepEqual((await state()).view.newSessionDraft.selection,wrong,'Changing the local connection field does not silently save a default model');
+  // Successful recommendations are not an entitlement gate. The uncommon exact
+  // ID path stays explicit and does not add a made-up row to the API inventory.
+  await dialog.getByRole('button',{name:'Enter an exact model ID',exact:true}).click();
+  await dialog.locator('input#chat-model').fill('hidden-by-recommendation');
+  await dialog.locator('input#chat-model').press('Tab');
+  await expect.poll(async()=>(await state()).view.newSessionDraft.selection?.model).toBe('hidden-by-recommendation');
+  await expect(dialog.locator('select#chat-model-catalog option[value="hidden-by-recommendation"]')).toHaveCount(0);
+  await expect(dialog.getByText(/not verified by discovery/)).toBeVisible();
+  await dialog.locator('input#chat-model').fill(wrong.model);
+  await dialog.locator('input#chat-model').press('Tab');
+  await expect.poll(async()=>(await state()).view.newSessionDraft.selection?.model).toBe(wrong.model);
+  // Choosing a different model intentionally clears model-specific effort.
+  // Restore the explicit old journey baseline rather than assuming it survived.
+  await showComposerOption(page,'effort');
+  await dialog.locator('#chat-effort').focus();await dialog.locator('#chat-effort').press('Home');await dialog.locator('#chat-effort').press('Tab');
+  await expect.poll(async()=>(await state()).view.newSessionDraft.selection).toEqual(wrong);
  const fault=async mode=>{const response=await page.request.post(url+'/fixture/provider-resolution/fault',{data:{id:'unified',mode}});assert.equal(response.status(),200)};
  await fault('error');
  await dialog.getByRole('button',{name:'Refresh this connection',exact:true}).click();

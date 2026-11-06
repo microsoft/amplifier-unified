@@ -41,8 +41,8 @@ class Provider:
     async def list_models(self):
         return [{'id': 'cli-model'}, {'id': 'unified-model'}]
 
-    async def discover_models(self):
-        return {'version':1,'source':'provider-api','models':await self.list_models()}
+    def get_model_list_info(self):
+        return {'version':1,'source':'provider-api'}
 
     async def complete(self, request, **kwargs):
         self.calls.append({'model': kwargs.get('model') or request.model or self.default_model,
