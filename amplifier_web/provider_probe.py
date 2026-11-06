@@ -32,19 +32,61 @@ def public(value):
     return value
 
 
+async def discovered_models(provider):
+    """Optional versioned adapter seam; list_models may legally be static.
+
+    The independently released provider owns API access and provenance. Unified
+    never infers discovery from a module name or repairs it with credential HTTP.
+    """
+    method = getattr(provider, 'discover_models', None)
+    if not callable(method):
+        return {'models': [], 'modelsSupported': False, 'modelsProvenance': 'unsupported'}
+    result = method()
+    if inspect.isawaitable(result):
+        result = await result
+    if (not isinstance(result, dict) or result.get('version') != 1
+            or result.get('source') not in {'provider-api', 'unsupported'}
+            or not isinstance(result.get('models'), list)):
+        raise ValueError('Invalid provider discovery provenance')
+    models = public(result['models'])
+    if result['source'] == 'unsupported' and models:
+        raise ValueError('Unsupported discovery cannot supply model choices')
+    if any(not isinstance(row, dict) or not isinstance(row.get('id'), str) or not row['id'] for row in models):
+        raise ValueError('Invalid provider model IDs')
+    return {'models': models, 'modelsSupported': result['source'] == 'provider-api',
+            'modelsProvenance': result['source']}
+
+
+class ProbeFailure(ValueError):
+    def __init__(self, module, stage, cause):
+        self.diagnostic = {'module': module, 'stage': stage, 'category': type(cause).__name__[:80]}
+        super().__init__(f'Connection discovery failed at {stage} ({type(cause).__name__[:80]}). Check this connection and refresh to retry.')
+
+
 async def query(request):
+    progress = {'stage': 'import'}
+    try:
+        return await _query(request, progress)
+    except Exception as exc:
+        raise ProbeFailure(request.get('module'), progress['stage'], exc) from None
+
+
+async def _query(request, progress):
     source=request.get('source')
     if not source:
         try:provider_class(request['module'])
         except ImportError:source=request.get('fallbackSource')
     if source:
+        progress['stage'] = 'preparation'
         from amplifier_foundation import Bundle
         os.environ['AMPLIFIER_HOME']=request['registryHome']
         bundle=Bundle.from_dict({'bundle':{'name':'provider-setup'},'providers':[{'module':request['module'],'source':source}]})
         await bundle.prepare(strict=True)
+    progress['stage'] = 'import'
     cls=provider_class(request['module'])
     # Metadata gets no credentials/config, except the saved endpoint when the
     # public constructor requires it. No model-list or inference call is made.
+    progress['stage'] = 'schema'
     schema_provider=construct_schema_provider(cls,request.get('config',{}))
     try:
         info=schema_provider.get_info()
@@ -58,14 +100,17 @@ async def query(request):
         await close_provider(schema_provider)
     if request['action']=='providers.schema':
         return {'info':public(info),'configSchema':public(schema),'imageGeneration':public(image_info)}
+    progress['stage'] = 'configuration'
     config=materialize_provider_config(request.get('config',{}),schema)
     if request['module']=='provider-github-copilot' and config.get('github_token'):
         os.environ['COPILOT_AGENT_TOKEN']=config['github_token']
+    progress['stage'] = 'construction'
     provider=construct_provider(cls,config)
     async def invoke(name):
         value=getattr(provider,name)()
         return await value if inspect.isawaitable(value) else value
     try:
+        progress['stage'] = 'metadata'
         info=public(await invoke('get_info'))
         result={'info':info,'configSchema':public(schema),'imageGeneration':public(image_info)}
         if request['action'] == 'providers.imageModels':
@@ -81,6 +126,9 @@ async def query(request):
             from amplifier_web.provider_test import test_message
             result['messageTest'] = await test_message(provider, config, request.get('model'), info)
             return result
+        progress['stage'] = 'models'
+        if request['action'] == 'providers.models':
+            return {**result, **await discovered_models(provider)}
         supported=callable(getattr(provider,'list_models',None))
         result['modelsSupported']=supported
         if not supported and request['action']=='providers.test':raise ValueError('Provider does not expose model discovery')
@@ -100,6 +148,11 @@ def main():
         request=json.loads(sys.stdin.read())
         result=asyncio.run(query(request))
     except Exception as exc:
+        if isinstance(exc, ProbeFailure):
+            result={'error':str(exc),'diagnostic':exc.diagnostic,
+                    'authenticationRequired':exc.diagnostic['category']=='AuthenticationError'}
+            output.write(json.dumps(result)+'\n');output.flush()
+            return
         kind=type(exc).__name__
         hint='Check the saved credentials and endpoint, then retry.'
         if isinstance(exc,ImportError):hint='This provider module is not installed in the app runtime yet. Prepare a conversation with its bundle first.'

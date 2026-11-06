@@ -81,6 +81,52 @@ New sessions resolve the default bundle from their own workspace. Deliberate
 existing Unified conversation overrides (`configuration.json` and
 `control-state.json`) remain in force; they are not flattened into user defaults.
 
+## Configured connection and model discovery
+
+The bundled Model for this chat panel, new-chat setup and Settings use the
+configured connection roster for their effective global/workspace scope.
+Mounted reports and saved/default selections are separate facts, not extra
+connection or model options. Managed chats use global settings only.
+Connection labels and order come from this roster; accounts/endpoints remain
+separate even when they use the same provider implementation.
+
+Unified consumes an optional provider-owned `discover_models()` method. Its
+version-1 result is `{version: 1, source: "provider-api", models: [...]}`, with
+model IDs from a successful API response for that exact account and endpoint.
+An actual empty list is a successful empty response. Providers without this
+method, or returning `{version: 1, source: "unsupported", models: []}`, expose
+explicit model-ID entry instead. Failed discovery raises an error, not a default
+model or a static list. The independently released `list_models()` contract is
+unchanged and is not evidence of API discovery. Metadata may annotate returned
+IDs but must not invent variants or add configured/saved IDs to the list.
+
+The host's existing private `ProviderCatalog` owns single-flight discovery and
+restart reuse. Explicit Refresh reloads the selected connection once. Reopen,
+chat navigation and elapsed time do not refresh it. An unsuccessful refresh
+retains the same identity's last successful models and timestamp with a visible
+error; it does not retry automatically. Successful empty refresh removes previous
+options. Credential, endpoint, discovery configuration, source or qualified
+runtime changes create a distinct identity. Selection-only `model`,
+`default_model`, `reasoning_effort`, priority and connection labels do not affect
+strict discovery. Other provider configuration remains identity-bearing.
+Legacy unproven cache entries are not adopted as authentic snapshots.
+
+Conversation-specific account/endpoint overrides remain intact. The panel marks
+known mismatches separately instead of treating an equal instance name as equal
+credentials. A newly saved configured selection is bound to that connection's
+identity; input admission checks the actual mounted identity and refuses a
+mismatch without sending or substituting another account.
+
+The cache is bounded by entry count and encoded bytes. Eviction is not a history
+policy. Relative credential/configuration paths retain their workspace scope.
+Late results cannot be published under a changed connection identity.
+
+An explicit manual ID is saved as intent, not as a discovered option. Unknown
+capabilities do not clear saved reasoning intent. Advertised finite reasoning
+choices still validate it. Sending preserves current authority, Stop, revision,
+connection availability and provider invocation checks; a failed provider
+request is never retried under a different connection or model.
+
 ## Upgrade from private settings
 
 Startup performs an additive migration once per shared root and used workspace:

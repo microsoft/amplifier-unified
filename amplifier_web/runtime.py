@@ -1289,7 +1289,13 @@ class RuntimeManager:
             guarded = {'guard': guard} if guard else {}
             await self.start({**session,**({'selection':requested,'replaceSavedSelection':True} if requested else {})}, emit, **guarded)
             if requested:
-                await self.control(session['id'],'provider.select',requested, **guarded)
+                await self.control(session['id'],'provider.select',{
+                    **requested, **({'expectedCatalogKey':session['modelConnectionKey']} if session.get('modelConnectionKey') else {})
+                }, **guarded)
+            elif session.get('modelConnectionKey') and session.get('selection'):
+                await self.control(session['id'],'provider.verifyConnection',{
+                    'instance':session['selection']['instance'],'expectedCatalogKey':session['modelConnectionKey']
+                }, **guarded)
             if configuration_guard:
                 guard()
                 await emit('runtime.nextMessageApplied', {'sessionId': session['id'],

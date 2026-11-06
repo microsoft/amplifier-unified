@@ -17,6 +17,7 @@ async def test_native_metadata_and_catalog_materialize_config_close_providers_an
                 {'id':'reasoning_effort','field_type':'choice','required':False,'choices':['low','high']},
             ]}
         async def list_models(self):return [{'id':'model','api_key':'private'}]
+        async def discover_models(self):return {'version':1,'source':'provider-api','models':await self.list_models()}
         async def close(self):closed.append(True)
     monkeypatch.setattr(provider_probe,'provider_class',lambda module:Provider)
     monkeypatch.setenv('TEST_PROBE_KEY','private')
@@ -50,6 +51,7 @@ async def test_failed_catalog_still_closes_provider(monkeypatch):
         def __init__(self,*,api_key=None,config=None):pass
         def get_info(self):return {'config_fields':[]}
         async def list_models(self):raise ValueError('private exception')
+        async def discover_models(self):return {'version':1,'source':'provider-api','models':await self.list_models()}
         async def close(self):closed.append(True)
     monkeypatch.setattr(provider_probe,'provider_class',lambda module:Provider)
     with pytest.raises(ValueError):await provider_probe.query({'module':'test','action':'providers.models'})
@@ -75,6 +77,7 @@ async def test_endpoint_provider_uses_explicit_unmodified_endpoint_and_metadata_
             assert self.config and action != 'providers.schema'
             calls.append(('models', True))
             return [{'id': 'configured-model'}]
+        async def discover_models(self):return {'version':1,'source':'provider-api','models':await self.list_models()}
         async def close(self):
             closed.append(True)
     monkeypatch.setattr(provider_probe, 'provider_class', lambda module: Provider)
@@ -103,3 +106,31 @@ async def test_naming_probe_makes_one_call_and_closes_the_provider(monkeypatch):
                                          'config': {'api_key': 'private'}})
     assert result['naming'] == {'text': '{"action":"set","name":"N"}'}
     assert requests == ['Name this'] and closed == [True, True]
+
+
+async def test_legacy_static_list_is_never_promoted_to_discovery():
+    class StaticProvider:
+        def list_models(self):
+            raise AssertionError('Legacy API must not be called for discovery')
+    assert await provider_probe.discovered_models(StaticProvider()) == {
+        'models':[], 'modelsSupported':False, 'modelsProvenance':'unsupported'}
+
+
+@pytest.mark.parametrize('payload', [
+    {'source':'provider-api','models':[{'id':'real'}]},
+    {'version':1,'source':'cache','models':[{'id':'static'}]},
+    {'version':1,'source':'unsupported','models':[{'id':'invented'}]},
+    {'version':1,'source':'provider-api','models':[{'name':'no id'}]},
+])
+async def test_strict_discovery_rejects_unqualified_results(payload):
+    class Provider:
+        async def discover_models(self):return payload
+    with pytest.raises(ValueError):
+        await provider_probe.discovered_models(Provider())
+
+
+async def test_strict_successful_empty_is_not_failure_or_unsupported():
+    class Provider:
+        async def discover_models(self):return {'version':1,'source':'provider-api','models':[]}
+    assert await provider_probe.discovered_models(Provider()) == {
+        'models':[], 'modelsSupported':True, 'modelsProvenance':'provider-api'}

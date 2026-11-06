@@ -65,16 +65,20 @@ async def test_catalog_discovery_does_not_hold_the_command_queue(app,monkeypatch
 
 
 async def test_mounted_connection_cache_miss_resolves_and_hit_does_not_probe(app,monkeypatch):
-    from amplifier_web import draft_defaults
+    import yaml
+    from amplifier_web.host.config import write_private
+    from amplifier_web.session_files import amplifier_home
+    from amplifier_web.setup import SetupManager
     session=app._session(app.state['selectedSessionId'])
     session['runtimeReport']={'provider_choices':[{'id':'one','sharedCatalogKey':'account-one','model':'model','effort':'high'}]}
     calls=[]
-    async def resolve(*args,**kwargs):
+    write_private(amplifier_home()/'settings.yaml', yaml.safe_dump({'config':{'providers':[
+        {'id':'one','module':'provider-fixture','config':{}}]}}))
+    async def probe(*args,**kwargs):
         calls.append(kwargs)
-        return {'providers':[{'id':'one','sharedCatalogKey':'account-one'}],
-                'catalogs':{'account-one':{'phase':'ready','models':[{'id':'model'}],
-                    'metadata':{'info':{},'configSchema':{'fields':[]}}}}}
-    monkeypatch.setattr(draft_defaults,'resolve_defaults',resolve)
+        return {'models':[{'id':'model'}], 'modelsSupported':True,
+                'providerMetadata':{'info':{},'configSchema':{'fields':[]}}}
+    monkeypatch.setattr(SetupManager,'probe',probe)
     await browse(app.management,session)
     assert len(calls)==1
     def no_write(*args):raise AssertionError('Cache hits must not rewrite catalog files')

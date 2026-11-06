@@ -1,4 +1,4 @@
-"""Private model catalogs with expiry, restart reuse and single-flight refresh."""
+"""Private connection catalogs: explicit refresh, restart reuse and single flight."""
 import asyncio
 import copy
 from functools import lru_cache
@@ -11,6 +11,23 @@ from pathlib import Path
 
 
 _UNQUALIFIED_GENERATION = uuid.uuid4().hex
+
+class CatalogInvalidated(ValueError):
+    """Captured configuration changed; no result or failure may be retained."""
+
+
+def public_failure(exc):
+    """Only bounded categories/stages, never provider exception bodies."""
+    import re
+    supplied = getattr(exc, 'diagnostic', {}) or {}
+    stage = supplied.get('stage', 'models')
+    if stage not in {'preparation','import','schema','configuration','construction','metadata','models','probe'}:
+        stage = 'probe'
+    category = supplied.get('category', type(exc).__name__)
+    if not isinstance(category, str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,79}', category):
+        category = 'ProviderError'
+    diagnostic = {'stage':stage,'category':category}
+    return f'Connection discovery failed at {stage} ({category}). Refresh this connection to retry.', diagnostic
 
 
 def fingerprint(value):
@@ -74,7 +91,7 @@ def _qualified_provider_sources(home,identity):
 def configuration_key(workspace, module, config, source=None, *, home=None):
     """Private, conservative identity shared by probes and mounted providers.
 
-    Instance labels and priority do not change discovery. Every other provider
+    The strict discovery seam ignores selection defaults and priority. Every other provider
     setting, effective credential, credential file and source remains isolated.
     Missing environment values retain their reference, never match a mounted
     provider with a different materialized value, and never leak in the digest.
@@ -82,7 +99,8 @@ def configuration_key(workspace, module, config, source=None, *, home=None):
     from .setup import PROVIDER_ENV, environment_credential
     from .host.config import expand_environment
     raw = copy.deepcopy(config or {})
-    raw.pop('priority', None)
+    for name in ('priority', 'model', 'default_model', 'reasoning_effort'):
+        raw.pop(name, None)
     credential = environment_credential(module, raw)
     if not raw.get(credential['field']) and credential['available']:
         raw[credential['field']] = '${' + credential['envVar'] + '}'
@@ -122,7 +140,7 @@ def configuration_key(workspace, module, config, source=None, *, home=None):
     relative=any(isinstance(value,str) and value and not Path(value).expanduser().is_absolute()
                  for name,value in leaves if any(part in name for part in ('path','file','directory')))
     scope=str(Path(workspace).resolve()) if relative or source and not str(source).startswith(('git+','https://','http://','/')) else None
-    return fingerprint(['provider-catalog-v4',scope,module,source,generation,raw,environment,files])
+    return fingerprint(['provider-catalog-v5',scope,module,source,generation,raw,environment,files])
 
 
 def mounted_catalog_keys(home,workspace,rows,sources):
@@ -135,14 +153,60 @@ def mounted_catalog_keys(home,workspace,rows,sources):
 def model_key(identity):
     return ('providers.models', identity)
 
+def configured_binding(home, workspace, instance, *, global_only=False):
+    from .setup import SetupManager
+    manager = SetupManager(home, global_only=global_only, allow_missing_workspace=True)
+    with manager.read_snapshot(workspace):
+        if not any(row['id'] == instance and row['enabled'] for row in manager.provider_rows(workspace)):
+            return None
+        return manager.catalog_key({'id':instance}, workspace)
+
+
+def conversation_bindings(home, workspace, session_id, providers, *, global_only=False):
+    """Report known conversation overrides separately from the shared inventory.
+
+    No bundle preparation, provider import, transcript or worker is needed.
+    The actual mount repeats the exact-identity check before input admission.
+    """
+    from .host.config import load_config
+    config = load_config(workspace, home=home, session_id=session_id, global_only=global_only)
+    rows = config.providers
+    path = Path(home)/'sessions'/session_id/'configuration.json'
+    if path.exists():
+        saved = json.loads(path.read_text())
+        if 'providers' in saved:
+            rows = saved['providers']
+    by_id = {row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-'):row for row in rows}
+    result = {}
+    for provider in providers:
+        row = by_id.get(provider['id'])
+        if row is None:
+            result[provider['id']] = {'eligible':False,'reason':'This conversation does not include this configured connection.'}
+            continue
+        key = configuration_key(workspace,row['module'],row.get('config',{}),
+            config.module_sources.get(row['module']) or row.get('source'),home=home)
+        if key != provider['sharedCatalogKey']:
+            result[provider['id']] = {'eligible':False,
+                'reason':'This conversation overrides this connection. Its saved account or endpoint differs from the configured connection.'}
+    return result
+
+
+def require_mounted_binding(coordinator, instance, expected):
+    if not expected:
+        return
+    captured = coordinator.get_capability('web.provider_catalog') or {}
+    if captured.get('keys',{}).get(instance) != expected:
+        raise ValueError('The mounted connection differs from the selected configured connection. No input was sent; review the conversation connection override.')
+
 
 class ProviderCatalog:
-    def __init__(self, path=None, *, ttl=None, retry_after=60, clock=time.time,
-                 max_entries=128, max_bytes=3_900_000, max_age=86400):
+    def __init__(self, path=None, *, ttl=None, retry_after=None, clock=time.time,
+                 max_entries=128, max_bytes=3_900_000, max_age=None):
         self.entries = {}
         self.loaded_at = {}
         self.failed_at = {}
         self.pending = {}
+        self.load_limit = asyncio.Semaphore(3)
         self.path = Path(path) if path else None
         self.ttl, self.retry_after, self.clock = ttl, retry_after, clock
         self.saved = {}
@@ -152,13 +216,17 @@ class ProviderCatalog:
             try:
                 if self.path.stat().st_size <= 4_000_000:
                     data = json.loads(self.path.read_text())
-                    if data.get('version') == 1:
+                    if data.get('version') == 2:
                         self.saved = {key: row for key, row in data.get('entries', {}).items()
-                                      if isinstance(row, dict) and isinstance(row.get('at'), (int, float)) and isinstance(row.get('result'), dict)
-                                      and 0 <= clock() - row['at'] < max_age}
+                                      if isinstance(row, dict) and isinstance(row.get('at'), (int, float))
+                                      and (row.get('result') is None or isinstance(row.get('result'), dict))
+                                      and self._retained(row['at'])}
             except (OSError, ValueError, TypeError, AttributeError):
                 pass
         self._trim()
+
+    def _retained(self, at):
+        return self.max_age is None or 0 <= self.clock() - at < self.max_age
 
     def _forget(self, key):
         self.entries.pop(key, None)
@@ -170,7 +238,8 @@ class ProviderCatalog:
         """Bound reusable discovery data, including direct puts and disk restores.
 
         Pending callers own their task's result even if it is too large to cache.
-        Age is retention, not the independent freshness TTL or a history policy.
+        Default retention is size bounded, not time based. A configured identity
+        never expires merely because a day elapsed or the host restarted.
         """
         now = self.clock()
         # One identity budget spans lazy disk entries and resident failures.
@@ -180,27 +249,30 @@ class ProviderCatalog:
             identity = fingerprint(key)
             at = max(self.loaded_at.get(key, 0), self.failed_at.get(key, 0))
             candidates[identity] = (at, max(self.sizes.get(key, 0), candidates.get(identity, (0, 0))[1]))
-        retained, size = set(), len(json.dumps({'version': 1, 'entries': {}}).encode())
+        retained, size = set(), len(json.dumps({'version': 2, 'entries': {}}).encode())
         for identity, (at, cost) in sorted(reversed(list(candidates.items())), key=lambda item: item[1][0], reverse=True):
-            if 0 <= now - at < self.max_age and len(retained) < self.max_entries and size + cost <= self.max_bytes:
+            if self._retained(at) and len(retained) < self.max_entries and size + cost <= self.max_bytes:
                 retained.add(identity)
                 size += cost
         self.saved = {identity: row for identity, row in self.saved.items()
-                      if identity in retained and 0 <= now - row['at'] < self.max_age}
+                      if identity in retained and self._retained(row['at'])}
         for key in list(self.entries):
             if fingerprint(key) not in retained:
                 self._forget(key)
 
     def peek(self, key):
         at = self.loaded_at.get(key, self.failed_at.get(key))
-        if at is not None and not 0 <= self.clock() - at < self.max_age:
+        if at is not None and not self._retained(at):
             self._forget(key)
             self.saved.pop(fingerprint(key), None)
         if key not in self.entries:
             row = self.saved.get(fingerprint(key))
-            if row and 0 <= self.clock() - row['at'] < self.max_age:
-                self.entries[key] = (copy.deepcopy(row['result']), None)
-                self.loaded_at[key] = row['at']
+            if row and self._retained(row['at']):
+                self.entries[key] = (copy.deepcopy(row['result']), row.get('error'))
+                if row.get('loadedAt') is not None:
+                    self.loaded_at[key] = row['loadedAt']
+                if row.get('failedAt') is not None:
+                    self.failed_at[key] = row['failedAt']
                 self.sizes[key] = len(json.dumps(row).encode()) + len(fingerprint(key)) + 8
             elif row:
                 self.saved.pop(fingerprint(key), None)
@@ -221,7 +293,7 @@ class ProviderCatalog:
         self.entries[key] = (copy.deepcopy(result), None)
         self.loaded_at[key] = self.clock()
         self.failed_at.pop(key, None)
-        self.saved[fingerprint(key)] = {'at': self.loaded_at[key], 'result': copy.deepcopy(result)}
+        self.saved[fingerprint(key)] = {'at': self.loaded_at[key], 'loadedAt': self.loaded_at[key], 'result': copy.deepcopy(result)}
         self.sizes[key] = len(json.dumps(self.saved[fingerprint(key)]).encode()) + len(fingerprint(key)) + 8
         self._trim()
         self._persist()
@@ -231,34 +303,60 @@ class ProviderCatalog:
             return
         try:
             from .host.config import write_private
-            write_private(self.path, json.dumps({'version': 1, 'entries': self.saved}))
+            write_private(self.path, json.dumps({'version': 2, 'entries': self.saved}))
         except OSError:
             pass  # A read-only cache must never prevent using a provider.
 
     async def get(self, key, loader, refresh=False):
         self.peek(key)
         if not refresh:
-            if self.fresh(key):
-                return self.peek(key)
-            if key in self.failed_at and self.clock() - self.failed_at[key] < self.retry_after:
+            if key in self.failed_at and (self.retry_after is None or self.clock() - self.failed_at[key] < self.retry_after):
                 _, error = self.entries[key]
                 raise ValueError(error)
+            if self.fresh(key):
+                return self.peek(key)
         if key not in self.pending:
             async def load():
                 try:
-                    result = await loader()
+                    async with self.load_limit:
+                        result = await loader()
                     self.put(key, result)
                     return result
+                except CatalogInvalidated:
+                    self.discard(key)
+                    raise
                 except Exception as exc:
-                    self.entries[key] = (self.peek(key), str(exc))
+                    message, diagnostic = public_failure(exc)
+                    self.entries[key] = (self.peek(key), message)
                     self.failed_at[key] = self.clock()
                     self.sizes[key] = len(json.dumps(self.entries[key]).encode()) + len(fingerprint(key)) + 8
+                    self.saved[fingerprint(key)] = {
+                        'at': self.failed_at[key], 'failedAt': self.failed_at[key],
+                        'loadedAt': self.loaded_at.get(key),
+                        'result': self.peek(key), 'error': message,
+                        'diagnostic': diagnostic}
                     self._trim()
+                    self._persist()
                     raise
                 finally:
                     self.pending.pop(key, None)
             self.pending[key] = asyncio.create_task(load())
         return copy.deepcopy(await asyncio.shield(self.pending[key]))
+
+    def entry(self, key):
+        """One presentation shape for Settings, new chats and existing chats."""
+        value = self.peek(key) or {}
+        error = self.entries.get(key, (None, None))[1]
+        return {
+            'sharedCatalogKey': key[1], 'models': value.get('models', []),
+            'metadata': value.get('providerMetadata'),
+            'supported': value.get('modelsSupported', False),
+            'provenance': value.get('modelsProvenance'),
+            'diagnostic': self.saved.get(fingerprint(key), {}).get('diagnostic'),
+            'loadedAt': self.loaded_at.get(key), 'failedAt': self.failed_at.get(key),
+            'phase': 'error' if error else 'ready' if key in self.loaded_at else 'unloaded',
+            **({'error': error} if error else {}),
+        }
 
     async def close(self):
         tasks = list(self.pending.values())

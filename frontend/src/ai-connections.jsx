@@ -28,7 +28,7 @@ export function AIConnections({state,session,act,navigate,onReturnToChat}){
   // chat account from the same provider or change its save/test workflow.
   return choice.decisionOnlyWhen&&config?{...choice,decisionOnly:config.chat_enabled===false}:choice;
  };
- const labels=new Map(providerOptions(providers.map(p=>({...p,info:{id:p.module,display_name:serviceFor(p.module).name}}))).map(row=>[row.id,row.label]));
+ const labels=new Map(providerOptions(providers).map(row=>[row.id,row.label]));
  const editorKey='aiConnectionEditor';
  const configId=useConfigurationId();
  const requested=state.view?.[editorKey]||{};
@@ -87,7 +87,7 @@ export function AIConnections({state,session,act,navigate,onReturnToChat}){
    edit({step:'model'});run('providers.models',{id:d.id});
   }
  },[step,d.saved,login?.status,login?.loginId,busy,layout.active]);
- const catalog=setup.providerCatalogs?.[d.id],models=modelOptions(catalog?.models||setup.modelCatalogs?.[d.id]||[]);
+ const connectionCatalog=setup.providerCatalogs?.[d.id],catalog=state.modelCatalogs?.[connectionCatalog?.sharedCatalogKey]||connectionCatalog,models=modelOptions(catalog?.models||[]);
  const modelBusy=setupPending(setup.operations?.['providers.models:'+d.id])||catalog?.phase==='working';
  const credential=!setupPending(credentialOperation)&&setup.credentialCheck?.module===d.module?setup.credentialCheck:null;
  const credentialMode=d.credentialMode==='auto'?(credential?.githubCliAvailable?'github-cli':credential?.available?'environment':'private'):(d.credentialMode||'private');

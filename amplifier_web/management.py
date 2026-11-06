@@ -70,7 +70,7 @@ class Management:
     async def warm_providers(self,manager,workspace,*,refresh=False):
         catalogs={};pending=[]
         def catalog_entry(result,cache_key,**values):
-            return {'sharedCatalogKey':cache_key[1],'models':(result or {}).get('models',[]),'supported':(result or {}).get('modelsSupported',True),'metadata':(result or {}).get('providerMetadata'),'loadedAt':self.provider_catalog.loaded_at.get(cache_key),**values}
+            return {**self.provider_catalog.entry(cache_key), **values}
         # Publish the cached catalog as one snapshot. Even fresh cache hits used
         # to rebuild and persist the entire app twice for every provider.
         with manager.read_snapshot(workspace):
@@ -79,9 +79,13 @@ class Management:
                 key=manager.catalog_key({'id':row['id']},workspace)
                 cache_key=('providers.models',key)
                 cached=self.provider_catalog.peek(cache_key)
-                fresh=not refresh and not row.get('authenticationRequired') and not (row.get('account') or {}).get('refreshable') and self.provider_catalog.fresh(cache_key)
-                catalogs[row['id']]=catalog_entry(cached,cache_key,phase='ready' if fresh else 'working')
-                if not fresh:pending.append((row,key,cache_key))
+                if row.get('authenticationRequired'):
+                    catalogs[row['id']]={'sharedCatalogKey':key,'models':[],'phase':'invalidated','supported':False,
+                        'error':'This connection needs sign-in. Cached models are not available until it is reconnected.'}
+                    continue
+                known=not refresh and (self.provider_catalog.fresh(cache_key) or cache_key in self.provider_catalog.failed_at)
+                catalogs[row['id']]=catalog_entry(cached,cache_key,**({} if known else {'phase':'working'}))
+                if not known:pending.append((row,key,cache_key))
         async with self.service.lock:
             setup=self.service.state.setdefault('setup',{})
             if setup.get('providersWorkspace')!=workspace or (setup.get('providersLocation',{}).get('kind')=='managed')!=bool(getattr(manager,'global_only',False)):return
@@ -104,10 +108,10 @@ class Management:
             identity=row['id'];args={'id':identity}
             async with self.catalog_limit:
                 try:
-                    result=await manager.perform('providers.models',{'id':identity,'workspace':workspace,'refresh':True})
-                    entry=catalog_entry(result,cache_key,phase='ready')
+                    result=await manager.perform('providers.models',{'id':identity,'workspace':workspace,'refresh':refresh})
+                    entry=catalog_entry(result,cache_key)
                 except Exception:
-                    entry=catalog_entry(self.provider_catalog.peek(cache_key),cache_key,phase='error',error='Could not refresh models. Saved models remain available; retry or enter a model ID.')
+                    entry=catalog_entry(self.provider_catalog.peek(cache_key),cache_key)
             # An old request must never overwrite a newer config or workspace.
             current_key=manager.catalog_key(args,workspace)
             if current_key!=key:
@@ -149,9 +153,14 @@ class Management:
         async def load():
             # The host owns expiry/manual refresh; a second worker cache must
             # not extend the host's TTL after it decides a refresh is needed.
-            result=await self.service.runtime.control(session_id,'configuration.providerModels',{'instance':row['id'],'refresh':True})
+            result=await self.service.runtime.control(session_id,'configuration.providerModels',{
+                'instance':row['id'],'refresh':True,
+                **({'expectedCatalogKey':row['sharedCatalogKey']} if row.get('sharedCatalogKey') else {})})
             if row.get('module') and 'info' in row and 'configSchema' in row:
-                result={**result,'providerMetadata':{'module':row['module'],'info':row['info'],'configSchema':row['configSchema']}}
+                info=copy.deepcopy(row['info'])
+                for name in ('model','default_model','reasoning_effort','priority'):
+                    info.get('defaults',{}).pop(name,None)
+                result={**result,'providerMetadata':{'module':row['module'],'info':info,'configSchema':row['configSchema']}}
             return result
         return await self.provider_catalog.get(key,load,refresh=refresh)
 
@@ -904,7 +913,21 @@ class Management:
                 routing_contexts[None] = (session['workspace'], None)
                 routing_before = {identity: routing_manager.effective_routing(*context)
                                   for identity, context in routing_contexts.items()}
-            result=await manager.perform(action,{**args,'workspace':session['workspace']})
+            try:
+                result=await manager.perform(action,{**args,'workspace':session['workspace']})
+            except Exception:
+                if action=='providers.models' and probe_key==manager.catalog_key(args,session['workspace']):
+                    async with self.service.lock:
+                        from .conversation_models import publish_catalogs
+                        from .configuration_target import state_for
+                        entry=self.provider_catalog.entry(('providers.models',probe_key))
+                        publish_catalogs(self,{probe_key:entry})
+                        setup=state_for(self.service,'setup',args)
+                        previous=setup.get('providerCatalogs',{}).get(args['id'],{})
+                        if previous.get('sharedCatalogKey')==probe_key:
+                            setup['providerCatalogs'][args['id']]=entry
+                        self.service._publish_changes(globals={'setup','modelCatalogs'})
+                raise
             routing_sessions = None
             if routing_before is not None:
                 routing_sessions = {identity for identity, before in routing_before.items()
@@ -935,9 +958,12 @@ class Management:
                 if 'imageModels' in result:
                     setup.setdefault('imageCatalogs',{})[result['imageModelsProviderId']]={'phase':'ready','models':result['imageModels'],'supported':result.get('imageModelsSupported',False),'metadata':result.get('providerMetadata')}
                 if 'models' in result:
+                    from .conversation_models import publish_catalogs
+                    entry=self.provider_catalog.entry(('providers.models',probe_key))
                     setup.setdefault('modelCatalogs',{})[result['modelsProviderId']]=result['models']
-                    setup.setdefault('providerCatalogs',{})[result['modelsProviderId']]={'phase':'ready','models':result['models'],'supported':result.get('modelsSupported',True),'metadata':result.get('providerMetadata')}
-                self.service._publish_progress(session_ids=set(), record_only=True, global_keys={'setup'})
+                    setup.setdefault('providerCatalogs',{})[result['modelsProviderId']]=entry
+                    publish_catalogs(self,{probe_key:entry})
+                self.service._publish_progress(session_ids=set(), record_only=True, global_keys={'setup','modelCatalogs'})
             if action in {'providers.list','providers.save','providers.finishSetup','providers.remove','providers.move','providers.reorder','providers.loginStatus'}:
                 async with self.service.lock:
                     from .configuration_target import state_for
@@ -1096,7 +1122,8 @@ class Management:
             operation_guard()
             if args['operation']=='configuration.catalog':
                 from .conversation_models import request_browse
-                await request_browse(self,session,refresh=args.get('args',{}).get('refresh',False))
+                await request_browse(self,session,refresh=args.get('args',{}).get('refresh',False),
+                                     instance=args.get('args',{}).get('instance'))
                 return
             if args['operation']=='provider.queueSelection':
                 from .conversation_models import select

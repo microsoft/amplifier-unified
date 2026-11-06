@@ -71,26 +71,95 @@ test('provider test results remain clear when another action overwrites global m
  await renderAct(async()=>root.unmount());
 });
 
-test('model selector uses provider catalog and falls back only when no list exists',async()=>{
+test('model selector searches only discovered models and displays an unlisted saved ID separately',async()=>{
  const {ModelSelect}=await server.ssrLoadModule('/src/model-select.jsx');
- let root;const props={id:'choice',label:'Model',value:'saved-model',state:{view:{}},act:async()=>{},onChange:()=>{}};
- await renderAct(async()=>{root=create(React.createElement(ModelSelect,{...props,entry:{phase:'ready',models:[{id:'catalog-model'}]}}))});
- assert.equal(root.root.findAllByType('select').length,1);
- assert.equal(root.root.findAllByType('input').length,0);
- assert.equal(root.root.findByType('select').props.value,'saved-model');
- await renderAct(async()=>root.update(React.createElement(ModelSelect,{...props,entry:{phase:'working',models:[]}})));
- assert.equal(root.root.findByType('select').props.disabled,false);
- assert.ok(root.root.findAllByType('option').some(row=>row.props.value==='catalog-model'),'Keep same-provider options during refresh');
- const changed=[],committed=[];
- await renderAct(async()=>root.update(React.createElement(ModelSelect,{...props,onChange:value=>changed.push(value),onCommit:value=>committed.push(value),entry:{phase:'error',models:[]}})));
- assert.equal(root.root.findAllByType('select').length,0);
- assert.ok(root.root.findAllByType('option').some(row=>row.props.value==='catalog-model'),'Retain cached models as suggestions after failure');
- const manual=root.root.findByType('input');
- await renderAct(async()=>{manual.props.onChange({target:{value:'new-model-id'}});manual.props.onBlur({target:{value:'new-model-id'}})});
- assert.deepEqual(changed,['new-model-id']);assert.deepEqual(committed,['new-model-id']);
- await renderAct(async()=>root.update(React.createElement(ModelSelect,{...props,catalogKey:'other-provider',entry:{phase:'working',models:[]}})));
- assert.ok(!root.root.findAllByType('option').some(row=>row.props.value==='catalog-model'),'Do not borrow options from another provider');
- await renderAct(async()=>root.update(React.createElement(ModelSelect,{...props,entry:{phase:'ready',supported:false,models:[]}})));
- assert.equal(root.root.findAllByType('select').length,0);assert.equal(root.root.findByType('input').props.value,'saved-model');
- await renderAct(async()=>root.unmount());
+ const calls=[],changed=[],committed=[],entry={phase:'ready',models:[{id:'catalog-one',displayName:'First model'},{id:'catalog-two',displayName:'Second model'}]};
+ let root,value='saved-model';
+ const render=()=>React.createElement(ModelSelect,{id:'choice',label:'Model',value,entry,state:{view:{}},act:async(name,args)=>calls.push({name,args}),onChange:value=>changed.push(value),onCommit:value=>committed.push(value)});
+ const values=()=>root.root.findAllByType('option').map(row=>row.props.value);
+ try{
+  await renderAct(async()=>root=create(render()));
+  assert.equal(root.root.findAllByType('select').length,1);
+  assert.equal(root.root.findByType('input').props.type,'search','A real list has search, not manual ID entry');
+  assert.equal(root.root.findByType('select').props.value,'');
+  assert.deepEqual(values(),['','catalog-one','catalog-two']);
+  assert.match(JSON.stringify(root.toJSON()),/Saved selection: .*saved-model.*not in the discovered list/);
+  await renderAct(async()=>root.root.findByType('input').props.onChange({target:{value:'Second'}}));
+  assert.deepEqual(values(),['','catalog-two'],'Search matches display names as well as IDs');
+  assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{settingsFilters:{'model-picker-choice':'Second'}}}});
+  assert.deepEqual(changed,[]);assert.deepEqual(committed,[],'Filtering is not a selection');
+  await renderAct(async()=>root.root.findByProps({'aria-label':'Clear search model'}).props.onClick());
+  await renderAct(async()=>root.root.findByType('select').props.onChange({target:{value:'catalog-one'}}));
+  assert.deepEqual(changed,['catalog-one']);assert.deepEqual(committed,['catalog-one']);
+  value='catalog-one';await renderAct(async()=>root.update(render()));
+  assert.equal(root.root.findByType('select').props.value,'catalog-one');
+  await renderAct(async()=>root.root.findByType('input').props.onChange({target:{value:'no match'}}));
+  assert.deepEqual(values(),['']);
+  assert.equal(root.root.findByType('select').props.value,'','Filtering out the selected row must not invent an option');
+  assert.match(JSON.stringify(root.toJSON()),/No matches/);
+  await renderAct(async()=>root.root.findByType('select').props.onChange({target:{value:''}}));
+  assert.deepEqual(changed,['catalog-one']);assert.deepEqual(committed,['catalog-one']);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+
+test('model selector retains only host-supplied refresh data and never unions earlier connection lists',async()=>{
+ const {ModelSelect}=await server.ssrLoadModule('/src/model-select.jsx');
+ const changed=[],committed=[],props={id:'choice',label:'Model',value:'saved-model',state:{view:{}},act:async()=>{},onChange:value=>changed.push(value),onCommit:value=>committed.push(value)};
+ let root,entry={phase:'ready',models:['catalog-model'],loadedAt:1700000000};
+ const render=()=>React.createElement(ModelSelect,{...props,entry});
+ const values=()=>root.root.findAllByType('option').map(row=>row.props.value);
+ try{
+  await renderAct(async()=>root=create(render()));
+  entry={...entry,phase:'working'};await renderAct(async()=>root.update(render()));
+  assert.equal(root.root.findByType('select').props.disabled,false);
+  assert.deepEqual(values(),['','catalog-model'],'Last successful rows are retained in the shared host entry');
+  entry={...entry,phase:'error',error:'Discovery failed'};await renderAct(async()=>root.update(render()));
+  assert.deepEqual(values(),['','catalog-model']);
+  assert.equal(root.root.findByType('select').props.id,'choice-catalog');
+  assert.equal(root.root.findByType('select').props.value,'');
+  assert.match(JSON.stringify(root.toJSON()),/Discovery failed/);
+  assert.match(JSON.stringify(root.toJSON()),/Last successful refresh/);
+  const manual=root.root.find(node=>node.type==='input'&&node.props.id==='choice');
+  await renderAct(async()=>manual.props.onChange({target:{value:'new-model-id'}}));
+  assert.deepEqual(committed,[],'Typing alone does not commit a manual ID');
+  await renderAct(async()=>manual.props.onBlur({target:{value:' new-model-id '}}));
+  assert.deepEqual(changed,['new-model-id']);assert.deepEqual(committed,['new-model-id']);
+  entry={phase:'working',models:[]};await renderAct(async()=>root.update(render()));
+  assert.deepEqual(values(),[],'Missing rows in a different entry do not reuse the prior list');
+  assert.equal(root.root.findAllByType('input').length,0);
+  assert.match(JSON.stringify(root.toJSON()),/Loading provider models/);
+  entry={phase:'error',models:[]};await renderAct(async()=>root.update(render()));
+  assert.deepEqual(values(),[]);
+  assert.equal(root.root.findByType('input').props.value,'saved-model');
+  entry={phase:'ready',models:['other-connection-model']};await renderAct(async()=>root.update(render()));
+  assert.deepEqual(values(),['','other-connection-model']);
+  assert.equal(root.root.findByType('select').props.value,'');
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+
+for(const [name,entry,notice] of [
+ ['unavailable',undefined,/Manual ID/],
+ ['failed',{phase:'error',models:[]},/Model list unavailable/],
+ ['unsupported',{phase:'ready',supported:false,models:[]},/does not supply verified model discovery/],
+ ['empty',{phase:'ready',models:[]},/returned no models/]
+])test('manual model ID remains explicit for '+name+' discovery',async()=>{
+ const {ModelSelect}=await server.ssrLoadModule('/src/model-select.jsx');
+ const changed=[],committed=[];let root,prevented=0;
+ try{
+  await renderAct(async()=>root=create(React.createElement(ModelSelect,{id:'manual-choice',label:'Model',value:'saved-model',entry,...(entry?{models:['fallback-only']}:{}),state:{view:{}},act:async()=>{},onChange:value=>changed.push(value),onCommit:value=>committed.push(value)})));
+  assert.equal(root.root.findAllByType('select').length,0);
+  assert.equal(root.root.findAllByType('option').length,0,'Neither saved IDs nor caller fallback rows replace an authoritative empty catalog');
+  const input=root.root.findByType('input');
+  assert.equal(input.props.id,'manual-choice');
+  assert.equal(input.props.value,'saved-model');
+  assert.match(JSON.stringify(root.toJSON()),notice);
+  assert.match(JSON.stringify(root.toJSON()),/not verified by discovery/);
+  await renderAct(async()=>input.props.onChange({target:{value:' deployment-id '}}));
+  assert.deepEqual(changed,[' deployment-id ']);assert.deepEqual(committed,[]);
+  await renderAct(async()=>input.props.onBlur({target:{value:'   '}}));
+  await renderAct(async()=>input.props.onKeyDown({key:'Enter',currentTarget:{value:'   '},preventDefault:()=>prevented++}));
+  assert.deepEqual(committed,[]);assert.equal(prevented,0);
+  await renderAct(async()=>input.props.onKeyDown({key:'Enter',currentTarget:{value:' deployment-id '},preventDefault:()=>prevented++}));
+  assert.deepEqual(committed,['deployment-id']);assert.equal(prevented,1);
+ }finally{await renderAct(async()=>root?.unmount())}
 });
