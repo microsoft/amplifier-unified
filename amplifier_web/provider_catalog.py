@@ -162,15 +162,20 @@ def configuration_key(workspace, module, config, source=None, *, home=None):
     That salt is deliberately NOT the identity used to admit a selection.
     """
     from .host.config import expand_environment
-    filters = (config or {}).get('model_filters')
-    try:filters = expand_environment(filters)
-    except ValueError:pass  # Preserve unresolved references, as connection_key does.
+    scope = {}
+    for name in ('model_filters', 'model', 'default_model'):
+        if name not in (config or {}):continue
+        value = config[name]
+        try:value = expand_environment(value)
+        except ValueError:pass  # Preserve unresolved references, as connection_key does.
+        scope[name] = value
     # The selected recommendation scope is cached, not an unfiltered second
-    # catalog. A filter edit invalidates discovery but not the saved account
-    # binding or an exact model ID hidden by the new recommendation scope.
-    return fingerprint(['provider-catalog-v7',
+    # catalog. Providers may derive listing defaults from model/default_model.
+    # Conservatively retain those constructor inputs without copying their
+    # policy. Scope edits never change the saved account binding or exact ID.
+    return fingerprint(['provider-catalog-v8',
         connection_key(workspace,module,config,source,home=home),
-        filters,
+        scope,
         generation_identity(home) if home is not None else None])
 
 

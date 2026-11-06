@@ -132,11 +132,14 @@ chat navigation and elapsed time do not refresh it. An unsuccessful refresh
 retains the same identity's last successful models and timestamp with a visible
 error; it does not retry automatically. Successful empty refresh removes previous
 options. Credential, endpoint, discovery configuration, source or qualified
-runtime changes create a distinct identity. Selection-only `model`,
-`default_model`, `reasoning_effort`, priority and connection labels do not affect
-strict discovery. `model_filters` changes the catalog identity, but not the
-account binding of a saved exact model selection. Other provider configuration
-remains identity-bearing.
+runtime changes create a distinct identity. Catalog identity conservatively
+includes configured `model` and `default_model` because a provider can derive
+its listing defaults from those constructor inputs (including explicit legacy
+filtering). This can refresh recommendations even when that provider ignores
+these fields. `model_filters`, `model` and `default_model` never change the
+account binding of a saved exact model selection. `reasoning_effort`, priority
+and connection labels do not affect catalog identity. Other provider
+configuration remains identity-bearing.
 Legacy unproven cache entries are not adopted as authentic snapshots.
 Ordinary model display/refresh does not prepare a whole bundle to resolve an
 unknown default label. Saved intent or a current native report supplies that

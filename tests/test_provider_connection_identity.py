@@ -129,6 +129,11 @@ def test_saved_binding_survives_separate_host_worker_processes(tmp_path, monkeyp
     if module=='provider-github-copilot':
         assert worker['promoted'] is True  # Real apply_provider_environment path.
     assert (worker['catalog'] == host['catalog']) is qualified
+    changed_selection=process_identity(tmp_path,'worker',expected=host['binding'],
+        change={'model':'new-default','default_model':'other-default'})
+    assert changed_selection['verified'] is True
+    assert changed_selection['binding']==host['binding']
+    assert changed_selection['catalog']!=host['catalog']
     restarted_host=process_identity(tmp_path,'host')
     assert restarted_host['binding'] == host['binding']
     assert (restarted_host['catalog'] == host['catalog']) is qualified

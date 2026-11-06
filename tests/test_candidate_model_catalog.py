@@ -321,6 +321,70 @@ async def test_actual_anthropic_lifecycle_scope_is_provider_owned(
     finally:await manager.catalog.close()
 
 
+@pytest.mark.parametrize("field", ["model", "default_model"])
+async def test_legacy_filtered_selection_changes_catalog_not_pinned_account(
+    field, tmp_path, monkeypatch, candidate_environment,
+):
+    """The real legacy selector may use either field; never reuse its old rows."""
+    from amplifier_web.management import Management
+    from amplifier_web.service import AppService
+
+    provider = "chat-completions"
+    monkeypatch.setenv("UNIFIED_CATALOG_PROVIDER", provider)
+    config = _config(provider, tmp_path)
+    config.pop("model")
+    config.pop("default_model")
+    config.update(filtered=True)
+    row = {"id": "candidate", "module": "provider-" + provider, "config": config}
+    manager = SetupManager(tmp_path / "host", catalog=ProviderCatalog(tmp_path / "catalog.json"),
+                           probe_command=[sys.executable, str(TRANSPORT_FILE)])
+    service = AppService(tmp_path / "host", workspace=tmp_path)
+    service.management = Management(service)
+    keys, bindings = [], []
+    selected = {"instance": "candidate", "model": transport.SELECTION_ONLY}
+    try:
+        for index, expected in enumerate(transport.MODEL_IDS[provider]):
+            config[field] = expected
+            write_private(amplifier_home() / "settings.yaml",
+                          yaml.safe_dump({"config": {"providers": [row]}}))
+            if index == 0:
+                await service.dispatch("session.create", {"bundle": "anchors"})
+                session = service._session()
+                await service.dispatch("conversation.configure", {
+                    "sessionId": session["id"], "expectedRevision": 0, "selection": selected,
+                }, include_state=False)
+                pinned_binding = session["modelConnectionKey"]
+            key = manager.catalog_key({"id": "candidate"}, str(tmp_path))
+            binding = manager.catalog_key({"id": "candidate"}, str(tmp_path), binding=True)
+            keys.append(key)
+            bindings.append(binding)
+            result = await manager.cached_probe("providers.models", {"id": "candidate"}, str(tmp_path))
+            # The pre-fix key returns the first selection's cached rows here.
+            assert [model["id"] for model in result["models"]] == [expected]
+            assert result["providerMetadata"]["modelListInfo"]["default_filters"][
+                "legacy_filtered_model"] == expected
+            assert result["modelsProvenance"] == "provider-api"
+            assert (await manager.cached_probe("providers.models", {"id": "candidate"},
+                                               str(tmp_path))) == result
+            assert len(_records(candidate_environment, "request")) == index + 1
+            assert session["selection"] == session["pendingModelSelection"] == selected
+            assert session["modelConnectionKey"] == pinned_binding == binding
+        assert len(set(keys)) == 2 and len(set(bindings)) == 1
+        config["model_filters"] = {}
+        write_private(amplifier_home() / "settings.yaml",
+                      yaml.safe_dump({"config": {"providers": [row]}}))
+        result = await manager.cached_probe("providers.models", {"id": "candidate"}, str(tmp_path))
+        assert [model["id"] for model in result["models"]] == transport.MODEL_IDS[provider]
+        assert len(_records(candidate_environment, "request")) == 3
+        assert not _records(candidate_environment, "forbidden")
+        assert service.runtime is None
+        assert session["selection"] == session["pendingModelSelection"] == selected
+        assert session["modelConnectionKey"] == pinned_binding
+    finally:
+        await manager.catalog.close()
+        await service.close()
+
+
 async def test_synthetic_unsupported_manual_selection_is_not_six_adapter_evidence(
     tmp_path, candidate_environment, record_property,
 ):

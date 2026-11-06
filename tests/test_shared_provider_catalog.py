@@ -119,7 +119,7 @@ def test_configuration_identity_materializes_secrets_but_isolates_inputs(tmp_pat
     assert base!=configuration_key(tmp_path/'other','provider-openai',reference,'source')
     assert base!=configuration_key(tmp_path,'provider-openai',reference,'other-source')
     assert base!=configuration_key(tmp_path,'provider-openai',{**reference,'base_url':'https://other.invalid'},'source')
-    assert base==configuration_key(tmp_path,'provider-openai',{**reference,'default_model':'other'},'source')
+    assert base!=configuration_key(tmp_path,'provider-openai',{**reference,'default_model':'other'},'source')
     monkeypatch.setenv('OPENAI_API_KEY','private-rotated')
     assert base!=configuration_key(tmp_path,'provider-openai',reference,'source')
     token=tmp_path/'credential.json';token.write_text('first')

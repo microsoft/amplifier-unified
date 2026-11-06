@@ -253,10 +253,22 @@ async def test_provider_priority_does_not_invalidate_models(tmp_path,monkeypatch
     assert manager.catalog_key({'id':'0'},str(tmp_path))!=before
 
 
-def test_selection_defaults_do_not_change_strict_discovery_identity(tmp_path):
-    from amplifier_web.provider_catalog import configuration_key
+@pytest.mark.parametrize('field', ['model', 'default_model'])
+def test_selection_defaults_change_catalog_not_account_identity(tmp_path, monkeypatch, field):
+    from amplifier_web.provider_catalog import configuration_key, connection_key
     config={'api_key':'synthetic','base_url':'https://fixture.invalid'}
     before=configuration_key(tmp_path,'provider-fixture',config)
     assert before==configuration_key(tmp_path,'provider-fixture',{
-        **config,'model':'changed','default_model':'other','reasoning_effort':'high','priority':10})
+        **config,'reasoning_effort':'high','priority':10})
+    updated={**config,field:'changed'}
+    assert before!=configuration_key(tmp_path,'provider-fixture',updated)
+    assert connection_key(tmp_path,'provider-fixture',config)==connection_key(
+        tmp_path,'provider-fixture',updated)
+    indirect={**config,field:'${LIST_MODEL}'}
+    monkeypatch.setenv('LIST_MODEL','changed')
+    assert configuration_key(tmp_path,'provider-fixture',indirect)==configuration_key(
+        tmp_path,'provider-fixture',updated)
+    monkeypatch.setenv('LIST_MODEL','other')
+    assert configuration_key(tmp_path,'provider-fixture',indirect)!=configuration_key(
+        tmp_path,'provider-fixture',updated)
     assert before!=configuration_key(tmp_path,'provider-fixture',{**config,'api_key':'rotated'})
