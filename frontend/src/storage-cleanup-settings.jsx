@@ -22,7 +22,7 @@ export function StorageCleanupSettings({act,navigate=()=>{}}){
   if(busy)return;const request=pending||{id:crypto.randomUUID(),action,args};if(!retain(request))return;setBusy(true);setError('');setNotice('');const version=++epoch.current;
   try{const response=await act(request.action,request.args,{id:request.id,feedback:false});if(!response?.accepted){const failure=Error(response?.error||'The request was not confirmed.');failure.status=response?.status;throw failure}
    if(!mounted.current||version!==epoch.current)return;retain(null);
-   if(request.action==='storage.cleanup.save'){setReport(response.result);setDraft(response.result.policy);setPreview(null);setNotice('Cleanup settings saved for all workspaces. Active work and saved results stay protected.')}
+   if(['storage.cleanup.save','storage.cleanup.applyPreset'].includes(request.action)){setReport(response.result);setDraft(response.result.policy);setPreview(null);setNotice('Cleanup settings saved for all workspaces. Active work and saved results stay protected.')}
    else{setPreview(null);setReport(old=>({...old,lastCleanup:response.result}));setNotice(response.result.status==='completed'?`Cleanup completed. Removed ${bytes(response.result.removedFileBytes)} of unused file content.`:'Cleanup is not fully confirmed. Its receipt is kept; the request will not be repeated.')}
   }catch(e){if(mounted.current&&version===epoch.current){setError(e.message);if([400,403,409].includes(e.status))retain(null)}}finally{if(mounted.current&&version===epoch.current)setBusy(false)}
  }
@@ -44,6 +44,8 @@ export function StorageCleanupSettings({act,navigate=()=>{}}){
    {draft?.workspaceArchiveKeepDays!=null&&<label className="a-field">Keep temporary test workspaces for days<input type="number" min="1" max="3650" step="1" value={draft.workspaceArchiveKeepDays} onChange={e=>setDraft({...draft,workspaceArchiveKeepDays:e.target.value===''?'':Number(e.target.value)})}/></label>}
    <p className="a-caption">Applies to new queued tests after their environment is removed. Seven days is recommended. Original source, saved results and receipts stay. Tests explicitly kept for review remain available. Existing archives, manual environments and uncertain work stay protected. Turning this off pauses expiry; longer durations extend existing promises.</p>
   </fieldset>
+  <button className="a-soft" disabled={busy||!report||!!pending||dirty||draft?.revision!==report?.policy.revision} onClick={()=>send('storage.cleanup.applyPreset',{expectedRevision:report.policy.revision,preset:'temporary-test-workspaces'})}>Use seven-day temporary test cleanup</button>
+  <p className="a-caption">Enables automatic cleanup and seven-day retention for future temporary test workspaces. Keeps your unused-copy duration and size choices. You can adjust the duration or turn it off above.</p>
   <button className="a-primary" disabled={busy||!report||(!pending&&(!dirty||!valid||draft.revision!==report.policy.revision))} onClick={()=>send('storage.cleanup.save',{expectedRevision:draft.revision,enabled:draft.enabled,keepDays:draft.keepDays,maxUnusedBytes:draft.maxUnusedBytes,workspaceArchiveKeepDays:draft.workspaceArchiveKeepDays??null})}>{pending?'Check the same request':'Save cleanup settings'}</button>
   <button className="a-soft" disabled={busy||!!pending} onClick={load}>Reload cleanup settings</button>
   {draft&&report&&draft.revision!==report.policy.revision&&<p role="alert">Settings changed elsewhere. Your edits are kept. Use the saved settings before editing again.</p>}

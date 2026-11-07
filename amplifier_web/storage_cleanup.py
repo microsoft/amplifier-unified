@@ -29,6 +29,10 @@ def definitions(schema, string):
             'maxUnusedBytes': {'type': 'integer', 'minimum': 0, 'maximum': 2**53-1},
             'workspaceArchiveKeepDays': {'type': ['integer', 'null'], 'minimum': 1, 'maximum': 3650},
         }, ['expectedRevision', 'enabled', 'keepDays', 'maxUnusedBytes'])),
+        'storage.cleanup.applyPreset': ('Enable standing automatic cleanup with seven-day expiry for future temporary queued-test workspace copies. Preserves unused-code duration/size choices and existing archive promises. Available to the user and Full callers.', schema({
+            'expectedRevision': {'type': 'integer', 'minimum': 0},
+            'preset': {'enum': ['temporary-test-workspaces']},
+        }, ['expectedRevision', 'preset'])),
         'storage.cleanup.preview': ('Measure a bounded set of unused code copies and protected storage. Never starts workers or deletes files. Incomplete measurements are reported.', schema({}, [])),
         'storage.cleanup.run': ('Apply the saved cleanup policy under standing Full or user control. Each owner rechecks unused code before removal. Reuse the request ID to observe an uncertain outcome without replay.', schema({
             'expectedRevision': {'type': 'integer', 'minimum': 0}}, ['expectedRevision'])),
@@ -412,6 +416,8 @@ async def dispatch(app, action, args, origin, command_id, caller_session_id=None
         from .saved_test_storage import read as evidence
         try:
             if args.get('owner', 'tests') == 'smartTools':
+                if getattr(app, 'smart_tools', None) is None:
+                    raise AppError('Smart Tool storage is not available yet.', 503)
                 return {'accepted': True, 'result': app.smart_tools.retention_accounting(args.get('before'))}
             if args.get('owner', 'tests') != 'tests':
                 raise ValueError('Choose a supported storage evidence owner.')
@@ -453,11 +459,18 @@ async def dispatch(app, action, args, origin, command_id, caller_session_id=None
         current = policy(app)
         if args['expectedRevision'] != current['revision']:
             raise AppError('Cleanup settings changed. Reload them before saving.', 409)
-        value = {name: args[name] for name in ('enabled', 'keepDays', 'maxUnusedBytes')}
+        if action == 'storage.cleanup.applyPreset':
+            if args.get('preset') != 'temporary-test-workspaces':
+                raise AppError('Choose a supported cleanup preset.', 400)
+            value = {name: current[name] for name in ('keepDays', 'maxUnusedBytes')}
+            value['enabled'] = True
+            days = 7
+        else:
+            value = {name: args[name] for name in ('enabled', 'keepDays', 'maxUnusedBytes')}
+            days = args.get('workspaceArchiveKeepDays', current.get('workspaceArchiveKeepDays'))
         if (type(value['enabled']) is not bool or type(value['keepDays']) is not int or not 0 <= value['keepDays'] <= 3650
                 or type(value['maxUnusedBytes']) is not int or not 0 <= value['maxUnusedBytes'] <= 2**53-1):
             raise AppError('Choose valid cleanup settings.', 400)
-        days = args.get('workspaceArchiveKeepDays', current.get('workspaceArchiveKeepDays'))
         if days is not None and (type(days) is not int or not 1 <= days <= 3650):
             raise AppError('Choose a temporary test workspace retention between 1 and 3650 days, or disable it.', 400)
         value['workspaceArchiveKeepDays'] = days
