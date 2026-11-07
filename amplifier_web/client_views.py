@@ -64,12 +64,12 @@ class ClientViews:
     @staticmethod
     def validate(identity):
         if not isinstance(identity, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", identity):
-            from .service import AppError
+            from .errors import AppError
             raise AppError("Choose a valid client ID.")
         return identity
 
     def attach(self, identity, resume=None, kind="web", *, device=None):
-        from .service import AppError
+        from .errors import AppError
         self.validate(identity)
         if kind not in {"web", "tui", "native", "api"}:
             raise AppError("Unsupported client kind.")
@@ -156,6 +156,12 @@ class ClientViews:
                 if shell:
                     shell.update(preview=None, reported=None)
                     self.service.shell.put("client", identity, shell)
+        # Retire the saved modal route on upgrade. Do not auto-open a new
+        # Canvas document over a retained viewer or its edits; the existing
+        # Overview/Chat info entry opens the inspector when requested.
+        if self.records[identity].get('view', {}).get('panel') == 'context-inspector':
+            self.records[identity]['view']['panel'] = None
+            self.dirty.add(identity)
         self.reconcile(identity)
         self.selection_revision(identity)
         return self.records[identity]
@@ -242,7 +248,7 @@ class ClientViews:
         if identity is not None:
             self.validate(identity)
             if identity not in self.records:
-                from .service import AppError
+                from .errors import AppError
                 raise AppError("Attach this client before using the session service.", 409, code="client_not_attached")
             self.reconcile(identity)
         token = self.current.set(identity)
@@ -272,7 +278,7 @@ class ClientViews:
             document = None
             if previous and text:
                 if not text.startswith(old_text):
-                    from .service import AppError
+                    from .errors import AppError
                     raise AppError('Quoted content was kept. Edit its commentary in the composer.', 409)
                 document = copy.deepcopy(previous)
                 if text != old_text:
@@ -291,7 +297,7 @@ class ClientViews:
         record = self.record()
         if record is None:
             if session is None:
-                from .service import AppError
+                from .errors import AppError
                 raise AppError('Attach a client to add files before starting a chat.')
             return session.setdefault("draftAttachments", [])
         return record.setdefault("attachments", {}).setdefault(session["id"] if session else "", [])
@@ -321,7 +327,7 @@ class ClientViews:
     def attachment_target(self, target, expected_draft_id):
         if expected_draft_id is None:
             return target  # Public explicit-chat API retains its existing contract.
-        from .service import AppError
+        from .errors import AppError
         record = self.record()
         if record is None or target is not None:
             raise AppError('This upload is not bound to an unnamed draft.', 409)
@@ -446,6 +452,15 @@ class ClientViews:
             record['selectionRevision'] = record.get('selectionRevision', 0) + 1
             self.dirty.add(identity)
         return record.get('selectionRevision', 0)
+
+    def commit(self, identity, command_id, fingerprint, receipt):
+        """Commit a private view with its receipt; the caller owns rollback."""
+        db = self.service.db
+        if command_id:
+            db.execute('INSERT INTO commands VALUES (?,?,?)', (command_id, fingerprint, json.dumps(receipt)))
+        written = self.save(identity, defer_ack=True)
+        db.commit()
+        self.acknowledge(written)
 
     def save(self, identity=None, *, defer_ack=False):
         pending = set(self.dirty) if identity is None else self.dirty.intersection({identity})
