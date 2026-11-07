@@ -194,6 +194,13 @@ drives a real Python cell through the public HTTP actions, expires its journal
 stdout and verifies retained result/outcome and no replay. It does not claim a
 mounted Operations/Computation panel or a live-provider conversation.
 
+`node frontend/tests/operations-http-browser.mjs` checks authenticated HTTP
+observation, real command submission/input, exact retries and one side effect
+across browser reload, while preserving the selected conversation and draft.
+It uses an isolated fixture and the production build; the bundled chat has no
+separate Operations panel. These checks do not claim a live provider conversation
+or full Work bundle composition has been deployed.
+
 Additional host receipt stores can register a read-only adapter with
 `service.operations.register_source(name, list_records, read_record)`. Callbacks
 receive the bound session ID (and exact prefixed ID for read) and return common
