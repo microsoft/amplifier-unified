@@ -133,7 +133,7 @@ def update(path: Path, key: str, value, expected: str):
         identity = path.lstat()
         if not stat.S_ISREG(identity.st_mode):
             raise ManifestError("Manifest must be a regular file, not a symbolic link")
-        if key in manifest and manifest[key] == value:
+        if key in manifest and record_digest({key: value}, key) == expected:
             return {"changed": False, "key": key, "recordSha256": expected, "manifestSha256": digest(before)}
         manifest[key] = value
         after = (json.dumps(manifest, indent=2, ensure_ascii=False, allow_nan=False) + "\n").encode()

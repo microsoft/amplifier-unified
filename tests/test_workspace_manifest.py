@@ -85,6 +85,15 @@ class WorkspaceManifestTests(unittest.TestCase):
             with self.assertRaises(wm.ManifestError):
                 wm.update(path, "new", 3, missing)
 
+    def test_json_boolean_does_not_equal_numeric_policy(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "WORKSPACE-MANIFEST.json"
+            path.write_text('{"policy": {"enabled": 1}}')
+            expected = wm.record_digest(wm.load(path)[1], "policy")
+            result = wm.update(path, "policy", {"enabled": True}, expected)
+            self.assertTrue(result["changed"])
+            self.assertIs(wm.load(path)[1]["policy"]["enabled"], True)
+
     def test_failed_replace_keeps_original_and_removes_temporary(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "WORKSPACE-MANIFEST.json"

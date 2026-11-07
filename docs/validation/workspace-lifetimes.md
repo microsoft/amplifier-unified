@@ -9,7 +9,7 @@ their own disposition. Product history and Storage policies have separate owners
 ## Read only the relevant record
 
 `scripts/workspace_manifest.py` provides bounded discovery and updates for an
-existing development workspace's `WORKSPACE-MANIFEST.json`. Pass its exact path;
+existing Linux development workspace's `WORKSPACE-MANIFEST.json`. Pass its exact path;
 the tool does not infer another task's workspace from the current directory.
 
 ```sh
