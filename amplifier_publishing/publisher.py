@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 
+from . import retention as release_retention
+
 
 class PublishingError(ValueError):
     """A stable public error code, with its durable receipt when available."""
@@ -268,6 +270,8 @@ class Publisher:
             self._db.execute("CREATE TABLE IF NOT EXISTS records (kind TEXT, id TEXT, body TEXT NOT NULL, PRIMARY KEY(kind,id))")
             self._db.execute("CREATE TABLE IF NOT EXISTS receipts (session TEXT, request TEXT, fingerprint TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(session,request))")
             self._db.execute("CREATE INDEX IF NOT EXISTS publishing_resources ON records(json_extract(body,'$.sessionId'),kind,id)")
+            self._db.execute("CREATE INDEX IF NOT EXISTS publishing_pins ON records(json_extract(body,'$.sessionId'),json_extract(body,'$.siteId'),id) "
+                             "WHERE kind='retention' AND json_extract(body,'$.pinned')=1 AND json_extract(body,'$.availability')='available'")
             self._recover()
         except BaseException:
             self._lock_file.close()
@@ -312,6 +316,8 @@ class Publisher:
                 if receipt["state"] == "running":
                     receipt.update(state="unknown", completedAt=_now(), error={"code": "unknown_outcome", "message": "Process ended before the operation outcome was recorded; it was not replayed"})
                     self._save_receipt(receipt, fingerprint)
+                    if receipt['action'] == 'build':
+                        self._uncertain_capture(receipt)
                     if receipt["action"] in {"deploy", "rollback", "stop", "remove"}:
                         self._fence(receipt)
             self._db.execute("COMMIT")
@@ -376,12 +382,14 @@ class Publisher:
                 self._save_receipt(receipt, fingerprint)
                 self._db.execute("COMMIT")
             except PublishingError as exc:
-                self._db.execute("ROLLBACK")
+                if self._db.in_transaction:
+                    self._db.execute("ROLLBACK")
                 receipt.update(state="failed", error={"code": exc.code, "message": str(exc)}, completedAt=_now())
                 self._save_receipt(receipt, fingerprint)
                 raise PublishingError(exc.code, str(exc), receipt=receipt) from exc
             except Exception as exc:
-                self._db.execute("ROLLBACK")
+                if self._db.in_transaction:
+                    self._db.execute("ROLLBACK")
                 # An unexpected failure after an external effect cannot be called
                 # a known failure. Fail closed, retain uncertainty, never retry it.
                 self._stop_listeners(payload["siteId"])
@@ -389,11 +397,20 @@ class Publisher:
                 self._db.execute("BEGIN IMMEDIATE")
                 self._refresh_liveness()
                 self._save_receipt(receipt, fingerprint)
+                if action == 'build':
+                    self._uncertain_capture(receipt)
                 if action in {"deploy", "rollback", "stop", "remove"}:
                     self._fence(receipt)
                 self._db.execute("COMMIT")
                 raise PublishingError("unknown_outcome", receipt["error"]["message"], receipt=receipt) from exc
             return self._receipt_result(receipt, action)
+
+    def _uncertain_capture(self, receipt):
+        identity = receipt.get('releaseId')
+        state = self._get('retention', identity) if identity else None
+        if state and state.get('availability') == 'expired' and (self._content / identity).exists():
+            state.update(availability='unknown', revision=state['revision'] + 1)
+            self._put('retention', state)
 
     @staticmethod
     def _receipt_result(receipt, action):
@@ -476,13 +493,17 @@ class Publisher:
             shutil.rmtree(staging)
             raise
 
-    def build(self, source, *, site_id, session_id, request_id):
+    def build(self, source, *, site_id, session_id, request_id, retention=None):
         source = Path(source).expanduser()
         if ".." in source.parts:
             raise PublishingError("unsafe_path", "Build output cannot contain traversal components")
         source = source.absolute()
 
         def create(_receipt):
+            try:
+                settings = release_retention.policy(retention)
+            except ValueError as exc:
+                raise PublishingError('invalid_argument', str(exc)) from exc
             site = self._get("site", site_id)
             if site:
                 self._scope(site, session_id, "Site")
@@ -496,12 +517,26 @@ class Publisher:
                 raise PublishingError("unsafe_source", "Build output could not be safely read") from exc
             digest = _digest(manifest)
             identity = _digest({"siteId": site_id, "sessionId": session_id, "manifestDigest": digest})
+            # Capture discovered this content identity. Commit that exact intent
+            # before installing its immutable directory, including a recapture.
+            _receipt['releaseId'] = identity
+            fingerprint = self._db.execute("SELECT fingerprint FROM receipts WHERE session=? AND request=?",
+                                           (session_id, request_id)).fetchone()[0]
+            self._save_receipt(_receipt, fingerprint)
+            self._db.execute('COMMIT')
+            self._db.execute('BEGIN IMMEDIATE')
             release = {"id": identity, "siteId": site_id, "sessionId": session_id, "manifestDigest": digest, "createdAt": _now(), "files": manifest, "totalBytes": total}
             try:
                 prior = self._get("release", identity)
+                state = self._get('retention', identity)
+                restoring = state is not None and state.get('availability') == 'expired'
                 if prior:
                     release = prior
+                    if not restoring:
+                        self._require_available(release)
                 destination = self._content / identity
+                if restoring and destination.exists():
+                    raise PublishingError('release_unavailable', 'Expired release has unsettled stored content; it was not replaced')
                 if destination.exists():
                     # Verify rather than replace an existing immutable snapshot,
                     # including a possible uncommitted snapshot after a crash.
@@ -524,14 +559,27 @@ class Publisher:
                     finally:
                         os.close(directory_fd)
                 self._put("release", release)
+                if (prior is None and settings is not None) or restoring:
+                    self._put('retention', release_retention.capture(release, settings, _now(), previous=state))
                 return self._project_release(release)
             finally:
                 if staging.exists():
                     shutil.rmtree(staging)
 
-        return self._operation("build", session_id, request_id, {"siteId": site_id, "source": str(source)}, create)
+        payload = {"siteId": site_id, "source": str(source)}
+        if retention is not None:
+            payload['retention'] = retention
+        return self._operation("build", session_id, request_id, payload, create)
+
+    def _require_available(self, release):
+        state = self._get('retention', release['id'])
+        if state and state.get('availability') == 'expired':
+            raise PublishingError('release_expired', 'Release content expired; its manifest and receipts remain. A new deliberate build can capture it again')
+        if not release_retention.available(state):
+            raise PublishingError('release_unavailable', 'Release content has an unresolved retirement; it was not restored or replayed')
 
     def _verify(self, release):
+        self._require_available(release)
         identity = _digest({"siteId": release["siteId"], "sessionId": release["sessionId"], "manifestDigest": release["manifestDigest"]})
         if identity != release["id"] or _digest(release["files"]) != release["manifestDigest"]:
             raise PublishingError("integrity_error", "Release manifest does not match its immutable digest")
@@ -558,6 +606,36 @@ class Publisher:
             self._put("review", review)
             return self._project_release(release)
         return self._release_operation("review", release_id, session_id, request_id, {"note": note}, record)
+
+    def retention(self, release_id, session_id):
+        """Read one owned body's current policy/availability without content reads."""
+        with self._mutex:
+            self._check_open()
+            _identifier(release_id, 'releaseId')
+            _identifier(session_id, 'sessionId')
+            row = self._db.execute("SELECT json_extract(body,'$.sessionId'),json_extract(body,'$.createdAt'),json_extract(body,'$.siteId') "
+                                   "FROM records WHERE kind='release' AND id=?", (release_id,)).fetchone()
+            release = self._scope({'id': release_id, 'sessionId': row[0], 'createdAt': row[1], 'siteId': row[2]} if row else None,
+                                  session_id, 'Release')
+            return (self._get('retention', release_id)
+                    or release_retention.capture(release, None, release['createdAt']))
+
+    def pin(self, release_id, *, session_id, request_id, expected_revision, pinned):
+        """Choose durable protection for an available body without changing history."""
+        def change(release, _receipt):
+            state = self._get('retention', release_id)
+            revision = state['revision'] if state else 0
+            if type(expected_revision) is not int or expected_revision < 0 or type(pinned) is not bool:
+                raise PublishingError('invalid_argument', 'Pin requires a boolean choice and nonnegative lifecycle revision')
+            if revision != expected_revision:
+                raise PublishingError('stale_revision', f'Release retention changed; current revision is {revision}')
+            self._require_available(release)
+            state = state or release_retention.capture(release, None, release['createdAt'])
+            state.update(pinned=pinned, revision=revision + 1)
+            self._put('retention', state)
+            return self._project_release(release)
+        return self._release_operation('pin', release_id, session_id, request_id,
+                                       {'expectedRevision': expected_revision, 'pinned': pinned}, change)
 
     def _start(self, release, *, preview=False):
         try:
@@ -595,7 +673,21 @@ class Publisher:
                 self._sites[site_id] = server
             else:
                 server.release = release
-            site.update(status="running", url=server.url, accessPolicy=self._access_policy, revision=site["revision"] + 1, previousReleaseId=site["releaseId"], releaseId=release_id, updatedAt=_now())
+            now = _now()
+            current_retention = self._get('retention', release_id)
+            if (current_retention and current_retention.get('policy')) or 'rollbackHistory' in site:
+                previous_id = site['releaseId']
+                history = [item for item in site.get('rollbackHistory', []) if item['releaseId'] not in {release_id, previous_id}]
+                if previous_id and previous_id != release_id:
+                    previous_state = self._get('retention', previous_id)
+                    deadline = release_retention.rollback_deadline(previous_state, now)
+                    history.insert(0, {'releaseId': previous_id, 'supersededAt': now, 'retainUntil': deadline})
+                    if previous_state and previous_state.get('policy'):
+                        previous_state.update(supersededAt=now, rollbackUntil=deadline, revision=previous_state['revision'] + 1)
+                        self._put('retention', previous_state)
+                settings = (current_retention or {}).get('policy') or release_retention.DEFAULTS
+                site['rollbackHistory'] = history[:settings['rollbackKeepCount']]
+            site.update(status="running", url=server.url, accessPolicy=self._access_policy, revision=site["revision"] + 1, previousReleaseId=site["releaseId"], releaseId=release_id, updatedAt=now)
             site["deployedReleaseIds"] = sorted(set(site["deployedReleaseIds"] + [release_id]))
             self._put("site", site)
             return site
@@ -645,7 +737,29 @@ class Publisher:
         preview = self._get("preview", release["id"])
         record["previewUrl"] = preview["url"] if preview else None
         record["previewStatus"] = preview["status"] if preview else "none"
+        state = self._get('retention', release['id'])
+        if state is not None:
+            record['retention'] = {key: value for key, value in state.items() if key not in {'id', 'sessionId', 'siteId'}}
         return record
+
+    def _project_site(self, site):
+        if 'rollbackHistory' not in site:
+            return site
+        states = {item['releaseId']: self._get('retention', item['releaseId']) for item in site['rollbackHistory']}
+        candidates = release_retention.rollback_candidates(site, states, _now())
+        # Explicit pins can outlive both the automatic time and count windows.
+        # Read only current pins, without hydrating historical release manifests.
+        pinned = self._db.execute("SELECT id FROM records WHERE kind='retention' "
+                                  "AND json_extract(body,'$.sessionId')=? AND json_extract(body,'$.siteId')=? "
+                                  "AND json_extract(body,'$.pinned')=1 AND json_extract(body,'$.availability')='available' ORDER BY id",
+                                  (site['sessionId'], site['id']))
+        deployed = set(site['deployedReleaseIds'])
+        candidates.extend(row[0] for row in pinned if row[0] in deployed
+                          and row[0] != site['releaseId'] and row[0] not in candidates)
+        # previousReleaseId is historical. Only these current choices are offered
+        # automatically; an available explicitly pinned body can outlive a window.
+        return {**site, 'rollbackCandidates': candidates,
+                'previousReleaseAvailable': site.get('previousReleaseId') in candidates}
 
     def _refresh_liveness(self):
         # Process-owned listener objects are the only authority for a live URL.
@@ -747,8 +861,13 @@ class Publisher:
             self._check_open()
             self._refresh_liveness()
             releases = self._all("release")
+            available = []
             for release in releases:
+                state = self._get('retention', release['id'])
+                if state and state.get('availability') == 'expired':
+                    continue
                 self._verify(release)
+                available.append(release)
             destination.parent.mkdir(parents=True, exist_ok=True)
             staging = Path(tempfile.mkdtemp(prefix="publishing-backup-", dir=destination.parent))
             try:
@@ -757,7 +876,7 @@ class Publisher:
                     self._db.backup(backup)
                 finally:
                     backup.close()
-                for release in releases:
+                for release in available:
                     target = staging / "releases" / release["id"]
                     for item in release["files"]:
                         path = target / "files" / item["path"]
@@ -765,7 +884,8 @@ class Publisher:
                         path.write_bytes(_read_file(self._content / release["id"] / "files", item["path"], item["size"]))
                         path.chmod(0o400)
                     (target / "manifest.json").write_text(_json(release["files"]))
-                metadata = {"format": "static-publishing-v1", "createdAt": _now(), "releaseCount": len(releases), "siteCount": len(self._all("site"))}
+                metadata = {"format": "static-publishing-v1", "createdAt": _now(), "releaseCount": len(releases), "siteCount": len(self._all("site")),
+                            "availableReleaseCount": len(available), "expiredReleaseCount": len(releases) - len(available)}
                 (staging / "snapshot.json").write_text(_json(metadata))
                 os.rename(staging, destination)
                 return {**metadata, "path": str(destination)}
@@ -777,13 +897,13 @@ class Publisher:
         with self._mutex:
             self._check_open()
             self._refresh_liveness()
-            return [site for site in self._all("site") if site["sessionId"] == session_id]
+            return [self._project_site(site) for site in self._all("site") if site["sessionId"] == session_id]
 
     def status(self, site_id, session_id):
         with self._mutex:
             self._check_open()
             self._refresh_liveness()
-            return self._scope(self._get("site", site_id), session_id, "Site")
+            return self._project_site(self._scope(self._get("site", site_id), session_id, "Site"))
 
     def releases(self, session_id):
         with self._mutex:

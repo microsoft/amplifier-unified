@@ -34,7 +34,9 @@ publisher.close()
 
 - `Publisher(root, *, bind_host="127.0.0.1", max_files=2000,
   max_file_bytes=20*1024*1024, max_total_bytes=100*1024*1024)` opens storage.
-- `build(source, *, site_id, session_id, request_id)` returns a release.
+- `build(source, *, site_id, session_id, request_id, retention=None)` returns a
+  release. The optional prospective policy is described below; omission retains
+  the existing durable behavior.
 - `review(release_id, *, session_id, request_id, note="")` saves a review bound
   to that exact immutable manifest. A review records caller intent; it does not
   claim automated visual inspection or security certification.
@@ -51,6 +53,13 @@ publisher.close()
 - `list(session_id)`, `status(site_id, session_id)`, `releases(session_id)`, and
   `receipts(session_id)` return only that session's records. The list retains
   removed sites so their revision and audit history remain discoverable.
+- `retention(release_id, session_id)` reads one owned release's current body
+  generation, availability, policy, pin and lifecycle revision. It reads no
+  content, historical collection or live listener and never changes a lifetime.
+- `pin(release_id, *, session_id, request_id, expected_revision, pinned)` changes
+  the explicit protection of an available release body, using the current
+  lifecycle revision from `retention`. It returns a durable exact-retry receipt.
+  Unpinning a durable legacy release does not opt it into expiry.
 - `export_release(release_id, session_id)` returns only `siteId`, `sessionId`,
   `manifest`, `manifestDigest`, and canonical base64 `files`, suitable for a
   transport import request. It reads the owned immutable snapshot through
@@ -58,8 +67,9 @@ publisher.close()
   second hash check after initial release validation. It accepts no source path
   and exports no review, preview, listener, or storage metadata. A transport must
   enforce its own message and transfer limits before sending this payload.
-- `snapshot(destination)` copies a consistent private database and all known
-  immutable release files to a new directory. It excludes temporary staging and
+- `snapshot(destination)` copies a consistent private database and all available
+  immutable release files to a new directory, retaining expired release metadata
+  and receipts. It excludes temporary staging and
   owner locks. It does not change live listeners. Restoring a copy never resumes
   historical listeners; callers own backup access, encryption, and retention.
 - `capabilities` reports `bindHost`, `accessPolicy`, `authentication`,
@@ -147,3 +157,74 @@ read-only and hash checked, which detects accidental changes; this is not a
 security boundary against a malicious process with the same OS account. A crash
 may leave an unused staged/orphan snapshot, retained rather than replayed or
 silently assigned a success outcome. The host controls retention and disk quota.
+
+## Prospective body retention and pins
+
+The Python library implements policy capture, current availability, explicit
+pins, chronological automatic rollback choices, backup support and deliberate
+recapture. It does **not yet implement automatic retirement or unlink**. App
+Storage/UI integration and independently installed remote-service support are
+separate followups. No current RPC accepts these new Python-only policy or pin
+arguments; do not send them to a v1 service or infer its retention support.
+The matching service/client can read historical Python `pin` receipts, including
+after backup adoption, without exposing a new RPC mutation. Older receipt readers
+reject that newly opted-in state; keep the matching reader when adopting or
+downgrading a store containing pin receipts. Existing stores with no new policy
+or pins retain their original behavior.
+
+A new `build(..., retention={})` explicitly captures the defaults: `keepDays: 30`,
+`rollbackKeepDays: 30`, `rollbackKeepCount: 2`. These optional fields accept integer
+values (days 1–3650, count 0–100); `policyRevision` may retain the calling policy's
+nonnegative integer revision. No policy is inferred from age or deployment state.
+An existing durable identity stays durable even if a later identical-content
+build supplies a temporary policy. The policy is part of a new build request's
+exact fingerprint; old requests keep their original fingerprints.
+
+A separate record in the same Publisher database owns `policy`, `pinned`,
+`revision`, `payloadGeneration`, `materializedAt` and `availability`. The immutable
+release ID, manifest, original `createdAt` and request receipts remain unchanged.
+For an opted-in or explicitly pinned body, current release projections include
+this `retention` record. `retention(...)` also reports the default durable state
+for legacy bodies without creating a stored record. `available` reports owner
+metadata, not a fresh content-integrity proof; actual content operations still
+verify the immutable bytes. Missing or altered content is an integrity error,
+never inferred expiry. Reads and duplicate builds do not refresh lifetime.
+
+A prospective deployment records the two most recent prior successful releases
+in chronological `rollbackHistory`, with their supersession times and captured
+rollback deadlines. Current `status`/`list` expose `rollbackCandidates` and
+`previousReleaseAvailable`; historical `previousReleaseId` remains unchanged.
+This automatically populated pointer is not an indefinite explicit pin. A pin
+can keep an available body offered beyond its automatic time and count windows. Default legacy
+sites retain their existing behavior. The automatic window does not prohibit a
+new explicit rollback to another still-available, previously deployed release.
+Future body retirement must separately preserve each promised unused lifetime,
+current deployment/live preview, explicit pin and unresolved effect; the bounded
+history is not itself permission to delete an older release.
+
+An `expired` body keeps its manifest, ownership and exact request receipts.
+Preview, review, pin and export reject it with `release_expired`; an unresolved
+retirement rejects content operations with `release_unavailable`. Old exact
+retries continue to return their same historical outcome, without restoring
+files or claiming current availability. Backups retain expired metadata while
+omitting absent bodies; unknown retirement or missing supposedly available
+content still prevents claiming a complete backup. Restoring a backup never
+restarts listeners.
+
+A NEW deliberate build may capture identical bytes again after completed expiry.
+It reuses the immutable content identity but creates a new `payloadGeneration`,
+`materializedAt` and captured policy, preserving original creation facts and old
+request results. Omission of policy on that new build captures a durable body.
+Unsettled residual content is never overwritten. An interrupted recapture keeps
+its unknown receipt; neither a new read nor an exact retry resolves or repeats
+that effect. `stop`/`remove` still only affect the
+managed deployment and listeners; they do not delete release content or classify
+legacy bodies as temporary.
+
+A review remains bound to the immutable manifest, so a deliberately recaptured
+identical body retains its existing review. Deployment still verifies every file;
+a new body generation is not a new content identity or an extra approval step.
+The exact discovered release ID is journaled before installing a recaptured body.
+If interruption precedes installation, the historical request stays unknown and
+the body stays expired; if installed bytes remain without a committed outcome,
+availability becomes unknown and those bytes are preserved for recovery.
