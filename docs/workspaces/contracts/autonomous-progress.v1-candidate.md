@@ -1,231 +1,123 @@
 # Autonomous progress — proposed continuation contract
 
-**Status: design for review, 2026-11-07. Not implemented or release-qualified.**
+**DRAFT for review, 2026-11-07. Not implemented or release-qualified.**
 
-This applies the accepted [standing-authorization vision](../../architecture/VISION.md#10-standing-authorization-enables-unattended-work)
-and [workspace execution direction](execution.v1.md) to routine waiting and recovery.
-It does not require a new agent engine, Core contract, storage migration or scheduler.
+## Who relies on this
 
-## Decision
+People and managers should not have to connect routine settings, waiting and
+resumption steps for work that is already authorized. The configuration, native
+execution and task-continuation owners implement this boundary; clients explain
+its state. [Configuration authority](../configuration-authority.md) and
+[execution](execution.v1.md) retain ownership of permissions, runtime identity
+and execution safety. This proposal does not grant new authority.
 
-**An authorized objective stays authorized while the system waits for a routine
-prerequisite. The owner of that prerequisite is responsible for getting the same
-task moving again.** Users and managers should make decisions about objectives,
-scope and results, not shuttle messages between internal lifecycle steps.
+## The behavior
 
-Task intent, permission and execution readiness are separate facts. A running
-process can yield without pausing its task. An unavailable resource can delay
-execution without withdrawing permission. A completed setting change should not
-need another model turn merely to reactivate the task that requested it.
-
-The observable path is:
+When an active task requests an authorized change to its own runtime settings,
+the host accepts the change, reaches the required execution boundary, applies and
+verifies the settings, and continues the same objective. The task does not need a
+separate block, resume command or message to itself.
 
 ```text
-working → saved yield → waiting for the exact prerequisite → continuing
-                         └→ recovery by its existing owner → continuing / actionable blocker
+Working → Waiting for settings — will continue automatically → Working
+                         └→ Recovering → Working / specific blocker
 ```
 
-Actual user Stop, deliberate pause, revoked authority and unresolved external
-effects retain their meaning. They must not be conflated with routine waiting.
+The first scope is an active task changing its own settings. Changing settings on
+an idle, completed or deliberately paused task does not start work. Cross-chat
+changes, application updates and device input retain their existing owners.
 
-## What is wrong today
+## Promises
 
-Source baseline: Unified `efa6c0762a03cc8884e316fc4652e811a0449ed5` (0.60.0).
-A retained live recovery confirmed that configuration reached `ready/readback/mounted`
-while its task remained dependency-blocked. Recovery required a separate task
-resume and fresh continuation; the earlier unsent message stayed unsent.
+### Waiting preserves the objective
 
-| Current mechanism | Friction | Proposed removal |
-| --- | --- | --- |
-| `Management.apply_queued` waits for root/child inactivity; the active goal can keep continuing. | The task works against the idle boundary its requested change needs. | Request a saved native yield as part of accepting the change. |
-| Configuration completion drains eligible messages but does not itself own continuation of the requesting task. | Blocking the task to reach idle leaves it stranded afterward. | Save continuation intent before yielding; settle and wake it through the existing delivery owner. |
-| `task.resume` changes status but sends no input. Dependency-blocked peer work needs an admitted message and a deliberate resume. | Routine host prerequisites become multi-chat management chores. | Machine waits keep the task active. A real external blocker can still require a decision. |
-| Current Full authorization covers ordinary repair, but individual owners retain separate admission and recovery requirements. | Successful recovery in one owner is mistaken for complete readiness, or another owner cannot obtain the exact disposition. | Publish one authoritative, bounded disposition for the original operation and consume it directly. |
-| Time-limited controller observations and standing operator permission can expire together in practice. | Already authorized work can need another person to renew an execution lease. | Separate permission from the renewable observation/ownership lease; qualify this at the device owner. |
+Accepting a change that requires yielding durably binds continuation intent to
+that change and the current task before execution yields. The objective, limits
+and authority remain intact. A change that can apply immediately needs no
+artificial wait. Leaving authorized work stranded until somebody sends a nudge
+is a failure of this boundary.
 
-These are distinct defects and design gaps. This proposal does not attribute every
-previous interruption to configuration or promise that Full bypasses an external
-account, operating-system permission or genuine resource conflict.
+### Yield settles the actual execution
 
-## Small runtime contract
+The existing native execution owner settles admitted tools and children before
+replacing their runtime. Completed effects and input identities remain recorded.
+An idle root does not establish that its children have settled, and saved settings
+do not establish mounted readiness. An unresolved boundary identifies the actual
+owner or effect that prevents it from settling.
 
-### 1. Accept the wait with the operation
+### A settled result continues the same work
 
-When an active task requests an authorized change to its own runtime that needs
-an idle boundary, the configuration owner saves the change **and its continuation intent** before
-asking the runtime to yield. The caller receives an ordinary accepted receipt
-that says the task will continue after application or receive an actionable
-failure. It needs no extra `task.block`, `task.resume`, self-message or wait tool.
-Changes that can apply immediately do not acquire an unnecessary yield/wait cycle.
+Verified readiness makes the same task eligible through existing admission.
+There is at most one logical continuation for the operation and task identity;
+restart or duplicate completion delivery does not create another initial turn.
+Eligible fresh input or an existing continuation may consume that readiness.
+Other prerequisites still apply; a capacity wait remains queued for automatic
+admission. This does not promise exactly-once external effects or authorize replay
+of old inputs, tool calls or writes.
 
-Attach this intent to the existing configuration operation; do not create a
-parallel task journal. The minimal binding is the operation identity, owning task
-and continuation epoch, originating runtime/boundary identity, Stop/authority
-boundary and exact outcome reference. Reuse existing fields and receipts where
-they already express those facts. Task progress-only edits must not invalidate
-the wait; changed objectives, ownership or permission must be re-evaluated.
+### Current intent governs continuation
 
-This first scope is a change requested by the active task for itself. Changing
-settings on an idle, completed or deliberately paused chat must not start it.
-Cross-chat changes do not grant the requester control of the target's task.
-Later coverage for external changes to active work needs its own acceptance.
+New user input takes precedence without being lost or delivered twice. Stop,
+deliberate pause, an objective or ownership change, and revoked or expired
+authority suppress obsolete continuation. Routine progress edits do not. Checking
+current authority does not mean requesting it again. Previously unsent input
+remains preserved; editing an inactive chat's settings creates no objective.
 
-### 2. Yield the execution, preserve the objective
+### Recovery belongs to the operation owner
 
-Use the existing native handoff boundary and goal-yield behavior. Stop further
-automatic goal turns at the supported boundary and let admitted tool work and
-children settle. Preserve the goal, used budget, completed effects and native
-input identities. A persistent idle child must be settled by its native owner;
-root-idle alone is not sufficient proof.
+The owner uses the operation's receipt and readback to finish known partial work
+or settle a known no-effect failure. An unknown outcome requires inspection,
+not guessing or replay. Ordinary recovery within existing authority needs no
+manager relay or model-driven polling. If readiness cannot be established, the
+result names the missing fact, responsible owner and next action. An indefinite
+generic settings fence is not an acceptable terminal result.
 
-Configuration application then uses its existing preparation/save/readback owner.
-It must not claim readiness from saved settings alone. A supported boundary that
-cannot settle reports the exact outstanding owner/effect; waiting is not evidence
-that a worker can be killed. No arbitrary sleep or manager polling makes it safe.
+### Waiting costs only relevant work
 
-### 3. Resume from the result, once
+Recovery and restart inspect enrolled operations with bounded work. They do not
+scan every conversation, repeatedly load full histories or spend model turns
+polling. Observation creates no objective and repeats no uncertain effect.
+Workers handle ordinary repair within their assigned scope; managers choose
+priorities and accept deliverables.
 
-On a qualified mounted result, enqueue one continuation through the existing
-collaboration/goal admission owner. Keep the same task, objective and used budget.
-There is one logical continuation identity derived from the operation and task;
-duplicate events or restart cannot create another initial turn.
+### The visible state has one meaning
 
-New user input takes precedence. If already-admitted fresh input or an eligible
-existing continuation will carry the task forward, attach the disposition there
-instead of adding a redundant wakeup. Re-evaluate against the resulting runtime,
-not the obsolete runtime that yielded. Do not replay historical unsent messages,
-failed tool calls or already accepted inputs.
+Receipts and UI distinguish automatic waiting, recovery, a specific blocker and
+resumed work. Accepted, saved, mounted and completed are different observations.
+The UI does not demand an extra resume step after the host can continue. A
+historical unsent message is not evidence of the current task's state. Guidance
+must describe only qualified capability, and retire the corresponding manual
+workaround when automatic continuation ships.
 
-Authority and intent changes suppress the old continuation with a specific reason.
-Temporary capacity pressure leaves it queued and automatically reconsidered by
-the existing capacity owner; it does not turn into a task block or new approval.
-Completion of one wait does not clear another owner's unresolved prerequisite.
+## How this will be checked
 
-### 4. Recovery belongs to the operation
+The [focused acceptance plan](../notes/autonomous-progress-20261107.md#focused-acceptance)
+covers the installed host, actual worker and built UI, including restart,
+duplicate delivery, children, changed intent and unknown outcomes. These are
+planned checks, not passed evidence.
 
-| Observed outcome | Automatic behavior within existing authority |
-| --- | --- |
-| Rejection proved before any effect | Release that operation's fence and return its actual failure to the same task for ordinary correction. Do not silently rerun the identical failing command. |
-| Settings saved; mounted readback unfinished | Finish readback through the existing recovery owner. Do not repeat the settings write. |
-| Outcome unknown | Perform exact passive readback/reconciliation by operation and backend identity. Retry delivery/observation when that is safe; never infer that an external effect did not happen. |
-| Outcome cannot be determined, or a conflicting owner/decision is real | Leave a concrete blocker with responsible owner, next supported action and retained evidence reference. Escalate only the decision or access actually missing. |
+Targets are zero routine human nudges, zero model polling turns, and one consumed
+logical continuation per eligible result. Measure admission delay separately from
+runtime preparation and model latency.
 
-Routine recovery must not require a model to start under the very uncertain
-configuration it is being asked to repair. Deterministic inspection and proven
-settlement belong to the host operation owner. Where that owner cannot establish
-safety, expose the precise limitation; do not invent a generic repair agent with
-broader authority or clear the fence just to create activity.
+## Deliberately outside this first contract
 
-Restart re-reads saved pending operations and continuation receipts. Repeated
-identical observations without new evidence do not generate model turns or retry
-storms. Unknown dispatch stays unknown until authoritative readback resolves it.
+- Cross-chat configuration needs its own authority and continuation review before
+  extending this boundary.
+- Device-control leases and input freshness remain with the shared computer-use
+  owner; standing permission does not itself establish current device readiness.
+- A new scheduler, database, broker, supervisor or history migration is not an
+  assumed prerequisite. Reuse the existing execution and operation owners.
+- Legacy blocked work is reconciled individually. A free-text historical promise
+  to continue is neither a durable continuation record nor new authorization.
 
-### 5. Permission is not a timer
+## Change record
 
-Standing operator permission lasts until revoked or its explicit scope ends.
-A deliberately time-boxed user grant still ends at its deadline and is not renewed
-implicitly. A host-generated freshness timeout is a different kind of boundary.
-A short-lived lease can establish exclusive device ownership or a fresh
-screen/target observation. Its expiration requires a current check, not automatically
-another human authorization when standing policy already permits renewal.
-
-For computer use, propose renewal by the same controller while the saved operator
-policy permits unattended exclusive use and current target, ownership and presence
-checks support it. Actual takeover, revocation or changed scope stops input.
-Permission alone does not prove that a device is clear. Ambiguous presence must be
-resolved through the device owner's supported policy; it is not silently ignored.
-This needs a scoped shared computer-use contract change and tests. Do not implement
-it as a longer global timeout, a Unified-only bypass or a guessed fresh clearance.
-
-## Existing owners, not another coordination framework
-
-| Owner | Change / responsibility |
-| --- | --- |
-| `management.py`, `configuration_recovery.py` | Save the own-task wait, observe application and resolve its exact fence/outcome. |
-| `handoff_boundary.py`, `task_continuity.py` | Yield native execution while preserving the task. Generalize the necessary existing boundary behavior instead of introducing a second checkpoint system. |
-| `task_binding.py`, `collaboration.py` | Preserve semantic task binding; admit one outcome-backed continuation and prioritize newer input. |
-| `update_drain.py` | Existing `task.waitForUpdate` provides a reference for durable enrollment, exact boundary and guarded wakeup. Share only genuinely common mechanics; keep update verification with the updater. |
-| Shared computer-use owner | Separate and renew execution leases under explicit standing policy. Unified consumes that result. |
-| Context/skill and task UI owners | Explain the actual wait/result without turning internal state into another procedure. |
-
-No additional database, broker, supervisor chat, permission hierarchy or mandatory
-scratch file is proposed. Waiting watches only enrolled operations and reacts to
-their transitions; it must not scan every session or reload full event histories.
-Reuse existing startup recovery and bounded scheduling for missed notifications.
-This is not a prerequisite for the separate storage/protocol redesign.
-
-## Remove the workarounds as the capability ships
-
-- Remove guidance to block/pause a task merely to let its own configuration apply,
-  and remove routine resume/acknowledgement messages for that path.
-- Use the existing authority check once at the owning effect boundary, with
-  required delayed-effect rechecks. Do not add prompt-level permission steps.
-- Make workers own ordinary correction and focused validation to their assigned
-  result. Managers intervene for priorities, acceptance or genuine external
-  decisions, not each failed check or settled host wait.
-- Use typed wait/outcome references, not prose reasons or scratch files, to decide
-  continuation. Existing `task.block` remains for actual unresolved dependencies;
-  free-text legacy blocks are not silently reclassified.
-- Show **Waiting for settings — will continue automatically**, **Recovering**, or
-  the actionable blocker. A historical “Not sent” message remains visibly unsent
-  but must not be presented as the current task's state.
-
-Deliver implementation and guidance removal together. Do not advertise automatic
-continuation in shipped prompts before the installed path is qualified. Keep
-specialized failure recipes on demand, rather than adding this contract to every
-model request.
-
-## Delivery and acceptance
-
-1. **Own-session settings first.** Qualify accepted change → native yield → mounted
-   readback → one resumed turn, with no manager/human nudge. Reuse the existing
-   supported native loop; no Core or consumer upgrade is assumed. If it cannot
-   express the boundary, stop and present that concrete dependency before expanding
-   scope. Exercise the actual installed host/worker and built UI in an owned DTU.
-2. **Close recovery gaps.** Reconcile known partial/no-effect outcomes and consume
-   their dispositions directly. Audit existing wait paths against the same contract,
-   changing demonstrated failures rather than rewriting all coordination at once.
-3. **Renew device leases at their owner.** Prove unattended authorized continuation
-   plus actual takeover/revocation behavior before adopting the shared change.
-4. **Observe real work.** Measure owner intervention, time spent waiting, duplicate
-   wakeups and completed deliverables. Correct remaining reproducible blockers.
-   An idle chat or a successful launch is not proof of productive autonomy.
-
-Required focused scenarios for the first slice:
-
-- A goal that would otherwise continue yields for its own configuration, resumes
-  the same objective once and completes it without `task.block` or extra messages.
-- Active children settle; persistent idle children do not retain a hidden wait.
-- Successful application plus a lost acknowledgement or host restart produces no
-  duplicate write, tool effect, input, continuation or budget reset.
-- A proven no-effect failure releases only its fence and permits ordinary repair;
-  a saved-not-mounted failure finishes readback without another write.
-- Unknown dispatch remains retained; available exact observations drive recovery
-  without requiring human permission merely to read them.
-- Stop, deliberate pause, revoked permission and changed objective prevent the old
-  wakeup. Progress-only task updates do not. Later explicit resume remains possible.
-- New input is neither lost nor duplicated; old unsent drafts stay unsent. A
-  settings change to a previously idle chat never starts work.
-- Two completed prerequisites and duplicate notifications produce one eligible
-  next turn. Capacity recovery wakes queued work without another manager turn.
-
-Acceptance targets: **zero routine human/manager nudges**, **zero model polling
-turns while waiting**, and **at most one logical continuation per saved result**,
-with every eligible result consumed by resumed or already-continuing work.
-On a warm owned fixture with capacity available, target under one second from
-settled prerequisite to continuation enqueue; separately measure worker preparation,
-model latency and total completion time. Report actual cold/warm results, not an
-unconditional production latency promise. Add these to affected smoke coverage;
-do not add another broad per-release campaign.
-
-## Existing held tasks
-
-Do not infer permission or completion from an old blocked reason. Reconcile each
-already held operation through its existing owner. A legacy task needs an exact
-supported binding or an explicit current continuation; preserve its task identity,
-budget, user pauses and uncertain effects. Once recovered, future own-task changes
-use the new path. Do not bulk resume paused chats or rewrite their histories.
-
-The intended result is fewer controls for agents to orchestrate, not fewer facts
-the system verifies: accept authorized work, wait safely, repair routinely and
-continue without asking someone to connect the pieces.
+- 2026-11-07: proposed own-task settings continuation; separated observable
+  promises from diagnosis, implementation choices and planned qualification.
+  Earlier draft clauses map as follows: 1 → **Waiting preserves the objective**;
+  2 → **Yield settles the actual execution**; 3 → **A settled result continues
+  the same work** and **Current intent governs continuation**; 4 → **Recovery
+  belongs to the operation owner**. Clause 5, **Permission is not a timer**, moves
+  to the [separate device follow-up](../notes/autonomous-progress-20261107.md#separate-device-freshness-follow-up),
+  preserving deliberately time-limited grants and the shared owner's policy.

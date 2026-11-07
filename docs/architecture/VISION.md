@@ -90,10 +90,8 @@ approval ceremonies. The [standing authorization contract](../workspaces/configu
 defines this direction separately from demonstrated implementation.
 
 The [autonomous-progress proposal](../workspaces/contracts/autonomous-progress.v1-candidate.md)
-applies this principle to settings, recovery and continuation. It proposes that
-machine-owned waits preserve authorized task intent and resume through their
-existing owners, without routine manager or human nudges. It remains a design
-for review, not a claim that the current runtime implements those guarantees.
+applies this principle first to own-task settings waits and continuation. It is a
+draft, not implemented behavior; diagnosis and delivery live in its linked design note.
 
 ### 11. Available resources govern throughput
 Ordinary work has no default turn, member, queued-work or retained-resource count
