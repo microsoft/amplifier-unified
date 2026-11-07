@@ -780,7 +780,7 @@ class Worker:
                 return result
             phase = "model"
             retry = {}
-            detail = "Waiting for the configured model to respond."
+            detail = "Thinking..."
             if event == "context:compaction_started":
                 phase, detail = "compacting", "Making room in the conversation. This can take a few minutes. You can keep sending updates."
                 if data.get("recovery"):
@@ -1119,6 +1119,8 @@ class Worker:
                 checkpoint = self.session.coordinator.get_capability("live.checkpoint")
                 if checkpoint:
                     await checkpoint(self.root_generation_outcome or "completed")
+                    from amplifier_web.handoff_boundary import checkpoint_configuration
+                    checkpoint_configuration(self)
                 self.parked_history_stamp = self.history_stamp()
                 from amplifier_web.shared_state import configuration_stamp
                 self.parked_config_stamp = configuration_stamp(
@@ -1649,7 +1651,9 @@ class Worker:
                 if not data.get('cancel'):
                     await finish(self, data.get('receipt'))
                 result = await inspect(self, data['request_id'], data.get('cancel', False),
-                    update=data.get('update') is True, expected=(data.get('receipt') or {}).get('updateWait'))
+                    update=data.get('update') is True, configuration=data.get('configuration') is True,
+                    expected=(data.get('receipt') or {}).get(
+                        'configurationWait' if data.get('configuration') else 'updateWait'))
             elif op == "desktop.readiness":
                 if not self.controls:
                     result = {"status": "unavailable", "reason": "Conversation tools are not mounted."}

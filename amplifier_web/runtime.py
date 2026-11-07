@@ -1482,8 +1482,22 @@ class RuntimeManager:
             requested=session.get('pendingModelSelection')
             guarded = {'guard': guard} if guard else {}
             await self.start({**session,**({'selection':requested,'replaceSavedSelection':True} if requested else {})}, emit, **guarded)
+            if session.get('modelConnectionKey') and (requested or session.get('selection')):
+                try:
+                    await self.control(session['id'],'provider.verifyConnection',{
+                        'instance':(requested or session['selection'])['instance'],
+                        'expectedConnectionKey':session['modelConnectionKey']
+                    }, **guarded)
+                except (SessionInUseError, RuntimeStartupError, RuntimeHostClosingError):
+                    raise
+                except Exception as exc:
+                    raise RuntimeStartupError(
+                        'Could not verify the saved connection. No input was sent. '
+                        'Review its account and endpoint, reconnect if needed, and save the model again.') from exc
             if requested:
-                await self.control(session['id'],'provider.select',requested, **guarded)
+                await self.control(session['id'],'provider.select',{
+                    **requested, **({'expectedConnectionKey':session['modelConnectionKey']} if session.get('modelConnectionKey') else {})
+                }, **guarded)
             if configuration_guard:
                 guard()
                 await emit('runtime.nextMessageApplied', {'sessionId': session['id'],
@@ -1549,10 +1563,10 @@ class RuntimeManager:
                 current.args = (f'Takeover did not complete ({result.status}). {result.message} {current}',)
                 raise current from None
 
-    async def handoff_boundary(self, session_id, request_id, *, cancel=False, receipt=None, update=False):
+    async def handoff_boundary(self, session_id, request_id, *, cancel=False, receipt=None, update=False, configuration=False):
         """Inspect only this existing worker; never warm or acquire a writer."""
         row = self.workers.get(session_id)
-        expected = (receipt or {}).get('updateWait')
+        expected = (receipt or {}).get('configurationWait') if configuration else (receipt or {}).get('updateWait')
         def guard():
             current = self.workers.get(session_id)
             if expected and (not current or current.get('runtimeOwnerId') != expected['owner']):
@@ -1563,7 +1577,8 @@ class RuntimeManager:
         if row['process'].returncode is not None:
             raise RuntimeError('The old worker exited before confirming its saved boundary.')
         return await self._request(session_id, 'handoff.boundary', request_id=request_id, cancel=cancel,
-            receipt=receipt, **({'guard': guard} if expected else {}), **({'update': True} if update else {}))
+            receipt=receipt, **({'guard': guard} if expected else {}), **({'update': True} if update else {}),
+            **({'configuration': True} if configuration else {}))
 
     @contextmanager
     def stopped_boundary(self, session):

@@ -154,6 +154,7 @@ class Collector:
             data = json.loads(path.read_text())
             bindings.setdefault((data['git_url'], data['commit']), set()).add(data['ref'])
         inspected, packages, constraints, manifests = {}, {}, {}, {}
+        constraint_origins = {}
         for name, source in sorted(batch.names.items()):
             name, source = package_name(name), Path(source)
             package = {'status': 'unresolved'}
@@ -204,6 +205,12 @@ class Collector:
                 if dependency in sibling_dev:
                     continue  # --no-sources does not activate this selected sibling's dev edge.
                 constraints.setdefault(dependency, []).extend(declarations)
+                constraint_origins.setdefault(dependency, []).append({
+                    'package': name, 'url': data['git_url'], 'revision': data['commit'],
+                    'subdirectory': '' if source == root else source.relative_to(root).as_posix(),
+                    'manifestSha256': hashlib.sha256(content).hexdigest(),
+                    'declarations': declarations,
+                })
             if any((path / 'uv.toml').exists() or (path / 'uv.toml').is_symlink() for path in (root, source)):
                 package['status'] = 'separate-resolver-config'
                 continue
@@ -232,17 +239,22 @@ class Collector:
                 continue
             manifests[name] = content
         for name, package in packages.items():
-            if package.get('status') != 'selected' or name not in constraints:
+            if package.get('status') not in {'selected', 'explicit-pin'} or name not in constraints:
                 continue
             # Check each authored choice against the independently selected
             # identity. rev=main and branch=main can each agree with it without
             # declaring every rev a branch or discarding a conflicting tag.
-            if any(not constraint or constraint.get('refKind') == 'tag'
-                   or any(constraint.get(field, '') != package[field]
-                          for field in ('url', 'ref', 'subdirectory'))
-                   for constraint in constraints[name]):
+            if any(not compatible_constraint(constraint, package) for constraint in constraints[name]):
                 package.clear()
                 package['status'] = 'authored-constraint'
+            elif any(exact_constraint_pin(constraint) for constraint in constraints[name]):
+                # An independently selected branch can satisfy an authored pin
+                # at this exact commit, but that is never moving-ref authority.
+                # The existing explicit-pin gate requires the checked revision
+                # to match even before alignment; migration/root rewrites remain
+                # protected. Do not replace the selected ref or remove the pin.
+                package['status'] = 'explicit-pin'
+            package['authoredConstraints'] = constraint_origins[name]
         from .selected_runtime_dependencies import selected
         dependencies = selected({name: content for name, content in manifests.items()
                                  if packages[name].get('status') == 'selected'})
@@ -251,8 +263,27 @@ class Collector:
         return {'version': VERSION, 'configuration': configuration(config), 'packages': packages,
                 # Private preparation evidence, never copied into update diagnostics.
                 'batchPaths': {name: str(path) for name, path in batch.names.items()},
-                'protectedPaths': sorted(str(path) for path in self.local_sources | self.local_manifests)}
+                'protectedPaths': sorted(str(path) for path in self.local_sources | self.local_manifests),
+                'observedReferences': [list(row) for row in sorted(self.references)],
+                'localSources': sorted(map(str, self.local_sources)),
+                'localManifests': sorted(map(str, self.local_manifests))}
 
+
+def exact_constraint_pin(constraint):
+    return bool(constraint and constraint.get('refKind') == 'rev'
+                and isinstance(constraint.get('ref'), str)
+                and re.fullmatch('[a-f0-9]{40}', constraint['ref']))
+
+
+def compatible_constraint(constraint, package):
+    """Restrictions cannot select a package or turn a pin into branch policy."""
+    if (not constraint or constraint.get('refKind') not in {'branch', 'rev'}
+            or any(constraint.get(field, '') != package.get(field)
+                   for field in ('url', 'subdirectory'))):
+        return False
+    if exact_constraint_pin(constraint):
+        return constraint['ref'] == package.get('revision')
+    return constraint.get('ref') == package.get('ref')
 
 
 def selected_sibling_dev_sources(content, source, root, selected):
@@ -539,3 +570,58 @@ async def reconcile(manager, stage, project, collect):
               'offeredPackages': sorted(first.get('packages', {})),
               'migrated': {name: checked[name] for name in selected}}
     write_private(stage / RECEIPT, json.dumps(result, indent=2) + '\n')
+    # Only this invocation may reuse its collection. A migration changes checked
+    # policy, bindings and/or resolver input and always needs fresh composition.
+    return {'selection': first, 'generation': old_generation} if not selected else None
+
+
+def policy_inputs(stage, project):
+    """Small explicit control inputs; no persistent cache or arbitrary settings."""
+    paths = [Path(stage) / name for name in (
+        'runtime-sources.json', 'runtime-install-overrides.txt', 'profiles.json')]
+    paths += [Path(project) / name for name in ('pyproject.toml', 'uv.lock', 'uv.toml')]
+    # Include declarations/bindings consumed by composition, not credential files
+    # or every cached payload. Local/custom inputs cannot use this shortcut.
+    for folder in ('config', 'shared-config', 'foundation/registry.json', 'foundation/cache/.source-bindings'):
+        path = Path(stage) / folder
+        paths.extend([path] if path.is_file() else sorted(
+            p for p in path.rglob('*') if p.is_file() and p.suffix in {'.json', '.yaml', '.yml', '.toml'}))
+    return ([(str(path), hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None)
+             for path in paths] +
+            [(key, hashlib.sha256(os.environ.get(key, '').encode()).hexdigest()) for key in
+             ('UV_CONFIG_FILE', 'UV_OVERRIDE', 'UV_CONSTRAINT', 'UV_BUILD_CONSTRAINT', 'AMPLIFIER_SOURCE_STORE')])
+
+
+async def reuse_collection(manager, stage, project, observed, inputs):
+    """Re-observe identities without launching a second composition process.
+
+    Changed controls/config/source/bindings return no reuse. The normal fresh
+    collection, alignment, exact guard, installer and profile probes still run.
+    """
+    from types import SimpleNamespace
+    from .host.config import read_config
+    from .updates import active_release
+    selection = (observed or {}).get('selection')
+    if not selection or 'observedReferences' not in selection:
+        return None
+    if selection.get('localSources') or selection.get('localManifests'):
+        return None
+    generation = active_release(manager.home).get('current')
+    if generation != observed['generation'] or policy_inputs(stage, project) != inputs:
+        return None
+    config = read_config(Path(stage) / 'qualification-workspace', home=stage,
+                         shared_home=Path(stage) / 'shared-config', global_only=True)
+    if configuration(config) != selection.get('configuration'):
+        return None
+    collector = Collector()
+    collector.references = {tuple(row) for row in selection['observedReferences']}
+    collector.local_sources = {Path(path) for path in selection['localSources']}
+    collector.local_manifests = {Path(path) for path in selection['localManifests']}
+    try:
+        current = await collector.report(SimpleNamespace(names=selection['batchPaths']), config)
+    except (OSError, ValueError, KeyError):
+        return None
+    if (current != selection or policy_inputs(stage, project) != inputs
+            or active_release(manager.home).get('current') != generation):
+        return None
+    return current
