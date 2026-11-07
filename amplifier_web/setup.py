@@ -276,7 +276,7 @@ class SetupManager:
                 'authenticationRequired':needs_auth,'account':account,'accountConnected':connected,'credentialsConfigured':configured,'keySource':'environment' if (not refs and credential['available']) or any(isinstance(v,str) and v.startswith('${') for v in refs) else ('configuration' if refs else 'provider-managed'), 'enabled':value.get('enabled',True) and identity not in config.settings.get('configurator',{}).get('disabled',{}).get('providers',[])})
         return rows
 
-    async def discover_catalog(self, workspace, *, refresh=False, instance=None):
+    async def discover_catalog(self, workspace, *, refresh=False, instance=None, selected_only=False):
         """Configured connections only; all consumers share the host cache.
 
         A session's mounted/default/saved selection is not an inventory source.
@@ -286,7 +286,7 @@ class SetupManager:
         from .provider_catalog import model_key
         with self.read_snapshot(workspace):
             rows = [row for row in self.provider_rows(workspace) if row['enabled']
-                    and (instance is None or row['id'] == instance)]
+                    and (not selected_only or row['id'] == instance)]
             for row in rows:
                 row['sharedCatalogKey'] = self.catalog_key({'id': row['id']}, workspace)
                 row['connectionKey'] = self.catalog_key({'id': row['id']}, workspace, binding=True)
@@ -321,7 +321,7 @@ class SetupManager:
         with self.read_snapshot(workspace):
             current = {row['id']: self.catalog_key({'id': row['id']}, workspace)
                        for row in self.provider_rows(workspace) if row['enabled']
-                       and (instance is None or row['id'] == instance)}
+                       and (not selected_only or row['id'] == instance)}
         if current != {row['id']: row['sharedCatalogKey'] for row in rows}:
             raise ValueError('Configured connections changed during discovery. Reopen model settings.')
         for row in rows:

@@ -134,6 +134,21 @@ async def test_safe_host_setup_failure_preserves_remedy(tmp_path,monkeypatch,sta
     assert 'Refresh this connection to retry' not in message
 
 
+async def test_targeted_picker_refresh_keeps_other_connections_visible(tmp_path,monkeypatch):
+    home,path,row=configure(tmp_path,monkeypatch,count=3)
+    manager=SetupManager(home);calls=[]
+    async def probe(self,action,args,workspace):
+        calls.append(args['id'])
+        return {'models':[{'id':args['id']+'-model'}],'modelsSupported':True}
+    monkeypatch.setattr(SetupManager,'probe',probe)
+    before=await manager.discover_catalog(tmp_path)
+    calls.clear()
+    refreshed=await manager.discover_catalog(tmp_path,refresh=True,instance='one')
+    assert [row['id'] for row in refreshed['providers']]==[row['id'] for row in before['providers']]
+    assert calls==['one']
+    assert set(refreshed['catalogs'])==set(before['catalogs'])
+
+
 @pytest.mark.parametrize('source',['configured','static','simulated'])
 async def test_local_catalog_test_returns_not_verifiable_without_listing(monkeypatch,source):
     from amplifier_web import provider_probe
