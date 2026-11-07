@@ -18,7 +18,7 @@ INLINE_KINDS = frozenset({'markdown', 'text', 'code', 'json', 'jsonl', 'image', 
 CAPABILITIES = ['canvas.resource.read', 'canvas.view.update', 'canvas.view.report']
 LABELS = {'markdown': 'Markdown', 'text': 'Plain text', 'code': 'Code', 'json': 'JSON', 'jsonl': 'JSON lines',
           'image': 'Image', 'gif': 'Retained GIF', 'pdf': 'PDF', 'html': 'HTML', 'babylon': '3D scene', 'mermaid': 'Mermaid', 'dot': 'Graphviz',
-          'a2ui': 'Interactive controls', 'browser': 'Website', 'mcp-app': 'Tool app', 'canvas-app': 'Interactive surface', 'settings': 'Settings'}
+          'a2ui': 'Interactive controls', 'browser': 'Website', 'mcp-app': 'Tool app', 'canvas-app': 'Interactive surface', 'settings': 'Settings', 'context-inspector': 'Context inspector'}
 BUILTINS = {'builtin.canvas.' + kind: {'id': 'builtin.canvas.' + kind, 'label': label,
     'version': '1.0.0', 'apiVersion': '1.0', 'profile': PROFILE, 'stateSchema': 'canvas-view-v1',
     'capabilities': CAPABILITIES, 'resourceKinds': [kind]} for kind, label in LABELS.items()}
@@ -124,7 +124,7 @@ class CanvasViews:
         required to move a mounted scriptable preview, never an agent assertion.
         This does not clear a renderer's dirty flag or touch another artifact.
         """
-        from .service import AppError
+        from .errors import AppError
         client = self.service.clients.record()
         if client is None:
             if destination == 'inline':
@@ -181,7 +181,7 @@ class CanvasViews:
         external work change. View-specific replacements retain their existing
         deferred receipts; explicit recovery is the deliberate discard route.
         """
-        from .service import AppError
+        from .errors import AppError
 
         def check(client, view_ids):
             if not client:
@@ -365,7 +365,7 @@ class CanvasViews:
                 **{key: copy.deepcopy(preference[key]) for key in ('document', 'interaction', 'events') if key in preference}}
 
     def project(self):
-        from .service import AppError
+        from .errors import AppError
         views = []
         try:
             identities = ['primary', *self.record().get('inline', {})]
@@ -459,7 +459,7 @@ class CanvasViews:
         if action == 'canvas.views.loadVersion':
             from .canvas_versions import definition, ordinary_preview
             from .canvas_library import load, scope
-            from .service import AppError
+            from .errors import AppError
             if args['viewId'] != 'primary' or not ordinary_preview(row) or not scope(self.service.state, row):
                 fail('Load a saved version from the primary HTML or 3D preview.', 409)
             if preference['dirty']:
