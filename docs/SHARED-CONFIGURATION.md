@@ -107,7 +107,8 @@ preserving that provider's effective configured `model_filters` or defaults.
 For adapters declaring `unfiltered: {}` and `override: "replace"`, explicit saved
 `model_filters: {}` requests the full inventory; a custom mapping replaces
 defaults, not merges with them. OpenAI's declared default is
-`include: ["gpt-6*"]`, `exclude: []`, `hide_dated: true`.
+`include: ["gpt-6*"]`, `exclude: []`, `hide_dated: true`,
+`hide_shutdown: true`; explicit `{}` disables both optional exclusions.
 Other providers' policies remain their owners' decisions. Optional v1 metadata
 advertises `filters_keyword`, `filters_schema`, `default_filters`, `unfiltered`
 and `override`; selectors are passed only when advertised. Unified does not copy
@@ -130,6 +131,12 @@ binds reviewed provider revisions and module hashes, including required SDK vers
 Its offline checks exercise real installed providers through Unified's probe/cache
 with synthetic HTTP or SDK responses. This is candidate integration evidence, not
 an upstream merge, runtime-lock adoption, live entitlement or inference qualification.
+The separate `tests/fixtures/model_catalog_accepted.json` binds merged primary
+provider, Foundation and routing revisions. Set `UNIFIED_CATALOG_ACCEPTED=1`
+alongside the existing opt-in to use it. Unmerged community repair candidates are
+excluded from that graph; their older evidence remains separate. The host lock
+records accepted revisions while runtime source declarations retain their existing
+main-following policy. Neither manifest is evidence of live account access.
 
 The host's existing private `ProviderCatalog` owns single-flight discovery and
 restart reuse. Explicit Refresh reloads the selected connection once. Reopen,

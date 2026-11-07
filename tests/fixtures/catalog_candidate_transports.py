@@ -49,7 +49,9 @@ MODEL_IDS = {
                        "auto", "future-unrecognized-family"],
 }
 OPENAI_DEFAULT_IDS = ["gpt-6", "gpt-6-mini"]
-CANDIDATES = json.loads(Path(__file__).with_name("canonical_model_catalog_candidate.json").read_text())
+CANDIDATES = json.loads(Path(__file__).with_name(
+    "model_catalog_accepted.json" if os.environ.get("UNIFIED_CATALOG_ACCEPTED") == "1"
+    else "canonical_model_catalog_candidate.json").read_text())
 CANONICAL_PROVIDERS = tuple(CANDIDATES["providers"])
 LOCAL_PROVIDERS = tuple(CANDIDATES.get("localProviders", {}))
 DEFAULT_IDS = {"openai": OPENAI_DEFAULT_IDS,
@@ -266,7 +268,7 @@ def class_evidence(provider):
     package_root = Path(importlib.import_module(package).__file__).resolve().parent
     candidate = {**CANDIDATES["providers"], **CANDIDATES.get("localProviders", {})}[provider]
     sdk = candidate.get("sdk")
-    if sdk and importlib.metadata.version(sdk["distribution"]) != sdk["qualificationVersion"]:
+    if sdk and sdk.get("qualificationVersion") and importlib.metadata.version(sdk["distribution"]) != sdk["qualificationVersion"]:
         raise AssertionError("Candidate SDK differs from the qualification manifest")
     if candidate["module"] != package or not path.is_relative_to(package_root):
         raise AssertionError("Candidate class is not defined in its installed package")

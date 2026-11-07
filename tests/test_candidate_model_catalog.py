@@ -3,6 +3,7 @@
 The managed runner must install the exact reviewed candidate dependency graph.
 Run explicitly: UNIFIED_CATALOG_CANDIDATES=1 python -m pytest -s \
     tests/test_candidate_model_catalog.py
+Add UNIFIED_CATALOG_ACCEPTED=1 to select the separately retained merged graph.
 
 This file never installs packages or calls a live service. It exercises the
 actual SetupManager subprocess protocol and disk-backed host catalog. Captured
@@ -398,6 +399,8 @@ async def test_legacy_filtered_selection_changes_catalog_not_pinned_account(
 async def test_actual_local_origin_catalog_is_visible_without_api_verification(
     provider, config, expected, all_ids, tmp_path, monkeypatch, candidate_environment, record_property,
 ):
+    if provider not in transport.LOCAL_PROVIDERS:
+        pytest.skip("Provider is not part of the explicitly selected immutable graph")
     from amplifier_web.provider_health import generation, record, issue
     monkeypatch.setenv("UNIFIED_CATALOG_PROVIDER", provider)
     # LiteLLM's published opt-out keeps its bundled pricing data offline too;
