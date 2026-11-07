@@ -81,7 +81,7 @@ async def worker(root):
 
 async def run(root, mismatch=False):
     import yaml
-    from catalog_candidate_transports import SYNTHETIC_KEY, MODEL_IDS, OPENAI_DEFAULT_IDS
+    from catalog_candidate_transports import CANDIDATES, SYNTHETIC_KEY, MODEL_IDS, OPENAI_DEFAULT_IDS
     root.mkdir(parents=True,exist_ok=False)
     home, workspace, shared=(root/name for name in ('app','workspace','shared'))
     workspace.mkdir();shared.mkdir()
@@ -100,7 +100,7 @@ async def run(root, mismatch=False):
     from amplifier_web.service import AppService
     paths={name:str(Path(importlib.import_module('amplifier_module_'+name.replace('-','_')).__file__).parent)
            for name in ('loop-live','context-simple','provider-openai')}
-    candidate=json.loads((SOURCE/'tests/fixtures/canonical_model_catalog_candidate.json').read_text())['providers']['openai']
+    candidate=CANDIDATES['providers']['openai']
     package=Path(paths['provider-openai'])
     for name,sha in candidate['files'].items():
         assert digest(package/name)==sha,(name,'candidate source mismatch')
