@@ -40,7 +40,7 @@ async def main(home):
     async def capture(scenario='normal'):
         config(home, recording=scenario != 'partial')
         value = ChatRequest(model='fixture', max_output_tokens=200, messages=[
-            Message(role='system', content='Respond with attributable evidence.\n<context_file paths="AGENTS.md → /synthetic/AGENTS.md">Keep original documents.\n'+('Check the captured request, not current disk.\n'*80)+'</context_file>'),
+            Message(role='system', content='Respond with attributable evidence.\n<context_file paths="@work:context/AGENTS.md → /synthetic/source-store/objects/'+('a'*64)+'/'+('b'*64)+'/context/AGENTS.md">Keep original documents.\n'+('Check the captured request, not current disk.\n'*80)+'</context_file>'),
             Message(role='user', content='Compare the rollout alternatives and retain the supporting evidence.\n' * 140),
             Message(role='assistant', content='Research observations.\n' * 400),
             Message(role='user', content='Continuation note: preserve the accepted scope.\n'*30, metadata={'source':'context-managed','ephemeral':True}),
@@ -50,13 +50,22 @@ async def main(home):
         ], tools=[ToolSpec(name='read_file', description='Read a selected permitted file.', parameters={'type':'object','properties':{'path':{'type':'string'}}})])
         if scenario == 'unicode':
             value.messages[1].content = '😀' * 10000
-        if scenario != 'partial':
+        if scenario.startswith('long-list'):
+            value.messages[0].content = '\n'.join(
+                f'<context_file paths="@fixture:source-{i:02}.md → /synthetic/source-store/{"a"*64}/source-{i:02}.md">'
+                + (('Long reader line with captured evidence.\n' * 500) if i == 1 else f'Short captured source {i:02}.\nEnd of source.')
+                + '</context_file>' for i in range(60)
+            )
+        if scenario not in ('partial', 'long-list-unknown'):
             await provider.request_budget(value)
         await provider.complete(value)
         await observer.drain()
         if scenario == 'known-window-no-usage':
             latest = observer.store.index()[0]
             observer.store.finish(latest['callId'], 'completed', {})
+        if scenario == 'over-window':
+            latest = observer.store.index()[0]
+            observer.store.finish(latest['callId'], 'completed', {'inputTokens': 9000})
     await capture()
     service._publish()
     async def scenario(request):
