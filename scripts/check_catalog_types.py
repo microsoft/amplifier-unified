@@ -52,11 +52,14 @@ def main():
             if Path(item["file"]).resolve() == source.resolve()
         }
         if (
-            actual != expected
+            checked.returncode != int(invalid)
+            or actual != expected
             or any(Path(item["file"]).resolve() != source.resolve() for item in errors)
             or bool(errors) != invalid
         ):
             print(checked.stdout)
+            if checked.stderr:
+                print(checked.stderr, file=sys.stderr)
             return 1
         print(f"{name}: {len(errors)} expected errors; no unexpected errors")
     return 0
