@@ -17,9 +17,9 @@ export async function openSettingsDialog(page,{activate=click}={}){
   if(await settings.isVisible()){await activate('Open Settings from navigation footer',settings);return;}
   await activate('Open App options',options,{timeout:1500});
  }catch(error){
-  // Connection discovery may open onboarding between the initial check and
-  // the navigation click. Use that real Settings surface when it arrives.
-  if(await page.locator('.a-settings-experience').isVisible())return;
+  // Ordinary fixture clicks may race onboarding. Instrumented callers own
+  // their gesture/assertion failures even when that Settings surface arrives.
+  if(activate===click&&await page.locator('.a-settings-experience').isVisible())return;
   throw error;
  }
  await activate('Open Settings from App options',settingsButton(page.getByRole('group',{name:'App options',exact:true})));
