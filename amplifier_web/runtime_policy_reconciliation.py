@@ -283,7 +283,6 @@ def compatible_constraint(constraint, package):
     return constraint.get('ref') == package.get('ref')
 
 
-
 def selected_sibling_dev_sources(content, source, root, selected):
     """Ignore only a proven selected sibling's local, dev-only uv source.
 

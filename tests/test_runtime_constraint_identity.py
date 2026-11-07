@@ -252,7 +252,7 @@ async def test_exact_pin_does_not_excuse_other_authored_constraints(selected, ca
     if case == 'fork': declaration = NAME + ' @ git+' + URL + '-fork@' + s.old
     elif case == 'subdirectory': declaration += '#subdirectory=different'
     elif case == 'abbreviated': declaration = NAME + ' @ git+' + URL + '@' + s.old[:12]
-    elif case == 'conditional': declaration += "; python_version >= '3.13'"
+    elif case == 'conditional': declaration += " ; python_version >= '3.13'"
     elif case == 'extra': declaration = NAME + '[feature] @ git+' + target
     elif case == 'unknown-fragment': declaration += '#unknown=value'
     elif case in {'tag', 'branch-sha'}:
@@ -296,3 +296,25 @@ async def test_exact_pin_and_compatible_branch_keep_both_authored_origins(select
         NAME: {'url': URL, 'ref': 'main', 'subdirectory': '', 'revision': s.old}})
     assert report['packages'][NAME]['status'] == 'explicit-pin'
     assert report['packages'][NAME]['authoredConstraints'] == origins
+
+
+@pytest.mark.parametrize('change', ['missing', 'repository', 'ref', 'subdirectory'])
+async def test_compatible_authored_pin_still_requires_exact_checked_identity(selected, change):
+    s = selected
+    dependent_constraint(s, NAME + ' @ git+' + URL + '@' + s.old)
+    checked = {NAME: {'url': URL, 'ref': 'main', 'subdirectory': '', 'revision': s.old}}
+    if change == 'missing':
+        checked.clear()
+    elif change == 'repository':
+        checked[NAME]['url'] += '-fork'
+    else:
+        checked[NAME][change] = 'different'
+    pointer = s.home / 'updates/active.json'
+    failure = s.home / 'updates/prior-failure.json'
+    pointer.write_text('{"current":"serving","previous":"rollback"}')
+    failure.write_text('{"status":"failed","attemptId":"retained"}')
+    before = (s.marker.read_bytes(), pointer.read_bytes(), failure.read_bytes())
+    with pytest.raises(ValueError):
+        await alignment.checked_batch_sources(s.batch, s.collector, s.config, checked)
+    assert before == (s.marker.read_bytes(), pointer.read_bytes(), failure.read_bytes())
+    assert not any(any(verb in cmd for verb in ('fetch', 'checkout', 'reset', 'clean', 'install')) for cmd in s.commands)
