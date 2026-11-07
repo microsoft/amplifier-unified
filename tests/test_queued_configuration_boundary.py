@@ -12,6 +12,7 @@ import copy
 import json
 import time
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -260,13 +261,14 @@ async def test_real_worker_process_refusal_reconciles_and_explicit_resume_mounts
     await b.runtime._request(b.owner["id"], "fixture.busy", count=1)
     assert (await process_apply(b))["phase"] == "error"
     saved = operation(b)
-    assert saved["state"]["effect"] == "unknown"
+    assert saved["state"]["effect"] == "none"
+    assert saved["state"]["stage"] == "reconciled"
+    assert not b.owner["configurationBusy"]
     attempt = saved["attempts"][-1]
     assert attempt["nativeSessionId"] == "synthetic-native-owner"
     assert attempt["workerPid"] == b.runtime.workers[b.owner["id"]]["process"].pid
     assert evidence(attempt)["effect"] == "none"
     assert not override_path("synthetic-native-owner").exists()
-    await recovery(b, "reconcile")
     await b.runtime._request(b.owner["id"], "fixture.busy", count=0)
     await recovery(b, "resume")
     await asyncio.wait_for(b.app.management.pending_config_tasks[b.owner["id"]], 12)
@@ -320,11 +322,27 @@ async def test_real_process_lost_ack_keeps_saved_distinct_from_mounted(process_b
     assert read["nativeEffect"] == "saved_not_mounted" and read["state"]["effect"] == "unknown"
     await recovery(b, "reconcile")
     assert operation(b)["state"]["effect"] == "saved_not_mounted"
-    with pytest.raises(AppError, match="no-effect"):
-        await recovery(b, "resume")
+    await recovery(b, "resume")
+    task = b.app.management.pending_config_tasks.get(b.owner["id"])
+    if task is not None:
+        await asyncio.wait_for(task, 3)
+    # The old worker still has the previous plan. Continuation observes it,
+    # never retires it, repeats the saved mutation or blesses its stale mount.
+    assert "does not match loaded-plan" in operation(b)["state"]["error"]
     assert b.owner["configurationBusy"]
     assert receipt_path(saved["attempts"][-1]).read_bytes() == receipt
     assert json.loads(override_path("synthetic-native-owner").read_text()) == plan(2)
+    # Once that worker is absent, an explicit continuation mounts the same save.
+    await b.runtime.stop(b.owner["id"], reason="configuration")
+    current = operation(b)
+    await b.app.dispatch("configuration.operation.resume", {"sessionId": b.owner["id"],
+        "operationId": saved["id"], "expectedRevision": current["revision"]})
+    task = b.app.management.pending_config_tasks.get(b.owner["id"])
+    if task is not None:
+        await asyncio.wait_for(task, 12)
+    assert operation(b)["state"]["effect"] == "mounted"
+    assert operation(b)["attempts"] == saved["attempts"]
+    assert receipt_path(saved["attempts"][-1]).read_bytes() == receipt
 
 
 async def test_unsealed_success_ack_is_not_configuration_save_proof(boundary):
@@ -381,7 +399,11 @@ async def test_native_admission_wait_rechecks_original_authority(boundary, inval
     assert not override_path(boundary.owner["id"]).exists()
     with pytest.raises(AppError):
         await recovery(boundary, "reconcile")
-    assert boundary.owner["configurationBusy"]  # Revocation doesn't authorize recovery.
+    with pytest.raises(AppError):
+        await recovery(boundary, "resume")
+    # Observing a terminal refusal releases input; it doesn't renew authority.
+    assert operation(boundary)["state"]["effect"] == "none"
+    assert not boundary.owner["configurationBusy"]
 
 
 def use_native_receipts(boundary):
@@ -415,12 +437,23 @@ async def recovery(boundary, verb, *, revision=None, identity=None, actor=None, 
         _runtimeSessionId=(actor or boundary.owner).get("runtimeSessionId", (actor or boundary.owner)["id"]))
 
 
+def deferred_native_evidence():
+    """Model a receipt unavailable to the host until after failure handling.
+
+    These cases exercise explicit recovery of retained unknown outcomes. The
+    native writer and its authenticated receipt remain real; immediate terminal
+    refusals now settle automatically and have separate process regressions.
+    """
+    return patch("amplifier_web.configuration_recovery.evidence", return_value=None)
+
+
 async def native_refusal(boundary):
     use_native_receipts(boundary)
-    await queue(boundary)
-    boundary.runtime.native.queued_inputs = 1
-    await reach_apply(boundary)
-    await settle(boundary)
+    with deferred_native_evidence():
+        await queue(boundary)
+        boundary.runtime.native.queued_inputs = 1
+        await reach_apply(boundary)
+        await settle(boundary)
     assert operation(boundary)["state"]["effect"] == "unknown"
     assert not override_path(boundary.owner["id"]).exists()
     return operation(boundary)
@@ -1092,9 +1125,10 @@ async def test_new_request_cannot_replace_pending_or_unknown_original(boundary):
             command_id="replacement")
     assert operation(boundary) == before
     assert boundary.app.management.queued_path(boundary.owner["id"]).read_bytes() == boundary.payload
-    await reach_apply(boundary)
-    boundary.runtime.native.queued_inputs = 1
-    await settle(boundary)
+    with deferred_native_evidence():
+        await reach_apply(boundary)
+        boundary.runtime.native.queued_inputs = 1
+        await settle(boundary)
     failed = operation(boundary)
     assert failed["state"]["effect"] == "unknown"  # Native error text is not a no-effect receipt.
     with pytest.raises(ValueError, match="unresolved"):
@@ -1350,7 +1384,8 @@ async def test_wrong_saved_ack_cannot_replace_the_immutable_request(boundary, lo
     assert record["state"]["phase"] == "error"
     assert record["state"]["effect"] == "saved_not_mounted"
     assert boundary.owner["configurationBusy"]
-    assert "acknowledgement does not match" in record["state"]["error"]
+    assert ("acknowledgement does not match" if loaded_limit == 2 else
+            "does not match loaded-plan") in record["state"]["error"]
     assert boundary.app.management.queued_path(boundary.owner["id"]).read_bytes() == boundary.payload
     calls = list(boundary.runtime.calls)
     duplicate = await agent(boundary.app, boundary.owner, "configuration.apply",
@@ -1518,12 +1553,13 @@ async def http_recovery(boundary, verb, *, identity=None, revision=None):
 
 
 async def terminal_refusal(boundary):
-    await queue(boundary)
-    # The original turn really is over before deferred application begins.
-    boundary.owner["collaborationGeneration"]["terminal"] = True
-    boundary.runtime.native.queued_inputs = 1
-    await reach_apply(boundary)
-    await settle(boundary)
+    with deferred_native_evidence():
+        await queue(boundary)
+        # The original turn really is over before deferred application begins.
+        boundary.owner["collaborationGeneration"]["terminal"] = True
+        boundary.runtime.native.queued_inputs = 1
+        await reach_apply(boundary)
+        await settle(boundary)
     saved = operation(boundary)
     assert saved["state"]["effect"] == "unknown"
     assert boundary.owner["configurationBusy"]
@@ -1737,6 +1773,13 @@ async def test_settled_cancelled_dispatch_reconciles_late_native_evidence_withou
                 await asyncio.wait_for(task, 3)
             assert operation(b)["state"]["effect"] == "mounted"
             assert len(operation(b)["attempts"]) == 2
+        elif outcome == "saved_not_mounted":
+            assert (await http_recovery(b, "resume", identity="after-proof-resume")).status == 200
+            task = b.app.management.pending_config_tasks.get(b.owner["id"])
+            if task is not None:
+                await asyncio.wait_for(task, 3)
+            assert len(operation(b)["attempts"]) == 1
+            assert b.runtime.calls.count("configuration.apply") == calls.count("configuration.apply")
         else:
             assert (await http_recovery(b, "resume", identity="after-proof-resume")).status == 409
             assert b.owner["configurationBusy"] and len(operation(b)["attempts"]) == 1

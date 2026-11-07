@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-unified"
-version = "0.57.0"
+version = "0.58.1"
 description = "A local voice-first Amplifier workspace with a shared user and agent interface"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -84,7 +84,7 @@ dev = [
     # Qualified upstream recovery API; provider stays on the existing locked
     # source shared with the optional decisions extra.
     "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@12166f8effb5e26737bb5f9f7885cbb9bd4cdf43#subdirectory=modules/context-managed",
-    "amplifier-module-provider-openai @ git+https://github.com/microsoft/amplifier-module-provider-openai@main",
+    "amplifier-module-provider-openai[native] @ git+https://github.com/microsoft/amplifier-module-provider-openai@main",
     # Same real QuickJS dispatcher used by the maintained native-check workflow.
     "amplifier-module-tool-exec @ git+https://github.com/microsoft/amplifier-module-tool-exec@f267548ccd1b38a236a46afb96252bb6dd474dcd",
     # Ordinary-root switch fixtures retain the real local capture hook offline.

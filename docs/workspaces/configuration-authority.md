@@ -357,10 +357,36 @@ for evaluating peer messages. Configuration commits recheck the captured mode
 revision; turning the mode off fences delayed changes and grants derived from it.
 
 A failed configuration operation retains its original authority, including Full
-access. The agent can reconcile native evidence and explicitly resume proven
+access. If its exact authenticated terminal native receipt proves that rejection
+occurred before any write, the error path records that no-effect result and
+releases only that operation's input fence. The original error, request and
+history remain; no settings or conversation input are retried. Missing, invalid,
+nonterminal or partial evidence keeps the operation held. Redacted credentials
+remain bound to the module's source identity; a changed source requires a fresh
+inspection rather than copying hidden values from an older full plan.
+The agent can reconcile native evidence and explicitly resume proven
 no-effect work without another permission request. Recovery checks the original
 mode revision, Stop boundary, target and exact payload again; re-enabling Full
-access does not renew an older operation. Unknown or saved effects cannot resume.
+access does not renew an older operation. Unknown or partial effects cannot resume.
+A terminal sealed native save receipt and an unchanged saved plan allow explicit
+resume to finish that same operation's loaded readback. It observes the exact
+existing worker first; only an absent worker may mount the proven saved plan.
+This continuation never repeats the settings write or submits conversation input.
+A different loaded plan remains held. Readback may equate relocated module source
+declarations through qualified generations and matching recorded repository,
+revision, subdirectory and source-content digest. If an ecosystem update has
+already been adopted, an older saved declaration may also resolve to the worker's
+captured qualified generation for the same package, repository, mutable ref and
+subdirectory. The worker's derived profile must match the adopted parent's exact
+revision and content digest. A later global component promotion does not invalidate
+the existing worker's captured graph. This recognizes an existing update, never authorizes
+a new source choice or moves a fixed revision/tag. Module configuration, ordering
+and disabled rows remain exact. Retained effective
+configuration files are not loaded-worker evidence. Missing provenance fails closed.
+While recovery is held, `configuration.inspect` may observe the exact existing
+worker and publish its actual loaded plan, even when it differs from the saved
+request. This read never starts a worker, changes settings or settles the operation;
+Stop or replacement of the observed worker prevents stale publication.
 For UI, user or internal originals, a current Full agent, qualified child or
 trusted system can reconcile and resume through the same recovery owner. Ask
 cannot substitute a new grant for that operator-origin authority. Resume retains
