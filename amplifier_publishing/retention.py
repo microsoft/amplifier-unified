@@ -28,7 +28,16 @@ def capture(release, settings, now, *, previous=None):
     return {'id': release['id'], 'sessionId': release['sessionId'], 'siteId': release['siteId'], 'version': 1,
             'policy': settings, 'payloadGeneration': previous.get('payloadGeneration', 0) + 1,
             'materializedAt': now, 'revision': previous.get('revision', -1) + 1,
-            'pinned': False, 'availability': 'available'}
+            'pinned': False, 'availability': 'available', 'unusedSince': now}
+
+
+def projection(state, *, identity=False):
+    fields = {'version', 'policy', 'payloadGeneration', 'materializedAt', 'revision', 'pinned',
+              'availability', 'unusedSince', 'supersededAt', 'rollbackUntil', 'expiredAt',
+              'retirementPhase', 'retirementRequestId'}
+    if identity:
+        fields |= {'id', 'sessionId', 'siteId'}
+    return {key: value for key, value in state.items() if key in fields}
 
 
 def available(state):
@@ -38,14 +47,19 @@ def available(state):
 def valid_projection(state):
     """Validate the bounded release metadata carried by historical receipts."""
     required = {'version', 'policy', 'payloadGeneration', 'materializedAt', 'revision', 'pinned', 'availability'}
-    dates = {'materializedAt', 'supersededAt', 'rollbackUntil', 'expiredAt'}
-    if not isinstance(state, dict) or not required <= state.keys() or state.keys() - required - dates:
+    dates = {'materializedAt', 'unusedSince', 'supersededAt', 'rollbackUntil', 'expiredAt'}
+    optional = {'retirementPhase', 'retirementRequestId'}
+    if not isinstance(state, dict) or not required <= state.keys() or state.keys() - required - dates - optional:
         return False
     if type(state['version']) is not int or state['version'] != 1 or type(state['pinned']) is not bool:
         return False
     if any(type(state[key]) is not int or state[key] < minimum for key, minimum in [('revision', 0), ('payloadGeneration', 1)]):
         return False
-    if not isinstance(state['availability'], str) or state['availability'] not in {'available', 'expired', 'unknown'}:
+    if not isinstance(state['availability'], str) or state['availability'] not in {'available', 'expired', 'unknown', 'retiring'}:
+        return False
+    if 'retirementPhase' in state and (not isinstance(state['retirementPhase'], str) or state['retirementPhase'] not in {'prepared', 'detached', 'held', 'complete', 'admission-required'}):
+        return False
+    if 'retirementRequestId' in state and (not isinstance(state['retirementRequestId'], str) or not 1 <= len(state['retirementRequestId']) <= 200):
         return False
     if state['availability'] == 'expired' and 'expiredAt' not in state:
         return False
