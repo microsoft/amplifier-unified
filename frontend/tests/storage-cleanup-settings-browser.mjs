@@ -192,6 +192,31 @@ try{
  await expect(days).toHaveValue('0');await days.scrollIntoViewIfNeeded();
  assert.equal(await section.evaluate(element=>element.scrollWidth<=element.clientWidth),true);
  await page.screenshot({path:join(outputDir,'storage-cleanup-mobile.png'),animations:'disabled'});
+ const preset=section.getByRole('button',{name:'Use seven-day temporary test cleanup',exact:true});
+ await section.getByLabel('Automatically clean up unused copies',{exact:true}).uncheck();
+ await section.getByLabel('Keep temporary test workspaces for days',{exact:true}).fill('30');
+ await expect(preset).toBeDisabled();
+ await save.click();await expect(section.getByRole('status').filter({hasText:'saved for all workspaces'})).toBeVisible();
+ const customPolicy=(await observe()).policy;
+ assert.equal(customPolicy.enabled,false);assert.equal(customPolicy.workspaceArchiveKeepDays,30);
+ const presetAttempts=[];let losePreset=true;
+ await page.route('**/api/actions',async route=>{
+  const body=route.request().postDataJSON();
+  if(body?.action==='storage.cleanup.applyPreset'){
+   presetAttempts.push(body);if(losePreset){losePreset=false;await route.fetch();await route.abort('connectionreset');return}
+  }
+  await route.fallback();
+ });
+ await preset.click();await expect(section.getByRole('button',{name:'Check the same request',exact:true})).toBeEnabled();
+ assert.deepEqual((await observe()).policy,{...customPolicy,revision:customPolicy.revision+1,enabled:true,workspaceArchiveKeepDays:7});
+ await page.reload();await page.waitForSelector('#amp-one');await openSettingsPage(page,'storage');
+ await section.getByRole('button',{name:'Check the same request',exact:true}).click();
+ await expect(section.getByRole('status').filter({hasText:'saved for all workspaces'})).toBeVisible();
+ assert.equal(presetAttempts.length,2);assert.deepEqual(presetAttempts[0],presetAttempts[1]);
+ await expect(section.getByLabel('Automatically clean up unused copies',{exact:true})).toBeChecked();
+ await expect(section.getByLabel('Keep temporary test workspaces for days',{exact:true})).toHaveValue('7');
+ assert.equal((await observe()).policy.revision,customPolicy.revision+1);
+ assert.equal((await observe()).savedLedgerUnchanged,true);
  assert.deepEqual(errors,[]);
  const result={passed:true,productionBuiltUI:true,productionService:true,syntheticRuntime:true,syntheticInstalledGraph:true,
   providerCalls:false,removedFileBytes:after.lastCleanup.removedFileBytes,checks:[
@@ -201,7 +226,8 @@ try{
    'saved test sizes load only on explicit read','canonical receipt roles stay distinct from current disk use',
    'bounded saved-test pagination and refresh','unknown accounting remains unavailable and protected',
    'lost passive page response preserves last page and supports retry','saved-test reads preserve ledger and policy',
-   'saved test sizes fit desktop and mobile']};
+   'saved test sizes fit desktop and mobile','explicit temporary preset preserves custom code thresholds',
+   'preset lost acknowledgment exact retry after reopen','preset preserves existing saved test ledger']};
  await writeFile(join(outputDir,'result.json'),JSON.stringify(result,null,2));
  console.log(JSON.stringify({outputDir,...result}));
 }catch(error){failure=error;await writeFile(join(outputDir,'fixture-stderr.log'),stderr);console.error(stderr);throw error}

@@ -479,7 +479,16 @@ of reclaimable storage. Source and result archives stay protected. An explicitly
 ### Temporary queued-test workspace copies
 
 **Expire temporary test workspace copies** is an optional Storage policy, off
-until enabled. Seven days is recommended. It applies only to checks newly
+until enabled. **Use seven-day temporary test cleanup** enables automatic cleanup
+and this seven-day choice in one action. It preserves custom unused-code age/size
+settings; merely reading Storage or upgrading never replaces saved disabled/custom
+choices. Full agent and system callers can use `storage.cleanup.applyPreset` with
+`preset: "temporary-test-workspaces"` and the current `expectedRevision` under
+the same standing authority as other Storage changes, without human interaction.
+The request keeps an exact retry receipt. `storage.cleanup.save` and the duration
+field remain available for other durations or disabling expiry.
+
+The choice applies only to checks newly
 submitted through `workspace.tests.submit`; the duration is captured in the
 existing job/allocation receipt. `keepWorkspace: true` preserves a check's full
 workspace, for example when it contains final edits not exported as results.
