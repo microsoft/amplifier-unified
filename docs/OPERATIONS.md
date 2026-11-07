@@ -2,8 +2,8 @@
 
 Unified exposes one conversation-scoped view of managed processes, existing
 Smart Tool receipts, and workers through `operations.list`, `operations.status`,
-`operations.read`, `operations.wait`, and `operations.cancel`. The Operations panel
-and agent app actions use these same actions, plus `operations.submit`,
+`operations.read`, `operations.wait`, and `operations.cancel`. Agent app actions
+and authorized HTTP clients use these actions, plus `operations.submit`,
 `operations.write`, and `operations.request` for explicit execution/input and
 their durable admission receipts. Reading or waiting does not select
 a conversation, change its draft, activate a runtime, or replay work.
@@ -142,10 +142,12 @@ or external side effects.
 Run the focused Python suite with `pytest tests/test_operations.py`. If the
 managed bash module is importable, it also exercises a real subprocess and durable
 output beyond its local ring; otherwise that optional integration test skips.
-`node frontend/tests/operations-browser.mjs` starts an isolated fixture and checks
-live output, final state, reconnect, selected conversation/draft preservation and
-mobile bounds against the production build. These checks do not claim a live
-provider conversation or full Work bundle composition has been deployed.
+`node frontend/tests/operations-http-browser.mjs` checks authenticated HTTP
+observation, real command submission/input, exact retries and one side effect
+across browser reload, while preserving the selected conversation and draft.
+It uses an isolated fixture and the production build; the bundled chat has no
+separate Operations panel. These checks do not claim a live provider conversation
+or full Work bundle composition has been deployed.
 
 Additional host receipt stores can register a read-only adapter with
 `service.operations.register_source(name, list_records, read_record)`. Callbacks
