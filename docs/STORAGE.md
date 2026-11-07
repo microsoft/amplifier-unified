@@ -72,8 +72,33 @@ directory. Immutable canvas/result bodies live in `artifacts/<sha256>.json`, wit
 small SQLite references. Live MCP context is separate from static HTML, preventing
 every polling update from duplicating an entire application. Reachability collection
 keeps saved artifacts and retained results, including transitive references.
-Completed operation results expire after 30 days, 200 results or 32 MB; small
-execution receipts remain to prevent replay. Running operations are never expired.
+Smart Tool result and argument bodies expire after 30 days, 200 retained results
+or 32,000,000 logical bytes. This budget belongs to `smart_tool_operations`,
+not every operation, command or saved test. It currently runs during storage
+upgrade and completed Smart Tool writes; an idle installation does not have a
+periodic result-expiry pass. Queued and running operations are excluded. Small
+execution receipts remain to prevent replay.
+
+Storage accounting distinguishes current logical record/body bytes from historical
+archive sizes and allocated disk space. Shared body references can repeat the same
+logical bytes; their sum is not unique storage or guaranteed reclaimable space.
+`storage.cleanup.evidence` defaults to saved-test receipts; `owner: "smartTools"`
+returns a bounded page of Smart Tool receipt/body sizes without opening resources
+or starting tools. Oversized or incomplete records remain explicitly unaccounted.
+The read does not reset retention, change policy, or delete anything.
+
+| Owner | Existing retention | What remains protected |
+| --- | --- | --- |
+| Smart Tools | 30 days / 200 full results / 32,000,000 bytes; enforced on qualifying writes | Execution identities; queued/running bodies |
+| Process operations | Output bounded per operation; no terminal lifetime expiry | Admission, outcomes, cancellation and unknown-effect recovery |
+| Schedules | 100 terminal runs per schedule | Current schedule, active/unknown runs and command identities |
+| Saved tests | Optional prospective final-workspace expiry | Original source, results, legacy/manual/unknown custody |
+| Publishing and outputs | No general age expiry | Current/pinned/referenced content; unlink/remove does not imply content deletion |
+| Diagnostics | 30 days / 25,000 records by default | Native transcripts and event files are separate owners |
+
+Current policy, grants, Work records and unsettled effects also live in the
+`commands` table. A table-wide TTL would remove current authority or let an old
+request look new; it is not a retention mechanism.
 
 ### Incremental application state
 

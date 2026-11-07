@@ -199,6 +199,44 @@ class SmartToolsManager(Lifecycle, ManagedUpdates):
                 overview[field] = {**put(self.service.db,overview[field]), "summary": "Stored tool data; read this state path for paginated details."}
         return overview
 
+    def retention_accounting(self, before=None):
+        """Page scalar receipt metadata; never hydrate resources or change retention."""
+        if before is not None and (type(before) is not int or not 1 <= before <= 2**53 - 1):
+            raise ValueError("Choose a valid storage evidence cursor.")
+        # Legacy embedded bodies can be large. Do not parse oversized records
+        # merely to count them; preserve their unknown payload accounting.
+        fields = []
+        for name in ('result', 'arguments'):
+            fields.append(f"""CASE
+                WHEN json_type(value,'$.{name}') IS NULL THEN 0
+                WHEN json_type(value,'$.{name}.$resource') IS NOT NULL THEN
+                    CASE WHEN json_type(value,'$.{name}.bytes')='integer'
+                        AND json_extract(value,'$.{name}.bytes') BETWEEN 0 AND 9007199254740991
+                        THEN json_extract(value,'$.{name}.bytes') END
+                ELSE length(CAST(json_quote(json_extract(value,'$.{name}')) AS BLOB)) END""")
+        rows = self.service.db.execute(f"""SELECT rowid,id,length(CAST(value AS BLOB)),
+            CASE WHEN length(CAST(value AS BLOB))<=262144 THEN json_object(
+                'status',substr(json_extract(value,'$.status'),1,100),
+                'expired',json_extract(value,'$.resultExpired') IS 1,
+                'receiptBytes',length(CAST(json_remove(value,'$.result','$.arguments') AS BLOB)),
+                'resultBytes',{fields[0]},'argumentBytes',{fields[1]}) END
+            FROM smart_tool_operations WHERE rowid<? ORDER BY rowid DESC LIMIT 33""",
+            (before if before is not None else 2**63 - 1,)).fetchall()
+        items = []
+        for position, identity, record_bytes, projected in rows[:32]:
+            item = {'id': identity, 'recordBytes': record_bytes, 'receiptBytes': None,
+                    'resultBytes': None, 'argumentBytes': None, 'status': 'unaccounted'}
+            if projected is not None:
+                item.update(json.loads(projected))
+            items.append(item)
+        return {'owner': 'smartTools', 'items': items,
+                'nextBefore': rows[31][0] if len(rows) > 32 else None,
+                'recordBytes': sum(item['recordBytes'] for item in items),
+                'receiptBytes': sum(item['receiptBytes'] or 0 for item in items),
+                'payloadBytes': sum((item['resultBytes'] or 0) + (item['argumentBytes'] or 0) for item in items),
+                'unaccountedCount': sum(any(item[key] is None for key in ('receiptBytes', 'resultBytes', 'argumentBytes')) for item in items),
+                'note': 'Current logical receipt/body accounting for this page, not allocated disk or reclaimable bytes. Shared references may repeat bytes. Records over 256 KiB and incomplete body references remain unaccounted; no resources are opened.'}
+
     def operation(self, identity):
         row = self.service.db.execute("SELECT value FROM smart_tool_operations WHERE id=?", (identity,)).fetchone()
         if row:
