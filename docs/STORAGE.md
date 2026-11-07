@@ -93,7 +93,7 @@ The read does not reset retention, change policy, or delete anything.
 | Owner | Existing retention | What remains protected |
 | --- | --- | --- |
 | Smart Tools | 30 days / 200 full results / 32,000,000 bytes; qualifying writes and bounded periodic expiry | Execution identities; active/uncertain bodies |
-| Process operations | Output bounded per operation; no terminal lifetime expiry | Admission, outcomes, cancellation and unknown-effect recovery |
+| Process/cell operations | Bounded output ring; optional prospective 30-day terminal output expiry, at most eight due operations per pass | Admission/retry identities, outcomes, kernel results/errors, live/uncertain work and unresolved Work references |
 | Schedules | 100 terminal runs per schedule | Current schedule, active/unknown runs and command identities |
 | Saved tests | Optional prospective final-workspace expiry | Original source, results, legacy/manual/unknown custody |
 | Publishing and outputs | No general age expiry | Current/pinned/referenced content; unlink/remove does not imply content deletion |

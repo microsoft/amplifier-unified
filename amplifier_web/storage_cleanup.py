@@ -13,7 +13,8 @@ import uuid
 from amplifier_operations.coordination import fingerprint
 from .errors import AppError
 
-DEFAULTS = {'revision': 0, 'enabled': True, 'keepDays': 7, 'maxUnusedBytes': 10 * 1024**3, 'workspaceArchiveKeepDays': None}
+DEFAULTS = {'revision': 0, 'enabled': True, 'keepDays': 7, 'maxUnusedBytes': 10 * 1024**3,
+            'workspaceArchiveKeepDays': None, 'operationOutputKeepDays': None}
 POLICY = 'storage-cleanup-policy'
 OBSERVATION = 'storage-cleanup-observation'
 LATEST = 'storage-cleanup-latest'
@@ -23,15 +24,16 @@ def definitions(schema, string):
     return {
         'storage.cleanup.read': ('Read global automatic cleanup settings and the last receipt without scanning or starting work.', schema({}, [])),
         'storage.cleanup.evidence': ('Read one bounded page of saved-test historical sizes or Smart Tool receipt/body accounting. Does not open bodies, measure current files, start work or delete evidence.', schema({'owner': {'enum': ['tests', 'smartTools']}, 'before': {'type': 'integer', 'minimum': 1, 'maximum': 2**53-1}}, [])),
-        'storage.cleanup.save': ('Save global unused component/test-runner code retention under standing Full or user control. Sources, results, chats and project folders stay. Optional temporary queued-test workspace expiry applies only to newly submitted checks.', schema({
+        'storage.cleanup.save': ('Save global retention under standing Full or user control. Optional temporary workspace and terminal operation-output expiry apply prospectively. Chats, saved outputs, request identities and uncertain work stay.', schema({
             'expectedRevision': {'type': 'integer', 'minimum': 0}, 'enabled': {'type': 'boolean'},
             'keepDays': {'type': 'integer', 'minimum': 0, 'maximum': 3650},
             'maxUnusedBytes': {'type': 'integer', 'minimum': 0, 'maximum': 2**53-1},
             'workspaceArchiveKeepDays': {'type': ['integer', 'null'], 'minimum': 1, 'maximum': 3650},
+            'operationOutputKeepDays': {'type': ['integer', 'null'], 'minimum': 1, 'maximum': 3650},
         }, ['expectedRevision', 'enabled', 'keepDays', 'maxUnusedBytes'])),
-        'storage.cleanup.applyPreset': ('Enable standing automatic cleanup with seven-day expiry for future temporary queued-test workspace copies. Preserves unused-code duration/size choices and existing archive promises. Available to the user and Full callers.', schema({
+        'storage.cleanup.applyPreset': ('Enable standing automatic cleanup for future temporary queued-test workspace copies (seven days) or settled operation output (30 days). Preserves other retention choices and existing promises. Available to the user and Full callers.', schema({
             'expectedRevision': {'type': 'integer', 'minimum': 0},
-            'preset': {'enum': ['temporary-test-workspaces']},
+            'preset': {'enum': ['temporary-test-workspaces', 'temporary-operation-output']},
         }, ['expectedRevision', 'preset'])),
         'storage.cleanup.preview': ('Measure a bounded set of unused code copies and protected storage. Never starts workers or deletes files. Incomplete measurements are reported.', schema({}, [])),
         'storage.cleanup.run': ('Apply the saved cleanup policy under standing Full or user control. Each owner rechecks unused code before removal. Reuse the request ID to observe an uncertain outcome without replay.', schema({
@@ -60,8 +62,8 @@ def public(value):
 
 def read(app):
     return {'policy': policy(app), 'lastCleanup': public(record(app, LATEST)),
-            'scope': 'All workspaces on this Amplifier installation. Unused code and dependencies, plus explicitly temporary retired test workspace copies when enabled, are eligible.',
-            'preserved': 'Chats, working folders, saved test sources and results, other dependency stores, current and rollback versions, and uncertain work are kept.'}
+            'scope': 'All workspaces on this Amplifier installation. Unused code and dependencies, explicitly temporary retired test workspace copies, and opted-in settled operation output are eligible.',
+            'preserved': 'Chats, working folders, saved test sources/results and outputs, request identities, current and rollback versions, uncertain work and unresolved task references are kept.'}
 
 
 def request_maintenance(app):
@@ -315,6 +317,7 @@ async def run(app, identity, *, expected_revision=None, automatic=False, authori
             return previous  # Re-observe the same attempt; never submit it anew.
         check(app, authority)
         settings = policy(app)
+        operation_cursor = (record(app, LATEST, {}) or {}).get('operationOutputCursor')
         if expected_revision is not None and settings['revision'] != expected_revision:
             raise ValueError('Cleanup settings changed. Reload them before cleaning up.')
         if automatic and not settings['enabled']:
@@ -330,6 +333,7 @@ async def run(app, identity, *, expected_revision=None, automatic=False, authori
                                 protected=report.get('observedProtected', []))
         store(app, OBSERVATION, seen)
         result = {'id': identity, 'expectedRevision': expected_revision, 'status': 'running', 'startedAt': now, 'policy': settings,
+                  'operationOutputCursor': operation_cursor,
                   **{key: report[key] for key in ('generationCursor', 'retiredCursor', 'runtimeCursor', 'retentionReasons', 'workspaceArchiveCursor') if key in report},
                   'selectedFileBytes': report['selectedFileBytes'], 'removedFileBytes': 0,
                   'effects': [], 'completeInspection': report['complete']}
@@ -398,6 +402,10 @@ async def run(app, identity, *, expected_revision=None, automatic=False, authori
                 await asyncio.to_thread(workspace_archive_retention.retire, app.data_dir, settings,
                     {identity: row for (kind, identity), row in chosen.items() if kind == 'test-workspace'},
                     archive_record, lambda row: archive_record('guard', row))
+            if (result['status'] == 'running' and settings['enabled']
+                    and settings.get('operationOutputKeepDays') is not None and policy(app) == settings):
+                result['operationOutput'] = await app.operations.expire_outputs(settings, after=operation_cursor, authority=authority)
+                result['operationOutputCursor'] = result['operationOutput']['nextCursor']
             if result['status'] == 'running':
                 result['status'] = 'needs-inspection' if any(row['status'] == 'attempting' for row in result['effects']) else 'completed'
         finally:
@@ -460,20 +468,25 @@ async def dispatch(app, action, args, origin, command_id, caller_session_id=None
         if args['expectedRevision'] != current['revision']:
             raise AppError('Cleanup settings changed. Reload them before saving.', 409)
         if action == 'storage.cleanup.applyPreset':
-            if args.get('preset') != 'temporary-test-workspaces':
+            if args.get('preset') not in {'temporary-test-workspaces', 'temporary-operation-output'}:
                 raise AppError('Choose a supported cleanup preset.', 400)
             value = {name: current[name] for name in ('keepDays', 'maxUnusedBytes')}
             value['enabled'] = True
-            days = 7
+            days = 7 if args['preset'] == 'temporary-test-workspaces' else current['workspaceArchiveKeepDays']
+            operation_days = 30 if args['preset'] == 'temporary-operation-output' else current['operationOutputKeepDays']
         else:
             value = {name: args[name] for name in ('enabled', 'keepDays', 'maxUnusedBytes')}
             days = args.get('workspaceArchiveKeepDays', current.get('workspaceArchiveKeepDays'))
+            operation_days = args.get('operationOutputKeepDays', current.get('operationOutputKeepDays'))
         if (type(value['enabled']) is not bool or type(value['keepDays']) is not int or not 0 <= value['keepDays'] <= 3650
                 or type(value['maxUnusedBytes']) is not int or not 0 <= value['maxUnusedBytes'] <= 2**53-1):
             raise AppError('Choose valid cleanup settings.', 400)
         if days is not None and (type(days) is not int or not 1 <= days <= 3650):
             raise AppError('Choose a temporary test workspace retention between 1 and 3650 days, or disable it.', 400)
         value['workspaceArchiveKeepDays'] = days
+        if operation_days is not None and (type(operation_days) is not int or not 1 <= operation_days <= 3650):
+            raise AppError('Choose operation output retention between 1 and 3650 days, or disable it.', 400)
+        value['operationOutputKeepDays'] = operation_days
         value['revision'] = current['revision'] + 1
         receipt = {'accepted': True, 'commandAction': action, 'result': {**read(app), 'policy': value}}
         if authority is not None:
