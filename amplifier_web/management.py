@@ -180,55 +180,6 @@ class Management:
             return result
         return await self.provider_catalog.get(key,load,refresh=refresh)
 
-    async def warm_runtime_models(self,session_id,providers,revision=None):
-        """Reuse the host catalog and publish one snapshot per refresh batch."""
-        def key(row):
-            return self.runtime_catalog_key(session_id,row,revision)
-        def entry(result,cache_key,phase):
-            result=result or {}
-            return {'phase':phase,'models':result.get('models',[]),
-                    'supported':result.get('supported',result.get('modelsSupported',True)),
-                    'provenance':result.get('modelsProvenance'),
-                    'stale':cache_key in self.provider_catalog.loaded_at and not self.provider_catalog._fresh(cache_key),
-                    'loadedAt':self.provider_catalog.loaded_at.get(cache_key)}
-        pending=[];catalogs={}
-        for row in providers:
-            cache_key=key(row)
-            cached=self.provider_catalog.peek(cache_key)
-            fresh=self.provider_catalog.fresh(cache_key)
-            catalogs[row['id']]=entry(cached,cache_key,'ready' if fresh else 'working')
-            if not fresh:pending.append((row,cache_key))
-        async with self.service.lock:
-            control=self.service.state.setdefault('runtimeControl',{}).setdefault(session_id,{})
-            current_revision=control.get('configuration.providers',{}).get('catalogRevision')
-            if revision and current_revision and current_revision!=revision:return
-            before=(control.get('modelCatalogRevision'),control.get('modelCatalogs'))
-            control.update(modelCatalogRevision=revision,modelCatalogs=catalogs)
-            if before!=(revision,catalogs):self.service._publish_changes(sessions={session_id})
-        if not pending:return
-        await asyncio.sleep(0)
-        async def load(row,cache_key):
-            identity=row['id']
-            try:
-                async with self.catalog_limit:
-                    result=await self.runtime_models(session_id,row,revision)
-                value=entry(result,cache_key,'ready')
-            except Exception:
-                value={**entry(self.provider_catalog.peek(cache_key),cache_key,'error'),
-                       'error':'Could not load models from this mounted provider. Retry to check the connection.'}
-            async with self.service.lock:
-                control=self.service.state.setdefault('runtimeControl',{}).setdefault(session_id,{})
-                if control.get('modelCatalogRevision')!=revision:return
-                current=control.get('configuration.providers',{}).get('providers',[])
-                mounted=next((candidate for candidate in current if candidate['id']==identity),None)
-                if current and (mounted is None or key(mounted)!=cache_key):return
-                control.setdefault('modelCatalogs',{})[identity]=value
-                self.service._publish_progress(session_ids={session_id}, record_only=True)
-        try:
-            await asyncio.gather(*(load(*item) for item in pending))
-        finally:
-            await self.service._flush_pending_progress()
-
     async def publish(self,**values):
         async with self.service.lock:
             self.service.state.update(values)
@@ -792,9 +743,6 @@ class Management:
             controls = self.service.state.setdefault('runtimeControl', {}).setdefault(session['id'], {})
             controls['configuration.providers'] = recovery
             controls[operation] = result
-            if operation == 'configuration.providerModels':
-                controls.setdefault('modelCatalogs', {})[result['provider']] = {
-                    'phase': 'ready', 'models': result.get('models', []), 'supported': result.get('supported', True)}
             self.service._publish_progress(session_ids={session['id']}, record_only=True)
         return True
 
@@ -1324,12 +1272,7 @@ class Management:
                     if args['operation'] in {'configuration.inspect','configuration.apply','configuration.toggle'}:
                         configuration=result.get('configuration',result)
                         self.service._session(session['id'])['configuration']=configuration
-                    if args['operation']=='configuration.providerModels':
-                        identity=args.get('args',{}).get('instance') or args.get('args',{}).get('provider')
-                        self.service.state['runtimeControl'][session['id']].setdefault('modelCatalogs',{})[identity]={'phase':'ready','models':result.get('models',[]),'supported':result.get('supported',True)}
                     self.service._publish_progress(session_ids={session['id']}, record_only=True)
-                provider_info=result if args['operation']=='configuration.providers' else refreshed.get('configuration.providers')
-                if provider_info is not None:self.background(self.warm_runtime_models(session['id'],provider_info.get('providers',[]),provider_info.get('catalogRevision')))
             finally:
                 if mutating or recovery_contract_change:
                     async with self.service.lock:

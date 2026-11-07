@@ -70,6 +70,53 @@ def _config(provider, tmp_path):
     return config
 
 
+async def test_actual_chatgpt_refresh_preserves_saved_and_mounted_account(
+    tmp_path, monkeypatch, candidate_environment, record_property,
+):
+    from types import SimpleNamespace
+    from amplifier_web.provider_catalog import configured_binding, mounted_catalog_keys
+    from amplifier_web.runtime_controls import RuntimeControls
+    monkeypatch.setenv("UNIFIED_CATALOG_PROVIDER", "openai-chatgpt")
+    monkeypatch.setenv("UNIFIED_CATALOG_CHATGPT_REFRESH", "1")
+    config = _config("openai-chatgpt", tmp_path)
+    path = Path(config["token_file_path"])
+    tokens = json.loads(path.read_text())
+    tokens.update(expires_at="2020-01-01T00:00:00+00:00",refresh_token="synthetic-expired-refresh")
+    path.write_text(json.dumps(tokens))
+    row = {"id":"candidate","module":"provider-openai-chatgpt","config":config}
+    write_private(amplifier_home()/"settings.yaml",yaml.safe_dump({"config":{"providers":[row]}}))
+    home=tmp_path/"host";cache=ProviderCatalog(tmp_path/"catalog.json")
+    manager=SetupManager(home,catalog=cache,probe_command=[sys.executable,str(TRANSPORT_FILE)])
+    expected=configured_binding(home,tmp_path,"candidate")
+    plan={"providers":[row]};sources={"candidate":None}
+    captured={"home":str(home),"workspace":str(tmp_path),"sources":sources,
+              "connectionKeys":mounted_catalog_keys(home,tmp_path,[row],sources,binding=True)}
+    coordinator=SimpleNamespace(config=plan,session_state={},get=lambda name:{},
+        get_capability=lambda name:captured if name=="web.provider_catalog" else None,
+        register_capability=lambda *args:None)
+    controls=RuntimeControls(SimpleNamespace(coordinator=coordinator,config=plan,session_id="fixture"),
+                             SimpleNamespace(generation=None,queued_inputs=0))
+    try:
+        result=await manager.discover_catalog(tmp_path,instance="candidate")
+        entry=next(iter(result["catalogs"].values()))
+        assert entry["phase"]=="ready" and entry["models"]
+        assert len(_records(candidate_environment,"refresh"))==1
+        assert len(_records(candidate_environment,"request"))==2
+        assert json.loads(path.read_text())["refresh_token"]=="synthetic-rotated-refresh"
+        assert configured_binding(home,tmp_path,"candidate")==expected
+        assert (await controls.perform("provider.verifyConnection",{
+            "instance":"candidate","expectedConnectionKey":expected}))["verified"]
+        assert mounted_catalog_keys(home,tmp_path,[row],sources,binding=True)["candidate"]==expected
+        path.unlink()
+        with pytest.raises(ValueError,match="credentials changed"):
+            await controls.perform("provider.verifyConnection",{
+                "instance":"candidate","expectedConnectionKey":expected})
+        assert not _records(candidate_environment,"forbidden")
+        record_property("providerClasses",json.dumps(_records(candidate_environment,"provider-class")))
+    finally:
+        await controls.close();await cache.close()
+
+
 @pytest.fixture
 def candidate_environment(tmp_path, monkeypatch):
     # A test command must not inherit host account choices, token paths, proxies

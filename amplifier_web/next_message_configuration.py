@@ -193,6 +193,7 @@ async def prepare(service, captured):
                 service.state['settings'].get('appBundle'),
                 session_id=session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'],
                 catalog=True, desired_bundle=bool(pending),
+                instance=selection['instance'],
                 catalog_cache=service.management.provider_catalog,
                 global_only=session.get('location', {}).get('kind') == 'managed')
             check()

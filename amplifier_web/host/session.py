@@ -406,7 +406,10 @@ def _apply_settings(bundle, config):
     for kind in ("providers", "tools", "hooks"):
         values = []
         for row in getattr(bundle, kind):
-            override = merge(overrides.get(row.get("module"), {}), overrides.get(row.get("id") or row.get("instance_id"), {}))
+            override_id = row.get("id") or row.get("instance_id")
+            if kind == "providers" and not override_id:
+                override_id = row["module"].removeprefix("provider-")
+            override = merge(overrides.get(row.get("module"), {}), overrides.get(override_id, {}))
             if override.get("enabled") is False or (kind == "providers" and (row.get("id") or row.get("instance_id") or row["module"].removeprefix("provider-")) in settings.get("configurator", {}).get("disabled", {}).get("providers", [])):
                 if kind == "providers":
                     # Removing a connection must not erase its old image intent

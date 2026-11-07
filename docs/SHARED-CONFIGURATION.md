@@ -166,7 +166,25 @@ This connection binding is stable across host and worker processes and distinct
 from the runtime-qualified discovery cache identity. Unqualified processes may
 agree on a connection without sharing discovery across restarts. Effective
 Copilot credential promotion and implicit ChatGPT OAuth/Plan token files are
-included; token-file replacement or removal invalidates the affected identity.
+included; token-file replacement or removal invalidates discovery reuse.
+
+For supported ChatGPT Codex and Plan credential records, account binding uses
+the configured path/auth mode and the provider-owned stable account fields
+(`account_id`, or Plan `client_id` and `subject`), not rotating token bytes.
+This is a local identity comparison, not authentication. The provider still
+validates current credentials. Malformed/unknown records retain byte identity;
+removal, account changes, API-key changes and endpoint changes cannot reuse a
+saved binding. Catalog and health generations still observe token rotation.
+A refresh that rotates the same account re-queries once under the new generation;
+it never relabels an older response or retries a different account.
+
+Send preparation loads only the selected connection's catalog, without using
+membership as an inference gate. Unrelated connections do not add listing work.
+Provider selection, bundle changes and runtime inventory reads do not warm a
+second mounted catalog. The explicit raw `configuration.providerModels` control
+remains available; its result is not an automatic UI discovery subscription.
+Settings disables API connection testing for declared local origins and explains
+why; explicit tests return a bounded not-verifiable remedy, never fake success.
 
 The cache is bounded by entry count and encoded bytes. Eviction is not a history
 policy. Relative credential/configuration paths retain their workspace scope.

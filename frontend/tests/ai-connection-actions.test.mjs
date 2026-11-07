@@ -12,6 +12,21 @@ const {aiServices}=await vite.ssrLoadModule('/src/ai-connections-data.js');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;test.after(()=>vite.close());
 const state=editor=>({view:{aiConnectionEditor:editor},setup:{providers:[],providersLoadedAt:1}});
 
+test('connection detail respects per-connection local catalog testability',async()=>{
+ const {AIConnectionDetail}=await vite.ssrLoadModule('/src/ai-connection-detail.jsx');
+ let root;const calls=[];
+ try{
+  await act(async()=>{root=create(React.createElement(AIConnectionDetail,{
+   selected:{id:'one',config:{}},service:{auth:'key'},state:{setup:{providerCatalogs:{
+    one:{phase:'ready',metadata:{supports:{test:false},modelListInfo:{version:1,source:'configured'}}}}}},
+   onCheck:()=>calls.push('test'),act:async()=>{},busy:false}))});
+  const button=root.root.findAll(node=>node.type==='button'&&node.children.includes('Check connection'))[0];
+  assert.equal(button.props.disabled,true);
+  assert.match(JSON.stringify(root.toJSON()),/Configured models do not verify connectivity/);
+  assert.deepEqual(calls,[]);
+ }finally{await act(async()=>root?.unmount())}
+});
+
 test('the supported service list is the same shared host catalog',async()=>{
  assert.deepEqual(aiServices,JSON.parse(await readFile(new URL('../../amplifier_web/ai_services.json',import.meta.url),'utf8')));
  assert.equal(aiServices.length,6);

@@ -122,9 +122,10 @@ async def test_legacy_static_list_cannot_claim_a_reachable_connection(monkeypatc
         def get_info(self):return {'config_fields':[]}
         async def list_models(self):raise AssertionError('Unverified listing must not be called')
     monkeypatch.setattr(provider_probe,'provider_class',lambda module:StaticProvider)
-    with pytest.raises(provider_probe.ProbeFailure) as raised:
+    from amplifier_web.probe_diagnostics import HostProbeFailure
+    with pytest.raises(HostProbeFailure) as raised:
         await provider_probe.query({'module':'fixture','action':'providers.test'})
-    assert raised.value.diagnostic['category']=='ValueError'
+    assert raised.value.diagnostic['code']=='not-verifiable'
 
 
 @pytest.mark.parametrize('info', [
@@ -234,7 +235,8 @@ async def test_explicit_origin_is_visible_but_never_connection_verification(sour
     result=await provider_probe.query({'module':'fixture','action':'providers.models'})
     assert result['models']==models and result['modelsSupported'] is True
     assert result['modelsProvenance']==source and calls==[{}]
-    with pytest.raises(provider_probe.ProbeFailure,match='models'):
+    from amplifier_web.probe_diagnostics import HostProbeFailure
+    with pytest.raises(HostProbeFailure,match='API model listing'):
         await provider_probe.query({'module':'fixture','action':'providers.test'})
     assert calls==[{}], 'Connection testing rejects local-origin metadata before listing'
     cache=ProviderCatalog(tmp_path/'catalog.json')

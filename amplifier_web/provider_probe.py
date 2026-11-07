@@ -64,7 +64,8 @@ async def listed_models(provider, *, filters=None, require_api=False):
     """
     info = await model_list_info(provider)
     if require_api and (info is None or info['source'] != 'provider-api'):
-        raise ValueError('Provider does not expose API model listing for connection testing')
+        from amplifier_web.probe_diagnostics import HostProbeFailure
+        raise HostProbeFailure('not-verifiable')
     if info is None or info['source'] == 'unsupported':
         return {'models': [], 'modelsSupported': False, 'modelsProvenance': 'unsupported'}
     kwargs = {}
@@ -92,8 +93,11 @@ class ProbeFailure(ValueError):
 
 async def query(request):
     progress = {'stage': 'import'}
+    from amplifier_web.probe_diagnostics import HostProbeFailure
     try:
         return await _query(request, progress)
+    except HostProbeFailure:
+        raise
     except Exception as exc:
         raise ProbeFailure(request.get('module'), progress['stage'], exc) from None
 
@@ -155,6 +159,7 @@ async def _query(request, progress):
             return result
         progress['stage'] = 'models'
         result.update(await listed_models(provider, require_api=request['action']=='providers.test'))
+        result['supports'] = {'test': result.get('modelsProvenance') == 'provider-api'}
         if request['action']=='providers.test':
             result['test']={'reachable':True,'modelCount':len(result['models']),'method':'provider.list_models'}
         return result
@@ -170,6 +175,11 @@ def main():
         request=json.loads(sys.stdin.read())
         result=asyncio.run(query(request))
     except Exception as exc:
+        from amplifier_web.probe_diagnostics import HostProbeFailure
+        if isinstance(exc, HostProbeFailure):
+            output.write(json.dumps({'error':exc.public_message, 'publicFailureCode':exc.code,
+                                     'diagnostic':exc.diagnostic})+'\n');output.flush()
+            return
         if isinstance(exc, ProbeFailure):
             result={'error':str(exc),'diagnostic':exc.diagnostic,
                     'authenticationRequired':exc.diagnostic['category']=='AuthenticationError'}

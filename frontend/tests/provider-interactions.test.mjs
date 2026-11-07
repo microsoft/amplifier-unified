@@ -9,6 +9,23 @@ globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 const renderedText=node=>typeof node==='string'?node:Array.isArray(node)?node.map(renderedText).join(''):renderedText(node?.children||[]);
 test.after(()=>server.close());
 
+for(const source of ['configured','static','simulated','unsupported']){
+ test(`Settings keeps ${source} choices but disables API connection checks`,async()=>{
+  const entry={phase:'ready',provenance:source,models:[{id:'Exact/Alias'}],
+   metadata:{modelListInfo:{version:1,source},supports:{test:false},configSchema:{fields:[]}}};
+  const state={view:{providerEditor:{id:'one',module:'provider-fixture',detailOpen:true}},setup:{
+   providers:[{id:'one',module:'provider-fixture',config:{}}],providerCatalogs:{one:entry}}};
+  let root;const calls=[];
+  try{
+   await renderAct(async()=>{root=create(React.createElement(ProviderSettings,{state,act:async(...args)=>calls.push(args)}))});
+   assert.equal(root.root.findByProps({'data-action':'providers.test'}).props.disabled,true);
+   assert.match(renderedText(root.toJSON()),/do not verify connectivity/);
+   assert.equal(root.root.findByProps({'data-action':'providers.models'}).props.disabled,false);
+   assert.equal(calls.some(([name])=>name==='providers.test'),false);
+  }finally{await renderAct(async()=>root?.unmount())}
+ });
+}
+
 test('opening settings loads saved configuration and keeps subsequent edits during refresh',async()=>{
  const calls=[],dispatch=async(name,args)=>{calls.push({name,args});return {accepted:true}};
  let state={view:{providerEditor:{id:'openai',module:'provider-openai'}},setup:{}},root;

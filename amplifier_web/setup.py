@@ -285,7 +285,8 @@ class SetupManager:
         """
         from .provider_catalog import model_key
         with self.read_snapshot(workspace):
-            rows = [row for row in self.provider_rows(workspace) if row['enabled']]
+            rows = [row for row in self.provider_rows(workspace) if row['enabled']
+                    and (instance is None or row['id'] == instance)]
             for row in rows:
                 row['sharedCatalogKey'] = self.catalog_key({'id': row['id']}, workspace)
                 row['connectionKey'] = self.catalog_key({'id': row['id']}, workspace, binding=True)
@@ -306,12 +307,21 @@ class SetupManager:
                 # The cache/probe owns the bounded diagnostic. Construction,
                 # import, configuration and model discovery fail independently.
                 pass
-            return row['sharedCatalogKey'], self.catalog.entry(key)
+            # A provider-owned same-account refresh can rotate its token file.
+            # cached_probe re-queries under the new generation, never retags an
+            # old response. Adopt only that newly checked key for publication.
+            with self.read_snapshot(workspace):
+                binding = self.catalog_key({'id': row['id']}, workspace, binding=True)
+                if binding != row['connectionKey']:
+                    raise ValueError('Configured connection changed during discovery. Reopen model settings.')
+                row['sharedCatalogKey'] = self.catalog_key({'id': row['id']}, workspace)
+            return row['sharedCatalogKey'], self.catalog.entry(model_key(row['sharedCatalogKey']))
 
         entries = dict(await asyncio.gather(*(discover(row) for row in rows)))
         with self.read_snapshot(workspace):
             current = {row['id']: self.catalog_key({'id': row['id']}, workspace)
-                       for row in self.provider_rows(workspace) if row['enabled']}
+                       for row in self.provider_rows(workspace) if row['enabled']
+                       and (instance is None or row['id'] == instance)}
         if current != {row['id']: row['sharedCatalogKey'] for row in rows}:
             raise ValueError('Configured connections changed during discovery. Reopen model settings.')
         for row in rows:
@@ -328,10 +338,15 @@ class SetupManager:
         identity = connection_key if binding else configuration_key
         return identity(workspace,module,raw,(row or {}).get('source') or getattr(config,'module_sources',{}).get(module),home=self.home)
 
-    async def cached_probe(self,action,args,workspace):
+    async def cached_probe(self,action,args,workspace,*,_rotation_retry=True):
         from .provider_catalog import model_key, CatalogInvalidated, public_failure
-        from .probe_diagnostics import ProbeProcessFailure
+        from .probe_diagnostics import ProbeProcessFailure, HostProbeFailure
         identity=self.catalog_key(args,workspace)
+        binding=self.catalog_key(args,workspace,binding=True)
+        def configured_row():
+            return next((row for row in self.config(workspace).configured_connections
+                         if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==args.get('id')), {})
+        captured_row=copy.deepcopy(configured_row())
         key=model_key(identity) if action=='providers.models' else (action,identity)
         if action=='providers.schema' and not args.get('refresh') and self.catalog.fresh(model_key(identity)):
             cached=self.catalog.peek(model_key(identity))
@@ -347,14 +362,24 @@ class SetupManager:
                 if identity!=self.catalog_key(args,workspace):
                     raise CatalogInvalidated('Provider configuration changed during discovery.')
                 return result
-            except (CatalogInvalidated, ProbeProcessFailure):
+            except (CatalogInvalidated, ProbeProcessFailure, HostProbeFailure):
                 raise
             except Exception as exc:
                 message, diagnostic = public_failure(exc)
                 failure = ValueError(message)
                 failure.diagnostic = {**diagnostic, 'connection': args.get('id')}
                 raise failure from None
-        result=await self.catalog.get(key,load,refresh=args.get('refresh',False))
+        try:
+            result=await self.catalog.get(key,load,refresh=args.get('refresh',False))
+        except CatalogInvalidated:
+            # One new observation after same-account credential renewal. Never
+            # reuse a response across accounts or loop on continuously changing
+            # credentials; ordinary failure/cancellation does not retry.
+            if (_rotation_retry and captured_row.get('module')=='provider-openai-chatgpt'
+                    and captured_row==configured_row() and identity!=self.catalog_key(args,workspace)
+                    and binding==self.catalog_key(args,workspace,binding=True)):
+                return await self.cached_probe(action,args,workspace,_rotation_retry=False)
+            raise
         if identity!=self.catalog_key(args,workspace):
             self.catalog.discard(key)
             raise ValueError('Provider configuration changed during discovery. The new configuration is being refreshed.')
@@ -366,12 +391,13 @@ class SetupManager:
 
     def probe_snapshot(self, action, args, workspace):
         """Freeze credentials/config/source before waiting for discovery capacity."""
+        from .probe_diagnostics import HostProbeFailure
         configured=self.config(workspace)
         row=next((row for row in configured.configured_connections if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==args.get('id')),None)
         module=args.get('module') if action=='providers.schema' else (row or {}).get('module')
-        if not module:raise ValueError('Save this provider before discovering models or testing it.')
+        if not module:raise HostProbeFailure('unsaved')
         if action!='providers.schema' and row.get('enabled') is False:
-            raise ValueError('This configured connection is disabled.')
+            raise HostProbeFailure('disabled')
         safe_name(module)
         raw=(row or {}).get('config',{}) if row and row['module']==module else {}
         # Metadata may need this exact instance's endpoint, never its secrets.
@@ -403,7 +429,7 @@ class SetupManager:
         probe_workspace=Path(workspace)
         while not probe_workspace.is_dir() and probe_workspace.parent!=probe_workspace:
             probe_workspace=probe_workspace.parent
-        from .probe_diagnostics import communicate, stderr_tail, ProbeProcessFailure
+        from .probe_diagnostics import communicate, stderr_tail, ProbeProcessFailure, HostProbeFailure
         from .probe_process import spawn, stop
         process=await spawn(*command,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,env=env,cwd=probe_workspace)
         stderr_task=asyncio.create_task(stderr_tail(process.stderr))
@@ -411,7 +437,7 @@ class SetupManager:
             try:
                 output,stderr=await asyncio.wait_for(asyncio.gather(communicate(process,json.dumps({'action':action,'model':args.get('model'),**({'prompt':args['prompt']} if action=='naming.complete' else {}),'module':module,'config':config,'source':snapshot['source'],'fallbackSource':KNOWN_PROVIDER_SOURCES.get(module),'registryHome':snapshot['registryHome']}).encode()),stderr_task),90)
             except TimeoutError:
-                raise ValueError('Provider check timed out after 90 seconds. Check connectivity and credentials, then retry.') from None
+                raise HostProbeFailure('timeout') from None
             try:result=json.loads(output)
             except (ValueError,UnicodeError):
                 raise ProbeProcessFailure(process.returncode, stderr) from None
@@ -420,6 +446,8 @@ class SetupManager:
                 if (not result.get('error') and api_observation) or result.get('authenticationRequired') is True:
                     record(self.home,args['id'],credential_generation,authentication_required=result.get('authenticationRequired') is True)
             if result.get('error'):
+                if result.get('publicFailureCode') in HostProbeFailure.messages:
+                    raise HostProbeFailure(result['publicFailureCode'])
                 error = ValueError(result['error'])
                 error.diagnostic = result.get('diagnostic', {'stage':'probe','category':'ProviderError'})
                 raise error
@@ -427,7 +455,7 @@ class SetupManager:
             if action=='naming.complete':
                 if result.get('naming',{}).get('error'):raise ValueError(result['naming']['error'])
                 return {'text':result.get('naming',{}).get('text','')}
-            metadata={'module':module,'info':result['info'],'configSchema':result['configSchema'],'imageGeneration':result.get('imageGeneration')}
+            metadata={'module':module,'info':result['info'],'configSchema':result['configSchema'],'imageGeneration':result.get('imageGeneration'),'supports':result.get('supports',{})}
             if action=='providers.models':
                 metadata['modelListInfo']=result.get('modelListInfo')
                 metadata['info']=copy.deepcopy(metadata['info'])

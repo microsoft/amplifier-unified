@@ -56,11 +56,11 @@ async def test_settings_models_and_metadata_are_reused_by_mounted_controls(app,m
     await manager.perform('providers.models',{'id':'setup-name','workspace':app.default_workspace})
     await manager.perform('providers.schema',{'id':'setup-name','workspace':app.default_workspace})
     sid=app.state['selectedSessionId']
-    await app.management.warm_runtime_models(sid,[row],'first')
     await app.management.command('runtime.control',{'sessionId':sid,'operation':'configuration.providerModels','args':{'instance':row['id']}},'read')
     assert app.runtime.calls=={}
     assert probes==['providers.models']
-    assert app.state['runtimeControl'][sid]['modelCatalogs'][row['id']]['models']==[{'id':'setup-model'}]
+    assert app.state['runtimeControl'][sid]['configuration.providerModels']['models']==[{'id':'setup-model'}]
+    assert 'modelCatalogs' not in app.state['runtimeControl'][sid]
 
 
 @pytest.mark.parametrize('source', ['configured', 'static', 'simulated'])
@@ -75,20 +75,19 @@ async def test_mounted_publication_keeps_origin_on_ready_empty_and_failure(app,m
         return {'models':[] if mode[0]=='empty' else [{'id':'Local/Alias'}],
                 'modelsSupported':True,'modelsProvenance':source}
     monkeypatch.setattr(app.runtime,'control',control)
-    await app.management.warm_runtime_models(sid,[row],'first')
-    before=app.state['runtimeControl'][sid]['modelCatalogs'][row['id']]
+    await app.management.runtime_models(sid,row,'first')
+    key=model_key(row['sharedCatalogKey'])
+    before=app.management.provider_catalog.entry(key)
     assert before['provenance']==source and not before['stale']
     mode[0]='error'
     with pytest.raises(ValueError):
         await app.management.runtime_models(sid,row,'first',refresh=True)
-    await app.management.warm_runtime_models(sid,[row],'first')
-    failed=app.state['runtimeControl'][sid]['modelCatalogs'][row['id']]
+    failed=app.management.provider_catalog.entry(key)
     assert failed['provenance']==source and failed['stale'] and failed['phase']=='error'
     assert failed['loadedAt']==before['loadedAt'] and failed['models']==before['models']
     mode[0]='empty'
     await app.management.runtime_models(sid,row,'first',refresh=True)
-    await app.management.warm_runtime_models(sid,[row],'first')
-    empty=app.state['runtimeControl'][sid]['modelCatalogs'][row['id']]
+    empty=app.management.provider_catalog.entry(key)
     assert empty['provenance']==source and empty['models']==[] and not empty['stale']
 
 
@@ -97,7 +96,7 @@ async def test_runtime_refresh_updates_shared_models_and_schema(app,monkeypatch)
     async def unexpected(*args):raise AssertionError('Equivalent catalog must reuse mounted result')
     monkeypatch.setattr(SetupManager,'probe',unexpected)
     sid=app.state['selectedSessionId']
-    await app.management.warm_runtime_models(sid,[row],'first')
+    await app.management.runtime_models(sid,row,'first')
     result=await manager.perform('providers.models',{'id':'setup-name','workspace':app.default_workspace})
     assert result['models']==[{'id':'mounted-model'}] and result['modelsProviderId']=='setup-name'
     assert (await manager.perform('providers.schema',{'id':'setup-name','workspace':app.default_workspace}))['providerMetadata']['info']==row['info']
@@ -142,23 +141,19 @@ async def test_mounted_listing_origin_and_connection_test_are_distinct(tmp_path,
     finally:await controls.close()
 
 
-async def test_expired_mounted_cache_refreshes_even_when_ui_phase_is_ready(app):
+async def test_explicit_mounted_reads_reuse_only_the_requested_catalog(app):
     now=[1000]
     cache=ProviderCatalog(ttl=10,clock=lambda:now[0])
     app.management.provider_catalog=cache
     rows=[{'id':str(i),'catalogKey':'key-'+str(i)} for i in range(14)]
     sid=app.state['selectedSessionId']
-    snapshots=[];publish=app._publish
-    def measured(**kwargs):publish(**kwargs);snapshots.append(copy.deepcopy(app.state['runtimeControl'][sid]))
-    app._publish=measured
-    await app.management.warm_runtime_models(sid,rows,'first')
-    assert len(snapshots)==2 and app.runtime.calls=={str(i):1 for i in range(14)}
-    snapshots.clear()
-    await app.management.warm_runtime_models(sid,rows,'first')
-    assert snapshots==[]
+    await app.management.runtime_models(sid,rows[0],'first')
+    assert app.runtime.calls=={'0':1}
+    await app.management.runtime_models(sid,rows[0],'first')
+    assert app.runtime.calls=={'0':1}
     now[0]+=11
-    await app.management.warm_runtime_models(sid,rows,'first')
-    assert len(snapshots)==2 and app.runtime.calls=={str(i):2 for i in range(14)}
+    await app.management.runtime_models(sid,rows[0],'first')
+    assert app.runtime.calls=={'0':2}
 
 
 async def test_old_mount_completion_cannot_replace_new_mount_catalog(app):
@@ -168,11 +163,12 @@ async def test_old_mount_completion_cannot_replace_new_mount_catalog(app):
         if args.get('instance')=='old':entered.set();await finish.wait()
         return await original(sid,operation,args)
     app.runtime.control=slow
-    old=asyncio.create_task(app.management.warm_runtime_models(sid,[{'id':'old','catalogKey':'old'}],'old'))
+    old=asyncio.create_task(app.management.runtime_models(sid,{'id':'old','catalogKey':'old'},'old'))
     await entered.wait()
-    await app.management.warm_runtime_models(sid,[{'id':'new','catalogKey':'new'}],'new')
+    await app.management.runtime_models(sid,{'id':'new','catalogKey':'new'},'new')
     finish.set();await old
-    assert set(app.state['runtimeControl'][sid]['modelCatalogs'])=={'new'}
+    assert app.management.provider_catalog.peek(('mounted','new'))['models']==[{'id':'mounted-model'}]
+    assert 'modelCatalogs' not in app.state.get('runtimeControl',{}).get(sid,{})
 
 
 def test_configuration_identity_materializes_secrets_but_isolates_inputs(tmp_path,monkeypatch):

@@ -170,13 +170,13 @@ async def test_remount_reuses_unchanged_provider_catalogs(tmp_path):
     await service.dispatch('session.create',{})
     sid=service.state['selectedSessionId']
     try:
-        await service.management.warm_runtime_models(sid,[{'id':'one','catalogKey':'one-config'},{'id':'two','catalogKey':'two-config'}],'first')
+        for row in [{'id':'one','catalogKey':'one-config'},{'id':'two','catalogKey':'two-config'}]:
+            await service.management.runtime_models(sid,row,'first')
         assert calls=={'one':1,'two':1}
-        await service.management.warm_runtime_models(sid,[{'id':'one','catalogKey':'changed-config'},{'id':'two','catalogKey':'two-config'}],'second')
+        for row in [{'id':'one','catalogKey':'changed-config'},{'id':'two','catalogKey':'two-config'}]:
+            await service.management.runtime_models(sid,row,'second')
         assert calls=={'one':2,'two':1}
-        assert set(service.state['runtimeControl'][sid]['modelCatalogs'])=={'one','two'}
-        await service.management.warm_runtime_models(sid,[],'third')
-        assert service.state['runtimeControl'][sid]['modelCatalogs']=={}
+        assert 'modelCatalogs' not in service.state.get('runtimeControl',{}).get(sid,{})
     finally:await service.close()
 
 

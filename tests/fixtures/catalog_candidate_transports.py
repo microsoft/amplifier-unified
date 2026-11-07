@@ -131,6 +131,15 @@ def _http_provider(request):
 
 
 def _response(http, request):
+    if (os.environ.get("UNIFIED_CATALOG_CHATGPT_REFRESH") == "1"
+            and request.method == "POST" and str(request.url) == "https://auth.openai.com/oauth/token"):
+        from urllib.parse import parse_qs
+        data = parse_qs(request.content.decode())
+        assert data["grant_type"] == ["refresh_token"]
+        assert data["refresh_token"] == ["synthetic-expired-refresh"]
+        _record("refresh", provider="openai-chatgpt", boundary="http", method="POST")
+        return http.Response(200, json={"access_token":SYNTHETIC_KEY,
+                                      "refresh_token":"synthetic-rotated-refresh","expires_in":3600})
     provider = _http_provider(request)
     mode = _mode()
     status = int(os.environ.get("UNIFIED_CATALOG_STATUS", "401")) if mode == "http-error" else 200

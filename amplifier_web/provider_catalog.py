@@ -19,8 +19,8 @@ class CatalogInvalidated(ValueError):
 def public_failure(exc):
     """Only bounded categories/stages, never provider exception bodies."""
     import re
-    from .probe_diagnostics import ProbeProcessFailure
-    if isinstance(exc, ProbeProcessFailure):
+    from .probe_diagnostics import ProbeProcessFailure, HostProbeFailure
+    if isinstance(exc, (ProbeProcessFailure, HostProbeFailure)):
         return exc.public_message, dict(exc.diagnostic)
     supplied = getattr(exc, 'diagnostic', {}) or {}
     stage = supplied.get('stage', 'models')
@@ -91,11 +91,45 @@ def _qualified_provider_sources(home,identity):
     except (OSError,ValueError,TypeError,KeyError,AttributeError):return {}
 
 
-def connection_key(workspace, module, config, source=None, *, home=None):
+def _chatgpt_account(contents, config):
+    """Local binding witness, NOT token authentication or entitlement.
+
+    The provider owns refresh/validation: Codex preserves account_id; Plan
+    preserves (auth_mode, client_id, subject). Only these supported records can
+    outlive token rotation. Unknown/malformed records retain byte identity.
+    """
+    from .setup import chatgpt_auth_mode
+    try:
+        tokens = json.loads(contents)
+        mode = chatgpt_auth_mode(config.get('auth_mode'))
+        stored = tokens.get('auth_mode')
+        if stored == 'oauth':stored = 'chatgpt_codex'
+        else:stored = chatgpt_auth_mode(stored)
+        if mode != stored or mode not in {'chatgpt_codex', 'chatgpt_plan'}:return None
+        keys = ('subject', 'client_id') if mode == 'chatgpt_plan' else ('account_id',)
+        if any(not isinstance(tokens.get(k), str) or not tokens[k].strip()
+               for k in (*keys, 'access_token')):return None
+        # Missing/invalid refresh and expiration are not renewable credentials.
+        if tokens.get('refresh_token') is not None and (
+                not isinstance(tokens['refresh_token'], str) or not tokens['refresh_token'].strip()):return None
+        from datetime import datetime
+        import math
+        expiry = tokens.get('expires_at')
+        if mode == 'chatgpt_codex' and isinstance(expiry, str):
+            expiry = datetime.fromisoformat(expiry.replace('Z', '+00:00')).timestamp()
+        if isinstance(expiry, bool) or not isinstance(expiry, (int, float)) or not math.isfinite(expiry):return None
+        if not tokens.get('refresh_token') and expiry <= time.time():return None
+        return ['chatgpt-account-v1', mode, *(tokens[k] for k in keys)]
+    except (ValueError, TypeError, AttributeError, OverflowError):
+        return None
+
+
+def connection_key(workspace, module, config, source=None, *, home=None, _credential_generation=False):
     """Stable private connection binding shared by host and worker processes.
 
     The connection binding ignores selection defaults, model filters and priority. Every other provider
     setting, effective credential, credential file and source remains isolated.
+    Supported ChatGPT OAuth files bind the stable account, not renewable tokens.
     Missing environment values retain their reference, never match a mounted
     provider with a different materialized value, and never leak in the digest.
     """
@@ -139,7 +173,14 @@ def connection_key(workspace, module, config, source=None, *, home=None):
                 if not path.is_absolute():path = Path(workspace)/path
                 if path.is_file():
                     info = path.stat()
-                    files[name] = fingerprint(path.read_bytes()) if info.st_size < 1_000_000 else (info.st_size,info.st_mtime_ns,info.st_ctime_ns)
+                    if info.st_size < 1_000_000:
+                        contents = path.read_bytes()
+                        account = (_chatgpt_account(contents, raw)
+                                   if module == 'provider-openai-chatgpt' and name == '.token_file_path'
+                                   and not _credential_generation else None)
+                        files[name] = account if account is not None else fingerprint(contents)
+                    else:
+                        files[name] = (info.st_size,info.st_mtime_ns,info.st_ctime_ns)
             except (OSError,ValueError):
                 files[name]='unreadable'  # Provider validation owns invalid paths.
     generation=generation_identity(home) if home is not None else None
@@ -174,7 +215,7 @@ def configuration_key(workspace, module, config, source=None, *, home=None):
     # Conservatively retain those constructor inputs without copying their
     # policy. Scope edits never change the saved account binding or exact ID.
     return fingerprint(['provider-catalog-v8',
-        connection_key(workspace,module,config,source,home=home),
+        connection_key(workspace,module,config,source,home=home,_credential_generation=True),
         scope,
         generation_identity(home) if home is not None else None])
 
@@ -234,6 +275,14 @@ def require_mounted_binding(coordinator, instance, expected, *, catalog=False):
     captured = coordinator.get_capability('web.provider_catalog') or {}
     if captured.get('keys' if catalog else 'connectionKeys',{}).get(instance) != expected:
         raise ValueError('The mounted connection differs from the selected configured connection. No input was sent; review the conversation connection override.')
+    if not catalog and captured.get('workspace') is not None:
+        rows = coordinator.config.get('providers', [])
+        row = next((row for row in rows if (
+            row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-')) == instance), None)
+        current = connection_key(captured['workspace'], row['module'], row.get('config', {}),
+            captured['sources'].get(instance), home=captured.get('home')) if row else None
+        if current != expected:
+            raise ValueError('The saved connection credentials changed or are unavailable. No input was sent; review the connection and sign in again if needed.')
 
 
 class ProviderCatalog:
