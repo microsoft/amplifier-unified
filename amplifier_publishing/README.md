@@ -8,8 +8,9 @@ directory, and scope each call to the authenticated owning session.
 
 Supported runtime hosts are POSIX systems with `flock` and directory-relative
 `O_NOFOLLOW` file operations (tested on macOS; Linux-compatible). There is one
-active `Publisher` per storage root. Calls are serialized and may be made from
-worker threads. No source or deploy commands run inside this library.
+active `Publisher` per storage root. Ownership transitions are serialized; body
+retirement runs its disk work outside that lock. Blocking calls belong on worker
+threads. No source or deploy commands run inside this library.
 
 ## API
 
@@ -60,6 +61,21 @@ publisher.close()
   the explicit protection of an available release body, using the current
   lifecycle revision from `retention`. It returns a durable exact-retry receipt.
   Unpinning a durable legacy release does not opt it into expiry.
+- `retirement_candidates(session_id, *, policy, limit=25, after=None)` inspects an
+  indexed page of prospective bodies, with eligibility, hold reason, current
+  lifecycle revision and `nextAfter`. It reads no body or historical collection.
+  `policy=None` disables admission; otherwise it uses the policy fields below.
+- `retire(release_id, *, session_id, request_id, expected_revision, policy,
+  stop_event=None)` admits one eligible local body under the caller's current
+  authority/policy. Success means physical cleanup completed; its receipt holds
+  compact lifecycle facts. Exact retries preserve the original outcome.
+- `reconcile_retirements(*, limit=1, after=None, stop_event=None)` advances a page
+  of saved intents. It automatically finishes proven detached private cleanup;
+  an untouched original is made available for fresh admission. Opening an owner
+  advances one intent. Further passes use `nextAfter`, including past held rows.
+  These calls accept a thread event for cooperative Stop between filesystem steps.
+- `receipt(session_id, request_id)` reads one existing receipt without a history
+  scan. It returns `None` when the request is absent.
 - `export_release(release_id, session_id)` returns only `siteId`, `sessionId`,
   `manifest`, `manifestDigest`, and canonical base64 `files`, suitable for a
   transport import request. It reads the owned immutable snapshot through
@@ -72,12 +88,16 @@ publisher.close()
   and receipts. It excludes temporary staging and
   owner locks. It does not change live listeners. Restoring a copy never resumes
   historical listeners; callers own backup access, encryption, and retention.
+  In-progress/unknown bodies reject a complete snapshot until reconciled; a
+  snapshot does not export inode-bound cleanup intents.
 - `capabilities` reports `bindHost`, `accessPolicy`, `authentication`,
   `previewAccessPolicy`, and `publicPublishing`.
-- `close()` closes owned listeners and storage and marks running records stopped.
+- `close()` closes owned listeners, waits for active body reads and retirement
+  workers to settle, closes storage, and marks running records stopped.
   A context manager is supported.
 
-All mutations except `build` return a receipt. `PublishingError` subclasses
+Explicit operations except `build` return a receipt; recovery returns current
+dispositions without rewriting historical receipts. `PublishingError` subclasses
 `ValueError` and provides `code` and, when persisted, `receipt`.
 
 ## Records and durable retry
@@ -96,8 +116,10 @@ listener interruption increment the revision. Reusing an old revision fails.
 
 A receipt contains `id`, `requestId`, `sessionId`, `action`, `siteId`, `releaseId`,
 `state`, `createdAt`, `completedAt`, `result`, and `error`. Pending intent is
-committed before effects. Domain changes and the completed receipt commit in
-one SQLite transaction. Expected validation failures are also durably recorded.
+committed before effects. Ordinary domain changes and their completed receipt
+commit in one SQLite transaction. Retirement instead persists its admitted and
+detached phases before cleanup, and records current expiry separately from the
+historical receipt, as described below. Validation failures are durably recorded.
 
 The caller supplies a stable `requestId` for retries. Its namespace is the
 session. An exact retry returns the **same historical result**, including a URL
@@ -161,15 +183,15 @@ silently assigned a success outcome. The host controls retention and disk quota.
 ## Prospective body retention and pins
 
 The Python library implements policy capture, current availability, explicit
-pins, chronological automatic rollback choices, backup support and deliberate
-recapture. It does **not yet implement automatic retirement or unlink**. App
+pins, chronological automatic rollback choices, backup support, deliberate
+recapture, and explicit local retirement with automatic interrupted-cleanup recovery. App
 Storage/UI integration and independently installed remote-service support are
 separate followups. No current RPC accepts these new Python-only policy or pin
 arguments; do not send them to a v1 service or infer its retention support.
-The matching service/client can read historical Python `pin` receipts, including
+The matching service/client can read historical Python `pin` and `retire` receipts, including
 after backup adoption, without exposing a new RPC mutation. Older receipt readers
 reject that newly opted-in state; keep the matching reader when adopting or
-downgrading a store containing pin receipts. Existing stores with no new policy
+downgrading a store containing those receipts. Existing stores with no new policy
 or pins retain their original behavior.
 
 A new `build(..., retention={})` explicitly captures the defaults: `keepDays: 30`,
@@ -198,9 +220,42 @@ This automatically populated pointer is not an indefinite explicit pin. A pin
 can keep an available body offered beyond its automatic time and count windows. Default legacy
 sites retain their existing behavior. The automatic window does not prohibit a
 new explicit rollback to another still-available, previously deployed release.
-Future body retirement must separately preserve each promised unused lifetime,
-current deployment/live preview, explicit pin and unresolved effect; the bounded
+Body retirement preserves each promised unused lifetime, current deployment/live
+preview, explicit pin and unresolved effect; the bounded
 history is not itself permission to delete an older release.
+
+The unused interval begins on materialization, supersession, preview release,
+unpin, or release of the last active reader or managed current reference.
+Earlier prospective records missing `unusedSince` get a fresh grace on adoption.
+Retirement waits until `unusedSince + max(captured keepDays, current keepDays)`
+and any captured rollback deadline or longer current rollback promise have passed.
+Count eviction never shortens a captured time promise. A stopped/interrupted site
+keeps its resume reference; an explicitly removed site releases that reference
+and starts grace. Neither `stop` nor `remove` deletes content itself.
+
+One private intent in the same lifecycle record owns retirement. Before detach,
+the owner rechecks the revision, actual consumers, pins, unsettled effects and
+exact body-root identity, then durably records intent and atomically moves that
+body to its exclusive private retirement directory. Unlink runs outside the main
+lock through no-follow directory descriptors. HTTP uses a small reader gate over
+actual listener state and in-flight reads; it never waits for an unrelated build
+or backup transaction. Completed old reads retain their observed release time
+until the next owner boundary records it, including inside final retirement
+admission. Captured bodies are wholly private
+and immutable: deletion does not hash bytes, retain per-file witnesses, or follow
+links to external targets. Corrupt bytes and added entries inside that owned body
+are disposable; replacement of the root or storage parents is held as ambiguous.
+No source path or arbitrary caller-selected directory can be retired.
+
+An interruption preserves `unknown` history and reports current availability and
+phase separately. The next owner open/recovery pass finishes a proven detached
+body automatically. If the original is still present, recovery restores available
+ownership and reports `admission-required`; it never detaches using a saved policy
+that may have been revoked. The caller can supply fresh current authority/policy
+on its next ordinary pass, without a new human approval. Actually ambiguous root
+identity remains held for owner investigation. Stop checks before detach and
+between unlink steps; an OS syscall is not a hard cancellation-time guarantee.
+There is no scheduler or app policy activation in this library batch.
 
 An `expired` body keeps its manifest, ownership and exact request receipts.
 Preview, review, pin and export reject it with `release_expired`; an unresolved

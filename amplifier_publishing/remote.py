@@ -376,7 +376,7 @@ class SSHClient:
             if not isinstance(row, dict) or not isinstance(row.get("requestId"), str) or not row["requestId"]:
                 invalid("Receipt must be an identified object")
             action = row.get("action")
-            if not isinstance(action, str) or action not in MUTATIONS | {"build", "pin"} or not isinstance(row.get("state"), str) or row["state"] not in {"running", "unknown", "succeeded", "failed"}:
+            if not isinstance(action, str) or action not in MUTATIONS | {"build", "pin", "retire"} or not isinstance(row.get("state"), str) or row["state"] not in {"running", "unknown", "succeeded", "failed"}:
                 invalid("Receipt has an invalid action or outcome", row)
             if expected_action is not None and action != expected_action and {action, expected_action} != {"build", "import"}:
                 invalid("Receipt action differs from the requested operation", row)
@@ -385,7 +385,13 @@ class SSHClient:
                 return
             if not isinstance(body, dict):
                 invalid("Successful receipt must contain an object result", row)
-            if action in {"import", "build", "review", "pin"}:
+            if action == 'retire':
+                projection = {key: value for key, value in body.items() if key not in {'id', 'siteId', 'sessionId'}}
+                if (body.get('id') != row.get('releaseId') or body.get('sessionId') != row.get('sessionId')
+                        or body.get('siteId') != row.get('siteId') or not valid_projection(projection)
+                        or (row['state'] == 'succeeded' and body['availability'] != 'expired')):
+                    invalid('Retirement receipt has invalid body disposition', row)
+            elif action in {"import", "build", "review", "pin"}:
                 release(body, row, require_retention=action == 'pin')
             else:
                 site(body, preview=action == "preview", receipt=row, successful_action=action if row["state"] == "succeeded" else None)
