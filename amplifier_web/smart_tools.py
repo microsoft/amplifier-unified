@@ -146,6 +146,8 @@ class SmartToolsManager(Lifecycle, ManagedUpdates):
         self.closed = False
         service.db.execute("CREATE TABLE IF NOT EXISTS smart_tool_operations (id TEXT PRIMARY KEY, value TEXT NOT NULL)")
         service.db.execute("CREATE TABLE IF NOT EXISTS state_resources (id TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        from .storage_migration import index_operations
+        index_operations(service.db)
         state = service.state.setdefault("smartTools", {})
         for field in ("servers", "operations", "catalog", "installations"):
             state.setdefault(field, [])
@@ -185,6 +187,24 @@ class SmartToolsManager(Lifecycle, ManagedUpdates):
         if operation.get('status') not in {'queued', 'running'}:
             from .storage_migration import trim_operations
             trim_operations(self.service.db, self.service.state)
+
+    async def expire_results(self):
+        """Enforce the existing body budget during the ordinary maintenance pass."""
+        from .storage_migration import RESULT_EXPIRY_BATCH, refresh_operations, trim_operations
+        async with self.service.lock:
+            if self.closed or getattr(self.service, 'backup_in_progress', False):
+                return 0
+            try:
+                result = trim_operations(self.service.db, self.service.state, expire_limit=RESULT_EXPIRY_BATCH)
+                if result['changed']:
+                    self.service._publish_changes(globals={'smartTools'})
+                    if getattr(self.service, 'operations', None):
+                        self.service.operations.notify()
+                return result['expired']
+            except BaseException:
+                self.service.db.rollback()
+                refresh_operations(self.service.db, self.service.state)
+                raise
 
     def _overview(self, operation):
         overview = copy.deepcopy(operation)

@@ -74,10 +74,13 @@ every polling update from duplicating an entire application. Reachability collec
 keeps saved artifacts and retained results, including transitive references.
 Smart Tool result and argument bodies expire after 30 days, 200 retained results
 or 32,000,000 logical bytes. This budget belongs to `smart_tool_operations`,
-not every operation, command or saved test. It currently runs during storage
-upgrade and completed Smart Tool writes; an idle installation does not have a
-periodic result-expiry pass. Queued and running operations are excluded. Small
-execution receipts remain to prevent replay.
+not every operation, command or saved test. It runs during storage upgrade, completed Smart Tool writes, and the existing
+hourly Storage maintenance pass while the app is open, independently of the
+unused-code cleanup setting. Each periodic pass expires at most 32 settled
+results; its candidate index excludes receipt-only history. Queued, running,
+interrupted and unknown outcomes, and records without a settlement timestamp,
+are excluded. Small execution receipts remain to prevent replay. Bodies still
+referenced by another owner remain protected by ordinary resource collection.
 
 Storage accounting distinguishes current logical record/body bytes from historical
 archive sizes and allocated disk space. Shared body references can repeat the same
@@ -89,7 +92,7 @@ The read does not reset retention, change policy, or delete anything.
 
 | Owner | Existing retention | What remains protected |
 | --- | --- | --- |
-| Smart Tools | 30 days / 200 full results / 32,000,000 bytes; enforced on qualifying writes | Execution identities; queued/running bodies |
+| Smart Tools | 30 days / 200 full results / 32,000,000 bytes; qualifying writes and bounded periodic expiry | Execution identities; active/uncertain bodies |
 | Process operations | Output bounded per operation; no terminal lifetime expiry | Admission, outcomes, cancellation and unknown-effect recovery |
 | Schedules | 100 terminal runs per schedule | Current schedule, active/unknown runs and command identities |
 | Saved tests | Optional prospective final-workspace expiry | Original source, results, legacy/manual/unknown custody |

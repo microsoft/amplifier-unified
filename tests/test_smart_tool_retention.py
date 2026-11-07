@@ -51,3 +51,102 @@ async def test_accounting_pages_legacy_large_and_incomplete_records_without_fals
 async def test_accounting_rejects_invalid_cursors(manager, before):
     with pytest.raises(ValueError, match='cursor'):
         manager.retention_accounting(before)
+
+
+async def test_periodic_expiry_is_bounded_and_keeps_exact_receipts_and_uncertain_work(manager, monkeypatch):
+    import time
+    from amplifier_web.storage_migration import RESULT_EXPIRY_BATCH
+    now = time.time()
+    for status in ('running', 'queued', 'interrupted', 'unknown', 'outcome_unknown'):
+        insert(manager, status, status=status, updatedAt=now-100*86400, arguments={'keep': status})
+    insert(manager, 'legacy-no-time', result='keep')
+    insert(manager, 'recent', updatedAt=now, result='keep')
+    for index in range(RESULT_EXPIRY_BATCH + 1):
+        insert(manager, 'old-' + str(index), updatedAt=now-31*86400-index, result='expire', arguments={'key': index})
+    manager.state['inspectedOperation'] = manager.operation('old-0')
+    monkeypatch.setattr(manager, 'execute', lambda *_args, **_kwargs: pytest.fail('Replayed tool'))
+    assert await manager.expire_results() == RESULT_EXPIRY_BATCH
+    assert manager.operation('old-0')['resultExpired'] is True
+    assert manager.state['inspectedOperation']['resultExpired'] is True
+    assert await manager.expire_results() == 1
+    publications = len(manager.service.published)
+    assert await manager.expire_results() == 0
+    assert len(manager.service.published) == publications
+    for status in ('running', 'queued', 'interrupted', 'unknown', 'outcome_unknown'):
+        assert manager.operation(status)['arguments'] == {'keep': status}
+    assert manager.operation('legacy-no-time')['result'] == 'keep'
+    assert manager.operation('recent')['result'] == 'keep'
+    with pytest.raises(ValueError, match='already has a receipt'):
+        await manager.command('smartTools.call', {'id': 'never-start', 'name': 'no-replay'}, 'old-0')
+
+
+async def test_expiry_publication_failure_restores_receipt_and_inspection(manager, monkeypatch):
+    insert(manager, 'old', updatedAt=1, result={'keep': True})
+    manager.state['inspectedOperation'] = manager.operation('old')
+    before = manager.operation('old')
+    def fail(**_):
+        raise RuntimeError('Commit unavailable')
+    monkeypatch.setattr(manager.service, '_publish_changes', fail)
+    with pytest.raises(RuntimeError, match='Commit unavailable'):
+        await manager.expire_results()
+    assert manager.operation('old') == before
+    assert manager.state['inspectedOperation'] == before
+    manager.service.backup_in_progress = True
+    assert await manager.expire_results() == 0
+    manager.service.backup_in_progress = False
+    manager.closed = True
+    assert await manager.expire_results() == 0
+    manager.closed = False
+
+
+async def test_expiry_releases_only_bodies_without_any_other_owner(manager):
+    from amplifier_web.resource_files import collect, put
+    db = manager.service.db
+    shared = put(db, {'text': 'durable artifact'})
+    disposable = put(db, {'text': 'temporary result'})
+    manager.service.state['canvasArtifacts'] = [{'body': shared}]
+    insert(manager, 'shared', updatedAt=1, result=shared)
+    insert(manager, 'disposable', updatedAt=1, result=disposable)
+    assert await manager.expire_results() == 2
+    assert collect(db, manager.service.state) == [disposable['$resource']]
+    db.commit()
+    assert db.execute('SELECT id FROM state_resources').fetchall() == [(shared['$resource'],)]
+    assert manager.operation('shared')['resultExpired'] is True
+
+
+async def test_periodic_expiry_uses_candidate_index_instead_of_receipt_history(manager, monkeypatch):
+    from amplifier_web import storage_migration
+    db = manager.service.db
+    db.executemany('INSERT INTO smart_tool_operations VALUES(?,?)',
+        [(str(i), json.dumps({'id': str(i), 'status': 'completed', 'resultExpired': True})) for i in range(5000)])
+    db.commit()
+    insert(manager, 'old', updatedAt=1, result='expire')
+    plan = list(db.execute('EXPLAIN QUERY PLAN SELECT id FROM smart_tool_operations WHERE '
+                          + storage_migration.RESULT_CANDIDATE + " ORDER BY json_extract(value,'$.updatedAt') DESC"))
+    assert 'smart_tool_result_retention' in str(plan)
+    assert 'TEMP B-TREE' not in str(plan)
+    loads = json.loads
+    decoded = []
+    def counted(raw, *args, **kwargs):
+        decoded.append(raw)
+        return loads(raw, *args, **kwargs)
+    monkeypatch.setattr(storage_migration.json, 'loads', counted)
+    assert await manager.expire_results() == 1
+    assert len(decoded) == 1  # Neither retired receipt history nor full tool bodies are loaded.
+
+
+async def test_existing_periodic_maintenance_expires_tools_even_when_code_cleanup_disabled(manager, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from amplifier_web.updates import UpdateManager
+    import asyncio
+    db = manager.service.db
+    db.execute('CREATE TABLE commands(id TEXT PRIMARY KEY,fingerprint TEXT,receipt TEXT)')
+    storage_cleanup.store(manager.service, storage_cleanup.POLICY, {**storage_cleanup.DEFAULTS, 'enabled': False})
+    manager.service.smart_tools = manager
+    insert(manager, 'old', updatedAt=1, result='expire')
+    updates = SimpleNamespace(service=manager.service, closed=False, awaiting_restart=lambda: False, publish=AsyncMock())
+    monkeypatch.setattr(asyncio, 'sleep', AsyncMock())
+    await UpdateManager.retire_storage(updates)
+    assert manager.operation('old')['resultExpired'] is True
+    assert updates.publish.call_args.kwargs['storage']['status'] == 'disabled'
