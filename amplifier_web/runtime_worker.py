@@ -1098,7 +1098,7 @@ class Worker:
                 checkpoint = self.session.coordinator.get_capability("live.checkpoint")
                 if checkpoint:
                     await checkpoint(self.root_generation_outcome or "completed")
-                    from .handoff_boundary import checkpoint_configuration
+                    from amplifier_web.handoff_boundary import checkpoint_configuration
                     checkpoint_configuration(self)
                 self.parked_history_stamp = self.history_stamp()
                 from amplifier_web.shared_state import configuration_stamp
