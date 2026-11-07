@@ -9,7 +9,7 @@ directory, and scope each call to the authenticated owning session.
 Supported runtime hosts are POSIX systems with `flock` and directory-relative
 `O_NOFOLLOW` file operations (tested on macOS; Linux-compatible). There is one
 active `Publisher` per storage root. Ownership transitions are serialized; body
-retirement runs its disk work outside that lock. Blocking calls belong on worker
+traversal and unlink run outside that lock. Blocking calls belong on worker
 threads. No source or deploy commands run inside this library.
 
 ## API
