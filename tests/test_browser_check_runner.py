@@ -236,8 +236,9 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     question_fade_addition = question_fade_browser_addition(rows, set())
     context_addition = context_inspector_browser_addition(rows, set())
     immediate_addition = immediate_direction_browser_addition(rows, set())
+    waiting_addition = navigation_waiting_browser_addition(rows, set())
     historical_rows = [row for row in rows
-                       if not (canvas_additions | breadbin_addition | question_fade_addition | context_addition | immediate_addition).intersection(row['command'])]
+                       if not (canvas_additions | breadbin_addition | question_fade_addition | context_addition | immediate_addition | waiting_addition).intersection(row['command'])]
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
     additions = {
@@ -671,6 +672,30 @@ def test_immediate_direction_browser_owner_rejects_invalid_coverage(fault):
         immediate_direction_browser_addition(rows, readiness)
 
 
+def navigation_waiting_browser_addition(rows, readiness_scripts):
+    script = 'tests/navigation-waiting-browser.mjs'
+    assert [row for row in rows if script in row['command']] == [{
+        'id': 'navigation-waiting', 'command': ['node', script],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/navigation-waiting',
+                'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python'},
+    }], 'navigation-waiting: expected one exact ordinary owner'
+    assert script not in readiness_scripts, 'navigation-waiting: duplicate readiness owner'
+    return {script}
+
+
+@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'environment', 'readiness'])
+def test_navigation_waiting_owner_is_distinct(fault):
+    rows = json.loads((ROOT / 'frontend/tests/browser-checks.json').read_text())['scenarios']
+    owner = next(row for row in rows if row['id'] == 'navigation-waiting')
+    readiness = set()
+    if fault == 'missing': rows.remove(owner)
+    elif fault == 'duplicate': rows.append(dict(owner))
+    elif fault == 'environment': owner['env'] = {}
+    else: readiness.add('tests/navigation-waiting-browser.mjs')
+    with pytest.raises(AssertionError, match='navigation-waiting'):
+        navigation_waiting_browser_addition(rows, readiness)
+
+
 def context_inspector_browser_addition(rows, readiness_scripts):
     """New feature owner; preserve every frozen preceding coverage count."""
     scripts = set()
@@ -828,10 +853,11 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     question_fade_addition = question_fade_browser_addition(plan['scenarios'], readiness_scripts)
     context_addition = context_inspector_browser_addition(plan['scenarios'], readiness_scripts)
     immediate_addition = immediate_direction_browser_addition(plan['scenarios'], readiness_scripts)
+    waiting_addition = navigation_waiting_browser_addition(plan['scenarios'], readiness_scripts)
     # Freeze all three prior counts; validate each new owner before subtracting
     # the additions so missing or duplicated coverage cannot disappear.
     previous_scripts = ((readiness_scripts | extended_scripts) - {state_stream, update_delivery}
-                        - provider_additions - breadbin_addition - canvas_additions - question_fade_addition - context_addition - immediate_addition)
+                        - provider_additions - breadbin_addition - canvas_additions - question_fade_addition - context_addition - immediate_addition - waiting_addition)
     assert len(previous_scripts - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience, pin_reorder, approval, dormant, shared_work} - feature_additions - voice_additions) == 146
     assert len(previous_scripts - {shared_work, 'tests/delegate-work-stream-browser.mjs', 'tests/client-traffic-browser.mjs'} - voice_additions) == 164
     assert len(previous_scripts) == 171

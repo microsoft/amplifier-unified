@@ -72,6 +72,8 @@ def _project(task, history, goal, sid, *, continuity=None, supported=None):
                    originalObjectiveRef=(_detail_ref(task, sid, "originalObjective")
                                          if isinstance(task.get("originalObjective"), str) else None),
                    historyRef=_ref("task.history", sid, taskId=task["id"]))
+    from .navigation_waiting import wait_epoch
+    summary["dependencyWaitEpoch"] = wait_epoch(task)
     result["task"] = summary
     # An omitted value is null, not an empty list/text. Exact references and
     # counts describe what is missing. No age-based supersession of corrections.
@@ -758,9 +760,15 @@ def observe_task(service, session, observation):
     revision = returned.get("revision", 0)
     if revision < current_revision:
         return False, current_revision
+    from .navigation_waiting import wait_epoch
+    # Derived display metadata only; never write it into native task authority.
+    # A cold bounded observation may already carry this exact projection.
+    display_task = ({**returned, "dependencyWaitEpoch": wait_epoch(returned)}
+                    if "changes" in returned else observation["task"])
     controls["task.get"] = {**previous, **{key: observation[key] for key in
         ("task", "history", "goal", "continuity", "continuationSupported") if key in observation}}
-    session["task"] = observation["task"]
+    controls["task.get"]["task"] = display_task
+    session["task"] = display_task
     if "continuity" in observation:
         session["continuity"] = observation["continuity"]
     return True, revision
