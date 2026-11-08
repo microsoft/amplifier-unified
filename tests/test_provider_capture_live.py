@@ -65,7 +65,7 @@ async def test_live_boundary_large_budget(tmp_path, monkeypatch, measured, manag
     original_host=HostAdapter()
     from amplifier_module_loop_live.runtime import Runtime, Input
     finished=asyncio.Event()
-    async def observe_runtime(event):
+    def observe_runtime(event):
         if event['type']=='generation.finished':finished.set()
     runtime=Runtime(session.session_id,observer=observe_runtime)
     host=runtime_worker.Worker();host.telemetry=events;host.runtime=runtime
@@ -80,6 +80,7 @@ async def test_live_boundary_large_budget(tmp_path, monkeypatch, measured, manag
     inspector=ContextInspection(c,tmp_path/'capture',home);events.context_inspectors[session.session_id]=inspector
     async def instructions():return 'X'*1_000_100
     await c.get('context').set_system_prompt_factory(instructions)
+    execution=None
     try:
         if manager:
             execution=asyncio.create_task(session.execute(''))
@@ -95,4 +96,7 @@ async def test_live_boundary_large_budget(tmp_path, monkeypatch, measured, manag
         assert row['budget']['measurement']['input_tokens']==100
         assert state.wire[-1]['sha256']==state.budgets[-1]
     finally:
+        if execution is not None and not execution.done():
+            await runtime.submit(Input('stop'))
+            await asyncio.wait_for(execution,5)
         await inspector.drain();await session.cleanup()
