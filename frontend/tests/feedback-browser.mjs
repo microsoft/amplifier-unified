@@ -58,8 +58,11 @@ try{
  vite=await createServer({configFile:false,root,server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
  browser=await chromium.launch({headless:true,args:process.env.UNIFIED_BROWSER_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
- const diagnosticReads=[];
- page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'&&request.postDataJSON()?.action==='feedback.diagnostics')diagnosticReads.push(request.postDataJSON())});
+ const diagnosticReads=[],actions=[];
+ page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'){
+  const command=request.postDataJSON();actions.push(command.action);
+  if(command.action==='feedback.diagnostics')diagnosticReads.push(command);
+ }});
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
  await page.waitForFunction(()=>window.amplifier?.getState());
@@ -77,7 +80,7 @@ try{
   await preview.waitFor();
   const text=await preview.inputValue();
   assert.match(text,/Local report without GitHub CLI|Only this deliberately entered text/);
-  assert.doesNotMatch(text,/PRIVATE|synthetic\/workspace|Preserve this unsent|App version:/);
+  assert.doesNotMatch(text,/PRIVATE|synthetic\/workspace|Preserve this unsent|Reproduction diagnostics/);
   const downloadEvent=page.waitForEvent('download');
   await page.getByRole('button',{name:'Save local report',exact:true}).click();
   const download=await downloadEvent;
@@ -89,12 +92,18 @@ try{
   // Deliberate opt-in is previewed, not posted, and never imports raw failure text.
   await page.getByRole('checkbox',{name:'Include reproduction diagnostics'}).check();
   await page.getByRole('button',{name:'Prepare local report',exact:true}).click();
-  await page.waitForFunction(()=>document.querySelector('[aria-label="Local feedback report preview"]')?.value.includes('App version:'));
+  await page.waitForFunction(()=>document.querySelector('[aria-label="Local feedback report preview"]')?.value.includes('### Reproduction diagnostics'));
   assert.doesNotMatch(await preview.inputValue(),/PRIVATE|synthetic\/workspace|Preserve this unsent/);
+  await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async()=>{throw Error('Synthetic clipboard unavailable')}}}));
+  await page.getByRole('button',{name:'Copy local report',exact:true}).click();
+  await page.getByText('Clipboard unavailable. Select and copy the report preview.',{exact:true}).waitFor();
+  assert.equal(actions.filter(action=>action==='feedback.report').length,2);
+  assert.equal(actions.some(action=>['feedback.submit','conversation.send','runtime.control','feedback.attachment.add'].includes(action)),false);
+  assert.deepEqual(await page.evaluate(()=>fetch('/api/fixture/feedback').then(response=>response.json())),{calls:[],uploads:[]});
   await page.keyboard.press('Escape');
   assert.equal(await page.getByRole('textbox',{name:'Message Amplifier'}).inputValue(),'Preserve this unsent synthetic draft');
   assert.deepEqual(errors,[]);
-  console.log('PASS: in-place error report, explicit diagnostic opt-in, exact local Markdown download, draft preserved, no GitHub CLI/upload/submission or provider request.');
+  console.log('PASS: in-place error report, explicit diagnostic opt-in, exact local Markdown download, clipboard refusal recovery, draft preserved; no GitHub CLI, upload, submission or conversation.send.');
  }else{
  if(!await page.getByRole('button',{name:/^App options/}).isVisible())await page.getByRole('button',{name:'Open navigation',exact:true}).click();
  await page.getByRole('button',{name:/^App options/}).click();
