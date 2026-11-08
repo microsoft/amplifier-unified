@@ -459,8 +459,10 @@ def main():
             import json
             print(json.dumps(result))
         else:
-            print("Default runtime is prepared; no model request was sent." if result["ok"]
-                  else result["message"])
+            print(("Runtime dependencies are prepared. Connect an AI account in the app; no conversation worker or model request was started."
+                   if result.get("connectionRequired") else
+                   "Default runtime is prepared; no model request was sent.")
+                  if result["ok"] else result["message"])
         if not result["ok"]:
             raise SystemExit(1)
         return

@@ -22,6 +22,7 @@ def qualifier(tmp_path, monkeypatch):
         project.mkdir(parents=True)
         (stage / "runtime-project.json").write_text(json.dumps({"project": project.name}))
     monkeypatch.setattr(updates.UpdateManager, "validate", validate)
+    monkeypatch.setattr(setup, "_needs_connection", lambda home: False)
     monkeypatch.setattr(runtime_qualification, "verify_recorded",
                         lambda project, receipt: calls.append(("verify", project, receipt)))
     return calls
@@ -112,3 +113,64 @@ def test_progress_retains_only_bounded_stage_facts(tmp_path):
     value = json.loads((stage / "install-progress.json").read_text())
     assert len(value["events"]) == 64
     assert "SECRET" not in json.dumps(value)
+
+
+@pytest.mark.parametrize("corruption", [None, "marker", "lock", "manifest", "inventory"])
+def test_no_account_installs_only_declared_dependencies_without_claiming_worker_readiness(tmp_path, monkeypatch, corruption):
+    from pathlib import Path
+    monkeypatch.setattr(setup, "_needs_connection", lambda home: True)
+    calls = []
+    async def command(*argv, **kwargs):
+        calls.append(argv[1])
+        if argv[1] == "lock":
+            project = Path(argv[argv.index("--project") + 1])
+            (project / "uv.lock").write_text('version = 1\n')
+        return ""
+    monkeypatch.setattr(updates, "process", command)
+    monkeypatch.setattr(setup.shutil, "which", lambda name: "/usr/bin/uv")
+    monkeypatch.setattr(runtime_qualification, "installed_graph",
+                        lambda path: [{"name": "amplifier-core", "version": "2.0.2"}])
+    async def overrides(project, target):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("amplifier-core==2.0.2\n")
+    monkeypatch.setattr(runtime_qualification, "prepare_overrides", overrides)
+    monkeypatch.setattr(runtime_qualification, "verify_recorded", lambda *a, **kw: None)
+    monkeypatch.setattr(runtime_qualification, "verify_install_overrides", lambda *a: None)
+    async def forbidden(*args):
+        pytest.fail("No account must not create a fake provider or mount a conversation")
+    monkeypatch.setattr(updates.UpdateManager, "validate", forbidden)
+    first = asyncio.run(setup.prepare(tmp_path))
+    assert first["ok"] and first["prepared"] and first["connectionRequired"]
+    assert first["workerReady"] is False and first["profileCount"] == 0
+    assert first["modelRequestSent"] is False and first["generation"] is None
+    assert calls == ["lock", "sync", "pip"]
+    assert not (tmp_path / "updates/active.json").exists()
+    calls.clear()
+    assert asyncio.run(setup.prepare(tmp_path)) == first
+    assert calls == []  # An installed baseline is inspected, never re-resolved.
+    if corruption:
+        receipt = runtime_environment.receipt_directory(tmp_path)
+        project = runtime_environment.project_path(tmp_path)
+        target, value = {
+            "marker": (receipt / "installation-prepared.json", "[]"),
+            "lock": (project / "uv.lock", "changed"),
+            "manifest": (project / "pyproject.toml", "changed"),
+            "inventory": (receipt / "runtime-installed.json", "[1]"),
+        }[corruption]
+        target.write_text(value)
+        inspected = asyncio.run(setup.prepare(tmp_path))
+        assert inspected["ok"] is False and calls == []
+        assert target.read_text() == value and not updates.active_release(tmp_path)
+
+
+def test_runtime_preparation_failure_keeps_closed_command_facts(tmp_path):
+    from amplifier_web.update_diagnostics import CommandFailure
+    owner = setup._Preparation(tmp_path, tmp_path / "attempt")
+    async def fail():
+        raise CommandFailure({"exitCode": 1, "stderrBytes": 42, "stdoutBytes": 0,
+                              "durationMs": 12, "text": "SECRET", "argv": ["SECRET"]})
+    with pytest.raises(CommandFailure):
+        asyncio.run(owner.run("initial-runtime-lock", fail))
+    saved = json.loads((owner.stage / "install-failure.json").read_text())
+    assert saved["exitCode"] == 1 and saved["stderrBytes"] == 42
+    assert "SECRET" not in json.dumps(saved)

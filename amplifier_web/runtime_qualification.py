@@ -171,7 +171,7 @@ async def prepare_overrides(project, target):
     policy once, so ordinary recorded workers do not depend on exporter changes.
     """
     from .updates import process
-    from .deployment import write_private
+    from .host.config import write_private
     project, target = Path(project).resolve(), Path(target)
     if (target.parent / 'runtime-installed.json').exists():
         return verify_install_overrides(project, target)
@@ -378,11 +378,13 @@ async def freeze(manager, generation, project):
                 raise ValueError('The frozen worker installation differs from its prepared source graph.')
             from .deployment import write_private
             write_private(final / 'qualification.json', json.dumps({'key': key,
-                'lockSha256': hashlib.sha256((final / 'uv.lock').read_bytes()).hexdigest()}))
+                'lockSha256': hashlib.sha256((final / 'uv.lock').read_bytes()).hexdigest()}),
+                owned_root=manager.home)
         else:
             manager.diagnostics.record('ecosystem-runtime-reuse', 'succeeded')
     from .deployment import write_private
-    write_private(receipt / 'runtime-project.json', json.dumps({'project': final.name}))
+    write_private(receipt / 'runtime-project.json', json.dumps({'project': final.name}),
+                  owned_root=manager.home)
     receipt.joinpath('runtime-base.toml').write_bytes(environments.declared_manifest())
     shutil.copy2(final / 'pyproject.toml', receipt / 'runtime.toml')
     shutil.copy2(final / 'uv.lock', receipt / 'runtime.lock')
