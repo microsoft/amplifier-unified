@@ -269,15 +269,16 @@ def applied(session, payload):
     if (type(revision) is not int or revision > session.get('nextMessageRevision', 0)
             or revision <= session.get('appliedConfigurationRevision', -1)):
         return
+    pending = session.get('pendingBundleSelection')
+    if (revision == session.get('nextMessageRevision', 0)
+            and pending and pending['bundle'] != payload.get('bundle')):
+        return
     # A slow earlier mount may finish after the user saves a future choice.
     # Record its actual root, without clearing or relabelling that newer intent.
     if payload.get('bundle'):
         session['bundle'] = payload['bundle']
     session['appliedConfigurationRevision'] = revision
     if revision != session.get('nextMessageRevision', 0):
-        return
-    pending = session.get('pendingBundleSelection')
-    if pending and pending['bundle'] != payload.get('bundle'):
         return
     if pending:
         session['bundle'] = pending['bundle']

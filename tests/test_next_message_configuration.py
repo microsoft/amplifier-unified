@@ -488,6 +488,16 @@ async def test_active_input_keeps_its_snapshot_and_later_choices_wait_for_next_i
     assert 'pendingModelSelection' not in current and 'pendingBundleSelection' not in current
 
 
+def test_mismatched_bundle_ack_cannot_change_current_or_future_configuration():
+    from amplifier_web.next_message_configuration import applied
+    current = {'nextMessageRevision': 2, 'appliedConfigurationRevision': 1, 'bundle': 'anchors',
+               'pendingBundleSelection': {'bundle': 'work'}, 'nextMessageStatus': 'saved',
+               'pendingModelSelection': {'instance': 'one', 'model': 'chosen'}}
+    before = deepcopy(current)
+    applied(current, {'revision': 2, 'bundle': 'unexpected'})
+    assert current == before
+
+
 @pytest.mark.parametrize('fault', ['stop', 'newer', 'permission'])
 async def test_delayed_validation_refuses_before_start_and_keeps_intent(app, monkeypatch, fault):
     from amplifier_web import draft_defaults

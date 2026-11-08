@@ -117,6 +117,8 @@ must not silently retry it over another browser's choice.
 These future choices remain editable while this host is running or stopping a
 turn, including active child work and pending delivery. Saving never changes
 that turn's captured model, effort, bundle, ownership, or execution status.
+Steering remains part of the current run and keeps that run's settings; it is
+not a fresh-turn configuration boundary.
 Unresolved configuration mutations, read-only history, and ownership on another
 host still block a save and must be explained at the controls.
 
