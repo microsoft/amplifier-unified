@@ -22,13 +22,13 @@ import zipfile
 
 
 # Exact reviewed prototype inputs, not a general support declaration. This app
-# wheel was built from the byte-verified 40e5 source snapshot; later bootstrap
+# wheel was built from the byte-verified b3a21 source snapshot; later bootstrap
 # edits do not manufacture a different Git origin for those immutable bytes.
 # The older 0.54.5 prototype and its receipts remain in history, not as fallback.
-APP_SOURCE = "40e5fcb49c91449b7b4bd6eeff085883ec97006a"
+APP_SOURCE = "b3a21a3691b02249abfc5255f8b3e9fc67adc6ec"
 APP_VERSION = "0.65.0"
-APP_SHA256 = "dec614dd6bc2112db34c7fd8b7e308c78abe65213cb5c4d1d7b459c66e90a72b"
-APP_BYTES = 10353135
+APP_SHA256 = "adb74f2aa0494cf19c51d03d0ff8adc738268ac4bcaa2028fd43b766685d88c8"
+APP_BYTES = 10353394
 APP_METADATA_SHA256 = "04c86275a237665915a51af12d65ba35dc4a6e66a89a205c79adc1abeef46b85"
 LOCK_SHA256 = "a430eea8399afdb460ea3755f656b9692dfa1ee7c696171e6251b7b7b40538c6"
 PRODUCTION_REQUIREMENTS_SHA256 = "6249ca66ef434f47735286eed61756c4c37e1ead9de607c7724c3adb6b7ffeb5"
