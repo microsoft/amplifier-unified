@@ -83,6 +83,69 @@ for(const choice of ['medium','none',''])test('basic default effort sends narrow
  }finally{await act(async()=>root?.unmount())}
 });
 
+test('effort-only edit cannot overwrite a refreshed model with the retained editor draft',async()=>{
+ let current={...state({step:'model',id:'one',module:'provider-openai',model:'model-a',settingDefault:true}),
+  setup:{providersLoadedAt:1,providers:[{id:'one',module:'provider-openai',config:{default_model:'model-a',reasoning_effort:'medium'}}],
+   providerCatalogs:{one:{sharedCatalogKey:'key'}}},
+  modelCatalogs:{key:{phase:'ready',models:['model-a','model-b'],metadata:{configSchema:{fields:[{id:'reasoning_effort',choices:['none','medium','high']}]}}}}};
+ let saved={default_model:'model-a',reasoning_effort:'medium'},root;const calls=[];
+ const dispatch=async(action,args)=>{
+  calls.push([action,args]);
+  if(action==='providers.finishSetup'){
+   if(args.expectedModel!==saved.default_model)return {accepted:false,error:'The default model changed. Refresh this connection before saving reasoning effort.'};
+   saved={default_model:args.model,reasoning_effort:args.effort};
+  }
+  return {accepted:true,operationId:'effort-save'};
+ };
+ const render=()=>React.createElement(AIConnections,{state:current,act:dispatch,navigate:()=>{}});
+ try{
+  await act(async()=>root=create(render()));
+  assert.equal(root.root.findByProps({id:'ai-default-effort'}).props.value,'medium');
+  // Another client saves B. The provider snapshot updates, but this editor's
+  // model-A draft remains intentionally retained.
+  saved={default_model:'model-b',reasoning_effort:'none'};
+  current={...current,setup:{...current.setup,providers:[{...current.setup.providers[0],config:{...saved}}]}};
+  await act(async()=>root.update(render()));
+  assert.equal(current.view.aiConnectionEditor.model,'model-a');
+  await act(async()=>root.root.findByProps({id:'ai-default-effort'}).props.onChange({target:{value:'high'}}));
+  assert.deepEqual(saved,{default_model:'model-b',reasoning_effort:'none'});
+  assert.match(JSON.stringify(root.toJSON()),/default model changed/i);
+  assert.equal(calls.filter(([action])=>action==='providers.finishSetup').length,0,'known stale editor must not submit a model mutation');
+  // Explicitly reopening the editor supplies the new saved model rather than
+  // silently rebasing the retained draft on a provider-row refresh.
+  current={...current,view:{aiConnectionEditor:{...current.view.aiConnectionEditor,model:'model-b'}}};
+  await act(async()=>root.update(render()));
+  await act(async()=>root.root.findByProps({id:'ai-default-effort'}).props.onChange({target:{value:'high'}}));
+  assert.deepEqual(saved,{default_model:'model-b',reasoning_effort:'high'});
+  assert.deepEqual(calls.find(([action])=>action==='providers.finishSetup')[1],
+   {id:'one',model:'model-b',expectedModel:'model-b',effort:'high',scope:'global',initializeRouting:false});
+ }finally{await act(async()=>root?.unmount())}
+});
+
+test('effort precondition stays bound to the draft if the host changes before the response',async()=>{
+ const current={...state({step:'model',id:'one',module:'provider-openai',model:'model-a',settingDefault:true}),
+  setup:{providersLoadedAt:1,providers:[{id:'one',module:'provider-openai',config:{default_model:'model-a',reasoning_effort:'medium'}}],
+   providerCatalogs:{one:{sharedCatalogKey:'key'}}},
+  modelCatalogs:{key:{phase:'ready',models:['model-a','model-b'],metadata:{configSchema:{fields:[{id:'reasoning_effort',choices:['none','medium','high']}]}}}}};
+ const saved={default_model:'model-b',reasoning_effort:'none'},calls=[];let root;
+ try{
+  await act(async()=>root=create(React.createElement(AIConnections,{state:current,act:async(action,args)=>{
+   calls.push([action,args]);
+   if(action==='providers.finishSetup'){
+    assert.equal(args.model,'model-a');
+    assert.equal(args.expectedModel,'model-a');
+    assert.notEqual(args.expectedModel,saved.default_model);
+    return {accepted:false,error:'The default model changed. Refresh this connection before saving reasoning effort.'};
+   }
+   return {accepted:true,operationId:'other'};
+  },navigate:()=>{}})));
+  await act(async()=>root.root.findByProps({id:'ai-default-effort'}).props.onChange({target:{value:'high'}}));
+  assert.deepEqual(saved,{default_model:'model-b',reasoning_effort:'none'});
+  assert.equal(calls.filter(([action])=>action==='providers.finishSetup').length,1);
+  assert.match(JSON.stringify(root.toJSON()),/default model changed/i);
+ }finally{await act(async()=>root?.unmount())}
+});
+
 test('connection detail respects per-connection local catalog testability',async()=>{
  const {AIConnectionDetail}=await vite.ssrLoadModule('/src/ai-connection-detail.jsx');
  let root;const calls=[];

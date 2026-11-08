@@ -136,6 +136,16 @@ export function AIConnections({state,session,act,navigate,onReturnToChat,readCom
  const effortField=providerFields(catalog?.metadata||selected,{model:d.model,default_model:d.model}).find(field=>field.id==='reasoning_effort');
  const effortChoices=(effortField?.choices||[]).map(value=>typeof value==='object'?value.value:value);
  const defaultEffort=selected?.config?.reasoning_effort??'';
+ const saveDefaultEffort=effort=>{
+  const model=d.model?.trim()||'',savedModel=selected?.config?.default_model||selected?.config?.model||'';
+  if(model!==savedModel){
+   setError('The default model changed. Reopen this connection before saving reasoning effort. Your model draft is kept.');
+   return;
+  }
+  // Bind the precondition to the model this draft edits, not a later provider
+  // snapshot. The host still rejects a change made after this render.
+  run('providers.finishSetup',{id:d.id,model,expectedModel:model,effort,scope,initializeRouting:false},'effort');
+ };
  const modelBusy=setupPending(setup.operations?.['providers.models:'+d.id])||catalog?.phase==='working';
  const credential=credentialOperation?.phase==='ready'&&credentialOperation.commandId
   &&setup.credentialCheck?.commandId===credentialOperation.commandId
@@ -207,7 +217,7 @@ export function AIConnections({state,session,act,navigate,onReturnToChat,readCom
      {models.length>0?<><label htmlFor={configId('ai-model')}>Model</label><ModelSelect id={configId('ai-model')} label="Model" value={d.model||''} catalogKey={d.id} entry={{...catalog,models}} state={state} act={act} disabled={busy} onChange={model=>{edit({model});if(d.settingDefault&&model.trim())run('providers.finishSetup',{id:d.id,model,scope,initializeRouting:false})}}/></>:<><ModelOriginNotice entry={catalog}/><p role="status">{modelBusy?'Loading models…':catalog?.phase==='ready'&&catalog?.supported!==false?'This connection returned no models. Enter an exact model ID under More options.':'No model list is available yet. Retry or enter a model ID under More options.'}</p></>}
      {catalog?.phase==='error'&&<ResultNotice phase="error" message={catalog.error||'Could not refresh the model list. Saved choices are kept.'}/>}
      <button className="a-link" data-action="providers.models" disabled={busy||modelBusy} onClick={()=>run('providers.models',{id:d.id,refresh:true})}><RefreshCw/>Refresh models</button>
-     {effortChoices.length>0&&<><label htmlFor={configId('ai-default-effort')}>Default reasoning effort</label><select id={configId('ai-default-effort')} disabled={busy||!d.model?.trim()} value={defaultEffort} data-action="providers.finishSetup" onChange={event=>run('providers.finishSetup',{id:d.id,model:d.model,expectedModel:selected?.config?.default_model||selected?.config?.model||'',effort:event.target.value||null,scope,initializeRouting:false},'effort')}>
+     {effortChoices.length>0&&<><label htmlFor={configId('ai-default-effort')}>Default reasoning effort</label><select id={configId('ai-default-effort')} disabled={busy||!d.model?.trim()} value={defaultEffort} data-action="providers.finishSetup" onChange={event=>saveDefaultEffort(event.target.value||null)}>
       <option value="">Use provider default{effortField.default!=null?` (${effortField.default})`:''}</option>
       {defaultEffort&&!effortChoices.includes(defaultEffort)&&<option value={defaultEffort}>{defaultEffort} (saved)</option>}
       {effortChoices.map(value=><option key={value} value={value}>{value==='none'?'none — explicit effort choice':value}</option>)}
