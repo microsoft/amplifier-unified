@@ -147,7 +147,7 @@ try {
     Need ($script:Links.Count -eq 1) 'reusable-tool path did not prepare relaunch'
 
     Reset-Model
-    $script:Plan.source='b3a21a3691b02249abfc5255f8b3e9fc67adc6ec'
+    $script:Plan.source='d9b26e7bb3c5270d377520b82e498111384e931d'
     $script:Plan.version='0.65.0'
     $script:Plan.sourceMode='pinned-vcs'
     $script:UseExisting=$true
