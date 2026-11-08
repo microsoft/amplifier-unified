@@ -171,6 +171,8 @@ class ExecutionEvents:
         return self.admission_inputs.get(sid, self.admission_inputs.get(self.root_id, self.turn_id))
 
     async def _begin_provider_call(self, sid, provider, request, *, label=None, run_id=None, request_options=None):
+        from . import request_projection
+        projection_guard = request_projection.claim(self, provider, request)
         parent,turn = self.parent(sid)
         admission_input = self.admission_input(sid)
         purpose=CALL_PURPOSE.get()
@@ -202,6 +204,13 @@ class ExecutionEvents:
         if active and not purpose:
             delivery, attempt = active
             delivery.admit_work(attempt, row, guarded=self.admission_guard is not None)
+        try:
+            request_projection.validate(projection_guard, request, request_options or {})
+        except Exception as error:
+            from .session_health import exception_details
+            self.publish({**row, 'phase': 'error', 'endedAt': time.time(),
+                          'failure': exception_details(error)})
+            raise
         from .context_inspection_adapter import safe_observe
         # Synchronous passive validation after the existing awaits. No guard,
         # quota, Work join, refit or provider-entry authority is changed here.

@@ -1,0 +1,73 @@
+"""Prepared image guards are execution checks, independent of numeric capture."""
+import asyncio
+from types import SimpleNamespace
+
+import pytest
+from amplifier_core.message_models import ChatRequest
+from amplifier_web.surface_delivery import SurfaceProvider
+from test_context_inspection import observed, request
+from test_provider_capture import NoWorkDelivery
+
+
+@pytest.mark.parametrize('boundary', ['metadata', 'admission'])
+@pytest.mark.parametrize('mutation', ['source', 'owner', 'request', 'options'])
+@pytest.mark.parametrize('observer_enabled', [False, True])
+async def test_projection_refuses_post_await_change_without_work_or_ticket(
+        tmp_path, boundary, mutation, observer_enabled):
+    observer, events, provider = observed(tmp_path, recording=False)
+    state = {'valid': True, 'value': None}
+    def validate():
+        if not state['valid']:raise ValueError('Prepared computer screenshot is no longer current')
+    def project(value):return value, validate
+    state['project'] = project
+    coordinator = SimpleNamespace(get_capability=lambda name: state['project'])
+    delivery = NoWorkDelivery()
+    original = delivery.finalize_work
+    async def finalize(value, **kwargs):
+        state['value'] = value
+        return await original(value, **kwargs)
+    delivery.finalize_work = finalize
+    surface = SurfaceProvider(provider, delivery, coordinator=coordinator)
+    value = request('X'*1_000_100);before = value.model_dump_json()
+    options = {'custom': {'limit': 1}}
+    await surface.request_budget(value, request_options=options)
+    # Numeric capture unavailable must not remove image authority validation.
+    surface._capture_tickets.clear()
+    if not observer_enabled:events.context_inspectors.clear()
+    async def change():
+        await asyncio.sleep(0)
+        if mutation == 'source':state['valid'] = False
+        elif mutation == 'owner':state['project'] = lambda value: (value, None)
+        elif mutation == 'request':state['value'].messages[-1].content += 'changed'
+        else:options['custom']['limit'] = 2
+    if boundary == 'metadata':
+        info = provider.get_info()
+        async def get_info():await change();return info
+        provider.get_info = get_info
+    else:
+        events.admission_guard = lambda row: change()
+    with pytest.raises(ValueError, match='(screenshot|projection)'):
+        await surface.complete(value, **options)
+    assert provider.calls == []
+    assert value.model_dump_json() == before
+    assert any(row.get('phase') == 'error' for row in events.nodes.values())
+    await observer.drain()
+
+
+async def test_projection_encoding_shared_with_capture(tmp_path, monkeypatch):
+    observer, events, provider = observed(tmp_path, recording=False)
+    coordinator = SimpleNamespace(get_capability=lambda name: project)
+    def project(value):return value, lambda: None
+    surface = SurfaceProvider(provider, NoWorkDelivery(), coordinator=coordinator)
+    value=request('X'*1_000_100)
+    await surface.request_budget(value)
+    count=0;original=ChatRequest.model_dump_json
+    def encode(self,*args,**kwargs):
+        nonlocal count
+        count+=1
+        return original(self,*args,**kwargs)
+    monkeypatch.setattr(ChatRequest,'model_dump_json',encode)
+    await surface.complete(value)
+    assert count==1
+    await observer.drain()
+    assert observer.store.read()['selected']['budgetStatus']=='captured'

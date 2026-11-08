@@ -114,6 +114,22 @@ can explain a future capture. Existing captures are never backfilled.
 
 ### Passive final-fit budget attribution
 
+Computer screenshot projection is prepared before `SurfaceProvider` calls its
+existing delivery/fitting owner. When the independently released hook advertises
+`computer_use.prepare_request`, the host retains its image-source validator with
+the bounded prepared record. The hook's no-op projection preserves object identity;
+already-projected blocks pass unchanged through its ordinary provider wrapper.
+Ordinary CLI/Agent clients do not need the Unified integration.
+
+Image validation is **execution evidence, not optional diagnostic evidence**. It
+runs synchronously after metadata/admission and before provider entry, including
+when Work, the inspector or a numeric ticket is absent. The current registered
+projection owner, original capture/tool/file identity and exact fitted request and
+options must still match. Refusal records the admitted call's error and never
+silently retries or substitutes pixels. Its one complete current encoding is shared
+with numeric attribution when present. Existing no-image diagnostic mismatches
+still suppress attribution only. No skip registry or public request token is added.
+
 `SurfaceProvider` already owns a full fitted `ChatRequest` serialization. Its
 private capture ticket shares that exact immutable string (no second prompt copy)
 with a particular budget attempt and normalized dispatch options. Original request

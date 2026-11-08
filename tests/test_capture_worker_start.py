@@ -22,7 +22,8 @@ from test_context_inspection import config, evidence
 
 @pytest.mark.parametrize('restore',[False,True])
 @pytest.mark.parametrize('computer_hook',[False,True])
-async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_hook):
+@pytest.mark.parametrize('image',[False,True])
+async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_hook,image):
     import socket
     def forbidden(*args,**kwargs):raise AssertionError('External network forbidden')
     monkeypatch.setattr(socket.socket,'connect',forbidden)
@@ -46,6 +47,7 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
     session=await prepared.create_session(session_id=sid);c=session.coordinator
     await c.mount('providers',raw,name='configured')
     hook_cleanup=None
+    computer=None
     if computer_hook:
         from amplifier_module_hook_computer_use import mount
         class ScreenshotAuthority:
@@ -57,8 +59,35 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
                 raise AssertionError('No screenshot was requested')
             async def execute(self,*args,**kwargs):
                 raise AssertionError('No desktop operation is permitted')
-        await c.mount('tools',ScreenshotAuthority(),name='fixture_screenshot')
+        if image:
+            import io
+            from PIL import Image
+            import amplifier_module_tool_computer_use as tool_module
+            from amplifier_module_tool_computer_use.base import ScreenGeometry
+            class Backend:
+                name='fixture';is_remote=False
+                def screen_geometry(self):return ScreenGeometry(32,32,0,0)
+                def list_monitors(self):raise NotImplementedError()
+                def capture(self,region=None):
+                    output=io.BytesIO();Image.new('RGB',(32,32),'navy').save(output,format='PNG')
+                    return output.getvalue()
+                def close(self):pass
+            monkeypatch.setattr(tool_module,'SHOT_DIR',tmp_path/'shots')
+            computer=tool_module.ComputerTool(Backend(),{'max_edge':32})
+            computer.resolve_display()
+        await c.mount('tools',computer or ScreenshotAuthority(),name='fixture_screenshot')
         hook_cleanup=await mount(c)
+    async def capture_image():
+        if computer:
+            result=await computer.execute({'action':'screenshot'})
+            assert result.success, result.error
+            await c.hooks.emit('tool:post',{'tool_name':'fixture_screenshot',
+                'tool_call_id':'capture','result':result.model_dump()})
+            await c.get('context').set_messages([
+                {'role':'assistant','content':None,'tool_calls':[{'id':'capture','type':'function',
+                 'function':{'name':'fixture_screenshot','arguments':'{"action":"screenshot"}'}}]},
+                {'role':'tool','name':'fixture_screenshot','tool_call_id':'capture',
+                 'content':result.model_dump_json()+'\\nretained appended context'}])
     selection={'instance':'configured','model':'gpt-6-astra','effort':'high'}
     c.get('orchestrator').root_provider=SelectedProvider(raw,selection)
     async def instructions():return 'W'*1_000_100
@@ -94,23 +123,26 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
         path.write_text(json.dumps({'selection':selection,'budget':{'maxOutputTokens':321}}))
     try:
         await worker.start({'id':sid,'workspace':str(workspace),'selection':selection},raise_errors=True,recover_bundle=False)
+        await capture_image()
         await worker.runtime.submit(Input('user','Complete without tools.',activation=worker.activation))
         await asyncio.wait_for(finished.wait(),20)
         assert any(row.get('type')=='generation.finished' for row in published), published
         await worker.runtime.submit(Input('stop',activation=worker.activation))
         await worker.execution
         observer=worker.telemetry.context_inspectors[sid];await observer.drain();row=observer.store.read()['selected']
-        evidence('full-worker-'+str(restore)+'-'+str(computer_hook),{
+        evidence('full-worker-'+str(restore)+'-'+str(computer_hook)+'-'+str(image),{
             'header':row,'requests':paths,'workerStart':True,
             'rootType':type(c.get('orchestrator').root_provider).__name__,
             'computerHookMounted':computer_hook,
             'computerHookWrapped':getattr(raw,'_amplifier_computer_use_wrapped',False)})
         assert row['budgetStatus']=='captured'
         assert row['budget']['measurement']['input_tokens']==100
+        assert len({p['inputHash'] for p in paths})==1
     finally:
-        evidence('full-worker-lifecycle-'+str(restore)+'-'+str(computer_hook),{'events':published,'requests':paths})
+        evidence('full-worker-lifecycle-'+str(restore)+'-'+str(computer_hook)+'-'+str(image),{'events':published,'requests':paths})
         if worker.execution and not worker.execution.done():
             await worker.runtime.submit(Input('stop',activation=worker.activation));await asyncio.wait_for(worker.execution,5)
         if worker.controls:await worker.controls.close()
         if hook_cleanup:await hook_cleanup()
+        if computer:computer._backend.close()
         await session.cleanup();await client.close()
