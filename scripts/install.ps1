@@ -685,11 +685,15 @@ function Invoke-InstallChild([string] $Executable, [string[]] $Arguments, [hasht
         $info.EnvironmentVariables['GIT_CONFIG_GLOBAL'] = 'NUL'
         $info.EnvironmentVariables['GIT_CONFIG_SYSTEM'] = 'NUL'
         $info.EnvironmentVariables['GIT_TERMINAL_PROMPT'] = '0'
-        $info.EnvironmentVariables['GIT_CONFIG_COUNT'] = '2'
+        $info.EnvironmentVariables['GIT_CONFIG_COUNT'] = '3'
         $info.EnvironmentVariables['GIT_CONFIG_KEY_0'] = 'credential.helper'
         $info.EnvironmentVariables['GIT_CONFIG_VALUE_0'] = ''
         $info.EnvironmentVariables['GIT_CONFIG_KEY_1'] = 'core.askPass'
         $info.EnvironmentVariables['GIT_CONFIG_VALUE_1'] = ''
+        # Root-local caches can exceed legacy MAX_PATH during a full pinned
+        # checkout. This is Git's child-only support, not an OS policy change.
+        $info.EnvironmentVariables['GIT_CONFIG_KEY_2'] = 'core.longpaths'
+        $info.EnvironmentVariables['GIT_CONFIG_VALUE_2'] = 'true'
     }
     if ($script:InstallStage -like 'prototype*' -or $Environment.ContainsKey('UV_TOOL_DIR')) {
         # Keep the ordinary Windows profile identity. Discard only package/tool
@@ -754,12 +758,12 @@ function Install-VerifiedHelper([string] $Name) {
     # GitHub asset digests, not guessed URLs or claims of signature verification.
     $helpers = @{
         uv = @{
-            version = '0.12.18'
-            url = 'https://github.com/astral-sh/uv/releases/download/0.12.18/uv-x86_64-pc-windows-msvc.zip'
-            sha256 = 'cae6a3bc25239f83dffb467a4b180508d9da23986c04639ebfa44e43e6a84bff'
+            version = '0.13.7'
+            url = 'https://github.com/astral-sh/uv/releases/download/0.13.7/uv-x86_64-pc-windows-msvc.zip'
+            sha256 = '0cdc5b38fe5a8168ed6a25814f5ba43c21d313dd3187314fccb37b7cec46e021'
             executable = 'uv.exe'
             license = 'LICENSE-MIT'
-            licenseSource = 'https://raw.githubusercontent.com/astral-sh/uv/01cb90c1a4f88af09906cb60de9766d2add4a062'
+            licenseSource = 'https://raw.githubusercontent.com/astral-sh/uv/316c827e058c16b71d5c507a20729c2995a7bcce'
             licenseHashes = @{
                 'LICENSE-MIT' = '860e3d7a86b84e6a7012c7a635fc64df475cebc6cce34dfeb73a5982ec58176c'
                 'LICENSE-APACHE' = 'c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4'
@@ -1071,7 +1075,7 @@ function Invoke-UnifiedPrototype([string] $ManifestUrl, [string] $ManifestHash, 
         $childEnv = Get-PrototypeEnvironment $script:InstallWork $uv $git
         if ($mode -eq 'pinned-vcs') {
             $uvVersion = Invoke-InstallChild $uv @('--version') $childEnv
-            if ($uvVersion -cnotmatch '^uv 0\.12\.18(?:\s|$)') { throw 'Pinned bootstrap uv identity mismatch.' }
+            if ($uvVersion -cnotmatch '^uv 0\.13\.7(?:\s|$)') { throw 'Pinned bootstrap uv identity mismatch.' }
         }
         $script:InstallStage = 'private ordinary CPython'
         Write-Host '[2/3] Preparing ordinary CPython 3.13 without changing the system Python.'
@@ -1118,7 +1122,7 @@ function Invoke-UnifiedPrototype([string] $ManifestUrl, [string] $ManifestHash, 
             manifestSha256 = $ManifestHash; capsuleSha256 = $plan.capsule.sha256
             python = $hostPython; uv = $uv; git = $git
             sourceMode = $mode
-            bootstrapUv = if ($mode -eq 'pinned-vcs') { '0.12.18' } else { 'reused-or-private' }
+            bootstrapUv = if ($mode -eq 'pinned-vcs') { '0.13.7' } else { 'reused-or-private' }
         }
         $null = Invoke-InstallChild $hostPython @('-I', '-B', $launcher, '--check') $childEnv
         $shortcutPath = Write-PrototypeShortcut $hostPython $launcher $LogonHost

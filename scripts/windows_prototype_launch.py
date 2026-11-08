@@ -40,6 +40,16 @@ def child_environment(root: Path, receipt: dict) -> dict[str, str]:
             }:
                 del result[name]
         result["UV_NO_CONFIG"] = "1"
+        # Keep caller-owned Git/credential settings, then append only the
+        # Git-for-Windows path support needed by this root's longer cache paths.
+        # No user/machine gitconfig or Windows registry policy is changed.
+        count = result.get("GIT_CONFIG_COUNT", "0")
+        if not count.isascii() or not count.isdecimal() or not 0 <= int(count) <= 64:
+            raise RuntimeError("Inherited Git configuration count is invalid; no launch requested.")
+        index = int(count)
+        result["GIT_CONFIG_COUNT"] = str(index + 1)
+        result[f"GIT_CONFIG_KEY_{index}"] = "core.longpaths"
+        result[f"GIT_CONFIG_VALUE_{index}"] = "true"
     result.update({
         "AMPLIFIER_WEB_HOME": str(root / "app"),
         "AMPLIFIER_HOME": str(root / "shared"),

@@ -45,11 +45,47 @@ separate. The public activation gate remains closed until those remaining
 boundaries are qualified. Script execution policy is respected: a policy refusal
 does not authorize changing it or executing the file through another route.
 
+### Clean-account entry correction
+
+The first genuine disposable Windows 11 account exposed a delivery defect:
+Windows PowerShell 5.1's default effective policy was `Restricted`, and the
+ordinary non-admin user's normal invocation of `install.ps1` refused with
+`PSSecurityException` before setup. The policy was not changed. That result
+supersedes any assumption that prepared-account script fixtures established
+zero-prerequisite installation.
+
+The prototype therefore adds a **native x64 executable entry**, built on a
+Windows build runner against the in-box .NET Framework 4.8. No compiler, Python,
+Git, uv, WSL, PowerShell 7 or script-policy change is required on the target.
+`scripts/windows_bootstrap_native.cs` performs bootstrap directly; it does not
+invoke PowerShell, load its automation engine, or repackage the refused script
+as an inline command. Its build preparer
+`scripts/windows_bootstrap_native.py` reuses the exact existing C# `InstallStorage`
+body and canonical helper/app pins at build time, rather than introducing a
+second private-filesystem policy.
+
+This is still an explicit **prototype**, not a public installation path.
+It requires a reviewed manifest digest and preserves the same capsule, frozen
+host graph, private helper/Python layout, installed audit and ordinary launcher.
+The optional `--capsule-file` input permits a staged, hash-verified candidate
+before publication; its receipt explicitly distinguishes that path from an
+official HTTPS download. Local staging is not public-download acceptance.
+`--background` selects the already-defined owner-logon mode; `--no-open`
+prepares setup without opening a browser or starting the app.
+
+Build-source preparation, compilation, restricted-policy execution, clean
+bootstrap, signed/download reputation, browser trust and actual sign-in/out
+remain separate evidence. An unsigned development executable is not a signed
+or SmartScreen-qualified release. Neither entry opens the public activation
+gate, silently changes trust, or qualifies automatic upgrades.
+
 ## Zero-prerequisite bootstrap prototype
 
-The requested direction is a single PowerShell paste for an ordinary Windows
+The initial direction was a single PowerShell paste for an ordinary Windows
 information worker, with **no curl, Git, Python, uv, WSL, PowerShell 7 or winget
-assumed**. `scripts/install.ps1` now has a separate explicit prototype entry:
+assumed**. The clean-account policy result above requires the native entry
+instead of routing around a refused script. The retained `scripts/install.ps1`
+has a separate explicit prototype entry:
 `-PrototypeManifestUrl` plus `-PrototypeManifestSha256`. The no-argument public
 release installer still requires its native-support record and retains its
 closed activation gate. A prototype manifest has `status: prototype`; it is
@@ -64,7 +100,7 @@ installation has run on a clean Windows account.
 ### Chosen prerequisite strategy
 
 1. The selected `pinned-vcs` mode always acquires root-local official uv
-   **0.12.18** and standard **MinGit
+   **0.13.7** and standard **MinGit
    2.56.0.windows.4** ZIPs. Verify pinned SHA-256 before extraction/execution;
    retain whole distributions, licenses and receipts. It does not rely on
    preinstalled developer tools. The retained `offline-wheels` mode may reuse
@@ -94,11 +130,20 @@ are a useful architecture/checksum precedent, not a dependency.
 Do not copy execution-policy bypasses from other projects.
 
 Pinned helper digests are those reported by the publishers' exact
-[uv release metadata](https://api.github.com/repos/astral-sh/uv/releases/tags/0.12.18)
+[uv release metadata](https://api.github.com/repos/astral-sh/uv/releases/tags/0.13.7)
 and [Git for Windows metadata](https://api.github.com/repos/git-for-windows/git/releases/tags/v2.56.0.windows.4).
 Publisher-served digests establish integrity, not independent signatures.
 uv verifies its own pinned python-build-standalone download digest; the exact
 Python patch and resulting interpreter still need native candidate checks.
+
+The genuine clean-account run found that the original bootstrap uv 0.12.18 has
+no bundled download for the selected CPython 3.13.17. Its Python-install child
+exited 2 before host installation. A read-only native catalog probe confirms
+uv 0.13.7 includes ordinary Windows x64 CPython 3.13.17; the helper is now pinned
+to that publisher's exact ZIP digest and source-license commit. The selected
+Python, original app wheel and frozen host dependencies do not change.
+The old prepared-account proof and failed bootstrap remain retained; a catalog
+entry alone is not successful interpreter installation or fresh-PC acceptance.
 
 ### Build and delivery interface — trial owner only
 
@@ -182,8 +227,16 @@ Anonymous Git access disables credential helpers/configuration. Ordinary
 `USERPROFILE`, `HOMEDRIVE` and `HOMEPATH` stay inherited, not removed or redirected.
 No credentials are saved in the plan/receipt. On relaunch the wrapper restores
 root-local cache, tools, Python and absolute helper PATH. Bootstrap phase uv is
-**0.12.18**; the installed host's `uv==0.13.4` dependency is a distinct artifact,
+**0.13.7**; the installed host's `uv==0.13.4` dependency is a distinct artifact,
 not silently substituted into the install phase.
+
+The first full clean-account checkout also exposed Git's legacy path limit:
+the retained stderr reports `Filename too long` during Foundation checkout.
+This is not an established network/authentication failure. Bootstrap child
+environments now set `core.longpaths=true`; the launcher appends the same Git
+setting after any inherited caller configuration. It preserves existing
+credential settings, rejects malformed/oversized inherited configuration counts,
+and changes neither Windows long-path policy nor user/machine gitconfig.
 
 The original app wheel is a narrow allowed root artifact; this does not grant
 verified app Git identity for later optional-feature addition. Keep that

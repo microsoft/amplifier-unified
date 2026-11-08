@@ -63,7 +63,7 @@ GIT_SOURCES = {
 }
 SOURCE_MODE = "pinned-vcs"
 BOOTSTRAP_HELPERS = {
-    "uv": {"version": "0.12.18", "sha256": "cae6a3bc25239f83dffb467a4b180508d9da23986c04639ebfa44e43e6a84bff"},
+    "uv": {"version": "0.13.7", "sha256": "0cdc5b38fe5a8168ed6a25814f5ba43c21d313dd3187314fccb37b7cec46e021"},
     "git": {"version": "2.56.0.windows.4", "sha256": "e3bf78351fe777fba47ddee5950082f8a98bb0f02604fdc7ba3ee2cb68ffa877"},
 }
 MAX_WHEEL_BYTES = 134217728

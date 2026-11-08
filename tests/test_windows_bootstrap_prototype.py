@@ -683,6 +683,31 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(env["UV_TOOL_DIR"], str(Path("/trial/tools")))
         self.assertEqual(env["UV_TOOL_BIN_DIR"], str(Path("/trial/tool-bin")))
 
+    def test_long_paths_are_child_only_and_preserve_existing_git_credentials(self):
+        inherited = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "credential.helper",
+                     "GIT_CONFIG_VALUE_0": "synthetic-existing-helper", "PATH": ""}
+        with mock.patch.dict(launcher.os.environ, inherited, clear=True):
+            before = dict(launcher.os.environ)
+            env = launcher.child_environment(Path("/trial"),
+                {"sourceMode": "pinned-vcs", "uv": "/uv/uv", "git": "/git/git"})
+            self.assertEqual(dict(launcher.os.environ), before)
+        self.assertEqual(env["GIT_CONFIG_COUNT"], "2")
+        self.assertEqual(env["GIT_CONFIG_KEY_0"], "credential.helper")
+        self.assertEqual(env["GIT_CONFIG_VALUE_0"], inherited["GIT_CONFIG_VALUE_0"])
+        self.assertEqual(env["GIT_CONFIG_KEY_1"], "core.longpaths")
+        self.assertEqual(env["GIT_CONFIG_VALUE_1"], "true")
+
+    def test_invalid_inherited_git_count_refuses_without_mutation(self):
+        for value in ("-1", "65", "1;ignored", "１", ""):
+            with self.subTest(value=value), mock.patch.dict(
+                launcher.os.environ, {"GIT_CONFIG_COUNT": value}, clear=True
+            ):
+                before = dict(launcher.os.environ)
+                with self.assertRaisesRegex(RuntimeError, "Git configuration count"):
+                    launcher.child_environment(Path("/trial"),
+                        {"sourceMode": "pinned-vcs", "uv": "/uv/uv", "git": "/git/git"})
+                self.assertEqual(dict(launcher.os.environ), before)
+
     def test_cli_commands_use_list_argv_and_hide_sensitive_child_errors(self):
         root = Path("/synthetic/space λ")
         scope = launcher.connection_args(root)
@@ -819,7 +844,7 @@ class BootstrapSourceTests(unittest.TestCase):
         self.assertIn("if ($mode -eq 'pinned-vcs')", proto)
         self.assertIn("$uv = Install-VerifiedHelper 'uv'", proto)
         self.assertIn("$git = Install-VerifiedHelper 'git'", proto)
-        self.assertIn(r"^uv 0\.12\.18", proto)
+        self.assertIn(r"^uv 0\.13\.7", proto)
         self.assertLess(proto.index("'--validate-source'"), proto.index("@('venv'"))
         self.assertLess(proto.index("'--audit-source'"), proto.index("Write-PrototypeShortcut $hostPython"))
         self.assertIn("'--build-constraint'", proto)
