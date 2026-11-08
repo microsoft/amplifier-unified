@@ -92,11 +92,11 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
             import io
             from PIL import Image
             import amplifier_module_tool_computer_use as tool_module
-            from amplifier_module_tool_computer_use.backend import ScreenGeometry
+            from amplifier_module_tool_computer_use.backend import ScreenGeometry, BackendError
             class Backend:
                 name='fixture';is_remote=False
                 def screen_geometry(self):return ScreenGeometry(32,32,0,0)
-                def list_monitors(self):raise NotImplementedError()
+                def list_monitors(self):raise BackendError('Fixture has no monitor enumeration')
                 def capture(self,region=None):
                     output=io.BytesIO();Image.new('RGB',(32,32),'navy').save(output,format='PNG')
                     return output.getvalue()
