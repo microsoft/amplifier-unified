@@ -12,7 +12,7 @@ function DeliveryWarning({message,session,delivery,localDelivery,dispatch,retry,
  const inputId=message.inputId||localDelivery?.commandId;
  const checkOwner=usePendingDeliveryCheck(JSON.stringify([session.id,inputId]));
  const pending=submitting||checkOwner.pending;
- const report=checkOwner.settled?.result?.result||localReport,error=checkOwner.settled?.error||localError;
+ const report=localReport||checkOwner.settled?.result?.result,error=localError||checkOwner.settled?.error;
  const storageKey=session.id&&inputId?'amplifier.deliveryWarning.v1:'+JSON.stringify([session.id,inputId]):null;
  const [dismissed,setDismissed]=useState(()=>{try{return !!storageKey&&sessionStorage.getItem(storageKey)==='dismissed'}catch{return false}});
  const [expanded,setExpanded]=useState(false),summary=useRef(null),mounted=useRef(true);
@@ -36,7 +36,7 @@ function DeliveryWarning({message,session,delivery,localDelivery,dispatch,retry,
   [delivery,localDelivery,message.delivery,{status:report?.delivery}].some(row=>['sending','queued','queued_for_update'].includes(row?.status));
  const dismissible=!!storageKey&&!active&&['failed','unknown'].includes(delivery?.status);
  const check=async()=>{
-  if(pending)return;setError('');setConfirm(false);
+  if(pending)return;setReport(null);setError('');setConfirm(false);
   try{
    if(!session.id){setReport({delivery:'not_saved',message:'This message has no confirmed conversation yet. Retry the original submission to check or complete its delivery.'});return;}
    const result=await checkOwner.run(()=>dispatch('conversation.delivery',{sessionId:session.id,inputId},{feedback:false}));

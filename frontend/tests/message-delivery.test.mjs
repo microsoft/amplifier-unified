@@ -38,6 +38,7 @@ test('another browser can check saved delivery and confirm one explicit resend',
  await act(async()=>button(root,'Send again').props.onClick());
  await act(async()=>button(root,'Send this message again').props.onClick());
  assert.deepEqual(calls[1],{action:'conversation.retry',args:{sessionId:'chat',inputId:'original',confirmUncertain:true}});
+    assert.doesNotMatch(JSON.stringify(root.toJSON()),/Delivery not confirmed|Not sent/);
  assert.equal(retryCalls.length,0);await act(async()=>root.unmount());
 });
 for(const [phase,label] of Object.entries({sent:'Sending live direction',accepted:'Accepted; applying live direction',pending:'Accepted; queued at the provider',applied:'Live direction applied to the successor response'})){
