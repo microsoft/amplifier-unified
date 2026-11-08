@@ -51,7 +51,7 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore):
     finished=asyncio.Event();published=[]
     def publish(row):
         published.append(row)
-        if row.get('type')=='generation.finished':finished.set()
+        if row.get('type') in {'generation.finished','generation.failed','generation.detached','runtime.error'}:finished.set()
     monkeypatch.setattr(runtime_worker,'publish',publish)
     async def acquire(workspace,*,runtime,**kw):
         c.register_capability('live.runtime',runtime)
@@ -69,7 +69,7 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore):
     worker.preparation_progress=AsyncMock();worker.history_stamp=lambda:();worker.ownership.register=AsyncMock()
     worker.park=AsyncMock()
     async def bridge(operation,args):
-        if operation=='capacity.admit':return {'allowed':True}
+        if operation=='capacity.admit':return {'allowed':True,'budgetRevision':0,'admittedAt':1}
         if operation=='context.prepare':return {}
         if operation=='context.manifest':return {'surfaces':[],'inputIds':[]}
         return {}
@@ -81,6 +81,7 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore):
         await worker.start({'id':sid,'workspace':str(workspace),'selection':selection},raise_errors=True,recover_bundle=False)
         await worker.runtime.submit(Input('user','Complete without tools.',activation=worker.activation))
         await asyncio.wait_for(finished.wait(),20)
+        assert any(row.get('type')=='generation.finished' for row in published), published
         await worker.runtime.submit(Input('stop',activation=worker.activation))
         await worker.execution
         observer=worker.telemetry.context_inspectors[sid];await observer.drain();row=observer.store.read()['selected']
@@ -88,6 +89,7 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore):
         assert row['budgetStatus']=='captured'
         assert row['budget']['measurement']['input_tokens']==100
     finally:
+        evidence('full-worker-lifecycle-'+str(restore),{'events':published,'requests':paths})
         if worker.execution and not worker.execution.done():
             await worker.runtime.submit(Input('stop',activation=worker.activation));await asyncio.wait_for(worker.execution,5)
         if worker.controls:await worker.controls.close()
