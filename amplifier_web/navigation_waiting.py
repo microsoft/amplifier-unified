@@ -10,8 +10,8 @@ def dependency(task):
     return bool(task.get('blockProvenance') is not None and dependency_blocked(task))
 
 
-# This partial, covering index excludes settled/unknown/cancelled requests before
-# pagination. Routine reads neither decode receipt bodies nor scan old commands.
+# A rebuildable scalar index over commands. Triggers share the command's own
+# transaction; this table cannot admit work or settle a result.
 PENDING = """json_extract(receipt,'$.commandAction')='coordination.send'
  AND json_extract(receipt,'$.protocol')=2
  AND json_extract(receipt,'$.subscription.notificationVersion')=2
@@ -33,15 +33,32 @@ TITLE = "substr(json_extract(receipt,'$.target.title'),1,200)"
 
 
 def initialize(db):
-    if db.execute("SELECT 1 FROM sqlite_master WHERE name='commands'").fetchone():
-        db.execute(f"CREATE INDEX IF NOT EXISTS navigation_pending_waits ON commands({KEYS},{TARGET},{TITLE}) WHERE {PENDING}")
-        db.execute(f"CREATE INDEX IF NOT EXISTS navigation_waiting_target ON commands({TARGET},json_extract(receipt,'$.senderSessionId')) WHERE {PENDING}")
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='commands'").fetchone():
+        return
+    if db.execute("SELECT 1 FROM sqlite_master WHERE name='navigation_pending_requests'").fetchone():
+        return
+    db.execute('''CREATE TABLE navigation_pending_requests(
+        id TEXT PRIMARY KEY,sender TEXT,task_id TEXT,interruption INTEGER,epoch INTEGER,
+        generation TEXT,input_id TEXT,target TEXT,title TEXT)''')
+    db.execute('CREATE INDEX navigation_pending_scope ON navigation_pending_requests(sender,task_id,interruption,epoch,generation,input_id)')
+    db.execute('CREATE INDEX navigation_pending_target ON navigation_pending_requests(target,sender)')
+    values = f'{KEYS},{TARGET},{TITLE}'
+    insert = f"INSERT OR REPLACE INTO navigation_pending_requests SELECT new.id,{values.replace('receipt,', 'new.receipt,')} WHERE {PENDING.replace('receipt,', 'new.receipt,')};"
+    for event in ('INSERT', 'UPDATE OF receipt'):
+        name = 'insert' if event == 'INSERT' else 'update'
+        db.execute(f'''CREATE TRIGGER navigation_wait_{name} AFTER {event} ON commands BEGIN
+            DELETE FROM navigation_pending_requests WHERE id=new.id;
+            {insert} END''')
+    db.execute('''CREATE TRIGGER navigation_wait_delete AFTER DELETE ON commands BEGIN
+        DELETE FROM navigation_pending_requests WHERE id=old.id; END''')
+    # One migration/backfill, not a navigation read. Canonical bytes stay intact.
+    db.execute(f'INSERT INTO navigation_pending_requests SELECT id,{values} FROM commands WHERE {PENDING}')
 
 
 def affected_sources(db, target):
     """Lifecycle publication visits actual pending dependants, never history."""
     return {row[0] for row in db.execute(
-        f"SELECT DISTINCT json_extract(receipt,'$.senderSessionId') FROM commands INDEXED BY navigation_waiting_target WHERE {PENDING} AND {TARGET}=?",
+        "SELECT DISTINCT sender FROM navigation_pending_requests WHERE target=?",
         (target,)) if row[0]}
 
 
@@ -134,19 +151,17 @@ def project(db, session, task):
     prior = task.get('dependencyWaitEpoch')
     if type(prior) is int and prior not in epochs:
         epochs.append(prior)
-    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='navigation_pending_waits'").fetchone():
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='navigation_pending_requests'").fetchone():
         return None
     boundary = input_boundary(session)
     if boundary is None:
         return None
-    sender, identity, interruption, epoch, generation, last_input = KEYS.split(',\n ')
     rows = []
-    # SQLite 3.46 loses covering expression reads with an IN seek here. Two
-    # exact epoch seeks retain the total row bound without reparsing big bodies.
+    # Two exact epoch seeks share a total lookahead bound.
     for value in epochs:
-        rows.extend(db.execute(f"""SELECT {TARGET},{TITLE} FROM commands INDEXED BY navigation_pending_waits
-            WHERE {PENDING} AND {sender}=? AND {identity}=? AND {interruption}=?
-            AND {epoch}=? AND {generation}=? AND {last_input}=?
+        rows.extend(db.execute("""SELECT target,title FROM navigation_pending_requests
+            WHERE sender=? AND task_id=? AND interruption=?
+            AND epoch=? AND generation=? AND input_id=?
             LIMIT ?""", (session['id'], task['id'], session.get('interruptionRevision', 0),
                          value, *boundary, LIMIT + 1 - len(rows))).fetchall())
         if len(rows) > LIMIT:

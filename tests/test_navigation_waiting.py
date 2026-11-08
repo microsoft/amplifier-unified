@@ -140,11 +140,12 @@ def test_pending_query_uses_covering_expressions_not_large_receipt_bodies(db):
     db.set_trace_callback(statements.append)
     assert project(db,session(),task())
     db.set_trace_callback(None)
-    query=next(sql for sql in statements if 'FROM commands' in sql)
+    query=next(sql for sql in statements if 'FROM navigation_pending_requests' in sql)
     operations=db.execute('EXPLAIN '+query).fetchall()
     print('SQLITE',sqlite3.sqlite_version,'PLAN',json.dumps(operations))
     # Expression-index reads must not invoke JSON functions over retained text.
-    assert not any(row[1]=='Function' and 'json_extract' in str(row[5]) for row in operations), operations
+    assert not any(row[1] in {'Function','PureFunc'} and 'json_extract' in str(row[5]) for row in operations), operations
+    assert all('FROM commands' not in sql for sql in statements)
 
 
 def test_wait_epoch_uses_typed_contiguous_changes_and_stops_at_active_boundary():
@@ -332,3 +333,28 @@ def test_waiting_and_paused_filter_shapes_remain_bounded():
         view_patch({'navStatusFilter':kind,'workHomeFilter':kind,
                     'navStatusPages':{kind:1},'workHomePages':{kind:1},
                     'navStatusCollapsed':[kind]})
+
+
+def test_derived_index_preserves_original_receipts_and_three_value_writers(tmp_path):
+    path=tmp_path/'existing.sqlite3'
+    db=sqlite3.connect(path)
+    db.execute('CREATE TABLE commands(id TEXT PRIMARY KEY,fingerprint TEXT,receipt TEXT)')
+    original=json.dumps(receipt(),sort_keys=True)
+    db.execute('INSERT INTO commands VALUES(?,?,?)',('old','fingerprint',original))
+    initialize(db)
+    initialize(db)
+    db.execute('INSERT INTO commands VALUES(?,?,?)',('new','next',original))
+    db.commit();db.close()
+    db=sqlite3.connect(path)
+    assert db.execute('SELECT id,fingerprint,receipt FROM commands ORDER BY id').fetchall()==[
+        ('new','next',original),('old','fingerprint',original)]
+    assert project(db,session(),task())['targets'][0]['sessionId']=='worker'
+    db.execute('DELETE FROM commands WHERE id=?',('new',))
+    db.execute('UPDATE commands SET receipt=? WHERE id=?',
+               (json.dumps(receipt(response={'status':'staged','outcome':'success'})),'old'))
+    assert project(db,session(),task()) is None
+    db.rollback()
+    assert project(db,session(),task()), 'Derived state must roll back with the canonical receipt'
+    db.execute('DELETE FROM commands')
+    assert not db.execute('SELECT 1 FROM navigation_pending_requests').fetchone()
+    db.close()

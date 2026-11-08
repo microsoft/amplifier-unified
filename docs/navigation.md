@@ -383,9 +383,13 @@ This is a passive projection of an agent-recorded dependency block and exact
 pending direct-request subscriptions. It is not an inventory of workers. A
 bounded typed task projection identifies the pre-block epoch without changing
 continuation authority. Existing saved source-generation/input identity prevents an
-old wait from reappearing after new input, runtime replacement, or Stop. A partial
-index reads at most 17 current request references, showing at most 16 with an
+old wait from reappearing after new input, runtime replacement, or Stop. A derived
+scalar index reads at most 17 current request references, showing at most 16 with an
 explicit continuation marker; historical receipt bodies are not decoded.
+The index is populated once when introduced; command insert/update/delete triggers
+maintain it in the canonical command transaction. It contains no request/report
+bodies and has no execution authority. Navigation does not parse retained runtime
+task history; keyed directory task facts are refreshed by the task observation owner.
 Recipient lifecycle publication visits only its indexed pending dependants so
 their displayed status can refresh; this work grows with actual dependants, not
 all retained chats or receipts.
