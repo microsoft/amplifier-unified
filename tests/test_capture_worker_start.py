@@ -181,7 +181,10 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
         if revocation != 'none':
             assert revoked
             assert not any(p['path']=='/v1/responses' for p in paths)
-            assert any(row.get('kind')=='llm' and row.get('phase')=='error' for row in published)
+            errors=[row['event'] for row in published
+                    if row.get('type')=='execution.event' and row.get('event',{}).get('kind')=='llm'
+                    and row['event'].get('phase')=='error']
+            assert len(errors)==1 and errors[0].get('admittedAt')==1
             return
         assert any(row.get('type')=='generation.finished' for row in published), published
         await worker.runtime.submit(Input('stop',activation=worker.activation))
