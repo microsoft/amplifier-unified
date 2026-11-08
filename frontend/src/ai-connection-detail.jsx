@@ -5,6 +5,16 @@ import {ProviderKeyPreview} from './provider-key-preview';
 import {ProviderMessageTest} from './provider-message-test';
 import {connectionTestability} from './setup-data';
 
+export function ConnectionPreference({id,providers,labels,busy,onChange}){
+ const enabled=providers.filter(row=>row.enabled!==false),chat=enabled.filter(row=>row.config?.chat_enabled!==false);
+ if(chat.length<2)return null;
+ return <div className="a-connection-capability"><div><label htmlFor={id}>Preferred chat connection</label><p className="a-caption">Used when model rules do not choose another connection. Existing chats keep their choices.</p></div><select id={id} disabled={busy} data-action="providers.reorder" value={chat[0].id} onChange={event=>{
+  const chosen=event.target.value;
+  if(!chat.some(row=>row.id===chosen)||chosen===chat[0].id)return;
+  onChange({ids:[chosen,...enabled.filter(row=>row.id!==chosen).map(row=>row.id)],expectedIds:enabled.map(row=>row.id)});
+ }}>{chat.map(row=><option key={row.id} value={row.id}>{labels?.get(row.id)||row.displayName||row.id}</option>)}</select></div>;
+}
+
 export function AIConnectionDetail({selected,service,state,session,act,busy,onModel,onDecisions,onCredentials,onRefresh,onCheck,onRemove,onAdvanced}){
  const entry=state.setup?.providerCatalogs?.[selected?.id],check=connectionTestability(state.modelCatalogs?.[entry?.sharedCatalogKey]||entry);
  return <>

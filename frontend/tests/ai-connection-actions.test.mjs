@@ -12,6 +12,44 @@ const {aiServices}=await vite.ssrLoadModule('/src/ai-connections-data.js');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;test.after(()=>vite.close());
 const state=editor=>({view:{aiConnectionEditor:editor},setup:{providers:[],providersLoadedAt:1}});
 
+test('preferred connection is directly editable with exact order and no credential payload',async()=>{
+ const {ConnectionPreference}=await vite.ssrLoadModule('/src/ai-connection-detail.jsx');
+ const orders=[],providers=[
+  {id:'decision',config:{chat_enabled:false}},
+  {id:'one',displayName:'Work account',config:{}},
+  {id:'two',displayName:'Personal account',config:{}},
+  {id:'disabled',enabled:false,config:{}}
+ ];
+ let root;
+ try{
+  await act(async()=>root=create(React.createElement(ConnectionPreference,{id:'preference',providers,onChange:value=>orders.push(value)})));
+  const select=root.root.findByType('select');
+  assert.equal(select.props.value,'one');
+  assert.deepEqual(select.findAllByType('option').map(row=>row.props.value),['one','two']);
+  await act(async()=>select.props.onChange({target:{value:'two'}}));
+  assert.deepEqual(orders,[{ids:['two','decision','one'],expectedIds:['decision','one','two']}]);
+  assert.match(JSON.stringify(root.toJSON()),/Existing chats keep their choices/);
+ }finally{await act(async()=>root?.unmount())}
+});
+
+for(const choice of ['medium','none',''])test('basic default effort sends narrow intent, including distinct provider default: '+choice,async()=>{
+ const current={...state({step:'model',id:'one',module:'provider-openai',model:'chosen-model',settingDefault:true}),
+  setup:{providersLoadedAt:1,providers:[{id:'one',module:'provider-openai',config:{default_model:'chosen-model',reasoning_effort:'high',api_key:'[REDACTED]'}}],
+   providerCatalogs:{one:{sharedCatalogKey:'key'}}},
+  modelCatalogs:{key:{phase:'ready',models:['chosen-model'],metadata:{configSchema:{fields:[{id:'reasoning_effort',choices:['none','medium','high']}]}}}}};
+ const calls=[];let root;
+ try{
+  await act(async()=>root=create(React.createElement(AIConnections,{state:current,act:async(...args)=>{calls.push(args);return {accepted:true,operationId:'effort-save'}},navigate:()=>{}})));
+  const field=root.root.findByProps({id:'ai-default-effort'});
+  assert.deepEqual(field.findAllByType('option').map(row=>row.props.value),['','none','medium','high']);
+  await act(async()=>field.props.onChange({target:{value:choice}}));
+  const saved=calls.find(([action])=>action==='providers.finishSetup');
+  assert.deepEqual(saved[1],{id:'one',model:'chosen-model',expectedModel:'chosen-model',effort:choice||null,scope:'global',initializeRouting:false});
+  assert.ok(!JSON.stringify(saved).includes('REDACTED'));
+  assert.equal(calls.some(([action])=>['providers.save','providers.login','conversation.configure'].includes(action)),false);
+ }finally{await act(async()=>root?.unmount())}
+});
+
 test('connection detail respects per-connection local catalog testability',async()=>{
  const {AIConnectionDetail}=await vite.ssrLoadModule('/src/ai-connection-detail.jsx');
  let root;const calls=[];

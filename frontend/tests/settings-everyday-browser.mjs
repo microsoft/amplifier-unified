@@ -29,6 +29,15 @@ try{
  assert.equal(await page.locator('.a-settings-sidebar>button').count(),settingsSections.length);
  await expect(page.locator('.a-settings-sidebar').getByRole('button',{name:'Workspaces',exact:true})).toBeVisible();
  assert.equal(await page.locator('.a-settings-sidebar').getByText('Bundles & modules',{exact:true}).count(),0);
+ const preferred=page.getByLabel('Preferred chat connection',{exact:true});
+ await expect(preferred).toBeVisible();
+ const originalPreference=await preferred.inputValue();
+ const alternatePreference=await preferred.locator('option').evaluateAll((rows,current)=>rows.find(row=>row.value!==current).value,originalPreference);
+ await preferred.selectOption(alternatePreference);
+ await expect.poll(async()=>(await state()).setup.providers[0].id).toBe(alternatePreference);
+ await expect(page.getByText('Preferred chat connection saved. Existing chats and model rules are unchanged.',{exact:true})).toBeVisible();
+ await preferred.selectOption(originalPreference);
+ await expect.poll(async()=>(await state()).setup.providers[0].id).toBe(originalPreference);
  await page.getByRole('button',{name:'Connect another service',exact:true}).click();
  await page.getByRole('button',{name:/Anthropic API Connect with/}).click();
  await page.getByLabel('API key',{exact:true}).fill('everyday-private-fixture-key');
@@ -52,6 +61,16 @@ try{
  // Existing model selection saves on change without a second completion click.
  await page.getByRole('button',{name:/Anthropic API.*fixture-alternative/}).click();
  await page.getByRole('button',{name:'Choose model',exact:true}).click();
+ const defaultEffort=page.getByLabel('Default reasoning effort',{exact:true});
+ await expect(defaultEffort).toBeVisible();
+ const chosenProvider=(await state()).view.aiConnectionEditor.id;
+ await defaultEffort.selectOption('high');
+ await expect.poll(async()=>(await state()).setup.providers.find(p=>p.id===chosenProvider).config.reasoning_effort).toBe('high');
+ await expect(page.getByText('Default reasoning effort saved for new conversations. Existing chats keep their choices.',{exact:true})).toBeVisible();
+ // Provider-default reset is a distinct saved null, not the literal 'none'.
+ await defaultEffort.selectOption('');
+ await expect.poll(async()=>(await state()).setup.providers.find(p=>p.id===chosenProvider).config.reasoning_effort).toBe(null);
+ await page.reload();await expect(defaultEffort).toHaveValue('');
  await page.getByLabel('Model',{exact:true}).selectOption('fixture-model');
  await expect(page.getByText('Model saved. Existing model rules are unchanged.',{exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:'Finish setup',exact:true})).toHaveCount(0);
