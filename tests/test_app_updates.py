@@ -20,6 +20,32 @@ def base_installation(monkeypatch):
         {'name':'amplifier-unified','version':'99.0.0','url':app_updates.SOURCE,'revision':'a'*40}]))
 
 
+@pytest.mark.parametrize("read_fails", [False, True])
+async def test_windows_task_refuses_activation_before_target_reads_or_mutation(tmp_path, monkeypatch, read_fails):
+    from amplifier_web import windows_service, update_drain, application_generations
+    import copy
+    state = {'updates': {'phase': 'app-staged', 'pendingApp': {'revision': 'a' * 40},
+                         'pendingModelChoice': {'model': 'preserved'}}}
+    original = copy.deepcopy(state)
+    manager = SimpleNamespace(home=tmp_path, service=SimpleNamespace(state=state))
+    def read(home):
+        assert home == tmp_path
+        if read_fails:
+            raise PermissionError("Synthetic unreadable task; not proof of no task")
+        return {"exists": True}, object()
+    monkeypatch.setattr(windows_service, "_read", read)
+    monkeypatch.setattr(app_updates.sys, "platform", "win32")
+    def forbidden(*args, **kwargs):
+        pytest.fail("Unsupported task activation must refuse before target/drain/promotion")
+    monkeypatch.setattr(app_updates, "installed_target", forbidden)
+    monkeypatch.setattr(update_drain, "prepare", forbidden)
+    monkeypatch.setattr(application_generations, "promote", forbidden)
+    with pytest.raises((windows_service.WindowsServiceError, PermissionError)):
+        # No manager.directory exists: even marker reads would fail this test.
+        await app_updates._activate(manager, force=object())
+    assert state == original and list(tmp_path.iterdir()) == []
+
+
 def test_packaging_probe_rejects_broken_login_dependency(tmp_path):
     import os
     import subprocess
