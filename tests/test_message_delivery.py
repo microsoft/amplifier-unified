@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+import sqlite3
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -975,14 +976,35 @@ async def test_delivery_rejects_malformed_or_contradictory_saved_receipt(recover
 
 
 @pytest.mark.parametrize('raw', ['null', '[]', '{invalid JSON'])
-async def test_positive_delivery_preserves_malformed_receipt_bytes(recovery, raw):
+async def test_positive_delivery_preserves_malformed_receipt_bytes(recovery, raw, monkeypatch):
     app, runtime, _ = recovery
     session = app._session()
     message = session['messages'][-1]
     assert message['inputId'] == 'original' and message.get('navigationPost')
     message['attachments'] = [{'id': 'kept', 'name': 'reference.txt'}]
     before = copy.deepcopy(message)
-    app.db.execute('UPDATE commands SET receipt=? WHERE id=?', (raw, 'original'))
+    db = app.db
+    if raw.startswith('{invalid'):
+        # The current indexed store rejects invalid JSON on write. Exercise a
+        # corrupt legacy read at the exact receipt seam, without removing indexes.
+        with pytest.raises(sqlite3.OperationalError, match='malformed JSON'):
+            db.execute('UPDATE commands SET receipt=? WHERE id=?', (raw, 'original'))
+        original_bytes = db.execute('SELECT receipt FROM commands WHERE id=?', ('original',)).fetchone()[0]
+
+        class CorruptReceiptRead:
+            def __getattr__(self, name):
+                return getattr(db, name)
+
+            def execute(self, sql, args=()):
+                if sql == 'SELECT receipt FROM commands WHERE id=?' and args == ('original',):
+                    return SimpleNamespace(fetchone=lambda: (raw,))
+                assert not (sql.startswith('UPDATE commands SET receipt=') and args[-1:] == ('original',))
+                return db.execute(sql, args)
+
+        monkeypatch.setattr(app, 'db', CorruptReceiptRead())
+    else:
+        db.execute('UPDATE commands SET receipt=? WHERE id=?', (raw, 'original'))
+        original_bytes = raw
     runtime.evidence = 'accepted'
     result = await app._check_delivery(session['id'], 'original')
     assert result['delivery'] == 'accepted'
@@ -990,6 +1012,7 @@ async def test_positive_delivery_preserves_malformed_receipt_bytes(recovery, raw
     for key in ('id', 'inputId', 'text', 'attachments'):
         assert message.get(key) == before.get(key)
     assert app.db.execute('SELECT receipt FROM commands WHERE id=?', ('original',)).fetchone()[0] == raw
+    assert db.execute('SELECT receipt FROM commands WHERE id=?', ('original',)).fetchone()[0] == original_bytes
     assert not runtime.sent and not runtime.retries and not runtime.started
     # A later unknown observation cannot erase the independently confirmed message.
     runtime.evidence = 'unknown'
