@@ -119,8 +119,19 @@ actual wheel identities, original app hash/size/metadata, registry lock hashes,
 five canonical full Git refs and the separate backend closure before creating
 output. The source-mode manifest and capsule identity must agree.
 
+The current prototype binds the **0.65.0** wheel built from the byte-verified
+`40e5fcb49c91449b7b4bd6eeff085883ec97006a` app snapshot, SHA-256
+`dec614dd6bc2112db34c7fd8b7e308c78abe65213cb5c4d1d7b459c66e90a72b`.
+Its host lock is `a430eea8399afdb460ea3755f656b9692dfa1ee7c696171e6251b7b7b40538c6`;
+the no-dev/no-editable/no-project/no-hashes uv export is
+`6249ca66ef434f47735286eed61756c4c37e1ead9de607c7724c3adb6b7ffeb5`.
+The native 65-distribution copy-based installation, all five real Git origins,
+installed RECORDs and original app payload were checked using the private pinned
+uv/MinGit tools. This supersedes the old 0.54.5 prototype recipe, not its retained
+evidence. It still does not establish clean-account or browser acceptance.
+
 ```sh
-python scripts/windows_bootstrap_capsule.py --source-mode pinned-vcs --wheelhouse /path/to/60-runtime-wheels --build-wheelhouse /path/to/6-build-wheels --lock /path/to/frozen/uv.lock --production-requirements /path/to/production-requirements.txt --inventory /path/to/reviewed-runtime-inventory.json --output /path/to/new-output --source 1c4ac3b4f9ed5d2d3f588f6fa6c74a119e439153 --version 0.54.5 --python EXACT_3.13_PATCH --url https://github.com/microsoft/amplifier-unified/releases/download/EXACT_PROTOTYPE_TAG/windows-prototype.zip
+python scripts/windows_bootstrap_capsule.py --source-mode pinned-vcs --wheelhouse /path/to/60-runtime-wheels --build-wheelhouse /path/to/6-build-wheels --lock /path/to/frozen/uv.lock --production-requirements /path/to/production-requirements.txt --inventory /path/to/reviewed-runtime-inventory.json --output /path/to/new-output --source 40e5fcb49c91449b7b4bd6eeff085883ec97006a --version 0.65.0 --python EXACT_3.13_PATCH --url https://github.com/microsoft/amplifier-unified/releases/download/EXACT_PROTOTYPE_TAG/windows-prototype.zip
 ```
 
 That is an owner-side build template, not a usable installation command or a

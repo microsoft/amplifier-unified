@@ -932,9 +932,9 @@ function Read-PrototypeManifest($Record) {
         throw 'Prototype capsule must name an exact official HTTPS release asset.'
     }
     $mode = Get-PrototypeSourceMode $Record
-    if ($mode -eq 'pinned-vcs' -and ($Record.source -cne '1c4ac3b4f9ed5d2d3f588f6fa6c74a119e439153' -or
-        $Record.version -cne '0.54.5')) {
-        throw 'The pinned VCS prototype is bound to the frozen 0.54.5 candidate.'
+    if ($mode -eq 'pinned-vcs' -and ($Record.source -cne '40e5fcb49c91449b7b4bd6eeff085883ec97006a' -or
+        $Record.version -cne '0.65.0')) {
+        throw 'The pinned VCS prototype is bound to the reviewed 0.65.0 candidate.'
     }
     return $Record
 }
