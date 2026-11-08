@@ -34,6 +34,7 @@ on:
       - amplifier_web/message_delivery.py
       - amplifier_web/windows_files.py
       - amplifier_web/voice_diagnostics.py
+      - amplifier_web/update_checks.py
       - amplifier_web/windows_jobs.py
       - amplifier_web/windows_launch_guard.py
       - amplifier_web/deployment.py
@@ -62,6 +63,7 @@ on:
       - tests/test_windows_owned_process.py
       - tests/test_windows_installer.py
       - tests/test_deployment.py
+      - tests/test_update_checks.py
       - tests/test_windows_tls.py
       - tests/test_windows_service.py
       - tests/test_cli_deployment.py
