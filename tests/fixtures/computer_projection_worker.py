@@ -21,13 +21,14 @@ from amplifier_web.shared_state import ActivationGate
 from test_context_inspection import config, evidence
 
 
-@pytest.mark.parametrize('revocation,image,computer_hook,restore', [
-    ('none',False,False,False), ('none',False,False,True),
-    ('none',False,True,False), ('none',False,True,True),
-    ('none',True,True,True), ('metadata-file',True,True,True),
-    ('admission-file',True,True,True),
+@pytest.mark.parametrize('revocation,image,computer_hook,restore,model', [
+    ('none',False,False,False,'gpt-6-astra'), ('none',False,False,True,'gpt-6-astra'),
+    ('none',False,True,False,'gpt-6-astra'), ('none',False,True,True,'gpt-6-astra'),
+    ('none',True,True,True,'gpt-6-astra'), ('metadata-file',True,True,True,'gpt-6-astra'),
+    ('admission-file',True,True,True,'gpt-6-astra'),
+    ('none',False,True,True,'unknown-deployment'),
 ])
-async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_hook,image,revocation):
+async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_hook,image,revocation,model):
     import socket
     def forbidden(*args,**kwargs):raise AssertionError('External network forbidden')
     monkeypatch.setattr(socket.socket,'connect',forbidden)
@@ -48,7 +49,7 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
             assert url.startswith('data:image/png;base64,')
             digests.append(hashlib.sha256(base64.b64decode(url.split(',',1)[1])).hexdigest())
         encoded=json.dumps(body.get('input'),sort_keys=True)
-        paths.append({'path':req.url.path,'bytes':len(req.content),
+        paths.append({'path':req.url.path,'bytes':len(req.content),'model':body.get('model'),
             'inputHash':hashlib.sha256(encoded.encode()).hexdigest(),
             'imageDigests':digests,'imageTypes':[b['type'] for b in images],
             'referenceRetained':'retained appended context' in encoded,
@@ -133,7 +134,7 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
                  'function':{'name':'fixture_screenshot','arguments':'{"action":"screenshot"}'}}]},
                 {'role':'tool','name':'fixture_screenshot','tool_call_id':'capture',
                  'content':result.model_dump_json()+'\\nretained appended context'}])
-    selection={'instance':'configured','model':'gpt-6-astra','effort':'high'}
+    selection={'instance':'configured','model':model,'effort':'high'}
     c.get('orchestrator').root_provider=SelectedProvider(raw,selection)
     async def instructions():return 'W'*1_000_100
     await c.get('context').set_system_prompt_factory(instructions)
@@ -190,15 +191,21 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
         await worker.runtime.submit(Input('stop',activation=worker.activation))
         await worker.execution
         observer=worker.telemetry.context_inspectors[sid];await observer.drain();row=observer.store.read()['selected']
-        evidence('full-worker-'+str(restore)+'-'+str(computer_hook)+'-'+str(image)+'-'+revocation,{
+        evidence('full-worker-'+str(restore)+'-'+str(computer_hook)+'-'+str(image)+'-'+revocation+'-'+model,{
             'header':row,'requests':paths,'workerStart':True,
             'rootType':type(c.get('orchestrator').root_provider).__name__,
             'computerHookMounted':computer_hook,'issuedImageSha256':image_digest,
             'computerHookWrapped':getattr(raw,'_amplifier_computer_use_wrapped',False)})
         assert row['budgetStatus']=='captured'
         assert row['budget']['measurement']['input_tokens']==100
+        expected_window=1_050_000 if model=='gpt-6-astra' else None
+        assert row['budget'].get('context_window_tokens')==expected_window
+        assert row['limits']['modelWindow']==expected_window
+        if restore:
+            assert row['budget']['max_output_tokens']==321
         assert len({p['inputHash'] for p in paths})==1
         for p in paths:
+            assert p['model']==model
             assert p['imageDigests']==([image_digest] if image and computer_hook else [])
             if image and computer_hook:
                 assert p['imageTypes']==['input_image']
@@ -213,7 +220,7 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
             import traceback
             failures.append(''.join(traceback.format_exception(error,limit=20))[-6000:])
         finally:
-            evidence('full-worker-lifecycle-'+str(restore)+'-'+str(computer_hook)+'-'+str(image)+'-'+revocation,{'events':published,'requests':paths,'revoked':revoked,'failures':failures})
+            evidence('full-worker-lifecycle-'+str(restore)+'-'+str(computer_hook)+'-'+str(image)+'-'+revocation+'-'+model,{'events':published,'requests':paths,'revoked':revoked,'failures':failures})
         if worker.controls:await worker.controls.close()
         if hook_cleanup:await hook_cleanup()
         if computer:computer._backend.close()
