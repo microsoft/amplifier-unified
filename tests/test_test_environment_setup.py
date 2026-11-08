@@ -28,6 +28,17 @@ def args(**extra):
     return {'workspaceId': 'workspace', 'sessionId': 'session', 'requestId': 'setup', 'backend': 'docker', **extra}
 
 
+def test_shared_schema_allows_docker_default_and_explicit_incus():
+    import jsonschema
+    definitions = setup.definitions(
+        lambda fields, required: {'type': 'object', 'properties': fields, 'required': required},
+        lambda maximum: {'type': 'string', 'maxLength': maximum})
+    schema = definitions['workspace.environments.setup'][1]
+    assert schema['properties']['backend']['default'] == 'docker'
+    jsonschema.validate({key: value for key, value in args().items() if key != 'backend'}, schema)
+    jsonschema.validate(args(backend='incus'), schema)
+
+
 async def settle(app):
     await asyncio.gather(*list(app._test_setup_tasks.values()))
     latest = setup.read_json(setup.root(app) / 'latest.json')

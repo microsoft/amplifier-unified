@@ -69,7 +69,7 @@ async def main(home, port, backend='docker'):
                 'reason': 'Controlled fixture; no backend installation.', 'operation': None,
                 'backends': [{'id': name, 'label': label, 'available': True, 'reason': 'Controlled fixture'}
                              for name, label in [('docker', 'Docker'), ('incus', 'Incus')]]}
-    async def setup_request(app, args, actor, guard=None):
+    async def setup_request(app, args, actor, guard=None, *, authority=None, origin=None):
         if guard:
             await guard()
         setup_calls.append(dict(args))
