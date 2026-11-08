@@ -387,11 +387,22 @@ ecosystem candidates, eight purpose-installed runner candidates and eight
 qualified dependency layers, with time
 limits and a retained cursor. The cleanup policy saves that cursor in its durable
 receipt and restores it after restart; a scan position is never deletion authority.
+Preview results are inspection snapshots, not removal authority. Read-only
+previews do not acquire the runtime activation lock or repeat removal-admission
+probes. Removing a selected copy reruns qualification and the owner's current-use
+checks under its existing removal boundary.
 Protected copies include bounded reasons distinguishing unverified source,
 unverified extra files, local edits, and a changed or incomplete final check.
 Incomplete inspection is labeled; uninspected
 copies stay put. File-content measurements are not physical disk-allocation
 promises: hard links, shared runtimes and copy-on-write blocks can retain storage.
+Storage subprocess I/O and deadlines run independently of the app event loop;
+caller cancellation still waits for owned process cleanup. Initial inspection
+accepts a completed reference check after delayed delivery. Final removal checks
+also bound preparation, queueing and delivery within their existing two-second
+budget; an expired check defers removal without retrying. Failed initial reference
+checks retain a bounded stage, category and elapsed time in the preview and
+cleanup receipt, without settings, paths, process arguments or raw error output.
 The size target uses the existing observation ledger's latest measured sizes
 across bounded batches. Timestamp-only legacy observations retain their age but
 contribute no invented size until measured. Newly protected, absent or removed

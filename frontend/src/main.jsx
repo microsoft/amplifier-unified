@@ -9,6 +9,7 @@ import {useConnectionSetup} from './setup-journey';
 import {createChatLinkReceiver} from './chat-deep-link';
 import {DictationButton} from './dictation-controls';
 import {ChatPlan} from './chat-plan';
+import {DependencyWaiting} from './dependency-waiting';
 import {WorkProjectionStatus} from './work-projection-status';
 import {voiceWorkRows,voiceWorkStream} from './voice-work-rows.js';
 import {workProjectionReceipt} from './work-projection-receipt.js';
@@ -361,6 +362,14 @@ function App(){
     if(stop){
      capabilityStopFence.current.settleStop(stop,result?.accepted===true?'accepted':'unknown');
      void capabilityStopFence.current.reconcile(stop.sessionId);
+    }
+    // An exact positive delivery receipt is independent of the bounded message
+    // window and of a following state read. Never treat generic acceptance as delivery.
+    if(action==='conversation.delivery'&&result.accepted===true){
+     outbox.acknowledge(args.sessionId,args.inputId,result.result);
+     if(result.result?.delivery==='accepted'){
+      try{sessionStorage.removeItem('amplifier.deliveryWarning.v1:'+JSON.stringify([args.sessionId,args.inputId]))}catch{}
+     }
     }
     if(historyVisit)destinationHistory.current.finish(result);
     try{
@@ -864,6 +873,7 @@ function App(){
    {session&&!historyDisplayPending&&<ConversationRail paneRef={messagesPane} sessionId={session.id} messages={messages} onJump={id=>messages.some(row=>row.id===id)?chatScroll.current?.jump(id):detail.around(id)}/>}
    {(awayFromBottom||detail.focused)&&<div className="a-chat-jump"><button type="button" className="a-soft" aria-label="Jump to latest messages" onClick={()=>detail.focused?detail.latest():chatScroll.current?.reveal()}>↓ Latest messages</button></div>}
    <LiveActivity session={state.sessions.find(row=>row.id===session?.id)||session}/>
+   {!historyDisplayPending&&<DependencyWaiting key={'waiting:'+session?.id} sessionId={session?.id} activity={state.selectedActivity} act={act}/>}
    <ApprovalPanel key={session?.id} session={session} act={act} dispatch={dispatch} canvasDraft={state.view?.canvasDraft} freshnessKey={`${connected}:${session?.interruptionRevision}:${session?.executionRevision}`}/>
    {(!presentation.planPlacement||presentation.planPlacement==='composer'||presentation.planPlacement==='active'&&responseActive)&&!historyDisplayPending&&<ChatPlan session={session} state={state} act={act}/> }
    <QuestionNotice session={session} paneRef={messagesPane}/>

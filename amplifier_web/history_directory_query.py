@@ -137,9 +137,7 @@ def _chat_query(directory, state, section, *, activity_counts=True):
     total = 0
     if activity_counts:
         for kind, count in directory.db.execute(sql + ' SELECT activity_kind,COUNT(*) FROM eligible GROUP BY activity_kind', params):
-            if kind in counts: counts[kind] = count
-            # Include every group, even an unfamiliar activity kind. The public
-            # four counters and the complete filtered count have distinct jobs.
+            counts[kind] = count
             if status == 'all' or kind == status: total += count
     if status != 'all':
         sql += ', filtered AS (SELECT * FROM eligible WHERE activity_kind=?)'
@@ -228,7 +226,7 @@ def root_count(directory, state):
 
 def child_count(directory, state, parent):
     """Count canonical direct children without constructing a hidden page."""
-    sql, params = directory.effective(state, children_of=parent)
+    sql, params = directory.effective(state, children_of=parent, fields={'id'})
     return directory.db.execute(sql+' SELECT COUNT(*) FROM directory_rows',params).fetchone()[0]
 
 
@@ -283,6 +281,6 @@ def archived_count(directory, state):
     identities = list(archived)
     excluded = 0
     for start in range(0, len(identities), PUBLIC_ID_BATCH):
-        sql, params = directory.effective(state, public_ids=identities[start:start+PUBLIC_ID_BATCH])
+        sql, params = directory.effective(state, public_ids=identities[start:start+PUBLIC_ID_BATCH], fields={'session_kind'})
         excluded += directory.db.execute(sql+" SELECT COUNT(*) FROM directory_rows WHERE session_kind!='root'", params).fetchone()[0]
     return len(archived)-excluded
