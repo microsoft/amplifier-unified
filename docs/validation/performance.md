@@ -223,8 +223,16 @@ Fragment size accounting conservatively charges shared objects more than once.
 `test_execution_preparation.py` checks changed-fragment work, cross-fragment
 aliases, duplicate precedence, eviction and oversized fallback;
 `test_execution_references.py` retains pointer-failure/retry and resource checks.
-This still traverses the source witnesses and rebuilds live placements, and is
-not history-independent publication or a fix for unrelated storage GC delays.
+Observed placements reuse the existing canonical JSON fragment cache after
+witnessing each source fragment, its current turn membership and its exact
+accounting receipts. Changed dependencies re-run the canonical projection;
+unchanged fragments avoid repeating placement validation and JSON encoding.
+This uses the existing encoding budget, not a new retained graph. Inline values
+and unsupported inputs keep the original projection. The reference tests also
+check changed receipts shared across fragments, removed turns, rejected rows
+and small-budget fallback against complete canonical readback.
+This still traverses the source witnesses and decodes stored placement fragments;
+it is not history-independent publication or a fix for unrelated storage GC delays.
 
 For repeatable comparisons, `execution_publication_scaling.py --cycles 4` records
 87 publications for three owners (three cold, 84 steady); `--size small` uses
@@ -287,6 +295,19 @@ engine checks preserve hook denial, delayed-approval revocation, cancellation,
 call identity and default serialization. No model-provided flag grants this
 behavior. Compare overlapping waits with a serial baseline; do not claim remote
 provider latency or end-to-end live improvement from a synthetic transport.
+
+## Quiet background observations
+
+Quiet-watch storage has a separate history from client navigation observations.
+`tests/test_observation_store_queries.py` holds selected reads and active work fixed
+against 0, 100 and 1,000 unrelated retained watches. It measures actual SQLite
+instructions and decoded rows/bytes, compares exact reports and list ordering with
+the original scan, and preserves expiry, lease recovery and unknown handoffs.
+Session/watch/state indexes must constrain SQLite work before body decoding;
+fewer decoded rows alone can hide a broad index scan. The indexes derive from the
+existing canonical JSON and do not rewrite it. Their first creation reads retained
+records; this is not a constant-time startup claim. Complete public lists still
+grow with the requested records, and genuinely active work still requires visits.
 
 ## Provider requests and cache observations
 

@@ -102,7 +102,10 @@ python scripts/release.py prepare --version X.Y.Z --notes-file /path/to/authored
 It validates the notes and three version owners before changing them, preserves
 unrelated edits and historical notice identities, and refuses conflicting notes
 already saved for that version. An identical retry changes nothing. It neither
-installs dependencies nor commits, tags or publishes. Run with `--build` in the
+installs dependencies nor commits, tags or publishes. `--help` describes the notes
+input; JSON output includes the remaining steps and a link to this guidance.
+Expected preparation failures report a concise error and a nonzero exit status.
+Run with `--build` in the
 owned prepared DTU to perform the single canonical frontend build in that same
 invocation; otherwise its output gives the build command for the environment
 owner. Complete routine preparation in one invocation, then commit, push and open
@@ -141,6 +144,17 @@ frontend unit tests. The proof names its actual test scope, never a skipped full
 the frontend checks itself when that proof is unavailable; an earlier version's
 proof does not qualify the new version. Package/native qualification and candidate
 receipts remain fresh under the existing publication workflow.
+
+Frontend proof reuse or the canonical build validates the staged
+`amplifier_web/static` tree **before** packaging. Both the wheel and source archive
+must contain its complete exact file set and bytes, including runtime-loaded
+vendor files, build metadata and licenses. A published source archive is ready to
+build into a wheel using Python build dependencies alone; installation never
+downloads or builds the frontend. Raw Git development checkouts may require Node
+and npm to produce updated assets; see [development setup](../../CONTRIBUTING.md#development-setup).
+The source-archive round-trip regression exercises the real package backend with
+Node absent and network/process creation denied. It is an affected packaging
+check, not an additional universal release campaign.
 
 Routine release verification ends after the hosted published-package smoke.
 Absent a concrete failure, do not repeat its exact-candidate wheel, source or
