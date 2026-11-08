@@ -22,6 +22,10 @@ _lock = threading.Lock()
 
 
 def _shape(function):
+    # inspect.getsource follows __wrapped__. Its source can therefore describe
+    # a reviewed function while the callable actually installed is unknown.
+    if hasattr(function, "__wrapped__"):
+        return None
     try:
         tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
         node = tree.body[0]

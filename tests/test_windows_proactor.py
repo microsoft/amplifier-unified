@@ -1,9 +1,12 @@
 """Offline cleanup oracle; real Proactor sockets are checked on Windows."""
 import asyncio
+import functools
+import importlib.util
 import inspect
 from pathlib import Path
 import socket
 import sys
+import textwrap
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -92,6 +95,60 @@ def test_fixed_runtime_and_non_windows_need_no_override(monkeypatch):
     assert "_call_connection_lost" not in Socket.__dict__
     monkeypatch.setattr(repair.sys, "platform", "linux")
     assert repair.install() == "not-windows"
+
+
+def reviewed_method(kind, tmp_path):
+    if kind == "original":
+        from asyncio.proactor_events import _ProactorBasePipeTransport
+        method = _ProactorBasePipeTransport._call_connection_lost
+        assert repair._shape(method) == repair._ORIGINAL
+        return method
+    # An independent plain fixed callable, not the adapter's identity shortcut.
+    path = tmp_path / "reviewed_fixed.py"
+    path.write_text(textwrap.dedent(inspect.getsource(repair._call_connection_lost)))
+    spec = importlib.util.spec_from_file_location("reviewed_fixed", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    method = module._call_connection_lost
+    assert method is not repair._call_connection_lost
+    assert repair._shape(method) == repair._FIXED
+    return method
+
+
+@pytest.mark.parametrize("kind", ["original", "fixed"])
+def test_wrapped_reviewed_callable_is_not_recognized_or_replaced(kind, tmp_path):
+    method = reviewed_method(kind, tmp_path)
+    @functools.wraps(method)
+    def wrapper(self, exc):
+        return method(self, exc)
+    class Base:
+        _call_connection_lost = wrapper
+    class Socket(Base): pass
+    class Pipe(Base): pass
+    with pytest.raises(RuntimeError, match="unrecognized"):
+        repair._install(Base, Socket)
+    assert Base._call_connection_lost is wrapper
+    assert Socket._call_connection_lost is wrapper
+    assert Pipe._call_connection_lost is wrapper
+    assert "_call_connection_lost" not in Socket.__dict__
+
+
+@pytest.mark.parametrize("kind", ["original", "fixed"])
+def test_plain_reviewed_callable_retains_positive_and_idempotent_paths(kind, tmp_path):
+    method = reviewed_method(kind, tmp_path)
+    class Base:
+        _call_connection_lost = method
+    class Socket(Base): pass
+    class Pipe(Base): pass
+    expected = "backport-active" if kind == "original" else "upstream-fixed"
+    assert repair._install(Base, Socket) == expected
+    assert repair._install(Base, Socket) == expected
+    assert Base._call_connection_lost is method and Pipe._call_connection_lost is method
+    if kind == "original":
+        assert Socket._call_connection_lost is repair._call_connection_lost
+    else:
+        assert Socket._call_connection_lost is method
+        assert "_call_connection_lost" not in Socket.__dict__
 
 
 async def test_app_factory_applies_the_boundary_before_data_or_socket_start(tmp_path, monkeypatch):

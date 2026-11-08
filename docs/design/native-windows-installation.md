@@ -13,9 +13,11 @@ cleanup; pipe transports, loop policy and exception handlers are unchanged.
 TCP and TLS use that socket transport.
 
 The adapter compares the normalized source AST against the reviewed vulnerable
-and fixed implementations. Unknown runtime code or an independent override
-refuses startup rather than replacing it blindly. A recognized upstream-fixed
-runtime needs no override. Only `ConnectionError` raised by the shutdown call is
+and fixed implementations. Wrapped callables are rejected before source
+inspection, which otherwise follows `__wrapped__` rather than the installed
+callable. Unknown runtime code or an independent override refuses startup rather
+than replacing it blindly. A recognized upstream-fixed runtime needs no override.
+Only `ConnectionError` raised by the shutdown call is
 handled; protocol callback errors and unexpected socket errors remain visible.
 The shipped `CPYTHON-LICENSE.txt` retains upstream licensing.
 
