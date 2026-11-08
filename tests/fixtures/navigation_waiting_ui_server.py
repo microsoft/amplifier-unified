@@ -70,7 +70,7 @@ async def main(home):
         elif mode=='stopped':
             owner['status']='stopped'
         elif mode=='question':
-            owner['questions']=[{'id':'fixture-question','status':'pending','required':True,
+            owner['questions']=[{'id':'fixture-question','status':'pending','required':True,'revision':1,
                                  'question':'Choose the destination','prompt':'Choose the destination','options':[]}]
         elif mode=='recipient-error':
             rows[1].update(status='error',error='Synthetic worker failure')

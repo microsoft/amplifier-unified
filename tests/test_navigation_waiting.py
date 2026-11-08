@@ -142,8 +142,9 @@ def test_pending_query_uses_covering_expressions_not_large_receipt_bodies(db):
     db.set_trace_callback(None)
     query=next(sql for sql in statements if 'FROM commands' in sql)
     operations=db.execute('EXPLAIN '+query).fetchall()
+    print('SQLITE',sqlite3.sqlite_version,'PLAN',json.dumps(operations))
     # Expression-index reads must not invoke JSON functions over retained text.
-    assert not any(row[1]=='Function' and 'json_extract' in str(row[5]) for row in operations)
+    assert not any(row[1]=='Function' and 'json_extract' in str(row[5]) for row in operations), operations
 
 
 def test_wait_epoch_uses_typed_contiguous_changes_and_stops_at_active_boundary():

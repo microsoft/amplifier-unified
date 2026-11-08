@@ -18,8 +18,6 @@ PENDING = """json_extract(receipt,'$.commandAction')='coordination.send'
  AND json_extract(receipt,'$.subscription.supported')=1
  AND json_extract(receipt,'$.subscription.status')='waiting'
  AND json_extract(receipt,'$.subscription.open')=1
- AND json_extract(receipt,'$.sourceGenerationId') IS NOT NULL
- AND json_extract(receipt,'$.sourceInputIds[#-1]') IS NOT NULL
  AND json_extract(receipt,'$.response') IS NULL
  AND json_extract(receipt,'$.terminalOutcome') IS NULL
  AND json_extract(receipt,'$.delivery') IN ('queued','accepted','pending_steer','started','applied')

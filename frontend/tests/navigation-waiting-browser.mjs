@@ -50,6 +50,7 @@ try{
  assert.ok(Math.abs(columns.chatIcon.x-columns.workspaceIcon.x)<1,JSON.stringify(columns));
  assert.equal(await page.locator('.a-workspace-pin-mark').count(),0);
  const workspace=nav.locator('.a-workspace-row');
+ await workspace.hover();
  await workspace.getByRole('button',{name:'Details and actions for Unified: Launch Readiness',exact:true}).click();
  await expect(page.getByRole('dialog',{name:'Details for Unified: Launch Readiness',exact:true}).getByRole('button',{name:'Unpin workspace '+ready.path,exact:true})).toBeVisible();
  await page.keyboard.press('Escape');
