@@ -143,6 +143,13 @@ def listener_owned(record, host, port):
     """IPv4 loopback listener ownership, not a health/authentication claim."""
     if os.name != "nt" or host != "127.0.0.1" or type(port) is not int or not 0 < port < 65536:
         return False
+    return listener_owners(host, port) == {record["pid"]}
+
+
+def listener_owners(host, port):
+    """Read the native IPv4 listener table; timeout/connect is not absence."""
+    if os.name != "nt" or host != "127.0.0.1" or type(port) is not int or not 0 < port < 65536:
+        raise ValueError("Native listener inspection requires an IPv4 loopback TCP port.")
     from ctypes import wintypes as W
     api = C.WinDLL("iphlpapi", use_last_error=True)
     api.GetExtendedTcpTable.argtypes = [C.c_void_p, C.POINTER(W.DWORD), W.BOOL,
@@ -167,7 +174,7 @@ def listener_owned(record, host, port):
         number = int.from_bytes(row.port.to_bytes(4, "little")[:2], "big")
         if address in {host, "0.0.0.0"} and number == port:
             owners.add(row.pid)
-    return owners == {record["pid"]}
+    return owners
 
 
 def request_stop(spec, *, timeout=60):

@@ -39,6 +39,11 @@ try {
     $refused=$false
     try { $nativeStorage.EnableToolWrites([IO.Path]::GetDirectoryName($nativeRoot)) } catch { $refused=$true }
     Need $refused 'ancestor was allowed tool mutation'
+    $script:InstallWork = $nativeRoot
+    $shortcutPath = Write-PrototypeShortcut 'C:\private tools\python.exe' 'C:\private tools\launch.py' $true
+    $savedLink = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcutPath)
+    Need ($savedLink.Arguments.EndsWith(' --background')) 'logon shortcut lost explicit background selection'
+    Need ($savedLink.TargetPath -ceq 'C:\private tools\python.exe') 'shortcut changed the absolute interpreter'
 } finally {
     $nativeStorage.Dispose()
     [IO.Directory]::Delete($nativeRoot,$true)
@@ -102,8 +107,8 @@ try {
         return ''
     }
     function Write-PrototypeShortcut {
-        param($Python,$Launcher)
-        $script:Links += ,@($Python,$Launcher)
+        param($Python,$Launcher,$LogonHost=$false)
+        $script:Links += ,@($Python,$Launcher,$LogonHost)
         return (Join-Path $script:InstallWork 'Launch Unified.lnk')
     }
     function Reset-Model {
@@ -129,6 +134,11 @@ try {
     }
     Need ($installs[0][2].AMPLIFIER_HOME -ne $installs[0][2].AMPLIFIER_SESSION_STATE_HOME) 'history and ownership merged'
     Need (-not (($script:Children | ForEach-Object { $_[1] }) -contains 'service')) 'service command emitted'
+
+    Reset-Model
+    Invoke-UnifiedPrototype 'https://github.com/microsoft/amplifier-unified/releases/download/prototype-abc/plan.json' ('c'*64) $true $true
+    Need ($script:Links.Count -eq 1 -and $script:Links[0][2]) 'background selection did not reach the relaunch shortcut'
+    Need (-not (($script:Children | ForEach-Object { $_[1] }) -contains 'service')) 'NoOpen must not register or start a task'
 
     Reset-Model
     $script:UseExisting=$true

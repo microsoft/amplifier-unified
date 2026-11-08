@@ -614,6 +614,37 @@ class SourceCapsuleTests(unittest.TestCase):
 
 
 class LauncherTests(unittest.TestCase):
+    def test_background_shortcut_leaves_host_without_untrusted_browser_entry(self):
+        from amplifier_web import windows_installation, windows_files
+        from io import StringIO
+        from cryptography import x509
+        root = Path("/trial")
+        pinned = mock.MagicMock()
+        @contextmanager
+        def private(*args, **kwargs):
+            self.assertEqual(kwargs["owned_root"], root)
+            yield pinned
+        async def prepare(*args):
+            return {"runtime": {"connectionRequired": True}}
+        certificate = mock.Mock()
+        certificate.fingerprint.return_value = b"\x11" * 32
+        with mock.patch.object(windows_installation, "prepare_background", side_effect=prepare), \
+             mock.patch.object(windows_files, "directory", side_effect=private), \
+             mock.patch.object(launcher, "check_installation", return_value=root / "host/Scripts/app.exe"), \
+             mock.patch.object(launcher, "child_environment", return_value={}), \
+             mock.patch.object(launcher, "run_cli", return_value=b"PUBLIC CERTIFICATE") as run, \
+             mock.patch.object(launcher, "browser_trust_ready", return_value=False), \
+             mock.patch.object(launcher, "open_owned_browser") as browser, \
+             mock.patch.object(launcher.sys.stdin, "isatty", return_value=False), \
+             mock.patch.object(launcher.sys, "stdout", new_callable=StringIO) as output, \
+             mock.patch.object(x509, "load_pem_x509_certificate", return_value=certificate):
+            launcher.launch_background(root, {})
+            browser.assert_not_called()
+            self.assertIn("Host left running", output.getvalue())
+            self.assertIn("not a Windows SCM service", output.getvalue())
+            self.assertEqual(run.call_args.args[1], ["--data-dir", str(root / "app"), "setup-tls", "export"])
+            pinned.publish_private.assert_called_once_with("trial-ca.cer", b"PUBLIC CERTIFICATE", replace=True)
+
     def test_environment_survives_missing_shell_path_without_copying_keys(self):
         root = Path("/synthetic/trial space/Unicode-λ")
         receipt = {"uv": "/private/tools/uv", "git": "/private/git/bin/git",

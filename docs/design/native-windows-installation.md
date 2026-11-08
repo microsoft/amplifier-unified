@@ -2,6 +2,49 @@
 
 Status: implementation design and trial preparation; **not a native Windows support claim**.
 
+## Owner-logon candidate
+
+The selected personal-PC deployment is an **interactive-token Task Scheduler
+host**, not an SCM service: start at sign-in, survive terminal/browser closure,
+and stop at sign-out. It stores no Windows password, requests no elevation and
+does not run agent work as LocalSystem. The explicit prototype installer accepts
+`-Background`; the generated private shortcut selects that same mode.
+
+The installed `windows_installation` library composes the ordinary CLI config,
+TLS, `runtime prepare`, service install and service status operations. A second
+shortcut activation inspects/reopens the same owned task; it does not resync
+dependencies or replace another task. Occupied addresses and foreign task
+definitions are refusals, not permission to adopt or terminate a host.
+
+`runtime prepare/status` distinguishes two results:
+
+- With no AI account, prepare the declared baseline dependencies and installation
+  policy. Report `connectionRequired: true`, `workerReady: false`, no qualified
+  profiles and no inference. Do not invent a provider to pass a profile probe.
+- With a configured account, reuse the canonical updater's complete preparation,
+  no-model profile qualification and exact recorded-generation verification.
+  Activate only after that evidence matches.
+
+Both paths hold the existing exclusive repair lock. A running host holds it
+shared. Recorded dependencies are inspected without branch resolution or repair.
+Damaged receipts stay damaged and visible; shortcut use never refreshes them.
+
+The runner publishes a private registration/run/PID/birth/image receipt. Status
+joins that exact process, the native IPv4 listener table, the private leaf pin
+and authenticated app/data/version health, then rechecks currentness. Normal
+stop requests target only that exact run and wait for its cleanup; Task.Stop,
+force termination and port-based killing are not used. Logs retain a bounded
+128 KiB private tail.
+
+Prepared-account native checks now cover real task registration/start, pinned
+health, same-process reopen, normal stop/restart, private logs and removal, plus
+accountless dependency preparation. These are **not** clean-account bootstrap,
+actual sign-in/sign-out, browser trust, automatic app upgrade or rollback
+acceptance. Existing native foreground Sol/file/Stop/history evidence remains
+separate. The public activation gate remains closed until those remaining
+boundaries are qualified. Script execution policy is respected: a policy refusal
+does not authorize changing it or executing the file through another route.
+
 ## Zero-prerequisite bootstrap prototype
 
 The requested direction is a single PowerShell paste for an ordinary Windows
@@ -37,7 +80,8 @@ installation has run on a clean Windows account.
    origins; it does not replace them with locally built dependency wheels.
 4. Use an absolute Python/launcher and retained helper paths on every relaunch.
    No user/machine PATH, shell profile, default Python, registry registration,
-   service or Scheduler mutation is needed.
+   service or Scheduler mutation is needed for the retained foreground mode.
+   The explicit background mode registers only the owner-logon task described above.
 
 Official references: [uv standalone installation](https://docs.astral.sh/uv/getting-started/installation/),
 [uv unmanaged installer options](https://docs.astral.sh/uv/reference/installer/),

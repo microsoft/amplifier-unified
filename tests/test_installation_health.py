@@ -63,7 +63,7 @@ def windows_health_chain(tmp_path, monkeypatch):
     task = {"state": 4, "instances": 1}
     record = {"pid": 123, "created": "134000000000000001", "phase": "listening", "run": "a" * 32}
     state = {"reads": 0, "listener": True, "record": record, "requests": [],
-             "credentialReads": 0, "pin": object(), "ready": True}
+             "credentialReads": 0, "pin": aiohttp.Fingerprint(b"\x11" * 32), "ready": True}
     monkeypatch.setattr(windows_service, "_read", lambda home: (dict(task), spec))
     monkeypatch.setattr(windows_task_runtime, "observe", lambda value: state["record"])
     monkeypatch.setattr(windows_task_runtime, "listener_owned", lambda *a: state["listener"])
@@ -144,6 +144,16 @@ def test_windows_health_bad_pin_does_not_read_or_send_bearer(windows_health_chai
     def invalid(*args):
         raise browser_entry.BrowserEntryUnavailable("private pin unavailable")
     monkeypatch.setattr(browser_entry, "_owner_probe_targets", invalid)
+    result = asyncio.run(health._windows_status(state["home"],
+                         {"version": "1.2.3", "revision": None}, "running"))
+    assert not result["ok"] and not result["probeAttempted"]
+    assert state["credentialReads"] == 0 and state["requests"] == []
+
+
+@pytest.mark.parametrize("pin", [False, True, None, object()])
+def test_windows_health_refuses_nonfingerprint_before_credential(windows_health_chain, pin):
+    state = windows_health_chain
+    state["pin"] = pin
     result = asyncio.run(health._windows_status(state["home"],
                          {"version": "1.2.3", "revision": None}, "running"))
     assert not result["ok"] and not result["probeAttempted"]

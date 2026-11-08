@@ -180,8 +180,12 @@ async def _windows_status(home, expected, state):
         # This canonical boundary validates private CA-layout/leaf identity
         # before the existing control credential is read.
         urls, pin = browser_entry._owner_probe_targets(home, config)
+        if not isinstance(pin, aiohttp.Fingerprint):
+            return result
         for url in urls:
             address = urlsplit(url)
+            if address.scheme != "https":
+                continue
             if not await asyncio.to_thread(listener_owned, record, address.hostname, address.port):
                 continue
             token = browser_entry._control_token(home, spec.sid)

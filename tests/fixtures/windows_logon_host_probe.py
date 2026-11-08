@@ -149,9 +149,58 @@ def exercise(root, old, *, resume=False):
             windows_service.uninstall(root / "app")
 
 
+def setup_flow(root, old):
+    """Exercise the installed setup composer without a browser or real account."""
+    from amplifier_web import windows_service, windows_installation, installation_runtime
+    from amplifier_web.windows_task_runtime import observe
+    env = environment(root, old)
+    # Keep the previously installed dependency resolver available; accountless
+    # prepare must only inspect its recorded graph on this invocation.
+    env["PATH"] = str(old / "candidates/0590-d2163beda/.venv/Scripts") + ";" + env["PATH"]
+    os.environ.clear()
+    os.environ.update(env)
+    assert windows_service._read()[1] is None, "Do not adopt an existing task"
+    baseline = root / "app/updates/baseline-runtime"
+    before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+              for p in baseline.iterdir() if p.is_file()}
+    result = None
+    proof = root / "proof" / ("setup-flow-" + str(time.time_ns()))
+    proof.mkdir()
+    try:
+        result = asyncio.run(windows_installation.prepare_background(
+            root, root / ".venv/Scripts/amplifier-unified.exe", env, port=8953))
+        assert result["created"] and result["background"]
+        assert result["runtime"]["prepared"] and result["runtime"]["connectionRequired"]
+        assert result["runtime"]["workerReady"] is False
+        task, spec = windows_service._read(root / "app")
+        assert spec and task["instances"] == 1
+        first = observe(spec)
+        assert first and first["pid"] == result["health"]["pid"]
+        second = asyncio.run(windows_installation.prepare_background(
+            root, root / ".venv/Scripts/amplifier-unified.exe", env, port=8953))
+        assert second["created"] is False and second["runtime"] is None
+        assert observe(spec) == first
+        assert before == {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                          for p in baseline.iterdir() if p.is_file()}
+        assert installation_runtime.status(root / "app")["workerReady"] is False
+        (proof / "result.json").write_text(json.dumps({
+            "first": result, "reopened": second, "sameRun": True,
+            "dependencyReceiptsUnchanged": True, "noBrowserOrModelRequest": True}, indent=2))
+    finally:
+        task, spec = windows_service._read(root / "app")
+        if spec is not None:
+            assert Path(spec.python).parent == root / ".venv/Scripts"
+            windows_service.uninstall(root / "app")
+        assert windows_service._read()[1] is None
+        (proof / "cleanup.json").write_text(json.dumps({"taskAbsent": True}))
+    assert result is not None
+    print(json.dumps({"nativeSetupFlow": "passed", "sameRunOnReopen": True,
+                      "normalCleanup": True, "noModelBrowserOrOriginalAppEffects": True}))
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("operation", choices=["install", "exercise", "continue-exercise"])
+    parser.add_argument("operation", choices=["install", "exercise", "continue-exercise", "setup-flow"])
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--old", type=Path, required=True)
     parser.add_argument("--wheel", type=Path)
@@ -160,6 +209,8 @@ def main():
     assert sys.platform == "win32" and sys.version_info[:2] == (3, 13)
     if args.operation == "install":
         asyncio.run(install(args.root, args.old, args.wheel, args.sha256))
+    elif args.operation == "setup-flow":
+        setup_flow(args.root, args.old)
     else:
         exercise(args.root, args.old, resume=args.operation == "continue-exercise")
 
