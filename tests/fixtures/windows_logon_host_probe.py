@@ -198,9 +198,99 @@ def setup_flow(root, old):
                       "normalCleanup": True, "noModelBrowserOrOriginalAppEffects": True}))
 
 
+def replacement_flow(root, old):
+    """Manual same-version host-graph replacement/rollback, not auto-upgrade."""
+    from amplifier_web import windows_service, windows_task_runtime
+    env = environment(root, old)
+    env["PATH"] = str(root / "bootstrap-inputs-v1/portable-uv") + ";" + env["PATH"]
+    os.environ.clear()
+    os.environ.update(env)
+    assert windows_service._read()[1] is None
+    first = root / ".venv/Scripts"
+    second = root / "bootstrap-host-v2/Scripts"
+    assert (first / "python.exe").is_file() and (second / "python.exe").is_file()
+    proof = root / "proof" / ("replacement-flow-" + str(time.time_ns()))
+    proof.mkdir()
+    baseline = root / "app/updates/baseline-runtime"
+    before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+              for p in baseline.iterdir() if p.is_file()}
+    receipts = []
+    runs = []
+
+    def command(label, scripts, *args):
+        result = subprocess.run([str(scripts / "amplifier-unified.exe"),
+                                 "--data-dir", str(root / "app"),
+                                 "--workspace", str(root / "workspace"), *args],
+                                cwd=root, env=env, stdin=subprocess.DEVNULL,
+                                capture_output=True, timeout=90)
+        (proof / (label + ".stdout")).write_bytes(result.stdout)
+        (proof / (label + ".stderr")).write_bytes(result.stderr)
+        receipts.append({"label": label, "returncode": result.returncode,
+                         "stdoutBytes": len(result.stdout), "stderrBytes": len(result.stderr)})
+        (proof / "commands.json").write_text(json.dumps(receipts, indent=2))
+        assert result.returncode == 0, label
+        return result.stdout
+
+    def observe(label, scripts):
+        health = json.loads(command(label + "-status", scripts, "service", "status", "--wait", "60", "--json"))
+        assert health["ok"] and health["processVerified"] and health["responding"]
+        _, spec = windows_service._read(root / "app")
+        assert Path(spec.python) == scripts / "python.exe"
+        record = windows_task_runtime.observe(spec)
+        assert record["pid"] == health["pid"]
+        runs.append(record)
+        (proof / "runs.json").write_text(json.dumps(runs, indent=2))
+        return spec
+
+    def exited(record):
+        with windows_task_runtime.process(record["pid"]) as actual:
+            assert actual is None or actual["created"] != record["created"] or actual["exited"]()
+
+    try:
+        command("initial-install", first, "service", "install")
+        initial_spec = observe("initial", first)
+        command("replace", second, "service", "install", "--replace")
+        replacement_spec = observe("replacement", second)
+        exited(runs[0])
+        assert initial_spec.registration_id == replacement_spec.registration_id
+        assert runs[0]["run"] != runs[1]["run"]
+        command("rollback", first, "service", "install", "--replace")
+        restored_spec = observe("restored", first)
+        exited(runs[1])
+        assert restored_spec == initial_spec and runs[2]["run"] not in {runs[0]["run"], runs[1]["run"]}
+        assert before == {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                          for p in baseline.iterdir() if p.is_file()}
+        # Actual replacement responses must name retained readable backups.
+        backup_count = 0
+        for label, expected in (("replace", initial_spec), ("rollback", replacement_spec)):
+            text = (proof / (label + ".stdout")).read_text()
+            candidates = [p for p in (root / "app/config/services").glob("task-backup-*.xml")
+                          if str(p) in text]
+            assert len(candidates) == 1
+            assert windows_service.owned_spec(candidates[0].read_text(), expected.sid) == expected
+            backup_count += 1
+        (proof / "result.json").write_text(json.dumps({
+            "sameVersionHostGraphReplacement": True, "normalRollback": True,
+            "privateBackupsVerified": backup_count, "runtimeReceiptBytesUnchanged": True,
+            "appVersionMigrationOrAutomaticUpdateQualified": False}, indent=2))
+    finally:
+        _, current = windows_service._read(root / "app")
+        if current is not None:
+            assert Path(current.python).parent in {first, second}
+            windows_service.uninstall(root / "app")
+        assert windows_service._read()[1] is None
+        for record in runs:
+            exited(record)
+        assert windows_task_runtime.listener_owners("127.0.0.1", 8953) == set()
+        (proof / "cleanup.json").write_text(json.dumps({"taskAbsent": True, "allExactRunsExited": True,
+                                                       "listener8953Absent": True}))
+    print(json.dumps({"nativeManualReplacement": "passed", "rollback": True,
+                      "sameVersionOnly": True, "normalCleanup": True}))
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("operation", choices=["install", "exercise", "continue-exercise", "setup-flow"])
+    parser.add_argument("operation", choices=["install", "exercise", "continue-exercise", "setup-flow", "replacement-flow"])
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--old", type=Path, required=True)
     parser.add_argument("--wheel", type=Path)
@@ -211,6 +301,8 @@ def main():
         asyncio.run(install(args.root, args.old, args.wheel, args.sha256))
     elif args.operation == "setup-flow":
         setup_flow(args.root, args.old)
+    elif args.operation == "replacement-flow":
+        replacement_flow(args.root, args.old)
     else:
         exercise(args.root, args.old, resume=args.operation == "continue-exercise")
 

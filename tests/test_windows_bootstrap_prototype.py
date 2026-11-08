@@ -342,11 +342,12 @@ class SourceCapsuleTests(unittest.TestCase):
         with self.model() as (base, wheels, args):
             original = args["lock"].read_bytes()
             for old, new in (
-                (b"c716df3cea84b2539aabdfea58a69ae676a1e853", b"0" * 40),
+                (capsule.GIT_SOURCES["amplifier-foundation"]["commit"].encode(), b"0" * 40),
                 (b"modules%2Fhooks-session-naming", b"modules%2Fother"),
                 (b"https://github.com/microsoft/amplifier-foundation", b"http://github.com/microsoft/amplifier-foundation"),
             ):
                 changed = original.replace(old, new)
+                self.assertNotEqual(changed, original, "The negative control must actually mutate the current input")
                 with mock.patch.object(capsule, "LOCK_SHA256", hashlib.sha256(changed).hexdigest()), \
                      self.subTest(old=old), self.assertRaisesRegex(ValueError, "Git lock"):
                     capsule.frozen_selection(changed, args["production_requirements"].read_bytes())
