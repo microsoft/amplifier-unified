@@ -15,8 +15,8 @@ const out=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp/sidebar-reading158';
 const ready=new Promise((resolve,reject)=>{let output='';fixture.stdout.on('data',value=>{output+=value;const line=output.split('\n').find(row=>row.startsWith('{"port":'));if(line)resolve(JSON.parse(line).port)});fixture.once('error',reject);fixture.once('exit',code=>reject(Error(`Fixture exited ${code}: ${logs}`)))});
 try{
  await mkdir(out,{recursive:true});
- const port=await ready,target=`http://127.0.0.1:${port}`;
- vite=await createServer({configFile:false,root:source,cacheDir:'/tmp/sidebar-reading158-vite',server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,req=>req.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
+ const port=await ready,target=`http://127.0.0.1:${port}`,built=process.env.AMPLIFIER_TEST_BUILT_CLIENT==='1';
+ if(!built){vite=await createServer({configFile:false,root:source,cacheDir:'/tmp/sidebar-reading158-vite',server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,req=>req.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen()}
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]});
  page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[],requests=[];page.on('pageerror',error=>errors.push(error.message));page.on('request',req=>{if(new URL(req.url()).pathname==='/api/shell/resources')requests.push(req.postDataJSON())});
@@ -25,7 +25,7 @@ try{
  const rows=page.locator('[data-shell-instance="chats"] [data-sidebar-section="recent"] .a-nav-chat[data-session-id]');
  const older=page.locator('[data-shell-instance="chats"] [data-sidebar-section="recent"]').getByRole('button',{name:'Load older chats',exact:true});
  const rail=page.locator('.a-nav-content');
- await page.goto(vite.resolvedUrls.local[0]);await showFixtureConversation(page,{navPinned:true});await expect(rows).toHaveCount(20);
+ await page.goto(built?target:vite.resolvedUrls.local[0]);await showFixtureConversation(page,{navPinned:true});await expect(rows).toHaveCount(20);
  // The Recent wrapper is a real focus-recovery target when its row disappears.
  // Its outline must use the theme, not Chromium's black/light native ring.
  const recent=page.locator('.a-recent-shortcuts');
