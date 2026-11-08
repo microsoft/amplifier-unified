@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -19,6 +20,8 @@ import sqlite3
 import stat
 import time
 from types import SimpleNamespace
+
+from filelock import FileLock, Timeout
 
 from amplifier_web import managed_runner_updates as updates
 from amplifier_web import managed_runner_qualification as qualification
@@ -64,20 +67,88 @@ async def stage_once(app, commit):
 
 async def qualify(home, commit, daemon, wait_seconds):
     home = private_home(home)
+    lock = FileLock(str(home / 'qualification.lock'), timeout=0, mode=0o600)
+    try:
+        lock.acquire()
+    except Timeout as exc:
+        raise ValueError('Qualification is already running for this private home.') from exc
+    try:
+        # One process owns initialization, stage/advance and final persistence.
+        # Never unlink the lock: later callers must lock the same inode.
+        return await qualify_locked(home, commit, daemon, wait_seconds)
+    finally:
+        lock.release()
+
+
+def verify_target(config, choice, daemon):
+    if (config.get('backend', 'docker') != 'docker'
+            or config.get('dockerHost') != choice['dockerHost']):
+        raise ValueError('The actual setup/qualification target differs from the expected Docker target.')
+    observed = json.loads(setup.command([choice['executable'], '--host', config['dockerHost'],
+                                        'info', '--format', '{{json .}}']))
+    if observed['ID'] != daemon:
+        raise ValueError('The explicitly expected local daemon identity changed.')
+
+
+def verify_setup(record, choice, daemon):
+    verify_target(record.get('candidateConfiguration', {}), choice, daemon)
+    proof = record.get('proof', {})
+    if proof.get('backend') != 'docker' or proof.get('daemon') != daemon:
+        raise ValueError('The retained setup proof differs from the expected Docker daemon.')
+
+
+@contextmanager
+def bound_setup(choice, daemon):
+    """Add driver assertions at actual selection; never replace native effects."""
+    original = setup.setup_docker
+    async def checked(base, selected, owned, record, step):
+        verify_target(selected, choice, daemon)
+        async def checked_step(*args):
+            await step(*args)
+            verify_target(selected, choice, daemon)
+        config, proof = await original(base, selected, owned, record, checked_step)
+        verify_setup({'candidateConfiguration': config, 'proof': proof}, choice, daemon)
+        return config, proof
+    setup.setup_docker = checked
+    try:
+        yield
+    finally:
+        setup.setup_docker = original
+
+
+def verify_update(app, identity, choice, daemon):
+    record = setup.read_json(updates.record_path(app, identity))
+    if not record:
+        raise ValueError('The original qualification record is missing.')
+    verify_target(record['candidate'], choice, daemon)
+    verify_target(record['normalized'], choice, daemon)
+    expected = {'backend': 'docker', 'daemon': daemon}
+    if record.get('resourceId'):
+        row = environments.get(app.data_dir, qualification.owner(record), record['resourceId'])
+        # Before prepare there is no physical binding. Afterwards it must be
+        # the expected daemon, before capacity/start or any subsequent effect.
+        if row.get('backendIdentity') is not None and row['backendIdentity'] != expected:
+            raise ValueError('The prepared qualification owner belongs to another Docker daemon.')
+        if record.get('probeState') not in {'new', 'prepare'} and row.get('backendIdentity') != expected:
+            raise ValueError('The prepared qualification owner has no expected daemon identity.')
+    if record.get('proof') and record['proof'].get('backendIdentity') != expected:
+        raise ValueError('The final qualification proof belongs to another Docker daemon.')
+    return record
+
+
+async def qualify_locked(home, commit, daemon, wait_seconds):
     intent = {'version': 1, 'commit': commit, 'daemon': daemon, 'owner': 'native-runner-qualification'}
     path = home / 'qualification-intent.json'
     prior = setup.read_json(path)
     if prior is not None and prior != intent:
         raise ValueError('This private qualification directory belongs to another intent.')
-    if prior is None and any(home.iterdir()):
+    if prior is None and any(item.name != 'qualification.lock' for item in home.iterdir()):
         raise ValueError('Initial qualification needs an empty task-private directory, never a live app home.')
     setup.write_json(path, intent)
     choice = next(row for row in setup.discover() if row['id'] == 'docker')
     if not choice['available']:
         raise ValueError(choice['reason'])
-    observed = json.loads(setup.command([choice['executable'], '--host', choice['dockerHost'], 'info', '--format', '{{json .}}']))
-    if observed['ID'] != daemon:
-        raise ValueError('The explicitly expected local daemon identity changed.')
+    verify_target(choice, choice, daemon)
     state_path = home / 'fixture-state.json'
     app = SimpleNamespace(data_dir=home, state=setup.read_json(state_path) or {'settings': {}},
                           lock=asyncio.Lock(), db=sqlite3.connect(home / 'fixture.sqlite3'))
@@ -96,20 +167,28 @@ async def qualify(home, commit, daemon, wait_seconds):
             if record['state'] != 'completed':
                 raise ValueError('Original setup is not completed; inspect its exact receipt, do not replay it.')
         else:
-            await setup.request(app, request, {'sessionId': 'native-qualification'})
-            await asyncio.gather(*list(app._test_setup_tasks.values()))
+            with bound_setup(choice, daemon):
+                await setup.request(app, request, {'sessionId': 'native-qualification'})
+                try:
+                    await asyncio.gather(*list(app._test_setup_tasks.values()))
+                finally:
+                    # Settle owned tasks before releasing the driver wrapper/lock.
+                    await setup.close(app)
             latest = setup.read_json(setup.root(app) / 'latest.json')
             record = setup.read_json(setup.root(app) / (latest['id'] + '.json'))
             if record['state'] != 'completed':
                 raise ValueError('Setup did not complete: ' + record.get('detail', record['state']))
+        verify_setup(record, choice, daemon)
+        verify_target(updates.raw_configuration(app), choice, daemon)
         report['setup'] = setup.public(record)
         attempt = await stage_once(app, commit)
         original, original_normalized = attempt['previous'], attempt['previousNormalized']
         identity = attempt['runnerUpdate']
         deadline = time.monotonic() + wait_seconds
         while True:
+            verify_update(app, identity, choice, daemon)
             result = await updates.advance(app, identity)
-            retained = setup.read_json(updates.record_path(app, identity))
+            retained = verify_update(app, identity, choice, daemon)
             print(json.dumps({'updateId': identity, 'phase': retained.get('probeState'), **result}), flush=True)
             if result['complete']:
                 break
@@ -117,6 +196,7 @@ async def qualify(home, commit, daemon, wait_seconds):
                 raise ValueError('Qualification retained its original owner: ' + json.dumps(result))
             await asyncio.sleep(1)
         selected = updates.raw_configuration(app)
+        verify_target(selected, choice, daemon)
         assert selected['commit'] == commit and selected['runnerQualificationRequired'] is True
         assert updates.trusted_installation(app, selected)
         normalized = environments.validate_configuration_value(app, selected)[0]
@@ -129,6 +209,7 @@ async def qualify(home, commit, daemon, wait_seconds):
         assert retained['check']['job']['terminal'] and retained['check']['result']['exit_code'] == 0
         assert retained['proof']['artifactVerified'] and retained['proof']['probeRemoved']
         assert (await updates.advance(app, identity))['complete'], 'Lost selection acknowledgement did not reconcile'
+        verify_update(app, identity, choice, daemon)
         report.update(result='qualified', updateId=identity, selected=selected, runtime=retained['runtime'],
                       proof=retained['proof'], check=retained['check'], owner=row['sessionId'],
                       universeId=row['universeId'], oldBindingPreserved=True,

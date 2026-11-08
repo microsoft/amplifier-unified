@@ -50,6 +50,17 @@ the production `origin`/`authority` arguments repaired that fixture. The separat
 first component-test invocation used the wrong working directory; the corrected
 frontend-directory invocation passed. Both failures remain retained evidence.
 
+Follow-up review found two test-driver boundary defects, not an observed failure
+of that native run: a second setup discovery could choose a different daemon,
+and concurrent CLI invocations could race staging in one private home. The
+driver now checks the actual selected target before native setup, its retained
+setup and prepared/final qualification identities, and holds a nonblocking
+same-home process lock through final persistence. A busy loser changes no JSON
+journal. Deterministic regressions reproduce both on the original driver
+(including two staging dispatches), then pass on the corrected driver.
+The production runtime and built frontend are unchanged by this correction.
+The recorded native lifecycle remains original-run evidence; it was not replayed.
+
 ### Earlier managed-runner acceptance
 
 - Linux ARM64, Docker: setup through the shared action installed the qualified
