@@ -482,6 +482,17 @@ async def installed_target():
 async def _activate(manager, *, force=None):
     release=manager.service.state['updates'].get('pendingApp')
     if not release:return
+    if sys.platform == 'win32':
+        from .windows_service import _read, WindowsServiceError
+        # The candidate task action remains pinned to its installed interpreter.
+        # Its native application-generation restart/rollback is not qualified.
+        # Refuse before drain, recovery records, pointer promotion or packages,
+        # rather than discovering the restart refusal after mutating the target.
+        _task, task_spec = await asyncio.to_thread(_read, manager.home)
+        if task_spec is not None:
+            raise WindowsServiceError('Automatic application activation for the Windows owner-logon host '
+                                      'is not qualified. The current host and staged candidate were preserved; '
+                                      'use the reviewed manual replacement/rollback procedure.')
     revision=release.get('revision','')
     if not re.fullmatch('[0-9a-f]{40}',revision):raise ValueError('Invalid staged release revision')
     generation=release.get('generation')

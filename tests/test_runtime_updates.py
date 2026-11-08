@@ -217,12 +217,23 @@ def test_inventory_is_read_only_and_branches_are_not_pins(environment):
     assert (current / 'uv.lock').read_bytes() == before
 
 
-async def test_update_refreshes_worker_lock_and_rollback_reuses_old_environment(environment):
+async def test_update_refreshes_worker_lock_and_rollback_reuses_old_environment(environment, monkeypatch):
     manager, current, row, old, new, repo = environment
+    from amplifier_web import deployment
+    writer = deployment.write_private
+    published = []
+    def owned_writer(path, text, *, owned_root=None):
+        if Path(path).name in {"runtime-sources.json", "runtime-registry-policy.json"}:
+            # Native Windows refuses the same write without an explicit root.
+            assert owned_root == manager.home
+            published.append(Path(path).name)
+        return writer(path, text, owned_root=owned_root)
+    monkeypatch.setattr(deployment, "write_private", owned_writer)
     generation = 'a' * 32
     release = manager.home / 'updates/releases' / generation
     release.mkdir(parents=True)
     project = await environments.stage(manager, generation, [row])
+    assert "runtime-sources.json" in published
     assert environments.locked_sources(project)['fixture-runtime'].fragment == new
     assert environments.locked_sources(current)['fixture-runtime'].fragment == old
     pointer = manager.home / 'updates/active.json'

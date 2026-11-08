@@ -9,21 +9,25 @@ qualification before the ordinary launcher/update path can use this backend.
 from __future__ import annotations
 
 import base64
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from contextlib import redirect_stderr, redirect_stdout
 import json
 import os
 from pathlib import Path, PureWindowsPath
 import re
-import runpy
 import subprocess
 import sys
 import sysconfig
+import time
 import uuid
 import xml.etree.ElementTree as ET
 
 SOURCE = "amplifier-unified owner-logon v1"
 NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 LIMIT = 128 * 1024
+LAUNCH_ROOTS = {"AMPLIFIER_HOME", "AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH",
+                "AMPLIFIER_UNIFIED_IMPORT_HOME", "UV_CACHE_DIR",
+                "UV_PYTHON_INSTALL_DIR", "UV_PYTHON_BIN_DIR"}
 ET.register_namespace("", NAMESPACE)
 
 
@@ -79,6 +83,7 @@ class TaskSpec:
     tool_path: str
     registration_id: str
     github_access: str = "auto"
+    launch_roots: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
         _sid(self.sid)
@@ -95,6 +100,10 @@ class TaskSpec:
             raise ValueError("Invalid task registration identity.")
         if self.github_access not in {"auto", "anonymous"}:
             raise ValueError("Invalid component download mode.")
+        if not isinstance(self.launch_roots, dict) or set(self.launch_roots) - LAUNCH_ROOTS:
+            raise ValueError("Only declared public launch roots may be retained.")
+        for value in self.launch_roots.values():
+            _path(value)
 
     def encoded(self) -> str:
         # Only public launch configuration, never credentials, goes into XML.
@@ -174,6 +183,60 @@ def _tree(node):
             tuple(sorted((_tree(child) for child in node), key=repr)))
 
 
+def _account_sid(name):
+    """Resolve scheduler-normalized account text through the native SID API."""
+    if sys.platform != "win32" or not isinstance(name, str) or len(name) > 1024:
+        raise WindowsServiceError("Cannot resolve the task trigger's owner identity.")
+    import ctypes as C
+    from ctypes import wintypes as W
+    api = C.WinDLL("advapi32", use_last_error=True)
+    api.LookupAccountNameW.argtypes = [W.LPCWSTR, W.LPCWSTR, C.c_void_p,
+                                      C.POINTER(W.DWORD), W.LPWSTR,
+                                      C.POINTER(W.DWORD), C.POINTER(W.DWORD)]
+    size, domain_size, use = W.DWORD(), W.DWORD(), W.DWORD()
+    api.LookupAccountNameW(None, name, None, C.byref(size), None,
+                           C.byref(domain_size), C.byref(use))
+    if C.get_last_error() != 122 or not 0 < size.value <= 65536 or domain_size.value > 32768:
+        raise WindowsServiceError("Cannot resolve the task trigger's owner identity.")
+    sid = C.create_string_buffer(size.value)
+    domain = C.create_unicode_buffer(max(1, domain_size.value))
+    if not api.LookupAccountNameW(None, name, sid, C.byref(size), domain,
+                                  C.byref(domain_size), C.byref(use)) or use.value != 1:
+        raise WindowsServiceError("Task trigger does not resolve to a user account.")
+    from .windows_files import _API
+    return _sid(_API().sid_text(C.cast(sid, C.c_void_p)))
+
+
+def _scheduler_defaults(root, sid):
+    """Normalize only documented omitted defaults, never unknown XML/settings."""
+    # Task Scheduler serializes an ordinary owner account name in LogonTrigger
+    # even when registration used a SID. Resolve it; text equality isn't identity.
+    for node in root.findall(f"{_q('Triggers')}/{_q('LogonTrigger')}/{_q('UserId')}"):
+        if node.text != sid:
+            try:
+                actual = _sid(node.text) if isinstance(node.text, str) and node.text.startswith("S-1-") else _account_sid(node.text)
+            except WindowsServiceError as error:
+                raise ValueError("Task trigger identity could not be resolved.") from error
+            if actual != sid:
+                raise ValueError("Task trigger belongs to another user.")
+            node.text = sid
+    defaults = {
+        "Triggers/LogonTrigger": {"Enabled": "true"},
+        "Principals/Principal": {"RunLevel": "LeastPrivilege"},
+        "Settings": {
+            "Enabled": "true", "StartWhenAvailable": "false", "WakeToRun": "false",
+            "RunOnlyIfIdle": "false", "RunOnlyIfNetworkAvailable": "false",
+            "AllowStartOnDemand": "true", "Priority": "7", "Hidden": "false",
+            "AllowHardTerminate": "true",
+        },
+    }
+    for path, values in defaults.items():
+        for parent in root.findall("/".join(_q(part) for part in path.split("/"))):
+            for name, value in values.items():
+                if parent.find(_q(name)) is None:
+                    ET.SubElement(parent, _q(name)).text = value
+
+
 def owned_spec(xml: str, sid: str, data_dir=None) -> TaskSpec:
     """Validate the complete supported definition before adoption or mutation.
 
@@ -195,6 +258,7 @@ def owned_spec(xml: str, sid: str, data_dir=None) -> TaskSpec:
         info = root.find(_q("RegistrationInfo"))
         for date in list(info.findall(_q("Date"))):
             info.remove(date)
+        _scheduler_defaults(root, spec.sid)
         if _tree(root) != _tree(ET.fromstring(task_xml(spec))):
             raise ValueError("Task definition does not match its ownership metadata.")
         return spec
@@ -230,12 +294,9 @@ try {
         } elseif ($null -eq $task -or $task.Xml -cne $p.previous) {
             throw 'Task changed; reconcile before retrying'
         }
-        if ($p.op -in @('stop', 'remove', 'replace')) {
-            $task.Stop(0)
-            $deadline = [DateTime]::UtcNow.AddSeconds(10)
-            while ($task.GetInstances(0).Count -ne 0) {
-                if ([DateTime]::UtcNow -ge $deadline) { throw 'Task did not stop' }
-                Start-Sleep -Milliseconds 100
+        if ($p.op -in @('remove', 'replace')) {
+            if ($task.GetInstances(0).Count -ne 0) {
+                throw 'Task is still running; normal shutdown must finish first'
             }
             if ($folder.GetTask($p.name).Xml -cne $p.previous) {
                 throw 'Task changed while stopping; reconcile before retrying'
@@ -245,7 +306,6 @@ try {
             'create' { $task = $folder.RegisterTask($p.name, $p.xml, 2, $p.sid, $null, 3, $null) }
             'replace' { $task = $folder.RegisterTask($p.name, $p.xml, 4, $p.sid, $null, 3, $null) }
             'start' { if ($task.GetInstances(0).Count -eq 0) { $null = $task.Run($null) } }
-            'stop' {}
             'remove' { $folder.DeleteTask($p.name, 0); $task = $null }
             default { throw 'Unsupported operation' }
         }
@@ -284,7 +344,7 @@ def _powershell() -> str:
 def _scheduler(op: str, sid: str, *, previous=None, xml=None, name=None) -> dict:
     if _owner() != sid:
         raise WindowsServiceError("The task owner does not match the process token.")
-    if op not in {"query", "create", "replace", "start", "stop", "remove"}:
+    if op not in {"query", "create", "replace", "start", "remove"}:
         raise ValueError("Unknown task operation.")
     payload = json.dumps({"op": op, "sid": sid, "name": name or task_name(sid),
                           "previous": previous, "xml": xml}, ensure_ascii=True).encode("ascii")
@@ -311,7 +371,7 @@ def _scheduler(op: str, sid: str, *, previous=None, xml=None, name=None) -> dict
                                   "no elevation/password fallback was attempted. Reconcile status before retrying.")
     if type(value.get("exists")) is not bool:
         raise WindowsServiceError("Task Scheduler returned an invalid receipt; reconcile status.")
-    if (op in {"create", "replace", "start", "stop"} and not value["exists"]
+    if (op in {"create", "replace", "start"} and not value["exists"]
             or op == "remove" and value["exists"]):
         raise WindowsServiceError("Task Scheduler did not confirm the requested task effect; reconcile status.")
     if value["exists"] and (
@@ -345,7 +405,7 @@ def task_state(data_dir=None) -> dict:
     return {"state": state, "processVerified": False, "healthy": False,
             "taskPath": "\\" + task_name(spec.sid) if spec else None,
             "lastResult": value.get("lastResult"), "instances": value.get("instances"),
-            "logsAvailable": False}
+            "logsAvailable": spec is not None}
 
 
 def _new_spec(data_dir, workspace, sid, previous):
@@ -354,12 +414,16 @@ def _new_spec(data_dir, workspace, sid, previous):
     from .windows_files import address
     _require_python()
     access = os.environ.get("AMPLIFIER_GITHUB_ACCESS")
+    roots = dict(previous.launch_roots) if previous else {}
+    roots.update({name: _path(value) for name in LAUNCH_ROOTS
+                  if (value := os.environ.get(name))})
     return TaskSpec(sid=sid, python=_path(sys.executable),
                     data_dir=str(address(data_dir)), workspace=str(address(workspace or Path.cwd())),
                     state_home=str(address(shared_state_home())), tool_path=tool_path(),
                     registration_id=previous.registration_id if previous else uuid.uuid4().hex,
                     github_access=("anonymous" if access == "anonymous" else
-                                   previous.github_access if access is None and previous else "auto"))
+                                   previous.github_access if access is None and previous else "auto"),
+                    launch_roots=roots)
 
 
 def _backup(spec: TaskSpec, xml: str) -> str:
@@ -383,6 +447,7 @@ def install(data_dir, workspace=None, *, replace=False) -> dict:
             raise WindowsServiceError("The generated Windows task has changed. Use --replace to save a "
                                       "private backup and replace the owned definition.")
         backup = _backup(previous, value["xml"])
+        value = _stop(value, previous)
     if previous != spec:
         result = _scheduler("replace" if previous else "create", sid,
                             previous=value.get("xml"), xml=xml)
@@ -397,6 +462,24 @@ def install(data_dir, workspace=None, *, replace=False) -> dict:
             **({"backup": backup} if backup else {})}
 
 
+def _stop(value, spec, *, timeout=60):
+    """Stop through the private runner, not Task.Stop/TerminateProcess."""
+    if value.get("instances", 0) == 0:
+        return value
+    from .windows_task_runtime import request_stop
+    request_stop(spec, timeout=timeout)
+    deadline = time.monotonic() + 10
+    while True:
+        current = _scheduler("query", spec.sid)
+        if (not current["exists"] or current.get("xml") != value["xml"]):
+            raise WindowsServiceError("Task definition changed while stopping; reconcile status.")
+        if current.get("instances") == 0:
+            return current
+        if time.monotonic() >= deadline:
+            raise WindowsServiceError("Task still has a running instance; no force-stop attempted.")
+        time.sleep(0.1)
+
+
 def command(name: str, data_dir=None):
     if name not in {"start", "stop", "restart", "status", "logs"}:
         raise ValueError(f"Unknown service command: {name}")
@@ -407,13 +490,20 @@ def command(name: str, data_dir=None):
         print(json.dumps(value))
         return value
     if name == "logs":
-        raise WindowsServiceError("Windows task stdout/stderr capture is not wired. "
-                                  "Task Scheduler state is not an application log.")
+        from .windows_task_runtime import read_log
+        _, spec = _read(data_dir)
+        if spec is None:
+            raise WindowsServiceError("Amplifier Unified's owner-logon task is not installed.")
+        try:
+            print(read_log(spec), end="")
+        except FileNotFoundError:
+            raise WindowsServiceError("No private task output has been recorded yet.") from None
+        return
     value, spec = _read(data_dir)
     if spec is None:
         raise WindowsServiceError("Amplifier Unified's owner-logon task is not installed.")
     if name in {"stop", "restart"}:
-        _scheduler("stop", spec.sid, previous=value["xml"])
+        value = _stop(value, spec)
     if name in {"start", "restart"}:
         _scheduler("start", spec.sid, previous=value["xml"])
 
@@ -423,6 +513,7 @@ def uninstall(data_dir=None) -> None:
         raise WindowsServiceError("Windows service removal requires an explicit data directory.")
     value, spec = _read(data_dir)
     if spec is not None:
+        value = _stop(value, spec)
         result = _scheduler("remove", spec.sid, previous=value["xml"])
         if result["exists"]:
             raise WindowsServiceError("Task removal was not verified; reconcile status.")
@@ -430,9 +521,15 @@ def uninstall(data_dir=None) -> None:
 
 
 def current_process_is_managed(data_dir) -> bool:
-    # An environment marker or IRunningTask.EnginePID is not host-process proof.
-    # Until native correlation is wired, disable automatic in-app restart.
-    return False
+    from .windows_task_runtime import observe
+    try:
+        value, spec = _read(data_dir)
+        if spec is None or value.get("state") != 4 or value.get("instances") != 1:
+            return False
+        record = observe(spec)
+        return bool(record and record["pid"] == os.getpid())
+    except (OSError, ValueError, RuntimeError):
+        return False
 
 
 def managed_restart_command() -> tuple[str, ...]:
@@ -457,10 +554,31 @@ def _run(encoded: str) -> None:
     os.environ["PATH"] = spec.tool_path
     os.environ["AMPLIFIER_SESSION_STATE_HOME"] = spec.state_home
     os.environ["AMPLIFIER_GITHUB_ACCESS"] = spec.github_access
+    os.environ["AMPLIFIER_WEB_HOME"] = spec.data_dir
+    os.environ.update(spec.launch_roots)
     os.chdir(spec.workspace)
     sys.argv = [spec.python, "--no-open", "--data-dir", spec.data_dir,
                 "--workspace", spec.workspace, "serve"]
-    runpy.run_module("amplifier_web", run_name="__main__")
+    # Keep this process as the host: a child or venv redirector PID must not
+    # masquerade as the scheduler's application process. Updates remain gated
+    # until the replacement/rollback entry has its own native qualification.
+    from .windows_task_runtime import PrivateLog, Runner
+    from .host_dependencies import prepare_environment
+    from . import cli
+    prepare_environment()
+    if not Path(sys.executable).samefile(spec.python):
+        raise WindowsServiceError("The running task interpreter differs from its definition.")
+    runner = Runner(spec)
+    with PrivateLog(spec) as log, redirect_stdout(log), redirect_stderr(log):
+        try:
+            cli._serve(cli._parse(), Path(spec.data_dir), task_runner=runner)
+        except BaseException:
+            import traceback
+            traceback.print_exc()
+            runner.phase("failed")
+            raise
+        else:
+            runner.phase("stopped")
 
 
 if __name__ == "__main__":

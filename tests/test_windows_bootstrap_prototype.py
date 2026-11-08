@@ -342,11 +342,12 @@ class SourceCapsuleTests(unittest.TestCase):
         with self.model() as (base, wheels, args):
             original = args["lock"].read_bytes()
             for old, new in (
-                (b"c716df3cea84b2539aabdfea58a69ae676a1e853", b"0" * 40),
+                (capsule.GIT_SOURCES["amplifier-foundation"]["commit"].encode(), b"0" * 40),
                 (b"modules%2Fhooks-session-naming", b"modules%2Fother"),
                 (b"https://github.com/microsoft/amplifier-foundation", b"http://github.com/microsoft/amplifier-foundation"),
             ):
                 changed = original.replace(old, new)
+                self.assertNotEqual(changed, original, "The negative control must actually mutate the current input")
                 with mock.patch.object(capsule, "LOCK_SHA256", hashlib.sha256(changed).hexdigest()), \
                      self.subTest(old=old), self.assertRaisesRegex(ValueError, "Git lock"):
                     capsule.frozen_selection(changed, args["production_requirements"].read_bytes())
@@ -614,6 +615,37 @@ class SourceCapsuleTests(unittest.TestCase):
 
 
 class LauncherTests(unittest.TestCase):
+    def test_background_shortcut_leaves_host_without_untrusted_browser_entry(self):
+        from amplifier_web import windows_installation, windows_files
+        from io import StringIO
+        from cryptography import x509
+        root = Path("/trial")
+        pinned = mock.MagicMock()
+        @contextmanager
+        def private(*args, **kwargs):
+            self.assertEqual(kwargs["owned_root"], root)
+            yield pinned
+        async def prepare(*args):
+            return {"runtime": {"connectionRequired": True}}
+        certificate = mock.Mock()
+        certificate.fingerprint.return_value = b"\x11" * 32
+        with mock.patch.object(windows_installation, "prepare_background", side_effect=prepare), \
+             mock.patch.object(windows_files, "directory", side_effect=private), \
+             mock.patch.object(launcher, "check_installation", return_value=root / "host/Scripts/app.exe"), \
+             mock.patch.object(launcher, "child_environment", return_value={}), \
+             mock.patch.object(launcher, "run_cli", return_value=b"PUBLIC CERTIFICATE") as run, \
+             mock.patch.object(launcher, "browser_trust_ready", return_value=False), \
+             mock.patch.object(launcher, "open_owned_browser") as browser, \
+             mock.patch.object(launcher.sys.stdin, "isatty", return_value=False), \
+             mock.patch.object(launcher.sys, "stdout", new_callable=StringIO) as output, \
+             mock.patch.object(x509, "load_pem_x509_certificate", return_value=certificate):
+            launcher.launch_background(root, {})
+            browser.assert_not_called()
+            self.assertIn("Host left running", output.getvalue())
+            self.assertIn("not a Windows SCM service", output.getvalue())
+            self.assertEqual(run.call_args.args[1], ["--data-dir", str(root / "app"), "setup-tls", "export"])
+            pinned.publish_private.assert_called_once_with("trial-ca.cer", b"PUBLIC CERTIFICATE", replace=True)
+
     def test_environment_survives_missing_shell_path_without_copying_keys(self):
         root = Path("/synthetic/trial space/Unicode-λ")
         receipt = {"uv": "/private/tools/uv", "git": "/private/git/bin/git",
@@ -650,6 +682,31 @@ class LauncherTests(unittest.TestCase):
             self.assertNotIn(key, env)
         self.assertEqual(env["UV_TOOL_DIR"], str(Path("/trial/tools")))
         self.assertEqual(env["UV_TOOL_BIN_DIR"], str(Path("/trial/tool-bin")))
+
+    def test_long_paths_are_child_only_and_preserve_existing_git_credentials(self):
+        inherited = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "credential.helper",
+                     "GIT_CONFIG_VALUE_0": "synthetic-existing-helper", "PATH": ""}
+        with mock.patch.dict(launcher.os.environ, inherited, clear=True):
+            before = dict(launcher.os.environ)
+            env = launcher.child_environment(Path("/trial"),
+                {"sourceMode": "pinned-vcs", "uv": "/uv/uv", "git": "/git/git"})
+            self.assertEqual(dict(launcher.os.environ), before)
+        self.assertEqual(env["GIT_CONFIG_COUNT"], "2")
+        self.assertEqual(env["GIT_CONFIG_KEY_0"], "credential.helper")
+        self.assertEqual(env["GIT_CONFIG_VALUE_0"], inherited["GIT_CONFIG_VALUE_0"])
+        self.assertEqual(env["GIT_CONFIG_KEY_1"], "core.longpaths")
+        self.assertEqual(env["GIT_CONFIG_VALUE_1"], "true")
+
+    def test_invalid_inherited_git_count_refuses_without_mutation(self):
+        for value in ("-1", "65", "1;ignored", "１", ""):
+            with self.subTest(value=value), mock.patch.dict(
+                launcher.os.environ, {"GIT_CONFIG_COUNT": value}, clear=True
+            ):
+                before = dict(launcher.os.environ)
+                with self.assertRaisesRegex(RuntimeError, "Git configuration count"):
+                    launcher.child_environment(Path("/trial"),
+                        {"sourceMode": "pinned-vcs", "uv": "/uv/uv", "git": "/git/git"})
+                self.assertEqual(dict(launcher.os.environ), before)
 
     def test_cli_commands_use_list_argv_and_hide_sensitive_child_errors(self):
         root = Path("/synthetic/space λ")
@@ -787,7 +844,7 @@ class BootstrapSourceTests(unittest.TestCase):
         self.assertIn("if ($mode -eq 'pinned-vcs')", proto)
         self.assertIn("$uv = Install-VerifiedHelper 'uv'", proto)
         self.assertIn("$git = Install-VerifiedHelper 'git'", proto)
-        self.assertIn(r"^uv 0\.12\.18", proto)
+        self.assertIn(r"^uv 0\.13\.7", proto)
         self.assertLess(proto.index("'--validate-source'"), proto.index("@('venv'"))
         self.assertLess(proto.index("'--audit-source'"), proto.index("Write-PrototypeShortcut $hostPython"))
         self.assertIn("'--build-constraint'", proto)

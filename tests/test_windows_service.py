@@ -125,6 +125,7 @@ def test_native_owner_sid_matches_independent_process_token():
 
 @pytest.fixture
 def backend(monkeypatch):
+    from amplifier_web import windows_task_runtime
     state = {"xml": None, "running": False, "calls": [], "backups": []}
     monkeypatch.setattr(service, "_owner", lambda: SID)
     monkeypatch.setattr(service, "_new_spec",
@@ -153,6 +154,14 @@ def backend(monkeypatch):
     monkeypatch.setattr(service, "_scheduler", scheduler)
     monkeypatch.setattr(service, "_backup", lambda old, xml:
                         state["backups"].append((old, xml)) or r"C:\private\task-backup.xml")
+    def request_stop(value, **kwargs):
+        state["calls"].append("request_stop")
+        state["running"] = False
+    monkeypatch.setattr(windows_task_runtime, "request_stop", request_stop)
+    monkeypatch.setattr(windows_task_runtime, "observe", lambda spec: None)
+    def missing_log(spec):
+        raise FileNotFoundError("synthetic")
+    monkeypatch.setattr(windows_task_runtime, "read_log", missing_log)
     return state
 
 
@@ -252,6 +261,8 @@ def test_scheduler_expansion_new_install_refused_before_scheduler_mutation(monke
     monkeypatch.setattr(windows_files, "address", lambda path: PureWindowsPath(path))
     monkeypatch.setattr(shared_state, "shared_state_home", lambda: PureWindowsPath(spec().state_home))
     monkeypatch.setattr(host_dependencies, "tool_path", lambda: spec().tool_path)
+    for name in service.LAUNCH_ROOTS:
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(service.sys, "executable",
                         r"C:\Tools\%USERNAME%\Scripts\python.exe" if field == "python" else spec().python)
     workspace = r"C:\Work\%USERNAME%" if field == "workspace" else spec().workspace
@@ -305,6 +316,38 @@ def test_scheduler_date_and_formatting_do_not_create_false_ownership_failure():
     ET.SubElement(info, service._q("Date")).text = "2026-01-01T00:00:00"
     ET.indent(tree)
     assert service.owned_spec(ET.tostring(tree, encoding="unicode"), SID) == spec()
+
+
+def test_scheduler_native_omitted_defaults_and_account_spelling_are_equivalent(monkeypatch):
+    tree = ET.fromstring(service.task_xml(spec()))
+    tree.find(f"{service._q('Triggers')}/{service._q('LogonTrigger')}/{service._q('UserId')}").text = "SYNTHETIC\\Owner"
+    omitted = {"Enabled", "RunLevel", "StartWhenAvailable", "WakeToRun", "RunOnlyIfIdle",
+               "RunOnlyIfNetworkAvailable", "AllowStartOnDemand", "Priority",
+               "Hidden", "AllowHardTerminate"}
+    for parent in tree.iter():
+        for node in list(parent):
+            if node.tag.split("}")[-1] in omitted:
+                parent.remove(node)
+    calls = []
+    monkeypatch.setattr(service, "_account_sid", lambda name: calls.append(name) or SID)
+    assert service.owned_spec(ET.tostring(tree, encoding="unicode"), SID) == spec()
+    assert calls == ["SYNTHETIC\\Owner"]
+    monkeypatch.setattr(service, "_account_sid", lambda name: SID + "1")
+    with pytest.raises(service.WindowsServiceError):
+        service.owned_spec(ET.tostring(tree, encoding="unicode"), SID)
+
+
+def test_scheduler_default_normalization_does_not_accept_unsafe_or_unknown_settings():
+    xml = service.task_xml(spec())
+    for before, after in (
+        ("<Enabled>true</Enabled>", "<Enabled>false</Enabled>"),
+        ("<Priority>7</Priority>", "<Priority>4</Priority>"),
+        ("<RunLevel>LeastPrivilege</RunLevel>", "<RunLevel>HighestAvailable</RunLevel>"),
+        ("</Settings>", "<UnknownSecuritySetting>true</UnknownSecuritySetting></Settings>"),
+        ("<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>", ""),
+    ):
+        with pytest.raises(service.WindowsServiceError):
+            service.owned_spec(xml.replace(before, after), SID)
 
 
 def test_install_registration_is_separate_from_health_and_rerun_reuses(backend):
@@ -366,8 +409,8 @@ def test_status_and_managed_are_passive_and_logs_are_truthful(backend):
     assert not service.managed(r"C:\Other")
     state = service.command("status", spec().data_dir)
     assert state["state"] == "running" and not state["healthy"]
-    assert not state["processVerified"] and not state["logsAvailable"]
-    with pytest.raises(service.WindowsServiceError, match="not wired"):
+    assert not state["processVerified"] and state["logsAvailable"]
+    with pytest.raises(service.WindowsServiceError, match="recorded yet"):
         service.command("logs", spec().data_dir)
     assert set(backend["calls"]) == {"query"}
 
@@ -379,7 +422,8 @@ def test_command_restart_stop_remove_only_exact_owned_definition(backend):
     backend["calls"].clear()
     service.command("restart", spec().data_dir)
     service.uninstall(spec().data_dir)
-    assert backend["calls"] == ["query", "stop", "start", "query", "remove"]
+    assert backend["calls"] == ["query", "request_stop", "query", "start",
+                                "query", "request_stop", "query", "remove"]
     assert backend["xml"] is None
 
 
@@ -455,6 +499,7 @@ def test_wrong_platform_refuses_before_any_subprocess(monkeypatch):
 
 
 def test_action_enters_existing_cli_in_same_process_with_exact_environment(backend, monkeypatch):
+    from amplifier_web import cli, host_dependencies, windows_task_runtime
     monkeypatch.setattr(service, "_require_python", lambda: None)
     service.install(spec().data_dir)
     calls = []
@@ -462,19 +507,33 @@ def test_action_enters_existing_cli_in_same_process_with_exact_environment(backe
     for name in ("PATH", "AMPLIFIER_SESSION_STATE_HOME", "AMPLIFIER_GITHUB_ACCESS"):
         monkeypatch.setenv(name, "prior")
     monkeypatch.setattr(service.sys, "argv", [])
-    monkeypatch.setattr(service.runpy, "run_module", lambda *a, **kw: calls.append(("run", a, kw)))
+    monkeypatch.setattr(host_dependencies, "prepare_environment", lambda: None)
+    monkeypatch.setattr(service.Path, "samefile", lambda *a: True)
+    monkeypatch.setattr(cli, "_parse", lambda: "parsed")
+    class Runner:
+        def __init__(self, value):
+            assert value == spec()
+        def phase(self, phase):
+            calls.append(("phase", phase))
+    monkeypatch.setattr(windows_task_runtime, "Runner", Runner)
+    @contextmanager
+    def private_log(spec):
+        import io
+        yield io.StringIO()
+    monkeypatch.setattr(windows_task_runtime, "PrivateLog", private_log)
+    monkeypatch.setattr(cli, "_serve", lambda *a, **kw: calls.append(("serve", a[0], str(a[1]))))
     service._run(spec().encoded())
     assert service.sys.argv == [spec().python, "--no-open", "--data-dir", spec().data_dir,
                                 "--workspace", spec().workspace, "serve"]
     assert os.environ["AMPLIFIER_SESSION_STATE_HOME"] == spec().state_home
     assert os.environ["PATH"] == spec().tool_path
-    assert calls == [("cwd", spec().workspace), ("run", ("amplifier_web",), {"run_name": "__main__"})]
+    assert calls == [("cwd", spec().workspace), ("serve", "parsed", spec().data_dir),
+                     ("phase", "stopped")]
 
 
 def test_action_refuses_mismatched_registered_definition(backend, monkeypatch):
     monkeypatch.setattr(service, "_require_python", lambda: None)
     service.install(spec().data_dir)
-    monkeypatch.setattr(service.runpy, "run_module", lambda *a, **kw: pytest.fail("must not serve"))
     with pytest.raises(service.WindowsServiceError, match="does not match"):
         service._run(replace(spec(), workspace=r"C:\Other").encoded())
 
@@ -523,6 +582,8 @@ def test_new_spec_freezes_lexical_paths_and_keeps_anonymous_choice(monkeypatch):
     monkeypatch.setattr(shared_state, "shared_state_home", lambda: PureWindowsPath(spec().state_home))
     monkeypatch.setattr(host_dependencies, "tool_path", lambda: spec().tool_path)
     monkeypatch.delenv("AMPLIFIER_GITHUB_ACCESS", raising=False)
+    for name in service.LAUNCH_ROOTS:
+        monkeypatch.delenv(name, raising=False)
     previous = spec(github_access="anonymous")
     result = service._new_spec(spec().data_dir, spec().workspace, SID, previous)
     assert result == previous
@@ -533,6 +594,16 @@ def test_new_spec_freezes_lexical_paths_and_keeps_anonymous_choice(monkeypatch):
         service._new_spec(spec().data_dir, spec().workspace, SID, previous)
 
 
+def test_launch_roots_are_public_paths_not_arbitrary_environment():
+    value = spec(launch_roots={"AMPLIFIER_HOME": r"C:\Private\shared",
+                              "UV_CACHE_DIR": r"C:\Private\cache"})
+    assert service.TaskSpec.decode(value.encoded()) == value
+    for roots in ({"OPENAI_API_KEY": "secret"}, {"PATH": r"C:\Other"},
+                  {"AMPLIFIER_HOME": "relative"}, {"UV_CACHE_DIR": "C:\\bad\npath"}):
+        with pytest.raises(ValueError):
+            spec(launch_roots=roots)
+
+
 def test_free_threaded_interpreter_is_not_ordinary_python(monkeypatch):
     monkeypatch.setattr(service.sys, "version_info", (3, 13))
     monkeypatch.setattr(service.sysconfig, "get_config_var", lambda key: 1)
@@ -541,13 +612,11 @@ def test_free_threaded_interpreter_is_not_ordinary_python(monkeypatch):
 
 
 def test_failed_stop_cannot_start_successor_or_remove_task(backend, monkeypatch):
+    from amplifier_web import windows_task_runtime
     service.install(spec().data_dir)
-    original = service._scheduler
-    def fail(op, sid, **kwargs):
-        if op == "stop":
-            raise service.WindowsServiceError("stop outcome unknown")
-        return original(op, sid, **kwargs)
-    monkeypatch.setattr(service, "_scheduler", fail)
+    def fail(*args, **kwargs):
+        raise service.WindowsServiceError("stop outcome unknown")
+    monkeypatch.setattr(windows_task_runtime, "request_stop", fail)
     backend["calls"].clear()
     with pytest.raises(service.WindowsServiceError, match="unknown"):
         service.command("restart", spec().data_dir)
@@ -589,7 +658,7 @@ def test_native_argv_unicode_and_quoting_roundtrip():
 
 @pytest.mark.skipif(os.name != "nt" or os.environ.get("AMPLIFIER_TEST_WINDOWS_TASKS") != "1",
                     reason="Opt-in only: AMPLIFIER_TEST_WINDOWS_TASKS=1 on an interactive Windows test account")
-def test_native_synthetic_task_create_run_stop_remove(tmp_path):
+def test_native_synthetic_task_create_run_exit_remove(tmp_path):
     # This is a transport probe, NOT Unified host/sign-out/readiness acceptance.
     # Never register the production task name or run the real application.
     sid = service._owner()
@@ -600,7 +669,7 @@ def test_native_synthetic_task_create_run_stop_remove(tmp_path):
     root.find(f"{service._q('RegistrationInfo')}/{service._q('URI')}").text = "\\" + name
     root.find(f"{service._q('RegistrationInfo')}/{service._q('Description')}").text = "synthetic transport probe"
     action = root.find(f"{service._q('Actions')}/{service._q('Exec')}/{service._q('Arguments')}")
-    action.text = subprocess.list2cmdline(["-I", "-S", "-c", "import time; time.sleep(60)"])
+    action.text = subprocess.list2cmdline(["-I", "-S", "-c", "import time; time.sleep(5)"])
     xml = ET.tostring(root, encoding="unicode")
     assert service._scheduler("query", sid, name=name)["exists"] is False
     # Cleanup always reconciles the exact unique task after a lost receipt.
@@ -622,8 +691,11 @@ def test_native_synthetic_task_create_run_stop_remove(tmp_path):
                 break
             assert time.monotonic() < deadline, "Synthetic task did not run in this interactive account"
             time.sleep(.1)
-        stopped = service._scheduler("stop", sid, name=name, previous=current["xml"])
-        assert stopped["instances"] == 0
+        deadline = time.monotonic() + 15
+        while current["instances"]:
+            assert time.monotonic() < deadline, "Synthetic task did not finish; exact task retained"
+            time.sleep(.1)
+            current = service._scheduler("query", sid, name=name)
     finally:
         current = service._scheduler("query", sid, name=name)
         if current["exists"]:
