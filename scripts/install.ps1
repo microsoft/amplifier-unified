@@ -1090,14 +1090,14 @@ function Invoke-UnifiedPrototype([string] $ManifestUrl, [string] $ManifestHash, 
         $null = Invoke-InstallChild $uv @('venv', '--python', $python, $venv) $childEnv
         $hostPython = Join-Path $venv 'Scripts\python.exe'
         $null = Invoke-InstallChild $uv @('pip', 'install', '--python', $hostPython,
-            '--no-index', '--no-deps', '--require-hashes', '--only-binary', ':all:',
+            '--no-index', '--no-deps', '--link-mode', 'copy', '--require-hashes', '--only-binary', ':all:',
             '--find-links', (Join-Path $capsule 'wheels'), '-r', (Join-Path $capsule 'requirements.txt')) $childEnv
         if ($mode -eq 'pinned-vcs') {
             $script:InstallStage = 'prototype exact Git dependencies'
             Write-Host 'Building five frozen Python packages with private Git and pinned isolated backend wheels.'
             $gitNames = 'amplifier-foundation,amplifier-module-hooks-session-naming,amplifier-memory,amplifier-bundle-ui-use,amplifier-bundle-context-intelligence'
             $null = Invoke-InstallChild $uv @('pip', 'install', '--python', $hostPython,
-                '--no-index', '--no-deps', '--no-require-hashes', '--verify-hashes',
+                '--no-index', '--no-deps', '--link-mode', 'copy', '--no-require-hashes', '--verify-hashes',
                 '--only-binary', ':all:', '--no-binary', $gitNames,
                 '--find-links', (Join-Path $capsule 'build-wheels'),
                 '--build-constraint', (Join-Path $capsule 'build-constraints.txt'),

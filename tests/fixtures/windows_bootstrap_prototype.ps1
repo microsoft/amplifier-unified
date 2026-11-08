@@ -129,7 +129,7 @@ try {
     Need ($env:PATH -ceq $beforePath) 'parent PATH changed'
     $installs=@($script:Children | Where-Object { $_[1][0] -eq 'pip' -and $_[1][1] -eq 'install' })
     Need ($installs.Count -eq 1) 'package mutation must occur once'
-    foreach ($flag in @('--require-hashes','--no-index','--no-deps','--only-binary')) {
+    foreach ($flag in @('--require-hashes','--no-index','--no-deps','--only-binary','--link-mode','copy')) {
         Need ($installs[0][1] -contains $flag) "missing offline immutable install flag $flag"
     }
     Need ($installs[0][2].AMPLIFIER_HOME -ne $installs[0][2].AMPLIFIER_SESSION_STATE_HOME) 'history and ownership merged'
@@ -156,7 +156,7 @@ try {
     Need ($installs.Count -eq 2) 'source mode must separate hashed wheels from exact Git'
     Need ($installs[0][1] -contains '--require-hashes') 'registry/app phase lost hash enforcement'
     Need (-not ($installs[1][1] -contains '--require-hashes')) 'Git phase must not claim wheel hashes for source'
-    foreach ($flag in @('--no-deps','--no-index','--no-require-hashes','--verify-hashes',
+    foreach ($flag in @('--no-deps','--no-index','--link-mode','copy','--no-require-hashes','--verify-hashes',
         '--only-binary','--no-binary','--build-constraint','--find-links')) {
         Need ($installs[1][1] -contains $flag) "source phase missing $flag"
     }

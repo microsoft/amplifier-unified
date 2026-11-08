@@ -146,6 +146,8 @@ wrong refs/subdirectories, missing/extra wheels or changed hashes. It then uses:
 3. Read-only installed metadata auditing for exactly 65 distributions, no
    editables, all five real repository/commit/subdirectory origins and expected
    versions, then `uv pip check`, normal launcher validation and shortcut creation.
+   Both installation phases use explicit `--link-mode copy`: package payloads
+   must not share mutable file identity with the installer's cache.
 
 These flags were checked against
 [uv 0.12.18 CLI definitions](https://raw.githubusercontent.com/astral-sh/uv/0.12.18/crates/uv-cli/src/lib.rs),
