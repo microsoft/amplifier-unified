@@ -4189,11 +4189,18 @@ class AppService:
         async with self.lock:
             session = copy.deepcopy(self._session(sid))
             question = self.questions.for_input(sid, input_id)
+            row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
+            receipt = json.loads(row[0]) if row else {}
+            bound_receipt = receipt.get('sessionId') == sid and receipt.get('inputId') == input_id
         message = find_message(session, input_id)
         if message is None and question is not None:
             # The answer record survives a cold/pruned message projection.
             # Its exact input binding permits a passive evidence probe, not send.
             message = {'delivery': question['delivery']}
+        if message is None and bound_receipt:
+            # Exact command delivery survives a bounded/pruned message view.
+            # Command admission alone (accepted=True) is not input delivery.
+            message = {'delivery': {'status': receipt.get('delivery', 'unknown')}}
         if message is None:
             return {'delivery': 'not_saved', 'message': 'This app has no saved copy. You can try sending the original message again with the same delivery identity.'}
         if message.get('steering'):
@@ -4202,6 +4209,8 @@ class AppService:
             return {'delivery': message['delivery']['status'], 'steering': copy.deepcopy(message['steering']),
                     'message': 'Steering status: ' + message['steering']['disposition'] + '. This correction is bound to its original run and was not sent again.'}
         status = message.get('delivery', {}).get('status', 'unknown')
+        if bound_receipt and receipt.get('delivery') == 'accepted':
+            status = 'accepted'
         if status in {'queued_for_update', 'held'}:
             return {'delivery': status, 'message': message['delivery'].get('reason') or 'Saved for delivery after the app update. Nothing has been sent yet.'}
         if status != 'accepted' and self.runtime and hasattr(self.runtime, 'delivery'):
@@ -4215,8 +4224,12 @@ class AppService:
             current = self._session(sid)
             current_message = find_message(current, input_id)
             current_question = self.questions.for_input(sid, input_id)
+            row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
+            current_receipt = json.loads(row[0]) if row else {}
             if ((current_message and current_message.get('delivery', {}).get('status') == 'accepted') or
-                    (current_question and current_question['delivery']['status'] == 'accepted')):
+                    (current_question and current_question['delivery']['status'] == 'accepted') or
+                    (current_receipt.get('sessionId') == sid and current_receipt.get('inputId') == input_id
+                     and current_receipt.get('delivery') == 'accepted')):
                 status = 'accepted'
             if status == 'accepted':
                 self._delivery(current, input_id, status)

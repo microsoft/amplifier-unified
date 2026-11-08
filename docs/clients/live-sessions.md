@@ -102,6 +102,19 @@ A changed command with the same ID is rejected. Command acceptance is distinct
 from a completed model/tool operation. Interrupted or uncertain work is never
 automatically rerun by attachment, reload, or SSE reconnection.
 
+The bundled browser can dismiss a settled failed/uncertain delivery warning into
+reversible **Delivery details**. This stores only the exact chat/input identities
+in that browser tab's session storage; it neither deletes the original message,
+attachments or uncertain outbox nor claims delivery. **Show warning** restores
+the emphasis. Active sending, queued input, the current running input and pending
+checks cannot be dismissed. Another input or chat does not inherit the choice.
+Later unrelated conversation activity is not delivery evidence. **Check delivery**
+never resends: only an exact positive saved receipt or runtime confirmation can
+settle that input, including after its message leaves the bounded view. The
+client retires only the matching accepted outbox entry; late transport errors
+cannot recreate it. Missing evidence remains uncertain/not saved, not proven
+non-delivery. Dismissal leaves drafts, selection and shared history unchanged.
+
 The optional `expectedRevision` checks the app's global state revision, including
 presentation changes; it is not a per-session revision. Do not use it as a
 mandatory send precondition during active streaming.

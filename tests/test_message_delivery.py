@@ -920,6 +920,41 @@ async def test_check_reconciles_positive_evidence_and_original_receipt(recovery)
     assert runtime.retries == []
 
 
+@pytest.mark.parametrize('prior,evidence,expected', [
+    ('accepted', 'unknown', 'accepted'),
+    ('unknown', 'accepted', 'accepted'),
+    ('unknown', 'unknown', 'unknown'),
+])
+async def test_check_exact_receipt_outside_message_window(recovery, prior, evidence, expected):
+    app, runtime, _ = recovery
+    sid = app._session()['id']
+    if prior == 'accepted':
+        app._delivery(app._session(), 'original', 'accepted')
+    app._session()['messages'] = []
+    runtime.evidence = evidence
+    # No full-history read or unrelated message is needed to prove this input.
+    result = await app._check_delivery(sid, 'original')
+    assert result['delivery'] == expected
+    assert app._session()['messages'] == []
+    assert runtime.sent == [] and runtime.retries == [] and runtime.started == []
+
+
+async def test_delivery_receipt_never_borrows_other_chat_or_generic_acceptance(recovery):
+    app, runtime, _ = recovery
+    sid = app._session()['id']
+    app._session()['messages'] = []
+    record = app.db.execute('SELECT receipt FROM commands WHERE id=?', ('original',)).fetchone()
+    receipt = json.loads(record[0])
+    assert receipt['sessionId'] == sid and receipt['inputId'] == 'original'
+    for change in ({'sessionId': 'other', 'delivery': 'accepted'}, {'inputId': 'other', 'delivery': 'accepted'},
+                   {'delivery': 'unknown', 'accepted': True}):
+        app.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps({**receipt, **change}), 'original'))
+        runtime.evidence = 'unknown'
+        result = await app._check_delivery(sid, 'original')
+        assert result['delivery'] != 'accepted'
+    assert not runtime.sent and not runtime.retries
+
+
 async def test_retry_preserves_message_attachments_draft_and_identity(recovery):
     app, runtime, _ = recovery
     original = app._session()['messages'][-1]

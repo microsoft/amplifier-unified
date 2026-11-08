@@ -362,6 +362,9 @@ function App(){
      capabilityStopFence.current.settleStop(stop,result?.accepted===true?'accepted':'unknown');
      void capabilityStopFence.current.reconcile(stop.sessionId);
     }
+    // An exact positive delivery receipt is independent of the bounded message
+    // window and of a following state read. Never treat generic acceptance as delivery.
+    if(action==='conversation.delivery')outbox.acknowledge(args.sessionId,args.inputId,result.result);
     if(historyVisit)destinationHistory.current.finish(result);
     try{
      if(result.state)acceptState(result.state);
