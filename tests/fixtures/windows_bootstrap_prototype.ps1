@@ -97,7 +97,10 @@ try {
     function Invoke-InstallChild {
         param($Executable,$Arguments,$Environment)
         $script:Children += ,@($Executable,$Arguments,$Environment)
-        if ($Arguments.Count -eq 1 -and $Arguments[0] -eq '--version') { return 'uv 0.12.18' }
+        if ($Arguments.Count -eq 1 -and $Arguments[0] -eq '--version') {
+            if ($script:WrongUvVersion) { return 'uv 0.12.18' }
+            return 'uv 0.13.7'
+        }
         if ($Arguments[0] -eq 'python' -and $Arguments[1] -eq 'find') {
             return (Join-Path $script:InstallWork 'python\cpython-3.13.8\python.exe')
         }
@@ -117,7 +120,7 @@ try {
                 url='https://github.com/microsoft/amplifier-unified/releases/download/prototype-abc/windows-prototype.zip';
                 sha256=('b'*64)}}
         $script:Downloads=@();$script:Helpers=@();$script:Children=@();$script:Receipts=@();$script:Links=@()
-        $script:BadHash=$false;$script:FailInstall=$false
+        $script:BadHash=$false;$script:FailInstall=$false;$script:WrongUvVersion=$false
         $script:UseExisting=$false
     }
     Reset-Model
@@ -164,7 +167,7 @@ try {
     $validations=@($script:Children | Where-Object { $_[1] -contains '--validate-source' })
     $audits=@($script:Children | Where-Object { $_[1] -contains '--audit-source' })
     Need ($validations.Count -eq 1 -and $audits.Count -eq 1) 'source payload and installed origins both require validation'
-    Need ($script:Receipts[0].bootstrapUv -ceq '0.12.18') 'bootstrap uv phase identity missing'
+    Need ($script:Receipts[0].bootstrapUv -ceq '0.13.7') 'bootstrap uv phase identity missing'
     Need ($script:Receipts[0].sourceMode -ceq 'pinned-vcs') 'prepared receipt source mode missing'
     Need ($env:PATH -ceq $beforePath) 'source mode changed parent PATH'
     $inherited = @{}
@@ -178,6 +181,18 @@ try {
     }
     Need ($modelEnvironment.UV_TOOL_DIR -ceq (Join-Path $script:InstallWork 'tools')) 'private tool root missing'
     Need ($modelEnvironment.UV_TOOL_BIN_DIR -ceq (Join-Path $script:InstallWork 'tool-bin')) 'private tool bin root missing'
+
+    Reset-Model
+    $script:Plan.source='d9b26e7bb3c5270d377520b82e498111384e931d'
+    $script:Plan.version='0.65.0'
+    $script:Plan.sourceMode='pinned-vcs'
+    $script:WrongUvVersion=$true
+    $failed=$false
+    try { Invoke-UnifiedPrototype 'https://github.com/microsoft/amplifier-unified/releases/download/prototype-abc/plan.json' ('c'*64) $true }
+    catch { $failed=$true }
+    Need $failed 'pinned mode accepted the old helper with an unavailable selected Python catalog'
+    Need ($script:Children.Count -eq 1 -and $script:Children[0][1][0] -ceq '--version') 'wrong helper reached Python or package installation'
+    Need ($script:Receipts.Count -eq 0 -and $script:Links.Count -eq 0) 'wrong helper reported a prepared installation'
 
     Reset-Model
     $script:Plan.sourceMode='pinned-vcs'
