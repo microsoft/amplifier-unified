@@ -147,3 +147,10 @@ test('exact positive check retires only matching outbox and a late error cannot 
  assert.deepEqual(api.entries.map(row=>row.id),['two']);
  await act(async()=>root.unmount());delete globalThis.sessionStorage;
 });
+test('a check reporting active sending cannot be dismissed while the original frame is uncertain',async()=>{
+ let root;
+ await act(async()=>{root=create(React.createElement(MessageDelivery,{message:{inputId:'input'},session:{id:'chat'},delivery:{status:'unknown'},dispatch:async()=>({result:{delivery:'sending',message:'Still in progress'}})}))});
+ await act(async()=>button(root,'Check delivery').props.onClick());
+ assert.equal(button(root,'Dismiss warning'),undefined);
+ await act(async()=>root.unmount());
+});

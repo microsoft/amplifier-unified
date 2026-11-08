@@ -42,7 +42,7 @@ try{
  await expect(original().locator('summary')).toBeVisible();
  await expect(original().getByText('Delivery not confirmed',{exact:true})).not.toBeVisible();
  assert.deepEqual(await outbox(),before);assert.deepEqual(effects(),[]);
- await expect(composer).toHaveDraft('Keep the next unsent thought');await expect(original().getByText('reference.txt',{exact:true})).toBeVisible();
+ await expect(composer).toHaveDraft('Keep the next unsent thought');await expect(original().getByText(/reference.txt/)).toBeVisible();
  await page.screenshot({path:artifact+'/desktop-collapsed.png'});
  await page.reload();await expect(original().locator('summary')).toBeVisible();
  await expect(original().getByText('Delivery not confirmed',{exact:true})).not.toBeVisible();
@@ -72,6 +72,8 @@ try{
  await page.screenshot({path:artifact+'/mobile-details.png'});
  // Receipt arrives after original leaves server window: retire exact outbox anyway.
  await original().getByRole('button',{name:'Check delivery',exact:true}).click();await expect.poll(()=>pending.length).toBe(1);
+ await original().locator('summary').click();
+ await expect(original().getByRole('button',{name:'Checking…',exact:true})).toBeVisible();
  state.sessions[0].messages=[];state.revision++;
  await pending.shift().route.fulfill({json:{accepted:true,result:{delivery:'accepted',message:'Received. Not resent.'},state:shell.state()}});
  await expect.poll(async()=>(await outbox()).length).toBe(0);

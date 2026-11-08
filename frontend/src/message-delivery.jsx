@@ -24,7 +24,7 @@ function DeliveryWarning({message,session,delivery,localDelivery,dispatch,retry,
  const originalSubmission=!!localDelivery&&!saved;
  const working=['working','starting','running','stopping'].includes(session.status);
  const active=working&&session.execution?.currentTurnId===inputId||
-  [delivery,localDelivery,message.delivery].some(row=>['sending','queued','queued_for_update'].includes(row?.status));
+  [delivery,localDelivery,message.delivery,{status:report?.delivery}].some(row=>['sending','queued','queued_for_update'].includes(row?.status));
  const dismissible=!!storageKey&&!active&&['failed','unknown'].includes(delivery?.status);
  const check=async()=>{
   if(pending)return;setPending(true);setError('');setConfirm(false);
@@ -57,7 +57,7 @@ function DeliveryWarning({message,session,delivery,localDelivery,dispatch,retry,
    {error&&<span role="alert">{error}</span>}
   </span>;
  }
- if(!delivery||delivery.status==='accepted'||report?.delivery==='accepted'&&!active)return null;
+ if(!delivery||delivery.status==='accepted'||report?.delivery==='accepted')return null;
  if(delivery.status==='queued_for_update')return <span className="a-message-delivery" role="status">Saved · waiting for the app update. You do not need to send it again.</span>;
  if(delivery.status==='held')return <span className="a-message-delivery" role="status">{delivery.reason||'Message retained without sending.'}</span>;
  const sending=['sending','queued'].includes(delivery.status);
@@ -75,7 +75,7 @@ function DeliveryWarning({message,session,delivery,localDelivery,dispatch,retry,
   {dismissible&&<button type="button" className="a-link" disabled={pending} onClick={()=>{if(!pending)setWarningDismissed(!dismissed)}}>{dismissed?'Show warning':'Dismiss warning'}</button>}
  </>;
  return dismissible?<details className="a-delivery-warning" open={!dismissed||expanded} onToggle={event=>{if(dismissed)setExpanded(event.currentTarget.open)}}>
-  <summary ref={summary} hidden={!dismissed}>Delivery details</summary>
+  <summary ref={summary} hidden={!dismissed} aria-disabled={pending||undefined} onClick={event=>{if(pending)event.preventDefault()}}>Delivery details</summary>
   {content}
  </details>:content;
 }
