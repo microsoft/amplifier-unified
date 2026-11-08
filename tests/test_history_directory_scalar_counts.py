@@ -26,12 +26,14 @@ def test_count_queries_do_not_bind_retained_summary_bodies(tmp_path, kind, expec
     }
 
     def read_with_statement_size():
-        sizes = []
-        directory.db.set_trace_callback(lambda sql: sizes.append(len(sql.encode('utf-8'))))
+        statements = []
+        directory.db.set_trace_callback(statements.append)
         try:
-            return readers[kind](), max(sizes, default=0)
+            result = readers[kind]()
         finally:
             directory.db.set_trace_callback(None)
+        assert all('retained detail' not in sql for sql in statements)
+        return result, max((len(sql.encode('utf-8')) for sql in statements), default=0)
 
     small_count, small_statement = read_with_statement_size()
     assert small_count == expected
@@ -47,7 +49,11 @@ def test_count_queries_do_not_bind_retained_summary_bodies(tmp_path, kind, expec
     # the same admitted row, not a replacement object or a new library.
     if kind == 'roots':
         state['sessions'][0]['sessionKind'] = 'root'
-        assert readers[kind]() == expected + 1
+        # Invalidate the membership memo: the production root-count path must
+        # also omit retained bodies when it actually executes its count query.
+        changed_count, changed_statement = read_with_statement_size()
+        assert changed_count == expected + 1
+        assert changed_statement <= small_statement
     elif kind == 'children':
         state['sessions'][0]['parentId'] = parent['id']
         assert readers[kind]() == expected + 1

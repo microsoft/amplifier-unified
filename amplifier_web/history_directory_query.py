@@ -220,7 +220,7 @@ def workspace_counts(directory, state, archive='active'):
 
 
 def root_count(directory, state):
-    sql, params = directory.effective(state, fields={'session_kind'})
+    sql, params = directory.effective(state)
     return directory.db.execute(sql + " SELECT COUNT(*) FROM directory_rows WHERE session_kind='root'", params).fetchone()[0]
 
 
