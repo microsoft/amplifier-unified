@@ -21,7 +21,8 @@ def dispatch(provider, request, fitted, validator, options):
     finally:
         if scope is not None:
             scope['active'] = False
-            scope['encoded'] = None
+            for key in ('provider', 'request', 'task', 'fitted', 'validator', 'options', 'encoded'):
+                scope[key] = None
         _CURRENT.reset(token)
 
 
@@ -49,6 +50,8 @@ def validate(scope, request, options):
     """Synchronous after admission; failures must not be swallowed as diagnostics."""
     if scope is None:
         return
+    if not isinstance(scope['fitted'], str):
+        raise ValueError('Prepared screenshot fitting boundary is unavailable')
     from .provider_capture import normalized_options
     if (not scope['active'] or scope['task'] is not asyncio.current_task()
             or scope['request'] is not request or scope['options'] is None

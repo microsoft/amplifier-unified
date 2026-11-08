@@ -74,6 +74,15 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
     plan={'session':{'orchestrator':{'module':'loop-live','config':{'max_iterations':2}},'context':{'module':'context-managed','config':{'token_meter':'actual'}}},'providers':[]}
     sid='worker-capture';prepared=PreparedBundle(plan,BundleModuleResolver(modules),Bundle(name='fixture',session=plan['session']))
     session=await prepared.create_session(session_id=sid);c=session.coordinator
+    failures=[]
+    execute=c.get('orchestrator').execute
+    async def recorded_execute(*args,**kwargs):
+        try:return await execute(*args,**kwargs)
+        except Exception as error:
+            import traceback
+            failures.append(''.join(traceback.format_exception(error,limit=20))[-6000:])
+            raise
+    c.get('orchestrator').execute=recorded_execute
     await c.mount('providers',raw,name='configured')
     hook_cleanup=None
     computer=None
@@ -189,9 +198,11 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
                 assert p['imageTypes']==['input_image']
                 assert p['referenceRetained'] and p['toolCallRetained']
     finally:
-        evidence('full-worker-lifecycle-'+str(restore)+'-'+str(computer_hook)+'-'+str(image)+'-'+revocation,{'events':published,'requests':paths,'revoked':revoked})
         if worker.execution and not worker.execution.done():
-            await worker.runtime.submit(Input('stop',activation=worker.activation));await asyncio.wait_for(worker.execution,5)
+            if not worker.runtime.closed:
+                await worker.runtime.submit(Input('stop',activation=worker.activation))
+            await asyncio.wait_for(worker.execution,5)
+        evidence('full-worker-lifecycle-'+str(restore)+'-'+str(computer_hook)+'-'+str(image)+'-'+revocation,{'events':published,'requests':paths,'revoked':revoked,'failures':failures})
         if worker.controls:await worker.controls.close()
         if hook_cleanup:await hook_cleanup()
         if computer:computer._backend.close()

@@ -114,3 +114,31 @@ async def test_recovery_revalidates_source_without_reusing_numeric_ticket(tmp_pa
     await observer.drain()
     assert raw.attempts==2 and len(validations)==2
     assert observer.store.read()['selected']['budget']=={}
+
+
+async def test_projection_scope_rejects_reentry_and_releases_inherited_references():
+    from amplifier_web import request_projection as projection
+    import weakref, gc
+    value=request();provider=SimpleNamespace()
+    # Registered host identity is exact; this probe uses a weak-referenceable provider.
+    from test_context_inspection import Provider
+    provider=Provider();events=SimpleNamespace(provider_wrappers={})
+    reference=weakref.ref(value)
+    gate=asyncio.Event()
+    async def child():
+        scope=projection._CURRENT.get()
+        with pytest.raises(ValueError,match='task'):
+            projection.claim(events,provider,value)
+        await gate.wait()
+        assert not scope['active'] and scope['request'] is None
+        assert scope['validator'] is None and scope['fitted'] is None
+    with projection.dispatch(provider,value,value.model_dump_json(),lambda:None,{}):
+        claim=projection.claim(events,provider,value)
+        with pytest.raises(ValueError,match='identity'):
+            projection.claim(events,provider,value)
+        task=asyncio.create_task(child())
+        await asyncio.sleep(0)
+        projection.release(claim)
+    gate.set();await task
+    del value;gc.collect()
+    assert reference() is None
