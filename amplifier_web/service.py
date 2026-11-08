@@ -2162,13 +2162,16 @@ class AppService:
                     reviewed_files.append({'id': row['id'], 'sha256': digest})
             return {'accepted': True, 'result': {'repository': repo['full_name'], 'repositoryId': repo['id'],
                     'visibility': 'private' if repo['private'] else 'public'}, 'files': reviewed_files, 'effects': []}
-        if action == 'feedback.diagnostics':
+        if action in {'feedback.diagnostics', 'feedback.report'}:
             async with self.lock:
                 try:
-                    result = self.feedback.diagnostics(args)
+                    result = self.feedback.report(args) if action == 'feedback.report' else self.feedback.diagnostics(args)
                 except ValueError as exc:
-                    raise AppError(str(exc), 404) from None
-                return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': result}
+                    raise AppError(str(exc), 400 if action == 'feedback.report' else 404) from None
+                effects = ([{'type': 'download', 'filename': result['filename'], 'mime': result['mime'],
+                             'content': result['content']}]
+                           if action == 'feedback.report' and args.get('destination') == 'download' else [])
+                return {'accepted': True, 'revision': self.state['revision'], 'effects': effects, 'result': result}
         if action == 'updates.diagnostics':
             if not self.update_manager:
                 raise AppError('Update service is unavailable.')
