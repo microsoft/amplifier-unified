@@ -793,9 +793,16 @@ async def test_restart_reconstructs_cached_steering_copy_then_pages_original(sto
         await service.close()
     reopened = AppService(app_path, NoModel(), workspace=tmp_path)
     try:
-        # No migration guesses from the saved display-only copy. Reconstruction
-        # is an explicit canonical read; ordinary saved cursor reads stay bounded.
-        await reopened.history.load("recipient", canonical=True)
+        # Supported passive repair action, even with an unchanged native stamp:
+        # session.history -> history_page -> canonical load, not browser reload.
+        # No migration guesses from the saved display-only copy.
+        from test_collaborative_workspaces import until
+        restored = reopened._session("recipient")
+        restored["nativeRevision"] = automatic_history.revision(restored)
+        assert len(restored["messages"]) == 2
+        accepted = await reopened.dispatch("session.history", {"id": "recipient"}, command_id="repair-display")
+        assert accepted["accepted"] is True
+        await until(lambda: len(reopened._session("recipient")["messages"]) == 1)
         restored = reopened._session("recipient")
         assert len(restored["messages"]) == 1
         assert restored["messages"][0]["id"] == peer["id"]
