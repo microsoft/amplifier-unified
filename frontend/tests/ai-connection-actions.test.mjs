@@ -32,6 +32,39 @@ test('preferred connection is directly editable with exact order and no credenti
  }finally{await act(async()=>root?.unmount())}
 });
 
+test('preferred connection saves are single-flight before the pending render',async()=>{
+ const {ConnectionPreference}=await vite.ssrLoadModule('/src/ai-connection-detail.jsx');
+ const orders=[];let resolve,root;
+ try{
+  await act(async()=>root=create(React.createElement(ConnectionPreference,{id:'preference',providers:[{id:'one'},{id:'two'}],onChange:value=>{orders.push(value);return new Promise(done=>resolve=done)}})));
+  const choose=root.root.findByType('select').props.onChange;
+  let first;
+  await act(async()=>{first=choose({target:{value:'two'}});await choose({target:{value:'two'}})});
+  assert.equal(orders.length,1);
+  assert.equal(root.root.findByType('select').props.disabled,true);
+  await act(async()=>{resolve();await first});
+  assert.equal(root.root.findByType('select').props.disabled,false);
+ }finally{await act(async()=>root?.unmount())}
+});
+
+test('advanced provider editor also saves active-chat intent for the next message',async()=>{
+ const {ProviderSettings}=await vite.ssrLoadModule('/src/setup.jsx');
+ const calls=[],session={id:'active-chat',status:'working',nextMessageRevision:7};
+ const current={view:{providerEditor:{id:'one',module:'provider-openai',config:'{"reasoning_effort":"none"}',model:'chosen-model',detailOpen:true}},
+  setup:{providers:[{id:'one',module:'provider-openai',credentialsConfigured:true,config:{default_model:'chosen-model'}}],
+   providerCatalogs:{one:{metadata:{configSchema:{fields:[]}}}}}};
+ let root;
+ try{
+  await act(async()=>root=create(React.createElement(ProviderSettings,{state:current,session,act:async(action,args)=>{calls.push([action,args]);return {accepted:true,result:{revision:8}}}})));
+  const button=root.root.findByProps({'data-action':'conversation.configure'});
+  assert.equal(Boolean(button.props.disabled),false);
+  await act(async()=>button.props.onClick());
+  assert.deepEqual(calls.find(([action])=>action==='conversation.configure'),['conversation.configure',{sessionId:'active-chat',expectedRevision:7,selection:{instance:'one',model:'chosen-model',effort:'none'}}]);
+  assert.equal(calls.some(([action])=>action==='runtime.control'),false);
+  assert.match(JSON.stringify(root.toJSON()),/Work already running keeps its current model/);
+ }finally{await act(async()=>root?.unmount())}
+});
+
 for(const choice of ['medium','none',''])test('basic default effort sends narrow intent, including distinct provider default: '+choice,async()=>{
  const current={...state({step:'model',id:'one',module:'provider-openai',model:'chosen-model',settingDefault:true}),
   setup:{providersLoadedAt:1,providers:[{id:'one',module:'provider-openai',config:{default_model:'chosen-model',reasoning_effort:'high',api_key:'[REDACTED]'}}],
