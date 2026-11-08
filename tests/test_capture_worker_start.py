@@ -39,7 +39,8 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
     def transport(req):
         body=json.loads(req.content)
         blocks=[block for item in body.get('input',[]) if isinstance(item,dict)
-                for block in (item.get('content') if isinstance(item.get('content'),list) else [])]
+                for key in ('content','output')
+                for block in (item.get(key) if isinstance(item.get(key),list) else [])]
         images=[block for block in blocks if block.get('type')=='input_image']
         digests=[]
         for block in images:
