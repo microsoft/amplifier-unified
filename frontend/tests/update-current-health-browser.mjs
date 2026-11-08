@@ -40,7 +40,7 @@ try{
    await expect(panel.getByText('Source details opened below.',{exact:true})).toBeVisible();
   }
  }
- await page.screenshot({path:output+'/blocked-mobile.png'});await page.setViewportSize({width:1280,height:950});await page.screenshot({path:output+'/blocked-desktop.png'});
+ await page.setViewportSize({width:390,height:844});await page.screenshot({path:output+'/blocked-mobile.png'});await page.setViewportSize({width:1280,height:950});await page.screenshot({path:output+'/blocked-desktop.png'});
  await transition('uncertain');await expect(status).toContainText('Installation needs verification');
  await transition('current');await expect(status).toContainText('You’re up to date');
  assert.deepEqual(errors,[]);Object.assign(result,{status:'passed',package:boot.package,currentDesktop:true,currentMobile:true,historyRetained:true,reload:true,currentFailureHasAction:true,sourceActionReopensAndReveals:true,uncertainPreserved:true});
