@@ -26,6 +26,42 @@ try{
  const older=page.locator('[data-shell-instance="chats"] [data-sidebar-section="recent"]').getByRole('button',{name:'Load older chats',exact:true});
  const rail=page.locator('.a-nav-content');
  await page.goto(vite.resolvedUrls.local[0]);await showFixtureConversation(page,{navPinned:true});await expect(rows).toHaveCount(20);
+ // The Recent wrapper is a real focus-recovery target when its row disappears.
+ // Its outline must use the theme, not Chromium's black/light native ring.
+ const recent=page.locator('.a-recent-shortcuts');
+ const focusStyles=[];
+ for(const scheme of ['light','dark']){
+  await page.evaluate(async scheme=>{
+   const shell=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
+   const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:shell.revision,composition:{...shell.effectiveComposition,presentation:{...shell.effectiveComposition.presentation,scheme}}});
+   await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:shell.revision,changeId:prepared.result.id});
+  },scheme);
+  await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',scheme);
+  await page.keyboard.press('Tab');await recent.focus();
+  await expect(recent).toBeFocused();
+  const facts=await recent.evaluate(node=>{
+   const style=getComputedStyle(node),probe=document.createElement('span');
+   probe.style.color='var(--a-accent)';node.append(probe);
+   const accent=getComputedStyle(probe).color;probe.remove();
+   return {focusVisible:node.matches(':focus-visible'),outlineColor:style.outlineColor,outlineStyle:style.outlineStyle,outlineWidth:style.outlineWidth,outlineOffset:style.outlineOffset,accent};
+  });
+  focusStyles.push({scheme,...facts});await writeFile(out+'/focus-styles.json',JSON.stringify(focusStyles,null,2)+'\n');
+  await page.screenshot({path:out+'/recent-focus-'+scheme+'.png'});
+  assert.equal(facts.focusVisible,true);
+  assert.equal(facts.outlineStyle,'solid');
+  assert.equal(facts.outlineWidth,'2px');
+  assert.equal(facts.outlineColor,facts.accent);
+  assert.equal(facts.outlineOffset,'-2px','inset focus is not clipped by the sidebar scrollport');
+ }
+ // Pointer-initiated recovery must not leave the same keyboard outline behind.
+ await page.getByRole('textbox',{name:'Message Amplifier'}).click();
+ await recent.focus();
+ const pointer=await recent.evaluate(node=>({focusVisible:node.matches(':focus-visible'),outlineStyle:getComputedStyle(node).outlineStyle}));
+ assert.equal(pointer.focusVisible,false);assert.equal(pointer.outlineStyle,'none');
+ await page.emulateMedia({forcedColors:'active'});await page.keyboard.press('Tab');await recent.focus();
+ assert.equal(await recent.evaluate(node=>getComputedStyle(node).outlineStyle),'solid');
+ await page.screenshot({path:out+'/recent-focus-forced-colors.png'});
+ await page.emulateMedia({forcedColors:'none'});
  await older.click();await expect(rows).toHaveCount(40);await expect(page.getByText(/Recent changed during the read/)).toHaveCount(0);
  // Put an existing row near the middle. Select it without scrolling the rail.
  await rows.nth(23).scrollIntoViewIfNeeded();
