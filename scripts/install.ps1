@@ -1004,9 +1004,14 @@ function Invoke-UnifiedPrototype([string] $ManifestUrl, [string] $ManifestHash, 
     try {
         [Net.ServicePointManager]::SecurityProtocol = $originalTls -bor [Net.SecurityProtocolType]::Tls12
         Write-PrivateInstallText $script:InstallLog '' -Mutable
-        Write-Host 'Experimental foreground setup, NOT a qualified public Windows installation.'
+        Write-Host 'Experimental native setup, NOT a qualified public Windows installation.'
         Write-Host "Private location: $($script:InstallWork)"
-        Write-Host 'Prior installs, PATH, default Python, trust stores and startup tasks stay unchanged.'
+        Write-Host 'Prior installs, PATH, default Python and trust stores stay unchanged.'
+        if ($LogonHost) {
+            Write-Host 'The selected launcher will register only an owned sign-in background task after dependency preparation.'
+        } else {
+            Write-Host 'Foreground mode does not register a startup task.'
+        }
         $planPath = Join-Path $script:InstallWork 'prototype-plan.json'
         Get-BoundedDownload $ManifestUrl $planPath 1048576
         Assert-FileChecksum $planPath $ManifestHash
