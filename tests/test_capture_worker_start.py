@@ -21,7 +21,8 @@ from test_context_inspection import config, evidence
 
 
 @pytest.mark.parametrize('restore',[False,True])
-async def test_full_worker_start_capture(tmp_path,monkeypatch,restore):
+@pytest.mark.parametrize('computer_hook',[False,True])
+async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_hook):
     import socket
     def forbidden(*args,**kwargs):raise AssertionError('External network forbidden')
     monkeypatch.setattr(socket.socket,'connect',forbidden)
@@ -44,6 +45,20 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore):
     sid='worker-capture';prepared=PreparedBundle(plan,BundleModuleResolver(modules),Bundle(name='fixture',session=plan['session']))
     session=await prepared.create_session(session_id=sid);c=session.coordinator
     await c.mount('providers',raw,name='configured')
+    hook_cleanup=None
+    if computer_hook:
+        from amplifier_module_hook_computer_use import mount
+        class ScreenshotAuthority:
+            name='fixture_screenshot'
+            description='Fixture capture authority; never invoked'
+            input_schema={'type':'object','properties':{}}
+            computer_use_screenshots=True
+            def _take_issued_capture_result(self,*args,**kwargs):
+                raise AssertionError('No screenshot was requested')
+            async def execute(self,*args,**kwargs):
+                raise AssertionError('No desktop operation is permitted')
+        await c.mount('tools',ScreenshotAuthority(),name='fixture_screenshot')
+        hook_cleanup=await mount(c)
     selection={'instance':'configured','model':'gpt-6-astra','effort':'high'}
     c.get('orchestrator').root_provider=SelectedProvider(raw,selection)
     async def instructions():return 'W'*1_000_100
@@ -85,12 +100,17 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore):
         await worker.runtime.submit(Input('stop',activation=worker.activation))
         await worker.execution
         observer=worker.telemetry.context_inspectors[sid];await observer.drain();row=observer.store.read()['selected']
-        evidence('full-worker-'+str(restore),{'header':row,'requests':paths,'workerStart':True,'rootType':type(c.get('orchestrator').root_provider).__name__})
+        evidence('full-worker-'+str(restore)+'-'+str(computer_hook),{
+            'header':row,'requests':paths,'workerStart':True,
+            'rootType':type(c.get('orchestrator').root_provider).__name__,
+            'computerHookMounted':computer_hook,
+            'computerHookWrapped':getattr(raw,'_amplifier_computer_use_wrapped',False)})
         assert row['budgetStatus']=='captured'
         assert row['budget']['measurement']['input_tokens']==100
     finally:
-        evidence('full-worker-lifecycle-'+str(restore),{'events':published,'requests':paths})
+        evidence('full-worker-lifecycle-'+str(restore)+'-'+str(computer_hook),{'events':published,'requests':paths})
         if worker.execution and not worker.execution.done():
             await worker.runtime.submit(Input('stop',activation=worker.activation));await asyncio.wait_for(worker.execution,5)
         if worker.controls:await worker.controls.close()
+        if hook_cleanup:await hook_cleanup()
         await session.cleanup();await client.close()
