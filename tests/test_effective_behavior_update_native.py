@@ -246,8 +246,15 @@ async def test_actual_check_install_qualifies_selected_app_behavior(tmp_path,mon
         entry.write_text(entry.read_text().replace(
             "async def mount(coordinator,config=None):await coordinator.mount('providers',Provider(),name='fixture')",
             "async def mount(coordinator,config=None):raise RuntimeError('fixture qualification refusal')"))
+    provider_url='https://fixture.invalid/update-provider'
+    git(provider,'init','-b','main');git(provider,'config','user.name','Fixture')
+    git(provider,'config','user.email','fixture@example.invalid')
+    git(provider,'add','.');git(provider,'commit','-m','Offline qualification provider')
+    provider_revision=git(provider,'rev-parse','HEAD')
+    transport[provider_url]=provider.as_uri()
+    transport_file.write_text(json.dumps(transport))
     profile=work/'profile.yaml'
-    profile.write_text(yaml.safe_dump({'bundle':{'name':'fixture'},'session':{'orchestrator':{'module':'loop-streaming'},'context':{'module':'context-simple'}},'providers':[{'module':'provider-update-fixture','source':str(provider),'config':{'default_model':'fixture'}}]}))
+    profile.write_text(yaml.safe_dump({'bundle':{'name':'fixture'},'session':{'orchestrator':{'module':'loop-streaming'},'context':{'module':'context-simple'}},'providers':[{'module':'provider-update-fixture','source':'git+'+provider_url+'@main','config':{'default_model':'fixture'}}]}))
     # Installed host components remain real; explicit local module substitutions
     # isolate this fixture from unrelated default bundle repositories.
     site=next((project/'.venv/lib').glob('python*/site-packages'))
@@ -318,6 +325,7 @@ async def test_actual_check_install_qualifies_selected_app_behavior(tmp_path,mon
             if case in {'old-pin','custom-pin'}:
                 assert manager.diagnostics.state['lastFailure'].get('reason') in {
                     'runtime-source-constraint','protected-runtime-source'}
+                assert manager.diagnostics.state['lastFailure'].get('package')=='amplifier-foundation'
                 probes=[p.read_text() for p in OUT.glob('probe-*.log')]
                 assert not any('"dependenciesPrepared": true' in text for text in probes)
             if case=='failed-qualification':

@@ -69,9 +69,7 @@ async def test_stage_activate_and_rollback_preserve_original_cache(app,repo):
         assert git(root,'rev-parse','HEAD')==repo[1]
     manager.validate=validate
     manager.diagnostics.begin('ecosystem', components=['repo'])
-    failure=manager.diagnostics.record('ecosystem-validation','failed',errorType='ValueError',
-                                       reason='runtime-source-constraint',package='fixture')
-    await manager.publish(phase='error',error='Fixture preparation failed')
+    failure=manager.diagnostics.record('ecosystem-validation','failed',errorType='ValueError')
     from amplifier_web.attention import snapshot
     assert any(item.get('actionRequired') for item in snapshot(app.state)['items'])
     published=[]
@@ -687,7 +685,9 @@ async def test_new_automatic_default_installs_eligible_updates_but_not_managed_p
     manager=app.update_manager;events=[]
     async def check(**kwargs):
         events.append('check');app.state['updates'].update(phase='available',available=1,lastCheck=time.time())
-    async def install():events.append('install')
+    async def install(*, automatic=False):
+        assert automatic is True
+        events.append('install')
     manager.check=check;manager.install=install
     await manager.tick();assert events==['check','install']
     app.state['updates'].update(appAvailable=True,application={'canInstall':False})
