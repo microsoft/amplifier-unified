@@ -593,8 +593,10 @@ def test_placement_fragments_revalidate_changed_dependencies_and_preserve_exact_
         tree['turns'].clear()
     else:
         for node in tree['nodes']:
-            node['observationWindowId'] = 'invalid'
+            node['observationWindow'] = 'invalid'
     expected = session_projection.stored_execution(tree)
+    if change in ('turn', 'all-invalid'):
+        assert expected['nodes'] == []
     calls, original = [], session_projection._observed_work
     def observe(node, *args):
         calls.append(node['id'])
