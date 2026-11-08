@@ -27,7 +27,8 @@ from test_context_inspection import config, evidence
 
 @pytest.mark.parametrize('measured', [False, True])
 @pytest.mark.parametrize('manager', [False, True])
-async def test_live_boundary_large_budget(tmp_path, monkeypatch, measured, manager):
+@pytest.mark.parametrize('driver', ['synthetic', 'openai'])
+async def test_live_boundary_large_budget(tmp_path, monkeypatch, measured, manager, driver):
     modules=('loop-live','context-managed')
     paths={name:Path(importlib.util.find_spec('amplifier_module_'+name.replace('-','_')).origin).parent for name in modules}
     plan={'session':{'orchestrator':{'module':'loop-live','config':{'max_iterations':2,'min_delay_between_calls_ms':0}},
@@ -50,11 +51,39 @@ async def test_live_boundary_large_budget(tmp_path, monkeypatch, measured, manag
         async def complete(self,value,**kwargs):
             state.wire.append({'sha256':hashlib.sha256(value.model_dump_json().encode()).hexdigest(),'characters':len(value.model_dump_json()),'options':kwargs})
             return ChatResponse(content=[TextBlock(text='Done')],usage=Usage(input_tokens=100,output_tokens=1,total_tokens=101))
-    raw=Provider();await c.mount('providers',raw,name='fixture')
+    client=None
+    if driver=='openai':
+        import httpx
+        import socket
+        from openai import AsyncOpenAI
+        from amplifier_module_provider_openai import OpenAIProvider
+        def forbidden(*args,**kwargs):raise AssertionError('External network forbidden')
+        monkeypatch.setattr(socket.socket,'connect',forbidden)
+        monkeypatch.setenv('AMPLIFIER_WEB_HOME',str(tmp_path/'app'))
+        def transport(req):
+            body=json.loads(req.content)
+            digest=hashlib.sha256(json.dumps(body.get('input'),sort_keys=True).encode()).hexdigest()
+            if req.url.path.endswith('/input_tokens'):
+                state.budgets.append(digest)
+                return httpx.Response(200,json={'input_tokens':100})
+            assert req.url.path=='/v1/responses'
+            state.wire.append({'sha256':digest,'characters':len(req.content),'options':{}})
+            return httpx.Response(200,json={'id':'fixture-response','object':'response',
+                'created_at':1,'model':'gpt-6-astra','status':'completed',
+                'output':[{'type':'message','id':'fixture-message','role':'assistant',
+                           'content':[{'type':'output_text','text':'Done','annotations':[]}]}],
+                'usage':{'input_tokens':100,'output_tokens':1,'total_tokens':101}})
+        client=AsyncOpenAI(api_key='fixture',max_retries=0,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(transport)))
+        raw=OpenAIProvider(api_key='fixture',client=client,config={
+            'default_model':'gpt-6-astra','use_streaming':False,'raw':False,'max_retries':0})
+    else:
+        raw=Provider()
+    await c.mount('providers',raw,name='fixture')
     events=ExecutionEvents(session.session_id,lambda row:None)
     async def bridge(operation,args):return {'surfaces':[],'inputIds':[]} if operation=='context.manifest' else {}
     await install_app_access(c,bridge)
-    loop=c.get('orchestrator');loop.root_provider=SelectedProvider(raw,{'model':'selected','effort':'high','max_output_tokens':321})
+    loop=c.get('orchestrator');loop.root_provider=SelectedProvider(raw,{'model':'gpt-6-astra' if driver=='openai' else 'selected','effort':'high','max_output_tokens':321})
     # Execute the exact production ObservedHost class, not a hand-flattened
     # provider chain. Its closure's external activity/checkpoint/bridge IO is
     # replaced with local observation; prepare_execution itself is unchanged.
@@ -62,7 +91,11 @@ async def test_live_boundary_large_budget(tmp_path, monkeypatch, measured, manag
     tree=ast.parse(Path(runtime_worker.__file__).read_text())
     node=next(n for n in ast.walk(tree) if isinstance(n,ast.ClassDef) and n.name=='ObservedHost')
     from amplifier_module_loop_live.host import HostAdapter
-    original_host=HostAdapter()
+    if driver=='openai':
+        from amplifier_web.host.children import StandaloneHostAdapter
+        original_host=StandaloneHostAdapter()
+    else:
+        original_host=HostAdapter()
     from amplifier_module_loop_live.runtime import Runtime, Input
     finished=asyncio.Event()
     def observe_runtime(event):
@@ -91,7 +124,7 @@ async def test_live_boundary_large_budget(tmp_path, monkeypatch, measured, manag
         else:
             assert await session.execute('Complete without tools.')=='Done'
         await inspector.drain();row=inspector.store.read()['selected']
-        evidence(f'live-boundary-{measured}-{manager}',{'loop':type(loop).__name__,'context':type(c.get('context')).__name__,'trace':trace,'wire':state.wire,'budgetHashes':state.budgets,'options':state.options,'header':row})
+        evidence(f'live-boundary-{driver}-{measured}-{manager}',{'loop':type(loop).__name__,'context':type(c.get('context')).__name__,'provider':type(raw).__name__,'trace':trace,'wire':state.wire,'budgetHashes':state.budgets,'options':state.options,'header':row})
         assert row['budgetStatus']=='captured'
         assert row['budget']['measurement']['input_tokens']==100
         assert state.wire[-1]['sha256']==state.budgets[-1]
@@ -104,3 +137,4 @@ async def test_live_boundary_large_budget(tmp_path, monkeypatch, measured, manag
             await runtime.submit(Input('stop'))
             await asyncio.wait_for(execution,5)
         await inspector.drain();await session.cleanup()
+        if client is not None:await client.close()
