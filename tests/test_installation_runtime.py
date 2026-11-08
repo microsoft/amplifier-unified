@@ -115,7 +115,7 @@ def test_progress_retains_only_bounded_stage_facts(tmp_path):
     assert "SECRET" not in json.dumps(value)
 
 
-@pytest.mark.parametrize("corruption", [None, "marker", "lock", "manifest", "inventory"])
+@pytest.mark.parametrize("corruption", [None, "marker", "missing-marker", "lock", "manifest", "inventory"])
 def test_no_account_installs_only_declared_dependencies_without_claiming_worker_readiness(tmp_path, monkeypatch, corruption):
     from pathlib import Path
     monkeypatch.setattr(setup, "_needs_connection", lambda home: True)
@@ -151,6 +151,13 @@ def test_no_account_installs_only_declared_dependencies_without_claiming_worker_
     if corruption:
         receipt = runtime_environment.receipt_directory(tmp_path)
         project = runtime_environment.project_path(tmp_path)
+        if corruption == "missing-marker":
+            (receipt / "installation-prepared.json").unlink()
+            saved = {p.name: p.read_bytes() for p in receipt.iterdir() if p.is_file()}
+            inspected = asyncio.run(setup.prepare(tmp_path))
+            assert inspected["ok"] is False and calls == []
+            assert saved == {p.name: p.read_bytes() for p in receipt.iterdir() if p.is_file()}
+            return
         target, value = {
             "marker": (receipt / "installation-prepared.json", "[]"),
             "lock": (project / "uv.lock", "changed"),

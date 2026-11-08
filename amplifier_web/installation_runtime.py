@@ -145,6 +145,12 @@ async def _prepare_baseline(home):
     receipt = receipt_directory(home)
     if (receipt / "installation-prepared.json").exists():
         return await asyncio.to_thread(_baseline_status, home)
+    if any((receipt / name).exists() for name in
+           ("runtime.toml", "runtime.lock", "runtime-installed.json", "runtime-install-policy.json")):
+        # A missing final marker does not authorize re-resolving a recorded or
+        # partially published graph. Preserve the original evidence for repair.
+        return {"ok": False, "prepared": False,
+                "message": "Initial dependency evidence is incomplete; no refresh was attempted."}
     project = prepare_project(home)
     owner = _Preparation(home, receipt)
     uv = shutil.which("uv")
