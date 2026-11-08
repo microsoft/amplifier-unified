@@ -140,11 +140,17 @@ def project(db, session, task):
     if boundary is None:
         return None
     sender, identity, interruption, epoch, generation, last_input = KEYS.split(',\n ')
-    rows = db.execute(f"""SELECT {TARGET},{TITLE} FROM commands INDEXED BY navigation_pending_waits
-        WHERE {PENDING} AND {sender}=? AND {identity}=? AND {interruption}=?
-        AND {epoch} IN ({','.join('?' for _ in epochs)})
-        AND {generation}=? AND {last_input}=?
-        LIMIT ?""", (session['id'], task['id'], session.get('interruptionRevision', 0), *epochs, *boundary, LIMIT + 1)).fetchall()
+    rows = []
+    # SQLite 3.46 loses covering expression reads with an IN seek here. Two
+    # exact epoch seeks retain the total row bound without reparsing big bodies.
+    for value in epochs:
+        rows.extend(db.execute(f"""SELECT {TARGET},{TITLE} FROM commands INDEXED BY navigation_pending_waits
+            WHERE {PENDING} AND {sender}=? AND {identity}=? AND {interruption}=?
+            AND {epoch}=? AND {generation}=? AND {last_input}=?
+            LIMIT ?""", (session['id'], task['id'], session.get('interruptionRevision', 0),
+                         value, *boundary, LIMIT + 1 - len(rows))).fetchall())
+        if len(rows) > LIMIT:
+            break
     targets = {}
     for sid, title in rows[:LIMIT]:
         if isinstance(sid, str) and sid and sid != session['id']:

@@ -71,7 +71,9 @@ async def main(home):
             owner['status']='stopped'
         elif mode=='question':
             owner['questions']=[{'id':'fixture-question','status':'pending','required':True,'revision':1,
-                                 'question':'Choose the destination','prompt':'Choose the destination','options':[]}]
+                                 'question':'Choose the destination','prompt':'Choose the destination','options':[],
+                                 'dependency':'Choose a destination before continuing','allowFreeText':True,
+                                 'questionIds':[],'artifacts':[],'createdAt':1,'updatedAt':1}]
         elif mode=='recipient-error':
             rows[1].update(status='error',error='Synthetic worker failure')
         elif mode=='new-input':
