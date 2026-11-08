@@ -107,6 +107,34 @@ def test_cli_starts_with_saved_server_extension_fields(tmp_path, monkeypatch):
     assert path.read_text() == original
 
 
+def test_task_control_attaches_after_async_application_factory(tmp_path, monkeypatch):
+    import asyncio
+    from amplifier_web import server, tls
+    monkeypatch.setattr(tls, "ssl_context", lambda *a: None)
+    monkeypatch.setattr("amplifier_web.settings_migration.migrate_settings", lambda *a: None)
+    monkeypatch.setattr("amplifier_web.host.config.load_config", lambda *a: None)
+    events = []
+    app = web.Application()
+    async def create(*args, **kwargs):
+        events.append("created")
+        return app
+    monkeypatch.setattr(server, "create_app", create)
+    class Runner:
+        def attach(self, value):
+            assert value is app
+            events.append("attached")
+        def phase(self, value):
+            events.append(value)
+    def run(factory, **kwargs):
+        assert asyncio.run(factory) is app
+        kwargs["print"]("listening")
+    monkeypatch.setattr(web, "run_app", run)
+    args = Namespace(port=None, workspace=str(tmp_path), no_open=True, bind=None, host=None,
+                     public_origin=None, tls_cert=None, tls_key=None, session_ttl_seconds=None)
+    cli._serve_unlocked(args, tmp_path, task_runner=Runner())
+    assert events == ["created", "attached", "listening"]
+
+
 def test_nonloopback_serve_is_rejected_before_socket_binding(tmp_path, monkeypatch):
     args = Namespace(port=None, workspace=str(tmp_path), no_open=True, bind=["192.0.2.5"], host=None,
                      public_origin=None, tls_cert=None, tls_key=None, session_ttl_seconds=None)

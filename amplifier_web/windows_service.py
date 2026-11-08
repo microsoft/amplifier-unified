@@ -183,6 +183,60 @@ def _tree(node):
             tuple(sorted((_tree(child) for child in node), key=repr)))
 
 
+def _account_sid(name):
+    """Resolve scheduler-normalized account text through the native SID API."""
+    if sys.platform != "win32" or not isinstance(name, str) or len(name) > 1024:
+        raise WindowsServiceError("Cannot resolve the task trigger's owner identity.")
+    import ctypes as C
+    from ctypes import wintypes as W
+    api = C.WinDLL("advapi32", use_last_error=True)
+    api.LookupAccountNameW.argtypes = [W.LPCWSTR, W.LPCWSTR, C.c_void_p,
+                                      C.POINTER(W.DWORD), W.LPWSTR,
+                                      C.POINTER(W.DWORD), C.POINTER(W.DWORD)]
+    size, domain_size, use = W.DWORD(), W.DWORD(), W.DWORD()
+    api.LookupAccountNameW(None, name, None, C.byref(size), None,
+                           C.byref(domain_size), C.byref(use))
+    if C.get_last_error() != 122 or not 0 < size.value <= 65536 or domain_size.value > 32768:
+        raise WindowsServiceError("Cannot resolve the task trigger's owner identity.")
+    sid = C.create_string_buffer(size.value)
+    domain = C.create_unicode_buffer(max(1, domain_size.value))
+    if not api.LookupAccountNameW(None, name, sid, C.byref(size), domain,
+                                  C.byref(domain_size), C.byref(use)) or use.value != 1:
+        raise WindowsServiceError("Task trigger does not resolve to a user account.")
+    from .windows_files import _API
+    return _sid(_API().sid_text(C.cast(sid, C.c_void_p)))
+
+
+def _scheduler_defaults(root, sid):
+    """Normalize only documented omitted defaults, never unknown XML/settings."""
+    # Task Scheduler serializes an ordinary owner account name in LogonTrigger
+    # even when registration used a SID. Resolve it; text equality isn't identity.
+    for node in root.findall(f"{_q('Triggers')}/{_q('LogonTrigger')}/{_q('UserId')}"):
+        if node.text != sid:
+            try:
+                actual = _sid(node.text) if isinstance(node.text, str) and node.text.startswith("S-1-") else _account_sid(node.text)
+            except WindowsServiceError as error:
+                raise ValueError("Task trigger identity could not be resolved.") from error
+            if actual != sid:
+                raise ValueError("Task trigger belongs to another user.")
+            node.text = sid
+    defaults = {
+        "Triggers/LogonTrigger": {"Enabled": "true"},
+        "Principals/Principal": {"RunLevel": "LeastPrivilege"},
+        "Settings": {
+            "Enabled": "true", "StartWhenAvailable": "false", "WakeToRun": "false",
+            "RunOnlyIfIdle": "false", "RunOnlyIfNetworkAvailable": "false",
+            "AllowStartOnDemand": "true", "Priority": "7", "Hidden": "false",
+            "AllowHardTerminate": "true",
+        },
+    }
+    for path, values in defaults.items():
+        for parent in root.findall("/".join(_q(part) for part in path.split("/"))):
+            for name, value in values.items():
+                if parent.find(_q(name)) is None:
+                    ET.SubElement(parent, _q(name)).text = value
+
+
 def owned_spec(xml: str, sid: str, data_dir=None) -> TaskSpec:
     """Validate the complete supported definition before adoption or mutation.
 
@@ -204,6 +258,7 @@ def owned_spec(xml: str, sid: str, data_dir=None) -> TaskSpec:
         info = root.find(_q("RegistrationInfo"))
         for date in list(info.findall(_q("Date"))):
             info.remove(date)
+        _scheduler_defaults(root, spec.sid)
         if _tree(root) != _tree(ET.fromstring(task_xml(spec))):
             raise ValueError("Task definition does not match its ownership metadata.")
         return spec

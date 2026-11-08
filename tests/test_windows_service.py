@@ -261,6 +261,8 @@ def test_scheduler_expansion_new_install_refused_before_scheduler_mutation(monke
     monkeypatch.setattr(windows_files, "address", lambda path: PureWindowsPath(path))
     monkeypatch.setattr(shared_state, "shared_state_home", lambda: PureWindowsPath(spec().state_home))
     monkeypatch.setattr(host_dependencies, "tool_path", lambda: spec().tool_path)
+    for name in service.LAUNCH_ROOTS:
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(service.sys, "executable",
                         r"C:\Tools\%USERNAME%\Scripts\python.exe" if field == "python" else spec().python)
     workspace = r"C:\Work\%USERNAME%" if field == "workspace" else spec().workspace
@@ -314,6 +316,38 @@ def test_scheduler_date_and_formatting_do_not_create_false_ownership_failure():
     ET.SubElement(info, service._q("Date")).text = "2026-01-01T00:00:00"
     ET.indent(tree)
     assert service.owned_spec(ET.tostring(tree, encoding="unicode"), SID) == spec()
+
+
+def test_scheduler_native_omitted_defaults_and_account_spelling_are_equivalent(monkeypatch):
+    tree = ET.fromstring(service.task_xml(spec()))
+    tree.find(f"{service._q('Triggers')}/{service._q('LogonTrigger')}/{service._q('UserId')}").text = "SYNTHETIC\\Owner"
+    omitted = {"Enabled", "RunLevel", "StartWhenAvailable", "WakeToRun", "RunOnlyIfIdle",
+               "RunOnlyIfNetworkAvailable", "AllowStartOnDemand", "Priority",
+               "Hidden", "AllowHardTerminate"}
+    for parent in tree.iter():
+        for node in list(parent):
+            if node.tag.split("}")[-1] in omitted:
+                parent.remove(node)
+    calls = []
+    monkeypatch.setattr(service, "_account_sid", lambda name: calls.append(name) or SID)
+    assert service.owned_spec(ET.tostring(tree, encoding="unicode"), SID) == spec()
+    assert calls == ["SYNTHETIC\\Owner"]
+    monkeypatch.setattr(service, "_account_sid", lambda name: SID + "1")
+    with pytest.raises(service.WindowsServiceError):
+        service.owned_spec(ET.tostring(tree, encoding="unicode"), SID)
+
+
+def test_scheduler_default_normalization_does_not_accept_unsafe_or_unknown_settings():
+    xml = service.task_xml(spec())
+    for before, after in (
+        ("<Enabled>true</Enabled>", "<Enabled>false</Enabled>"),
+        ("<Priority>7</Priority>", "<Priority>4</Priority>"),
+        ("<RunLevel>LeastPrivilege</RunLevel>", "<RunLevel>HighestAvailable</RunLevel>"),
+        ("</Settings>", "<UnknownSecuritySetting>true</UnknownSecuritySetting></Settings>"),
+        ("<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>", ""),
+    ):
+        with pytest.raises(service.WindowsServiceError):
+            service.owned_spec(xml.replace(before, after), SID)
 
 
 def test_install_registration_is_separate_from_health_and_rerun_reuses(backend):

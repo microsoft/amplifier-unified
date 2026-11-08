@@ -273,9 +273,14 @@ def _serve_unlocked(args, data_dir: Path, *, task_runner=None) -> None:
     from .mcp_oauth import SafeAccessLogger
     from amplifier_publishing import PublishingError
     try:
-        app = create_app(data_dir, workspace=args.workspace, server_config=config)
-        if task_runner is not None:
-            task_runner.attach(app)
+        if task_runner is None:
+            app = create_app(data_dir, workspace=args.workspace, server_config=config)
+        else:
+            async def managed_app():
+                app = await create_app(data_dir, workspace=args.workspace, server_config=config)
+                task_runner.attach(app)
+                return app
+            app = managed_app()
         web.run_app(app,
                     host=config["bind"], port=config["port"], ssl_context=secure, print=listening, access_log_class=SafeAccessLogger, access_log_format='%a %t "%r" %s %b')
     except OSError as exc:

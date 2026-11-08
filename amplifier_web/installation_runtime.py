@@ -52,8 +52,16 @@ class _Preparation:
             result = function(*args, **kwargs)
             if hasattr(result, "__await__"):
                 result = await result
-        except BaseException:
+        except BaseException as error:
             self.record(phase, "failed")
+            from .update_diagnostics import exception_facts
+            facts = exception_facts(error)
+            detail = getattr(error, "diagnostic_facts", {})
+            for key in ("exitCode", "stdoutBytes", "stderrBytes", "durationMs"):
+                if type(detail.get(key)) is int:
+                    facts[key] = detail[key]
+            _write(self.home, self.stage / "install-failure.json",
+                   {"schema": 1, "attempt": self.stage.name, "phase": phase, **facts})
             raise
         self.record(phase, "succeeded")
         return result
