@@ -4256,13 +4256,15 @@ class AppService:
         return {'delivery': 'accepted', 'resent': not bool(isinstance(result, dict) and result.get('duplicate'))}
 
     def _delivery(self, session, input_id, status):
+        from .message_delivery import receipt_mapping
         # Question command IDs differ from their immutable answer input IDs.
         # Reconcile their canonical record even after its message left the view.
         if status == 'accepted' and (questions := getattr(self, 'questions', None)):
             questions.accept_delivery(session['id'], input_id)
         message = next((row for row in session['messages'] if row.get('inputId') == input_id and row.get('role') == 'user'), None)
         row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
-        receipt = json.loads(row[0]) if row else {}
+        parsed_receipt = receipt_mapping(row[0]) if row else None
+        receipt = parsed_receipt if parsed_receipt is not None else {}
         message_bound = message is not None and 'delivery' in message
         # Voice delegation has no separate user bubble. Only its saved exact
         # input/session binding permits a receipt update without that message.
@@ -4285,7 +4287,9 @@ class AppService:
                 self._post_disposition(session, message, 'accepted' if status == 'accepted' else 'retained')
                 if message.get('navigationPost'):
                     receipt['navigationPost'] = copy.deepcopy(message['navigationPost'])
-        if row:
+        # Exact runtime evidence can reconcile the bound message, but does not
+        # authorize replacing malformed command evidence with an invented receipt.
+        if row and parsed_receipt is not None:
             if status == 'accepted' and message_bound:
                 # Acceptance/consumption and this receipt commit in the next
                 # synchronous owned publication under the service lock. Keep
@@ -4302,12 +4306,15 @@ class AppService:
 
     def _post_disposition(self, session, message, disposition):
         from .chat_navigation import finish_human_post
+        from .message_delivery import receipt_mapping
         finish_human_post(session, message, disposition)
         if not message or not message.get('navigationPost'):
             return
         row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (message['inputId'],)).fetchone()
         if row:
-            receipt = json.loads(row[0])
+            receipt = receipt_mapping(row[0])
+            if receipt is None:
+                return
             receipt['navigationPost'] = copy.deepcopy(message['navigationPost'])
             self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(receipt), message['inputId']))
 

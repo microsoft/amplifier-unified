@@ -974,6 +974,29 @@ async def test_delivery_rejects_malformed_or_contradictory_saved_receipt(recover
     assert not runtime.sent and not runtime.retries and not runtime.started
 
 
+@pytest.mark.parametrize('raw', ['null', '[]', '{invalid JSON'])
+async def test_positive_delivery_preserves_malformed_receipt_bytes(recovery, raw):
+    app, runtime, _ = recovery
+    session = app._session()
+    message = session['messages'][-1]
+    assert message['inputId'] == 'original' and message.get('navigationPost')
+    message['attachments'] = [{'id': 'kept', 'name': 'reference.txt'}]
+    before = copy.deepcopy(message)
+    app.db.execute('UPDATE commands SET receipt=? WHERE id=?', (raw, 'original'))
+    runtime.evidence = 'accepted'
+    result = await app._check_delivery(session['id'], 'original')
+    assert result['delivery'] == 'accepted'
+    assert message['delivery']['status'] == 'accepted'
+    for key in ('id', 'inputId', 'text', 'attachments'):
+        assert message.get(key) == before.get(key)
+    assert app.db.execute('SELECT receipt FROM commands WHERE id=?', ('original',)).fetchone()[0] == raw
+    assert not runtime.sent and not runtime.retries and not runtime.started
+    # A later unknown observation cannot erase the independently confirmed message.
+    runtime.evidence = 'unknown'
+    assert (await app._check_delivery(session['id'], 'original'))['delivery'] == 'accepted'
+    assert app.db.execute('SELECT receipt FROM commands WHERE id=?', ('original',)).fetchone()[0] == raw
+
+
 @pytest.mark.parametrize('action', [None, 'conversation.send'])
 async def test_delivery_accepts_valid_legacy_and_named_send_receipt(recovery, action):
     app, runtime, _ = recovery

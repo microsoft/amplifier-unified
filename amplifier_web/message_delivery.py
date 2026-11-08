@@ -2,13 +2,19 @@
 import json
 
 
-def receipt_delivery(raw, session_id, input_id):
-    """An exact, noncontradictory producer receipt; absence is not non-delivery."""
+def receipt_mapping(raw):
+    """Read a receipt without manufacturing a replacement for malformed bytes."""
     try:
         receipt = json.loads(raw)
     except (TypeError, ValueError):
         return None
-    if not isinstance(receipt, dict) or receipt.get('sessionId') != session_id or receipt.get('inputId') != input_id:
+    return receipt if isinstance(receipt, dict) else None
+
+
+def receipt_delivery(raw, session_id, input_id):
+    """An exact, noncontradictory producer receipt; absence is not non-delivery."""
+    receipt = receipt_mapping(raw)
+    if receipt is None or receipt.get('sessionId') != session_id or receipt.get('inputId') != input_id:
         return None
     # Existing send receipts predate action labels. If supplied, they must agree.
     if any(receipt[key] != 'conversation.send' for key in ('action', 'commandAction') if key in receipt):
