@@ -176,6 +176,8 @@ python scripts/frontend_build_artifact.py verify --directory /path/to/downloaded
 
 Verification is read-only. It rejects changed non-static inputs, changed local
 environment files, corrupt/missing/extra output, links and oversized bundles.
+Build inputs with Git's `assume-unchanged` or `skip-worktree` flags must have those
+flags cleared first so local edits cannot be hidden from verification.
 To import it into an inactive task-owned checkout, run:
 
 ```sh

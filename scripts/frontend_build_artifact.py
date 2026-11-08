@@ -71,6 +71,8 @@ def source_identity(root):
     # Static files may have changed in the completed build. Everything else
     # must match HEAD, including build helpers, workflows and package versions.
     exclude = ':!amplifier_web/static'
+    if any(row[:1] != b'H' for row in git(root, 'ls-files', '-v', '-z', '--', '.', exclude).split(b'\0') if row):
+        raise ValueError('Source index flags hide build inputs; clear skip-worktree/assume-unchanged first')
     git(root, 'diff', '--exit-code', 'HEAD', '--', '.', exclude)
     if git(root, 'ls-files', '--others', '--exclude-standard', '-z', '--', '.', exclude):
         raise ValueError('Untracked source inputs; commit or remove them first')

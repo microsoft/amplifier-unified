@@ -340,3 +340,20 @@ def test_linked_worktree_recovers_using_its_own_git_metadata(importable, tmp_pat
     finally:
         # This test owns the generated diff and has asserted its full inventory.
         git(source, 'worktree', 'remove', '--force', str(linked))
+
+
+@pytest.mark.parametrize('flag', ['assume-unchanged', 'skip-worktree'])
+def test_hidden_authored_input_cannot_claim_exact_source(importable, tmp_path, flag):
+    source, output, _, original = importable
+    git(source, 'update-index', '--' + flag, 'frontend/input.js')
+    (source / 'frontend/input.js').write_text('hidden authored changes')
+    assert git(source, 'diff', 'HEAD', '--', 'frontend/input.js') == b''
+    with pytest.raises(ValueError, match='Source index flags'):
+        module.create(source, tmp_path / 'another-output', {})
+    with pytest.raises(ValueError, match='Source index flags'):
+        module.verify(source, output)
+    with pytest.raises(ValueError, match='Source index flags'):
+        module.apply(source, output)
+    assert module.tree(source / module.STATIC) == original
+    assert (source / 'frontend/input.js').read_text() == 'hidden authored changes'
+    assert not recovery_path(source).exists()
