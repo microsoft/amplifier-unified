@@ -121,6 +121,18 @@ the bounded prepared record. The hook's no-op projection preserves object identi
 already-projected blocks pass unchanged through its ordinary provider wrapper.
 Ordinary CLI/Agent clients do not need the Unified integration.
 
+Delivery requires both the host integration and the selected component graph.
+The app lock records accepted OpenAI `c8104f327b9286bff49c589f804969a5a9d0ba9d`
+and computer-use `951181f829cd6b3de7653a31bf8826f8a0b76456` for its affected
+development/optional dependencies. The computer hook also comes from the selected
+Foundation behavior/cache; updating the app's desktop-tool package alone does not
+replace that hook. Existing qualified workers preserve their installed graph.
+After app adoption, the normal included-component update must qualify and activate
+the selected provider and hook/tool revisions before claiming these fixes are
+loaded. Explicit pins, forks and excluded behaviors remain protected. Verify
+installed graph/source receipts and then a naturally occurring call; an app version
+or a moving `main` declaration is not loaded-dependency evidence.
+
 Image validation is **execution evidence, not optional diagnostic evidence**. It
 runs synchronously after metadata/admission and before provider entry, including
 when Work, the inspector or a numeric ticket is absent. The current registered
