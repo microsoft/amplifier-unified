@@ -955,6 +955,39 @@ async def test_delivery_receipt_never_borrows_other_chat_or_generic_acceptance(r
     assert not runtime.sent and not runtime.retries
 
 
+@pytest.mark.parametrize('invalid', [
+    None, [], {'delivery': {}}, {'accepted': False}, {'status': 409},
+    {'status': 'failed'}, {'code': 'worker_startup_failed'}, {'error': 'refused'},
+    {'commandAction': 'session.delete'}, {'action': 'conversation.stop'},
+    {'commandAction': []}, {'accepted': 1},
+])
+async def test_delivery_rejects_malformed_or_contradictory_saved_receipt(recovery, invalid):
+    app, runtime, _ = recovery
+    sid = app._session()['id']
+    app._session()['messages'] = []
+    runtime.evidence = 'unknown'
+    base = {'sessionId': sid, 'inputId': 'original', 'accepted': True, 'delivery': 'accepted'}
+    receipt = {**base, **invalid} if isinstance(invalid, dict) else invalid
+    app.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(receipt), 'original'))
+    result = await app._check_delivery(sid, 'original')
+    assert result['delivery'] != 'accepted'
+    assert not runtime.sent and not runtime.retries and not runtime.started
+
+
+@pytest.mark.parametrize('action', [None, 'conversation.send'])
+async def test_delivery_accepts_valid_legacy_and_named_send_receipt(recovery, action):
+    app, runtime, _ = recovery
+    sid = app._session()['id']
+    app._session()['messages'] = []
+    runtime.evidence = 'unknown'
+    receipt = {'sessionId': sid, 'inputId': 'original', 'accepted': True, 'delivery': 'accepted'}
+    if action:
+        receipt['commandAction'] = action
+    app.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(receipt), 'original'))
+    assert (await app._check_delivery(sid, 'original'))['delivery'] == 'accepted'
+    assert not runtime.sent and not runtime.retries
+
+
 async def test_retry_preserves_message_attachments_draft_and_identity(recovery):
     app, runtime, _ = recovery
     original = app._session()['messages'][-1]

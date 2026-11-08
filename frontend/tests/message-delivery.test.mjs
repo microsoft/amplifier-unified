@@ -154,3 +154,24 @@ test('a check reporting active sending cannot be dismissed while the original fr
  assert.equal(button(root,'Dismiss warning'),undefined);
  await act(async()=>root.unmount());
 });
+test('pending delivery check survives remount without collapse, duplicate request or cross-chat borrowing',async()=>{
+ globalThis.sessionStorage=storage();let finish,root,calls=0;
+ const props={message:{inputId:'pending'},session:{id:'chat'},delivery:{status:'unknown'},
+  dispatch:()=>{calls++;return new Promise(resolve=>{finish=resolve})}};
+ await act(async()=>{root=create(React.createElement(MessageDelivery,props))});
+ await act(async()=>button(root,'Dismiss warning').props.onClick());
+ let running;await act(async()=>{running=button(root,'Check delivery').props.onClick()});
+ await act(async()=>root.unmount());
+ await act(async()=>{root=create(React.createElement(MessageDelivery,{...props,session:{id:'other'}}))});
+ assert.ok(button(root,'Check delivery'));assert.ok(button(root,'Dismiss warning'));
+ await act(async()=>root.unmount());
+ await act(async()=>{root=create(React.createElement(MessageDelivery,props))});
+ assert.equal(root.root.findByType('details').props.open,true);
+ assert.equal(button(root,'Checking…').props.disabled,true);
+ assert.equal(button(root,'Show warning').props.disabled,true);
+ await act(async()=>button(root,'Checking…').props.onClick());
+ assert.equal(calls,1);
+ await act(async()=>{finish({result:{delivery:'unknown',message:'Settled uncertain'}});await running});
+ assert.match(JSON.stringify(root.toJSON()),/Settled uncertain/);
+ await act(async()=>root.unmount());delete globalThis.sessionStorage;
+});

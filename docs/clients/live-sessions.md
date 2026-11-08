@@ -108,9 +108,16 @@ in that browser tab's session storage; it neither deletes the original message,
 attachments or uncertain outbox nor claims delivery. **Show warning** restores
 the emphasis. Active sending, queued input, the current running input and pending
 checks cannot be dismissed. Another input or chat does not inherit the choice.
+An in-flight check stays expanded across transcript remounts in the same page and
+cannot be issued twice for that identity. Its in-memory ownership ends on settlement;
+reload does not restore fake pending work. Exact acceptance removes that input's
+saved dismissal key without scanning other history.
 Later unrelated conversation activity is not delivery evidence. **Check delivery**
 never resends: only an exact positive saved receipt or runtime confirmation can
 settle that input, including after its message leaves the bounded view. The
+saved receipt must have a valid delivery shape and no contradictory rejection,
+error or action label; legacy send receipts without an action label remain valid.
+Generic command admission is not delivery evidence. The
 client retires only the matching accepted outbox entry; late transport errors
 cannot recreate it. Missing evidence remains uncertain/not saved, not proven
 non-delivery. Dismissal leaves drafts, selection and shared history unchanged.

@@ -72,11 +72,18 @@ try{
  await page.screenshot({path:artifact+'/mobile-details.png'});
  // Receipt arrives after original leaves server window: retire exact outbox anyway.
  await original().getByRole('button',{name:'Check delivery',exact:true}).click();await expect.poll(()=>pending.length).toBe(1);
+ state.selectedSessionId='other';await emit();
+ await expect(original().getByRole('button',{name:'Check delivery',exact:true})).toBeEnabled();
+ state.selectedSessionId='chat';await emit();
+ await expect(original().getByRole('button',{name:'Checking…',exact:true})).toBeVisible();
+ await expect(original().getByRole('button',{name:'Show warning',exact:true})).toBeDisabled();
  await original().locator('summary').click();
  await expect(original().getByRole('button',{name:'Checking…',exact:true})).toBeVisible();
+ assert.equal(pending.length,1,'Remount does not issue a duplicate read');
  state.sessions[0].messages=[];state.revision++;
  await pending.shift().route.fulfill({json:{accepted:true,result:{delivery:'accepted',message:'Received. Not resent.'},state:shell.state()}});
  await expect.poll(async()=>(await outbox()).length).toBe(0);
+ assert.equal(await page.evaluate(()=>sessionStorage.getItem('amplifier.deliveryWarning.v1:'+JSON.stringify(['chat','original']))),null);
  await expect(original()).toHaveCount(0);
  assert.deepEqual(effects(),[]);await expect(composer).toHaveDraft('Keep the next unsent thought');
  await page.reload();await expect.poll(async()=>(await outbox()).length).toBe(0);

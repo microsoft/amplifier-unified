@@ -4185,22 +4185,21 @@ class AppService:
             raise AppError(str(exc),409,code=receipt['code']) from exc
 
     async def _check_delivery(self, sid, input_id):
-        from .message_delivery import find_message
+        from .message_delivery import find_message, receipt_delivery
         async with self.lock:
             session = copy.deepcopy(self._session(sid))
             question = self.questions.for_input(sid, input_id)
             row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
-            receipt = json.loads(row[0]) if row else {}
-            bound_receipt = receipt.get('sessionId') == sid and receipt.get('inputId') == input_id
+            receipt_status = receipt_delivery(row[0], sid, input_id) if row else None
         message = find_message(session, input_id)
         if message is None and question is not None:
             # The answer record survives a cold/pruned message projection.
             # Its exact input binding permits a passive evidence probe, not send.
             message = {'delivery': question['delivery']}
-        if message is None and bound_receipt:
+        if message is None and receipt_status is not None:
             # Exact command delivery survives a bounded/pruned message view.
             # Command admission alone (accepted=True) is not input delivery.
-            message = {'delivery': {'status': receipt.get('delivery', 'unknown')}}
+            message = {'delivery': {'status': receipt_status}}
         if message is None:
             return {'delivery': 'not_saved', 'message': 'This app has no saved copy. You can try sending the original message again with the same delivery identity.'}
         if message.get('steering'):
@@ -4209,7 +4208,7 @@ class AppService:
             return {'delivery': message['delivery']['status'], 'steering': copy.deepcopy(message['steering']),
                     'message': 'Steering status: ' + message['steering']['disposition'] + '. This correction is bound to its original run and was not sent again.'}
         status = message.get('delivery', {}).get('status', 'unknown')
-        if bound_receipt and receipt.get('delivery') == 'accepted':
+        if receipt_status == 'accepted':
             status = 'accepted'
         if status in {'queued_for_update', 'held'}:
             return {'delivery': status, 'message': message['delivery'].get('reason') or 'Saved for delivery after the app update. Nothing has been sent yet.'}
@@ -4225,11 +4224,10 @@ class AppService:
             current_message = find_message(current, input_id)
             current_question = self.questions.for_input(sid, input_id)
             row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
-            current_receipt = json.loads(row[0]) if row else {}
+            current_receipt_status = receipt_delivery(row[0], sid, input_id) if row else None
             if ((current_message and current_message.get('delivery', {}).get('status') == 'accepted') or
                     (current_question and current_question['delivery']['status'] == 'accepted') or
-                    (current_receipt.get('sessionId') == sid and current_receipt.get('inputId') == input_id
-                     and current_receipt.get('delivery') == 'accepted')):
+                    current_receipt_status == 'accepted'):
                 status = 'accepted'
             if status == 'accepted':
                 self._delivery(current, input_id, status)
