@@ -23,7 +23,8 @@ from test_context_inspection import config, evidence
 @pytest.mark.parametrize('restore',[False,True])
 @pytest.mark.parametrize('computer_hook',[False,True])
 @pytest.mark.parametrize('image',[False,True])
-async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_hook,image):
+@pytest.mark.parametrize('revocation',['none','metadata-file','admission-file'])
+async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_hook,image,revocation):
     import socket
     def forbidden(*args,**kwargs):raise AssertionError('External network forbidden')
     monkeypatch.setattr(socket.socket,'connect',forbidden)
@@ -31,7 +32,7 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
     monkeypatch.setenv('AMPLIFIER_WEB_HOME',str(home))
     monkeypatch.setenv('AMPLIFIER_HOME',str(tmp_path/'community'))
     # Actual provider serialization/count/complete, no sockets/accounts.
-    paths=[]
+    paths=[];image_path=None;image_digest=None;revoked=False
     def transport(req):
         body=json.loads(req.content);paths.append({'path':req.url.path,'bytes':len(req.content),'inputHash':hashlib.sha256(json.dumps(body.get('input'),sort_keys=True).encode()).hexdigest()})
         if req.url.path.endswith('/input_tokens'):return httpx.Response(200,json={'input_tokens':100})
@@ -41,6 +42,19 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
             'usage':{'input_tokens':100,'output_tokens':1,'total_tokens':101}})
     client=AsyncOpenAI(api_key='fixture',max_retries=0,http_client=httpx.AsyncClient(transport=httpx.MockTransport(transport)))
     raw=OpenAIProvider(api_key='fixture',client=client,config={'default_model':'gpt-6-astra','use_streaming':False,'raw':False,'max_retries':0})
+    if revocation == 'metadata-file':
+        info=raw.get_info
+        def get_info():
+            from amplifier_web.request_projection import _CURRENT
+            if _CURRENT.get() is not None and image_path is not None and not revoked:
+                async def pending():
+                    nonlocal revoked
+                    await asyncio.sleep(0)
+                    image_path.unlink();revoked=True
+                    return info()
+                return pending()
+            return info()
+        raw.get_info=get_info
     modules={n:Path(importlib.util.find_spec('amplifier_module_'+n.replace('-','_')).origin).parent for n in ('loop-live','context-managed')}
     plan={'session':{'orchestrator':{'module':'loop-live','config':{'max_iterations':2}},'context':{'module':'context-managed','config':{'token_meter':'actual'}}},'providers':[]}
     sid='worker-capture';prepared=PreparedBundle(plan,BundleModuleResolver(modules),Bundle(name='fixture',session=plan['session']))
@@ -63,7 +77,7 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
             import io
             from PIL import Image
             import amplifier_module_tool_computer_use as tool_module
-            from amplifier_module_tool_computer_use.base import ScreenGeometry
+            from amplifier_module_tool_computer_use.backend import ScreenGeometry
             class Backend:
                 name='fixture';is_remote=False
                 def screen_geometry(self):return ScreenGeometry(32,32,0,0)
@@ -78,9 +92,13 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
         await c.mount('tools',computer or ScreenshotAuthority(),name='fixture_screenshot')
         hook_cleanup=await mount(c)
     async def capture_image():
+        nonlocal image_path,image_digest
         if computer:
             result=await computer.execute({'action':'screenshot'})
             assert result.success, result.error
+            from amplifier_module_hook_computer_use import _parse_marker
+            image_path=Path(_parse_marker(result.model_dump())['images'][0])
+            image_digest=hashlib.sha256(image_path.read_bytes()).hexdigest()
             await c.hooks.emit('tool:post',{'tool_name':'fixture_screenshot',
                 'tool_call_id':'capture','result':result.model_dump()})
             await c.get('context').set_messages([
@@ -113,7 +131,14 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
     worker.preparation_progress=AsyncMock();worker.history_stamp=lambda:();worker.ownership.register=AsyncMock()
     worker.park=AsyncMock()
     async def bridge(operation,args):
-        if operation=='capacity.admit':return {'allowed':True,'budgetRevision':0,'admittedAt':1}
+        nonlocal revoked
+        if operation=='capacity.admit':
+            if revocation == 'admission-file' and image_path is not None and not revoked:
+                await asyncio.sleep(0)
+                image_path.unlink();revoked=True
+                # Validation cannot depend on an enabled numeric observer.
+                worker.telemetry.context_inspectors.clear()
+            return {'allowed':True,'budgetRevision':0,'admittedAt':1}
         if operation=='context.prepare':return {}
         if operation=='context.manifest':return {'surfaces':[],'inputIds':[]}
         return {}
@@ -126,20 +151,25 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
         await capture_image()
         await worker.runtime.submit(Input('user','Complete without tools.',activation=worker.activation))
         await asyncio.wait_for(finished.wait(),20)
+        if revocation != 'none':
+            assert revoked
+            assert not any(p['path']=='/v1/responses' for p in paths)
+            assert any(row.get('kind')=='llm' and row.get('phase')=='error' for row in published)
+            return
         assert any(row.get('type')=='generation.finished' for row in published), published
         await worker.runtime.submit(Input('stop',activation=worker.activation))
         await worker.execution
         observer=worker.telemetry.context_inspectors[sid];await observer.drain();row=observer.store.read()['selected']
-        evidence('full-worker-'+str(restore)+'-'+str(computer_hook)+'-'+str(image),{
+        evidence('full-worker-'+str(restore)+'-'+str(computer_hook)+'-'+str(image)+'-'+revocation,{
             'header':row,'requests':paths,'workerStart':True,
             'rootType':type(c.get('orchestrator').root_provider).__name__,
-            'computerHookMounted':computer_hook,
+            'computerHookMounted':computer_hook,'issuedImageSha256':image_digest,
             'computerHookWrapped':getattr(raw,'_amplifier_computer_use_wrapped',False)})
         assert row['budgetStatus']=='captured'
         assert row['budget']['measurement']['input_tokens']==100
         assert len({p['inputHash'] for p in paths})==1
     finally:
-        evidence('full-worker-lifecycle-'+str(restore)+'-'+str(computer_hook)+'-'+str(image),{'events':published,'requests':paths})
+        evidence('full-worker-lifecycle-'+str(restore)+'-'+str(computer_hook)+'-'+str(image)+'-'+revocation,{'events':published,'requests':paths,'revoked':revoked})
         if worker.execution and not worker.execution.done():
             await worker.runtime.submit(Input('stop',activation=worker.activation));await asyncio.wait_for(worker.execution,5)
         if worker.controls:await worker.controls.close()

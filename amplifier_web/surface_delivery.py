@@ -220,7 +220,7 @@ class SurfaceProvider:
                 # measurement. Never replace fitted bytes during transport.
                 cached = await self.delivery.revalidate(cached)
             boundary = hasattr(self.delivery, "finalize_work")
-            entry = (request, cached, cached.model_dump_json() if boundary else None,
+            entry = (request, cached, cached.model_dump_json() if boundary or projection_validate is not None else None,
                      self.delivery.work_request(cached) if boundary else None,
                      projection_validate)
             if refit_binding is not None:
@@ -247,7 +247,7 @@ class SurfaceProvider:
             try:
                 if hasattr(self.delivery, "revalidate"):
                     cached = await self.delivery.revalidate(cached)
-                if fitted is not None:
+                if fitted is not None and hasattr(self.delivery, "finalize_work"):
                     cached = await self.delivery.finalize_work(cached, fitted=fitted, binding=binding)
             except Exception as error:
                 # Only the pretransport checks are covered. A sent/unknown
