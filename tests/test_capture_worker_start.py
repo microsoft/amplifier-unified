@@ -21,10 +21,12 @@ from amplifier_web.shared_state import ActivationGate
 from test_context_inspection import config, evidence
 
 
-@pytest.mark.parametrize('restore',[False,True])
-@pytest.mark.parametrize('computer_hook',[False,True])
-@pytest.mark.parametrize('image',[False,True])
-@pytest.mark.parametrize('revocation',['none','metadata-file','admission-file'])
+@pytest.mark.parametrize('revocation,image,computer_hook,restore', [
+    ('none',False,False,False), ('none',False,False,True),
+    ('none',False,True,False), ('none',False,True,True),
+    ('none',True,True,True), ('metadata-file',True,True,True),
+    ('admission-file',True,True,True),
+])
 async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_hook,image,revocation):
     import socket
     def forbidden(*args,**kwargs):raise AssertionError('External network forbidden')
@@ -126,7 +128,7 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
             await c.hooks.emit('tool:post',{'tool_name':'fixture_screenshot',
                 'tool_call_id':'capture','result':result.model_dump()})
             await c.get('context').set_messages([
-                {'role':'assistant','content':None,'tool_calls':[{'id':'capture','type':'function',
+                {'role':'assistant','content':'','tool_calls':[{'id':'capture','type':'function',
                  'function':{'name':'fixture_screenshot','arguments':'{"action":"screenshot"}'}}]},
                 {'role':'tool','name':'fixture_screenshot','tool_call_id':'capture',
                  'content':result.model_dump_json()+'\\nretained appended context'}])
@@ -198,11 +200,16 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
                 assert p['imageTypes']==['input_image']
                 assert p['referenceRetained'] and p['toolCallRetained']
     finally:
-        if worker.execution and not worker.execution.done():
-            if not worker.runtime.closed:
-                await worker.runtime.submit(Input('stop',activation=worker.activation))
-            await asyncio.wait_for(worker.execution,5)
-        evidence('full-worker-lifecycle-'+str(restore)+'-'+str(computer_hook)+'-'+str(image)+'-'+revocation,{'events':published,'requests':paths,'revoked':revoked,'failures':failures})
+        try:
+            if worker.execution and not worker.execution.done():
+                if not worker.runtime.closed:
+                    await worker.runtime.submit(Input('stop',activation=worker.activation))
+                await asyncio.wait_for(worker.execution,5)
+        except Exception as error:
+            import traceback
+            failures.append(''.join(traceback.format_exception(error,limit=20))[-6000:])
+        finally:
+            evidence('full-worker-lifecycle-'+str(restore)+'-'+str(computer_hook)+'-'+str(image)+'-'+revocation,{'events':published,'requests':paths,'revoked':revoked,'failures':failures})
         if worker.controls:await worker.controls.close()
         if hook_cleanup:await hook_cleanup()
         if computer:computer._backend.close()

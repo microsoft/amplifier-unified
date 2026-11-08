@@ -129,6 +129,13 @@ options must still match. Refusal records the admitted call's error and never
 silently retries or substitutes pixels. Its one complete current encoding is shared
 with numeric attribution when present. Existing no-image diagnostic mismatches
 still suppress attribution only. No skip registry or public request token is added.
+Normal no-Work provider recovery revalidates the same prepared image source at
+each real entry; it cannot reuse an exhausted numeric ticket. Concurrent/nested
+admission cannot borrow the in-progress entry. Closing the dispatch clears its
+request, provider, validator and fitted-value references, including inherited
+contexts. The bundled inspector's `begin` callback is synchronous; an unexpected
+async replacement is omitted, not awaited after final validation. Storage remains
+background work and terminal persistence still drains its exact pending write.
 
 `SurfaceProvider` already owns a full fitted `ChatRequest` serialization. Its
 private capture ticket shares that exact immutable string (no second prompt copy)
