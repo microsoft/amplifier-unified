@@ -114,7 +114,11 @@ def wait_epoch(task):
 
 
 def task_for(state, row):
-    return state.get('runtimeControl', {}).get(row['id'], {}).get('task.get', {}).get('task') or row.get('task') or {}
+    task = state.get('runtimeControl', {}).get(row['id'], {}).get('task.get', {}).get('task') or row.get('task') or {}
+    display = row.get('_navigationTask') or {}
+    if task and all(display.get(key) == task.get(key) for key in ('id', 'revision', 'status')):
+        return display
+    return task
 
 
 def saved_task(db, sid):

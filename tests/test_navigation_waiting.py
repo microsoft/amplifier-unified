@@ -322,8 +322,10 @@ async def test_actual_corrected_task_send_then_block_retains_exact_wait(app, mon
     original=deepcopy(control.tasks.record())
     observe_task(app,source,control.tasks.canonical_snapshot())
     source['status']='idle'
-    assert source['task']['dependencyWaitEpoch']==1
-    assert project(app.db,source,source['task'])['targets'][0]['sessionId']==app.state['sessions'][1]['id']
+    from amplifier_web.navigation_waiting import task_for
+    assert source['_navigationTask']['dependencyWaitEpoch']==1
+    assert 'dependencyWaitEpoch' not in source['task']
+    assert project(app.db,source,task_for(app.state, source))['targets'][0]['sessionId']==app.state['sessions'][1]['id']
     assert control.tasks.record()==original
 
 
