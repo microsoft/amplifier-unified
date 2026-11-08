@@ -358,3 +358,27 @@ def test_derived_index_preserves_original_receipts_and_three_value_writers(tmp_p
     db.execute('DELETE FROM commands')
     assert not db.execute('SELECT 1 FROM navigation_pending_requests').fetchone()
     db.close()
+
+
+def test_first_population_is_atomic_and_reopen_does_not_reparse_receipts(tmp_path):
+    db=sqlite3.connect(tmp_path/'failed-init.sqlite3')
+    db.execute('CREATE TABLE commands(id TEXT PRIMARY KEY,fingerprint TEXT,receipt TEXT)')
+    original=json.dumps(receipt())
+    db.execute('INSERT INTO commands VALUES(?,?,?)',('before','proof',original))
+    db.commit()
+    def deny_trigger(action,*args):
+        return sqlite3.SQLITE_DENY if action==sqlite3.SQLITE_CREATE_TRIGGER else sqlite3.SQLITE_OK
+    db.set_authorizer(deny_trigger)
+    with pytest.raises(sqlite3.DatabaseError):
+        initialize(db)
+    db.set_authorizer(None)
+    assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='navigation_pending_requests'").fetchone()
+    assert db.execute('SELECT receipt FROM commands').fetchone()[0]==original
+    initialize(db)
+    assert project(db,session(),task())
+    statements=[]
+    db.set_trace_callback(statements.append)
+    initialize(db)
+    db.set_trace_callback(None)
+    assert len(statements)==2 and all('sqlite_master' in sql for sql in statements)
+    db.close()

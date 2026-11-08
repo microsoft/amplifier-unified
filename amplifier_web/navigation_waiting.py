@@ -37,6 +37,17 @@ def initialize(db):
         return
     if db.execute("SELECT 1 FROM sqlite_master WHERE name='navigation_pending_requests'").fetchone():
         return
+    db.execute('SAVEPOINT navigation_wait_init')
+    try:
+        _initialize(db)
+        db.execute('RELEASE navigation_wait_init')
+    except BaseException:
+        db.execute('ROLLBACK TO navigation_wait_init')
+        db.execute('RELEASE navigation_wait_init')
+        raise
+
+
+def _initialize(db):
     db.execute('''CREATE TABLE navigation_pending_requests(
         id TEXT PRIMARY KEY,sender TEXT,task_id TEXT,interruption INTEGER,epoch INTEGER,
         generation TEXT,input_id TEXT,target TEXT,title TEXT)''')
