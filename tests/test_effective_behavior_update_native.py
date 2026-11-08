@@ -146,9 +146,11 @@ def fixture_module(root, wheels, distribution, package):
     return root
 
 
-@pytest.mark.parametrize('case',['shared-rollback','old-pin','custom-pin','failed-qualification','dirty-source'])
+@pytest.mark.parametrize('case',['shared-rollback','old-pin','custom-pin','failed-qualification','dirty-source','retain-pin'])
 async def test_actual_check_install_qualifies_selected_app_behavior(tmp_path,monkeypatch,case):
-    routing_target=ROLD if case=='old-pin' else RNEW
+    routing_target=ROLD if case in {'old-pin','retain-pin'} else RNEW
+    foundation_target=OLD if case=='retain-pin' else NEW
+    positive=case in {'shared-rollback','retain-pin'}
     global OUT
     OUT=Path('/artifacts/effective-full')/case
     # Keep executable/native inputs off noexec /tmp and outside the product
@@ -213,6 +215,7 @@ async def test_actual_check_install_qualifies_selected_app_behavior(tmp_path,mon
         '  flags.extend(["-c","url."+mirror+".insteadOf="+url])\n'+
         'os.execv("/usr/bin/git",["/usr/bin/git",*flags,*args])\n')
     git_shim.chmod(0o755)
+    beforebindings={}
     if case=='shared-rollback':
         from amplifier_foundation.sources.shared import SharedSourceStore
         store=SharedSourceStore(home/'source-store')
@@ -267,7 +270,14 @@ async def test_actual_check_install_qualifies_selected_app_behavior(tmp_path,mon
     if case=='dirty-source':
         manifest_file=roots['routing']/'modules/hooks-routing/pyproject.toml'
         manifest_file.write_text(manifest_file.read_text()+'\n# user edit retained\n')
-    git(mirrors['foundation'],'update-ref','refs/heads/main',NEW);git(mirrors['routing'],'update-ref','refs/heads/main',routing_target)
+    if case=='retain-pin':
+        # Exercise an actual unrelated checked update while routing's authored
+        # Foundation SHA and the checked/installed Foundation commit stay OLD.
+        oldcore=git(core,'rev-parse','HEAD')
+        (core/'revision.txt').write_text('new fixture component revision\n')
+        git(core,'add','revision.txt');git(core,'commit','-m','Update independent fixture Core')
+        newcore=git(core,'rev-parse','HEAD')
+    git(mirrors['foundation'],'update-ref','refs/heads/main',foundation_target);git(mirrors['routing'],'update-ref','refs/heads/main',routing_target)
     class Runtime:
         workers={}
         async def close(self):pass
@@ -309,7 +319,11 @@ async def test_actual_check_install_qualifies_selected_app_behavior(tmp_path,mon
         assert any(r.get('url')==RURL and r.get('kind')=='bundle / module'
                    and (r.get('status')=='local_changes' if case=='dirty-source' else r.get('latest')==routing_target)
                    for r in manager.inventory)
-        assert any(r.get('package')=='amplifier-foundation' and r.get('latest')==NEW for r in manager.inventory)
+        assert any(r.get('package')=='amplifier-foundation' and r.get('latest')==foundation_target for r in manager.inventory)
+        if case=='retain-pin':
+            assert any(r.get('package')=='amplifier-core' and r.get('current')==oldcore
+                       and r.get('latest')==newcore and r.get('status')=='update'
+                       for r in manager.inventory)
         if case=='shared-rollback':
             assert any(r.get('sharedSource') and r.get('url')==RURL
                        and r.get('updateTier')=='included' for r in manager.inventory)
@@ -318,7 +332,7 @@ async def test_actual_check_install_qualifies_selected_app_behavior(tmp_path,mon
         (OUT/'state.json').write_text(json.dumps(dict(app.state['updates']),indent=2))
         assert (project/'uv.lock').read_bytes()==beforelock
         assert {k:git(v,'rev-parse','HEAD') for k,v in roots.items()}==beforeheads
-        if case!='shared-rollback':
+        if not positive:
             assert app.state['updates']['phase']==('checked' if case=='dirty-source' else 'error'),app.state['updates']
             assert not updates.active_release(home).get('current')
             assert not app.state['updates'].get('pendingRelease')
@@ -340,7 +354,12 @@ async def test_actual_check_install_qualifies_selected_app_behavior(tmp_path,mon
         final=runtime_environment.project_path(home,generation);verify_recorded(final,stage)
         graph=installed_graph(final)
         foundation=next(row for row in graph if row['name']=='amplifier-foundation')
-        assert foundation['directUrl']['vcs_info']['commit_id']==NEW
+        assert foundation['directUrl']['vcs_info']['commit_id']==foundation_target
+        if case=='retain-pin':
+            assert next(r for r in graph if r['name']=='amplifier-core')['directUrl']['vcs_info']['commit_id']==newcore
+            policy=json.loads((stage/'selected-source-declarations.json').read_text())
+            assert policy['packages']['amplifier-foundation']['status']=='explicit-pin'
+            assert policy['packages']['amplifier-foundation']['ref']==OLD
         assert (stage/'profiles-qualified.json').is_file()
         assert (project/'uv.lock').read_bytes()==beforelock
         assert {k:git(v,'rev-parse','HEAD') for k,v in roots.items()}==beforeheads

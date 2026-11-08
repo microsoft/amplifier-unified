@@ -94,7 +94,10 @@ def selected(manifests, *, distributions=None, environment=None):
                 # Even an inactive pin/alternate is a source choice we cannot
                 # discard while recovering an old pin's missing origin.
                 declarations[dependency].add(json.dumps(source, sort_keys=True))
-                if requirement.marker is not None or pinned(source['ref']):
+                # Full SHA identity may prove retention, never moving recovery.
+                # Conditional refs, tags and abbreviated pins remain unresolved.
+                if requirement.marker is not None or (
+                        pinned(source['ref']) and not re.fullmatch('[a-f0-9]{40}', source['ref'])):
                     rejected.add(dependency)
             try:
                 active = requirement.marker is None or any(requirement.marker.evaluate(
@@ -137,7 +140,11 @@ def selected(manifests, *, distributions=None, environment=None):
         if name in constraints and (not constraint or constraint.get('refKind') == 'tag' or any(
                 constraint.get(key, '') != source[key] for key in ('url', 'ref', 'subdirectory'))):
             continue
-        result[name] = {'status': 'selected', **source, 'sourceKind': 'dependency',
+        exact_pin = bool(re.fullmatch('[a-f0-9]{40}', source['ref']))
+        if exact_pin and source['ref'] != source['revision']:
+            continue
+        result[name] = {'status': 'explicit-pin' if exact_pin else 'selected',
+                        **source, 'sourceKind': 'dependency',
                         'manifestSha256': hashlib.sha256('\n'.join(sorted(evidence[name])).encode()).hexdigest()}
     return result
 
@@ -151,7 +158,8 @@ async def refresh(manager, stage, project, selected):
     import shutil
     from pathlib import Path
 
-    selected = {name: row for name, row in selected.items() if row.get('sourceKind') == 'dependency'}
+    selected = {name: row for name, row in selected.items()
+                if row.get('sourceKind') == 'dependency' and row.get('status') != 'explicit-pin'}
     if not selected:
         return
     project, stage = Path(project), Path(stage)

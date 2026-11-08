@@ -39,6 +39,10 @@ A selected dependency with unresolved provenance cannot be bypassed merely
 because it is not itself an explicit installer root. Unrelated installed extras
 are not selection evidence. After alignment, the same guard requires exact
 checked revisions before the dependency transaction.
+An evidenced transitive full-SHA pin may be retained when its authored,
+installed and checked commits, repository and subdirectory agree exactly.
+That retention evidence grants no moving-reference recovery or permission to
+advance the pin, even when the checked installed policy names a branch.
 
 Check now remains read-only. Install remembers intent for the whole sequence,
 including across an app restart, without changing the user's automatic-install

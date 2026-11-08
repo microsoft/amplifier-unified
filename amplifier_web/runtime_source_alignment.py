@@ -40,6 +40,18 @@ def verify_checked_selection(checked, selection, *, exact=False):
             continue  # Ordinary dependencies remain governed by overrides and freeze.
         if source.get('status') == 'authored-constraint':
             raise ProtectedRuntimeSource(name, 'runtime-source-constraint')
+        if source.get('status') == 'explicit-pin' and source.get('sourceKind') == 'dependency':
+            # A reachable authored SHA is retention evidence even when the
+            # checked installed policy names a branch. It cannot authorize
+            # alignment/advance: all three commits must already be identical.
+            if (not re.fullmatch('[a-f0-9]{40}', source.get('ref', ''))
+                    or source['ref'] != source.get('revision')
+                    or source['revision'] != policy.get('revision')
+                    or not source.get('manifestSha256')
+                    or source_key(source['url'], 'HEAD')[0] != source_key(policy['url'], 'HEAD')[0]
+                    or source.get('subdirectory', '') != policy.get('subdirectory', '')):
+                raise ProtectedRuntimeSource(name, 'runtime-source-constraint')
+            continue
         if (source.get('status') not in {'selected', 'explicit-pin'}
                 or any(not source.get(field) for field in ('url', 'ref', 'revision'))
                 or source_key(source['url'], source['ref']) != source_key(policy['url'], policy['ref'])
