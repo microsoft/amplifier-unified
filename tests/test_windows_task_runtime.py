@@ -226,3 +226,16 @@ def test_native_identity_does_not_signal_or_terminate_sentinel():
         assert child.poll() is None
         assert child.wait(timeout=10) == 0
         assert first["exited"]()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native IPv4 owner table required")
+def test_native_listener_table_joins_only_actual_listening_process():
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+        listener.listen()
+        assert runtime.listener_owners("127.0.0.1", port) == {os.getpid()}
+        assert runtime.listener_owned({"pid": os.getpid()}, "127.0.0.1", port)
+        assert not runtime.listener_owned({"pid": os.getpid() + 1}, "127.0.0.1", port)
+    assert os.getpid() not in runtime.listener_owners("127.0.0.1", port)

@@ -39,6 +39,9 @@ on:
       - amplifier_web/tls.py
       - amplifier_web/windows_tls.py
       - amplifier_web/windows_service.py
+      - amplifier_web/windows_task_runtime.py
+      - amplifier_web/windows_installation.py
+      - amplifier_web/installation_runtime.py
       - amplifier_web/cli.py
       - amplifier_web/deployment_service.py
       - amplifier_web/installation_health.py
@@ -63,6 +66,10 @@ on:
       - tests/test_deployment.py
       - tests/test_windows_tls.py
       - tests/test_windows_service.py
+      - tests/test_windows_task_runtime.py
+      - tests/test_windows_installation.py
+      - tests/test_installation_runtime.py
+      - tests/test_installation_health.py
       - tests/test_cli_deployment.py
       - tests/test_browser_entry.py
       - tests/test_windows_auth.py
@@ -152,7 +159,7 @@ jobs:
       - name: Check private configuration, TLS and service policy without task registration
         shell: pwsh
         run: |
-          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_deployment.py tests/test_windows_tls.py tests/test_windows_service.py -k "not native_synthetic_task_create_run_stop_remove"
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_deployment.py tests/test_windows_tls.py tests/test_windows_service.py tests/test_windows_task_runtime.py -k "not native_synthetic_task_create_run_stop_remove"
           if ($LASTEXITCODE -ne 0) { throw 'Windows configuration, TLS or service policy checks failed.' }
       - name: Check actual CLI service root binding without tasks or health HTTP
         shell: pwsh
