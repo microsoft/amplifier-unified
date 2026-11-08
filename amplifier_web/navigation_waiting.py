@@ -43,7 +43,7 @@ def initialize(db):
 def affected_sources(db, target):
     """Lifecycle publication visits actual pending dependants, never history."""
     return {row[0] for row in db.execute(
-        f"SELECT DISTINCT json_extract(receipt,'$.senderSessionId') FROM commands WHERE {PENDING} AND {TARGET}=?",
+        f"SELECT DISTINCT json_extract(receipt,'$.senderSessionId') FROM commands INDEXED BY navigation_waiting_target WHERE {PENDING} AND {TARGET}=?",
         (target,)) if row[0]}
 
 
@@ -142,7 +142,7 @@ def project(db, session, task):
     if boundary is None:
         return None
     sender, identity, interruption, epoch, generation, last_input = KEYS.split(',\n ')
-    rows = db.execute(f"""SELECT {TARGET},{TITLE} FROM commands
+    rows = db.execute(f"""SELECT {TARGET},{TITLE} FROM commands INDEXED BY navigation_pending_waits
         WHERE {PENDING} AND {sender}=? AND {identity}=? AND {interruption}=?
         AND {epoch} IN ({','.join('?' for _ in epochs)})
         AND {generation}=? AND {last_input}=?
