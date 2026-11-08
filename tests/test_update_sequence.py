@@ -24,10 +24,11 @@ async def manager(tmp_path, monkeypatch):
     await service.close()
 
 
-def source(tier, current='a'*40):
+def source(manager, tier, current='a'*40):
     return {'id':tier,'kind':'bundle / module','updateTier':tier,'label':tier,
             'url':'https://example.invalid/'+tier,'ref':'main','current':current,
-            'status':'not_checked','eligible':True}
+            'status':'not_checked','eligible':True,
+            'appSelection':update_sequence.app_selection(manager.home)['witness']}
 
 
 @pytest.mark.parametrize('status', ['update','check_failed'])
@@ -46,7 +47,7 @@ async def test_app_is_checked_before_any_component_inventory(manager, monkeypatc
 @pytest.mark.parametrize('included_changed',[False, True])
 async def test_check_skips_current_tiers_but_stops_at_included_updates(manager, monkeypatch, included_changed):
     calls=[]
-    async def inventory(**kwargs):return [source('included'),source('other')]
+    async def inventory(**kwargs):return [source(manager,'included'),source(manager,'other')]
     async def process(*args,**kwargs):
         calls.append(args[2].rsplit('/',1)[-1])
         return ('b' if included_changed or calls[-1]=='other' else 'a')*40+' refs/heads/main'
@@ -62,7 +63,7 @@ async def test_check_skips_current_tiers_but_stops_at_included_updates(manager, 
 
 async def test_included_check_error_does_not_install_or_check_optional_sources(manager,monkeypatch):
     calls=[]
-    async def inventory(**kwargs):return [source('included'),source('other')]
+    async def inventory(**kwargs):return [source(manager,'included'),source(manager,'other')]
     async def process(*args,**kwargs):calls.append(args[2]);raise RuntimeError('offline')
     monkeypatch.setattr(manager,'inventory_sources',inventory)
     monkeypatch.setattr(updates,'process',process)
@@ -94,7 +95,9 @@ async def test_after_activation_tick_checks_next_tier_without_waiting_for_interv
     async def check(**kwargs):
         calls.append(kwargs)
         manager.service.state['updates'].update(phase='available',available=1)
-    async def apply():calls.append('install')
+    async def apply(*, automatic=False):
+        assert automatic is True
+        calls.append('install')
     monkeypatch.setattr(manager,'check',check)
     monkeypatch.setattr(manager,'install',apply)
     await manager.tick()

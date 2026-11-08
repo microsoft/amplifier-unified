@@ -5,12 +5,40 @@ inventory/checks until installation and verified restart; the new process reads
 its own shipped dependency declarations. A failed app check also defers component
 checks rather than assuming the installed app is current.
 
-Next are included components: the declared worker dependencies and Git sources
-in shipped app behaviors. Missing source caches or an uninitialized worker lock
-are installation candidates even when no existing cached row exists. Local
-source overrides, pins and protected edits retain the existing update policy.
+Next are included components: the declared worker dependencies and the effective
+enabled app behaviors. App behavior selection uses the same registration, local
+path, source-override and exclusion rules as conversation preparation, without
+loading or composing bundles during a check. Only the selected repository and
+ref belong to this tier; a different cached ref or an unselected sibling does
+not become included because its repository URL matches. Shipped behavior
+declarations are read only when that behavior remains selected.
+
+Missing source caches or an uninitialized worker lock are installation candidates
+even when no existing cached row exists. An installed package does not replace
+the declaring bundle's source copy: both checked rows participate in the same
+included batch, whose source copies are staged before dependency collection and
+qualification. Local source overrides, pins and protected edits retain the
+existing update policy.
 After included updates activate, the updater inventories and checks remaining
 sources against the new generation. Tiers with no updates are skipped.
+
+The inventory records a bounded witness of the effective app configuration and
+selected references. Selection changes invalidate the inventory index and refuse
+staging from stale checked rows. Installation verifies both the current selection
+and the copied candidate configuration before using that batch. This witness is
+not installation authority: source identity, dirty-tree protection, authored
+dependency constraints, exact checked revisions and offered-profile qualification
+still apply. An unresolvable or ambiguous app selection requires correction
+rather than substitution with a default branch. Discovery reads configuration
+and selected shipped declarations, not conversation history or arbitrary cached
+bundle contents.
+
+Before installation, checked Git identities must agree with both explicit batch
+roots and the reachable dependencies evidenced by the canonical source collector.
+A selected dependency with unresolved provenance cannot be bypassed merely
+because it is not itself an explicit installer root. Unrelated installed extras
+are not selection evidence. After alignment, the same guard requires exact
+checked revisions before the dependency transaction.
 
 Check now remains read-only. Install remembers intent for the whole sequence,
 including across an app restart, without changing the user's automatic-install
@@ -84,3 +112,21 @@ revision validation, read-only inventory, preserved source policies, and a
 real two-repository staged update. In that staged test, active work holds the
 first activation; after idle, included and optional source copies advance in
 order while both original repositories remain unchanged.
+
+`tests/test_effective_behavior_updates.py` exercises passive selection, exact-ref
+tiering, real registry-resolution parity, stale selection and bounded discovery.
+The opt-in `tests/test_effective_behavior_update_native.py` exercises public
+`UpdateManager.check` and `install` with real source collection, dependency
+installation, freeze and offered-profile mounts. Run it only in the prepared
+`python-project` managed environment with
+`AMPLIFIER_EFFECTIVE_UPDATE_NATIVE=1`. It uses no vendor/model calls.
+
+Supply Git bundles at `evidence/foundation-transition/{foundation,routing}.bundle`
+containing the exact old/new revisions named in the test. The fixture transports
+Git fetches to local mirrors while retaining public source identities; its
+synthetic routing `main` is candidate evidence until an accepted public merge is
+verified. It repacks installed test-image registry payloads and declares a
+fixture Core Git source; it does not qualify public registry transport or Core
+publication. Preserve those limits, the raw prior failures, and the source/run
+identities with any reported result. These affected checks are not a new routine
+release gate or permission to refresh installed user components.

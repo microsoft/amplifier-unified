@@ -16,11 +16,20 @@ from .staged_sources import owned_path as _owned, owned_git_checkout, retarget_r
 
 
 def verify_checked_selection(checked, selection, *, exact=False):
-    """Check explicit batch choices, never infer selection from installed extras."""
+    """Check batch roots and their evidenced reachable dependencies, not extras."""
     from .runtime_environment import ProtectedRuntimeSource
     from .updates import source_key
     packages = selection['packages']
-    for name in selection['batchPaths']:
+    # Collector only adds dependency rows reached from the actual selected
+    # manifests. A dependency need not be an explicit pip install root: ignoring
+    # it here lets a root's authored pin be displaced by the checked overrides.
+    # Unresolved provenance is protective, never absence of a source choice.
+    names = set(selection['batchPaths']) | {
+        name for name, source in packages.items()
+        if source.get('sourceKind') == 'dependency'
+        or source.get('status') == 'selected-dependency-unresolved'
+    }
+    for name in sorted(names):
         policy = checked.get(name)
         source = packages.get(name, {})
         if policy is None:
