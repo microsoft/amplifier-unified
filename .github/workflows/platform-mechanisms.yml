@@ -63,6 +63,9 @@ on:
       - tests/test_windows_files.py
       - tests/test_windows_owned_process.py
       - tests/test_windows_installer.py
+      - tests/test_windows_bootstrap_native.py
+      - tests/windows/native_bootstrap.Tests.cs
+      - tests/fixtures/windows_native_bootstrap_ci.py
       - tests/test_deployment.py
       - tests/test_windows_tls.py
       - tests/test_windows_service.py
@@ -87,6 +90,8 @@ on:
       - README.md
       - scripts/install.sh
       - scripts/install.ps1
+      - scripts/windows_bootstrap_native.cs
+      - scripts/windows_bootstrap_native.py
       - docs/design/native-windows-installation.md
 permissions:
   contents: read
@@ -410,6 +415,12 @@ jobs:
           import runpy, sys
           sys.argv = ["tests/fixtures/windows_bootstrap_ci.py", "--initialize"]
           runpy.run_path(sys.argv[0], run_name="__main__")
+      - name: Compile native bootstrap and exercise actual parser and Windows argv without installation
+        shell: python -I -S -B {0}
+        run: |
+          import runpy, sys
+          sys.argv = ["tests/fixtures/windows_native_bootstrap_ci.py"]
+          runpy.run_path(sys.argv[0], run_name="__main__")
       # Literal custom shells avoid Actions' built-in PowerShell wrapper, which
       # can inject an execution-policy override. Policy refusal remains failure.
       - name: Offline fixtures under Windows PowerShell 5.1
@@ -441,6 +452,8 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-bootstrap-offline-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/unified-bootstrap-offline/result.json
+          path: |
+            ${{ runner.temp }}/unified-bootstrap-offline/result.json
+            ${{ runner.temp }}/unified-native-bootstrap-offline/result.json
           if-no-files-found: error
           retention-days: 7

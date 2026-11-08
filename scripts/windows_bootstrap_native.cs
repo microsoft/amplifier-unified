@@ -283,13 +283,17 @@ namespace UnifiedBootstrap {
                 Stage="exact Git dependencies";
                 Child(uv,new[]{"pip","install","--python",python,"--no-index","--no-deps","--link-mode","copy","--no-require-hashes","--verify-hashes","--only-binary",":all:","--no-binary","amplifier-foundation,amplifier-module-hooks-session-naming,amplifier-memory,amplifier-bundle-ui-use,amplifier-bundle-context-intelligence","--find-links",Path.Combine(capsule,"build-wheels"),"--build-constraint",Path.Combine(capsule,"build-constraints.txt"),"-r",Path.Combine(capsule,"git-requirements.txt")},env);
                 Stage="installed audit"; Child(python,new[]{"-I","-B",checker,"--audit-source",capsule},env); Child(uv,new[]{"pip","check","--python",python},env);
-                launcher=Path.Combine(capsule,"launch.py"); Child(python,new[]{"-I","-B",launcher,"--check"},env);
+                launcher=Path.Combine(capsule,"launch.py");
                 PrivateText(Path.Combine(Storage.Root,"prototype.json"),Json.Serialize(new Dictionary<string,object> {
                     {"schemaVersion",1},{"status","prototype"},{"source",Text(plan,"source")},{"version",Text(plan,"version")},
                     {"manifestSha256",digest},{"capsuleSha256",Text(capsuleInfo,"sha256")},{"python",python},{"uv",uv},{"git",git},
                     {"sourceMode","pinned-vcs"},{"bootstrapUv",NativePins.UvVersion},{"bootstrapEntry","native-dotnet-framework"},
                     {"delivery",args.ContainsKey("--capsule-file")?"staged-local-capsule":"official-https-capsule"}
                 }));
+                // The existing launcher validates this receipt. Publish it only
+                // after package audits, but before asking that owner to read it.
+                Stage="launcher identity";
+                Child(python,new[]{"-I","-B",launcher,"--check"},env);
                 var shortcut=Shortcut(python,launcher,background); Storage.Validate();
                 Console.WriteLine("Setup prepared. Launch or relaunch: "+shortcut);
                 Console.WriteLine("Background selection: "+background+". Start at sign-in; stop at sign-out. Not an SCM service.");

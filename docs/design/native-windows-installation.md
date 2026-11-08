@@ -36,7 +36,7 @@ stop requests target only that exact run and wait for its cleanup; Task.Stop,
 force termination and port-based killing are not used. Logs retain a bounded
 128 KiB private tail.
 
-Prepared-account native checks now cover real task registration/start, pinned
+Prepared-account native checks cover real task registration/start, pinned
 health, same-process reopen, normal stop/restart, private logs and removal, plus
 accountless dependency preparation. These are **not** clean-account bootstrap,
 actual sign-in/sign-out, browser trust, automatic app upgrade or rollback
@@ -44,6 +44,49 @@ acceptance. Existing native foreground Sol/file/Stop/history evidence remains
 separate. The public activation gate remains closed until those remaining
 boundaries are qualified. Script execution policy is respected: a policy refusal
 does not authorize changing it or executing the file through another route.
+
+### Fresh-guest prototype result
+
+A separately created Hyper-V guest now provides a genuine Windows 11 Enterprise
+Evaluation x64 / ordinary-user baseline. Before setup, `UnifiedTest` was
+non-administrative, Python/Git/uv/PowerShell 7 commands were absent, and the guest
+WSL feature was disabled. Hyper-V/WSL management on the **lab host** is not a
+prerequisite installed in the guest.
+
+The native prototype entry completed under that account with the default
+PowerShell `Restricted` policy unchanged. It acquired private verified tools and
+ordinary CPython 3.13.17, installed the same original 0.65.0 app wheel and frozen
+dependencies, and created the private launcher. A separate installed audit
+verified 65 noneditable distributions, five canonical full Git origins, 3,594
+hashed installed RECORD entries, all 928 hashed original app members, and
+single-link package files. Capsule delivery was **staged locally**, not downloaded
+from a published Unified release. No app wheel or frontend asset rebuild was
+needed for the bootstrap corrections.
+
+The installed canonical library then prepared the accountless baseline, created
+the user's real interactive-token/Limited sign-in task, and passed authenticated
+process/listener/leaf-pinned health. Same-process reopen did not prepare
+dependencies again. Normal stop, a new-run restart, and final normal stop passed;
+independent inspection found both exact processes gone and port 8942 empty.
+The stopped, enabled logon registration is deliberately retained for the pending
+real sign-out/sign-in check. Finite verification tasks were removed normally.
+No provider credential transfer, inference, browser entry or trust import occurred;
+the authenticated health path did use its canonical private **app control**
+credential. Do not describe that as zero credential reads.
+
+Failed attempts remain evidence: policy-refused script entry, unavailable Python
+download in the original helper catalog, long Git checkout paths, and a native
+entry receipt/check ordering error. Separate verification-helper errors (a
+nonexistent liveness helper and an eight-tick FILETIME rounding error from CIM)
+were corrected using the existing exact native process handle, without replaying
+startup or weakening identity checks. These are not product-failure fixes.
+
+**Still unqualified:** public HTTPS artifact delivery, signed/download reputation,
+browser trust and owner entry, real sign-in/sign-out, and cross-version automatic
+upgrade. The host desktop was locked and the supported controller refused capture;
+no substitute screenshot/keyboard route or lock-policy change was used.
+This is clean-account **prototype bootstrap and lifecycle evidence**, not the
+public “install on any Windows 11 PC” claim or permission to open its gates.
 
 ### Clean-account entry correction
 

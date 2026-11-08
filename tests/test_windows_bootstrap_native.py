@@ -64,3 +64,12 @@ def test_pins_come_from_reviewed_capsule_and_helper_sources():
     assert 'UvHash="0cdc5b38fe5a8168ed6a25814f5ba43c21d313dd3187314fccb37b7cec46e021"' in pins
     assert 'GitHash="e3bf78351fe777fba47ddee5950082f8a98bb0f02604fdc7ba3ee2cb68ffa877"' in pins
     assert "[REDACTED]" not in pins
+
+
+def test_launcher_receipt_is_published_after_audit_before_launcher_reads_it():
+    source = (SCRIPTS / "windows_bootstrap_native.cs").read_text()
+    audit = source.index('checker,"--audit-source"')
+    receipt = source.index('PrivateText(Path.Combine(Storage.Root,"prototype.json")')
+    check = source.index('launcher,"--check"')
+    shortcut = source.index("var shortcut=Shortcut(")
+    assert audit < receipt < check < shortcut
