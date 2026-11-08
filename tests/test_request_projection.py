@@ -71,3 +71,46 @@ async def test_projection_encoding_shared_with_capture(tmp_path, monkeypatch):
     assert count==1
     await observer.drain()
     assert observer.store.read()['selected']['budgetStatus']=='captured'
+
+
+async def test_suspending_diagnostic_cannot_open_post_validation_gap(tmp_path):
+    observer, events, provider = observed(tmp_path, recording=False)
+    state={'called':False}
+    async def unsafe_begin(*args):
+        state['called']=True
+        await asyncio.sleep(0)
+        raise AssertionError('Must never suspend at final entry')
+    observer.begin=unsafe_begin
+    def project(value):return value, lambda: None
+    surface=SurfaceProvider(provider,NoWorkDelivery(),
+        coordinator=SimpleNamespace(get_capability=lambda name:project))
+    value=request()
+    await surface.request_budget(value);await surface.complete(value)
+    assert not state['called'] and len(provider.calls)==1
+
+
+async def test_recovery_revalidates_source_without_reusing_numeric_ticket(tmp_path,monkeypatch):
+    from amplifier_web.request_recovery import RecoveringProvider
+    from amplifier_web import request_recovery, provider_capture
+    from amplifier_core.llm_errors import ProviderUnavailableError
+    from test_context_inspection import Provider
+    # Keep actual recovery policy; only finite backoff duration is zero in this test.
+    monkeypatch.setattr(request_recovery,'DELAYS',(0,))
+    observer,events,_=observed(tmp_path,recording=False)
+    class RetryProvider(Provider):
+        attempts=0
+        async def complete(self,value,**kwargs):
+            self.attempts+=1
+            if self.attempts==1:raise ProviderUnavailableError('fixture unavailable',retryable=True)
+            return await super().complete(value,**kwargs)
+    raw=RetryProvider();observed_provider=events.instrument_provider('root',raw)
+    validations=[]
+    def project(value):return value,lambda:validations.append(True)
+    c=SimpleNamespace(get_capability=lambda name:project if name=='computer_use.prepare_request' else None,
+        hooks=SimpleNamespace(emit=lambda *args,**kwargs:asyncio.sleep(0)))
+    recovery=RecoveringProvider(observed_provider,c);provider_capture.bind_wrapper(recovery,observed_provider)
+    surface=SurfaceProvider(recovery,NoWorkDelivery(),coordinator=c)
+    value=request();await surface.request_budget(value);await surface.complete(value)
+    await observer.drain()
+    assert raw.attempts==2 and len(validations)==2
+    assert observer.store.read()['selected']['budget']=={}

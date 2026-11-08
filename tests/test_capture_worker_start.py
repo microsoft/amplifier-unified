@@ -1,5 +1,6 @@
 """Actual Worker.start wiring with local acquisition and offline SDK transport."""
 import asyncio
+import base64
 import hashlib
 import importlib.util
 import json
@@ -34,7 +35,21 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
     # Actual provider serialization/count/complete, no sockets/accounts.
     paths=[];image_path=None;image_digest=None;revoked=False
     def transport(req):
-        body=json.loads(req.content);paths.append({'path':req.url.path,'bytes':len(req.content),'inputHash':hashlib.sha256(json.dumps(body.get('input'),sort_keys=True).encode()).hexdigest()})
+        body=json.loads(req.content)
+        blocks=[block for item in body.get('input',[]) if isinstance(item,dict)
+                for block in (item.get('content') if isinstance(item.get('content'),list) else [])]
+        images=[block for block in blocks if block.get('type')=='input_image']
+        digests=[]
+        for block in images:
+            url=block.get('image_url','')
+            assert url.startswith('data:image/png;base64,')
+            digests.append(hashlib.sha256(base64.b64decode(url.split(',',1)[1])).hexdigest())
+        encoded=json.dumps(body.get('input'),sort_keys=True)
+        paths.append({'path':req.url.path,'bytes':len(req.content),
+            'inputHash':hashlib.sha256(encoded.encode()).hexdigest(),
+            'imageDigests':digests,'imageTypes':[b['type'] for b in images],
+            'referenceRetained':'retained appended context' in encoded,
+            'toolCallRetained':'capture' in encoded})
         if req.url.path.endswith('/input_tokens'):return httpx.Response(200,json={'input_tokens':100})
         assert req.url.path=='/v1/responses'
         return httpx.Response(200,json={'id':'r','object':'response','created_at':1,'model':'gpt-6-astra','status':'completed',
@@ -168,6 +183,11 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
         assert row['budgetStatus']=='captured'
         assert row['budget']['measurement']['input_tokens']==100
         assert len({p['inputHash'] for p in paths})==1
+        for p in paths:
+            assert p['imageDigests']==([image_digest] if image and computer_hook else [])
+            if image and computer_hook:
+                assert p['imageTypes']==['input_image']
+                assert p['referenceRetained'] and p['toolCallRetained']
     finally:
         evidence('full-worker-lifecycle-'+str(restore)+'-'+str(computer_hook)+'-'+str(image)+'-'+revocation,{'events':published,'requests':paths,'revoked':revoked})
         if worker.execution and not worker.execution.done():

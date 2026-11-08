@@ -39,6 +39,12 @@ def claim(execution, provider, request):
     return scope
 
 
+def release(scope):
+    if scope is not None:
+        scope['claimed'] = False
+        scope['encoded'] = None
+
+
 def validate(scope, request, options):
     """Synchronous after admission; failures must not be swallowed as diagnostics."""
     if scope is None:
