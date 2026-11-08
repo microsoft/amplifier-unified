@@ -44,6 +44,39 @@ def tombstones(db):
     return [json.loads(row[0]) for row in db.execute("SELECT value FROM managed_deletions WHERE phase IN ('confirmed','done')")]
 
 
+class CatalogSuppression:
+    """Interpret the existing deletion journal; never mutate the native catalog.
+
+    Managed-chat deletion owns its whole project. History cleanup owns only its
+    reviewed identities, including descendants, even when the review selected
+    every then-existing session. Future sessions in that workspace remain valid.
+    """
+    def __init__(self, db):
+        self.projects, self.ids = set(), set()
+        self.native = {}
+        for row in tombstones(db):
+            ids = row.get('ids', ())
+            if not row.get('preserveWorkspace'):
+                self.projects.add(row['project'])
+                self.ids.update(ids)
+            else:
+                self.native.setdefault(row['project'], set()).update(ids)
+
+    def contains(self, row):
+        from .session_identity import native_id, project
+        scope = project(row)
+        ids = {row['id'], native_id(row)}
+        return scope in self.projects or any(
+            identity in self.ids or identity in self.native.get(scope, ()) for identity in ids)
+
+    @staticmethod
+    def keys(groups):
+        return sorted(scope + '\0' + identity for scope, ids in groups.items() for identity in ids)
+
+    def signature(self):
+        return (sorted(self.projects), sorted(self.ids), self.keys(self.native))
+
+
 def removed(db, identity=None, workspace=None):
     return any(identity in row['ids'] or (not row.get('preserveWorkspace') and workspace == row['workspace']) for row in tombstones(db))
 
@@ -444,8 +477,20 @@ def _cleanup_db(db, plan):
         db.execute('DELETE FROM state_resources WHERE id=?', (identity,))
     for identity, value in db.execute('SELECT id,value FROM client_views').fetchall() if 'client_views' in tables else []:
         db.execute('UPDATE client_views SET value=? WHERE id=?', (_json(_scrub_local(json.loads(value), ids, set(plan['artifactIds']))), identity))
-    for identity, value in db.execute('SELECT id,receipt FROM commands').fetchall():
-        if _mentions(json.loads(value), ids):
+    # Preserve the old embedded board's deletion scope: a mention in its header
+    # or any current task invalidates the assignment and all current children.
+    # Recovery runs here before app assembly; retain IDs, not decoded bodies.
+    from .assignment_tasks import ASSIGNMENT_RECORD, RECORD
+    assignments = set()
+    for identity, encoded in db.execute("""SELECT id,receipt FROM commands
+            WHERE json_extract(receipt,'$.commandAction') IN (?,?)""", (ASSIGNMENT_RECORD, RECORD)):
+        value = json.loads(encoded)
+        if _mentions(value, ids):
+            assignments.add(identity if value['commandAction'] == ASSIGNMENT_RECORD else value['assignmentId'])
+    for identity, encoded in db.execute('SELECT id,receipt FROM commands').fetchall():
+        value = json.loads(encoded)
+        if (_mentions(value, ids) or identity in assignments or value.get('commandAction') == RECORD
+                and value.get('assignmentId') in assignments):
             db.execute('UPDATE commands SET receipt=? WHERE id=?', (_json({'accepted': False, 'deleted': True, 'error': 'This conversation was permanently deleted. Its work was not replayed.'}), identity))
     for table, column in (('output_receipts','value'), ('feedback_requests','receipt'), ('feedback_followups','receipt')):
         if table not in tables:

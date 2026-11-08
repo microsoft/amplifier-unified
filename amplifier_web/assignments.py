@@ -71,10 +71,15 @@ class Assignments:
         service.db.commit()
 
     def load(self, identity):
+        from .assignment_tasks import ASSIGNMENT_RECORD, STORAGE
         receipt = self.service.collaboration.receipt(identity)
-        if receipt.get('commandAction') != 'assignment.record':
+        kind = receipt.get('commandAction')
+        value = receipt.get('result', {})
+        if (not isinstance(value, dict) or kind not in {'assignment.record', ASSIGNMENT_RECORD}
+                or kind == ASSIGNMENT_RECORD and (value.get('taskStorage') != STORAGE or 'tasks' in value)
+                or kind == 'assignment.record' and 'taskStorage' in value):
             self.service.collaboration.error('The assignment record is unavailable.', 409)
-        return receipt['result']
+        return value
 
     def current(self, session):
         identity = session.get('assignmentId') or (session.get('collaboration') or {}).get('assignmentId')
@@ -87,8 +92,21 @@ class Assignments:
         return value if member['status'] not in {'detached', 'retired'} else None
 
     def save(self, value):
+        from .assignment_tasks import ASSIGNMENT_RECORD, STORAGE
+        if ('taskStorage' in value and value['taskStorage'] != STORAGE
+                or value.get('taskStorage') == STORAGE and 'tasks' in value):
+            self.service.collaboration.error('The assignment task storage layout is unavailable.', 409)
         self.service.collaboration.save(value['id'], {
-            'accepted': True, 'commandAction': 'assignment.record', 'result': value})
+            'accepted': True,
+            'commandAction': ASSIGNMENT_RECORD if value.get('taskStorage') == STORAGE else 'assignment.record',
+            'result': value})
+
+    def project(self, value, *, session_id):
+        """Current controls reference tasks; historical command results stay exact."""
+        result = {key: copy.deepcopy(item) for key, item in value.items()
+                  if key not in {'tasks', 'taskStorage'}}
+        result['taskListRef'] = {'action': 'assignment.tasks.list', 'args': {'sessionId': session_id}}
+        return result
 
     @asynccontextmanager
     async def mutation(self, source, identity, *, additional=()):
@@ -215,27 +233,28 @@ class Assignments:
         limits = value['limits']
         if limits['maxMembers'] is not None and self.active_member_count(value) >= limits['maxMembers']:
             self.service.collaboration.error('The assignment member limit is reached. Retire a finished member to release a slot; its history and usage stay retained.', 429)
-        pending = {row[0] for row in self.service.db.execute("""SELECT DISTINCT
-            json_extract(receipt,'$.target.sessionId') FROM commands
-            WHERE json_extract(receipt,'$.commandAction')='coordination.send'
-            AND json_extract(receipt,'$.delivery') IN ('queued','submitting','pending_steer')""")}
-        opened = 0
-        for key, member in value['members'].items():
-            if key == value['ownerSessionId'] or member['status'] in {'detached', 'retired', 'not_created'}:
-                continue
-            try:
-                row = self.service._session(key, hydrate=False)
-            except Exception:
-                row = None
-            active = (row or {}).get('collaborationGeneration') or {}
-            task = (row or {}).get('task') or self.service.coordination.task(key)
-            if (member['status'] == 'reserved' or row is None or row.get('status') in LIVE | {'busy', 'stopping'} or key in pending
-                    or active.get('id') and not active.get('terminal')
-                    or task.get('status') in {'active', 'running', 'working'}
-                    or key in getattr(self.service.runtime, '_preparations', {})):
-                opened += 1
-        if limits['maxOpenTasks'] is not None and opened >= limits['maxOpenTasks']:
-            self.service.collaboration.error('The assignment open-task limit is reached, including nested commissioned work.', 429)
+        if limits['maxOpenTasks'] is not None:
+            pending = {row[0] for row in self.service.db.execute("""SELECT DISTINCT
+                json_extract(receipt,'$.target.sessionId') FROM commands
+                WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+                AND json_extract(receipt,'$.delivery') IN ('queued','submitting','pending_steer')""")}
+            opened = 0
+            for key, member in value['members'].items():
+                if key == value['ownerSessionId'] or member['status'] in {'detached', 'retired', 'not_created'}:
+                    continue
+                try:
+                    row = self.service._session(key, hydrate=False)
+                except Exception:
+                    row = None
+                active = (row or {}).get('collaborationGeneration') or {}
+                task = (row or {}).get('task') or self.service.coordination.task(key)
+                if (member['status'] == 'reserved' or row is None or row.get('status') in LIVE | {'busy', 'stopping'} or key in pending
+                        or active.get('id') and not active.get('terminal')
+                        or task.get('status') in {'active', 'running', 'working'}
+                        or key in getattr(self.service.runtime, '_preparations', {})):
+                    opened += 1
+            if opened >= limits['maxOpenTasks']:
+                self.service.collaboration.error('The assignment open-task limit is reached, including nested commissioned work.', 429)
         value['members'][sid] = {'status': 'reserved', 'role': 'commissioned',
                                 'creatorSessionId': source['id'], 'creationOperationId': operation}
         value['revision'] += 1
@@ -336,7 +355,7 @@ class Assignments:
         if not value:
             return {'assignment': None}
         usage = self.usage(value)
-        return {'assignment': value, 'usage': {key: item for key, item in usage.items() if key != 'receipts'},
+        return {'assignment': self.project(value, session_id=session['id']), 'usage': {key: item for key, item in usage.items() if key != 'receipts'},
                 'inFlightCalls': sum(row.get('phase') in LIVE and not row.get('endedAt') for row in usage['receipts']),
                 **({'independentWork': self.external_requests(value)} if value['status'] == 'stopped' else {}),
                 'enforcement': 'Supported model admission only. Reservations are allowances; actual calls and effects may exceed them.'}
@@ -470,7 +489,7 @@ class Assignments:
                 value['revision'] += 1
                 self.save(value)
             receipt = {'accepted': True, 'commandAction': action, 'assignmentId': value['id'],
-                       'result': {'assignment': copy.deepcopy(value)},
+                       'result': {'assignment': self.project(value, session_id=source['id'])},
                        'interruptions': {sid: 'requested' for sid in stops}, 'interruptionsPending': len(stops)}
             if recovery:
                 receipt['result']['stopRecovery'] = {'assignmentRevision': args['expectedRevision'], 'members': recovery}
