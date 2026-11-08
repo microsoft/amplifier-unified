@@ -248,3 +248,44 @@ def test_source_less_saved_connection_matches_actual_host_composition(tmp_path, 
     ):
         other = process_identity(tmp_path, 'composed_worker', expected=host['binding'], **change)
         assert not other['verified']
+
+
+@pytest.mark.parametrize('module', ['provider-openai', 'provider-openai-chatgpt'])
+def test_disabled_source_does_not_override_enabled_connection_without_snapshot(tmp_path, monkeypatch, module):
+    from amplifier_web.provider_catalog import configured_binding, conversation_bindings
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
+    home = tmp_path / 'app'
+    store = SettingsStore(home)
+    store.update(tmp_path, 'global', lambda values: values.update(
+        config={'providers': [
+            {'id': 'one', 'module': module, 'config': {}},
+            {'id': 'disabled', 'module': module,
+             'source': 'git+https://fixture.invalid/other-implementation@' + 'b' * 40,
+             'config': {}},
+        ]},
+        configurator={'disabled': {'providers': ['disabled']}},
+    ))
+    path = home / 'sessions' / 'no-snapshot' / 'configuration.json'
+    assert not path.exists()
+    expected = configured_binding(home, tmp_path, 'one')
+    assert expected and configured_binding(home, tmp_path, 'disabled') is None
+    assert conversation_bindings(home, tmp_path, 'no-snapshot',
+                                 [{'id': 'one', 'connectionKey': expected}]) == {}
+    # A disabled selected connection remains refused, not silently re-enabled.
+    disabled = conversation_bindings(home, tmp_path, 'no-snapshot',
+                                     [{'id': 'disabled', 'connectionKey': expected}])
+    assert disabled['disabled']['eligible'] is False
+    # An actual saved snapshot is authoritative: a different saved source,
+    # endpoint or account is still a real override, not this absent-snapshot bug.
+    path.parent.mkdir(parents=True)
+    for patch in [
+        {'source': 'git+https://fixture.invalid/saved-implementation@' + 'c' * 40},
+        {'config': {'base_url': 'https://different.invalid'}},
+        {'config': {'api_key': 'synthetic-other-account'}},
+        {'enabled': False},
+    ]:
+        path.write_text(json.dumps({'providers': [{'id': 'one', 'module': module,
+                                                 'config': {}, **patch}]}))
+        result = conversation_bindings(home, tmp_path, 'no-snapshot',
+                                       [{'id': 'one', 'connectionKey': expected}])
+        assert result['one']['eligible'] is False, patch
