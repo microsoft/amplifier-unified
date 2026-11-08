@@ -9,7 +9,7 @@ qualification before the ordinary launcher/update path can use this backend.
 from __future__ import annotations
 
 import base64
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from contextlib import redirect_stderr, redirect_stdout
 import json
 import os
@@ -25,6 +25,9 @@ import xml.etree.ElementTree as ET
 SOURCE = "amplifier-unified owner-logon v1"
 NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 LIMIT = 128 * 1024
+LAUNCH_ROOTS = {"AMPLIFIER_HOME", "AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH",
+                "AMPLIFIER_UNIFIED_IMPORT_HOME", "UV_CACHE_DIR",
+                "UV_PYTHON_INSTALL_DIR", "UV_PYTHON_BIN_DIR"}
 ET.register_namespace("", NAMESPACE)
 
 
@@ -80,6 +83,7 @@ class TaskSpec:
     tool_path: str
     registration_id: str
     github_access: str = "auto"
+    launch_roots: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
         _sid(self.sid)
@@ -96,6 +100,10 @@ class TaskSpec:
             raise ValueError("Invalid task registration identity.")
         if self.github_access not in {"auto", "anonymous"}:
             raise ValueError("Invalid component download mode.")
+        if not isinstance(self.launch_roots, dict) or set(self.launch_roots) - LAUNCH_ROOTS:
+            raise ValueError("Only declared public launch roots may be retained.")
+        for value in self.launch_roots.values():
+            _path(value)
 
     def encoded(self) -> str:
         # Only public launch configuration, never credentials, goes into XML.
@@ -351,12 +359,16 @@ def _new_spec(data_dir, workspace, sid, previous):
     from .windows_files import address
     _require_python()
     access = os.environ.get("AMPLIFIER_GITHUB_ACCESS")
+    roots = dict(previous.launch_roots) if previous else {}
+    roots.update({name: _path(value) for name in LAUNCH_ROOTS
+                  if (value := os.environ.get(name))})
     return TaskSpec(sid=sid, python=_path(sys.executable),
                     data_dir=str(address(data_dir)), workspace=str(address(workspace or Path.cwd())),
                     state_home=str(address(shared_state_home())), tool_path=tool_path(),
                     registration_id=previous.registration_id if previous else uuid.uuid4().hex,
                     github_access=("anonymous" if access == "anonymous" else
-                                   previous.github_access if access is None and previous else "auto"))
+                                   previous.github_access if access is None and previous else "auto"),
+                    launch_roots=roots)
 
 
 def _backup(spec: TaskSpec, xml: str) -> str:
@@ -487,6 +499,8 @@ def _run(encoded: str) -> None:
     os.environ["PATH"] = spec.tool_path
     os.environ["AMPLIFIER_SESSION_STATE_HOME"] = spec.state_home
     os.environ["AMPLIFIER_GITHUB_ACCESS"] = spec.github_access
+    os.environ["AMPLIFIER_WEB_HOME"] = spec.data_dir
+    os.environ.update(spec.launch_roots)
     os.chdir(spec.workspace)
     sys.argv = [spec.python, "--no-open", "--data-dir", spec.data_dir,
                 "--workspace", spec.workspace, "serve"]

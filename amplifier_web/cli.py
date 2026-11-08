@@ -88,6 +88,9 @@ def _parse() -> argparse.Namespace:
     service = subcommands.add_parser("service", help="Manage the systemd or launchd user service")
     service.add_argument("service_command", choices=["install", "uninstall", "start", "stop", "restart", "status", "logs"])
     service.add_argument("--replace", action="store_true", help="Back up and replace an existing generated unit (install only)")
+    runtime = subcommands.add_parser("runtime", help="Prepare or inspect the default installation runtime without a conversation")
+    runtime.add_argument("runtime_command", choices=["prepare", "status"])
+    runtime.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
     setup_tls = subcommands.add_parser("setup-tls", help="Create or inspect the app-owned local CA")
     setup_tls.add_argument("mode", nargs="?", choices=["status", "default", "force", "export"], default="default")
     reset = subcommands.add_parser("reset", help="Reinstall a clean app and runtime while preserving user data")
@@ -439,6 +442,23 @@ def main():
     args = _parse()
     from .deployment import load_server_config
     data_dir = _data_dir(args.data_dir)
+    if args.command == "runtime":
+        from .installation_runtime import prepare, status
+        os.environ["AMPLIFIER_WEB_HOME"] = str(data_dir)
+        try:
+            result = (asyncio.run(prepare(data_dir)) if args.runtime_command == "prepare"
+                      else status(data_dir))
+        except (OSError, ValueError, RuntimeError):
+            raise SystemExit("Default runtime preparation did not complete. Private installation receipts were retained; no message was sent.") from None
+        if args.json:
+            import json
+            print(json.dumps(result))
+        else:
+            print("Default runtime is prepared; no model request was sent." if result["ok"]
+                  else result["message"])
+        if not result["ok"]:
+            raise SystemExit(1)
+        return
     if args.command == "tui":
         try:
             return _tui(args, data_dir)

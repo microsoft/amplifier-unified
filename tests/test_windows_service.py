@@ -548,6 +548,8 @@ def test_new_spec_freezes_lexical_paths_and_keeps_anonymous_choice(monkeypatch):
     monkeypatch.setattr(shared_state, "shared_state_home", lambda: PureWindowsPath(spec().state_home))
     monkeypatch.setattr(host_dependencies, "tool_path", lambda: spec().tool_path)
     monkeypatch.delenv("AMPLIFIER_GITHUB_ACCESS", raising=False)
+    for name in service.LAUNCH_ROOTS:
+        monkeypatch.delenv(name, raising=False)
     previous = spec(github_access="anonymous")
     result = service._new_spec(spec().data_dir, spec().workspace, SID, previous)
     assert result == previous
@@ -556,6 +558,16 @@ def test_new_spec_freezes_lexical_paths_and_keeps_anonymous_choice(monkeypatch):
     monkeypatch.setattr(service.sys, "version_info", (3, 14))
     with pytest.raises(service.WindowsServiceError, match="3.13"):
         service._new_spec(spec().data_dir, spec().workspace, SID, previous)
+
+
+def test_launch_roots_are_public_paths_not_arbitrary_environment():
+    value = spec(launch_roots={"AMPLIFIER_HOME": r"C:\Private\shared",
+                              "UV_CACHE_DIR": r"C:\Private\cache"})
+    assert service.TaskSpec.decode(value.encoded()) == value
+    for roots in ({"OPENAI_API_KEY": "secret"}, {"PATH": r"C:\Other"},
+                  {"AMPLIFIER_HOME": "relative"}, {"UV_CACHE_DIR": "C:\\bad\npath"}):
+        with pytest.raises(ValueError):
+            spec(launch_roots=roots)
 
 
 def test_free_threaded_interpreter_is_not_ordinary_python(monkeypatch):

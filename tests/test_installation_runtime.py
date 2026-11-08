@@ -1,0 +1,114 @@
+"""Installation calls the canonical no-model qualifier, never a user worker."""
+import asyncio
+from contextlib import contextmanager
+import json
+
+import pytest
+
+from amplifier_web import installation_runtime as setup
+from amplifier_web import runtime_environment, runtime_qualification, updates
+
+
+@pytest.fixture
+def qualifier(tmp_path, monkeypatch):
+    calls = []
+    async def validate(owner, stage, generation):
+        calls.append(("validate", owner.home, stage, generation))
+        assert owner.inventory == []
+        (stage / "profiles-qualified.json").write_text(json.dumps({"profiles": ["work"]}))
+        (stage / "runtime-installed.json").write_text(json.dumps([{"name": "synthetic", "version": "1"}]))
+        (stage / "runtime.lock").write_text("exact-locked-graph")
+        project = owner.home / "runtime" / ("q-" + "a" * 32)
+        project.mkdir(parents=True)
+        (stage / "runtime-project.json").write_text(json.dumps({"project": project.name}))
+    monkeypatch.setattr(updates.UpdateManager, "validate", validate)
+    monkeypatch.setattr(runtime_qualification, "verify_recorded",
+                        lambda project, receipt: calls.append(("verify", project, receipt)))
+    return calls
+
+
+def test_initial_prepare_qualifies_and_verifies_before_pointer(tmp_path, qualifier, monkeypatch):
+    original = setup._write
+    writes = []
+    def write(home, path, value):
+        if path.name == "active.json":
+            assert any(row[0] == "verify" for row in qualifier)
+        writes.append(path.name)
+        original(home, path, value)
+    monkeypatch.setattr(setup, "_write", write)
+    result = asyncio.run(setup.prepare(tmp_path))
+    assert result["ok"] and result["prepared"] and result["modelRequestSent"] is False
+    pointer = updates.active_release(tmp_path)
+    assert pointer == {**pointer, "current": result["generation"], "previous": None}
+    assert writes.index("validated.json") < writes.index("active.json")
+    assert [row[0] for row in qualifier] == ["validate", "verify"]
+    assert setup.status(tmp_path)["generation"] == result["generation"]
+
+
+def test_recorded_prepare_is_inspect_only_and_never_refreshes(tmp_path, qualifier):
+    result = asyncio.run(setup.prepare(tmp_path))
+    before = (tmp_path / "updates/active.json").read_bytes()
+    qualifier.clear()
+    second = asyncio.run(setup.prepare(tmp_path))
+    assert second == result and [row[0] for row in qualifier] == ["verify"]
+    assert (tmp_path / "updates/active.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("failure", ["qualification", "verification"])
+def test_failed_prepare_never_activates_and_keeps_evidence(tmp_path, qualifier, monkeypatch, failure):
+    if failure == "qualification":
+        async def fail(*args):
+            raise ValueError("synthetic private error")
+        monkeypatch.setattr(updates.UpdateManager, "validate", fail)
+    else:
+        def fail(*args):
+            raise ValueError("synthetic graph mismatch")
+        monkeypatch.setattr(runtime_qualification, "verify_recorded", fail)
+    with pytest.raises((ValueError, RuntimeError)):
+        asyncio.run(setup.prepare(tmp_path))
+    assert updates.active_release(tmp_path) == {}
+    attempts = list((tmp_path / "updates/releases").iterdir())
+    assert len(attempts) == 1
+    progress = json.loads((attempts[0] / "install-progress.json").read_text())
+    assert progress["events"][-1] == {"phase": "initial-installation", "status": "failed"}
+    assert "private error" not in json.dumps(progress) and "graph mismatch" not in json.dumps(progress)
+
+
+def test_status_does_not_prepare_or_create_missing_home(tmp_path, monkeypatch):
+    home = tmp_path / "absent"
+    monkeypatch.setattr(runtime_environment, "prepare_project",
+                        lambda *a, **kw: pytest.fail("Status cannot prepare"))
+    assert setup.status(home)["prepared"] is False
+    assert not home.exists()
+
+
+def test_existing_damaged_generation_is_not_rebuilt(tmp_path, qualifier, monkeypatch):
+    result = asyncio.run(setup.prepare(tmp_path))
+    receipt = tmp_path / "updates/releases" / result["generation"]
+    (receipt / "runtime-installed.json").write_text("[]")
+    qualifier.clear()
+    inspected = asyncio.run(setup.prepare(tmp_path))
+    assert not inspected["ok"] and inspected["generation"] == result["generation"]
+    assert all(row[0] != "validate" for row in qualifier)
+
+
+def test_exclusive_install_lock_refuses_before_qualifier(tmp_path, qualifier, monkeypatch):
+    from amplifier_web import reset
+    @contextmanager
+    def locked(home):
+        raise RuntimeError("host is already running")
+        yield
+    monkeypatch.setattr(reset, "repair_lock", locked)
+    with pytest.raises(RuntimeError, match="already running"):
+        asyncio.run(setup.prepare(tmp_path))
+    assert qualifier == [] and updates.active_release(tmp_path) == {}
+
+
+def test_progress_retains_only_bounded_stage_facts(tmp_path):
+    stage = tmp_path / "a"
+    owner = setup._Preparation(tmp_path, stage)
+    for _ in range(100):
+        owner.record("ecosystem-prepare", "succeeded", output="SECRET", argv=["SECRET"])
+    value = json.loads((stage / "install-progress.json").read_text())
+    assert len(value["events"]) == 64
+    assert "SECRET" not in json.dumps(value)
