@@ -47,7 +47,7 @@ CHECKPOINTS = frozenset({
     "installed_import", "installed_distribution", "installed_direct_url", "installed_origin",
     "installed_members", "installed_manifest", "journey", "complete",
     "outer_run", "outer_close", "parent_output_json", "parent_output_schema",
-    "inner_report_schema", "runtime_start",
+    "inner_report_schema", "runtime_start", "input_admission",
 })
 ERROR_CLASSES = {kind: kind.__name__ for kind in (
     AssertionError, OSError, PermissionError, FileNotFoundError, NotADirectoryError,
@@ -70,6 +70,10 @@ CODE_LABELS = {
     "runtime_identify": ("amplifier_web.runtime", "_WindowsWorkerOwner.identify"),
     "runtime_readline": ("amplifier_web.runtime", "_BoundedWorkerLines.readline"),
     "runtime_write": ("amplifier_web.runtime", "RuntimeManager._write"),
+    "service_send": ("amplifier_web.service", "AppService._send"),
+    "runtime_send": ("amplifier_web.runtime", "RuntimeManager.send"),
+    "runtime_input_start": ("amplifier_web.runtime", "RuntimeManager._start_for_input"),
+    "runtime_reply": ("amplifier_web.runtime", "RuntimeManager._reply"),
     "runtime_profiles": ("amplifier_web.runtime_profiles", "ensure"),
     "worker_start": ("__main__", "Worker.start"),
     "worker_bridge": ("__main__", "Worker.bridge"),
@@ -95,6 +99,16 @@ CODE_LABELS = {
     "core_initialize_session": ("amplifier_core._session_init", "initialize_session"),
     "core_load": ("amplifier_core.loader", "ModuleLoader.load"),
     "core_validate": ("amplifier_core.loader", "ModuleLoader._validate_module"),
+}
+# Exact public protocol constants only. Never publish arbitrary exception prose,
+# paths, provider responses or a digest of unknown text.
+ADMISSION_REASONS = {
+    "Session is not ready": "worker_not_ready",
+    "Session is not running": "worker_not_running",
+    "The session is parked and has no active shared writer.": "worker_parked",
+    "The session has not finished loading successfully.": "worker_not_loaded",
+    "The conversation already has a worker. Retry the bundle change after it settles.": "replacement_has_worker",
+    "Already started": "worker_already_started",
 }
 STARTUP_PHASES = frozenset({"runtime-setup", "bundle-preparation", "session-mount", "ready"})
 ACTIVATION_MODULES = frozenset({"loop-live", "context-simple", "hooks-session-naming", "other"})
@@ -216,6 +230,10 @@ def _failure_facts(error, name):
         seen.add(id(error))
         kind = type(error)
         row = {"class": ERROR_CLASSES.get(kind, "other"), "frames": []}
+        if kind is RuntimeError and name == "input_admission":
+            args = BaseException.__getattribute__(error, "args")
+            row["reason"] = (ADMISSION_REASONS.get(args[0], "other")
+                             if len(args) == 1 and type(args[0]) is str else "other")
         if kind in ERROR_CLASSES and isinstance(error, OSError):
             for key in ("errno", "winerror"):
                 number = getattr(error, key, None)
@@ -247,8 +265,11 @@ def validate_diagnostic(value):
     assert type(value["checkpoint"]) is str and value["checkpoint"] in CHECKPOINTS
     assert type(value["errors"]) is list and len(value["errors"]) <= 4
     for row in value["errors"]:
-        assert type(row) is dict and {"class", "frames"} <= set(row) <= {"class", "frames", "errno", "winerror", "returncode"}
+        assert type(row) is dict and {"class", "frames"} <= set(row) <= {"class", "frames", "errno", "winerror", "returncode", "reason"}
         assert type(row["class"]) is str and row["class"] in {*ERROR_CLASSES.values(), "other"}
+        if "reason" in row:
+            assert value["checkpoint"] == "input_admission" and row["class"] == "RuntimeError"
+            assert type(row["reason"]) is str and row["reason"] in {*ADMISSION_REASONS.values(), "other"}
         if "returncode" in row:
             assert row["class"] == "CalledProcessError"
         for key in ("errno", "winerror", "returncode"):
@@ -1304,8 +1325,10 @@ async def journey(root, wheel, report):
         owner.job.verify_member(row["process"].pid, owner.created)
         report["checks"]["workerIdentity"] = True
         report["stage"] = "turn"
+        checkpoint(report, "input_admission")
         await service.dispatch("conversation.send", {"sessionId": sid, "text": "DEFAULT_COMMAND_TURN"},
                                command_id="default-command-input")
+        checkpoint(report, "journey")
         history_store = SessionHistoryStore(sessions_dir(workspace) / sid)
         async with asyncio.timeout(90):
             while True:

@@ -3586,6 +3586,29 @@ def test_default_runtime_probe_diagnostic_privacy_bounds_and_schema(monkeypatch)
         'checkpoint': 'parent_output_json', 'errors': [{'class': 'other', 'frames': []}]}
 
 
+def test_default_runtime_probe_admission_diagnostic_is_closed_and_preserves_unknowns():
+    fixture = _default_runtime_probe_module()
+    for message, reason in fixture.ADMISSION_REASONS.items():
+        facts = fixture.failure_facts(RuntimeError(message), 'input_admission')
+        fixture.validate_diagnostic(facts)
+        assert facts['errors'][0]['reason'] == reason
+        assert message not in json.dumps(facts)
+    for args in [('SECRET /private/provider payload',), (), ('Session is not ready', 'SECRET')]:
+        facts = fixture.failure_facts(RuntimeError(*args), 'input_admission')
+        assert facts['errors'][0]['reason'] == 'other'
+        assert 'SECRET' not in json.dumps(facts)
+        fixture.validate_diagnostic(facts)
+    class Untrusted(RuntimeError):
+        def __str__(self):
+            raise AssertionError('must not stringify')
+    facts = fixture.failure_facts(Untrusted('SECRET'), 'input_admission')
+    assert facts['errors'] == [{'class': 'other', 'frames': []}]
+    for patch in [{'reason': 'SECRET'}, {'reason': True}, {'reason': 'worker_not_ready', 'class': 'ValueError'}]:
+        with pytest.raises(AssertionError):
+            fixture.validate_diagnostic({'checkpoint': 'input_admission',
+                'errors': [{'class': 'RuntimeError', 'frames': [], **patch}]})
+
+
 async def test_default_runtime_probe_diagnostic_fault_keeps_failed_outer_owner(tmp_path, monkeypatch):
     from unittest.mock import AsyncMock
     from amplifier_web import windows_jobs
