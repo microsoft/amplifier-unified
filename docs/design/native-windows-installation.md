@@ -841,6 +841,9 @@ than offering the unusable Windows password form.
 
 Implementation choice for the accepted lifetime: an interactive-token Scheduled Task under the owner SID,
 least privilege, with a user-logon trigger and no stored password.
+The November 7 clean-install follow-up explicitly selected this sign-in
+background host rather than an SCM service. It must not be advertised as an
+always-on Windows service or as surviving sign-out.
 Do not use LocalSystem or S4U to avoid account-password prompts.
 Use absolute executable/data/workspace/shared-state paths and explicit quoting.
 Configure indefinite execution, restart-on-failure and battery behavior
@@ -854,6 +857,21 @@ network credentials and ownership. Do not pretend a logon task provides it.
 Integrate install/start/stop/restart/status/logs with existing lifecycle commands.
 Task registration is not health: verify version, data identity, authenticated
 response and actual task process. Preserve the single host/reset exclusion.
+The implementation candidate records the actual interpreter PID, exact native
+creation FILETIME, image, registration and random run identity in a private
+receipt. Readiness joins that receipt to the live listener and leaf-pinned
+authenticated health, then rechecks the run. `IRunningTask.EnginePID` is not the
+application PID. Normal stop publishes a private request bound to that exact run,
+allows aiohttp and the application to complete cleanup, and waits for the retained
+process handle and scheduler instance to finish. A timeout is not permission to
+call Task.Stop, force-kill a PID or start a replacement.
+
+Task output is private diagnostic content, not a public/secret-free receipt.
+The candidate keeps a 128 KiB UTF-8 tail, coalescing snapshot publication to at
+most once per second plus final close; neither normal status nor installer logs
+should copy its body. These changes are implementation candidates until their
+native task/host and clean-account installation checks pass. Public activation
+gates remain closed in the meantime.
 An occupied port or unrelated task must never be adopted or terminated.
 If policy blocks registration, explain the failure and offer explicit foreground
 `serve` once that path itself works; do not silently elevate or report turnkey success.

@@ -244,7 +244,7 @@ def windows_cli_transport(monkeypatch):
     """
     import aiohttp
     from amplifier_web import application_generations, deployment_service, host_dependencies
-    from amplifier_web import installation_health, windows_files, windows_service
+    from amplifier_web import installation_health, windows_files, windows_service, windows_task_runtime
     root = Path(__file__).resolve().parents[1]
     for module in (cli, deployment_service, windows_service, windows_files):
         assert Path(module.__file__).resolve().is_relative_to(root), 'Wrong source checkout'
@@ -266,6 +266,18 @@ def windows_cli_transport(monkeypatch):
     monkeypatch.setattr(aiohttp.ClientSession, '_request',
                         lambda *a, **kw: pytest.fail('Service status must not send a health bearer'))
     monkeypatch.setattr(cli.webbrowser, 'open', lambda *a: pytest.fail('No browser permitted'))
+    # Only the native private-file/handle seam is replaced. No receipt means a
+    # scheduler Running observation must not send credentials or report ready.
+    monkeypatch.setattr(windows_task_runtime, 'observe', lambda spec: None)
+    def request_stop(spec, **kwargs):
+        assert spec.data_dir == value.data_dir
+        state['calls'].append('request_stop')
+        state['state'] = 3
+    monkeypatch.setattr(windows_task_runtime, 'request_stop', request_stop)
+    async def one_observation(home, wait=0):
+        return await installation_health._status_once(home)
+    # This fixture exercises root routing, not the 60-second readiness budget.
+    monkeypatch.setattr(installation_health, 'status', one_observation)
     def run(argv, **kwargs):
         request = json.loads(kwargs['input'])
         operation = request['op']
@@ -312,12 +324,12 @@ def test_windows_service_cli_real_chain_root_boundary(windows_cli_transport, mon
     else:
         mutations = [op for op in state['calls'] if op != 'query']
         assert mutations == {
-            'start': ['start'], 'stop': ['stop'], 'restart': ['stop', 'start'],
-            'status': [], 'uninstall': ['remove'],
+            'start': ['start'], 'stop': ['request_stop'], 'restart': ['request_stop', 'start'],
+            'status': [], 'uninstall': ['request_stop', 'remove'],
         }[command]
         assert state['exists'] == (command != 'uninstall')
         if command in {'start', 'restart', 'status'}:
-            assert 'not readiness' in capsys.readouterr().out
+            assert 'not ready' in capsys.readouterr().out
 
 
 @pytest.mark.parametrize('ambient_argv', [

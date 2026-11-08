@@ -216,13 +216,16 @@ def _setup_tls(data_dir: Path, mode: str) -> None:
     print("CA SHA-256 fingerprint:", ca_fingerprint(data_dir))
 
 
-def _serve(args, data_dir: Path) -> None:
+def _serve(args, data_dir: Path, *, task_runner=None) -> None:
     from .reset import repair_lock
     with repair_lock(data_dir, shared=True):
-        _serve_unlocked(args, data_dir)
+        if task_runner is None:
+            _serve_unlocked(args, data_dir)
+        else:
+            _serve_unlocked(args, data_dir, task_runner=task_runner)
 
 
-def _serve_unlocked(args, data_dir: Path) -> None:
+def _serve_unlocked(args, data_dir: Path, *, task_runner=None) -> None:
     from aiohttp import web
     from .deployment import load_server_config
     overrides = _server_overrides(args)
@@ -249,6 +252,8 @@ def _serve_unlocked(args, data_dir: Path) -> None:
         # Application startup signals run earlier and cannot establish this.
         nonlocal timer, listener_ready
         listener_ready = True
+        if task_runner is not None:
+            task_runner.phase("listening")
         print(f"Amplifier Unified · listening on {', '.join(config['bind'])}, port {config['port']} ({scheme})\n"
               f"Workspace: {args.workspace}\nState: {data_dir}")
         if config['public_origins']:
@@ -265,7 +270,10 @@ def _serve_unlocked(args, data_dir: Path) -> None:
     from .mcp_oauth import SafeAccessLogger
     from amplifier_publishing import PublishingError
     try:
-        web.run_app(create_app(data_dir, workspace=args.workspace, server_config=config),
+        app = create_app(data_dir, workspace=args.workspace, server_config=config)
+        if task_runner is not None:
+            task_runner.attach(app)
+        web.run_app(app,
                     host=config["bind"], port=config["port"], ssl_context=secure, print=listening, access_log_class=SafeAccessLogger, access_log_format='%a %t "%r" %s %b')
     except OSError as exc:
         guidance = {
