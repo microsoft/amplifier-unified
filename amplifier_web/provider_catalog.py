@@ -254,7 +254,10 @@ def conversation_bindings(home, workspace, session_id, providers, *, global_only
         saved = json.loads(path.read_text())
         if 'providers' in saved:
             rows = saved['providers']
-    sources = provider_mount_sources(rows, config.settings)
+    # Disabled connections cannot donate an implementation to an enabled one.
+    # Match configured_binding/SetupManager's intended-mount roster, while
+    # retaining all rows below so disabled selections are still refused.
+    sources = provider_mount_sources([row for row in rows if row.get('enabled', True)], config.settings)
     by_id = {row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-'):row for row in rows}
     result = {}
     for provider in providers:
