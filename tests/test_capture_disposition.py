@@ -148,8 +148,9 @@ async def test_identity_unsupported_and_closed_scope_are_unproven(tmp_path):
 
 @pytest.mark.parametrize('purpose,metadata,expected',[
     (None,{},'unspecified'),(None,{'purpose':'context-compaction'},'context_compaction'),
-    ({'purpose':'image_generation'}, {},'image_generation'),
-    ({'label':'Session naming'},{},'title'),({'label':'Memory consolidation'},{},'memory_consolidation'),
+    ({'purpose':'image_generation','label':'Image generation'}, {},'image_generation'),
+    ({'label':'Session naming','lifecycle':'background'},{},'title'),
+    ({'label':'Memory consolidation','lifecycle':'background'},{},'memory_consolidation'),
     ({'label':'PRIVATE LABEL'},{},'unknown'),(None,{'purpose':'PRIVATE'*100000},'unknown'),
 ])
 async def test_purpose_is_fixed_and_does_not_change_filtering(tmp_path,purpose,metadata,expected):
@@ -161,7 +162,7 @@ async def test_purpose_is_fixed_and_does_not_change_filtering(tmp_path,purpose,m
     await observer.drain()
     # Preserve the existing auxiliary exclusion. Do not invent a header or
     # alter the row's purpose merely to expose the diagnostic classification.
-    if purpose:assert observer.store.index()==[]
+    if purpose and (purpose.get('purpose') or purpose.get('lifecycle')=='background'):assert observer.store.index()==[]
     elif metadata.get('purpose')=='context-compaction':assert observer.store.index()==[]
     else:assert observer.store.index()[0]['captureDiagnostic']['purpose']==expected
 
@@ -200,7 +201,7 @@ async def test_stream_context_is_not_inherited_after_yield_or_reused(tmp_path):
     value=request();await surface.request_budget(value);it=surface.stream(value)
     assert capture.TRACE.get() is None
     await anext(it);assert capture.TRACE.get() is None
-    await asyncio.create_task(it.aclose());row=await header(observer)
+    await asyncio.create_task(it.aclose());await observer.drain();row=observer.store.index()[0]
     assert row['captureDiagnostic']['dispatch']=='observed' and row['budgetStatus']=='captured'
     await provider.complete(value);row=await header(observer)
     assert row['captureDiagnostic']['dispatch']=='not_observed' and row['budget']=={}
