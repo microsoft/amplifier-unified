@@ -33,6 +33,7 @@ on:
       - amplifier_web/worker_input.py
       - amplifier_web/message_delivery.py
       - amplifier_web/windows_files.py
+      - amplifier_web/voice_diagnostics.py
       - amplifier_web/windows_jobs.py
       - amplifier_web/windows_launch_guard.py
       - amplifier_web/deployment.py
