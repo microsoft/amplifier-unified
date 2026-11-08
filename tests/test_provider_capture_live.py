@@ -95,6 +95,10 @@ async def test_live_boundary_large_budget(tmp_path, monkeypatch, measured, manag
         assert row['budgetStatus']=='captured'
         assert row['budget']['measurement']['input_tokens']==100
         assert state.wire[-1]['sha256']==state.budgets[-1]
+        assert row['captureDiagnostic']['dispatch']=='observed'
+        assert row['captureDiagnostic']['fit']=='created'
+        assert row['captureDiagnostic']['claim']=='claimed'
+        assert row['captureDiagnostic']['consume']=='captured'
     finally:
         if execution is not None and not execution.done():
             await runtime.submit(Input('stop'))
