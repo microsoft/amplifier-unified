@@ -57,6 +57,19 @@ test('late local report cannot overwrite newly edited feedback',async()=>{
  }finally{await renderAct(async()=>root?.unmount())}
 });
 
+test('local diagnostics from a previous chat visit cannot revive after switching away and back',async()=>{
+ let release,root,pending,selectedSessionId='A';
+ const render=()=>React.createElement(LocalFeedbackReport,{draft:{...draft,includeDiagnostics:true},state:{selectedSessionId},act:()=>new Promise(resolve=>release=resolve)});
+ try{
+  await renderAct(async()=>root=create(render()));
+  await renderAct(async()=>{pending=root.root.findByProps({'data-action':'feedback.report'}).props.onClick()});
+  selectedSessionId='B';await renderAct(async()=>root.update(render()));
+  selectedSessionId='A';await renderAct(async()=>root.update(render()));
+  await renderAct(async()=>{release({accepted:true,result:{submitted:false,content:'Previous visit'}});await pending});
+  assert.equal(root.root.findAllByProps({'aria-label':'Local feedback report preview'}).length,0);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+
 test('a lost acknowledgement keeps the exact request and frozen text for explicit retry',async()=>{
  let state=base(),root;const calls=[];
  async function action(name,args){
@@ -177,8 +190,8 @@ test('an untrusted shared preview URL is never used as an image source',()=>{
  assert.match(html,/Review file destination/);assert.match(html,/visibility you explicitly review/);assert.match(html,/24 MB total/);
 });
 
- test('new feedback includes allowlisted diagnostics by default',()=>{
-  const html=renderToStaticMarkup(React.createElement(FeedbackPanel,{state:{view:{},feedback:{requests:[]}},act:()=>{}}));
+ test('an explicit saved diagnostic opt-in remains checked',()=>{
+  const html=renderToStaticMarkup(React.createElement(FeedbackPanel,{state:{view:{feedbackDraft:{includeDiagnostics:true}},feedback:{requests:[]}},act:()=>{}}));
   assert.match(html,/checked=""/);assert.match(html,/Include reproduction diagnostics/);
  });
  test('slow acknowledgements do not overwrite newer typing or queue every keystroke',async()=>{

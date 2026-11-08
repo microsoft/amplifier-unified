@@ -128,30 +128,30 @@ export function FeedbackPanel({state,act}){
 export function LocalFeedbackReport({draft,state,act,working=false,uncertain=false}){
  const [report,setReport]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const flight=useRef(false),alive=useRef(true),owner=useRef(null);
- const identity=JSON.stringify([draft?.title,draft?.body,draft?.category,draft?.includeDiagnostics===true]);
- owner.current=identity;
+ const identity=JSON.stringify([state.selectedSessionId,draft?.title,draft?.body,draft?.category,draft?.includeDiagnostics===true]);
+ if(owner.current?.identity!==identity)owner.current={identity};
  useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]);
  useEffect(()=>{setReport(null);setError('');setNotice('')},[identity]);
  async function prepare(){
   if(flight.current||working||!draft?.title?.trim()||!draft?.body?.trim())return;
-  const captured=identity;
+  const captured=owner.current;
   flight.current=true;setBusy(true);setError('');setNotice('');
   try{
    const response=await act('feedback.report',{title:draft.title,body:draft.body,category:draft.category||'bug',
     includeDiagnostics:draft.includeDiagnostics===true,...(draft.includeDiagnostics===true?{deviceDiagnostics:feedbackDiagnostics(state)}:{}),destination:'none'});
    if(response?.accepted!==true||response.result?.submitted!==false||typeof response.result.content!=='string')throw Error(response?.error||'The local report could not be prepared.');
-   if(alive.current&&owner.current===captured)setReport({identity:captured,...response.result});
+   if(alive.current&&owner.current===captured)setReport({owner:captured,...response.result});
   }catch(error){if(alive.current&&owner.current===captured)setError(error.message||'The local report could not be prepared.')}
   finally{flight.current=false;if(alive.current)setBusy(false)}
  }
- const current=report?.identity===identity?report:null;
+ const current=report?.owner===owner.current?report:null;
  return <section aria-label="Local feedback report"><h3>No host GitHub sign-in?</h3>
   <p>Prepare a report without GitHub CLI. Nothing is posted. Attachments and excerpts are not included; add them separately after reviewing the destination in your browser.</p>
   {uncertain&&<p role="alert">The earlier submission is unconfirmed. Check repository issues before posting again; this report does not resolve that outcome.</p>}
   <button type="button" className="a-soft" data-action="feedback.report" disabled={busy||working||!draft?.title?.trim()||!draft?.body?.trim()} onClick={prepare}>{busy?'Preparing report…':'Prepare local report'}</button>
   {current&&<><label>Local report preview<textarea aria-label="Local feedback report preview" readOnly rows={10} value={current.content}/></label>
-   <div className="a-dialog-actions"><button type="button" className="a-soft" onClick={async()=>{const captured=identity;try{await navigator.clipboard.writeText(current.content);if(alive.current&&owner.current===captured)setNotice('Report copied. Nothing was submitted.')}catch{if(alive.current&&owner.current===captured)setError('Clipboard unavailable. Select and copy the report preview.')}}}>Copy local report</button>
-    <button type="button" className="a-soft" onClick={()=>{const url=URL.createObjectURL(new Blob([current.content],{type:'text/markdown'}));try{const link=document.createElement('a');link.href=url;link.download='amplifier-feedback.md';link.click();setNotice('Report download started. Nothing was submitted.')}finally{setTimeout(()=>URL.revokeObjectURL(url),1000)}}}>Save local report</button>
+   <div className="a-dialog-actions"><button type="button" className="a-soft" onClick={async()=>{const captured=owner.current;try{await navigator.clipboard.writeText(current.content);if(alive.current&&owner.current===captured)setNotice('Report copied. Nothing was submitted.')}catch{if(alive.current&&owner.current===captured)setError('Clipboard unavailable. Select and copy the report preview.')}}}>Copy local report</button>
+    <button type="button" className="a-soft" onClick={()=>{let url;try{url=URL.createObjectURL(new Blob([current.content],{type:'text/markdown'}));const link=document.createElement('a');link.href=url;link.download='amplifier-feedback.md';link.click();setNotice('Report download started. Nothing was submitted.')}catch{setError('Download unavailable. Select and copy the report preview.')}finally{if(url)setTimeout(()=>URL.revokeObjectURL(url),1000)}}}>Save local report</button>
     <a href="https://github.com/microsoft/amplifier-unified/issues/new" target="_blank" rel="noopener noreferrer">Open GitHub issue form <ExternalLink size={14}/></a>
    </div><p className="a-caption">Your report is not put in the link or sent automatically. Paste it into the browser form and review before submitting. Browser sign-in and repository access may still be required.</p></>}
   {notice&&<p role="status">{notice}</p>}{error&&<p role="alert">{error}</p>}
