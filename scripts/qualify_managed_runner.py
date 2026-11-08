@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import stat
 import time
 from types import SimpleNamespace
 
@@ -26,8 +27,43 @@ from amplifier_web import test_environment_setup as setup
 from amplifier_web.smart_tools import SmartToolsManager
 
 
-async def qualify(home, commit, daemon, wait_seconds):
+def private_home(home):
+    home = home.absolute()
+    if any(part.is_symlink() for part in (home, *home.parents)):
+        raise ValueError('The private qualification home must not contain symlinks.')
     home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = home.stat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ValueError('The qualification home must be a private owned directory.')
+    return home
+
+
+async def stage_once(app, commit):
+    path = app.data_dir / 'qualification-update.json'
+    attempt = setup.read_json(path)
+    if attempt is None:
+        original = updates.raw_configuration(app)
+        source = updates.update_sources(app)[0]
+        assert source['eligible'] and source['runnerPolicy']['origin'] == 'app-setup'
+        source.update(latest=commit, status='update')
+        attempt = {'runnerUpdate': updates.intent_id(source), 'source': source,
+                   'previous': original,
+                   'previousNormalized': environments.validate_configuration_value(app, original)[0]}
+        # Dispatch intent precedes installation; a lost return cannot reinstall.
+        setup.write_json(path, attempt)
+        staged = await updates.stage(app, source)
+        assert staged['runnerUpdate'] == attempt['runnerUpdate']
+        assert updates.raw_configuration(app) == original, 'Staging selected an unqualified candidate'
+    record = setup.read_json(updates.record_path(app, attempt['runnerUpdate']))
+    if not record or not all(record.get(key) for key in ('candidate', 'normalized', 'runtime')):
+        raise ValueError('Original staging is incomplete; retain its installation receipt without replay.')
+    if record['previous'] != attempt['previous'] or record['revision'] != commit:
+        raise ValueError('The retained qualification staging identity changed.')
+    return attempt
+
+
+async def qualify(home, commit, daemon, wait_seconds):
+    home = private_home(home)
     intent = {'version': 1, 'commit': commit, 'daemon': daemon, 'owner': 'native-runner-qualification'}
     path = home / 'qualification-intent.json'
     prior = setup.read_json(path)
@@ -67,17 +103,8 @@ async def qualify(home, commit, daemon, wait_seconds):
             if record['state'] != 'completed':
                 raise ValueError('Setup did not complete: ' + record.get('detail', record['state']))
         report['setup'] = setup.public(record)
-        original = updates.raw_configuration(app)
-        original_normalized = environments.validate_configuration_value(app, original)[0]
-        attempt_path = home / 'qualification-update.json'
-        attempt = setup.read_json(attempt_path)
-        if attempt is None:
-            source = updates.update_sources(app)[0]
-            assert source['eligible'] and source['runnerPolicy']['origin'] == 'app-setup'
-            source.update(latest=commit, status='update')
-            attempt = await updates.stage(app, source)
-            setup.write_json(attempt_path, attempt)
-            assert updates.raw_configuration(app) == original, 'Staging selected an unqualified candidate'
+        attempt = await stage_once(app, commit)
+        original, original_normalized = attempt['previous'], attempt['previousNormalized']
         identity = attempt['runnerUpdate']
         deadline = time.monotonic() + wait_seconds
         while True:
@@ -129,7 +156,7 @@ def main():
     if not args.expected_daemon or args.wait_seconds < 1:
         parser.error('An observed daemon and positive bounded wait are required.')
     os.umask(0o077)
-    print(json.dumps(asyncio.run(qualify(args.private_home.resolve(), args.commit,
+    print(json.dumps(asyncio.run(qualify(args.private_home, args.commit,
                                       args.expected_daemon, args.wait_seconds)), sort_keys=True))
 
 
