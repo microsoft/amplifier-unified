@@ -338,7 +338,17 @@ class SetupManager:
         module=args.get('module') or (row or {}).get('module')
         raw=(row or {}).get('config',{})
         identity = connection_key if binding else configuration_key
-        return identity(workspace,module,raw,(row or {}).get('source') or getattr(config,'module_sources',{}).get(module),home=self.home)
+        source = (row or {}).get('source') or getattr(config,'module_sources',{}).get(module)
+        if binding and row:
+            from .host.config import provider_mount_sources
+            # Admission concerns the implementation we intend to mount. A
+            # source-less saved UI connection gains that source during ordinary
+            # host composition, even before any runtime receipt exists.
+            # Do NOT apply this fallback to discovery reuse: an implicit probe
+            # must still prove its installed implementation independently.
+            rows = [value for value in config.configured_connections if value.get('enabled', True)]
+            source = provider_mount_sources(rows, config.settings).get(args.get('id'))
+        return identity(workspace,module,raw,source,home=self.home)
 
     async def cached_probe(self,action,args,workspace,*,_rotation_retry=True):
         from .provider_catalog import model_key, CatalogInvalidated, public_failure
