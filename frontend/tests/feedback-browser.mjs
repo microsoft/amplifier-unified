@@ -1,11 +1,12 @@
 // Real source UI against an isolated host. GitHub and providers are mocked;
 // this test must never create a real issue or read existing app data.
+import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {once} from 'node:events';
 import {readFile} from 'node:fs/promises';
 import {createServer} from 'vite';
-import {chromium} from '@playwright/test';
+import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
@@ -101,7 +102,10 @@ try{
   assert.equal(actions.some(action=>['feedback.submit','conversation.send','runtime.control','feedback.attachment.add'].includes(action)),false);
   assert.deepEqual(await page.evaluate(()=>fetch('/api/fixture/feedback').then(response=>response.json())),{calls:[],uploads:[]});
   await page.keyboard.press('Escape');
-  assert.equal(await page.getByRole('textbox',{name:'Message Amplifier'}).inputValue(),'Preserve this unsent synthetic draft');
+  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
+  await expect(composer).toBeVisible();
+  await expect(composer).toContainText('Preserve this unsent synthetic draft');
+  await expect(composer).toHaveDraft('Preserve this unsent synthetic draft');
   assert.deepEqual(errors,[]);
   console.log('PASS: in-place error report, explicit diagnostic opt-in, exact local Markdown download, clipboard refusal recovery, draft preserved; no GitHub CLI, upload, submission or conversation.send.');
  }else{
