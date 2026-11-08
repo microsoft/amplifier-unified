@@ -198,15 +198,15 @@ try{
   return {key,entry:state.modelCatalogs?.[key]};
  },sid);
  await options.click();await expect(menu.locator('select#chat-model')).toHaveValue('chosen-model');
- assert.deepEqual(await currentCatalog(),initialCatalog);assert.equal((await discovery()).calls,1);
+ assert.deepEqual(await currentCatalog(),preferenceCatalog);assert.equal((await discovery()).calls,2);
  assert.equal((await page.request.post(url+'/fixture/model-discovery',{data:{mode:'error'}})).ok(),true);
  await menu.getByRole('button',{name:'Refresh this connection',exact:true}).click();
  const manual=menu.getByRole('textbox',{name:'Conversation model',exact:true});
  await expect(manual).toBeVisible();await expect(manual).toHaveValue('chosen-model');
  await expect(menu.getByText('Manual ID — not verified by discovery. The connection checks it when you send.',{exact:true})).toBeVisible();
  await assertDiscoveredOptions(menu.locator('select#chat-model-catalog'));
- const failedCatalog=await currentCatalog();assert.equal(failedCatalog.key,initialCatalog.key);assert.equal(failedCatalog.entry.phase,'error');assert.equal(failedCatalog.entry.loadedAt,initialCatalog.entry.loadedAt);assert.equal(failedCatalog.entry.provenance,'provider-api');assert.deepEqual(failedCatalog.entry.models,initialCatalog.entry.models);
- assert.equal((await discovery()).calls,2);
+ const failedCatalog=await currentCatalog();assert.equal(failedCatalog.key,preferenceCatalog.key);assert.equal(failedCatalog.entry.phase,'error');assert.equal(failedCatalog.entry.loadedAt,preferenceCatalog.entry.loadedAt);assert.equal(failedCatalog.entry.provenance,'provider-api');assert.deepEqual(failedCatalog.entry.models,preferenceCatalog.entry.models);
+ assert.equal((await discovery()).calls,3);
  const expectedRevision=await page.evaluate(sid=>window.amplifier.getState().sessions.find(row=>row.id===sid).nextMessageRevision||0,sid);
  const manualSaved=actionResponse('conversation.configure',args=>args?.sessionId===sid&&args.expectedRevision===expectedRevision&&args.selection?.instance==='test-provider'&&args.selection.model==='manual-deployment-id');
  await manual.fill('manual-deployment-id');await manual.press('Tab');
@@ -215,14 +215,14 @@ try{
  await assertDiscoveredOptions(menu.locator('select#chat-model-catalog'));await expect(menu.locator('select#chat-model-catalog')).toHaveValue('');
  await closeMenu();await page.reload();await expect(options).toContainText('manual-deployment-id');await options.click();await expect(manual).toHaveValue('manual-deployment-id');
  await expect(menu.getByText('Saved selection: manual-deployment-id (not in the discovered list)',{exact:true})).toBeVisible();
- await assertDiscoveredOptions(menu.locator('select#chat-model-catalog'));assert.deepEqual(await currentCatalog(),failedCatalog);assert.equal((await discovery()).calls,2);
+ await assertDiscoveredOptions(menu.locator('select#chat-model-catalog'));assert.deepEqual(await currentCatalog(),failedCatalog);assert.equal((await discovery()).calls,3);
  await closeMenu();await expect(composer).toHaveDraft('Keep this draft while managing connections');
  assert.equal((await(await page.request.get(url+'/fixture')).json()).sent.length,1);
  await composer.fill('Use the explicit manual deployment');await page.getByRole('button',{name:'Send message',exact:true}).click();
  await expect.poll(async()=>(await(await page.request.get(url+'/fixture')).json()).sent.length).toBe(2);
  const manualSend=(await(await page.request.get(url+'/fixture')).json()).sent[1];
  assert.equal(manualSend.sessionId,sid);assert.equal(manualSend.text,'Use the explicit manual deployment');assert.equal(manualSend.selection.instance,'test-provider');assert.equal(manualSend.selection.model,'manual-deployment-id');assert.equal(manualSend.bundle,'work');
- assert.equal((await discovery()).calls,2);
- await writeFile(output+'/catalog-cache.json',JSON.stringify({initialCatalog,failedCatalog,manualSelection:manualSend.selection,discovery:await discovery()},null,2));
+ assert.equal((await discovery()).calls,3);
+ await writeFile(output+'/catalog-cache.json',JSON.stringify({initialCatalog,preferenceCatalog,failedCatalog,manualSelection:manualSend.selection,discovery:await discovery()},null,2));
  assert.deepEqual(errors,[]);console.log('PASS: one model panel with Advanced bundle; real host cache and explicit manual-ID save/send, no default/pin injection, preserved drafts/reload, exact submissions, touch/focus, light/dark reduced-motion 320px.');
 }finally{await browser?.close();fixture.kill()}
