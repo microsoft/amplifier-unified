@@ -32,7 +32,11 @@ try{
    await expect(advanced).toHaveJSProperty('open',false);
    await review.click();
    await expect(advanced).toHaveJSProperty('open',true);
-   await expect(panel.locator('#update-sources-list')).toBeVisible();
+   await expect(advanced.locator(':scope > summary')).toBeFocused();
+   // This fixture's conflict is in the recorded graph receipt, not an invented
+   // cached-source row. The action must reveal that existing evidence.
+   await expect(advanced.locator('[data-part="update-diagnostics"] > .a-update-failure p')).toBeVisible();
+   await expect(advanced.locator('[data-part="update-diagnostics"] > .a-update-failure p')).toContainText('A package source declaration could not be reconciled');
    await expect(panel.getByText('Source details opened below.',{exact:true})).toBeVisible();
   }
  }

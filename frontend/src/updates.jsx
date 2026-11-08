@@ -59,7 +59,9 @@ export function UpdateSettings({state,act}){
    setDetailsOpen(true);
    setDetailsNotice(sources?'Source details opened below.':'Update diagnostics opened below.');
    // Explicit navigation only: routine background status refresh never scrolls.
-   advancedRef.current?.scrollIntoView?.({block:'start'});
+   const heading=advancedRef.current?.querySelector?.('summary');
+   heading?.focus?.({preventScroll:true});
+   heading?.scrollIntoView?.({block:'center'});
    try{
     Promise.resolve(act('view.update',{patch:{maintenanceDraft:{...state.view?.maintenanceDraft,updatesExpanded:sources,updateDiagnosticsExpanded:!sources}}}))
      .then(receipt=>{if(receipt?.accepted===false)setDetailsNotice('Details are open, but the view preference could not be saved.')})
