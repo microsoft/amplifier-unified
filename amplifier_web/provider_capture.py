@@ -265,6 +265,10 @@ def invalidate(owner, request):
     for ticket in owner._capture_tickets:
         if ticket.request() is request:ticket.close('superseded_fit')
     owner._capture_tickets[:] = [t for t in owner._capture_tickets if t.valid and t.request() is not None]
+    # An explicit new fit must not inherit the prior attempt's diagnostic note
+    # if preparation fails before begin_fit is reached.
+    owner._capture_fit_notes = [n for n in getattr(owner, '_capture_fit_notes', ())
+                               if n[0]() is not request and n[0]() is not None]
 
 
 def begin_fit(owner, original, prepared, options, kwargs=None):

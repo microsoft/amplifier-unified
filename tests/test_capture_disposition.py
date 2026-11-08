@@ -122,6 +122,17 @@ async def test_ambiguous_take_and_retry_are_not_new_fit_evidence(tmp_path):
     assert not row['budget']
 
 
+async def test_new_fit_invalidates_prior_note_even_when_preparation_fails(tmp_path):
+    observer,events,provider,surface=chain(tmp_path);value=request();await surface.request_budget(value)
+    surface.prepared.clear()
+    async def fail(value,provider):raise ValueError('preparation failed')
+    surface.delivery.prepare=fail
+    with pytest.raises(ValueError):await surface.request_budget(value)
+    assert not surface._capture_fit_notes
+    trace=capture.describe_take(surface,value,None)
+    assert trace.fit=='not_observed' and trace.take=='no_ticket'
+
+
 async def test_identity_unsupported_and_closed_scope_are_unproven(tmp_path):
     observer,events,provider,surface=chain(tmp_path)
     unweak=SimpleNamespace(metadata={'purpose':'PRIVATE'})
