@@ -47,7 +47,9 @@ try{
  assert.ok(!JSON.stringify(await state()).includes('everyday-private-fixture-key'));
  await page.getByRole('button',{name:'Save and check connection',exact:true}).click();
  await page.getByRole('button',{name:'Finish setup',exact:true}).waitFor();
- await page.getByLabel('Model',{exact:true}).selectOption('fixture-alternative');
+ const modelPicker=page.locator('select#ai-model');
+ await expect(modelPicker.locator('option[value="fixture-alternative"]')).toHaveCount(1);
+ await modelPicker.selectOption('fixture-alternative');
  const oldMatrix=(await state()).setup.active;
  await page.getByRole('button',{name:'Finish setup',exact:true}).click();
  await expect(page.getByText('Model saved. Existing model rules are unchanged.',{exact:true})).toBeVisible();
@@ -71,7 +73,8 @@ try{
  await defaultEffort.selectOption('');
  await expect.poll(async()=>(await state()).setup.providers.find(p=>p.id===chosenProvider).config.reasoning_effort).toBe(null);
  await page.reload();await expect(defaultEffort).toHaveValue('');
- await page.getByLabel('Model',{exact:true}).selectOption('fixture-model');
+ await expect(modelPicker.locator('option[value="fixture-model"]')).toHaveCount(1);
+ await modelPicker.selectOption('fixture-model');
  await expect(page.getByText('Model saved. Existing model rules are unchanged.',{exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:'Finish setup',exact:true})).toHaveCount(0);
  await page.screenshot({path:join(evidence,'settings-everyday-ai-desktop.png')});
