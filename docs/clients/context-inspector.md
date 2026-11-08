@@ -137,6 +137,16 @@ contexts. The bundled inspector's `begin` callback is synchronous; an unexpected
 async replacement is omitted, not awaited after final validation. Storage remains
 background work and terminal persistence still drains its exact pending write.
 
+The explicit cross-repository fixture is
+`tests/fixtures/computer_projection_worker.py`. It requires the reviewed
+computer-use hook/tool, Live/Boundary modules and OpenAI SDK/provider in an isolated
+prepared environment. Run with `PYTHONPATH=tests:$PYTHONPATH python -m pytest
+tests/fixtures/computer_projection_worker.py`; missing prerequisites fail rather
+than skip. It generates PNGs through the canonical tool with a fake backend,
+intercepts HTTP and forbids sockets. This is candidate-graph proof, not a live
+desktop/vendor claim or permission to change installed dependencies. Ordinary
+host guard regressions remain in `tests/test_request_projection.py`.
+
 `SurfaceProvider` already owns a full fitted `ChatRequest` serialization. Its
 private capture ticket shares that exact immutable string (no second prompt copy)
 with a particular budget attempt and normalized dispatch options. Original request
