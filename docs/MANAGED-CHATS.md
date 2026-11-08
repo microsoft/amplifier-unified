@@ -72,7 +72,8 @@ after that boundary gets a fresh file. No new conversation work is replayed.
 
 Startup discards expired unconfirmed deletion previews, including shared-history
 previews. This removes only review metadata; it never deletes conversation files.
-Current previews remain usable, and confirmed plans and completed tombstones do
+Only finite numeric expiry values are eligible; unknown or non-finite values are
+preserved. Current previews remain usable, and confirmed plans and completed tombstones do
 not expire. Cleanup runs before requests are admitted so it cannot race a
 confirmation already in progress.
 
