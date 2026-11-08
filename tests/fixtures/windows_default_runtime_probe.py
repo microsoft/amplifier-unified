@@ -109,7 +109,13 @@ ADMISSION_REASONS = {
     "The session has not finished loading successfully.": "worker_not_loaded",
     "The conversation already has a worker. Retry the bundle change after it settles.": "replacement_has_worker",
     "Already started": "worker_already_started",
+    "Session is closed": "loop_closed",
+    "This session activation has been released or superseded.": "activation_released",
 }
+# Worker replies intentionally frame the original exception type; the host
+# preserves that string in its RuntimeError. Match only these exact constants.
+ADMISSION_REASONS.update({"RuntimeError: " + text: reason
+                          for text, reason in tuple(ADMISSION_REASONS.items())})
 STARTUP_PHASES = frozenset({"runtime-setup", "bundle-preparation", "session-mount", "ready"})
 ACTIVATION_MODULES = frozenset({"loop-live", "context-simple", "hooks-session-naming", "other"})
 # Existing root/child facts can approach 4 KiB. Eight bounded operation counters
