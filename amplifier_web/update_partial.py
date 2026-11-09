@@ -172,9 +172,9 @@ class Preparation:
     async def hold_dependents(self):
         """Inspect static changed-root requirements once per source group.
 
-        Only direct constraints on already retained packages select a hold.
-        Dynamic/ambiguous dependency metadata goes to ordinary union qualification,
-        not a speculative resolver subset search.
+        Direct and optional constraints on retained packages select a hold.
+        Unknown dynamic dependency metadata refuses before installation, not a
+        speculative resolver subset search.
         """
         from .runtime_environment import package_name
         from .selected_runtime_dependencies import git_source
@@ -201,9 +201,18 @@ class Preparation:
                 conflict = False
                 for parent in policies:
                     data = requirements[parent]['project']
-                    if 'dependencies' in data.get('dynamic', []):
+                    if {'dependencies', 'optional-dependencies'} & set(data.get('dynamic', [])):
                         raise ValueError('Partial preparation cannot infer dynamic dependency independence.')
-                    for raw in data.get('dependencies', []):
+                    optional = data.get('optional-dependencies', {})
+                    if not isinstance(optional, dict) or any(not isinstance(values, list) for values in optional.values()):
+                        raise ValueError('Partial preparation needs static optional dependency declarations.')
+                    # The generated exact-source override replaces requirements,
+                    # including extras activated by another selected root. Keep
+                    # all declared optional constraints protective; do not invent
+                    # an extras resolver or infer that an unobserved extra is off.
+                    values = [*data.get('dependencies', []),
+                              *(raw for entries in optional.values() for raw in entries)]
+                    for raw in values:
                         requirement = Requirement(raw)
                         name = package_name(requirement.name)
                         retained = self.retained.get(name)

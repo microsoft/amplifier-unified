@@ -34,7 +34,7 @@ class Diagnostics:
 
 
 @pytest.fixture
-async def preparation(tmp_path, monkeypatch):
+async def preparation(tmp_path, monkeypatch, request):
     home = tmp_path / 'app'; stage = home / 'updates/releases' / ('c'*32)
     stage.mkdir(parents=True)
     previous = home / 'updates/releases' / ('a'*32); previous.mkdir()
@@ -47,7 +47,17 @@ async def preparation(tmp_path, monkeypatch):
         git(repo, 'config', 'user.name', 'Fixture'); git(repo, 'config', 'user.email', 'fixture@example.invalid')
         git(repo, 'remote', 'add', 'origin', url)
         def manifest(version, dependency):
-            return '[project]\nname="fixture-' + name + '"\nversion="' + version + '"\ndependencies=' + json.dumps(dependency) + '\n'
+            mode = getattr(request, 'param', 'required')
+            optional = ''
+            if mode in {'optional', 'dynamic-optional'}:
+                if name == 'b':
+                    dependency = ['fixture-c[feature]']
+                if name == 'c':
+                    dependency = []
+                    optional = ('dynamic=["optional-dependencies"]\n' if mode == 'dynamic-optional' and version == '2.0'
+                                else '[project.optional-dependencies]\nfeature='
+                                + json.dumps(['fixture-a>=' + ('2' if version == '2.0' else '1')]) + '\n')
+            return '[project]\nname="fixture-' + name + '"\nversion="' + version + '"\ndependencies=' + json.dumps(dependency) + '\n' + optional
         (repo / 'pyproject.toml').write_text(manifest('1.0', ['fixture-a>=1'] if name == 'c' else []))
         git(repo, 'add', '.'); git(repo, 'commit', '-m', 'old'); old[name] = git(repo, 'rev-parse', 'HEAD')
         (repo / 'pyproject.toml').write_text(manifest('2.0', ['fixture-a>=2'] if name == 'c' else []))
@@ -121,6 +131,26 @@ async def test_failed_distinct_a_keeps_all_copies_holds_dependent_c_advances_b(p
     assert next(r for r in applied if r['label'] == 'Source b')['current'] == p.new['b']
     assert all(r['status'] == 'check_failed' for r in applied if r['label'] in {'Source a', 'Source c'})
     assert 'https://' not in json.dumps(partial.public_results(receipt, adopted=True))
+
+
+@pytest.mark.parametrize('preparation', ['optional'], indirect=True)
+async def test_optional_version_requirement_holds_c_before_any_install(preparation):
+    p = preparation
+    await partial.stage_sources(p.manager, p.stage, p.rows)
+    receipt = partial.read(p.stage)
+    assert receipt['results']['c']['status'] == 'dependency-held'
+    assert receipt['results']['b']['status'] == 'awaiting-adoption'
+    assert git(p.stage/'foundation/cache/c', 'rev-parse', 'HEAD') == p.old['c']
+    assert not any(phase in {'ecosystem-runtime-lock', 'ecosystem-prepare'} for phase, _ in p.manager.diagnostics.calls)
+
+
+@pytest.mark.parametrize('preparation', ['dynamic-optional'], indirect=True)
+async def test_dynamic_optional_requirements_refuse_before_any_install(preparation):
+    p = preparation
+    with pytest.raises(ValueError, match='dynamic dependency independence'):
+        await partial.stage_sources(p.manager, p.stage, p.rows)
+    assert not (p.stage / partial.RECEIPT).exists()
+    assert not any(phase in {'ecosystem-runtime-lock', 'ecosystem-prepare'} for phase, _ in p.manager.diagnostics.calls)
 
 
 @pytest.mark.parametrize('change', ['baseline', 'dirty', 'drift', 'pin', 'unknown', 'origin', 'duplicate-dirty'])

@@ -90,6 +90,13 @@ not independently promoted package fragments. All copies and packages of the
 same repository/ref remain coupled; a successful sibling copy cannot silently
 advance that identity around a failed copy.
 
+The hold check includes every static optional dependency declared by a selected
+changed root, because another selected root can enable that extra and an exact
+source override must not erase its version constraint. This is deliberately
+conservative: it can hold a source for an optional constraint without proving
+that the extra is active. Dynamic required or optional dependency metadata
+cannot establish independence and refuses before installation.
+
 The retained revision is an exact candidate constraint. The configured moving
 branch remains separate policy and is still followed by later update checks.
 Retention does not replace a user's source, branch or pin, or turn a moving ref

@@ -161,17 +161,21 @@ def _foundation(root):
     }
 
 
-def _component(root, name, version, forbidden):
+def _component(root, name, version, forbidden, *, optional=False):
     root.mkdir(exist_ok=True)
     package = "amplifier_module_tool_partial_" + name
     dependencies = ["amplifier-core"]
     minimum_a = 2 if version.startswith("2.") else 1
-    if name == "c":
+    if name == "c" and not optional:
         dependencies.append(f"{PACKAGES['a']}>={minimum_a},<{minimum_a + 1}")
+    if name == "b" and optional:
+        dependencies.append(f"{PACKAGES['c']}[feature]")
     (root / "pyproject.toml").write_text(
         "[project]\nname=" + json.dumps(PACKAGES[name])
         + "\nversion=" + json.dumps(version)
         + "\ndependencies=" + json.dumps(dependencies)
+        + ("\n[project.optional-dependencies]\nfeature="
+           + json.dumps([f"{PACKAGES['a']}>={minimum_a},<{minimum_a + 1}"]) if name == "c" and optional else "")
         + "\n[build-system]\nrequires=[\"hatchling\"]\nbuild-backend=\"hatchling.build\""
         + "\n[project.entry-points.\"amplifier.modules\"]\n"
         + f"tool-partial-{name}=\"{package}:mount\"\n"
@@ -181,7 +185,7 @@ def _component(root, name, version, forbidden):
     source.mkdir(exist_ok=True)
     dependency_check = (
         "    from amplifier_module_tool_partial_a import VERSION as a_version\n"
-        f"    assert int(a_version.split('.')[0]) == {minimum_a}, a_version\n"
+        + (f"    assert int(a_version.split('.')[0]) == {minimum_a}, a_version\n" if not optional else "")
         if name == "c" else "    a_version = None\n"
     )
     (source / "__init__.py").write_text(
@@ -312,7 +316,8 @@ def _assert_probes(probes, generation, versions):
     assert next(row for row in actual if row["component"] == "c")["aVersion"] == versions["a"]
 
 
-async def test_settled_fetch_retains_qualified_a_holds_c_and_advances_moving_b(monkeypatch):
+@pytest.mark.parametrize("dependency_kind", ["required", "optional"])
+async def test_settled_fetch_retains_qualified_a_holds_c_and_advances_moving_b(monkeypatch, dependency_kind):
     assert sys.platform.startswith("linux") and sys.version_info[:2] == (3, 13)
     bootstrap_uv = Path("/opt/unified-prepared/bootstrap/bin/uv")
     assert bootstrap_uv.is_file() and Path("/usr/bin/git").is_file()
@@ -367,7 +372,7 @@ async def test_settled_fetch_retains_qualified_a_holds_c_and_advances_moving_b(m
     }
     for name in "abc":
         root = work / ("source-" + name)
-        _component(root, name, "1.0.0", forbidden)
+        _component(root, name, "1.0.0", forbidden, optional=dependency_kind == "optional")
         _init_repo(root, REFS[name])
         old[name] = _commit(root, "Working " + name + " version 1")
         roots[name] = root
@@ -600,7 +605,7 @@ async def test_settled_fetch_retains_qualified_a_holds_c_and_advances_moving_b(m
 
         new = {}
         for name in "abc":
-            _component(roots[name], name, "2.0.0", forbidden)
+            _component(roots[name], name, "2.0.0", forbidden, optional=dependency_kind == "optional")
             new[name] = _commit(roots[name], "New " + name + " version 2")
         await manager.check(fresh=True)
         checked = copy.deepcopy(manager.inventory)
@@ -654,7 +659,13 @@ async def test_settled_fetch_retains_qualified_a_holds_c_and_advances_moving_b(m
         # manifest; the final union is recollected with the retained OLD C.
         early = json.loads((stage / "partial-selected-roots.json").read_text())
         assert early["runtimeRequirements"][PACKAGES["c"]]["project"]["version"] == "2.0.0"
-        assert f"{PACKAGES['a']}>=2,<3" in early["runtimeRequirements"][PACKAGES["c"]]["project"]["dependencies"]
+        requirement_project = early["runtimeRequirements"][PACKAGES["c"]]["project"]
+        requirements = (requirement_project["optional-dependencies"]["feature"] if dependency_kind == "optional"
+                        else requirement_project["dependencies"])
+        assert f"{PACKAGES['a']}>=2,<3" in requirements
+        if dependency_kind == "optional":
+            assert f"{PACKAGES['c']}[feature]" in early["runtimeRequirements"][PACKAGES["b"]]["project"]["dependencies"]
+            assert not any(item.startswith(PACKAGES['a']) for item in requirement_project["dependencies"])
         assert selection["runtimeRequirements"][PACKAGES["c"]]["project"]["version"] == "1.0.0"
         attempt_commands = commands[start:]
         precollect = next(i for i, row in enumerate(attempt_commands)
@@ -713,7 +724,7 @@ async def test_settled_fetch_retains_qualified_a_holds_c_and_advances_moving_b(m
         # Retention evidence must not turn B's selected custom moving branch into
         # a permanent commit pin. Keep A's fault enabled for this second advance.
         retained_bytes = (_tree(stage), _tree(project))
-        _component(roots["b"], "b", "3.0.0", forbidden)
+        _component(roots["b"], "b", "3.0.0", forbidden, optional=dependency_kind == "optional")
         b_third = _commit(roots["b"], "Independent B advances again on stable")
         await manager.check(fresh=True)
         _json(work / "second-checked.json", manager.inventory)
@@ -739,7 +750,7 @@ async def test_settled_fetch_retains_qualified_a_holds_c_and_advances_moving_b(m
         assert not runtime.workers and not forbidden.exists()
         # A later incompatible union must fail closed, rather than partitioning
         # installer/initialization failures into arbitrary component subsets.
-        _component(roots["b"], "b", "4.0.0", forbidden)
+        _component(roots["b"], "b", "4.0.0", forbidden, optional=dependency_kind == "optional")
         entry = roots["b"] / "amplifier_module_tool_partial_b/__init__.py"
         entry.write_text(entry.read_text().replace(
             "async def mount(coordinator, config=None):",
@@ -776,6 +787,7 @@ async def test_settled_fetch_retains_qualified_a_holds_c_and_advances_moving_b(m
             "baseline": baseline, "partial": partial_generation, "second": second,
             "revisions": {**old, "b": b_third}, "promotions": promotions,
             "historyUnchanged": True, "sharedStoreCovered": False,
+            "dependencyKind": dependency_kind,
             "incompatibleUnionRefused": True, "unchangedFailureNotRetried": True,
             "rollback": partial_generation,
         })
