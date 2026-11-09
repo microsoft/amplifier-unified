@@ -240,6 +240,25 @@ attempt. An unchanged deterministic source/configuration conflict performs no
 duplicate copy, resolver or installer work. Changed source/configuration/application
 inputs or an explicit install request can re-evaluate; transient failures use a
 bounded backoff. Interrupted or unknown effects wait quietly on automatic ticks.
+Pinned and exact checked-revision mismatches retain a typed source-policy reason
+and sanitized package identity; they are not transient transport failures.
+The preparation witness includes the canonical source-configuration key, checked
+source rows, application version and active generation. It also includes complete
+module settings/identities, overrides, configurator choices, routing/decision
+configuration, effective active profile and the canonical offered-profile set
+consumed by qualification. Environment values do not affect unrelated source-policy
+holds. For an actual missing-environment failure, the qualification probe retains
+only the encountered reference in a private candidate receipt, bound to that
+candidate and attempt. This includes references authored inside bundles without
+loading/composing those bundles on every tick. Retry checks only whether that
+missing value is now available, using the same declared private path, key-file
+parser and fresh-worker precedence as qualification. Absent, stale or malformed
+evidence grants no retry; unknown outcomes still take precedence. No environment
+value is persisted in this receipt or public diagnostics, and checking never
+loads keys into the host process.
+The dependency graph key alone omits values that can repair a failed profile.
+It excludes the unrelated settings publication counter. Reading, ordinary rechecks and non-runtime preferences do not
+authorize another identical preparation. Explicit retry still runs every guard.
 A fresh install request can reconcile only a recorded, settled candidate-only
 snapshot copy with the same durable active pointer and no activation/rollback
 handoff. It creates a new candidate, never resumes the interrupted copy. Unknown
@@ -261,6 +280,13 @@ Rendering performs no source scans or installation checks. The update owner
 revalidates retained activation evidence on startup and relevant check/activation
 boundaries; an unavailable proof is labeled rather than inferred. Application
 readiness and pending replacement fences keep their existing exact-identity rules.
+
+Release-note presentation distinguishes absent details from an empty history or a
+failed refresh. A compact initial view has a five-second arrival grace, then says
+that details have not arrived and points to the exact published release or reopening
+Updates. It does not claim an outstanding network request, trigger an update, or
+infer transport failure. Late valid details render without reload; a new release
+target gets its own grace. Malformed detail and saved refresh warnings stay explicit.
 
 The main update card identifies the current component batch and shows successful
 configuration checks out of the total admitted for that attempt. Preparation and
@@ -285,6 +311,15 @@ When the app diagnostic collector is available it owns durable storage and confi
 ## Managed restart handoff and recovery
 
 For a systemd user service, the host queues `systemctl --user --no-block restart amplifier-unified.service`. Systemd owns the replacement process; Unified does not launch a second unmanaged host. A successful command response means the job was accepted, not that the new server is ready. If systemd terminates the requesting child before it receives that response, the request remains unconfirmed. The attempt ID, expected version/revision, and pending restart survive signals, cancellation, timeouts, and rejected requests. New work stays paused until a successor is verified. Genuine request rejection shows service-restart guidance and retains its diagnostic receipt.
+
+Before a managed restart or service start/stop/restart, legacy generated Linux
+units with no explicit kill policy receive `KillMode=mixed` and a private backup.
+Systemd then signals the host first, allowing it to settle its workers through
+the normal shutdown path; timeout escalation still covers the whole service.
+The installed command, environment, data root and explicit operator policies
+are preserved. A failed daemon reload prevents restart dispatch; retry reloads
+the corrected unit without rewriting it or creating another backup. This does
+not replay conversation inputs or clear genuine worker failures.
 
 The successor makes a bounded local HTTP health check after startup. HTTPS checks pin the configured leaf certificate; they do not disable certificate verification or forward credentials through configured proxies. Only authenticated control requests receive the captured running Git revision and process identity. A wrong version, wrong revision, different server, missing provenance, or an unready listener never counts as success. Timeout/cancellation keeps the attempt available for diagnosis and later confirmation.
 
