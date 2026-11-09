@@ -85,6 +85,8 @@ components and transitive extras through the existing qualification checks.
 | C: source-only Git tree | Explicitly package staged ignored static output; remove tracked generated assets; update canonical build, proof reuse, artifact application and active CI consumers | Fresh Git build, clear missing-UI packaging failure, complete wheel/sdist byte parity, Node-free rebuild, installed browser entry and affected login/PWA/vendor checks; measure routine release cost |
 
 Each batch can be reviewed independently. A and B retain generated static in Git.
+They may proceed while C remains held for an old-client transition decision and
+qualification. Reliable ordinary in-app updating remains the consumer goal.
 Unrelated releases continue normally. Release publication and live adoption remain
 separate operations owned by the release/deployment operator.
 
@@ -92,14 +94,16 @@ separate operations owned by the release/deployment operator.
 
 Shipping B alone does not make C safe: an older running updater selects the latest
 release and could jump directly to a source-only revision using its old Git path.
-Before C, settle and qualify that user-visible transition. The proposed bounded
-support path is to install the bridge through the current updater, or use the
-maintained package installer to upgrade an older installation directly. Release
-notes/install guidance must state that older in-app updaters need that installer
-once; the source build must fail clearly rather than install an app without UI.
+Before C, decide and qualify a supported user-visible transition. Adopting the
+bridge through the current updater or requiring a one-time terminal/package
+installer upgrade are options for that later decision, not approved defaults.
+In particular, this proposal does not authorize replacing ordinary in-app updating
+with a required installer step. Any selected transition must explain and qualify
+what older clients encounter; a missing UI must not become an apparently successful
+installation.
 
-If uninterrupted direct updating from every older supported release is required,
-C must wait for an alternative that those old clients can actually consume.
+C remains held until the supported transition is decided and qualified, including
+any requirement for uninterrupted updating from older supported releases.
 A new minimum-updater field cannot change already shipped code that ignores it.
 Spark-1 adoption of the bridge is a separately authorized deployment, not a
 development test or sufficient evidence about all other installations.
