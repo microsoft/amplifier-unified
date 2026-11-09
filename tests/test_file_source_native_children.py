@@ -295,7 +295,7 @@ async def test_resumed_native_child_retains_saved_write_ceiling_after_parent_gra
 
 
 @pytest.mark.parametrize('placement', ['derived', 'pinned'])
-async def test_native_child_resume_follows_committed_worktree_handoff(tmp_path, monkeypatch, app, placement):
+async def test_native_child_resume_follows_committed_worktree_handoff(tmp_path, tmp_path_factory, monkeypatch, app, placement):
     """Real child checkpoint/remount across host placement, not a live worker drain."""
     import asyncio
     import copy
@@ -305,12 +305,16 @@ async def test_native_child_resume_follows_committed_worktree_handoff(tmp_path, 
     from amplifier_web.host.children import install_children
     from amplifier_web.host.storage import SessionStore
     from amplifier_worktrees.git import git
+    from amplifier_worktrees import GitWorktrees
     from test_worktrees import settle
 
     async def deny_network(*args, **kwargs):
         raise AssertionError('Child handoff must not call a provider')
     monkeypatch.setattr('httpx.AsyncClient.send', deny_network)
     home = tmp_path.resolve()
+    # This app fixture keeps its data under workspace; real managed checkout
+    # storage must instead be outside the source repository.
+    monkeypatch.setattr(app.worktrees, 'git', GitWorktrees(tmp_path_factory.mktemp('handoff-checkouts')))
     git(home, 'init', '-b', 'main')
     git(home, 'config', 'user.name', 'Fixture')
     git(home, 'config', 'user.email', 'fixture@example.invalid')
