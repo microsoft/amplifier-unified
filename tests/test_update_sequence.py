@@ -286,3 +286,68 @@ async def test_deterministic_disposition_survives_service_reload(manager, monkey
         assert not updates.active_release(home)
     finally:
         await service.close()
+
+
+@pytest.mark.parametrize('repair', ['module-config', 'override-config', 'override-disabled'])
+async def test_qualification_configuration_repair_rechecks_same_sources(manager, monkeypatch, repair):
+    """Use real host setting application and probe classification inside install.
+    Installer/network/profile mounting are not qualified by this scheduling test.
+    """
+    import time
+    import yaml
+    from amplifier_web import update_plan, session_files, update_health
+    from amplifier_web.host import config as host_config
+    from amplifier_web.host.session import _apply_settings
+    from amplifier_web.update_diagnostics import CommandFailure, probe_failure
+    shared=manager.home/'shared';shared.mkdir()
+    monkeypatch.setattr(host_config, 'amplifier_home', lambda: shared)
+    monkeypatch.setattr(session_files, 'amplifier_home', lambda: shared)
+    monkeypatch.delenv('UNIFIED_MISSING_FIXTURE_VALUE', raising=False)
+    settings={'config': {'tools': [{'module':'tool-fixture','id':'fixture',
+        'config':{'value':'${UNIFIED_MISSING_FIXTURE_VALUE}'}}]}}
+    def save():host_config.write_private(shared/'settings.yaml',yaml.safe_dump(settings))
+    save()
+    row={**source('included'),'kind':'runtime dependency','package':'amplifier-foundation'}
+    async def inventory(**kw):return [dict(row)]
+    async def remote(*args,**kw):return 'b'*40+' refs/heads/main'
+    async def build(*args):return {'mode':'worker','reason':'fixture','activation':'per-worker'}
+    monkeypatch.setattr(manager,'inventory_sources',inventory)
+    monkeypatch.setattr(updates,'process',remote)
+    monkeypatch.setattr(updates,'foundation_home',lambda home:home/'absent')
+    monkeypatch.setattr(update_plan,'build',build)
+    attempts=[];prepared=[]
+    async def validate(stage, revision):
+        attempts.append(revision)
+        config=host_config.read_config(stage,home=stage,shared_home=stage/'shared-config',global_only=True)
+        bundle=SimpleNamespace(providers=[],tools=[],hooks=[],session={},agents={})
+        try:_apply_settings(bundle,config)
+        except ValueError as error:
+            raise CommandFailure({'probe':probe_failure(error,'prepare')}) from error
+        prepared.append(bundle.tools)
+        # Stop before mounting a synthetic module: reaching this point proves
+        # the repaired configuration got a new ordinary qualification attempt.
+        raise TimeoutError('fixture stops after configuration preparation')
+    monkeypatch.setattr(manager,'validate',validate)
+    manager._storage_last_pass=time.time();manager._storage_policy_due=False;manager._update_health_initial=False
+    await manager.check();await manager.install(automatic=True)
+    first=manager.diagnostics.state['lastFailure']
+    assert first['probe']['reason']=='missing-configured-environment'
+    assert manager.diagnostics.state['batch']['retry']['mode']=='changed-inputs'
+    before=update_health.preparation_key(manager,manager.inventory)
+    await manager.check();await manager.tick()
+    assert len(attempts)==1 and not prepared
+    settings['updates']={'intervalHours':8};save()
+    assert update_health.preparation_key(manager,manager.inventory)==before
+    if repair=='module-config':
+        settings['config']['tools'][0]['config']['value']='repaired'
+    elif repair=='override-config':
+        settings['overrides']={'fixture':{'config':{'value':'repaired'}}}
+    else:
+        settings['overrides']={'fixture':{'enabled':False}}
+    save()
+    await manager.check();await manager.tick()
+    assert len(attempts)==2 and len(prepared)==1
+    assert prepared[0]==[] if repair=='override-disabled' else prepared[0][0]['config']['value']=='repaired'
+    assert manager.diagnostics.state['batch']['retry']['mode']=='backoff'
+    assert first in manager.diagnostics.state['events']
+    assert not updates.active_release(manager.home)

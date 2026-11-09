@@ -99,15 +99,21 @@ def preparation_key(manager, rows):
     """Private witness for expensive work, not permission to install or a URL log."""
     from .updates import active_release
     from . import __version__
-    config, _ = configuration(manager)
+    source_key, config = configuration(manager)
     keys = ('id', 'kind', 'url', 'ref', 'current', 'latest', 'subdirectory', 'package',
             'status', 'eligible', 'policyOrigin', 'updateTier')
     selected = [{key: row[key] for key in keys if key in row} for row in rows]
     selected.sort(key=lambda row: json.dumps(row, sort_keys=True))
-    # configuration_key already witnesses source declarations. The publication
-    # counter also changes for unrelated settings/credentials, which cannot
-    # repair the same checked graph and must not reauthorize automatic work.
-    data = [__version__, active_release(manager.home).get('current'), config, selected]
+    # The dependency graph key deliberately omits module values/identities.
+    # Qualification consumes them through host.session._apply_settings; fixing
+    # those values (or disabling a failing module) must permit a new attempt.
+    # Hash only runtime configuration and the canonical offered-profile set,
+    # not unrelated preferences or the publication counter. Values stay private.
+    from .bundles import profile_candidates
+    qualification = {key: config.settings.get(key) for key in
+        ('config', 'modules', 'overrides', 'configurator', 'routing', 'decision_models')}
+    data = [__version__, active_release(manager.home).get('current'), source_key,
+            qualification, profile_candidates(config), selected]
     return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
 

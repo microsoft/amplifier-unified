@@ -243,8 +243,11 @@ bounded backoff. Interrupted or unknown effects wait quietly on automatic ticks.
 Pinned and exact checked-revision mismatches retain a typed source-policy reason
 and sanitized package identity; they are not transient transport failures.
 The preparation witness includes the canonical source-configuration key, checked
-source rows, application version and active generation, not the unrelated settings
-publication counter. Reading, ordinary rechecks and non-source preferences do not
+source rows, application version and active generation. It also includes complete
+module settings/identities, overrides, configurator choices, routing/decision
+configuration and the canonical offered-profile set consumed by qualification.
+The dependency graph key alone omits values that can repair a failed profile.
+It excludes the unrelated settings publication counter. Reading, ordinary rechecks and non-runtime preferences do not
 authorize another identical preparation. Explicit retry still runs every guard.
 A fresh install request can reconcile only a recorded, settled candidate-only
 snapshot copy with the same durable active pointer and no activation/rollback
