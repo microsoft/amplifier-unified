@@ -1456,13 +1456,16 @@ def test_canvas_feedback_scope_is_fixed_and_preserves_full_coverage(tmp_path):
     # A corrupt saved selection must fail before any command, settle the
     # retained receipt, and retain the no-replay guard.
     output = namespace['OUT']
-    for corrupt in ({**focused, 'units': ['untrusted-command']}, {**focused, 'scope': 'unknown'}):
+    for corrupt, expected_error in (
+        ({**focused, 'units': ['untrusted-command']}, 'Canvas qualification selection changed'),
+        ({**focused, 'scope': 'unknown'}, 'Unknown Canvas qualification scope'),
+    ):
         namespace['write'](output / 'summary.json',
                            {'status': 'not_started', 'stages': [], 'selection': focused})
         namespace['write'](output / 'identity.json', {'selection': corrupt})
         assert namespace['run']() == 1
         result = json.loads((output / 'summary.json').read_text())
-        assert result['status'] == 'failed' and result['error'] and result['stages'] == []
+        assert result['status'] == 'failed' and result['error'] == expected_error and result['stages'] == []
         with pytest.raises(ValueError, match='no replay'):
             namespace['run']()
 
