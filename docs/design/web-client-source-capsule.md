@@ -62,7 +62,3 @@ It does not establish actual-server parity, native runtime/model behavior,
 authority/cancellation parity, device support, or release adoption. A package
 build and this fixture are the first bounded proof; qualification with the exact
 paired server and ownership/distribution decisions remain before extraction.
-
-The existing private web candidate uses AHP and vendored client-kit/protocol
-extensions from an older baseline. It remains a separate candidate; no candidate
-implementation is copied into this public source boundary.
