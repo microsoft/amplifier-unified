@@ -215,10 +215,16 @@ async def observe_waiters(manager):
         if reason:
             cancelled = False
             if worker.get('runtimeOwnerId') == row['owner']:
-                result = await service.runtime.handoff_boundary(sid, row['boundaryId'], cancel=True,
-                    receipt={'updateWait': {'owner': row['owner']}})
-                if result.get('cancelled') is not True:
-                    raise RuntimeError('The original worker did not confirm cancellation of its update wait.')
+                try:
+                    result = await service.runtime.handoff_boundary(sid, row['boundaryId'], cancel=True,
+                        receipt={'updateWait': {'owner': row['owner']}})
+                    if result.get('cancelled') is not True:
+                        raise RuntimeError('The original worker did not confirm cancellation of its update wait.')
+                except Exception:
+                    async with service.lock:
+                        if not retained(row):
+                            continue
+                        raise
                 cancelled = True
             async with service.lock:
                 if not retained(row):

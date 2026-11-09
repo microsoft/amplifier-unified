@@ -708,11 +708,13 @@ async def test_superseded_wait_requires_positive_cancellation_before_reenrollmen
     assert not h.runtime.admitted
 
 
-async def test_late_cancel_observer_cannot_remove_new_wait_or_rewrite_old_receipt(waiting):
+@pytest.mark.parametrize('acknowledgement', ['cancelled', 'lost', 'missing'])
+async def test_late_cancel_observer_cannot_remove_new_wait_or_rewrite_old_receipt(waiting, acknowledgement):
     h = waiting
     await h.wait()
     old_boundary = h.row['boundaryId']
-    await enroll_other_owner(h)
+    other = await enroll_other_owner(h)
+    other_boundary = h.app.state['updates']['drain']['workers'][other]['boundaryId']
     await supersede_wait_with_human_input(h)
     original = h.runtime.handoff_boundary
     reached, release = asyncio.Event(), asyncio.Event()
@@ -722,6 +724,10 @@ async def test_late_cancel_observer_cannot_remove_new_wait_or_rewrite_old_receip
         if kwargs.get('cancel') and not reached.is_set():
             reached.set()
             await release.wait()
+            if acknowledgement == 'lost':
+                raise TimeoutError('Old cancellation acknowledgement arrived too late')
+            if acknowledgement == 'missing':
+                return {'ready': True}
         return result
 
     h.runtime.handoff_boundary = delayed
@@ -737,6 +743,7 @@ async def test_late_cancel_observer_cannot_remove_new_wait_or_rewrite_old_receip
         await asyncio.wait_for(late, 5)
         assert h.row['boundaryId'] == new_boundary and not h.row.get('suppressed')
         assert h.app.state['updates']['drain']['phase'] == 'waiting'
+        assert h.app.state['updates']['drain']['workers'][other]['boundaryId'] == other_boundary
         assert (await h.wait())['result'] == receipt
     finally:
         release.set()
