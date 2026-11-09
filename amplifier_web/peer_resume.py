@@ -50,10 +50,18 @@ def human_input(app, session):
 
 def question_settings(app, source, target):
     """Use existing control/placement and access-policy revisions, not payloads."""
-    return {row['id']: {
-        'control': app.management.recovery_admission_binding(row),
-        'accessRevision': app.access_mode.snapshot(row)['revision'],
-    } for row in (source, target)}
+    # AppService may run without a management adapter (including native clients).
+    # Snapshot only resident boundary fields; never prepare or inspect a runtime.
+    return {'configurationRevision': app.state.get('configurationRevision', 0),
+        'sessions': {row['id']: {
+            'accessRevision': app.access_mode.snapshot(row)['revision'],
+            'boundary': fingerprint({key: row.get(key) for key in
+                ('workspace', 'workingDirectory', 'executionRevision', 'bundle', 'selection',
+                 'configurationPendingRevision', 'recoveryControlRevision')}),
+            'controls': fingerprint({key: app.state.get('runtimeControl', {}).get(row['id'], {}).get(key)
+                for key in ('configuration.apply', 'configuration.toggle', 'provider.select',
+                            'provider.reset', 'mode.set', 'mode.clear', 'budget.set', 'budget.clear')}),
+        } for row in (source, target)}}
 
 
 def latest_root_generation(target):

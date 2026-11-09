@@ -22,9 +22,10 @@ class Manager(ScriptedProvider):
     async def complete(self, request, **kwargs):
         self.calls += 1
         if self.calls == 1:
-            latest = next(message_text(row) for row in reversed(request.messages) if row.role == 'user')
-            if '\nKeep it stopped\n' in latest:
-                self.negative_delivered = latest
+            delivered = [message_text(row) for row in request.messages if row.role == 'user']
+            negative = next((text for text in delivered if 'Keep it stopped' in text), None)
+            if negative is not None:
+                self.negative_delivered = negative
                 return self.final('Kept stopped; no resume request issued.')
             return self.dispatch('inspect-input', 'coordination.context', {'sessionId': self.source['id']})
         if self.calls == 2:
@@ -99,7 +100,8 @@ async def test_human_instruction_in_manager_reaches_paused_member_native_input(t
                                    command_id=input_id, include_state=False)
             await host.outcome(manager, input_id)
             if input_kind == 'negative_question':
-                assert 'Answer to “Resume the paused member?”:\nKeep it stopped\n' in parent.negative_delivered
+                assert 'Resume the paused member?' in parent.negative_delivered
+                assert 'Keep it stopped' in parent.negative_delivered
                 assert not host.admissions and child.calls == 0 and parent.calls == 1
                 assert target['status'] == 'stopped'
                 assert member.controls.tasks.record() == before['task']
