@@ -114,6 +114,75 @@ async def _get(client, params):
     return value
 
 
+def _observe_live_capture(service, session, monkeypatch):
+    """Bounded metadata-only observation; never flush/retry or change a result."""
+    from amplifier_web.event_window import _source, _stamp
+    from amplifier_web.work_windows import source_identity
+    diagnostics = service.diagnostics
+    windows = service.event_log_view.windows
+    original_persist = diagnostics._persist
+    worker = windows._worker()
+    original_project = worker.project
+    source = source_identity(session)
+    native = source.get('nativeIdentity') or source.get('runtimeSessionId') or source['id']
+    rows, gaps = [], []
+    attempts = 0
+
+    def retain(value):
+        if len(rows) < 32:
+            rows.append(value)
+
+    def stamp(source):
+        try:
+            return _stamp(_source(source)[0].stat())
+        except FileNotFoundError:
+            return None
+
+    def persist(items, cfg):
+        nonlocal attempts
+        attempts += 1
+        observe = attempts <= 16
+        summary = None
+        if observe:
+            try:
+                relevant = [item for item in items if item[3] == native]
+                summary = {'kind': 'persist', 'before': stamp(source),
+                           'targetEvents': sorted({item[5] for item in relevant}),
+                           'targetCount': len(relevant)}
+            except Exception:
+                gaps.append('persist-observation')
+        try:
+            return original_persist(items, cfg)
+        finally:
+            if summary is not None:
+                try:
+                    retain({**summary, 'after': stamp(source)})
+                except Exception:
+                    gaps.append('persist-after')
+
+    async def project(inputs, *, key):
+        summary = None
+        if len(rows) < 32 and inputs.get('operation') == 'window':
+            try:
+                summary = {'kind': 'window', 'continuation': inputs.get('before') is not None,
+                           'before': stamp(inputs['session'])}
+            except Exception:
+                gaps.append('window-before')
+        result = await original_project(inputs, key=key)
+        if summary is not None:
+            try:
+                retain({**summary, 'after': stamp(inputs['session']),
+                        'status': result.get('status'), 'reason': result.get('reason')})
+            except Exception:
+                gaps.append('window-after')
+        return result
+
+    monkeypatch.setattr(diagnostics, '_persist', persist)
+    monkeypatch.setattr(worker, 'project', project)
+    return lambda: {'rows': rows, 'gaps': gaps[:8], 'persistCalls': attempts,
+                    'limited': len(rows) == 32 or attempts > 16}
+
+
 async def _field(client, reference):
     chunks, offset = [], 0
     for _ in range(64):
@@ -135,7 +204,25 @@ async def _verify(client, service, sid, expected, final_id, retired):
     assert response.status == 200
     state = await response.json()
     visible = next(row for row in state['sessions'] if row['id'] == sid)
-    segments = [row for row in visible['execution']['segments']
+    # Use the same explicit group-page overlay as Load earlier conversation.
+    # The initial projection remains a tail, not all 144 resident positions.
+    groups = visible['execution']['segments']
+    cursor = visible['executionWindow'].get('before')
+    group_cursors = set()
+    for _ in range(8):
+        if not cursor or not cursor.startswith('resident-groups:'):
+            break
+        assert cursor not in group_cursors
+        group_cursors.add(cursor)
+        older = await _get(client, {'sessionId': sid, 'part': 'groups', 'before': cursor})
+        assert len(older['items']) <= 100
+        assert older['coverage']['sourceEnd'] - older['coverage']['sourceStart'] <= 100
+        # Latest summaries win when a group spans ranges; earlier groups remain.
+        groups = list({row['id']: row for row in [*older['items'], *groups]}.values())
+        cursor = older.get('before')
+    else:
+        pytest.fail('Resident group discovery did not progress within the fixture bound')
+    segments = [row for row in groups
                 if row.get('turnId') == 'original-144-input' and not row.get('observationWindow')]
     anchors = list(dict.fromkeys(row['anchor'] for row in expected.values()))
     assert [row['anchorMessageId'] for row in segments] == anchors, {
@@ -214,6 +301,7 @@ async def _verify(client, service, sid, expected, final_id, retired):
         assert not dict.__contains__(service._session(sid, hydrate=False), 'execution')
     print('INTERIM-A-144', json.dumps({
         'count': len(all_ids), 'unique': len(set(all_ids)), 'pageSizes': pages_read,
+        'groupPages': len(group_cursors),
         'identitiesSha256': hashlib.sha256(json.dumps(all_ids).encode()).hexdigest(),
         'retired': retired,
     }))
@@ -227,8 +315,11 @@ async def test_144_resident_calls_complete_through_registered_web(
     home = tmp_path / 'app'
     application, runtime = await _start(home, tmp_path, monkeypatch)
     service, client, socket = application['service'], None, None
+    capture = None
     try:
         session, expected, final_id = await _emit_resident_calls(service, split)
+        if phase == 'live':
+            capture = _observe_live_capture(service, session, monkeypatch)
         sid = session['id']
         retired = phase == 'retired-reopen'
         if phase != 'live':
@@ -270,9 +361,147 @@ async def test_144_resident_calls_complete_through_registered_web(
         await _verify(client, service, sid, expected, final_id, retired)
         assert runtime.started == runtime.sent == []
     finally:
+        if capture:
+            try:
+                print('INTERIM-A-CAPTURE', json.dumps(capture()))
+            except Exception:
+                print('INTERIM-A-CAPTURE-UNAVAILABLE')
         if socket is not None:
             await socket.close()
         if client is not None:
             await client.close()
         if not service.closed:
             await service.close()
+
+
+def test_resident_group_discovery_is_demand_paged_and_revalidates_admission(tmp_path, monkeypatch):
+    from test_resident_work_pages import live_fixture
+    owner, session, _ = live_fixture(tmp_path, monkeypatch, count=144)
+    for row in session['execution']['nodes'][:4]:
+        row['anchorMessageId'] = 'early'
+    visited = []
+
+    class BoundedRows(list):
+        def __iter__(self):
+            raise AssertionError('Discovery must not scan the full execution tree')
+
+        def __getitem__(self, key):
+            if isinstance(key, slice):
+                start, end, _ = key.indices(len(self))
+                assert end - start <= 100
+                visited.append((start, end))
+            return super().__getitem__(key)
+
+    session['execution']['nodes'] = BoundedRows(session['execution']['nodes'])
+    projection = owner.project(session)
+    assert visited == [(44, 144)]  # Passive state still visits only its tail.
+    assert [row['id'] for row in projection['execution']['segments']] == ['t@user']
+    cursor = projection['executionWindow']['before']
+    visited.clear()
+    groups = owner.live_pages.read_groups(session, cursor)
+    assert visited == [(0, 44)]  # One explicit range, not an eight-page scan.
+    assert [row['id'] for row in groups['items']] == ['t@early', 't@user']
+    assert groups['before'] is None
+    earlier = owner.live_pages.read(session, 't@early')
+    assert [row['id'] for row in earlier['items']] == ['0', '1', '2', '3']
+    assert earlier['before'] is None
+    assert owner.live_pages.read_text(session, earlier['items'][0]['outputDetail'])['value'] == 'body ' * 1000
+    # A discovery descriptor never overrules current position/group evidence.
+    for index in range(4):
+        session['execution']['nodes'][index]['anchorMessageId'] = 'moved'
+    with pytest.raises(ValueError, match='no longer available'):
+        owner.live_pages.read(session, 't@early')
+    owner.invalidate({'s'})
+    with pytest.raises(ValueError, match='changed'):
+        owner.live_pages.read_groups(session, cursor)
+
+
+@pytest.mark.parametrize('mutation', ['source', 'client', 'owner', 'forged'])
+def test_resident_group_discovery_refuses_other_scope(tmp_path, monkeypatch, mutation):
+    from test_resident_work_pages import live_fixture
+    owner, session, _ = live_fixture(tmp_path, monkeypatch, count=144)
+    cursor = owner.project(session)['executionWindow']['before']
+    if mutation == 'source':
+        session['nativeIdentity'] = 'other'
+    elif mutation == 'client':
+        monkeypatch.setattr(owner.live_pages, '_client', lambda: 'other-browser')
+    elif mutation == 'owner':
+        monkeypatch.setattr(owner, '_owner', lambda _: dict(session))
+    else:
+        cursor = cursor[:-4] + 'aaaa'
+    with pytest.raises(ValueError):
+        owner.live_pages.read_groups(session, cursor)
+
+
+def test_resident_group_discovery_progresses_empty_ranges_and_bounds_receipts(tmp_path, monkeypatch):
+    from test_resident_work_pages import live_fixture
+    owner, session, _ = live_fixture(tmp_path, monkeypatch, count=1001)
+    for row in session['execution']['nodes']:
+        row['canonicalHistory'] = True
+    cursor = owner.project(session)['executionWindow']['before']
+    ends = []
+    for _ in range(11):
+        page = owner.live_pages.read_groups(session, cursor)
+        assert page['items'] == []
+        ends.append(page['coverage']['sourceEnd'])
+        assert len(owner.live_pages.discovery) <= 8
+        cursor = page['before']
+        if cursor is None:
+            break
+    assert ends == [901, 801, 701, 601, 501, 401, 301, 201, 101, 1]
+    owner.retain_interest({'s'})
+    owner.retain_interest(set())
+    assert not owner.live_pages.discovery
+
+
+@pytest.mark.parametrize('declared_capture', [False, True])
+async def test_synthetic_capture_ownership_distinguishes_diagnostics_fallback(tmp_path, declared_capture):
+    from amplifier_web.service import AppService
+    service = AppService(tmp_path / 'app', Runtime(), workspace=tmp_path)
+    try:
+        await service.dispatch('session.create', {})
+        session = service._session()
+        if declared_capture:
+            session['runtimeReport'] = {'contextIntelligence': {'enabled': True}}
+        ensure_turn(session, 'capture-control')
+        emitted = []
+        observer = ExecutionEvents(session['id'], emitted.append)
+        observer.lifecycle({'type': 'input.delivered', 'input_id': 'capture-control', 'source': 'user'})
+        before = len(service.diagnostics.pending)
+        for event in ('tool:pre', 'tool:post'):
+            record = observer.hook(session['id'], event, {
+                'session_id': session['id'], 'tool_call_id': 'capture-control-call',
+                'tool_name': 'read_file', 'tool_input': {'path': 'synthetic'},
+                'result': 'synthetic', 'timestamp': time.time()})
+            await service.on_runtime_event('execution.event', emitted[-1]['event'])
+            append_event(session['workspace'], session['id'], event, record)
+        queued = [item[5] for item in service.diagnostics.pending[before:] if item[2] == 'tools']
+        assert queued == ([] if declared_capture else ['tool:pre', 'tool:post'])
+        assert len(session['execution']['nodes']) == 1
+    finally:
+        await service.close()
+
+
+async def test_resident_discovery_handoff_keeps_original_canonical_cursor_without_worker(tmp_path, monkeypatch):
+    from test_resident_work_pages import live_fixture
+    from amplifier_web.work_windows import source_identity
+    owner, session, _ = live_fixture(tmp_path, monkeypatch, count=144)
+    saved = {'group': 'event-window:original', 'sessionId': 's',
+             'source': source_identity(session), 'before': 'original-canonical-cursor'}
+    owner.pages[saved['group']] = saved
+    cursor = owner.live_pages.group_navigation(session, saved, {})['before']
+    # Another current canonical window must not retarget an older chain.
+    owner.current['s'] = 'event-window:replacement'
+    def forbidden():
+        raise AssertionError('Resident discovery must not read canonical history')
+    monkeypatch.setattr(owner, '_worker', forbidden)
+    page = await owner.read('s', cursor)
+    assert page['before'] == 'original-canonical-cursor'
+    assert owner.current['s'] == 'event-window:replacement'
+    assert owner.status == {}
+    assert len(page['items']) <= 100
+    del owner.pages[saved['group']]
+    with pytest.raises(ValueError, match='expired'):
+        await owner.read('s', cursor)
+    await owner.close()
+    assert not owner.live_pages.discovery

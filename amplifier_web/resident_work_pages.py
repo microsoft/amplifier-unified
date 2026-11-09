@@ -22,6 +22,10 @@ class ResidentWorkPages:
     def __init__(self, windows):
         self.windows = windows
         self.groups = OrderedDict()
+        # Disposable discovery receipts, not a second execution/history index.
+        # Each explicit read visits one <=100-position range. Passive state
+        # keeps its existing tail and the browser owns the older-page overlay.
+        self.discovery = OrderedDict()
         self.interests = set()
         from .open_work_fields import OpenWorkFields
         self.open_fields = OpenWorkFields(self)
@@ -34,7 +38,7 @@ class ResidentWorkPages:
         return self._client(), session['id'], group
 
     def _source(self, session, start, end):
-        source = self.windows.live_view(session)
+        source = self.windows.live_view(session, include_nodes=False)
         nodes = self.windows.resident_tree(session).get('nodes', [])
         source['execution']['nodes'] = [self.windows.live_node(session, row) for row in nodes[start:end]
             if row.get('liveObservation') or not row.get('canonicalHistory') and not row.get('nativeHistory')]
@@ -42,7 +46,7 @@ class ResidentWorkPages:
 
     def _stamp(self, session):
         from .work_windows import source_identity
-        source = self.windows.live_view(session)
+        source = self.windows.live_view(session, include_nodes=False)
         # Stable resident positions and bounded grouping facts, never node bodies.
         facts = [id(session), id(self.windows.resident_tree(session).get('nodes')),
             source_identity(session),
@@ -70,6 +74,80 @@ class ResidentWorkPages:
             return json.loads(value[32:])
         except (ValueError, TypeError):
             raise ValueError('This Work cursor expired. Close and reopen its steps.') from None
+
+    def group_navigation(self, session, page, live):
+        count = len(self.windows.resident_tree(session).get('nodes', []))
+        within = live.get('before')
+        end = count if within else max(0, count - NODE_LIMIT)
+        if not end:
+            return {}
+        cursor = self._group_cursor(session, end, page.get('group') if page else None, within)
+        return {'before': cursor, 'hasEarlier': True}
+
+    def _group_cursor(self, session, end, saved_group, within=None):
+        token = self._token({
+            'version': 1,
+            'client': self._client(), 'owner': session['id'], 'stamp': self._stamp(session),
+            'fence': self.windows._fence(session['id']), 'end': end, 'savedGroup': saved_group,
+            'within': within})
+        if len(token) > 4096:
+            raise ValueError('This Work cursor exceeds its bounded identity budget.')
+        return 'resident-groups:' + token
+
+    def read_groups(self, session, before):
+        from .browser_detail import page
+        if (self.windows.closed or getattr(self.windows.service, 'closed', False)
+                or self.windows._owner(session['id']) is not session):
+            raise ValueError('This Work cursor expired. Open the conversation again.')
+        cursor = self._parse(before.removeprefix('resident-groups:'))
+        nodes = self.windows.resident_tree(session, touch=True).get('nodes', [])
+        stamp, fence = self._stamp(session), self.windows._fence(session['id'])
+        end = cursor.get('end') if isinstance(cursor, dict) else None
+        if (not isinstance(cursor, dict)
+                or set(cursor) != {'version', 'client', 'owner', 'stamp', 'fence', 'end', 'savedGroup', 'within'}
+                or type(cursor.get('version')) is not int or cursor.get('version') != 1
+                or cursor.get('client') != self._client()
+                or cursor.get('owner') != session['id'] or cursor.get('stamp') != stamp
+                or cursor.get('fence') != fence or type(end) is not int or not 0 < end <= len(nodes)
+                or cursor.get('within') is not None and not isinstance(cursor['within'], str)
+                or cursor.get('savedGroup') is not None and not isinstance(cursor['savedGroup'], str)):
+            raise ValueError('This Work changed. Open the conversation again.')
+        saved_group = cursor.get('savedGroup')
+        saved = self.windows._page(session['id'], saved_group) if saved_group else None
+        start = max(0, end - NODE_LIMIT)
+        source = self._source(session, start, end)
+        # An older slice cannot identify the last segment of a whole turn.
+        # Summarize its rows without inheriting a later turn failure/liveness.
+        source['execution']['turns'] = [{key: value for key, value in row.items()
+            if key not in {'phase', 'status', 'endedAt'}} for row in source['execution']['turns']]
+        source['generations'] = []
+        result = page(source, 'groups', before=cursor.get('within'))
+        # Summaries describe this range only; never imply a complete turn total.
+        items = [{**row, 'partialWindow': True, 'nodeCounts': None, 'aggregateUsage': None}
+                 for row in result['items']]
+        key = (self._client(), session['id'], start, end, cursor.get('within'))
+        self.discovery.pop(key, None)
+        self.discovery[key] = {'stamp': stamp, 'fence': fence, 'groups': {row['id'] for row in items}}
+        while len(self.discovery) > MAX_RANGES:
+            self.discovery.popitem(last=False)
+        next_cursor = (self._group_cursor(session, end, saved_group, result['before']) if result['before']
+                       else self._group_cursor(session, start, saved_group) if start
+                       else saved.get('before') if saved else None)
+        return {'items': items, 'turns': [{key: value for key, value in row.items()
+                    if key not in {'nodeCounts', 'aggregateUsage'}} for row in result['turns']],
+                'mode': 'cursor', 'offset': None, 'total': None, 'before': next_cursor,
+                'hasEarlier': next_cursor is not None,
+                'coverage': {'kind': 'resident-live', 'historyComplete': False,
+                             'sourceStart': start, 'sourceEnd': end}}
+
+    def _discovered_range(self, session, group, stamp, fence):
+        # Only ranges explicitly observed by this client may admit an older
+        # group. Current rows/grouping are re-derived below, not trusted here.
+        ranges = [(start, end) for (client, identity, start, end, _), receipt in self.discovery.items()
+                  if client == self._client() and identity == session['id']
+                  and receipt['stamp'] == stamp and receipt['fence'] == fence
+                  and group in receipt['groups']]
+        return max(ranges, default=None)
 
     @staticmethod
     def _rows(source, group):
@@ -158,6 +236,10 @@ class ResidentWorkPages:
                 raise ValueError('Invalid resident Work range.')
         rows, anchors, segment = self._rows(self._source(session, start, end), group)
         if before is None:
+            if segment is None and (discovered := self._discovered_range(session, group, stamp, fence)):
+                start, end = discovered
+                if end <= len(nodes):
+                    rows, anchors, segment = self._rows(self._source(session, start, end), group)
             if segment is None:
                 raise ValueError('This Work is no longer available. Refresh this conversation.')
             entry['revision'] = segment['detailRevision']
@@ -322,3 +404,6 @@ class ResidentWorkPages:
         for key in tuple(self.groups):
             if key[1] in departed:
                 self.groups.pop(key, None)
+        for key in tuple(self.discovery):
+            if key[1] in departed:
+                self.discovery.pop(key, None)
