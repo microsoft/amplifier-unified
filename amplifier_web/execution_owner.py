@@ -107,9 +107,16 @@ class ExecutionOwner:
         self.pending[identity] = row
         waiter = None
         try:
-            receipt = await self.service.dispatch("conversation.send", {
+            # The owner may already be executing while its admission ACK waits.
+            # Detaching this observer must not cancel that dispatch or its work.
+            admission = self.service._task(self.service.dispatch("conversation.send", {
                 "sessionId": identity, "text": text,
-            }, origin=self.origin, command_id=input_id, include_state=False)
+            }, origin=self.origin, command_id=input_id, include_state=False))
+            admission.add_done_callback(lambda task: None if task.cancelled() else task.exception())
+            done, _ = await asyncio.wait({admission, delivery.failed}, return_when=asyncio.FIRST_COMPLETED)
+            if delivery.failed in done:
+                raise ValueError(delivery.failed.result())
+            receipt = admission.result()
             if receipt.get("duplicate"):
                 raise ValueError("Input was already admitted; inspect retained owner state before retrying")
             waiter = asyncio.create_task(self.service.wait_for_response(identity, input_id, timeout=None))
@@ -127,7 +134,9 @@ class ExecutionOwner:
                 await asyncio.wait({row["stopped"], delivery.failed}, return_when=asyncio.FIRST_COMPLETED)
                 if delivery.failed.done():
                     raise ValueError(delivery.failed.result())
-                row["stopped"].result()
+                stop_error = row["stopped"].result()
+                if stop_error:
+                    raise ValueError(stop_error)
                 outcome = {"outcome": "cancelled"}
             await delivery.finish()
             return outcome
@@ -218,9 +227,19 @@ class ExecutionOwner:
             event = {"type": kind, "event": {key: payload[key] for key in
                 ("id", "sessionId", "toolCallId", "kind", "phase", "label", "input", "output", "lifecycle")
                 if key in payload and (key not in {"input", "output"} or payload.get("kind") == "tool")}}
+        elif kind == "runtime.error":
+            current = self.service._session(identity, hydrate=False)
+            if (row["stop"] is not None and not row["stopped"].done()
+                    and current.get("status") == "error"
+                    and (current.get("lastInterruption") or {}).get("commandId") == row["stop"]):
+                # A rejected/stale event must not settle this wait. Completion
+                # still wins in the canonical waiter before this result is used.
+                row["stopped"].set_result("Stop did not settle; inspect retained owner state before retrying.")
+            return
         elif kind == "runtime.status" and payload.get("status") == "stopped":
             current = self.service._session(identity, hydrate=False)
-            if row["stop"] is not None and not row["stopped"].done():
+            if (row["stop"] is not None and not row["stopped"].done()
+                    and current.get("status") == "stopped"):
                 if (current.get("lastInterruption") or {}).get("commandId") == row["stop"]:
                     row["stopped"].set_result(None)
                 else:

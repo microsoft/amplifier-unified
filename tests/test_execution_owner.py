@@ -21,6 +21,9 @@ class Service:
     async def batch(self, events):
         self.events.extend(events)
 
+    def _task(self, coroutine):
+        return asyncio.create_task(coroutine)
+
     async def dispatch(self, action, args, **kwargs):
         self.calls.append((action, args, kwargs))
         if action == "conversation.stop":
