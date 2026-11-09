@@ -710,7 +710,7 @@ class UpdateManager:
         # retry/skip receipt; they are not unfinished activation work.
         return bool(pending) and all(row.get('runnerSource') or row.get('failure') for row in pending)
 
-    async def check(self, *, tier='application', install=False, fresh=True):
+    async def check(self, *, tier='application', install=False, fresh=True, automatic=False):
         state = self.service.state['updates']
         if (self.closed or self.awaiting_restart() or state.get('pendingRelease') or (state.get('pendingSmartTools') and not self.independent_tool_results(state))
                 or (state.get('pendingApp') or {}).get('featureSelection')):
@@ -719,27 +719,27 @@ class UpdateManager:
             # Join only an equivalent availability operation. A manual refresh
             # must not inherit a background TTL result, tier or install action.
             previous = self.check_task
-            equivalent = getattr(self, 'check_request', None) == (tier, install, fresh)
+            equivalent = getattr(self, 'check_request', None) == (tier, install, fresh, automatic)
             result = await asyncio.shield(previous)
             if equivalent:
                 return result
-            return await self.check(tier=tier, install=install, fresh=fresh)
+            return await self.check(tier=tier, install=install, fresh=fresh, automatic=automatic)
         async def run():
             from .update_checks import checking
             ttl = self.service.state['settings']['updates'].get('intervalHours', DEFAULT_CHECK_INTERVAL_HOURS) * 3600
             started = time.monotonic()
             started_at = time.time()
             async with checking(self.check_cache, fresh=fresh, ttl=ttl):
-                await self._check(tier=tier, install=install, fresh=fresh)
+                await self._check(tier=tier, install=install, fresh=fresh, automatic=automatic)
             timing = {'startedAt': started_at, 'finishedAt': time.time(),
                       'elapsedMs': round((time.monotonic()-started)*1000), **self.check_cache.stats}
             await self.publish(checkTiming=timing,
                                recentChecks=[*self.service.state['updates'].get('recentChecks', [])[-4:], timing])
-        self.check_request = (tier, install, fresh)
+        self.check_request = (tier, install, fresh, automatic)
         self.check_task = asyncio.create_task(run())
         return await asyncio.shield(self.check_task)
 
-    async def _check(self, *, tier='application', install=False, fresh=True):
+    async def _check(self, *, tier='application', install=False, fresh=True, automatic=False):
         from .update_sequence import summary
         from .update_health import pending_preparation
         async with self.lock:
@@ -880,14 +880,16 @@ class UpdateManager:
                     sequence['stage'] = stage
                     await self.publish(sequence={**sequence}, detail='Checking included components…' if stage == 'included' else 'Checking other components…')
                     await asyncio.gather(*(check_row(row) for row in selected))
+                    from .update_partial import retained_after_check, availability
+                    await asyncio.to_thread(retained_after_check, self, selected, retry_retained=not automatic and fresh)
                     checked.extend(selected)
                     sequence.update(stage=stage)
                     sequence[stage] = summary(group_sources(selected))
-                    if sequence[stage]['available'] or (stage == 'included' and sequence[stage]['issues']):break
+                    protected = any(row.get('status') in {'check_failed', 'local_changes'}
+                                    and not availability(row) for row in selected)
+                    if sequence[stage]['available'] or (stage == 'included' and protected):break
                 from .update_sequence import verify_app_selection
                 await asyncio.to_thread(verify_app_selection, self, checked)
-                from .update_partial import retained_after_check
-                await asyncio.to_thread(retained_after_check, self, checked, fresh=fresh)
                 self.inventory = checked
                 write_private(self.directory/'inventory.json',json.dumps(checked))
                 public = group_sources(checked)
@@ -1061,6 +1063,7 @@ class UpdateManager:
             self.diagnostics.state['batch']['preparation'] = proof
             source=foundation_home(self.home)
             phase='ecosystem-stage'
+            partial = None
             try:
                 await self.publish(phase='staging',detail='Preparing an isolated copy of the ecosystem…',error=None)
                 if source.exists():
@@ -1129,6 +1132,16 @@ class UpdateManager:
                 failure=self.diagnostics.state['lastFailure']
                 from .update_health import record_retry
                 record_retry(self.diagnostics.state['batch'], input_key, failure, prior_retry)
+                if interrupted:
+                    # Display may preserve a prior handled fetch failure. Actual
+                    # cancellation, not that historical display choice, owns the
+                    # unknown-operation fence and always wins over changed inputs.
+                    self.diagnostics.state['batch']['retry']['mode'] = 'inspect'
+                elif partial:
+                    # A mixed candidate already contains a known source hold.
+                    # Do not repeat its expensive qualification on unchanged
+                    # automatic ticks. Uncertain effects retain inspect instead.
+                    self.diagnostics.state['batch']['retry']['mode'] = 'changed-inputs'
                 self.diagnostics.record('ecosystem-stage',status,commandId=stage_id,preserve_last_failure=True)
                 from .update_health import retain_preparation
                 retain_preparation(self.diagnostics.state)
@@ -1551,7 +1564,7 @@ class UpdateManager:
         if state.get('pendingApp'):
             if state.get('phase') in {'error', 'interrupted'}:return
             if settings.get('autoCheck', True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',DEFAULT_CHECK_INTERVAL_HOURS)*3600:
-                await self.check(fresh=True)
+                await self.check(fresh=True, automatic=True)
             await self.app()
             return
         if state.get('pendingRelease'):
@@ -1567,7 +1580,7 @@ class UpdateManager:
             # Health, drain, storage, worker adoption and independent app/tool
             # paths above still run. No component availability/install is replayed.
             if settings.get('autoCheck', True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',DEFAULT_CHECK_INTERVAL_HOURS)*3600:
-                await self.check(tier='application', fresh=False)
+                await self.check(tier='application', fresh=False, automatic=True)
             if state.get('appAvailable') and settings.get('autoInstall', True):
                 await self.app()
             return
@@ -1578,9 +1591,9 @@ class UpdateManager:
             # Refresh later tiers too: an earlier tier may have stopped before
             # checking them, leaving only results from a previous update cycle.
             await self.check(tier=sequence['nextStage'], install=sequence.get('install', False),
-                             fresh=True)
+                             fresh=True, automatic=True)
         elif settings.get('autoCheck',True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',DEFAULT_CHECK_INTERVAL_HOURS)*3600:
-            await self.check(fresh=False)
+            await self.check(fresh=False, automatic=True)
         state=self.service.state['updates']
         managed_preview=state.get('appAvailable') and state.get('application',{}).get('canInstall') is False
         if not managed_preview and (settings.get('autoInstall',True) or state.get('sequence', {}).get('install')) and state.get('phase')=='available' and state.get('available',0):

@@ -55,10 +55,13 @@ class Preparation:
         if self.baseline is not None:
             return
         from .update_health import active_evidence, pointer_witness
+        from .updates import active_release
         facts = await asyncio.to_thread(active_evidence, self.manager)
         if not facts.get('verifiedAt') or facts.get('activationUnknown'):
             raise ValueError('Partial acquisition needs a verified working component generation.')
         self.pointer = pointer_witness(self.manager)
+        if active_release(self.manager.home).get('current') != facts['generation']:
+            raise ValueError('The verified baseline is no longer current.')
         self.baseline = self.manager.directory / 'releases' / facts['generation']
         self.policies = json.loads((self.baseline / 'runtime-sources.json').read_text())
         self.graph = {row['name']: row for row in json.loads((self.baseline / 'runtime-installed.json').read_text())}
@@ -68,6 +71,34 @@ class Preparation:
             from .update_health import pointer_witness
             if pointer_witness(self.manager) != self.pointer:
                 raise ValueError('The active generation changed during partial preparation.')
+
+    async def inherit_unchecked(self):
+        """Carry exact unresolved outcomes across an unrelated tier promotion.
+
+        This is the existing generation receipt, not another retry ledger.
+        Re-observe current owned copies before retaining an unchecked source;
+        installed presence by itself never authorizes retention.
+        """
+        from .updates import active_release
+        generation = active_release(self.manager.home).get('current')
+        if not generation:
+            return
+        prior = read(self.manager.directory / 'releases' / generation)
+        selection = sorted({row['appSelection'] for row in self.inventory if row.get('appSelection')})
+        if not prior or prior.get('selection') != selection:
+            return
+        missing = {key(value['source']): value for value in prior['results'].values()
+                   if value['status'] in {'failed', 'dependency-held'} and key(value['source']) not in self.groups}
+        if not missing:
+            return
+        rows = await self.manager.inventory_sources(indexed=True)
+        for identity, previous in missing.items():
+            copies = [dict(row, latest=previous.get('desired')) for row in rows
+                      if row.get('url') and row.get('ref') and key(row) == identity]
+            if not copies or any(row.get('current') != previous['revision'] for row in copies):
+                raise ValueError('An unchecked retained source no longer matches its qualified identity.')
+            self.groups[identity] = copies
+            await self.retain(identity, previous['status'])
 
     async def retain(self, identity, status):
         """Bind all copies and packages, never just remove a failed inventory row."""
@@ -151,11 +182,15 @@ class Preparation:
         from .updates import source_key
         selection = await collect(self.manager, self.stage, self.baseline.name)
         requirements = selection['runtimeRequirements']
-        # Only roots the canonical Collector actually reached may contribute
-        # dependency hold decisions. Missing evidence is not independence.
-        for name in selection['batchPaths']:
-            if name not in requirements:
-                raise ValueError('A selected root has no verifiable dependency declaration.')
+        # Only roots the canonical Collector actually reached may contribute.
+        # An unchanged local root need not authorize source retention; the final
+        # union still qualifies it. A changed managed root without provenance
+        # cannot be treated as independent.
+        for identity, rows in self.groups.items():
+            if any(row.get('status') == 'update' for row in rows):
+                for name, policy in self.policies.items():
+                    if key(policy) == identity and name in selection['batchPaths'] and name not in requirements:
+                        raise ValueError('A changed root has no verifiable dependency declaration.')
         changed = True
         while changed:
             changed = False
@@ -164,30 +199,30 @@ class Preparation:
                     continue
                 policies = {n: p for n, p in self.policies.items() if key(p) == identity and n in requirements}
                 conflict = False
-                for name in policies:
-                        data = requirements[name]['project']
-                        if 'dependencies' in data.get('dynamic', []):
-                            raise ValueError('Partial preparation cannot infer dynamic dependency independence.')
-                        for raw in data.get('dependencies', []):
-                            requirement = Requirement(raw)
-                            name = package_name(requirement.name)
-                            retained = self.retained.get(name)
-                            if retained is None:
-                                continue
-                            # Conservative marker/extras handling: do not hide a
-                            # possible runtime constraint to make a mixture fit.
-                            if requirement.specifier and not requirement.specifier.contains(self.graph[name]['version'], prereleases=True):
+                for parent in policies:
+                    data = requirements[parent]['project']
+                    if 'dependencies' in data.get('dynamic', []):
+                        raise ValueError('Partial preparation cannot infer dynamic dependency independence.')
+                    for raw in data.get('dependencies', []):
+                        requirement = Requirement(raw)
+                        name = package_name(requirement.name)
+                        retained = self.retained.get(name)
+                        if retained is None:
+                            continue
+                        # Conservative marker/extras handling: do not hide a
+                        # possible runtime constraint to make a mixture fit.
+                        if requirement.specifier and not requirement.specifier.contains(self.graph[name]['version'], prereleases=True):
+                            conflict = True
+                        if requirement.url:
+                            requested = git_source(requirement.url)
+                            if (requested is None or source_key(requested['url'], 'HEAD')[0] != source_key(retained['url'], 'HEAD')[0]
+                                    or requested['subdirectory'] != retained.get('subdirectory', '')
+                                    or requested['ref'] not in {retained['ref'], retained['revision']}):
                                 conflict = True
-                            if requirement.url:
-                                requested = git_source(requirement.url)
-                                if (requested is None or source_key(requested['url'], 'HEAD')[0] != source_key(retained['url'], 'HEAD')[0]
-                                        or requested['subdirectory'] != retained.get('subdirectory', '')
-                                        or requested['ref'] not in {retained['ref'], retained['revision']}):
-                                    conflict = True
-                        for dependency, constraints in requirements[name].get('constraints', {}).items():
-                            retained = self.retained.get(dependency)
-                            if retained and any(not compatible_constraint(item, retained) for item in constraints):
-                                conflict = True
+                    for dependency, constraints in requirements[parent].get('constraints', {}).items():
+                        retained = self.retained.get(dependency)
+                        if retained and any(not compatible_constraint(item, retained) for item in constraints):
+                            conflict = True
                 if conflict:
                     await self.retain(identity, 'dependency-held')
                     changed = True
@@ -200,7 +235,8 @@ class Preparation:
         from .deployment import write_private
         for row in self.inventory:
             if row.get('status') == 'update' and row.get('kind') != 'smart tool' and row['id'] not in self.results:
-                self.results[row['id']] = {'status': 'awaiting-adoption', 'revision': row['latest']}
+                kind = 'git' if row.get('url') and not row.get('registryManaged') else 'registry' if row.get('registryManaged') else 'runtime'
+                self.results[row['id']] = {'status': 'awaiting-adoption', 'revision': row['latest'], 'revisionKind': kind}
         write_private(self.stage / RECEIPT, json.dumps({'version': 1,
             'candidate': self.stage.name, 'attemptId': self.manager.diagnostics.state['attemptId'],
             'baseline': self.baseline.name, 'pointer': self.pointer,
@@ -215,8 +251,29 @@ def read(stage):
     from .staged_sources import owned_path
     owned_path(path, Path(stage))
     value = json.loads(path.read_text())
-    if value.get('version') != 1 or value.get('candidate') != Path(stage).name or not value.get('retained'):
+    if (not isinstance(value, dict) or value.get('version') != 1
+            or value.get('candidate') != Path(stage).name
+            or not isinstance(value.get('retained'), dict) or not value['retained']
+            or not re.fullmatch('[a-f0-9]{32}', value.get('attemptId', ''))
+            or not re.fullmatch('[a-f0-9]{32}', value.get('baseline', ''))
+            or not isinstance(value.get('results'), dict)):
         raise ValueError('Invalid partial source preparation receipt.')
+    for policy in value['retained'].values():
+        if (not isinstance(policy, dict) or not re.fullmatch('[a-f0-9]{40}', policy.get('revision', ''))
+                or not isinstance(policy.get('subdirectory', ''), str)):
+            raise ValueError('Invalid retained source identity.')
+        key(policy)
+    for result in value['results'].values():
+        if not isinstance(result, dict) or result.get('status') not in {'failed', 'dependency-held', 'awaiting-adoption'}:
+            raise ValueError('Invalid partial source result.')
+        revision = result.get('revision')
+        kind = result.get('revisionKind', 'git')
+        pattern = {'git': '[a-f0-9]{40}', 'registry': r'[0-9]+(?:\.[0-9A-Za-z]+)*(?:[-+][0-9A-Za-z.]+)?',
+                   'runtime': '(?:[a-f0-9]{64}|required)'}.get(kind)
+        if not pattern or not isinstance(revision, str) or not re.fullmatch(pattern, revision):
+            raise ValueError('Invalid partial result revision.')
+        if result['status'] != 'awaiting-adoption':
+            key(result['source'])
     return value
 
 
@@ -269,7 +326,8 @@ def pin_manifest(content, retained):
     generated = data['tool'].setdefault('amplifier-unified', {}).setdefault('generated-source-overrides', {})
     for name, policy in retained.items():
         source = sources.get(name)
-        if source and (not isinstance(source, dict) or source.get('git') != policy['url']
+        if source and (not isinstance(source, dict) or set(source) - {'git', 'rev', 'branch', 'subdirectory'}
+                       or len(set(source) & {'rev', 'branch'}) != 1 or source.get('git') != policy['url']
                        or (source.get('rev') or source.get('branch')) not in {policy['ref'], policy['revision']}
                        or source.get('subdirectory', '') != policy.get('subdirectory', '')):
             raise ValueError('Retaining a source cannot override another selected source policy.')
@@ -286,7 +344,8 @@ def pin_manifest(content, retained):
             if package_name(req.name) == name:
                 from .selected_runtime_dependencies import git_source
                 prior = git_source(req.url)
-                if req.marker or req.extras or prior is None or key(prior) != key(policy):
+                if (req.marker or req.extras or prior is None or key(prior) != key(policy)
+                        or prior.get('subdirectory', '') != policy.get('subdirectory', '')):
                     raise ValueError('An authored override protects the retained dependency.')
                 overrides.remove(old)
         overrides.append(value)
@@ -297,6 +356,7 @@ def pin_manifest(content, retained):
 async def stage_sources(manager, stage, candidates):
     """Prepare groups independently; only known settled fetch exits can retain."""
     plan = Preparation(manager, stage, manager.inventory)
+    await plan.inherit_unchecked()
     for identity, rows in plan.groups.items():
         if any(availability(row) for row in rows):
             status = 'dependency-held' if all(row.get('sourceUpdate') == 'dependency-held' for row in rows) else 'failed'
@@ -382,7 +442,7 @@ def adopted_inventory(rows, partial):
     return output
 
 
-def retained_after_check(manager, rows, *, fresh):
+def retained_after_check(manager, rows, *, retry_retained):
     """A recheck is not permission to repeat unchanged partial preparation."""
     from .updates import active_release
     generation = active_release(manager.home).get('current')
@@ -401,6 +461,6 @@ def retained_after_check(manager, rows, *, fresh):
             continue
         # A deliberate manual Check/Install may try again; automatic checks
         # require a genuinely new desired source revision.
-        if not fresh and (row.get('latest') == prior.get('desired') or row.get('status') == 'check_failed'):
+        if not retry_retained and row.get('status') == 'update' and row.get('latest') == prior.get('desired'):
             row.update(status='check_failed', sourceUpdate=prior['status'], availabilityFailure=True,
                        detail='The working version is retained. Check manually to retry this source.')

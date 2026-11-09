@@ -306,7 +306,9 @@ def _assert_probes(probes, generation, versions):
         for line in mounted[0]["stdout"].splitlines() if MOUNT_PREFIX in line
     ]
     assert {row["component"]: row["version"] for row in actual} == versions, actual
-    assert len(actual) == 3, actual
+    # Capability checking can initialize a module more than once. Verify every
+    # observed mount, not a guessed count of initialization hooks.
+    assert all(row["version"] == versions[row["component"]] for row in actual), actual
     assert next(row for row in actual if row["component"] == "c")["aVersion"] == versions["a"]
 
 
@@ -409,7 +411,9 @@ async def test_settled_fetch_retains_qualified_a_holds_c_and_advances_moving_b(m
         *PACKAGES.values(),
     ]
     sources = {
-        "amplifier-core": {"git": CORE_URL, "branch": "main"},
+        # Match the direct dependency's rev spelling. uv treats branch=main
+        # and direct @main as distinct constraints even for the same Git URL.
+        "amplifier-core": {"git": CORE_URL, "rev": "main"},
         "amplifier-foundation": {"git": FOUNDATION_URL, "branch": "main"},
         **{PACKAGES[name]: {"git": URLS[name], "branch": REFS[name]} for name in "abc"},
     }
@@ -527,6 +531,14 @@ async def test_settled_fetch_retains_qualified_a_holds_c_and_advances_moving_b(m
                 return out, err
 
             child.communicate = capture
+        elif "lock" in args or "sync" in args:
+            communicate = child.communicate
+            async def capture_resolver(*a, **kw):
+                out, err = await communicate(*a, **kw)
+                index = len(list(work.glob("resolver-*.log")))
+                (work / f"resolver-{index}.log").write_bytes((out or b"") + b"\nSTDERR\n" + (err or b""))
+                return out, err
+            child.communicate = capture_resolver
         return child
 
     def record_promotion(generation, **kwargs):
@@ -725,10 +737,39 @@ async def test_settled_fetch_retains_qualified_a_holds_c_and_advances_moving_b(m
                     if event["id"] == failure_event["id"]) == failure_event
         assert _tree(history) == history_before
         assert not runtime.workers and not forbidden.exists()
+        # A later incompatible union must fail closed, rather than partitioning
+        # installer/initialization failures into arbitrary component subsets.
+        _component(roots["b"], "b", "4.0.0", forbidden)
+        entry = roots["b"] / "amplifier_module_tool_partial_b/__init__.py"
+        entry.write_text(entry.read_text().replace(
+            "async def mount(coordinator, config=None):",
+            "async def mount(coordinator, config=None):\n    raise RuntimeError('Incompatible candidate fixture')"))
+        _commit(roots["b"], "Refuse incompatible B initialization")
+        await manager.check(fresh=True)
+        safe_pointer = (manager.directory / "active.json").read_bytes()
+        await manager.install()
+        assert app.state["updates"]["phase"] == "error"
+        assert (manager.directory / "active.json").read_bytes() == safe_pointer
+        assert promotions == [baseline, partial_generation, second]
+        assert manager.diagnostics.state["batch"]["retry"]["mode"] == "changed-inputs"
+        no_retry = len(commands), len(probes)
+        await manager.install(automatic=True)
+        assert (len(commands), len(probes)) == no_retry
+        # Return to the previous qualified mixed generation by the ordinary
+        # rollback path. No fresh resolver subset or host restart is introduced.
+        await manager.rollback()
+        assert updates.active_release(home)["current"] == partial_generation
+        assert promotions == [baseline, partial_generation, second, partial_generation]
+        verify_recorded(project, stage)
+        assert _tree(history) == history_before
+        assert next(event for event in _journal(manager)
+                    if event["id"] == failure_event["id"]) == failure_event
         _json(work / "verified-result.json", {
             "baseline": baseline, "partial": partial_generation, "second": second,
             "revisions": {**old, "b": b_third}, "promotions": promotions,
             "historyUnchanged": True, "sharedStoreCovered": False,
+            "incompatibleUnionRefused": True, "unchangedFailureNotRetried": True,
+            "rollback": partial_generation,
         })
     finally:
         try:

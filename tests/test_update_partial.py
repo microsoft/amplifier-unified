@@ -123,13 +123,15 @@ async def test_failed_distinct_a_keeps_all_copies_holds_dependent_c_advances_b(p
     assert 'https://' not in json.dumps(partial.public_results(receipt, adopted=True))
 
 
-@pytest.mark.parametrize('change', ['baseline', 'dirty', 'drift', 'pin', 'unknown'])
+@pytest.mark.parametrize('change', ['baseline', 'dirty', 'drift', 'pin', 'unknown', 'origin', 'duplicate-dirty'])
 async def test_partial_never_invents_retention_for_unsafe_inputs(preparation, monkeypatch, change):
     p = preparation
     if change == 'baseline': monkeypatch.setattr(update_health, 'active_evidence', lambda manager: {})
     if change == 'dirty': (p.stage/'foundation/cache/a/pyproject.toml').write_text('user edit')
     if change == 'drift': p.rows[0]['current'] = 'e'*40
     if change == 'pin': p.rows[0]['ref'] = p.old['a']
+    if change == 'origin': git(p.stage/'foundation/cache/a', 'remote', 'set-url', 'origin', 'https://example.invalid/fork')
+    if change == 'duplicate-dirty': (p.stage/'foundation/cache/a-duplicate/pyproject.toml').write_text('user edit')
     if change == 'unknown':
         async def uncertain(*args, **kw):
             if 'fetch' in args: raise CommandTimeout(1)
@@ -160,6 +162,82 @@ async def test_partial_receipt_blocks_unchanged_auto_retry_not_manual_or_new_rev
     p.pointer.write_text(json.dumps({'current': p.stage.name}))
     for fresh, latest, expected in [(False, p.new['a'], 'check_failed'), (True, p.new['a'], 'update'), (False, 'e'*40, 'update')]:
         rows = [dict(r, latest=latest) for r in p.rows if r['id'] == 'a']
-        partial.retained_after_check(p.manager, rows, fresh=fresh)
+        partial.retained_after_check(p.manager, rows, retry_retained=fresh)
         assert rows[0]['status'] == expected
     assert partial.read(p.stage)['results']['a']['status'] == 'failed'
+
+
+async def test_new_unknown_availability_is_not_reclassified_from_history(preparation):
+    p = preparation
+    await partial.stage_sources(p.manager, p.stage, p.rows)
+    p.pointer.write_text(json.dumps({'current': p.stage.name}))
+    row = {**p.rows[0], 'status': 'check_failed', 'availabilityFailure': False}
+    partial.retained_after_check(p.manager, [row], retry_retained=False)
+    assert row['availabilityFailure'] is False
+    assert not partial.availability(row)
+
+
+@pytest.mark.parametrize('kind,revision', [('runtime', 'f'*64), ('registry', '2.0.3')])
+async def test_non_git_updated_result_has_its_own_revision_kind(preparation, kind, revision):
+    p = preparation
+    p.rows.append({'id': 'runtime:extra', 'kind': 'runtime environment' if kind == 'runtime' else 'runtime dependency',
+                   'registryManaged': kind == 'registry', 'status': 'update', 'eligible': True, 'latest': revision})
+    await partial.stage_sources(p.manager, p.stage, p.rows)
+    assert partial.read(p.stage)['results']['runtime:extra'] == {
+        'status': 'awaiting-adoption', 'revision': revision, 'revisionKind': kind}
+
+
+def test_candidate_pin_preserves_conditional_and_subdirectory_restrictions():
+    policy = {'url': 'https://example.invalid/a', 'ref': 'main', 'revision': 'a'*40, 'subdirectory': 'pkg-a'}
+    for source in [
+        {'git': policy['url'], 'branch': 'main', 'subdirectory': 'pkg-a', 'marker': "sys_platform == 'linux'"},
+        {'git': policy['url'], 'branch': 'main', 'rev': 'main', 'subdirectory': 'pkg-a'},
+    ]:
+        from amplifier_web.runtime_environment import toml_value
+        content = ('[project]\nname="worker"\nversion="1"\n[tool.uv.sources]\na=' + toml_value(source)).encode()
+        with pytest.raises(ValueError):
+            partial.pin_manifest(content, {'a': policy})
+    content = b'[project]\nname="worker"\nversion="1"\n[tool.uv]\noverride-dependencies=["a @ git+https://example.invalid/a@main#subdirectory=pkg-b"]\n'
+    with pytest.raises(ValueError):
+        partial.pin_manifest(content, {'a': policy})
+
+
+@pytest.mark.parametrize('source', [
+    '{git="https://example.invalid/fork",branch="stable"}',
+    '{git="https://example.invalid/a",tag="stable"}',
+    '{git="https://example.invalid/a",branch="another"}',
+    '{git="https://example.invalid/a",rev="' + 'b'*40 + '"}',
+    '{git="https://example.invalid/a",branch="stable",subdirectory="other"}',
+])
+def test_candidate_retention_never_changes_explicit_selection(source):
+    policy = {'url': 'https://example.invalid/a', 'ref': 'stable', 'revision': 'a'*40}
+    content = ('[project]\nname="worker"\nversion="1"\n[tool.uv.sources]\na=' + source).encode()
+    with pytest.raises(ValueError):
+        partial.pin_manifest(content, {'a': policy})
+
+
+async def test_retention_receipt_requires_unchanged_pointer_and_well_formed_identity(preparation):
+    p = preparation
+    plan = await partial.stage_sources(p.manager, p.stage, p.rows)
+    p.pointer.write_text(json.dumps({'current': 'd'*32}))
+    with pytest.raises(ValueError, match='generation changed'):
+        await plan.recheck()
+    with pytest.raises(ValueError, match='generation changed'):
+        partial.verify_pointer(p.manager, partial.read(p.stage))
+    path = p.stage / partial.RECEIPT
+    value = json.loads(path.read_text())
+    value['retained']['fixture-a']['revision'] = 'not a commit'
+    path.write_text(json.dumps(value))
+    with pytest.raises(ValueError):
+        partial.read(p.stage)
+
+
+@pytest.mark.parametrize('error', [RuntimeError('unknown'), CommandTimeout(1), asyncio.CancelledError(),
+                                 CommandFailure({'exitCode': -15}), CommandFailure({'exitCode': 0})])
+def test_only_settled_positive_fetch_exit_can_enter_retention(error):
+    error.source_fetch_failed = True
+    assert not partial.settled_fetch(error)
+
+
+def test_other_command_failure_is_not_fetch_authority():
+    assert not partial.settled_fetch(CommandFailure({'exitCode': 128}))

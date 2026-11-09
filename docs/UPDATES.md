@@ -63,6 +63,57 @@ finish its turn before adopting the new one.
   Downloaded or installed files alone do not establish that a session is using
   the new components.
 
+## Partial source failure — first implementation slice (qualification pending)
+
+**Status:** implementation draft for the accepted policy above. Full-path
+qualification is pending; this section is not evidence of shipped or verified
+behavior, nor completion of the broader failure-isolation requirements.
+
+This slice handles settled pre-install source acquisition failures: an eligible
+source's availability lookup has a known, settled failure, or a legacy app-owned
+Git cache fetch has exited with a known nonzero status. Retention requires a
+verified working generation, matching source identity and exact revision, clean
+owned copies and qualified package evidence. It does not treat a timeout,
+cancellation, unsettled command or unknown write as a settled fetch failure.
+
+For example, if fetching A's new source fails, keep verified A-old. If C-new
+requires A-new, retain verified C-old as **dependency-held**. Independent B-new
+can advance only if the resulting A-old/C-old/B-new union passes the ordinary
+offered-profile dependency resolution, installed-source verification and runtime
+qualification. There is one qualified union and one atomic generation promotion,
+not independently promoted package fragments. All copies and packages of the
+same repository/ref remain coupled; a successful sibling copy cannot silently
+advance that identity around a failed copy.
+
+The retained revision is an exact candidate constraint. The configured moving
+branch remains separate policy and is still followed by later update checks.
+Retention does not replace a user's source, branch or pin, or turn a moving ref
+into a permanent pin. Local edits, conflicting identities and missing verified
+baselines remain protected.
+
+Shared-store sources may retain their verified old binding after an availability
+failure. A shared-store fetch failure does **not** establish the same settled
+legacy-fetch boundary; an unknown store mutation fails closed. This slice does
+not partition arbitrary resolver or installer conflicts, infer independence from
+dynamic dependency metadata, or detach component work from an application check
+or restart. Existing application, Smart Tool, activation and unknown-operation
+guards still apply.
+
+The public `componentResults` receipt reports each source ID, exact revision and
+one of **failed**, **dependency-held**, **awaiting-adoption** or **updated**.
+The UI resolves names from the public source inventory, including grouped members;
+it does not expose private source URLs. Retained rows remain `check_failed`, with
+`sourceUpdate` and sanitized detail distinguishing failure from dependency hold.
+Promoted rows become `current` with `sourceUpdate: updated`. **Awaiting adoption**
+is not promotion; **updated** confirms promotion for new work, not adoption by
+every running worker. The existing worker-adoption status remains separate.
+
+`includedCanProceed` permits an independent eligible installation despite included
+source issues. It does not clear a pending replacement, restart or uncertain
+operation, and does not make the failed tier “Up to date.” An unchanged automatic
+check does not silently retry retained failures; a deliberate manual check can
+refresh the desired sources for a new guarded attempt.
+
 ## Current implementation and operational behavior
 
 Available updates are listed immediately at the top of Settings. The application has its own card showing the installed version even before the first check, plus the latest published release after a successful check. The complete source inventory is behind **Show all sources**; failed checks are called out separately. Successfully installed application releases are removed from the pending count on restart. An installation newer than the published release is identified explicitly; application updates follow stable GitHub Releases, not every commit on main.
