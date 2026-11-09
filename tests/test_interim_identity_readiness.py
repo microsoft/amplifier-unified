@@ -106,10 +106,23 @@ async def _open_work(service, client, saved, requested, window):
              if row.get('kind') == 'tool' and row.get('toolCallId') == saved['call']
              and (window == 'resident' or row.get('event') == 'tool:post')]
     if window == 'resident':
+        assert node['sessionId'] == saved['public']
+        assert node['rootSessionId'] == saved['public']
         assert node['toolObservationId'] == saved['observation']
         detail = await _get(client, {**node['toolDetail'], 'sessionId': requested})
         node = detail['item']
+        assert node['sessionId'] == saved['public']
+        assert node['rootSessionId'] == saved['public']
         assert node['contentAvailability']['status'] == 'linked'
+    else:
+        # Raw event observations retain their native source namespace, not
+        # invented host root placement (EXECUTION-INSPECTION / _observation).
+        # Public owner authority is observable in the issued field selectors
+        # below and the positive alias / cross-root refusal HTTP checks.
+        assert node['sessionId'] == saved['native']
+        assert node['sourceSessionId'] == saved['native']
+        assert node['observation'] is True and node['association'] == 'unverified'
+        assert 'rootSessionId' not in node
     fields = {field: copy.deepcopy(node[field + 'Detail']) for field in ('input', 'output')}
     for field, selector in fields.items():
         # A field selector identifies canonical evidence, not necessarily the
