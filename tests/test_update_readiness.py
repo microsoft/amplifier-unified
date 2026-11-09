@@ -429,6 +429,49 @@ async def test_slow_target_preparation_cannot_stall_loop_or_reset_budget(tmp_pat
         await service.close()
 
 
+@pytest.mark.parametrize('slow_phase', ['response', 'confirmation'])
+async def test_total_readiness_deadline_covers_multiple_targets_and_confirmation(tmp_path, monkeypatch, slow_phase):
+    service, manager = make_manager(tmp_path, monkeypatch)
+    service.port = 8941
+    requests, confirmed = [], []
+    class Response:
+        status = 200
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        async def json(self):
+            await asyncio.sleep(.04 if slow_phase == 'response' else .001)
+            return health(manager)
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        def get(self, url, **kwargs):
+            requests.append(url)
+            return Response()
+    async def confirm(*args, **kwargs):
+        await asyncio.sleep(.04)
+        confirmed.append(True)
+        return True
+    urls = ['https://127.0.0.1:8941/api/health', 'https://127.0.0.2:8941/api/health']
+    monkeypatch.setattr(update_readiness, 'probe_targets', lambda manager: (urls, None))
+    monkeypatch.setattr(update_readiness.aiohttp, 'ClientSession', Client)
+    monkeypatch.setattr(update_readiness, 'confirm_readiness', confirm)
+    try:
+        await update_readiness.wait_for_readiness(manager, 'fixture-token', timeout=.02, interval=.001)
+        assert requests == urls[:1]  # Never start target two after total budget.
+        assert not confirmed  # No late confirmation, including an in-flight one.
+        assert service.state['updates']['pendingRestart'] == TARGET
+        assert manager.diagnostics.state['lastFailure']['errorType'] == 'TimeoutError'
+        assert not any(row['phase'] == 'restart-ack' for row in manager.diagnostics.state['events'])
+    finally:
+        await service.close()
+
+
 async def test_cancelled_readiness_preserves_marker_and_reports_interruption(tmp_path,monkeypatch):
     service,manager=make_manager(tmp_path,monkeypatch)
     async def handle(request):return web.json_response(health(manager))

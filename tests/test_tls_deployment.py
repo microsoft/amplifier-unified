@@ -270,6 +270,23 @@ def test_supplied_certificate_diagnostics_do_not_recommend_overwriting_with_app_
     assert not host.exists()
 
 
+def test_scoped_ipv6_uses_unscoped_san_identity_without_changing_transport_config(tmp_path):
+    import ipaddress
+    from cryptography import x509
+    from amplifier_web.deployment import load_server_config
+    from amplifier_web.tls import certificate_checks, setup_local_ca
+    config = setup_local_ca(tmp_path, load_server_config(tmp_path))
+    _replace_test_certificate(tmp_path, 'leaf.crt',
+                              sans=[x509.IPAddress(ipaddress.ip_address('fe80::123'))])
+    config = {**config, 'bind': ['fe80::123%7'],
+              'public_origins': ['https://[fe80::123%7]:8941']}
+    messages = '\n'.join(row['message'] for row in certificate_checks(tmp_path, config))
+    assert 'Certificate SAN covers fe80::123%7.' in messages
+    assert 'SAN is missing' not in messages
+    assert config['bind'] == ['fe80::123%7']
+    assert config['public_origins'] == ['https://[fe80::123%7]:8941']
+
+
 @pytest.mark.parametrize('missing', ['ca.crt', 'ca.key'])
 def test_missing_ca_preserves_other_certificate_findings_and_does_not_regenerate(tmp_path, missing):
     from amplifier_web.deployment import load_server_config

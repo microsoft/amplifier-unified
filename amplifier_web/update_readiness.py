@@ -609,17 +609,22 @@ async def wait_for_readiness(manager, token, *, timeout=60, interval=.25):
             # Resolver/syscall preparation must not stall the event loop or
             # receive a fresh timeout budget after a slow DNS lookup.
             urls, pin = await asyncio.to_thread(probe_targets, manager)
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2), trust_env=False) as client:
-            while not manager.closed and asyncio.get_running_loop().time() < deadline:
-                for url in urls:
-                    try:
-                        async with client.get(url, ssl=pin, allow_redirects=False, headers={
-                                'Authorization': 'Bearer ' + token, 'Host': f'localhost:{manager.service.port}'}) as response:
-                            if response.status == 200 and await confirm_readiness(manager, await response.json(), expected=target, command_id=command_id, successor=successor):
-                                return
-                    except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
-                        pass
-                await asyncio.sleep(interval)
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2), trust_env=False) as client:
+                while not manager.closed and asyncio.get_running_loop().time() < deadline:
+                    for url in urls:
+                        if asyncio.get_running_loop().time() >= deadline:
+                            raise TimeoutError
+                        try:
+                            async with client.get(url, ssl=pin, allow_redirects=False, headers={
+                                    'Authorization': 'Bearer ' + token, 'Host': f'localhost:{manager.service.port}'}) as response:
+                                value = await response.json() if response.status == 200 else None
+                                if asyncio.get_running_loop().time() >= deadline:
+                                    raise TimeoutError
+                                if response.status == 200 and await confirm_readiness(manager, value, expected=target, command_id=command_id, successor=successor):
+                                    return
+                        except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
+                            pass
+                    await asyncio.sleep(interval)
         issue = ('TimeoutError', 'failed')
     except asyncio.CancelledError:
         issue = ('CancelledError', 'interrupted')

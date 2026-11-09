@@ -240,7 +240,10 @@ def certificate_checks(data_dir: Path, config: dict) -> list[dict]:
             continue  # A wildcard bind is not a client identity.
         host = canonical_host(host)
         try:
-            covered = ipaddress.ip_address(host) in ips
+            # Zones select a local interface for transport, not a certificate
+            # identity: X.509 IP SANs encode only the address bytes.
+            address = ipaddress.ip_address(host)
+            covered = type(address)(int(address)) in ips
         except ValueError:
             # Only a complete leftmost label may be a wildcard, never a suffix
             # match, partial label, IP literal, or multi-level substitution.
