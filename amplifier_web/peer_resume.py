@@ -77,7 +77,7 @@ def question_settings(app, source, target, captured=None):
     for sid, value in result['sessions'].items():
         old = (captured or {}).get('sessions', {}).get(sid, {}).get('nextMessage')
         now = value['nextMessage']
-        if (old and (old['pendingBundle'] or old['pendingModel'])
+        if (old and old['revision'] > 0
                 and old['revision'] == now['revision'] == now['appliedRevision']
                 and old['appliedRevision'] < now['appliedRevision']
                 and not now['pendingBundle'] and not now['pendingModel']

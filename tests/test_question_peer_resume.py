@@ -1,5 +1,6 @@
 """An actual question answer is fresh input, never permission or a replay."""
 import copy
+import json
 
 import pytest
 
@@ -9,7 +10,7 @@ from test_collaborative_workspaces import settled
 from test_peer_resume import paused_member, submit
 
 
-async def answered_member(app, *, next_bundle=False):
+async def answered_member(app, *, next_bundle=False, no_op_bundle=False):
     source, target, _ = await paused_member(app)
     if next_bundle:
         from amplifier_web.management import Management
@@ -18,7 +19,10 @@ async def answered_member(app, *, next_bundle=False):
                       task={'id': 'paused-report', 'revision': 2, 'status': 'paused',
                             'maxTurns': 5, 'goalState': {'turns_used': 1}})
         await app.dispatch('conversation.configure', {'sessionId': target['id'],
-            'expectedRevision': 0, 'bundle': 'next-report'}, command_id='saved-before-answer')
+            'expectedRevision': 0, 'bundle': 'anchors' if no_op_bundle else 'next-report'},
+            command_id='saved-before-answer')
+        if no_op_bundle:
+            assert not target.get('pendingBundleSelection'), 'Fixture needs an actual idle no-op saved choice'
     q = (await agent_action(app, source, 'question.create', {
         'sessionId': source['id'], 'prompt': 'Resume the unfinished report?',
         'required': True, 'dependency': 'Continue the existing report task',
@@ -214,12 +218,13 @@ async def test_question_backed_recovery_preserves_failed_generation(app):
     assert target['failure'] == before and len(app.runtime.inputs) == 1
 
 
-@pytest.mark.parametrize('change', ['unchanged', 'later_edit', 'wrong_bundle', 'missing_ack', 'stop', 'placement'])
+@pytest.mark.parametrize('change', ['unchanged', 'no_op', 'later_edit', 'wrong_bundle', 'missing_ack', 'stop', 'placement'])
 async def test_saved_next_message_transition_is_not_an_intervening_edit(app, monkeypatch, change):
     """Real prepare + runtime acknowledgement + host final admission, no process."""
     from amplifier_web import draft_defaults, next_message_configuration
     from amplifier_web.runtime import RuntimeManager
-    source, target, human, _ = await answered_member(app, next_bundle=True)
+    source, target, human, _ = await answered_member(app, next_bundle=True, no_op_bundle=change == 'no_op')
+    expected_bundle = 'anchors' if change == 'no_op' else 'next-report'
     before_task = copy.deepcopy(target['task'])
     runtime = RuntimeManager()
     next_message_configuration.bind(app, runtime)
@@ -243,14 +248,14 @@ async def test_saved_next_message_transition_is_not_an_intervening_edit(app, mon
                     return
             await emit(event, payload)
         configuration_guard = await runtime._start_for_input(session, observe)
-        assert started == ['next-report'] and len(acknowledgements) == 1
+        assert started == [expected_bundle] and len(acknowledgements) == 1
         if change == 'later_edit':
             await app.dispatch('conversation.configure', {'sessionId': target['id'],
                 'expectedRevision': 1, 'bundle': 'later-choice'}, command_id='new-choice')
         elif change == 'wrong_bundle': target['bundle'] = 'not-the-captured-choice'
         elif change == 'stop': target['interruptionRevision'] += 1
         elif change == 'placement': target['executionRevision'] = target.get('executionRevision', 0) + 1
-        if change != 'unchanged':
+        if change not in {'unchanged', 'no_op'}:
             assert guard(), change
             assert not app.collaboration.admission(target['id'], args)['admitted']
             return {'accepted': False, 'reason': guard()}
@@ -262,7 +267,13 @@ async def test_saved_next_message_transition_is_not_an_intervening_edit(app, mon
     await submit(app, source, target, human)
     await until(lambda: app.collaboration.receipt('resume-member')['delivery'] in {'accepted', 'suppressed', 'unknown', 'not_sent'})
     receipt = app.collaboration.receipt('resume-member')
-    assert receipt['delivery'] == ('accepted' if change == 'unchanged' else 'suppressed'), (
+    print('NEXT_MESSAGE_OBSERVATION=' + json.dumps({
+        'change': change, 'started': started, 'acknowledgements': acknowledgements,
+        'delivery': receipt['delivery'], 'reason': receipt.get('admission', {}).get('reason'),
+        'appliedRevision': target.get('appliedConfigurationRevision'),
+        'bundle': target.get('bundle'), 'taskUnchanged': target['task'] == before_task,
+    }, sort_keys=True))
+    assert receipt['delivery'] == ('accepted' if change in {'unchanged', 'no_op'} else 'suppressed'), (
         'Applying the already-saved choice must not consume the answer as a failed resume', receipt)
     assert target['task'] == before_task
-    assert len(app.runtime.inputs) == (1 if change == 'unchanged' else 0)
+    assert len(app.runtime.inputs) == (1 if change in {'unchanged', 'no_op'} else 0)

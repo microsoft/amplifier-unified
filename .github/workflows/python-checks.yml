@@ -234,13 +234,28 @@ jobs:
           git archive b11bc51f29aecaa08bc96358d3129215886cd9de | tar -x -C "$RUNNER_TEMP/question-resume-before-next-message"
           cp tests/test_question_peer_resume.py "$RUNNER_TEMP/question-resume-before-next-message/tests/"
           set +e
-          (cd "$RUNNER_TEMP/question-resume-before-next-message" && "$GITHUB_WORKSPACE/.venv/bin/python" -m pytest -v --tb=short \
+          (cd "$RUNNER_TEMP/question-resume-before-next-message" && "$GITHUB_WORKSPACE/.venv/bin/python" -m pytest -s -v --tb=short \
             'tests/test_question_peer_resume.py::test_saved_next_message_transition_is_not_an_intervening_edit[unchanged]') \
             2>&1 | tee output/python-checks/next-message-predecessor.log
           predecessor=${PIPESTATUS[0]}
           set -e
           test "$predecessor" -eq 1
           grep -q 'Applying the already-saved choice must not consume the answer as a failed resume' output/python-checks/next-message-predecessor.log
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          marker = 'NEXT_MESSAGE_OBSERVATION='
+          rows = [json.loads(line.split(marker, 1)[1]) for line in
+                  Path('output/python-checks/next-message-predecessor.log').read_text().splitlines()
+                  if marker in line and line.split(marker, 1)[1].startswith('{')]
+          row, = rows
+          assert row['change'] == 'unchanged' and row['started'] == ['next-report']
+          ack, = row['acknowledgements']
+          assert ack['revision'] == row['appliedRevision'] == 1
+          assert ack['bundle'] == row['bundle'] == 'next-report'
+          assert row['taskUnchanged'] and row['delivery'] == 'suppressed'
+          assert row['reason'] == 'The question-backed resume settings or placement changed.'
+          PY
           uv run --no-sync python - <<'PY' > output/python-checks/question-resume-imports.json
           import hashlib, importlib, json, subprocess, xml.etree.ElementTree as ET
           from pathlib import Path
