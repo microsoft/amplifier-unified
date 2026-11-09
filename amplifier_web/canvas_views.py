@@ -368,7 +368,7 @@ class CanvasViews:
     def report_binding(self, view_id, row, preference):
         return {'viewId': view_id, 'resourceId': row['id'],
                 'resourceRevision': self.revision(row), 'generation': preference['generation'],
-                'renderer': preference['renderer']}
+                'renderer': preference['renderer'], 'clientId': self.service.clients.current.get()}
 
     def view_reports(self, view_id, row, preference):
         # Reselecting the same definition may reload its body without remounting
@@ -385,8 +385,10 @@ class CanvasViews:
         reports = self.view_reports(view_id, row, preference)
         source_error = (self.service.state.get('canvas', {}).get('renderReports', {}).get('stored-source')
                         if view_id == 'primary' else None)
+        tool_state_error = (self.service.state.get('canvas', {}).get('renderReports', {}).get('stored-tool-state')
+                            if view_id == 'primary' else None)
         return summary(row['kind'], reports, binding=self.report_binding(view_id, row, preference),
-                       source_error=source_error)
+                       source_error=source_error, tool_state_error=tool_state_error)
 
     def feedback(self, saved, version):
         """Inspect at most this client's primary and eight inline leases."""

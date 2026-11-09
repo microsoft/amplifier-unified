@@ -128,6 +128,7 @@ try{
  await expect(feedback).toContainText('Saved; the browser reported rendering.');
  await expect(page.locator('[data-canvas-view="primary"] .a-diagram-stage img')).toHaveCount(1);
  assert.deepEqual((await quality(2)).quality.diagnostics,[]);
+ const renderedCorrection=await quality(2);
  assert.equal((await quality(1)).quality.status,'not_checked');
  const onlySaved=(await action('canvas.show',{kind:'markdown',title:'Not opened',content:badSource,presentation:'saved'})).result;
  assert.equal(onlySaved.saved,true);assert.equal(onlySaved.quality.status,'not_checked');
@@ -143,9 +144,14 @@ try{
  await page.getByRole('button',{name:'Preview copy',exact:true}).click();
  await expect(page.locator('[data-canvas-view="primary"] .a-diagram-stage img')).toHaveCount(1);
  assert.deepEqual(await writingQuality(),beforeEdit,'Local-copy rendering is not saved-version evidence');
+ await page.getByRole('button',{name:'Edit copy',exact:true}).click();
+ await page.getByRole('textbox',{name:'Edit writing copy',exact:true}).fill('```mermaid\nflowchart LR\n C[Unclosed local label\n```');
+ await page.getByRole('button',{name:'Preview copy',exact:true}).click();
+ await expect(page.getByRole('alert').filter({hasText:'This local preview could not be rendered.'})).toBeVisible();
+ assert.deepEqual(await writingQuality(),beforeEdit,'A failed local copy must not change saved-version feedback');
  const feedbackCommands=commands.filter(row=>row.action==='canvas.views.command'&&row.args?.action==='canvas.report');
  assert.ok(feedbackCommands.length<80,`Render reporting must settle, got ${feedbackCommands.length}`);
- if(output)await writeFile(output+'/quality-observations.json',JSON.stringify({bad,failed,corrected,rendered:await quality(2),onlySaved,limits:['Browser reports are not pixel review or source-only validation.']},null,2)+'\n');
+ if(output)await writeFile(output+'/quality-observations.json',JSON.stringify({bad,failed,corrected,rendered:renderedCorrection,onlySaved,limits:['Browser reports are not pixel review or source-only validation.']},null,2)+'\n');
  const sentAfterVersions=(await(await page.request.get(url+'/fixture')).json()).sent;
  assert.deepEqual(sentAfterVersions,sentBeforeVersions,'Browsing, reloading and explicitly restoring saved versions never replay model input');
  const versionCommands=commands.slice(commandsBeforeVersions);

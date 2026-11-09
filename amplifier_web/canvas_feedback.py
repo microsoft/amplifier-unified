@@ -18,7 +18,7 @@ MESSAGES = {
 }
 
 
-def summary(kind, reports=None, *, binding=None, source_error=None):
+def summary(kind, reports=None, *, binding=None, source_error=None, tool_state_error=None):
     """Only exact-target reports count; mount and clipboard events do not."""
     observed = {
         part: report for part, report in (reports or {}).items()
@@ -29,6 +29,8 @@ def summary(kind, reports=None, *, binding=None, source_error=None):
     # failure, never qualify a render. Only the selected source owner supplies it.
     if source_error and source_error.get('status') == 'error':
         observed['stored-source'] = source_error
+    if tool_state_error and tool_state_error.get('status') == 'error':
+        observed['stored-tool-state'] = tool_state_error
     preview = observed.get('preview', {})
     expected = ['preview']
     inventory_known = kind != 'markdown'
@@ -65,7 +67,8 @@ def summary(kind, reports=None, *, binding=None, source_error=None):
         status = 'not_checked'
     return {
         'status': status, 'message': MESSAGES[status],
-        'basis': 'source_unavailable' if 'stored-source' in observed else 'browser_reports',
+        'basis': ('source_unavailable' if 'stored-source' in observed else
+                  'tool_state_unavailable' if 'stored-tool-state' in observed else 'browser_reports'),
         'sourceValidation': 'not_checked',
         'coverage': 'reported_parts' if observed else 'none',
         'reportedParts': len(observed), 'expectedParts': len(expected) if inventory_known else None,

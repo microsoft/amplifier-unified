@@ -641,7 +641,7 @@ def test_delivery_warning_browser_owner_is_exact(fault):
 def canvas_browser_additions(rows, readiness_scripts):
     """Validate new Canvas owners before excluding them from frozen inventories."""
     scripts = set()
-    for name in ('canvas-refresh', 'canvas-refresh-catchup'):
+    for name in ('canvas-refresh', 'canvas-refresh-catchup', 'canvas-versions'):
         script = f'tests/{name}-browser.mjs'
         owners = [row for row in rows if row['id'] == name or script in row['command']]
         expected = {'id': name, 'command': ['node', script],

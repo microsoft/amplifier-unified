@@ -194,6 +194,10 @@ async def test_missing_stored_source_remains_actionable_and_cannot_be_rendered(a
     reference = deepcopy(original['body'])
     await report(app, view(app), 'ready', parts=[], partsComplete=True)
     app.db.execute('DELETE FROM state_resources WHERE id=?', (reference['$resource'],))
+    # A live body's normal pre-selection save would repair the removed record.
+    # Model reopening after source loss, not deleting an in-memory recoverable copy.
+    with app.clients.bind('one'):
+        app.state['canvas'] = {'id': 'old-client', 'open': False}
     await call(app, 'canvas.select', {'id': saved['id']})
     checked = await inspect(app, saved)
     assert checked['saved'] and checked['quality']['status'] == 'issues'
@@ -216,3 +220,25 @@ async def test_inline_report_stays_in_its_exact_version_and_client(app):
         'id': saved['id'], 'expectedRevision': 1, 'content': 'Next'})
     assert changed['quality']['status'] == 'not_checked'
     assert (await inspect(app, saved, 1))['quality']['status'] == 'rendered'
+
+
+async def test_resumed_client_cannot_inherit_another_clients_render_proof(app):
+    saved = await call(app, 'canvas.show', {'kind': 'markdown', 'content': '# Resumed'})
+    await report(app, view(app), 'ready', parts=[], partsComplete=True)
+    original = (await inspect(app, saved))['quality']
+    assert original['status'] == 'rendered' and original['view']['clientId'] == 'one'
+    app.clients.attach('clone', 'one')
+    cloned = await inspect(app, saved, client='clone')
+    assert cloned['quality']['status'] == 'not_checked'
+    await report(app, view(app, 'clone'), 'ready', client='clone', parts=[], partsComplete=True)
+    assert (await inspect(app, saved, client='clone'))['quality']['status'] == 'rendered'
+    assert (await inspect(app, saved))['quality'] == original
+
+
+def test_stored_tool_state_failure_is_distinct_from_browser_evidence():
+    result = summary('mcp-app', tool_state_error={
+        'status': 'error', 'message': 'The saved tool state is unavailable. No tool work was replayed.'})
+    assert result['status'] == 'issues'
+    assert result['basis'] == 'tool_state_unavailable'
+    assert result['diagnostics'][0]['part'] == 'stored-tool-state'
+    assert summary('text', tool_state_error={'status': 'ready'})['status'] == 'not_checked'

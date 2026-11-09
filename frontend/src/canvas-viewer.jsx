@@ -52,10 +52,10 @@ function cleanSvg(svg){
  return DOMPurify.sanitize(svg,{USE_PROFILES:{svg:true,svgFilters:true},FORBID_TAGS:['foreignObject','script','image','a','use','animate','set'],FORBID_ATTR:['href','xlink:href']});
 }
 let mermaidPromise;
-export function Diagram({kind,source,canvas,act,part='preview',embedded=false,sourceLine}){
- return <DiagramView key={[canvas.id,canvas.selectedVersion,canvas.resourceRevision,canvas.generation,kind,part].join(':')} {...{kind,source,canvas,act,part,embedded,sourceLine}}/>;
+export function Diagram({kind,source,canvas,act,part='preview',embedded=false,sourceLine,unreported=false}){
+ return <DiagramView key={[canvas.id,canvas.selectedVersion,canvas.resourceRevision,canvas.generation,kind,part].join(':')} {...{kind,source,canvas,act,part,embedded,sourceLine,unreported}}/>;
 }
-function DiagramView({kind,source,canvas,act,part,embedded,sourceLine}){
+function DiagramView({kind,source,canvas,act,part,embedded,sourceLine,unreported}){
  const id=useId().replace(/[^a-zA-Z0-9]/g,''),report=useReport(canvas,act,part),[result,setResult]=useState({}),[natural,setNatural]=useState(null);
  const view=canvas.view||{},navigation=useDiagramNavigation(view,patch=>viewAction(canvas,act,patch),!embedded),{zoom,panX,panY}=navigation.value;
  useEffect(()=>{
@@ -85,7 +85,7 @@ function DiagramView({kind,source,canvas,act,part,embedded,sourceLine}){
    {kind==='dot'&&<select aria-label="Graph layout" data-action="canvas.view" value={view.engine||'dot'} onChange={e=>set({engine:e.target.value,node:''})}>{[['dot','Flow'],['neato','Network'],['fdp','Spread'],['sfdp','Large network'],['circo','Circular'],['twopi','Radial']].map(([engine,label])=><option key={engine} value={engine}>{label}</option>)}</select>}
    <span className="a-diagram-hint">Drag to pan · Scroll to zoom</span>
   </div>}
-  {result.error?<div className="a-canvas-result error" role="alert"><AlertCircle/><span>{sourceLine?`Diagram at source line ${sourceLine}: `:''}Preview could not be rendered. See the saved artifact feedback.</span></div>:uri?<div ref={navigation.ref} className="a-diagram-stage" tabIndex={0} aria-label={embedded?'Diagram. Scroll to explore; arrow keys scroll.':'Diagram. Drag to pan; scroll to zoom. Arrow keys move; plus and minus zoom; zero fits.'} {...navigation.events}><img alt={canvas.title||'Diagram'} draggable="false" src={uri} onLoad={event=>setNatural({width:event.currentTarget.naturalWidth,height:event.currentTarget.naturalHeight})} style={embedded?undefined:{width:fit?natural.width*fit:undefined,height:fit?natural.height*fit:undefined,visibility:fit?'visible':'hidden',transform:`translate(${panX}px,${panY}px) scale(${zoom})`}}/></div>:<p role="status">Drawing diagram…</p>}
+  {result.error?<div className="a-canvas-result error" role="alert"><AlertCircle/><span>{sourceLine?`Diagram at source line ${sourceLine}: `:''}{unreported?'This local preview could not be rendered. Its result is not included in saved artifact feedback.':'Preview could not be rendered. See the saved artifact feedback.'}</span></div>:uri?<div ref={navigation.ref} className="a-diagram-stage" tabIndex={0} aria-label={embedded?'Diagram. Scroll to explore; arrow keys scroll.':'Diagram. Drag to pan; scroll to zoom. Arrow keys move; plus and minus zoom; zero fits.'} {...navigation.events}><img alt={canvas.title||'Diagram'} draggable="false" src={uri} onLoad={event=>setNatural({width:event.currentTarget.naturalWidth,height:event.currentTarget.naturalHeight})} style={embedded?undefined:{width:fit?natural.width*fit:undefined,height:fit?natural.height*fit:undefined,visibility:fit?'visible':'hidden',transform:`translate(${panX}px,${panY}px) scale(${zoom})`}}/></div>:<p role="status">Drawing diagram…</p>}
   {navigation.error&&<p role="status">{navigation.error}</p>}
   {!embedded&&result.nodes?.length>0&&<details className="a-node-inspector"><summary>Node details · {result.nodes.length}</summary><label>Inspect a node<select aria-label="Inspect graph node" data-action="canvas.view" value={view.node||''} onChange={e=>set({node:e.target.value})}><option value="">Choose a node…</option>{result.nodes.map(n=><option key={n.name} value={n.name}>{n.label&&n.label!=='\\N'?n.label+' ('+n.name+')':n.name}</option>)}</select></label>{selected&&<dl>{Object.entries(selected).map(([key,value])=><React.Fragment key={key}><dt>{key}</dt><dd>{typeof value==='object'?JSON.stringify(value):String(value)}</dd></React.Fragment>)}</dl>}</details>}
  </div>;
@@ -104,7 +104,7 @@ function CanvasMarkdown({canvas,act}){
   if(tracked)inventory.parts.add(part);else inventory.complete=false;
   // Editing a writing copy retains its preview, but it cannot report evidence
   // about the immutable saved definition or consume its bounded report slots.
-  return <Diagram kind={language==='mermaid'?'mermaid':'dot'} source={source} canvas={canvas} act={tracked?act:localReport} embedded part={tracked?part:`local-${node?.position?.start?.offset||0}`} sourceLine={mapped?lineAt(offset):undefined}/>;
+  return <Diagram kind={language==='mermaid'?'mermaid':'dot'} source={source} canvas={canvas} act={tracked?act:localReport} embedded unreported={!tracked} part={tracked?part:`local-${node?.position?.start?.offset||0}`} sourceLine={mapped?lineAt(offset):undefined}/>;
  }}),[canvas.id,canvas.content,canvas.resourceRevision,canvas.generation,act,inventory,lineAt]);
  useEffect(()=>{report('ready','Markdown displayed',{parts:[...inventory.parts].slice(0,99),partsComplete:inventory.complete&&inventory.parts.size<=99})},[inventory,report]);
  return <Markdown text={canvas.content} overrides={overrides} mapSource/>;
