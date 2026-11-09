@@ -364,6 +364,8 @@ async def test_windows_activation_keeps_host_and_candidate_before_replacement(tm
                        for path in tmp_path.rglob('*') if path.is_file()
                        and any(part in {'applications','config'} for part in path.relative_to(tmp_path).parts)}
         assert manager.diagnostics.state['latest']['phase']=='restart-capability'
+        assert manager.diagnostics.state['latest']['errorType']=='RuntimeError'
+        assert manager.diagnostics.state['latest']['attemptId']==pending['attemptId']
         target.assert_not_awaited()
         # Failure is a refused activation, not a host shutdown or a new-work gate.
         result=await service.dispatch('conversation.send',{'text':'Current host remains usable'})

@@ -525,14 +525,21 @@ async def _activate(manager, *, force=None):
         # The fallback below uses POSIX liveness/signalling and cannot provide
         # a graceful, exact-owner Windows handoff. Refuse BEFORE drain admission,
         # promotion, reinstall, runtime cancellation or any restart helper.
+        # A retained replacement/restart marker can describe an older UNKNOWN
+        # effect. Never replace that account with a claim of "unchanged".
+        if manager.service.state['updates'].get('pendingReplacement') or manager.service.state['updates'].get('pendingRestart'):
+            if force is not None:
+                from .update_restart import RestartRejected
+                raise RestartRejected('The earlier application handoff still needs verification. Its outcome and work gate were preserved.')
+            return
         message=('Automatic Windows application replacement is not available. '
                  'The running host and prepared candidate are unchanged. '
                  'Use a qualified manual installation handoff; restarting the '
                  'current launcher alone does not install this candidate.')
-        manager.diagnostics.begin('application',revision,
+        manager.diagnostics.begin('application',revision,release.get('attemptId'),
                                   application_extras=release.get('extras'))
         manager.diagnostics.record('restart-capability','failed',
-                                   errorType='NativeRestartUnavailable')
+                                   errorType='RuntimeError')
         await manager.publish(phase='error',error=message,
             detail='No application pointer, installed package, worker or process was replaced. '
                    'The staged receipt is retained; automatic activation will not retry it.')

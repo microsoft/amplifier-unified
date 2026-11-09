@@ -59,7 +59,7 @@ class NativeActivationAdmissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("pendingReplacement", state)
         self.assertNotIn("pendingRestart", state)
         manager.diagnostics.record.assert_called_once_with(
-            "restart-capability", "failed", errorType="NativeRestartUnavailable")
+            "restart-capability", "failed", errorType="RuntimeError")
 
     async def test_windows_force_is_not_an_escape_and_keeps_the_candidate(self):
         manager, state = self.manager()
@@ -72,9 +72,20 @@ class NativeActivationAdmissionTests(unittest.IsolatedAsyncioTestCase):
     async def test_existing_unknown_replacement_is_never_cleared(self):
         original = {"attemptId": "unknown-old-attempt", "outcome": "unknown"}
         manager, state = self.manager(pendingReplacement=copy.deepcopy(original))
+        before = copy.deepcopy(state)
         await self.owner("win32")(manager)
-        self.assertEqual(state["pendingReplacement"], original)
-        self.assertNotIn("pendingRestart", state)
+        self.assertEqual(state, before)
+        manager.diagnostics.begin.assert_not_called()
+        manager.diagnostics.record.assert_not_called()
+
+    async def test_existing_restart_receipt_is_not_relabelled_as_no_effect(self):
+        manager, state = self.manager(
+            phase="interrupted", pendingRestart={"attemptId": "unknown", "version": "0.68.0"})
+        before = copy.deepcopy(state)
+        with self.assertRaisesRegex(_RestartRejected, "earlier application handoff"):
+            await self.owner("win32")(manager, force={"already": "confirmed"})
+        self.assertEqual(state, before)
+        manager.diagnostics.begin.assert_not_called()
 
     async def test_no_pending_candidate_does_not_invent_a_failure(self):
         manager, state = self.manager(pendingApp=None)
