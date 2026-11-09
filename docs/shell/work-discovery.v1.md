@@ -77,9 +77,30 @@ An active status filter stays visible beside the results; clearing it preserves
 the search and workspace scope. Layout selection stays recognizable across
 Appearance detail levels; screen width may change its arrangement.
 
+All chats and workspace chat catalogs offer **Recent / date**, **Workspace** and
+**Status** grouping, independently of Focus / Brief / Studio layout. A visible,
+keyboard-operable age slider selects **24h, 7d, 30d, 90d, 1y or All**; All is the
+default. Age uses the catalog's meaningful navigation activity, not selection,
+rename or intermediate tool progress. Finite ranges include the cutoff, exclude
+unknown/nonpositive dates, and retain pinned chats in their saved order. Pins
+still honor search, archive, status and workspace scope. Unknown dates remain
+discoverable under All. Grouping and age apply to the complete eligible catalog
+before bounded paging; the existing sort applies within each group. Changing
+either starts at the first page. Preferences belong to the originating client's
+navigation instance and survive reload, without changing another instance or
+client, canonical history, or the quiet sidebar's Browse/Status/Recent controls.
+
 Use **Workspace** for the registered folder-backed entity and **No workspace** for
 a standalone chat. “Project” remains ordinary language for someone’s undertaking,
 not an alternate UI name or a new membership model.
+
+Mixed pins distinguish a workspace destination from a chat: pinned workspaces
+keep a recognizable folder icon and a small **Workspace** subtitle even while
+showing activity separately. Location is secondary: show the shortest distinguishing
+folder context for duplicate display names, considering the indexed registry
+rather than just the visible pin page. The explicit full-path preference and
+inspectable/copyable full path remain available. Mixed pin order and actions stay
+with their existing owners; a subtitle does not change membership or execution.
 
 A new web view without saved client state already starts on Home. Restoring an
 existing view, refreshing or reconnecting retains its place; explicit chat links
