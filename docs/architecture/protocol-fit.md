@@ -57,6 +57,68 @@ It is not established as a drop-in replacement for today's bundle/module runtime
 Build `amplifier-agent-acp` over the runtime we already use. The user explicitly
 excluded `microsoft/amplifier-agent` from the migration; do not adopt it as the backend.
 
+### Native dependency preparation
+
+An explicitly immutable native worker binds Foundation's public dependency-installation
+policy before accepting work. That policy covers inherited asynchronous/thread work,
+lazy activation and joined cleanup for the worker lifetime. Only after binding the
+compatible policy may its native readiness report include `runtimePreparation`:
+`version: 1`, `immutable: true`, `dependencyInstallation: false`, and
+`policy: "foundation-dependency-installation"`. Missing policy support or a malformed
+launcher value fails before readiness; ordinary mutable startup retains its behavior.
+
+This is the native launcher/worker boundary, not an added ACP field. The adapter
+checks the report; it does not manufacture it. The policy prevents Foundation
+dependency installation, not arbitrary module filesystem or subprocess effects.
+It establishes neither Full authorization nor source closure, cancellation, resume
+or broader protocol conformance; those need their own evidence.
+
+### First native execution-owner integration
+
+The next bounded pilot injects a trusted execution owner into the existing ACP
+server. Standard clients send ordinary ACP requests; the native owner supplies
+Unified's authority and lifecycle behavior internally. Reuse the existing parser
+and standard update projection rather than implementing a second wire translator
+or pretending an owner is a worker process.
+
+The initial owner delegates the complete lifecycle to existing `AppService` and
+`RuntimeManager` paths. Those paths create native identities, admit work, correlate
+bridge acknowledgments/cancellation, ingest usage and settle durable receipts.
+Routing only `capacity.admit` would omit the latter obligations. No adapter-owned
+accounting store or synthesized generation is part of this integration.
+
+| Owner operation | Meaning |
+| --- | --- |
+| Create | Return the identity from the canonical session-creation path. |
+| Prompt | Submit one identified input and observe its matching native outcome; acceptance alone is not completion. |
+| Cancel | Request the existing Stop operation; report the actual terminal outcome, including completion races. |
+| Release observation | Detach this observer without archiving history or cancelling accepted work. |
+| Close owned service | Use the existing owner shutdown/settlement policy; preserve durable work and do not promise survival of owner loss. |
+
+The trusted launcher supplies the authority binding. ACP prompt data cannot grant Full
+or substitute an execution owner. Targeted public updates follow the existing
+owner's event handling; they do not expose unrelated sessions or private model
+context, and are not themselves durable admission receipts. Standing Full, live
+write-policy changes, child ceilings, Stop and reservation/usage ownership retain
+their current semantics. Missing load, configuration, MCP or extension support in
+this experimental path stays unadvertised and fails explicitly without creating
+a replacement session. The existing adapter path keeps its supported behavior.
+
+Interactive approval forwarding is a separate limitation of this first path.
+The existing access-mode owner resolves standing Full; the adapter may join its
+actual settlement without becoming another policy evaluator. A genuinely pending
+request with no supported client surface produces an explicit unavailable result
+and detaches observation, preserving the canonical request and accepted work.
+It cannot silently wait, manufacture a decision, cancel work or authorize replay.
+User-question interaction also needs separate qualification.
+
+This is an experimental in-process boundary around a composite legacy owner,
+not yet a remote authority protocol, a lightweight broker or a new shared
+conversation implementation. Its first evidence must distinguish a failed
+reservation commit from a lost acknowledgment after commit, preserve unknown
+effects without replay, prevent dispatch after Stop/revocation, and exercise an
+actual protected action under standing Full without a new human callback.
+
 ## Mapping inventory
 
 This assigns a destination, not a promise that every mapping already exists.
