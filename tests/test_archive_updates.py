@@ -1,5 +1,6 @@
 """Archive activation keeps the existing replacement and generation owners."""
 import json
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -39,6 +40,8 @@ async def test_archive_activation_selects_verified_reinstall_or_qualified_promot
         assert len(installs) == (1 if compatible else 2)
         if not compatible:
             assert installs[0][-1] == installs[1][-1] == app_updates.artifacts.requirement(receipt['artifact'])
+            probes = [call for call in calls if app_updates.PROBE in call]
+            assert Path(probes[-1][0]) == bootstrap / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
         assert bool(generations.active(manager.home)) == compatible
         pending = service.state['updates']['pendingRestart']
         assert pending['qualification']['artifact'] == receipt['artifact']

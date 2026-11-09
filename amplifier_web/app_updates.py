@@ -711,6 +711,9 @@ async def _activate(manager, *, force=None):
             installed_python = target['prefix'] / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
         else:
             await manager.diagnostics.run('replacement-install',process,uv,'tool','install','--force',*resolution_args,install_requirement(release['revision'],extras,artifact),env=git_environment(),timeout=900)
+            # The serving interpreter may belong to an older active generation.
+            # uv replaced the public bootstrap, so verify that actual destination.
+            installed_python = bootstrap / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
         output=await manager.diagnostics.run('replacement-probe',process,installed_python,'-I','-c',PROBE,*extras,**browser_process_options(manager, extras),timeout=30)
         installed=verified_version(manager,output,validated['version'],'replacement-version')
         if graph is not None:
