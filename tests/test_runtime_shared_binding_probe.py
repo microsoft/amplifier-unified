@@ -99,7 +99,7 @@ async def test_shared_binding_uses_canonical_repository_identity(shared_source, 
     assert (c.obj / '.amplifier_cache_meta.json').read_bytes() == c.immutable
 
 
-@pytest.mark.parametrize('change', ['host', 'repository', 'commit', 'ref', 'subdirectory', 'local', 'dirty'])
+@pytest.mark.parametrize('change', ['host', 'repository', 'commit', 'ref', 'missing', 'subdirectory', 'local', 'dirty'])
 async def test_shared_binding_cannot_authorize_another_identity(shared_source, change):
     c = shared_source
     data = json.loads(c.binding.read_text())
@@ -115,6 +115,8 @@ async def test_shared_binding_cannot_authorize_another_identity(shared_source, c
         path.write_text(path.read_text() + '\n# protected edit\n')
     c.binding.write_text(json.dumps(data))
     before = c.binding.read_bytes()
+    if change == 'missing':
+        c.binding.unlink()
     if change == 'dirty':
         with pytest.raises(ValueError, match='changed'):
             await c.collector.report(c.batch, c.config)
@@ -122,10 +124,12 @@ async def test_shared_binding_cannot_authorize_another_identity(shared_source, c
         report = await c.collector.report(c.batch, c.config)
         with pytest.raises(environments.ProtectedRuntimeSource):
             verify_checked_selection(c.checked, report, exact=True)
-    assert c.binding.read_bytes() == before
+    assert not c.binding.exists() if change == 'missing' else c.binding.read_bytes() == before
 
 
-async def test_real_probe_installs_checked_shared_hook_after_adoption_and_freezes(shared_source, tmp_path, monkeypatch):
+@pytest.mark.parametrize('choice', ['equivalent', 'host', 'repository', 'commit', 'ref', 'subdirectory'])
+async def test_real_probe_installs_checked_shared_hook_after_adoption_and_freezes(
+        shared_source, tmp_path, monkeypatch, record_property, choice):
     c = shared_source
     assert sys.version_info[:2] == (3, 13)
     uv = shutil.which('uv')
@@ -177,6 +181,11 @@ async def test_real_probe_installs_checked_shared_hook_after_adoption_and_freeze
     profiles = c.stage / 'profiles.json'
     profiles.write_text('["fixture"]')
     checked = c.stage / 'runtime-sources.json'
+    if choice == 'host': c.checked[NAME]['url'] = URL.replace('example.invalid', 'other.invalid')
+    elif choice == 'repository': c.checked[NAME]['url'] = URL + '-other'
+    elif choice == 'commit': c.checked[NAME]['revision'] = 'f' * 40
+    elif choice == 'ref': c.checked[NAME]['ref'] = 'stable'
+    elif choice == 'subdirectory': c.checked[NAME]['subdirectory'] = 'another-module'
     checked.write_text(json.dumps(c.checked))
     overrides = c.stage / 'install-overrides.txt'
     overrides.write_text('')
@@ -189,18 +198,40 @@ async def test_real_probe_installs_checked_shared_hook_after_adoption_and_freeze
     command = [str(project / '.venv/bin/python'), str(probe), str(workspace), 'fixture',
                '--profiles', str(profiles), '--checked-sources', str(checked),
                '--install-overrides', str(overrides), '--global-only']
+    record_property('probeCommand', json.dumps(command))
+    identity = subprocess.check_output([command[0], '-c',
+        'import importlib.metadata as m,json,sys; import amplifier_foundation; '
+        'print(json.dumps({"python":sys.version,"executable":sys.executable,'
+        '"foundation":m.version("amplifier-foundation"),"foundationPath":amplifier_foundation.__file__}))'],
+        text=True, env=env)
+    record_property('probeIdentity', identity.strip())
+    record_property('unifiedSource', str(probe))
+    # The actual child must encounter different raw URL spellings, not a test
+    # that accidentally normalizes both records before reaching the collector.
+    assert json.loads(c.binding.read_text())['git_url'] == URL
+    assert json.loads(c.immutable)['git_url'] == URL + '.git'
+    payload_before = qualification.package_content(project)
     result = await asyncio.to_thread(subprocess.run, command, env=env,
         text=True, capture_output=True, timeout=90)
-    assert result.returncode == 0, result.stdout + result.stderr
+    record_property('probeStdout', result.stdout)
+    record_property('probeStderr', result.stderr)
     from amplifier_web.update_diagnostics import PROBE_PREFIX
     facts = [json.loads(line.removeprefix(PROBE_PREFIX)) for line in result.stdout.splitlines()
              if line.startswith(PROBE_PREFIX)][-1]
+    assert {path: path.read_bytes() for path in before} == before
+    if choice != 'equivalent':
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert not facts['ok'] and facts['errorType'] == 'ProtectedRuntimeSource'
+        assert qualification.package_content(project) == payload_before
+        assert not qualification.installed_graph(project)
+        return
+    assert result.returncode == 0, result.stdout + result.stderr
     assert facts['ok'] and facts['stage'] == 'prepared'
-    assert facts['packages'] == facts['sources'] == facts['resolverTransactions'] == 1
+    assert facts['packages'] == facts['resolverTransactions'] == 1
+    assert facts['sources'] == 4  # Hook plus installed loop and two source-only fixture modules.
     installed = environments.installed_sources(project)
     assert installed[NAME]['current'] == c.revision
     assert installed[NAME]['subdirectory'] == SUBDIRECTORY
-    assert {path: path.read_bytes() for path in before} == before
     final = await qualification.freeze(c.manager, GENERATION, project)
     qualification.verify_recorded(final, c.stage)
     assert environments.installed_sources(final)[NAME]['current'] == c.revision
