@@ -584,7 +584,7 @@ class Worker:
             event['rootSessionId'] = event_root_id
         root_generation = event_session_id == root_session_id and event_root_id == root_session_id
         loop = self.session.coordinator.get("orchestrator") if self.session else None
-        if root_generation:
+        if root_generation and self.runtime:
             self.task_origin.observe(event, self.runtime, loop)
         if root_generation and event.get('type') == 'generation.started':
             # Explicit inputs carry the host epoch captured at transport
