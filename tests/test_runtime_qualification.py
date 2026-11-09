@@ -39,17 +39,21 @@ def test_installed_graph_decodes_file_uri_with_platform_path_rules(tmp_path, mon
     assert graph[0]['directUrl']['url'] == reference
 
 
-def test_installed_graph_real_file_uri_preserves_absolute_path(tmp_path):
+@pytest.mark.parametrize('authority', ['', 'localhost', 'LOCALHOST', 'LocalHost'])
+def test_installed_graph_real_file_uri_preserves_absolute_path(tmp_path, authority):
     source = tmp_path / 'source with % and \u03bb'
     source.mkdir()
     project = tmp_path / 'project'
     metadata = project / '.venv/Lib/site-packages/fixture-1.0.dist-info'
     metadata.mkdir(parents=True)
     (metadata / 'METADATA').write_text('Metadata-Version: 2.1\nName: fixture\nVersion: 1.0\n')
-    (metadata / 'direct_url.json').write_text(json.dumps({'url': source.as_uri(), 'dir_info': {}}))
+    reference = source.as_uri()
+    if authority:
+        reference = reference.replace('file:///', 'file://' + authority + '/', 1)
+    (metadata / 'direct_url.json').write_text(json.dumps({'url': reference, 'dir_info': {}}))
     graph = runtime_qualification.installed_graph(project)
     assert graph[0]['path'] == str(source.resolve())
-    assert graph[0]['directUrl']['url'] == source.as_uri()
+    assert graph[0]['directUrl']['url'] == reference
 
 
 @pytest.mark.parametrize('policy', [None, {'QUALIFICATION_FIXTURE': 'child-only'}])

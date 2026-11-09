@@ -19,7 +19,7 @@ from . import runtime_environment as environments
 def _file_url_path(parsed):
     """Decode a file URL with native drive/authority rules, not URI path rules."""
     from urllib.request import url2pathname
-    authority = '//' + parsed.netloc if parsed.netloc and parsed.netloc != 'localhost' else ''
+    authority = '//' + parsed.netloc if parsed.netloc and parsed.netloc.lower() != 'localhost' else ''
     return Path(url2pathname(authority + parsed.path))
 
 
