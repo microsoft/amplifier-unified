@@ -9,7 +9,7 @@ import {LandingCollection} from './work-landing';
 
 export function WorkspaceRow({row,state,act,now,open,newChat,browse,onEdit,compact=false,pinnedShortcut=false,handle,floating=false,landing=false}){
  const workspace=!!row.workspaceId;
- const countsPending=pinnedShortcut&&(state.navigationResourceAges?.pinnedNavigation??'all')!==(state.view?.navAge||'all');
+ const countsPending=pinnedShortcut&&(row.navigationAge??'all')!==(state.view?.navAge||'all');
  const count=(workspace?row.chatCount:row.descendantWorkspaceCount)||0,noun=workspace?(count===1?'chat':'chats'):(count===1?'workspace':'workspaces');
  const selectedWorkspace=state.view?.workSurface==='workspace'?state.view.workWorkspaceId||state.selectedWorkspaceId:null;
  const selected=workspace&&row.workspaceId===selectedWorkspace;

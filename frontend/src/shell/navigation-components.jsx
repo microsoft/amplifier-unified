@@ -403,7 +403,9 @@ export function PinnedItems({page,model,workspaceModel=model,now,navigation,canE
  const owner=useRef({alive:true,version:0,read:null});
  useEffect(()=>{const current=owner.current;current.alive=true;return()=>{current.alive=false;current.version++;current.read?.controller.abort()}},[model.host]);
  const settle=usePinOrderSettlement(model.host);
- const items=page.items.map(item=>({...item,label:item.kind==='workspace'?(item.row.customName||item.row.name):(item.row.title||'Untitled conversation')})),visible=items.map(item=>item.id);
+ const items=page.items.map(item=>({...item,
+  ...(item.kind==='workspace'?{row:{...item.row,navigationAge:model.state.navigationResourceAges?.pinnedNavigation??'all'}}:{}),
+  label:item.kind==='workspace'?(item.row.customName||item.row.name):(item.row.title||'Untitled conversation')})),visible=items.map(item=>item.id);
  const reorder=async(next,{id,basis,target,contextKey})=>{
   const version=++owner.current.version;owner.current.read?.controller.abort();setError(null);setReading(false);
   try{

@@ -78,11 +78,11 @@ test('empty Pinned disappears; workspace-only and mixed pins share one section',
 });
 test('pinned workspace stays navigable while mismatched age activity waits for its resource',()=>{
  const folder={...row,activityCounts:{working:25},chatCount:25};
- const state={...snapshot,view:{navAge:'24h'},navigationResourceAges:{pinnedNavigation:'all'}};
+ const state={...snapshot,view:{navAge:'24h'}};
  const props={row:folder,state,act:host.dispatch,now:1,open(){},newChat(){},browse(){},compact:true,pinnedShortcut:true};
  const stale=renderToStaticMarkup(React.createElement(WorkspaceRow,props));
  assert.match(stale,/Open chats in \/research/);assert.doesNotMatch(stale,/25 chats working/);
- const fresh=renderToStaticMarkup(React.createElement(WorkspaceRow,{...props,state:{...state,navigationResourceAges:{pinnedNavigation:'24h'}}}));
+ const fresh=renderToStaticMarkup(React.createElement(WorkspaceRow,{...props,row:{...folder,navigationAge:'24h'}}));
  assert.match(fresh,/25 chats working/);
  const details=renderToStaticMarkup(React.createElement(WorkspaceDetails,{row:folder,countsPending:true,now:1}));
  assert.match(details,/Updating workspace activity/);assert.doesNotMatch(details,/<dt>Chats|25 working/);
