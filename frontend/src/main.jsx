@@ -40,6 +40,7 @@ import {homePatch} from './adaptive-work.js';
 import {SettingsExperience} from './settings-experience';
 import {useGuardedSettingsPanel,useGuardedSettingsSession} from './settings-drafts';
 import {useMessageOutbox,outboxMessages} from './message-outbox';
+import {checkedDelivery,deliveryRecovery} from './pending-delivery-checks';
 import {clientId,clientUrl,attachClient,draftJournal} from './api';
 import {checkpointSurfaces} from './surface-checkpoint';
 import {useConversationDetail} from './conversation-detail';
@@ -134,7 +135,8 @@ function App(){
  const [streamClient,setStreamClient]=useState(null);
  const [destinationTrail,setDestinationTrail]=useState(null),destinationHistory=useRef(null);
  if(!destinationHistory.current)destinationHistory.current=createDestinationHistory({changed:setDestinationTrail});
- useEffect(()=>onAuthenticationChange(scope=>{destinationHistory.current.invalidate(scope);clearAppearanceCatalogs();setBootAttempt(value=>value+1)}),[]);
+ const deliveryAuthentication=useRef(0);
+ useEffect(()=>onAuthenticationChange(scope=>{deliveryAuthentication.current++;destinationHistory.current.invalidate(scope);clearAppearanceCatalogs();setBootAttempt(value=>value+1)}),[]);
  const [state,setState]=useState(null),[catalog,setCatalog]=useState([]),[error,setError]=useState(''),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[bootAttempt,setBootAttempt]=useState(0),[draft,setDraft]=useState(''),[workerDraft,setWorkerDraft]=useState(''),[themeDraft,setThemeDraft]=useState(defaultSkin),[themeName,setThemeName]=useState('Amplifier Unified'),[preview,setPreview]=useState(false),[agentAction,setAgentAction]=useState('view.update'),[agentArgs,setAgentArgs]=useState('{"patch":{"mode":"chat"}}'),[voice,setVoice]=useState({status:'idle'}),[uploading,setUploading]=useState(false);
  const appearanceEditor=useAppearanceEditor(state?.theme,defaultSkin);
  const visualClient=useRef(null),computerClient=useRef(null);const [visual,setVisual]=useState({status:'idle'}),[computerVisual,setComputerVisual]=useState({status:'idle'});
@@ -223,6 +225,8 @@ function App(){
   });
  },[acceptState]);
  const dispatch=useCallback((action,args={},meta={})=>{
+  const deliveryTarget=action==='conversation.delivery'?deliveryRecovery(latest.current,latest.current?.sessions?.find(row=>row.id===args.sessionId)):null,deliveryAuthenticationAtStart=deliveryAuthentication.current;
+  const sameDeliveryTarget=()=>deliveryAuthenticationAtStart===deliveryAuthentication.current&&(!deliveryTarget||JSON.stringify(deliveryTarget)===JSON.stringify(deliveryRecovery(latest.current,latest.current?.sessions?.find(row=>row.id===args.sessionId))));
   const capabilityCard=isCapabilityCardAction(action,args,meta);
   const capabilityRead=capabilityCard&&action==='capability.read'?capabilityStopFence.current.beginRead(args):null;
   // Capture eligibility BEFORE passive recovery: this preflight cannot become
@@ -325,6 +329,8 @@ function App(){
   const dirtyBarrier=canvasDirtyBarrier.current;
   const execute=async()=>{
    if(meta.before)await meta.before;
+   if(action==='conversation.delivery'&&(!sameDeliveryTarget()||meta.deliveryRecovery&&JSON.stringify(meta.deliveryRecovery)!==JSON.stringify(deliveryTarget)))
+    throw Error('The delivery target changed. Nothing was sent again.');
    if(capabilityRecovery)await capabilityRecovery;
    if(meta.consumePermissionHistory){
     // This is bundled presentation housekeeping, never a saved stale draft.
@@ -366,6 +372,8 @@ function App(){
     // An exact positive delivery receipt is independent of the bounded message
     // window and of a following state read. Never treat generic acceptance as delivery.
     if(action==='conversation.delivery'&&result.accepted===true){
+     if(!sameDeliveryTarget())throw Error('The delivery target changed. Nothing was sent again.');
+     checkedDelivery(result,args.sessionId,args.inputId);
      outbox.acknowledge(args.sessionId,args.inputId,result.result);
      if(result.result?.delivery==='accepted'){
       try{sessionStorage.removeItem('amplifier.deliveryWarning.v1:'+JSON.stringify([args.sessionId,args.inputId]))}catch{}
@@ -376,7 +384,7 @@ function App(){
      if(result.state)acceptState(result.state);
      // Exact annotation and read-only preview receipts settle locally. Navigation
      // still waits for its authoritative frame and exact history confirmation.
-     else if(!['message.reaction','peer.preview','context.inspect'].includes(action))await awaitState(result);
+     else if(!['message.reaction','peer.preview','context.inspect','conversation.delivery'].includes(action))await awaitState(result);
     }catch(error){
      // An accepted reset is not a refusal when only its following read fails.
      // Keep the exact receipt; the Canvas owner offers a read, never a replay.
