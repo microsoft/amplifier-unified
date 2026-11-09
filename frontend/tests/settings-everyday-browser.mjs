@@ -17,7 +17,7 @@ try{
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  const preferenceLayouts=[];
  async function checkPreferenceLayout(surface){
-  const control=page.getByLabel('Preferred chat connection',{exact:true});
+  const control=page.locator('.a-settings-page-content:not([hidden])').getByLabel('Preferred chat connection',{exact:true});
   await expect(control).toBeVisible();
   const geometry=await control.evaluate(select=>{
    const row=select.closest('.a-connection-capability'),label=row.querySelector('label'),copy=label.parentElement;
@@ -45,7 +45,7 @@ try{
  assert.equal(await page.locator('.a-settings-sidebar>button').count(),settingsSections.length);
  await expect(page.locator('.a-settings-sidebar').getByRole('button',{name:'Workspaces',exact:true})).toBeVisible();
  assert.equal(await page.locator('.a-settings-sidebar').getByText('Bundles & modules',{exact:true}).count(),0);
- const preferred=page.getByLabel('Preferred chat connection',{exact:true});
+ const preferred=page.locator('.a-settings-page-content:not([hidden])').getByLabel('Preferred chat connection',{exact:true});
  await expect(preferred).toBeVisible();
  // A full-width select must not shrink the adjacent explanation to one letter.
  // Exercise the real shared component in both Settings entry points, including
@@ -54,6 +54,9 @@ try{
   for(const width of [320,390,600,601,736,960,1280,1920]){
    await page.setViewportSize({width,height:920});
    await openSettingsPage(page,destination);
+   if(destination==='providers'&&!await page.locator('#advanced-preferred-chat-connection').isVisible()){
+    await page.getByRole('button',{name:'one fixture-model · credentials ready',exact:true}).click();
+   }
    await checkPreferenceLayout(destination);
   }
  }
