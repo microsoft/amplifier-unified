@@ -91,6 +91,12 @@ noncurrent-chat path, Undo, and the raw action's selection-preserving behavior.
 Release the interactive mutation lock on its confirmed receipt, independently of
 navigation. Qualify stalled navigation with usable Undo and superseding intent.
 
+## Native task-origin receipts
+
+Keep native job admission inputs and actual returned service-Input identity
+separate from display turns. Missing or recovered origin witnesses fail closed;
+do not reconstruct them from message text or the manager's current generation.
+
 ## Native Windows work
 
 Native Windows backend support is not yet qualified. Follow the
