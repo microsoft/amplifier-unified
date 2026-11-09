@@ -406,13 +406,55 @@ async def confirm_readiness(manager, health, expected=None, command_id=None, *, 
         return True
 
 
+def local_probe_hosts(bind):
+    """Resolve once and admit only numeric addresses owned by this computer.
+
+    A bind name is not authority to send a control credential through DNS.
+    An ordinary ephemeral bind (without freebind/reuse options) establishes local
+    address ownership, not listener readiness. Wildcards test loopback only.
+    """
+    import ipaddress
+    import socket
+
+    host = {'0.0.0.0': '127.0.0.1', '::': '::1'}.get(bind, bind)
+    try:
+        addresses = socket.getaddrinfo(host, 0, type=socket.SOCK_STREAM)
+    except OSError:
+        return []
+    hosts = []
+    for family, kind, protocol, _, address in addresses:
+        if family not in {socket.AF_INET, socket.AF_INET6}:
+            continue
+        ip = ipaddress.ip_address(address[0])
+        if ip.is_unspecified or ip.is_multicast:
+            continue
+        if sys.platform == 'linux' and not ip.is_loopback:
+            # Linux can globally permit nonlocal binds. In that configuration
+            # a successful ephemeral bind is no longer local-address evidence.
+            try:
+                if Path(f'/proc/sys/net/ipv{ip.version}/ip_nonlocal_bind').read_text().strip() != '0':
+                    continue
+            except OSError:
+                continue
+        try:
+            with socket.socket(family, kind, protocol) as candidate:
+                candidate.bind(address)
+        except OSError:
+            continue
+        value = str(ip)
+        if family == socket.AF_INET6 and address[3] and '%' not in value:
+            value += '%' + str(address[3])
+        hosts.append(value)
+    return list(dict.fromkeys(hosts))
+
+
 def probe_targets(manager):
     """Connect only to configured local bind addresses, with exact TLS pinning.
 
     Pin the configured leaf certificate so custom CA/DNS deployments work
     without routing a control token through a proxy or disabling TLS checks.
     """
-    from .deployment import resolve_path
+    from .deployment import is_loopback, resolve_path
     config = manager.service.server_config
     secure = config['tls']['method'] != 'none'
     pin = None
@@ -422,10 +464,12 @@ def probe_targets(manager):
         certificate = x509.load_pem_x509_certificate(resolve_path(manager.home, config['tls']['cert']).read_bytes())
         pin = aiohttp.Fingerprint(certificate.fingerprint(hashes.SHA256()))
     urls = []
-    for host in config['bind']:
-        host = {'0.0.0.0': '127.0.0.1', '::': '::1'}.get(host, host)
-        host = '[' + host + ']' if ':' in host else host
-        urls.append(f"{'https' if secure else 'http'}://{host}:{manager.service.port}/api/health")
+    for bind in config['bind']:
+        for host in local_probe_hosts(bind):
+            if not secure and not is_loopback(host):
+                continue
+            host = '[' + host + ']' if ':' in host else host
+            urls.append(f"{'https' if secure else 'http'}://{host}:{manager.service.port}/api/health")
     return list(dict.fromkeys(urls)), pin
 
 
