@@ -23,6 +23,15 @@ plus per-job checks preserves the same recovery result. Trace reads, copies,
 serialization, hashing and comparisons before filtering the final result. A small
 response, unchanged file or quiet UI does not prove that its construction was cheap.
 
+Resource collection needs an initial live-root mark and a fresh read at pruning.
+Reuse that final capture while retaining its uninterrupted owner lock; scanning
+the same mutable graph again before any yield adds cost without new evidence.
+Keep durable-root and source-index checks inside the writer transaction, and
+recapture live roots after any intervening yield. The live-root and cleanup
+regressions pair traversal counts with retained-resource readback, concurrent
+changes and cancellation; this is not permission to cache mutable roots across
+collection passes.
+
 When a compatible file and immutable resource store the same presentation value,
 reuse one canonical encoding. Keep resource identity and transaction/rollback
 ownership unchanged. Qualify changed and unchanged saves, exact readback and
@@ -199,6 +208,15 @@ nor rescan unchanged attention. Real title/error changes still reach both client
 dormant catalog and workspace membership changes retain their broader scope.
 This avoids multiplying publication by unrelated viewers without changing history
 authority or claiming that the affected owner's save is history-independent.
+
+Agent history reads refresh catalog metadata without refreshing transcripts open
+in browsers. Catalog discovery releases its lock before those display reads;
+per-conversation load locks still protect transcript consistency. The maintained
+automatic-history regression holds a real browser transcript reader open while
+agent list/read requests finish for another chat, across both incremental and
+forced refreshes. It also checks exact returned history, the selected draft and
+the absence of runtime starts or sends. Growing or refreshing one conversation
+must not serialize unrelated history queries behind its display work.
 
 Internal admission reads keep their loading fence in memory and commit the final
 history or error once. They must not serialize the same retained execution merely
