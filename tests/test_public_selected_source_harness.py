@@ -17,6 +17,20 @@ spec.loader.exec_module(adapter)
 
 
 class PublicSelectedHarness(unittest.TestCase):
+    def test_cleanup_handles_readonly_sources_without_following_symlinks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            outer = Path(directory)
+            work = outer / 'work'; work.mkdir()
+            protected = work / 'immutable'; protected.mkdir()
+            (protected / 'file').write_text('owned')
+            unrelated = outer / 'unrelated'; unrelated.mkdir()
+            (unrelated / 'keep').write_text('keep')
+            (work / 'alias').symlink_to(unrelated, target_is_directory=True)
+            protected.chmod(0o555)
+            adapter.remove_owned_work(work)
+            self.assertFalse(work.exists())
+            self.assertEqual((unrelated / 'keep').read_text(), 'keep')
+
     def test_environment_drops_accounts_and_preserves_only_exact_loop_transport(self):
         with patch.dict(os.environ, {'PATH': '/bin', 'ANTHROPIC_API_KEY': 'do-not-forward',
                                     'GITHUB_TOKEN': 'do-not-forward', 'SSH_AUTH_SOCK': '/private'}, clear=True):

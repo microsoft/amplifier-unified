@@ -51,6 +51,14 @@ def bounded_junit(source, target):
     ET.ElementTree(root).write(target, encoding='utf-8', xml_declaration=True)
 
 
+def remove_owned_work(work):
+    """Retire only this settled disposable tree, including immutable source copies."""
+    for root, dirs, _ in os.walk(work, followlinks=False):
+        dirs[:] = [name for name in dirs if not (Path(root) / name).is_symlink()]
+        os.chmod(root, 0o700, follow_symlinks=False)
+    shutil.rmtree(work)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--loop-source', type=Path, required=True)
@@ -135,8 +143,11 @@ def main():
             shutil.copyfile(path, output / ('public-' + path.name))
         settled = all(r.get('processGroupSettled') is True for r in status['commands'])
         status['processesSettled'] = settled
-        if settled:
-            shutil.rmtree(work)
+        try:
+            if settled:
+                remove_owned_work(work)
+        except OSError as error:
+            status.update(status='failed', cleanupErrorType=type(error).__name__)
         status['ownedWorkRemoved'] = not work.exists()
         if not status['ownedWorkRemoved']:
             status['status'] = 'failed'

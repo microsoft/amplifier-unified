@@ -219,4 +219,12 @@ async def test_public_selected_source_manager(tmp_path, monkeypatch, case):
     finally:
         save(case + '-probes', probes)
         save(case + '-diagnostics', manager.diagnostics.state)
+        # Preserve the actual canonical provenance on failed assertions too.
+        # Receipts contain identities/hashes, not private source bodies.
+        for stage in (home / 'updates/releases').glob('*'):
+            for name in ('selected-source-declarations.json', 'runtime-sources.json',
+                         'profiles-qualified.json', 'runtime-installed.json'):
+                path = stage / name
+                if path.is_file():
+                    save(case + '-' + stage.name + '-' + path.stem, json.loads(path.read_text()))
         await app.close()
