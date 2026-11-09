@@ -311,6 +311,28 @@ def test_retention_and_repair_locks_reject_substitutions(tmp_path, kind):
     assert target.read_text() == "private target"
 
 
+def test_emergency_script_isolated_actual_external_cleanup(tmp_path):
+    home, tool = tmp_path / "data", tmp_path / "tools"
+    tool.mkdir()
+    with policy.lease(home) as owner:
+        old = completed(owner, "cli", tool)
+        previous = members(owner, old)
+        latest = completed(owner)
+        current = members(owner, latest)
+    # No normal app package in this directory; -I -S also ignores site/PYTHONPATH.
+    emergency = tmp_path / "emergency"
+    emergency.mkdir()
+    for name in ("reset.py", "reset_retention.py"):
+        shutil.copy2(Path(reset.__file__).with_name(name), emergency / name)
+    result = subprocess.run([sys.executable, "-I", "-S", str(emergency / "reset.py"),
+                             "--data-dir", str(home), "--cleanup-only"],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '"cleanupComplete": true' in result.stdout
+    assert not any(path.exists() for path in previous)
+    assert all((path / "sentinel").read_text() == latest for path in current)
+
+
 def test_emergency_direct_script_and_policy_import_without_app_dependencies(tmp_path):
     script = Path(reset.__file__)
     result = subprocess.run([sys.executable, "-I", "-S", str(script),

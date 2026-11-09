@@ -49,6 +49,8 @@ def _ancestors(path):
 
 
 def _check_ancestors(expected):
+    if not isinstance(expected, dict) or not expected:
+        raise ValueError("Missing recovery structural identities")
     for name, stamp in expected.items():
         if _stamp(Path(name)) != stamp:
             raise ValueError("Recovery structural root was substituted")
@@ -424,6 +426,11 @@ def remove_member(path, member):
         for part in path.parent.parts[1:]:
             fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
             stack.callback(os.close, fd)
+            # Compare the actual opened directory, not a prior pathname stat.
+        parent = os.fstat(fd)
+        expected = member["ancestors"][str(path.parent)]
+        if (parent.st_dev, parent.st_ino) != (expected["device"], expected["inode"]):
+            raise ValueError("Recovery parent changed before deletion")
         try:
             info = os.stat(path.name, dir_fd=fd, follow_symlinks=False)
         except FileNotFoundError:
