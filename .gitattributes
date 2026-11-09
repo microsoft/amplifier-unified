@@ -75,4 +75,4 @@ package-lock.json source-context=locks
 /components/README.md source-context=documentation
 /components/AGENTS.md source-context=guidance
 /components/web-client.source.json source-context=configuration
-/components/web-client/** source-context=generated linguist-vendored=true
+/components/web-client/** source-context=generated linguist-vendored=true linguist-generated=true
