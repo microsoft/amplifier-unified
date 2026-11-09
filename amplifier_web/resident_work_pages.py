@@ -26,6 +26,7 @@ class ResidentWorkPages:
         # Each explicit read visits one <=100-position range. Passive state
         # keeps its existing tail and the browser owns the older-page overlay.
         self.discovery = OrderedDict()
+        self.discovery_epoch = 0
         self.interests = set()
         from .open_work_fields import OpenWorkFields
         self.open_fields = OpenWorkFields(self)
@@ -76,6 +77,10 @@ class ResidentWorkPages:
             raise ValueError('This Work cursor expired. Close and reopen its steps.') from None
 
     def group_navigation(self, session, page, live):
+        # Absence is still loading, not the end of canonical history. Anchor
+        # the combined chain to an accepted (possibly empty) canonical page.
+        if page is None:
+            return {}
         count = len(self.windows.resident_tree(session).get('nodes', []))
         within = live.get('before')
         end = count if within else max(0, count - NODE_LIMIT)
@@ -87,6 +92,7 @@ class ResidentWorkPages:
     def _group_cursor(self, session, end, saved_group, within=None):
         token = self._token({
             'version': 1,
+            'discoveryEpoch': self.discovery_epoch,
             'client': self._client(), 'owner': session['id'], 'stamp': self._stamp(session),
             'fence': self.windows._fence(session['id']), 'end': end, 'savedGroup': saved_group,
             'within': within})
@@ -104,8 +110,9 @@ class ResidentWorkPages:
         stamp, fence = self._stamp(session), self.windows._fence(session['id'])
         end = cursor.get('end') if isinstance(cursor, dict) else None
         if (not isinstance(cursor, dict)
-                or set(cursor) != {'version', 'client', 'owner', 'stamp', 'fence', 'end', 'savedGroup', 'within'}
+                or set(cursor) != {'version', 'discoveryEpoch', 'client', 'owner', 'stamp', 'fence', 'end', 'savedGroup', 'within'}
                 or type(cursor.get('version')) is not int or cursor.get('version') != 1
+                or cursor.get('discoveryEpoch') != self.discovery_epoch
                 or cursor.get('client') != self._client()
                 or cursor.get('owner') != session['id'] or cursor.get('stamp') != stamp
                 or cursor.get('fence') != fence or type(end) is not int or not 0 < end <= len(nodes)
@@ -126,10 +133,16 @@ class ResidentWorkPages:
         items = [{**row, 'partialWindow': True, 'nodeCounts': None, 'aggregateUsage': None}
                  for row in result['items']]
         key = (self._client(), session['id'], start, end, cursor.get('within'))
-        self.discovery.pop(key, None)
-        self.discovery[key] = {'stamp': stamp, 'fence': fence, 'groups': {row['id'] for row in items}}
-        while len(self.discovery) > MAX_RANGES:
-            self.discovery.popitem(last=False)
+        if items:
+            if key not in self.discovery and len(self.discovery) == MAX_RANGES:
+                # An older surviving receipt must never replace an evicted
+                # newer starting range for the same group. Expire discovery,
+                # not already-admitted node groups or their exact fields.
+                self.discovery.clear()
+                self.discovery_epoch += 1
+                raise ValueError('This Work discovery reached its page limit. Open the conversation again.')
+            self.discovery.pop(key, None)
+            self.discovery[key] = {'stamp': stamp, 'fence': fence, 'groups': {row['id'] for row in items}}
         next_cursor = (self._group_cursor(session, end, saved_group, result['before']) if result['before']
                        else self._group_cursor(session, start, saved_group) if start
                        else saved.get('before') if saved else None)

@@ -127,6 +127,7 @@ def _observe_live_capture(service, session, monkeypatch):
     native = source.get('nativeIdentity') or source.get('runtimeSessionId') or source['id']
     rows, gaps = [], []
     attempts = 0
+    window_attempts = 0
 
     def retain(value):
         if len(rows) < 32:
@@ -161,8 +162,10 @@ def _observe_live_capture(service, session, monkeypatch):
                     gaps.append('persist-after')
 
     async def project(inputs, *, key):
+        nonlocal window_attempts
+        window_attempts += 1
         summary = None
-        if len(rows) < 32 and inputs.get('operation') == 'window':
+        if window_attempts <= 32 and len(rows) < 32 and inputs.get('operation') == 'window':
             try:
                 summary = {'kind': 'window', 'continuation': inputs.get('before') is not None,
                            'before': stamp(inputs['session'])}
@@ -180,7 +183,8 @@ def _observe_live_capture(service, session, monkeypatch):
     monkeypatch.setattr(diagnostics, '_persist', persist)
     monkeypatch.setattr(worker, 'project', project)
     return lambda: {'rows': rows, 'gaps': gaps[:8], 'persistCalls': attempts,
-                    'limited': len(rows) == 32 or attempts > 16}
+                    'windowCalls': window_attempts,
+                    'limited': len(rows) == 32 or attempts > 16 or window_attempts > 32}
 
 
 async def _field(client, reference):
@@ -374,6 +378,15 @@ async def test_144_resident_calls_complete_through_registered_web(
             await service.close()
 
 
+def _discovery_anchor(owner, session):
+    """Only the unit controls use a small accepted-page stand-in, never A-C."""
+    from amplifier_web.work_windows import source_identity
+    saved = {'group': 'event-window:original', 'sessionId': session['id'],
+             'source': source_identity(session), 'before': None}
+    owner.pages[saved['group']] = saved
+    return saved
+
+
 def test_resident_group_discovery_is_demand_paged_and_revalidates_admission(tmp_path, monkeypatch):
     from test_resident_work_pages import live_fixture
     owner, session, _ = live_fixture(tmp_path, monkeypatch, count=144)
@@ -396,7 +409,9 @@ def test_resident_group_discovery_is_demand_paged_and_revalidates_admission(tmp_
     projection = owner.project(session)
     assert visited == [(44, 144)]  # Passive state still visits only its tail.
     assert [row['id'] for row in projection['execution']['segments']] == ['t@user']
-    cursor = projection['executionWindow']['before']
+    assert projection['executionWindow']['before'] is None  # Canonical loading is not exhaustion.
+    saved = _discovery_anchor(owner, session)
+    cursor = owner.live_pages.group_navigation(session, saved, {})['before']
     visited.clear()
     groups = owner.live_pages.read_groups(session, cursor)
     assert visited == [(0, 44)]  # One explicit range, not an eight-page scan.
@@ -420,7 +435,7 @@ def test_resident_group_discovery_is_demand_paged_and_revalidates_admission(tmp_
 def test_resident_group_discovery_refuses_other_scope(tmp_path, monkeypatch, mutation):
     from test_resident_work_pages import live_fixture
     owner, session, _ = live_fixture(tmp_path, monkeypatch, count=144)
-    cursor = owner.project(session)['executionWindow']['before']
+    cursor = owner.live_pages.group_navigation(session, _discovery_anchor(owner, session), {})['before']
     if mutation == 'source':
         session['nativeIdentity'] = 'other'
     elif mutation == 'client':
@@ -438,7 +453,7 @@ def test_resident_group_discovery_progresses_empty_ranges_and_bounds_receipts(tm
     owner, session, _ = live_fixture(tmp_path, monkeypatch, count=1001)
     for row in session['execution']['nodes']:
         row['canonicalHistory'] = True
-    cursor = owner.project(session)['executionWindow']['before']
+    cursor = owner.live_pages.group_navigation(session, _discovery_anchor(owner, session), {})['before']
     ends = []
     for _ in range(11):
         page = owner.live_pages.read_groups(session, cursor)
@@ -452,6 +467,34 @@ def test_resident_group_discovery_progresses_empty_ranges_and_bounds_receipts(tm
     owner.retain_interest({'s'})
     owner.retain_interest(set())
     assert not owner.live_pages.discovery
+
+
+def test_discovery_budget_expires_instead_of_downgrading_repeated_group(tmp_path, monkeypatch):
+    from test_resident_work_pages import live_fixture
+    owner, session, _ = live_fixture(tmp_path, monkeypatch, count=1001)
+    for index in range(701, 901):
+        session['execution']['nodes'][index]['anchorMessageId'] = 'repeated'
+    saved = _discovery_anchor(owner, session)
+    original = owner.live_pages.group_navigation(session, saved, {})['before']
+    cursor = original
+    for _ in range(8):
+        cursor = owner.live_pages.read_groups(session, cursor)['before']
+    # Admit newest 100 of the repeated group, then hold its exact open lease.
+    opened = owner.live_pages.read(session, 't@repeated')
+    assert [row['id'] for row in opened['items']] == [str(i) for i in range(801, 901)]
+    field = opened['items'][0]['outputDetail']
+    with pytest.raises(ValueError, match='discovery reached its page limit'):
+        owner.live_pages.read_groups(session, cursor)
+    assert owner.live_pages.discovery == {}
+    assert owner.live_pages.read_text(session, field)['value'] == 'body ' * 1000
+    with pytest.raises(ValueError, match='no longer available'):
+        owner.live_pages.read(session, 't@repeated')
+    with pytest.raises(ValueError, match='changed'):
+        owner.live_pages.read_groups(session, original)
+    fresh = owner.live_pages.group_navigation(session, saved, {})['before']
+    owner.live_pages.read_groups(session, fresh)
+    assert [row['id'] for row in owner.live_pages.read(session, 't@repeated')['items']] == [
+        str(i) for i in range(801, 901)]
 
 
 @pytest.mark.parametrize('declared_capture', [False, True])
