@@ -388,6 +388,18 @@ def test_source_record_rejects_wrong_selected_identity(source_candidate, index, 
     assert not (source_candidate[0] / 'amplifier_web/release-source.json').exists()
 
 
+@pytest.mark.parametrize('operation', ['stage', 'verify'])
+def test_source_record_old_ancestor_cannot_select_legacy_contract_for_new_head(source_candidate, operation):
+    root, repository, _, version = source_candidate
+    old_revision = git(root, 'rev-parse', 'HEAD^')
+    with pytest.raises(ValueError, match='selected checkout'):
+        if operation == 'stage':
+            release.stage_source(root, repository, old_revision, version)
+        else:
+            release.verify_dist(root, distributions(root), version, repository, old_revision)
+    assert not (root / 'amplifier_web/release-source.json').exists()
+
+
 @pytest.mark.parametrize('kind', ['wheel', 'source'])
 @pytest.mark.parametrize('change', ['missing', 'malformed', 'schema', 'repository', 'revision', 'version', 'extra-field', 'different-bytes', 'duplicate'])
 def test_source_record_rejects_missing_or_changed_archive_facts(source_candidate, kind, change):
@@ -606,7 +618,7 @@ def test_release_never_moves_a_remote_tag(repository,monkeypatch):
         return revision if args[:2]==('git','rev-parse') else 'b'*40+'\trefs/tags/v1.2.3'
     monkeypatch.setattr(release,'run',run)
     with pytest.raises(ValueError,match='refusing to move'):release.publish(repository,'example/app','v1.2.3',revision,dist)
-    assert len(calls)==2
+    assert len(calls)==3
 
 
 def test_new_release_publishes_only_after_draft_assets_are_uploaded(repository,monkeypatch):
@@ -676,7 +688,7 @@ def test_invalid_package_never_creates_a_tag_or_release(repository,monkeypatch):
     monkeypatch.setattr(release,'run',run)
     with pytest.raises(ValueError,match='validated frontend bytes'):
         release.publish(repository,'example/app','v1.2.3',revision,dist)
-    assert calls==[('git','rev-parse','HEAD')]
+    assert calls==[('git','rev-parse','HEAD'), ('git','rev-parse','HEAD')]
 
 
 def test_release_requires_notes_for_exact_version_before_any_mutation(repository,monkeypatch):
