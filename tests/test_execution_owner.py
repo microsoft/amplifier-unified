@@ -1,5 +1,6 @@
 """Attachment isolation and backpressure; native policy is tested by its owners."""
 import asyncio
+from types import SimpleNamespace
 import pytest
 
 from amplifier_web.errors import AppError
@@ -154,4 +155,36 @@ async def test_observer_failure_cannot_poison_canonical_ingestion(tmp_path):
         await asyncio.wait_for(task, 1)
     assert service.events[-1][1]["text"] == "persisted"
     assert not service.completed.done()
+    await owner.close()
+
+
+@pytest.mark.parametrize("standing_full", [True, False])
+async def test_pending_approval_waits_for_owner_then_reports_unavailable(tmp_path, standing_full):
+    owner, service = await attached(tmp_path)
+    entered, finish = asyncio.Event(), asyncio.Event()
+    approval = {"id": "exact-approval", "status": "pending"}
+    service.session["approvals"] = [approval]
+    async def settle(sid, *, wait):
+        assert wait is True and sid == "actual-owner"
+        entered.set()
+        await finish.wait()
+        if standing_full:
+            approval["status"] = "allow"
+    service.access_mode = SimpleNamespace(settle=settle)
+    service._task = asyncio.create_task
+    prompt = await started(owner, lambda event: None)
+    await service.on_runtime_event("approval.requested", {
+        "sessionId": "actual-owner", "id": "exact-approval"})
+    await entered.wait()
+    assert not prompt.done()
+    finish.set()
+    if standing_full:
+        service.completed.set_result({"text": "authorized"})
+        assert (await prompt)["outcome"] == "completed"
+        assert approval["status"] == "allow"
+    else:
+        with pytest.raises(ValueError, match="Interactive approval is unavailable"):
+            await asyncio.wait_for(prompt, 1)
+        assert approval["status"] == "pending" and not service.completed.done()
+    assert not any(row[0] in {"conversation.stop", "approval.respond"} for row in service.calls)
     await owner.close()

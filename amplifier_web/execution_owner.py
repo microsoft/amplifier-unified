@@ -102,7 +102,8 @@ class ExecutionOwner:
             raise ValueError("This execution already has an unsettled input")
         delivery = Projection(on_event)
         row = {"input": input_id, "delivery": delivery, "stop": None,
-               "stopped": asyncio.get_running_loop().create_future()}
+               "stopped": asyncio.get_running_loop().create_future(),
+               "approval_ids": set(), "approval_task": None}
         self.pending[identity] = row
         waiter = None
         try:
@@ -137,6 +138,9 @@ class ExecutionOwner:
             if self.pending.get(identity) is row:
                 del self.pending[identity]
             row["stopped"].cancel()
+            if row["approval_task"] is not None:
+                row["approval_task"].cancel()
+                await asyncio.gather(row["approval_task"], return_exceptions=True)
             await delivery.close()
 
     async def cancel(self, identity):
@@ -170,12 +174,36 @@ class ExecutionOwner:
         for kind, payload in rows:
             await self.observe(kind, payload)
 
+    async def approvals(self, identity, row):
+        try:
+            while row["approval_ids"]:
+                identities = row["approval_ids"]
+                row["approval_ids"] = set()
+                # Full remains the existing owner's decision. Joining its actual
+                # completion avoids mistaking a pending worker ACK for Ask.
+                task = self.service._task(self.service.access_mode.settle(identity, wait=True))
+                await asyncio.shield(task)
+                session = self.service._session(identity, hydrate=False)
+                if any(item.get("id") in identities and item.get("status") == "pending"
+                       for item in session.get("approvals", [])):
+                    row["delivery"].fail("Interactive approval is unavailable on this attachment. The owner retains the pending request; inspect it before retrying. No decision or work was replayed.")
+                    return
+        except Exception:
+            row["delivery"].fail("Approval settlement is unresolved; inspect retained owner state before retrying.")
+        finally:
+            row["approval_task"] = None
+
     async def observe(self, kind, payload):
         identity = payload.get("sessionId")
         row = self.pending.get(identity)
         if row is None or identity not in self.attached:
             return
         input_id = row["input"]
+        if kind == "approval.requested":
+            row["approval_ids"].add(payload.get("id"))
+            if row["approval_task"] is None:
+                row["approval_task"] = asyncio.create_task(self.approvals(identity, row))
+            return
         if kind in {"assistant.delta", "assistant.message"}:
             if payload.get("inputId") != input_id:
                 return
