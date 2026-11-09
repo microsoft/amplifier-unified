@@ -225,8 +225,11 @@ function App(){
   });
  },[acceptState]);
  const dispatch=useCallback((action,args={},meta={})=>{
-  const deliveryTarget=action==='conversation.delivery'?deliveryRecovery(latest.current,latest.current?.sessions?.find(row=>row.id===args.sessionId)):null,deliveryAuthenticationAtStart=deliveryAuthentication.current;
+  const deliveryTarget=['conversation.delivery','conversation.send'].includes(action)?deliveryRecovery(latest.current,latest.current?.sessions?.find(row=>row.id===args.sessionId)):null,deliveryAuthenticationAtStart=deliveryAuthentication.current;
   const sameDeliveryTarget=()=>deliveryAuthenticationAtStart===deliveryAuthentication.current&&(!deliveryTarget||JSON.stringify(deliveryTarget)===JSON.stringify(deliveryRecovery(latest.current,latest.current?.sessions?.find(row=>row.id===args.sessionId))));
+  const validDeliveryState=frame=>!deliveryTarget||(sameDeliveryTarget()&&
+   (!frame?.client?.hostInstanceId||frame.client.hostInstanceId===deliveryTarget.connection)&&
+   (!frame?.client?.historyScope||!latest.current?.client?.historyScope||frame.client.historyScope===latest.current.client.historyScope));
   const capabilityCard=isCapabilityCardAction(action,args,meta);
   const capabilityRead=capabilityCard&&action==='capability.read'?capabilityStopFence.current.beginRead(args):null;
   // Capture eligibility BEFORE passive recovery: this preflight cannot become
@@ -374,6 +377,7 @@ function App(){
     }
     // An exact positive delivery receipt is independent of the bounded message
     // window and of a following state read. Never treat generic acceptance as delivery.
+    if(deliveryTarget&&!validDeliveryState(result.state))throw Error('The delivery target changed. The original submission remains saved.');
     if(action==='conversation.delivery'&&result.accepted===true){
      const returnedHost=result.hostInstanceId||result.state?.client?.hostInstanceId;
      const returnedSource=result.state?.client?.historyScope,currentSource=latest.current?.client?.historyScope;
@@ -448,7 +452,7 @@ function App(){
    });
    if(!handledActionResults.current.has(result)){handledActionResults.current.add(result);handleEffects(result.effects)}
    return result;
-  }).catch(error=>{if(stop&&!stopPostStarted)capabilityStopFence.current.settleStop(stop,'not-applied');if(navigationToken){conversationNavigation.current.settle(navigationToken);if(serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}}if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}if(chatReference&&meta.chatReferenceIntent!==archiveRevision.current)error.navigationSuperseded=true;throw error}).finally(()=>{settleTracking();settleFeedback()});
+  }).catch(error=>{if(stop&&!stopPostStarted)capabilityStopFence.current.settleStop(stop,'not-applied');if(navigationToken){conversationNavigation.current.settle(navigationToken);if(serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}}if(error.state&&validDeliveryState(error.state))acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}if(chatReference&&meta.chatReferenceIntent!==archiveRevision.current)error.navigationSuperseded=true;throw error}).finally(()=>{settleTracking();settleFeedback()});
   queue.current=promise.catch(()=>{});
   if(permissionHistory)canvasVisibilityQueue.current=queue.current;
   if(action==='canvas.views.dirty'){
@@ -696,7 +700,8 @@ function App(){
  async function newChat(workspace){preserveOtherDraft(null);stickToBottom.current=true;await act('session.draft',workspace&&typeof workspace==='object'?workspace:workspace?{workspace}:{})}
  function creationSetup(){return {...newChatSetup(pendingView.current.apply(latest.current)),expectedDraftId:latest.current?.attachmentDraftId}}
  async function ensureSession(creation){const current=!creation&&latest.current?.sessions?.find(row=>row.id===latest.current?.selectedSessionId);if(current)return current;if(!creatingSession.current)creatingSession.current=dispatch('session.create',{...(creation?.setup||creationSetup()),fromDraft:true},{id:creation?.id}).catch(error=>{const created=creation?.id&&latest.current?.sessions?.find(row=>row.creationCommandId===creation.id);if(created)return {sessionId:created.id};throw error}).then(result=>{
-  const created={id:result.sessionId||result.state.selectedSessionId},payload=stagedDraftPayload.current;
+  const id=result.sessionId||result.state?.selectedSessionId,created=latest.current?.sessions?.find(row=>row.id===id),payload=stagedDraftPayload.current;
+  if(!created)throw Error('The new conversation is not confirmed in this source. The original submission remains saved.');
   if(stagedDraft.current&&payload?.sessionId===null){payload.sessionId=created.id;pendingView.current.bindDraft(stagedDraft.current,created.id);draftJournal.bind(draftJournalEntries.current.get(payload),created.id);clearTimeout(draftTimer.current);saveDraft(payload,stagedDraft.current).catch(e=>reportError(e));if(latest.current)setState(pendingView.current.apply(latest.current))}
   return created;
  }).finally(()=>{creatingSession.current=null});return creatingSession.current}
