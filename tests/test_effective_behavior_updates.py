@@ -308,8 +308,8 @@ def test_checked_reachable_dependency_uses_canonical_provenance(ref):
         verify_checked_selection(checked,proof)
         with pytest.raises(ProtectedRuntimeSource) as mismatch:
             verify_checked_selection(checked,proof,exact=True)
-        assert mismatch.value.package == 'dependency'
-        assert mismatch.value.reason == 'runtime-resolution-mismatch'
+        assert mismatch.value.diagnostic_facts['package'] == 'dependency'
+        assert mismatch.value.diagnostic_facts['reason'] == 'runtime-resolution-mismatch'
         checked['dependency']['revision']='b'*40
         checked['dependency']['subdirectory']='other'
         with pytest.raises(ProtectedRuntimeSource):
