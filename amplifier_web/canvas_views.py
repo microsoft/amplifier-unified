@@ -361,7 +361,7 @@ class CanvasViews:
                 'activation': preference.get('activation'),
                 **({'app': copy.deepcopy(row['app'])} if row.get('app') else {}),
                 'view': copy.deepcopy(self.service.state['canvas'].get('view', {})) if view_id == 'primary' else copy.deepcopy(preference['view']),
-                'renderReports': copy.deepcopy(self.service.state['canvas'].get('renderReports', {})) if view_id == 'primary' else copy.deepcopy(preference['renderReports']),
+                'renderReports': self.view_reports(view_id, row, preference),
                 'quality': self.view_feedback(view_id, row, preference),
                 **{key: copy.deepcopy(preference[key]) for key in ('document', 'interaction', 'events') if key in preference}}
 
@@ -370,11 +370,23 @@ class CanvasViews:
                 'resourceRevision': self.revision(row), 'generation': preference['generation'],
                 'renderer': preference['renderer']}
 
+    def view_reports(self, view_id, row, preference):
+        # Reselecting the same definition may reload its body without remounting
+        # the renderer. Reuse only reports from that still-identical mount.
+        binding = self.report_binding(view_id, row, preference)
+        reports = {part: copy.deepcopy(report) for part, report in preference.get('renderReports', {}).items()
+                   if report.get('binding') == binding}
+        if view_id == 'primary':
+            reports.update(copy.deepcopy(self.service.state.get('canvas', {}).get('renderReports', {})))
+        return reports
+
     def view_feedback(self, view_id, row, preference):
         from .canvas_feedback import summary
-        reports = (self.service.state.get('canvas', {}).get('renderReports', {})
-                   if view_id == 'primary' else preference.get('renderReports', {}))
-        return summary(row['kind'], reports, binding=self.report_binding(view_id, row, preference))
+        reports = self.view_reports(view_id, row, preference)
+        source_error = (self.service.state.get('canvas', {}).get('renderReports', {}).get('stored-source')
+                        if view_id == 'primary' else None)
+        return summary(row['kind'], reports, binding=self.report_binding(view_id, row, preference),
+                       source_error=source_error)
 
     def feedback(self, saved, version):
         """Inspect at most this client's primary and eight inline leases."""
@@ -479,6 +491,7 @@ class CanvasViews:
             canvas.pop('content', None)
         else:
             canvas.pop('contentResource', None)
+        canvas['renderReports'] = self.view_reports(view_id, row, preference)
         return canvas
 
     def command(self, action, args, origin):

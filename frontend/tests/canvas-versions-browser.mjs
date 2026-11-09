@@ -113,6 +113,10 @@ try{
  assert.equal(failed.reference,bad.reference);
  assert.match(failed.quality.diagnostics[0].message,/parse|syntax/i);
  assert.equal((await action('canvas.versions.inspect',{id:bad.id,version:1,includeSource:true})).result.source.content,badSource);
+ const sameErrorTarget=(await state()).canvasWorkspace.views.find(v=>v.viewId==='primary');
+ await action('canvas.select',{id:bad.id});
+ assert.equal((await quality()).quality.status,'issues','Reselecting the same definition preserves its failure');
+ assert.equal((await state()).canvasWorkspace.views.find(v=>v.viewId==='primary').generation,sameErrorTarget.generation);
  if(output)await page.screenshot({path:output+'/canvas-quality-error.png',fullPage:true});
  const prior=(await state()).canvasWorkspace.views.find(v=>v.viewId==='primary');
  const stale=Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,prior[key]]));
@@ -129,6 +133,18 @@ try{
  assert.equal(onlySaved.saved,true);assert.equal(onlySaved.quality.status,'not_checked');
  assert.equal((await action('canvas.versions.inspect',{id:onlySaved.id})).result.quality.status,'not_checked');
  await expect(page.getByRole('heading',{name:'Corrected Markdown',exact:true})).toBeVisible();
+ // A local writing copy renders without claiming its changed bytes are saved.
+ const writing=(await action('canvas.show',{kind:'markdown',title:'Local writing copy',content:':::writing{variant="document" id="12345"}\n```mermaid\nflowchart LR\n A-->B\n```\n:::\n'})).result;
+ const writingQuality=async()=>(await action('canvas.versions.inspect',{id:writing.id})).result.quality;
+ await expect.poll(async()=>(await writingQuality()).status).toBe('rendered');
+ const beforeEdit=await writingQuality();
+ await page.getByRole('button',{name:'Edit copy',exact:true}).click();
+ await page.getByRole('textbox',{name:'Edit writing copy',exact:true}).fill('```mermaid\nflowchart LR\n C["Local change"]-->D\n```');
+ await page.getByRole('button',{name:'Preview copy',exact:true}).click();
+ await expect(page.locator('[data-canvas-view="primary"] .a-diagram-stage img')).toHaveCount(1);
+ assert.deepEqual(await writingQuality(),beforeEdit,'Local-copy rendering is not saved-version evidence');
+ const feedbackCommands=commands.filter(row=>row.action==='canvas.views.command'&&row.args?.action==='canvas.report');
+ assert.ok(feedbackCommands.length<80,`Render reporting must settle, got ${feedbackCommands.length}`);
  if(output)await writeFile(output+'/quality-observations.json',JSON.stringify({bad,failed,corrected,rendered:await quality(2),onlySaved,limits:['Browser reports are not pixel review or source-only validation.']},null,2)+'\n');
  const sentAfterVersions=(await(await page.request.get(url+'/fixture')).json()).sent;
  assert.deepEqual(sentAfterVersions,sentBeforeVersions,'Browsing, reloading and explicitly restoring saved versions never replay model input');

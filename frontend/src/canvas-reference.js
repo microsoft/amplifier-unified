@@ -1,5 +1,16 @@
 export const QUOTE_LIMIT=4000;
 
+// One source scan per definition; each diagnostic lookup is logarithmic.
+export function sourceLineLookup(source){
+ const starts=[0];
+ for(const match of source.matchAll(/\r\n|\r|\n/g))starts.push(match.index+match[0].length);
+ return offset=>{
+  let low=0,high=starts.length;
+  while(low<high){const mid=(low+high)>>>1;if(starts[mid]<=offset)low=mid+1;else high=mid}
+  return low;
+ };
+}
+
 // Keep source locations on the rendered text, including repeated phrases. This
 // plugin is opt-in for Canvas; it does not alter ordinary chat Markdown.
 export function sourceSpans(source,base=0){

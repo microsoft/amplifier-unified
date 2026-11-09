@@ -1,4 +1,4 @@
-import {selectedReference} from './canvas-reference';
+import {selectedReference,sourceLineLookup} from './canvas-reference';
 import {CanvasControl,CanvasPrimaryAction,usePrimaryCanvas} from './canvas-controls';
 import {ImageActions} from './image-actions';
 import {clientUrl} from './api';
@@ -13,6 +13,7 @@ import {useDiagramNavigation} from './diagram-navigation';
 import {SavedFileDownload} from './artifact-file-details';
 
 const PdfPreview=lazy(()=>import('./pdf-preview'));
+const localReport=()=>Promise.resolve();
 const viewAction=(canvas,act,patch)=>act('canvas.view',{id:canvas.id,patch});
 function useReport(canvas,act,part='preview'){
  // Capture the exact view dispatcher. Late work must not use a newer target.
@@ -91,17 +92,20 @@ function DiagramView({kind,source,canvas,act,part,embedded,sourceLine}){
 }
 function CanvasMarkdown({canvas,act}){
  const report=useReport(canvas,act),inventory=useMemo(()=>({parts:new Set(),complete:true}),[canvas.content]);
+ const lineAt=useMemo(()=>sourceLineLookup(String(canvas.content||'')),[canvas.content]);
  const overrides=useMemo(()=>({pre:({children})=><div className="a-canvas-code-block">{children}</div>,code:({className,children,node,...props})=>{
   const language=/language-(\w+)/.exec(className||'')?.[1],source=String(children).replace(/\n$/,'');
   if(!['mermaid','dot','graphviz'].includes(language))return <code className={className} {...props}>{children}</code>;
   // Inventory comes from the actual Markdown renderer, including nested fences
   // and writing blocks, not a second regex parser or a second rendering pass.
   const offset=Number(props['data-canvas-fence-offset']),part=`fence-${offset}`;
-  if(!Number.isInteger(offset)||offset<0){inventory.complete=false;return <code className={className} {...props}>{children}</code>}
-  inventory.parts.add(part);
-  const sourceLine=String(canvas.content).slice(0,offset).split(/\r\n|\r|\n/).length;
-  return <Diagram kind={language==='mermaid'?'mermaid':'dot'} source={source} canvas={canvas} act={act} embedded part={part} sourceLine={sourceLine}/>;
- }}),[canvas.id,canvas.content,canvas.resourceRevision,canvas.generation,act,inventory]);
+  const mapped=Number.isInteger(offset)&&offset>=0;
+  const tracked=mapped&&(inventory.parts.has(part)||inventory.parts.size<99);
+  if(tracked)inventory.parts.add(part);else inventory.complete=false;
+  // Editing a writing copy retains its preview, but it cannot report evidence
+  // about the immutable saved definition or consume its bounded report slots.
+  return <Diagram kind={language==='mermaid'?'mermaid':'dot'} source={source} canvas={canvas} act={tracked?act:localReport} embedded part={tracked?part:`local-${node?.position?.start?.offset||0}`} sourceLine={mapped?lineAt(offset):undefined}/>;
+ }}),[canvas.id,canvas.content,canvas.resourceRevision,canvas.generation,act,inventory,lineAt]);
  useEffect(()=>{report('ready','Markdown displayed',{parts:[...inventory.parts].slice(0,99),partsComplete:inventory.complete&&inventory.parts.size<=99})},[inventory,report]);
  return <Markdown text={canvas.content} overrides={overrides} mapSource/>;
 }

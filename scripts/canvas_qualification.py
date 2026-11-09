@@ -200,7 +200,7 @@ def run():
               'tests/test_mcp_boundary_checks.py::test_mcp_workflow_is_fixed_default_off_with_separate_bounded_job',
               'tests/test_release_qualification.py::test_compact_composer_is_fixed_manual_only_with_independent_failure_evidence',
               'tests/test_peer_qualification.py::test_peer_hosted_route_is_fixed_and_separate',
-              'tests/test_browser_check_runner.py::test_compact_composer_and_peer_preview_keep_automatic_inventory_owners',
+              'tests/test_browser_check_runner.py::test_compact_composer_peer_preview_and_artifact_keep_automatic_inventory_owners',
               'tests/test_browser_check_runner.py::test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain')]],
               seconds=120)
         if not stage('build', ['npm', 'run', 'build'], seconds=180):

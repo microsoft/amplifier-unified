@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {Markdown} from '../src/markdown.js';
+import {sourceLineLookup} from '../src/canvas-reference.js';
 
 const render=(text,mapSource=true)=>renderToStaticMarkup(React.createElement(Markdown,{text,mapSource}));
 
@@ -46,4 +47,14 @@ test('diagram fence identity uses whole-document UTF-16 offsets across writing b
   assert.ok(html.includes(`data-canvas-fence-offset="${offset}"`),`${language} must identify its original fence`);
  }
  assert.ok(!render(source,false).includes('data-canvas-fence-offset'));
+});
+
+test('line lookup scans once and handles CRLF and surrogate pairs at repeated lookups',()=>{
+ const source='😀 first\r\nsecond\rthird\nlast',lineAt=sourceLineLookup(source);
+ for(let i=0;i<1000;i++){
+  assert.equal(lineAt(source.indexOf('second')),2);
+  assert.equal(lineAt(source.indexOf('third')),3);
+  assert.equal(lineAt(source.indexOf('last')),4);
+ }
+ assert.equal(lineAt(0),1);
 });

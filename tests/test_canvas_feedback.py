@@ -21,7 +21,7 @@ async def app(tmp_path):
 
 async def call(app, action, args=None, client='one'):
     with app.clients.bind(client):
-        return (await app.dispatch(action, args or {}, include_state=False))['result']
+        return (await app.dispatch(action, args or {}, include_state=False)).get('result')
 
 
 def view(app, client='one'):
@@ -155,3 +155,64 @@ def test_unknown_or_incomplete_inventory_and_unknown_status_do_not_pass():
     assert summary('text', reports('unexpected'), binding=binding)['status'] == 'not_checked'
     assert summary('text', reports('ready'), binding={'resourceId': 'different'})['status'] == 'not_checked'
     assert summary('browser', reports('ready'), binding=binding)['status'] == 'not_checked'
+
+
+@pytest.mark.parametrize('status', ['ready', 'error'])
+async def test_reselect_and_unchanged_file_reuse_only_same_mount_feedback(app, tmp_path, status):
+    path = tmp_path / 'document.md'
+    path.write_text('# Same document')
+    saved = await call(app, 'canvas.show', {'kind': 'auto', 'path': str(path)})
+    current = view(app)
+    await report(app, current, status, parts=[], partsComplete=True, message='Observed')
+    expected = 'rendered' if status == 'ready' else 'issues'
+    await call(app, 'canvas.select', {'id': saved['id']})
+    assert (await inspect(app, saved))['quality']['status'] == expected
+    assert target(view(app)) == target(current)
+    reopened = await call(app, 'canvas.show', {'kind': 'auto', 'path': str(path)})
+    assert reopened['id'] == saved['id'] and reopened['revision'] == 1
+    assert reopened['quality']['status'] == expected
+    path.write_text('# Different')
+    changed = await call(app, 'canvas.show', {'kind': 'auto', 'path': str(path)})
+    assert changed['revision'] == 2 and changed['quality']['status'] == 'not_checked'
+
+
+async def test_returned_agent_readback_preserves_explicit_client(app):
+    sid = app._session()['id']
+    saved = (await app.app_bridge('dispatch', {
+        'action': 'canvas.show',
+        'args': {'kind': 'text', 'content': 'Explicit client', 'clientId': 'one'}}, sid))['result']
+    await report(app, view(app), 'ready')
+    assert saved['readback']['args']['clientId'] == 'one'
+    checked = await app.app_bridge('dispatch', saved['readback'], sid)
+    assert checked['result']['quality']['status'] == 'rendered'
+    assert app.clients.records['two']['canvas'].get('id') != saved['id']
+
+
+async def test_missing_stored_source_remains_actionable_and_cannot_be_rendered(app):
+    saved = await call(app, 'canvas.show', {'kind': 'markdown', 'content': '# Retained'})
+    original = next(row for row in app.state['canvasArtifacts'] if row['id'] == saved['id'])
+    reference = deepcopy(original['body'])
+    await report(app, view(app), 'ready', parts=[], partsComplete=True)
+    app.db.execute('DELETE FROM state_resources WHERE id=?', (reference['$resource'],))
+    await call(app, 'canvas.select', {'id': saved['id']})
+    checked = await inspect(app, saved)
+    assert checked['saved'] and checked['quality']['status'] == 'issues'
+    assert checked['quality']['basis'] == 'source_unavailable'
+    assert 'source is unavailable' in checked['quality']['diagnostics'][0]['message']
+    assert original['body'] == reference
+
+
+async def test_inline_report_stays_in_its_exact_version_and_client(app):
+    saved = await call(app, 'canvas.show', {'kind': 'text', 'content': 'Inline', 'presentation': 'inline'})
+    row = next(row for row in app.state['canvasArtifacts'] if row['id'] == saved['id'])
+    inline = await call(app, 'canvas.views.inline', {
+        'resourceId': saved['id'], 'version': 1,
+        'messageId': row['publications'][0]['messageId'], 'previewId': 'test-preview',
+        'presentationRequest': True})
+    await report(app, inline, 'ready')
+    assert (await inspect(app, saved))['quality']['status'] == 'rendered'
+    assert (await inspect(app, saved, client='two'))['quality']['status'] == 'not_checked'
+    changed = await call(app, 'canvas.versions.revise', {
+        'id': saved['id'], 'expectedRevision': 1, 'content': 'Next'})
+    assert changed['quality']['status'] == 'not_checked'
+    assert (await inspect(app, saved, 1))['quality']['status'] == 'rendered'

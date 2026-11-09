@@ -18,13 +18,17 @@ MESSAGES = {
 }
 
 
-def summary(kind, reports=None, *, binding=None):
+def summary(kind, reports=None, *, binding=None, source_error=None):
     """Only exact-target reports count; mount and clipboard events do not."""
     observed = {
         part: report for part, report in (reports or {}).items()
         if PART.fullmatch(part) and isinstance(report, dict)
         and binding is not None and report.get('binding') == binding
     }
+    # Host source retrieval is separate from browser evidence. It can explain a
+    # failure, never qualify a render. Only the selected source owner supplies it.
+    if source_error and source_error.get('status') == 'error':
+        observed['stored-source'] = source_error
     preview = observed.get('preview', {})
     expected = ['preview']
     inventory_known = kind != 'markdown'
@@ -61,7 +65,8 @@ def summary(kind, reports=None, *, binding=None):
         status = 'not_checked'
     return {
         'status': status, 'message': MESSAGES[status],
-        'basis': 'browser_reports', 'sourceValidation': 'not_checked',
+        'basis': 'source_unavailable' if 'stored-source' in observed else 'browser_reports',
+        'sourceValidation': 'not_checked',
         'coverage': 'reported_parts' if observed else 'none',
         'reportedParts': len(observed), 'expectedParts': len(expected) if inventory_known else None,
         'diagnostics': diagnostics, 'truncated': truncated,
@@ -70,9 +75,11 @@ def summary(kind, reports=None, *, binding=None):
 
 def saved(service, row, version):
     """A same-client observation readback, never a request to render or save."""
+    client_id = service.clients.current.get()
     return {
         'saved': True,
         'quality': service.canvas_views.feedback(row, version),
         'readback': {'action': 'canvas.versions.inspect',
-                     'args': {'id': row['id'], 'sessionId': row['sessionId'], 'version': version}},
+                     'args': {'id': row['id'], 'sessionId': row['sessionId'], 'version': version,
+                              **({'clientId': client_id} if client_id is not None else {})}},
     }
