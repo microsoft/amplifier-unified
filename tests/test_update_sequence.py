@@ -157,7 +157,7 @@ async def test_checked_source_failure_retry_disposition_survives_checks_and_rest
     from amplifier_web.update_diagnostics import UpdateDiagnostics
 
     latest = ['b' * 40]
-    row = {**source('included'), 'kind': 'runtime dependency',
+    row = {**source(manager, 'included'), 'kind': 'runtime dependency',
            'package': 'amplifier-foundation'}
     async def inventory(**kw): return [dict(row)]
     async def remote(*args, **kw): return latest[0] + ' refs/heads/main'
@@ -252,7 +252,7 @@ async def test_preparation_witness_tracks_source_policy_not_unrelated_settings(m
     shared = manager.home/'fixture-shared'
     shared.mkdir()
     monkeypatch.setattr(host_config, 'amplifier_home', lambda: shared)
-    rows = [{**source('included'), 'latest': 'b'*40}]
+    rows = [{**source(manager, 'included'), 'latest': 'b'*40}]
     config = shared/'settings.yaml'
     write_private(config, 'updates:\n  intervalHours: 4\n')
     original = preparation_key(manager, rows)
@@ -265,7 +265,7 @@ async def test_preparation_witness_tracks_source_policy_not_unrelated_settings(m
 
 async def test_deterministic_disposition_survives_service_reload(manager, monkeypatch):
     from amplifier_web.update_health import preparation_key, record_retry
-    manager.inventory=[{**source('included'), 'latest':'b'*40, 'status':'update'}]
+    manager.inventory=[{**source(manager, 'included'), 'latest':'b'*40, 'status':'update'}]
     (manager.directory/'inventory.json').write_text(json.dumps(manager.inventory))
     manager.diagnostics.begin('ecosystem', 'b'*32, components=['amplifier-foundation'])
     failure=manager.diagnostics.record('ecosystem-source-preflight','failed',
@@ -313,7 +313,7 @@ async def test_qualification_configuration_repair_rechecks_same_sources(manager,
         settings={}
     def save():host_config.write_private(shared/'settings.yaml',yaml.safe_dump(settings))
     save()
-    row={**source('included'),'kind':'runtime dependency','package':'amplifier-foundation'}
+    row={**source(manager, 'included'),'kind':'runtime dependency','package':'amplifier-foundation'}
     async def inventory(**kw):return [dict(row)]
     async def remote(*args,**kw):return 'b'*40+' refs/heads/main'
     async def build(*args):return {'mode':'worker','reason':'fixture','activation':'per-worker'}
@@ -390,7 +390,7 @@ async def test_active_profile_repair_rechecks_same_registered_candidates(manager
     settings={'bundle':{'active':'unsupported','added':{'unsupported':'fixture:unsupported'}}}
     def save():host_config.write_private(shared/'settings.yaml',yaml.safe_dump(settings))
     save()
-    row={**source('included'),'kind':'runtime dependency','package':'amplifier-foundation'}
+    row={**source(manager, 'included'),'kind':'runtime dependency','package':'amplifier-foundation'}
     async def inventory(**kw):return [dict(row)]
     async def remote(*args,**kw):return 'b'*40+' refs/heads/main'
     async def build(*args):return {'mode':'worker','reason':'fixture','activation':'per-worker'}
@@ -443,7 +443,7 @@ async def test_environment_recovery_is_relevant_passive_and_uses_worker_preceden
     monkeypatch.delenv('FIXTURE_INPUT',raising=False)
     host_config.write_private(shared/'settings.yaml',
         'config:\n  tools:\n  - module: tool-fixture\n    config: {value: \"${FIXTURE_INPUT}\"}\n')
-    rows=[{**source('included'),'latest':'b'*40}]
+    rows=[{**source(manager, 'included'),'latest':'b'*40}]
     absent=preparation_key(manager,rows)
     before=dict(os.environ)
     host_config.write_private(shared/'keys.env','FIXTURE_INPUT=first-secret\n')
