@@ -2,7 +2,49 @@
 import copy
 
 from amplifier_operations.coordination import fingerprint
-from .schedule_handoff import latest_human
+
+
+def latest_intent(session):
+    """Include question answers as superseding input, not as implicit grants."""
+    return next((row for row in reversed(session.get('messages', []))
+                 if row.get('role') == 'user' and (row.get('questionId')
+                 or row.get('inputOrigin') in {'ui', 'user', 'voice'})), None)
+
+
+def human_input(app, session):
+    """Resolve a direct human answer from its canonical record, never peer prose.
+
+    Only the peer-resume path uses this resolver. In particular, a question
+    receipt does not acquire configuration, schedule or tool-approval authority.
+    Its exact input must still belong to the current transport-bound generation.
+    """
+    message = latest_intent(session)
+    if not message or message.get('scheduledRunId'):
+        return None, None
+    if not message.get('questionId'):
+        return message, None
+    record = app.questions.for_input(session['id'], message.get('inputId'))
+    if not record:
+        return None, None
+    answer = record['answer']
+    provenance = answer.get('provenance') or {}
+    prompt = f'Answer to “{record["prompt"]}”:\n{answer["text"]}\n\nFor: {record["dependency"]}'
+    if (message.get('via') != 'question'
+            or record['id'] != message['questionId']
+            or record['revision'] != answer.get('questionRevision', 0) + 1
+            or provenance.get('origin') not in {'ui', 'user'}
+            or provenance.get('via') != 'ui'
+            or provenance.get('messageId') or provenance.get('sourceRequestId')
+            or message.get('answerProvenance') != provenance
+            or message.get('text') != prompt
+            or record['delivery'].get('status') == 'rejected'):
+        return None, None
+    # Delivery acknowledgements may settle while native preparation runs. Bind
+    # immutable question/answer meaning, not mutable receipt projection fields.
+    proof = {'id': record['id'], 'revision': record['revision'],
+             'digest': fingerprint({key: record.get(key) for key in
+                 ('prompt', 'dependency', 'options', 'contentRevision', 'artifacts', 'answer')})}
+    return message, proof
 
 
 def latest_root_generation(target):
@@ -44,9 +86,8 @@ def retained_terminal_evidence(target):
 
 
 def prepare(app, source, target, value, lineage, boundary):
-    human = latest_human(source)
+    human, question = human_input(app, source)
     if (not human or human['id'] != value['sourceMessageId']
-            or human.get('questionId') or human.get('scheduledRunId')
             or human.get('inputId') not in lineage.get('sourceInputIds', [])):
         raise ValueError('Resume requires the latest actual human request in the owner’s current admitted input.')
     assignment = app.assignments.current(source)
@@ -94,15 +135,18 @@ def prepare(app, source, target, value, lineage, boundary):
         'sourceMessageId': human['id'], 'sourceInputId': human['inputId'],
         'textDigest': fingerprint(human.get('text', '')),
         'assignmentId': assignment['id'], 'assignmentRevision': assignment['revision'],
-        'targetHumanMessageId': (latest_human(target) or {}).get('id'),
+        'targetHumanMessageId': (latest_intent(target) or {}).get('id'),
         'authorizationKey': key,
+        **({'questionAnswer': question,
+            'questionConfigurationRevision': app.state.get('configurationRevision', 0)}
+           if question else {}),
         **({('interruptedRecovery' if interrupted else 'failedRecovery'): recovery} if recovery else {}),
     }
 
 
 def guard(app, receipt, source, target):
     scope = receipt['humanResume']
-    human = latest_human(source)
+    human, question = human_input(app, source)
     recovered = scope.get('failedRecovery')
     interrupted = scope.get('interruptedRecovery')
     if reason := safety_halt(target):
@@ -124,10 +168,11 @@ def guard(app, receipt, source, target):
     assignment = app.assignments.current(source)
     if (not human or human['id'] != scope['sourceMessageId']
             or human.get('inputId') != scope['sourceInputId']
-            or human.get('questionId') or human.get('scheduledRunId')
+            or question != scope.get('questionAnswer')
+            or question and scope['questionConfigurationRevision'] != app.state.get('configurationRevision', 0)
             or fingerprint(human.get('text', '')) != scope['textDigest']
             or human.get('createdAt', 0) <= (target.get('lastInterruption') or {}).get('at', 0)
-            or (latest_human(target) or {}).get('id') != scope['targetHumanMessageId']):
+            or (latest_intent(target) or {}).get('id') != scope['targetHumanMessageId']):
         return 'The human resume instruction or recipient input changed.'
     if (not assignment or assignment['id'] != scope['assignmentId']
             or assignment['revision'] != scope['assignmentRevision']

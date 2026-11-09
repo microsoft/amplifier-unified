@@ -26,6 +26,7 @@ on:
           - updater-synthetic-acquisition
           - updater-expanded-lock
           - native-child-fixtures
+          - question-answer-resume
       core_wheels:
         description: Qualify published Core wheels and real runtime on both Linux architectures
         type: boolean
@@ -75,6 +76,7 @@ jobs:
               'shared-work-native': ['tests/test_native_provider.py', 'tests/test_coordination_delivery.py', 'tests/test_work_native_effects.py', 'tests/test_work_origin.py', 'tests/test_capacity.py', 'tests/test_release_qualification.py'],
               'manager-exception-boundary': ['tests/test_manager_exception_boundary.py', 'tests/test_manager_failure_details.py', 'tests/test_session_health.py', 'tests/test_retained_failure_recovery.py', 'tests/test_runtime.py'],
               'native-child-fixtures': ['tests/test_child_app_assignment_capture.py', 'tests/test_history_scope_native.py', 'tests/test_file_source_native_children.py'],
+              'question-answer-resume': ['tests/test_question_peer_resume.py', 'tests/test_peer_resume.py', 'tests/test_peer_resume_native.py', 'tests/test_failed_peer_recovery.py', 'tests/test_retained_failure_recovery.py', 'tests/test_questions.py', 'tests/test_question_handoffs.py'],
           }
           selection = os.environ['CHECK_SUITE']
           if selection not in suites:
@@ -208,6 +210,72 @@ jobs:
             grep -q '/original/amplifier_web/runtime_worker.py' output/python-checks/original-red.log
           fi
           uv run --no-sync pytest -v --tb=short --junitxml=output/python-checks/junit.xml "${targets[@]}" 2>&1 | tee output/python-checks/pytest.log
+      - name: Verify question-answer predecessor and exact runtime joins
+        if: ${{ env.CHECK_SUITE == 'question-answer-resume' }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin c184826828c27c058edbf4a1d03f0ec4cc03961c
+          mkdir -p "$RUNNER_TEMP/question-resume-before"
+          git archive c184826828c27c058edbf4a1d03f0ec4cc03961c | tar -x -C "$RUNNER_TEMP/question-resume-before"
+          cp tests/test_question_peer_resume.py "$RUNNER_TEMP/question-resume-before/tests/"
+          set +e
+          (cd "$RUNNER_TEMP/question-resume-before" && "$GITHUB_WORKSPACE/.venv/bin/python" -m pytest -s -v --tb=short \
+            tests/test_question_peer_resume.py::test_exact_ui_answer_drives_existing_resume_once) \
+            2>&1 | tee output/python-checks/predecessor.log
+          predecessor=${PIPESTATUS[0]}
+          set -e
+          test "$predecessor" -eq 1
+          grep -q 'A real UI answer must be exposed without another typed Resume' output/python-checks/predecessor.log
+          grep -q '/question-resume-before/amplifier_web/peer_resume.py' output/python-checks/predecessor.log
+          uv run --no-sync python - <<'PY' > output/python-checks/question-resume-imports.json
+          import hashlib, importlib, json, subprocess, xml.etree.ElementTree as ET
+          from pathlib import Path
+          root = Path.cwd().resolve()
+          rows = list(ET.parse('output/python-checks/junit.xml').getroot().iter('testcase'))
+          assert rows and not any(row.find(kind) is not None for row in rows for kind in ('failure', 'error', 'skipped'))
+          native = [row for row in rows if 'test_peer_resume_native' in row.get('classname', '')]
+          assert len(native) == 6, 'Both ordinary and question inputs must cross the real native bridge'
+          modules = {}
+          for name in ('amplifier_web.peer_resume', 'amplifier_web.collaboration',
+                       'amplifier_web.questions', 'amplifier_module_loop_live.orchestrator',
+                       'amplifier_module_context_simple'):
+              path = Path(importlib.import_module(name).__file__).resolve()
+              if name.startswith('amplifier_web.'): assert path.is_relative_to(root / 'amplifier_web')
+              modules[name] = {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+          print(json.dumps({'head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              'tree': subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip(),
+              'loop': subprocess.check_output(['git', '-C', '.ci/loop-live', 'rev-parse', 'HEAD'], text=True).strip(),
+              'tests': len(rows), 'nativeTests': len(native), 'modules': modules}, indent=2))
+          PY
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: ${{ env.CHECK_SUITE == 'question-answer-resume' }}
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Verify rendered question-answer continuation and package bytes
+        if: ${{ env.CHECK_SUITE == 'question-answer-resume' }}
+        run: |
+          set -euo pipefail
+          npm ci --prefix frontend
+          npm run build --prefix frontend
+          (cd frontend && npx playwright install --with-deps chromium)
+          AMPLIFIER_TEST_PYTHON="$GITHUB_WORKSPACE/.venv/bin/python" \
+            AMPLIFIER_TEST_ARTIFACTS="$GITHUB_WORKSPACE/output/python-checks/question-browser" \
+            node frontend/tests/question-resume-browser.mjs 2>&1 | tee output/python-checks/question-browser.log
+          uv build --wheel --out-dir output/python-checks/dist
+          python - <<'PY' > output/python-checks/question-resume-wheel.json
+          import hashlib, json, zipfile
+          from pathlib import Path
+          wheel, = Path('output/python-checks/dist').glob('*.whl')
+          with zipfile.ZipFile(wheel) as package:
+              files = ['amplifier_web/peer_resume.py', 'amplifier_web/collaboration.py', 'amplifier_web/questions.py']
+              files += [str(p) for p in Path('amplifier_web/static').rglob('*') if p.is_file()]
+              for name in files:
+                  assert package.read(name) == Path(name).read_bytes(), name
+          print(json.dumps({'wheel': wheel.name, 'sha256': hashlib.sha256(wheel.read_bytes()).hexdigest(),
+                            'sourceAndBuildFilesVerified': len(files)}, indent=2))
+          PY
       - name: Run and retain exact native child fixture evidence
         if: ${{ env.CHECK_SUITE == 'native-child-fixtures' }}
         timeout-minutes: 10
