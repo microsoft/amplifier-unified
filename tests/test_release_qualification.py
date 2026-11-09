@@ -1424,7 +1424,7 @@ def test_canvas_qualification_is_fixed_manual_and_installed_not_a_release_gate()
     assert "assert static == json.loads((OUT / 'static.json').read_text())" in source
 
 
-def test_canvas_feedback_scope_is_fixed_and_preserves_full_coverage():
+def test_canvas_feedback_scope_is_fixed_and_preserves_full_coverage(tmp_path):
     import ast
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     scope = workflow['on']['workflow_dispatch']['inputs']['canvas_scope']
@@ -1436,8 +1436,8 @@ def test_canvas_feedback_scope_is_fixed_and_preserves_full_coverage():
     tree = ast.parse(source)
     definitions = [node for node in tree.body
                    if (isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in {'BROWSERS', 'UNITS'} for t in node.targets))
-                   or (isinstance(node, ast.FunctionDef) and node.name == 'selection')]
-    namespace = {}
+                   or (isinstance(node, ast.FunctionDef) and node.name in {'selection', 'run', 'write'})]
+    namespace = {'ROOT': tmp_path, 'OUT': tmp_path / 'evidence', 'json': json}
     exec(compile(ast.Module(body=definitions, type_ignores=[]), '<fixed-selection>', 'exec'), namespace)
     full = namespace['selection']('full')
     focused = namespace['selection']('artifact-feedback')
@@ -1453,6 +1453,18 @@ def test_canvas_feedback_scope_is_fixed_and_preserves_full_coverage():
     assert "assert selected == identity['selection'] == record['selection']" in source
     assert source.count("for name in selected['browsers']:") == 2
     assert "CANVAS_QUALIFICATION_SCOPE', 'full'" in source
+    # A corrupt saved selection must fail before any command, settle the
+    # retained receipt, and retain the no-replay guard.
+    output = namespace['OUT']
+    for corrupt in ({**focused, 'units': ['untrusted-command']}, {**focused, 'scope': 'unknown'}):
+        namespace['write'](output / 'summary.json',
+                           {'status': 'not_started', 'stages': [], 'selection': focused})
+        namespace['write'](output / 'identity.json', {'selection': corrupt})
+        assert namespace['run']() == 1
+        result = json.loads((output / 'summary.json').read_text())
+        assert result['status'] == 'failed' and result['error'] and result['stages'] == []
+        with pytest.raises(ValueError, match='no replay'):
+            namespace['run']()
 
 
 def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():

@@ -182,11 +182,6 @@ def run():
         raise ValueError('Qualification already started; no replay')
     record['status'] = 'running'
     write(OUT / 'summary.json', record)
-    identity = json.loads((OUT / 'identity.json').read_text())
-    selected = selection(identity['selection']['scope'])
-    assert selected == identity['selection'] == record['selection']
-    assert identity['revision'] == checked('git', 'rev-parse', 'HEAD')
-    assert all(sha(ROOT / name) == value for name, value in identity['sourceSha256'].items())
     python = str(ROOT / '.venv/bin/python')
     def stage(name, command, *, root=ROOT, seconds=180, env=None):
         entry = {'name': name, 'status': 'running'}
@@ -200,6 +195,11 @@ def run():
             raise RuntimeError('Uncertain process cleanup; no further scenarios')
         return rc == 0
     try:
+        identity = json.loads((OUT / 'identity.json').read_text())
+        selected = selection(identity['selection']['scope'])
+        assert selected == identity['selection'] == record['selection'], 'Canvas qualification selection changed'
+        assert identity['revision'] == checked('git', 'rev-parse', 'HEAD')
+        assert all(sha(ROOT / name) == value for name, value in identity['sourceSha256'].items())
         if not stage('imports', [python, str(Path(__file__).resolve()), 'imports'], seconds=30):
             raise RuntimeError('Host imports unavailable')
         if not stage('browser-preflight', ['node', 'tests/canvas-readiness.mjs'], seconds=30):
