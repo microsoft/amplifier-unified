@@ -106,7 +106,7 @@ def test_repeat_systemd_install_starts_without_rewrite_backup_or_restart(tmp_pat
 def test_legacy_shutdown_upgrade_preserves_installed_launch_and_private_backup(tmp_path, monkeypatch):
     path = deployment_service.unit_path()
     original = (deployment_service.MARKER + '\n[Unit]\nDescription=Owned app\n\n[Service]\n'
-                'ExecStart=/retained/bin/app --data-dir ' + str(tmp_path) + ' --workspace /retained serve\n'
+                'ExecStart=/retained/bin/amplifier-unified --no-open --data-dir ' + str(tmp_path) + ' --workspace /retained serve\n'
                 'Environment="PATH=/custom/bin:/usr/bin"\nRestartSec=9\n\n[Install]\nWantedBy=default.target\n')
     path.write_text(original)
     calls = []
@@ -125,7 +125,7 @@ def test_legacy_shutdown_upgrade_preserves_installed_launch_and_private_backup(t
 @pytest.mark.parametrize('selection', ['unmanaged', 'other-root', 'explicit-policy', 'other-platform'])
 def test_shutdown_preparation_leaves_other_owners_and_operator_policy_unchanged(tmp_path, monkeypatch, selection):
     path = deployment_service.unit_path()
-    content = deployment_service.MARKER + '\n[Service]\nExecStart=/app --data-dir ' + str(tmp_path) + '\n'
+    content = deployment_service.MARKER + '\n[Service]\nExecStart=/bin/amplifier-unified --no-open --data-dir ' + str(tmp_path) + ' --workspace /retained serve\n'
     if selection == 'unmanaged':
         content = content.replace(deployment_service.MARKER, '# Custom service')
     elif selection == 'other-root':
@@ -139,9 +139,57 @@ def test_shutdown_preparation_leaves_other_owners_and_operator_policy_unchanged(
     assert path.read_text() == content and not list(tmp_path.glob('*.backup-*'))
 
 
+@pytest.mark.parametrize('selection', ['prefix', 'workspace', 'environment', 'comment', 'other-program',
+                                     'duplicate-launch', 'reset-launch', 'expansion', 'continuation'])
+def test_shutdown_migration_requires_exact_generated_launch_root(tmp_path, selection):
+    path = deployment_service.unit_path()
+    root = tmp_path / 'unified'
+    launch = f'ExecStart=/bin/amplifier-unified --no-open --data-dir {root} --workspace /workspace serve\n'
+    content = deployment_service.MARKER + '\n[Service]\n' + launch
+    if selection == 'prefix':
+        content = content.replace(str(root), str(root) + '-prod')
+    elif selection in {'workspace', 'environment', 'comment'}:
+        content = content.replace(str(root), '/other-root')
+        if selection == 'workspace':
+            content = content.replace('/workspace', str(root))
+        else:
+            content += (f'Environment="ROOT={root}"\n' if selection == 'environment' else f'# {root}\n')
+    elif selection == 'other-program':
+        content = content.replace('/bin/amplifier-unified', '/bin/another-app')
+    elif selection == 'duplicate-launch':
+        content += launch.replace(str(root), '/other-root')
+    elif selection == 'reset-launch':
+        content += 'ExecStart=\n'
+    elif selection == 'expansion':
+        content = content.replace(str(root), '$DATA_ROOT') + f'Environment="DATA_ROOT={root}"\n'
+    else:
+        content = content.replace(' --workspace', ' \\\n --workspace')
+    path.write_text(content)
+    before = path.stat().st_mtime_ns
+    deployment_service.prepare_managed_shutdown(root)
+    assert path.read_text() == content and path.stat().st_mtime_ns == before
+    assert not list(tmp_path.glob('*.backup-*'))
+
+
+@pytest.mark.parametrize('module_launch', [False, True])
+def test_shutdown_migration_accepts_installer_command_including_spaces(tmp_path, monkeypatch, module_launch):
+    calls = []
+    monkeypatch.setattr(deployment_service, '_systemctl', lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(deployment_service.shutil, 'which', lambda _: None if module_launch else '/retained tools/amplifier-unified')
+    root = tmp_path / 'data with spaces'
+    deployment_service.install(root, tmp_path / 'workspace with spaces')
+    path = deployment_service.unit_path()
+    legacy = path.read_text().replace('KillMode=mixed\n', '')
+    path.write_text(legacy)
+    calls.clear()
+    deployment_service.prepare_managed_shutdown(root)
+    assert calls == [('daemon-reload',)]
+    assert path.read_text() == legacy.replace('[Service]\n', '[Service]\nKillMode=mixed\n')
+
+
 def test_failed_reload_is_retried_without_another_backup_or_rewrite(tmp_path, monkeypatch):
     path = deployment_service.unit_path()
-    path.write_text(deployment_service.MARKER + '\n[Service]\nExecStart=/app\n')
+    path.write_text(deployment_service.MARKER + '\n[Service]\nExecStart=/bin/amplifier-unified --no-open --data-dir /data --workspace /workspace serve\n')
     calls = []
     def reload(*args, **kwargs):
         calls.append(args)
@@ -161,7 +209,7 @@ def test_failed_reload_is_retried_without_another_backup_or_rewrite(tmp_path, mo
 @pytest.mark.parametrize('operation', ['start', 'stop', 'restart'])
 def test_service_commands_prepare_shutdown_policy_first(tmp_path, monkeypatch, operation):
     path = deployment_service.unit_path()
-    path.write_text(deployment_service.MARKER + '\n[Service]\nExecStart=/app\n')
+    path.write_text(deployment_service.MARKER + '\n[Service]\nExecStart=/bin/amplifier-unified --no-open --data-dir /data --workspace /workspace serve\n')
     calls = []
     monkeypatch.setattr(deployment_service, '_systemctl', lambda *a, **k: calls.append(a))
     deployment_service.command(operation)

@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import shlex
 import subprocess
@@ -93,6 +94,52 @@ def _backup(path: Path, content: str | bytes) -> Path:
     raise RuntimeError(f"Could not create a unique backup for {path}")
 
 
+def _generated_unit_matches(content: str, data_dir: Path | None) -> bool:
+    """Recognize only our literal generated launch before changing a unit.
+
+    This is deliberately not a general systemd parser. Customized/ambiguous
+    launches are left to their owner, including expansions and continuations.
+    A root mentioned in a comment, environment or workspace is not ownership.
+    """
+    lines = content.splitlines()
+    if MARKER not in lines or lines.count("[Service]") != 1:
+        return False
+    section, launches = "", []
+    for line in lines:
+        value = line.strip()
+        if not value or value.startswith(("#", ";")):
+            continue
+        if value.endswith("\\"):
+            return False
+        if value.startswith("["):
+            section = value
+        elif section == "[Service]" and value.partition("=")[0].strip() == "ExecStart":
+            launches.append(value.partition("=")[2].strip())
+    if len(launches) != 1 or any(char in launches[0] for char in "\\$%;"):
+        return False
+    try:
+        args = shlex.split(launches[0])
+    except ValueError:
+        return False
+    if not args or not Path(args[0]).is_absolute():
+        return False
+    executable = Path(args[0]).name
+    if executable == "amplifier-unified":
+        tail = args[1:]
+    elif re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", executable) and args[1:3] == ["-m", "amplifier_web"]:
+        tail = args[3:]
+    else:
+        return False
+    if (len(tail) != 6 or tail[:2] != ["--no-open", "--data-dir"]
+            or tail[3] != "--workspace" or tail[5] != "serve"
+            or any("'" in arg or '"' in arg for arg in args)
+            or " ".join(shlex.quote(arg) for arg in args) != launches[0]):
+        return False
+    root = Path(tail[2])
+    return (root.is_absolute() and Path(tail[4]).is_absolute()
+            and (data_dir is None or root == Path(data_dir).expanduser().resolve()))
+
+
 def prepare_managed_shutdown(data_dir: Path | None = None) -> None:
     """Upgrade an old generated unit before it can signal workers with the host.
 
@@ -100,10 +147,15 @@ def prepare_managed_shutdown(data_dir: Path | None = None) -> None:
     Reload even an already-correct unit so a previously failed reload is retryable.
     This prepares systemd only; it never starts, stops or restarts the app.
     """
-    if sys.platform != "linux" or not managed_unit(data_dir):
+    if sys.platform != "linux":
         return
     path = unit_path()
-    content = path.read_text()
+    try:
+        content = path.read_text()
+    except FileNotFoundError:
+        return
+    if not _generated_unit_matches(content, data_dir):
+        return
     lines = content.splitlines(keepends=True)
     section, service_header, kill_mode = "", None, None
     for index, line in enumerate(lines):

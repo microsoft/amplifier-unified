@@ -68,7 +68,7 @@ async def test_legacy_unit_reloaded_before_restart_dispatch(tmp_path,monkeypatch
     from amplifier_web import deployment_service
     service,manager,marker=await restart_fixture(tmp_path)
     unit=deployment_service.unit_path()
-    unit.write_text(deployment_service.MARKER+'\n[Service]\nExecStart=/owned/app --data-dir '+str(tmp_path)+' serve\n')
+    unit.write_text(deployment_service.MARKER+'\n[Service]\nExecStart=/owned/amplifier-unified --no-open --data-dir '+str(tmp_path)+' --workspace /workspace serve\n')
     calls=[]
     monkeypatch.setattr(deployment_service,'_systemctl',lambda *a,**k:calls.append((a,k)))
     async def command(*args,**kwargs):

@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shlex
 import subprocess
 import sys
 import threading
@@ -53,9 +54,14 @@ def exercise():
     unit = Path.home() / ".config/systemd/user" / name
     unit.parent.mkdir(parents=True, exist_ok=True)
     assert not unit.exists(), "Never replace another fixture's service"
+    # Use the installer's literal launch shape, with an owned signal-test app.
+    launcher = root / 'amplifier-unified'
+    launcher.write_text(f'#!{sys.executable}\nimport runpy\nrunpy.run_path({str(Path(__file__).resolve())!r}, run_name="__main__")\n')
+    launcher.chmod(0o700)
+    launch = [str(launcher), '--no-open', '--data-dir', str(root), '--workspace', str(root), 'serve']
     original = (service.MARKER + "\n[Unit]\nDescription=Owned shutdown signal fixture\n"
                 "[Service]\nType=simple\nTimeoutStopSec=2\n"
-                f"ExecStart={sys.executable} {Path(__file__).resolve()} serve {root}\n")
+                f"ExecStart={shlex.join(launch)}\n")
     unit.write_text(original)
     service.UNIT_NAME = name
     service.unit_path = lambda: unit
@@ -95,8 +101,7 @@ def exercise():
                          "childReply": "stopped\n"}, after
 
         # A stuck host must not leave its worker alive forever under mixed.
-        unit.write_text(unit.read_text().replace(f"serve {root}\n", f"serve {root} hang\n"))
-        ctl("daemon-reload")
+        (root / 'hang').touch()
         pids = stopped_run()
         assert not (root / "result.json").exists()
         assert ctl("show", name, "-p", "Result", "--value") == "timeout"
@@ -118,7 +123,8 @@ if __name__ == "__main__":
         print("ready", flush=True)
         assert input() == "stop"
         print("stopped", flush=True)
-    elif len(sys.argv) > 1 and sys.argv[1] == "serve":
-        serve(Path(sys.argv[2]), hang="hang" in sys.argv[3:])
+    elif '--data-dir' in sys.argv:
+        root = Path(sys.argv[sys.argv.index('--data-dir') + 1])
+        serve(root, hang=(root / 'hang').exists())
     else:
         exercise()
