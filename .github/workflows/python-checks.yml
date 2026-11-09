@@ -276,6 +276,38 @@ jobs:
           print(json.dumps({'wheel': wheel.name, 'sha256': hashlib.sha256(wheel.read_bytes()).hexdigest(),
                             'sourceAndBuildFilesVerified': len(files)}, indent=2))
           PY
+          uv venv --python .venv/bin/python --system-site-packages "$RUNNER_TEMP/question-resume-installed"
+          uv pip install --python "$RUNNER_TEMP/question-resume-installed/bin/python" --no-deps \
+            output/python-checks/dist/*.whl
+          mkdir -p "$RUNNER_TEMP/question-resume-package"
+          cp -a tests "$RUNNER_TEMP/question-resume-package/"
+          (
+            cd "$RUNNER_TEMP/question-resume-package"
+            unset PYTHONPATH
+            "$RUNNER_TEMP/question-resume-installed/bin/python" - <<'PY' > "$GITHUB_WORKSPACE/output/python-checks/installed-imports.json"
+          import hashlib, importlib, json, os
+          from pathlib import Path
+          root = Path(os.environ['GITHUB_WORKSPACE']).resolve()
+          expected = Path(os.environ['RUNNER_TEMP']) / 'question-resume-installed'
+          result = {}
+          for name in ('amplifier_web.peer_resume', 'amplifier_web.collaboration', 'amplifier_web.questions'):
+              path = Path(importlib.import_module(name).__file__).resolve()
+              assert path.is_relative_to(expected) and not path.is_relative_to(root), path
+              original = root / (name.replace('.', '/') + '.py')
+              assert path.read_bytes() == original.read_bytes()
+              result[name] = {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+          print(json.dumps(result, indent=2))
+          PY
+            "$RUNNER_TEMP/question-resume-installed/bin/python" -m pytest -c /dev/null -o asyncio_mode=auto \
+              -v --tb=short tests/test_question_peer_resume.py tests/test_peer_resume_native.py \
+              --junitxml="$GITHUB_WORKSPACE/output/python-checks/installed-junit.xml"
+          ) 2>&1 | tee output/python-checks/installed-tests.log
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          rows = list(ET.parse('output/python-checks/installed-junit.xml').getroot().iter('testcase'))
+          assert rows and not any(row.find(kind) is not None for row in rows for kind in ('failure', 'error', 'skipped'))
+          assert len([row for row in rows if 'test_peer_resume_native' in row.get('classname', '')]) == 9
+          PY
       - name: Run and retain exact native child fixture evidence
         if: ${{ env.CHECK_SUITE == 'native-child-fixtures' }}
         timeout-minutes: 10

@@ -84,6 +84,7 @@ async def test_human_instruction_in_manager_reaches_paused_member_native_input(t
             # Host stopped state and native saved goal are independently checked.
             # Process re-creation is covered by the companion subprocess test.
             before = copy.deepcopy(member.controls.tasks.snapshot())
+            before_record = copy.deepcopy(member.controls.tasks.record())
             if input_kind in {'question', 'negative_question'}:
                 question = (await app.dispatch('question.create', {
                     'sessionId': source['id'], 'prompt': 'Resume the paused member?',
@@ -104,7 +105,7 @@ async def test_human_instruction_in_manager_reaches_paused_member_native_input(t
                 assert 'Keep it stopped' in parent.negative_delivered
                 assert not host.admissions and child.calls == 0 and parent.calls == 1
                 assert target['status'] == 'stopped'
-                assert member.controls.tasks.record() == before['task']
+                assert member.controls.tasks.record() == before_record
                 assert not host.errors
                 return
             while not host.admissions:

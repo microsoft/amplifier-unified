@@ -55,6 +55,8 @@ def question_settings(app, source, target):
     return {'configurationRevision': app.state.get('configurationRevision', 0),
         'sessions': {row['id']: {
             'accessRevision': app.access_mode.snapshot(row)['revision'],
+            'task': {key: (row.get('task') or app.coordination.task(row['id'])).get(key)
+                     for key in ('id', 'revision', 'status', 'continuationEpoch')},
             'boundary': fingerprint({key: row.get(key) for key in
                 ('workspace', 'workingDirectory', 'executionRevision', 'bundle', 'selection',
                  'configurationPendingRevision', 'recoveryControlRevision')}),

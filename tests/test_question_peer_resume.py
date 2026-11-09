@@ -81,7 +81,8 @@ async def test_answer_discovery_requires_exact_canonical_provenance(app, change)
 
 @pytest.mark.parametrize('change', ['answer', 'revision', 'status', 'source_stop', 'target_stop',
                                    'target_input', 'target_question', 'task', 'assignment',
-                                   'settings', 'target', 'expiry', 'source_access', 'target_access'])
+                                   'settings', 'target', 'expiry', 'source_access', 'target_access',
+                                   'source_task', 'source_input'])
 async def test_answer_resume_rechecks_at_actual_admission(app, change):
     source, target, human, args = await answered_member(app)
     async def delayed(session, values, guard, emit):
@@ -97,6 +98,8 @@ async def test_answer_resume_rechecks_at_actual_admission(app, change):
         elif change == 'target_question':
             app._message(target, 'user', 'A new question answer', 'question', questionId='new-answer')
         elif change == 'task': target['task'] = {'id': 'new-task', 'revision': 1, 'status': 'active'}
+        elif change == 'source_task': source['task'] = {'id': 'new-source-task', 'revision': 1, 'status': 'active'}
+        elif change == 'source_input': app._message(source, 'user', 'Wait for my next instruction', inputOrigin='ui')
         elif change == 'assignment':
             value = app.assignments.current(source)
             value['revision'] += 1
