@@ -107,6 +107,16 @@ def apply(session, event):
     inputs = [value for value in event.get("input_ids", []) if isinstance(value, str)]
     anchor = next((row["id"] for row in session.get("messages", [])
                    if row.get("role") == "user" and row.get("inputId") in inputs), None)
+    from .task_origin import validate
+    proof = event.get("taskOrigin")
+    qualified = validate(proof, inputs)
+    if qualified:
+        anchors = [row for row in session.get("messages", [])
+                   if row.get("role") == "user" and not row.get("displayOnly")
+                   and row.get("inputId") == proof["initiatingInputId"]]
+        qualified = len(anchors) == 1
+        if qualified:
+            anchor = anchors[0]["id"]
     for row in messages:
         sequence = (row.get("runtimeMessage") or {}).get("sequence")
         # Late/unknown/partial rows never acquire an invented place in the turn.
@@ -115,6 +125,8 @@ def apply(session, event):
         row["response"] = {"version": 1, "generationId": generation, "status": "completed",
                            "phase": "final" if row["id"] in ids else "interim",
                            "finalMessageIds": ids, "inputIds": inputs, "anchorMessageId": anchor}
+        if qualified:
+            row["response"]["taskOrigin"] = proof
     return True
 
 
