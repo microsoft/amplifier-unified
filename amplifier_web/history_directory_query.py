@@ -91,7 +91,7 @@ def _base(directory, state, *, archive=None, public_ids=None, root_workspace=Fal
     return sql, params, rows
 
 
-def _chat_query(directory, state, section, *, activity_counts=True):
+def _chat_query(directory, state, section, *, activity_counts=True, now=None):
     from .history_directory import PUBLIC_ID_BATCH
     pins = state.get('pinnedSessionIds', [])
     # Exact public IDs preserve canonical overlays and suppression. Larger pin
@@ -116,7 +116,8 @@ def _chat_query(directory, state, section, *, activity_counts=True):
     status = view.get('navStatusFilter', 'all')
     if status != 'all': scope['statusFilter'] = status
     grouped = section in {'search', 'workspace'}
-    group, age, now = view.get('navGroup', 'recent'), view.get('navAge', 'all'), list_clock()
+    group, age = view.get('navGroup', 'recent'), view.get('navAge', 'all')
+    now = list_clock() if now is None else now
     if grouped:
         scope.update(group=group, age=age)
     where = ["session_kind='root'", '(resolved_workspace_id IS NOT NULL OR managed)']
@@ -188,7 +189,8 @@ def _chat_row(directory, row, labels):
 
 
 def chats(directory, state: dict[str, Any], *, section: str | None = None) -> ChatPageResult:
-    sql, params, scope, counts, order, workspaces, total = _chat_query(directory, state, section)
+    now = state.get('_navigationListClock', list_clock())
+    sql, params, scope, counts, order, workspaces, total = _chat_query(directory, state, section, now=now)
     view = state.get('view', {})
     result: ChatPageResult
     if section == 'shortcuts':
@@ -217,7 +219,7 @@ def chats(directory, state: dict[str, Any], *, section: str | None = None) -> Ch
     rows = _rows(directory, sql + f' SELECT * FROM filtered ORDER BY {order} LIMIT ? OFFSET ?', [*params,end-start,start])
     result['items'] = [_chat_row(directory,row,labels) for row in rows]
     if section in {'search', 'workspace'}:
-        result['items'] = [group_row(row, scope['group'], list_clock()) for row in result['items']]
+        result['items'] = [group_row(row, scope['group'], now) for row in result['items']]
     return result
 
 

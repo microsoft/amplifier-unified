@@ -172,6 +172,22 @@ def test_group_and_age_projection_invalidates_changed_preferences_and_clock(tmp_
     assert expired is projections.chats(dormant, section='search')
 
 
+def test_query_uses_one_clock_for_order_and_decoration_across_minute(tmp_path, monkeypatch):
+    now = 1_800_000_000
+    state, directory = directory_fixture(tmp_path, 4)
+    state['pinnedSessionIds'] = []
+    state['view'].update(navGroup='recent', navSort='name')
+    for index, row in enumerate(state['sessions'][1:]):
+        row.update(title=chr(65+index), recentActivityAt=now,
+                   navigationActivityAt=now-86400+(-1 if index == 2 else 0 if index == 0 else 60))
+    directory.sync(state['sessions'], state)
+    clock = iter([now, now+60])
+    monkeypatch.setattr('amplifier_web.history_directory_query.list_clock', lambda: next(clock))
+    page = chats(directory, {**state, 'sessions': []}, section='search')
+    assert [row['title'] for row in page['items']] == ['A', 'B', 'C']
+    assert [row['group']['id'] for row in page['items']] == ['date:0', 'date:0', 'date:1']
+
+
 def test_directory_workspace_and_mixed_pins_match(tmp_path):
     complete,directory=directory_fixture(tmp_path)
     working={**complete,'sessions':[]}

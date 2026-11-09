@@ -114,5 +114,5 @@ try{
  const info=await (await page.request.get(`http://127.0.0.1:${port}/api/fixture/info`)).json();assert.deepEqual(info.runtimeSends,[]);
  assert.deepEqual(errors,[]);
  console.log('Search passed: focused top field, pinned matches, wildcard search, paging reset, archive and sort, no implicit Back/Escape return, delayed same-chat selection followed by newer search, retained draft, compact light/dark and narrow layouts; no model sends.');
-}catch(error){await page?.screenshot({path:'/tmp/unified-search-failure.png'}).catch(()=>{});throw error}
+}catch(error){console.error('Overflow diagnostics',await page?.evaluate(()=>[...document.querySelectorAll('.a-chat-search-page *')].filter(el=>el.scrollWidth>el.clientWidth+1).map(el=>({tag:el.tagName,className:el.className,width:el.clientWidth,scroll:el.scrollWidth,box:el.getBoundingClientRect().toJSON(),css:{minWidth:getComputedStyle(el).minWidth,whiteSpace:getComputedStyle(el).whiteSpace}}))).catch(()=>[]));await page?.screenshot({path:'/tmp/unified-search-failure.png'}).catch(()=>{});throw error}
 finally{await browser?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}}

@@ -106,9 +106,14 @@ class StateProjections:
             if key[0] in {'session-index', 'attention', 'workspace-index', 'workspaces', 'chat-registry'}:
                 retained[key] = value
             elif key[0] == 'chat-index':
+                # Pins change grouped metadata and finite-age membership, not
+                # merely order. Rebuild from all roots so newly pinned old chats
+                # can enter, and unpinned expired chats can leave.
+                if key[-1] in {'search', 'workspace'}:
+                    continue
                 rows, scope, counts = value
                 sort = scope.get('sort', 'activity')
-                pin_first = key[-1]
+                pin_first = key[-2]
                 rows = [{**row, 'pinned': row['id'] in pins} for row in rows]
                 rows.sort(key=lambda row: (not row['pinned'] if pin_first else False, pins[row['id']] if pin_first and row['pinned'] else
                     row['title'].lower() if sort == 'name' else
@@ -275,7 +280,7 @@ class StateProjections:
         workspace = None if view.get('navChatScope') == 'all' else state.get('selectedWorkspaceId')
         filters = {key: view.get(key) for key in ('navChatScope', 'navSort', 'navFilter', 'navStatusFilter', 'navLocationFilter', 'navArchive', 'navCollection', 'navGroup', 'navAge')}
         from .chat_navigation import list_clock
-        filters['listClock'] = list_clock() if section in {'search', 'workspace'} else None
+        filters['listClock'] = state.get('_navigationListClock', list_clock()) if section in {'search', 'workspace'} else None
         if section:
             filters['navStatusFilter'] = 'all'
         catalog_state = {**state, 'view': {**view, 'navStatusFilter': 'all'}} if section else state
@@ -304,6 +309,8 @@ class StateProjections:
     def chats(self, state, *, section=None):
         from .chat_navigation import list_clock
         clock = list_clock() if section in {'search', 'workspace'} else None
+        if clock is not None:
+            state = {**state, '_navigationListClock': clock}
         directory = self.directory
         if directory is not None:
             dependencies = self.root_navigation_dependencies(state)

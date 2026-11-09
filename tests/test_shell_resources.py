@@ -115,6 +115,25 @@ def test_initial_view_preferences_are_part_of_settled_identity(owner):
     assert owner.bootstrap_key('one') == bootstrap
 
 
+def test_only_demanded_grouped_pages_expire_the_settled_envelope(owner, monkeypatch):
+    from amplifier_web import chat_navigation
+    now = [1_800_000_000]
+    monkeypatch.setattr(chat_navigation.time, 'time', lambda: now[0])
+    register(owner, ('sidebarSearch', 'recentNavigation'))
+    first = owner.snapshot('one')
+    calls = len(owner.shell.calls)
+    assert owner.snapshot('one') is first
+    now[0] += 60
+    owner.snapshot('one')
+    assert owner.shell.calls[calls:] == [frozenset({'sidebarSearch'})]
+    register(owner, ('recentNavigation',), 2)
+    hidden = owner.snapshot('one')
+    calls = len(owner.shell.calls)
+    now[0] += 60
+    assert owner.snapshot('one') is hidden
+    assert len(owner.shell.calls) == calls
+
+
 @pytest.mark.parametrize('browser', [False, True])
 def test_completed_envelope_rechecks_capacity_and_new_demand(owner, monkeypatch, browser):
     def snapshot():

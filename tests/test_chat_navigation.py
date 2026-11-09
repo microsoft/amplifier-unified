@@ -47,6 +47,30 @@ def test_catalog_view_preferences_validate_direct_and_nested(key, values):
             chat_navigation.view_patch({key: value})
 
 
+@pytest.mark.parametrize('section', ['search', 'workspace', 'recent', 'shortcuts'])
+def test_warm_catalog_pin_changes_rebuild_age_membership_and_group_metadata(monkeypatch, section):
+    from amplifier_web.state_projections import StateProjections
+    monkeypatch.setattr(chat_navigation.time, 'time', lambda: 1_800_000_000)
+    state = state_fixture()
+    state['view'].update(navChatScope='all', navAge='24h', navGroup='status')
+    state['sessions'] = [chat('fresh', recent=1_800_000_000), chat('expired', recent=1),
+                         chat('old-pin', recent=2)]
+    state['pinnedSessionIds'] = ['old-pin']
+    projections = StateProjections()
+    first = projections.chats(state, section=section)
+    for pins in [['expired'], [], ['old-pin', 'expired']]:
+        state['pinnedSessionIds'] = pins
+        projections.pins_changed(state)
+        actual = projections.chats(state, section=section)
+        assert actual == chat_navigation.snapshot(state, section=section)
+        if section in {'search', 'workspace'}:
+            assert set(ids(actual)) == {'fresh', *pins}
+            assert all(row['group']['id'] == 'pin' for row in actual['items'] if row['pinned'])
+        else:
+            assert ids(actual) == ['fresh', 'old-pin', 'expired']
+    assert first['items'][0]['pinned'] == (section in {'search', 'workspace'})
+
+
 @pytest.mark.parametrize('nested', [False, True])
 @pytest.mark.parametrize('scope', ['workspace', 'all'])
 def test_pick_up_again_accepts_direct_and_nested_filters_without_changing_attention(nested, scope):

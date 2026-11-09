@@ -102,7 +102,8 @@ def capture_inputs(directory, state, operation, args, fence, *, workspace_captur
     frozen['conversationOrganization'] = {'archived': archived}
     frozen.update(budget.copy({'selectedSessionId': state.get('selectedSessionId'),
         'selectedWorkspaceId': state.get('selectedWorkspaceId'), 'revision': state.get('revision', 0),
-        'view': {name: value for name, value in state.get('view', {}).items() if name in VIEW_FIELDS}}))
+        'view': {name: value for name, value in state.get('view', {}).items() if name in VIEW_FIELDS},
+        **({'_navigationListClock': state['_navigationListClock']} if '_navigationListClock' in state else {})}))
     inputs = budget.copy({'operation': operation, 'args': args, 'live': directory._live_values,
         'native': {'path': directory._native_path, 'namespace': directory._native_namespace},
         'durable': fence[0], 'files': fence[-1]})

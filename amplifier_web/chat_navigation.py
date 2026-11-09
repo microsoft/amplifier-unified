@@ -5,6 +5,8 @@ import math
 import time
 import uuid
 from typing import Any, TypedDict
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from .session_navigation import is_top_level, is_agent_created
 from .managed_chats import is_managed
@@ -46,11 +48,22 @@ DATE_GROUPS = ('Last 24 hours', '1–7 days ago', '7–30 days ago', '30–90 da
                '90 days–1 year ago', 'Over 1 year ago', 'Activity time unavailable')
 STATUS_GROUPS = {'attention': 'Needs you', 'unread': 'Ready for you', 'working': 'Working',
                  'waiting': 'Waiting', 'paused': 'Paused', 'idle': 'Pick up again'}
+_list_clock = ContextVar('navigation_list_clock', default=None)
 
 
 def list_clock():
     # Relative filters and date buckets share a minute witness in query caches.
-    return int(time.time() // 60) * 60
+    saved = _list_clock.get()
+    return saved if saved is not None else int(time.time() // 60) * 60
+
+
+@contextmanager
+def frozen_list_clock(now):
+    token = _list_clock.set(now)
+    try:
+        yield
+    finally:
+        _list_clock.reset(token)
 
 
 def list_group(group, pinned, recent, workspace_id, workspace_name, kind, now):
@@ -402,7 +415,8 @@ def catalog(state, *, indexed=None, pin_first=True, section=None):
              'filter': query, 'selectedSessionId': state.get('selectedSessionId')}
     sort = view.get('navSort', 'activity')
     grouped_catalog = section in {'search', 'workspace'}
-    group, age, now = view.get('navGroup', 'recent'), view.get('navAge', 'all'), list_clock()
+    group, age = view.get('navGroup', 'recent'), view.get('navAge', 'all')
+    now = state.get('_navigationListClock', list_clock())
     if grouped_catalog:
         scope.update(group=group, age=age)
     if sort != 'activity':
