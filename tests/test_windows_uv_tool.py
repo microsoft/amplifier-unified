@@ -245,6 +245,45 @@ class InstalledTargetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(f.reads, [])
 
 
+class WindowsSpellingTests(unittest.TestCase):
+    """PureWindowsPath exposes case folding even on a POSIX test host."""
+    def validate(self, *, selected=None, receipt=None):
+        import json
+        from pathlib import PureWindowsPath
+        prefix = PureWindowsPath(r"C:\Private\tools\amplifier-unified")
+        bin_root = PureWindowsPath(r"C:\Private\bin")
+        public = bin_root / "amplifier-unified.exe"
+        raw = ('[tool]\n[[tool.entrypoints]]\nname="amplifier-unified"\n'
+               'from="amplifier-unified"\ninstall-path='
+               + json.dumps(receipt or str(public))).encode()
+
+        def address(value):
+            value = str(value).replace("/", "\\")
+            return PureWindowsPath(value[0].upper() + value[1:])
+
+        @contextmanager
+        def directory(path, *, owned_root):
+            class Read:
+                def read_private(self, name, *, limit):
+                    return raw if name == "uv-receipt.toml" else b"MZmatching-copies"
+            yield Read()
+        with (patch.object(windows_uv_tool.windows_files, "address", address),
+              patch.object(windows_uv_tool.windows_files, "directory", directory)):
+            windows_uv_tool.validate_launcher(prefix, bin_root, selected or str(public))
+
+    def test_selected_case_alias_is_rejected_before_expected_path_reads(self):
+        with self.assertRaisesRegex(ValueError, "outside"):
+            self.validate(selected=r"C:\Private\BIN\amplifier-unified.exe")
+
+    def test_receipt_case_alias_does_not_own_expected_public_path(self):
+        with self.assertRaisesRegex(ValueError, "does not own"):
+            self.validate(receipt=r"C:\Private\BIN\amplifier-unified.exe")
+
+    def test_only_drive_spelling_is_normalized_by_existing_address_owner(self):
+        self.validate(selected=r"c:\Private\bin\amplifier-unified.exe",
+                      receipt=r"c:\Private\bin\amplifier-unified.exe")
+
+
 @unittest.skipUnless(os.name == "nt", "requires native Win64 private-file backend")
 class NativeWindowsUvLauncherTests(unittest.TestCase):
     def test_native_private_copy_and_hardlink_refusal(self):

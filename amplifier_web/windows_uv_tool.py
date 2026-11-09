@@ -17,7 +17,10 @@ def validate_launcher(prefix: Path, bin_root: Path, executable: str) -> None:
     launcher = prefix / "Scripts/amplifier-unified.exe"
     public = bin_root / launcher.name
     selected = windows_files.address(executable)
-    if selected not in (launcher, public):
+    # WindowsPath equality case-folds. The private-file owner intentionally
+    # rejects component case aliases, including collisions in case-sensitive
+    # directories; only address()'s drive normalization is permitted here.
+    if str(selected) not in (str(launcher), str(public)):
         raise ValueError("The Windows launcher is outside the active uv tool installation")
 
     # Keep the roots/ancestors pinned across the joined receipt and byte checks.
@@ -37,7 +40,7 @@ def validate_launcher(prefix: Path, bin_root: Path, executable: str) -> None:
         matches = [row for row in entries if row.get("name") == "amplifier-unified"]
         if (len(matches) != 1 or matches[0].get("from") != "amplifier-unified"
                 or not isinstance(matches[0].get("install-path"), str)
-                or windows_files.address(matches[0]["install-path"]) != public):
+                or str(windows_files.address(matches[0]["install-path"])) != str(public)):
             raise ValueError("The Windows uv tool receipt does not own this public launcher")
         original = scripts.read_private(launcher.name, limit=1024 * 1024)
         copied = entrypoints.read_private(public.name, limit=1024 * 1024)
