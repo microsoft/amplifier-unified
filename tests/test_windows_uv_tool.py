@@ -191,12 +191,17 @@ class InstalledTargetTests(unittest.IsolatedAsyncioTestCase):
                 raise ModuleNotFoundError(name)
 
         selected = f.public if platform == "nt" else f.bin / "amplifier-unified"
+        def which(name):
+            if name == "uv":
+                return str(f.root / "uv.exe")
+            expected = "amplifier-unified.exe" if platform == "nt" else "amplifier-unified"
+            self.assertEqual(name, expected)
+            return str(selected)
         namespace = {
             "__builtins__": {**vars(builtins), "__import__": load},
             "Path": Path, "os": SimpleNamespace(name=platform),
             "sys": SimpleNamespace(prefix=str(running or f.prefix)), "__version__": "fixture",
-            "shutil": SimpleNamespace(which=lambda name: str(f.root / "uv.exe")
-                                     if name == "uv" else str(selected)),
+            "shutil": SimpleNamespace(which=which),
             "process": process, "git_environment": lambda: {}, "json": json,
             "metadata": AbsentMetadata,
         }

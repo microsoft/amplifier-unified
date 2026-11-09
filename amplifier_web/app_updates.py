@@ -472,7 +472,9 @@ async def _activate_serialized(manager, *, force=None):
 async def installed_target():
     """Only replace the uv tool environment that owns this running host."""
     uv=shutil.which('uv')
-    executable=shutil.which('amplifier-unified')
+    # Avoid PATHEXT manufacturing ".EXE" in an otherwise canonical pathname.
+    # The native owner deliberately compares exact component spellings.
+    executable=shutil.which('amplifier-unified.exe' if os.name=='nt' else 'amplifier-unified')
     if not uv or not executable:
         raise ValueError('Install and launch this app with uv tool before applying application updates')
     env=git_environment()
