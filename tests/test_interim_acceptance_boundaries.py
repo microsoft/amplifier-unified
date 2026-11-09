@@ -405,6 +405,9 @@ def test_resident_group_discovery_is_demand_paged_and_revalidates_admission(tmp_
                 start, end, _ = key.indices(len(self))
                 assert end - start <= 100
                 visited.append((start, end))
+            elif isinstance(key, int):
+                position = key if key >= 0 else len(self) + key
+                visited.append((position, position + 1))
             return super().__getitem__(key)
 
     session['execution']['nodes'] = BoundedRows(session['execution']['nodes'])
@@ -419,9 +422,17 @@ def test_resident_group_discovery_is_demand_paged_and_revalidates_admission(tmp_
     assert visited == [(0, 44)]  # One explicit range, not an eight-page scan.
     assert [row['id'] for row in groups['items']] == ['t@early', 't@user']
     assert groups['before'] is None
+    visited.clear()
     earlier = owner.live_pages.read(session, 't@early')
+    positions = {i for start, end in visited for i in range(start, end)}
+    assert len(positions) <= 100, {'distinctPositions': len(positions), 'ranges': visited}
     assert [row['id'] for row in earlier['items']] == ['0', '1', '2', '3']
     assert earlier['before'] is None
+    visited.clear()
+    latest = owner.live_pages.read(session, 't@user')
+    positions = {i for start, end in visited for i in range(start, end)}
+    assert len(positions) <= 100, {'distinctPositions': len(positions), 'ranges': visited}
+    assert [row['id'] for row in latest['items']] == [str(i) for i in range(44, 144)]
     assert owner.live_pages.read_text(session, earlier['items'][0]['outputDetail'])['value'] == 'body ' * 1000
     # A discovery descriptor never overrules current position/group evidence.
     for index in range(4):
