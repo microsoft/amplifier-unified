@@ -19,6 +19,57 @@ spec.loader.exec_module(adapter)
 
 
 class PublicSelectedHarness(unittest.TestCase):
+    def test_matching_source_sha_restricts_branch_to_retention_in_both_orders(self):
+        from amplifier_web.selected_runtime_dependencies import selected
+        from amplifier_web.runtime_source_alignment import verify_checked_selection
+        from amplifier_web.runtime_policy_reconciliation import selected_policies
+        from amplifier_web.runtime_environment import ProtectedRuntimeSource
+        url, pin = 'https://example.invalid/dependency', 'a'*40
+        root = ('[project]\nname="routing"\ndependencies=["dependency @ git+' + url + '@main"]\n').encode()
+        restriction = ('[project]\nname="skills"\ndependencies=[]\n[tool.uv.sources]\n'
+                       'dependency={git="' + url + '",rev="' + pin + '"}\n').encode()
+        installed = SimpleNamespace(metadata={'Name': 'dependency'}, version='1', requires=[],
+            read_text=lambda _: json.dumps({'url': url, 'vcs_info': {'vcs': 'git', 'commit_id': pin}}))
+        results = []
+        for order in ([('routing', root), ('skills', restriction)], [('skills', restriction), ('routing', root)]):
+            with self.subTest(order=[name for name, _ in order]):
+                packages = selected(dict(order), distributions=[installed])
+                source = packages['dependency']
+                self.assertEqual(source['status'], 'explicit-pin')
+                self.assertEqual(source['ref'], pin)
+                self.assertEqual(source['revision'], pin)
+                self.assertTrue(source['manifestSha256'])
+                report = {'packages': packages, 'batchPaths': {'routing': '/selected/root'}}
+                checked = {'dependency': {'url': url, 'ref': 'main', 'revision': pin}}
+                verify_checked_selection(checked, report, exact=True)
+                checked['dependency']['revision'] = 'b'*40
+                with self.assertRaises(ProtectedRuntimeSource):
+                    verify_checked_selection(checked, report)
+                recovered, _ = selected_policies(
+                    {'dependency': {'url': url, 'subdirectory': '', 'current': pin}}, report)
+                self.assertEqual(recovered, {})
+                results.append(source)
+        self.assertEqual(len(results), 2)
+        if len(results) == 2:
+            self.assertEqual(results[0], results[1])
+        for change in ('tag', 'abbreviated', 'fork', 'subdirectory', 'conditional', 'different-sha'):
+            with self.subTest(protected=change):
+                altered = restriction.decode()
+                if change == 'tag':
+                    altered = altered.replace('rev=', 'tag=')
+                elif change == 'abbreviated':
+                    altered = altered.replace(pin, pin[:12])
+                elif change == 'fork':
+                    altered = altered.replace(url, url + '-fork')
+                elif change == 'subdirectory':
+                    altered = altered.replace('rev=', 'subdirectory="other",rev=')
+                elif change == 'conditional':
+                    altered = altered.replace('rev=', 'marker="python_version < \'1\'",rev=')
+                else:
+                    altered = altered.replace(pin, 'b'*40)
+                packages = selected({'routing': root, 'skills': altered.encode()}, distributions=[installed])
+                self.assertEqual(packages['dependency']['status'], 'selected-dependency-unresolved')
+
     def test_unselected_compatible_source_restriction_does_not_hide_selected_dependency(self):
         from amplifier_web.selected_runtime_dependencies import selected
         url = 'https://example.invalid/dependency'

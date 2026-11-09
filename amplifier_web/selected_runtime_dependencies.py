@@ -46,6 +46,7 @@ def selected(manifests, *, distributions=None, environment=None):
         installed[name] = dist
 
     roots, constraints, queue = {}, {}, deque()
+    constraint_evidence = defaultdict(set)
     for name, content in manifests.items():
         project = tomllib.loads(content.decode()).get('project', {})
         # Static dependency declarations are the source of selection. Dynamic
@@ -62,6 +63,10 @@ def selected(manifests, *, distributions=None, environment=None):
         # not unknown identity when another reachable requirement selects it.
         for dependency, declarations in constraint_declarations(content, runtime_batch=True).items():
             constraints.setdefault(dependency, []).extend(declarations)
+            if any(exact_constraint_pin(item) for item in declarations):
+                constraint_evidence[dependency].add(json.dumps({
+                    'parent': name, 'manifestSha256': hashlib.sha256(content).hexdigest(),
+                    'constraints': declarations}, sort_keys=True))
 
     seen, reachable, declarations, evidence = set(), set(), defaultdict(set), defaultdict(set)
     rejected, identities = set(), {}
@@ -137,10 +142,15 @@ def selected(manifests, *, distributions=None, environment=None):
         source = identities.get(name)
         if source is None or name in rejected or len(declarations[name]) != 1:
             continue
-        if any(not compatible_constraint(constraint, source) or
-               (exact_constraint_pin(constraint) and constraint['ref'] != source['ref'])
-               for constraint in constraints.get(name, [])):
+        restrictions = constraints.get(name, [])
+        if any(not compatible_constraint(constraint, source) for constraint in restrictions):
             continue
+        if any(exact_constraint_pin(constraint) for constraint in restrictions):
+            # A compatible full-SHA restriction binds the installed identity,
+            # even when the selecting requirement names a branch. Report a pin
+            # so neither recovery nor the strict checked guard may advance it.
+            source = {**source, 'ref': source['revision']}
+            evidence[name].update(constraint_evidence[name])
         exact_pin = bool(re.fullmatch('[a-f0-9]{40}', source['ref']))
         if exact_pin and source['ref'] != source['revision']:
             continue
