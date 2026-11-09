@@ -115,6 +115,9 @@ def main():
             'loopCommit': pin, 'privateLoopTransport': 'lock-exact checked-out mirror; no credentials persisted',
             'sourceHashes': {name: owner.digest(ROOT / name) for name in sources}})
         env = clean_environment(work, mirror)
+        run('source-policy-units', [str(ROOT / '.venv/bin/python'), '-m', 'pytest',
+            'tests/test_selected_runtime_dependencies.py', 'tests/test_public_selected_source_harness.py',
+            '-q', '--tb=short', '--junitxml=' + str(work / 'private-policy-junit.xml')], env=env, timeout=180)
         # Keep all descendants in an owned PID namespace, including detached uv/Git
         # helpers. Normal public acquisition networking remains available; no
         # credentials, agent sockets, vendor tokens or model execution are supplied.
@@ -137,6 +140,9 @@ def main():
         if (work / 'private-junit.xml').exists():
             bounded_junit(work / 'private-junit.xml', output / 'public-junit.xml')
             status['rawJunitSha256'] = owner.digest(work / 'private-junit.xml')
+        if (work / 'private-policy-junit.xml').exists():
+            bounded_junit(work / 'private-policy-junit.xml', output / 'public-policy-junit.xml')
+            status['rawPolicyJunitSha256'] = owner.digest(work / 'private-policy-junit.xml')
         # The fixture writes only explicit bounded proof files into this directory.
         for path in (work / 'proof').glob('*.json'):
             assert path.stat().st_size <= 4 * 1024 * 1024

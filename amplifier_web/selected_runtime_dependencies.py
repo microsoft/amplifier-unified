@@ -32,7 +32,8 @@ def git_source(value):
 
 def selected(manifests, *, distributions=None, environment=None):
     from .runtime_environment import package_name
-    from .runtime_policy_reconciliation import authored_constraints
+    from .runtime_policy_reconciliation import compatible_constraint, exact_constraint_pin
+    from .runtime_source_policy import constraint_declarations
     from .updates import source_key, pinned
 
     environment = default_environment() if environment is None else environment
@@ -56,11 +57,11 @@ def selected(manifests, *, distributions=None, environment=None):
             continue
         roots[name] = values
         queue.append((name, frozenset()))
-        for dependency, declaration in authored_constraints(content, runtime_batch=True).items():
-            if dependency in constraints and constraints[dependency] != declaration:
-                constraints[dependency] = None
-            else:
-                constraints[dependency] = declaration
+        # A contributor's uv source can restrict a dependency without selecting
+        # it. Preserve every restriction separately; missing selection there is
+        # not unknown identity when another reachable requirement selects it.
+        for dependency, declarations in constraint_declarations(content, runtime_batch=True).items():
+            constraints.setdefault(dependency, []).extend(declarations)
 
     seen, reachable, declarations, evidence = set(), set(), defaultdict(set), defaultdict(set)
     rejected, identities = set(), {}
@@ -136,9 +137,9 @@ def selected(manifests, *, distributions=None, environment=None):
         source = identities.get(name)
         if source is None or name in rejected or len(declarations[name]) != 1:
             continue
-        constraint = constraints.get(name)
-        if name in constraints and (not constraint or constraint.get('refKind') == 'tag' or any(
-                constraint.get(key, '') != source[key] for key in ('url', 'ref', 'subdirectory'))):
+        if any(not compatible_constraint(constraint, source) or
+               (exact_constraint_pin(constraint) and constraint['ref'] != source['ref'])
+               for constraint in constraints.get(name, [])):
             continue
         exact_pin = bool(re.fullmatch('[a-f0-9]{40}', source['ref']))
         if exact_pin and source['ref'] != source['revision']:

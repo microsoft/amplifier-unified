@@ -1,9 +1,11 @@
 """Cheap authoring checks; never acquire or run the hosted public graph locally."""
 import ast
 import importlib.util
+import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
@@ -17,6 +19,23 @@ spec.loader.exec_module(adapter)
 
 
 class PublicSelectedHarness(unittest.TestCase):
+    def test_unselected_compatible_source_restriction_does_not_hide_selected_dependency(self):
+        from amplifier_web.selected_runtime_dependencies import selected
+        url = 'https://example.invalid/dependency'
+        requirement = '[project]\nname="routing"\ndependencies=["dependency @ git+' + url + '@main"]\n'
+        installed = SimpleNamespace(metadata={'Name': 'dependency'}, version='1', requires=[],
+            read_text=lambda _: json.dumps({'url': url, 'vcs_info': {'vcs': 'git', 'commit_id': 'a'*40}}))
+        for kind, ref, status in [('branch', 'main', 'selected'), ('rev', 'main', 'selected'),
+                                  ('tag', 'main', 'selected-dependency-unresolved'),
+                                  ('rev', 'b'*40, 'selected-dependency-unresolved')]:
+            with self.subTest(kind=kind, ref=ref):
+                other = ('[project]\nname="skills"\ndependencies=[]\n[tool.uv.sources]\n'
+                         'dependency={git="' + url + '",' + kind + '="' + ref + '"}\n')
+                result = selected({'routing': requirement.encode(), 'skills': other.encode()},
+                                  distributions=[installed])
+                self.assertEqual(result['dependency']['status'], status)
+                self.assertEqual(selected({'skills': other.encode()}, distributions=[installed]), {})
+
     def test_cleanup_handles_readonly_sources_without_following_symlinks(self):
         with tempfile.TemporaryDirectory() as directory:
             outer = Path(directory)
@@ -83,6 +102,43 @@ class PublicSelectedHarness(unittest.TestCase):
         self.assertIn('verify_recorded(final, stage)', source)
         self.assertIn('await manager.rollback()', source)
         self.assertIn('http://127.0.0.1:9', source)
+
+
+class PinnedCollectorBoundary(unittest.IsolatedAsyncioTestCase):
+    async def test_verified_pinned_root_keeps_its_dependency_constraint(self):
+        import subprocess
+        from amplifier_web.runtime_policy_reconciliation import Collector
+        from amplifier_web.runtime_source_alignment import verify_checked_selection
+        from amplifier_web.runtime_environment import ProtectedRuntimeSource
+        from amplifier_web.host.config import HostConfig
+        with tempfile.TemporaryDirectory() as directory:
+            stage = Path(directory) / 'candidate'
+            root = stage / 'foundation/cache/root'
+            root.mkdir(parents=True)
+            url, child = 'https://example.invalid/root', 'https://example.invalid/dependency'
+            (root / 'pyproject.toml').write_text('[project]\nname="root"\nversion="1"\n'
+                'dependencies=["dependency @ git+' + child + '@' + 'a'*40 + '"]\n')
+            def git(*args):
+                return subprocess.check_output(['git', *args], cwd=root, text=True,
+                                               stderr=subprocess.DEVNULL).strip()
+            git('init', '-b', 'main')
+            git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid')
+            git('remote', 'add', 'origin', url); git('add', '.'); git('commit', '-m', 'Pinned declaration')
+            pin = git('rev-parse', 'HEAD')
+            (root / '.amplifier_cache_meta.json').write_text(json.dumps(
+                {'git_url': url, 'ref': pin, 'commit': pin}))
+            config = HostConfig(stage, stage, {}, stage / 'foundation')
+            collector = Collector(); collector.observe('git+' + url + '@' + pin, config)
+            installed = SimpleNamespace(metadata={'Name': 'dependency'}, version='1', requires=[],
+                read_text=lambda _: json.dumps({'url': child, 'vcs_info': {'vcs': 'git', 'commit_id': 'b'*40}}))
+            with patch('importlib.metadata.distributions', return_value=[installed]), patch.dict(
+                    os.environ, {'AMPLIFIER_SOURCE_STORE': ''}):
+                report = await collector.report(SimpleNamespace(names={'root': root}), config)
+            self.assertEqual(report['packages']['root']['status'], 'explicit-pin')
+            self.assertEqual(report['packages']['dependency']['status'], 'selected-dependency-unresolved')
+            with self.assertRaises(ProtectedRuntimeSource):
+                verify_checked_selection({'dependency': {'url': child, 'ref': 'main',
+                                          'revision': 'b'*40}}, report, exact=True)
 
 
 if __name__ == '__main__':
