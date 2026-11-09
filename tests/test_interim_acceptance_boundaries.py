@@ -163,9 +163,11 @@ def _observe_live_capture(service, session, monkeypatch):
 
     async def project(inputs, *, key):
         nonlocal window_attempts
-        window_attempts += 1
+        is_window = inputs.get('operation') == 'window'
+        if is_window:
+            window_attempts += 1
         summary = None
-        if window_attempts <= 32 and len(rows) < 32 and inputs.get('operation') == 'window':
+        if is_window and window_attempts <= 32 and len(rows) < 32:
             try:
                 summary = {'kind': 'window', 'continuation': inputs.get('before') is not None,
                            'before': stamp(inputs['session'])}
