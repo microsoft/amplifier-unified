@@ -8,7 +8,8 @@ const vite=await createServer({server:{middlewareMode:true,hmr:false},appType:'c
 const {WorkNavigationContext,browsePatch}=await vite.ssrLoadModule('/src/work-navigation.js');
 const {WorkSurface,LiveChatActivity,WorkspaceFiles}=await vite.ssrLoadModule('/src/work-shell.jsx');
 const {ConversationList,PinnedItems,useRecentShortcuts}=await vite.ssrLoadModule('/src/shell/navigation-components.jsx');
-const {WorkspaceExplorer}=await vite.ssrLoadModule('/src/workspace-explorer.jsx');
+const {WorkspaceExplorer,WorkspaceRow}=await vite.ssrLoadModule('/src/workspace-explorer.jsx');
+const {WorkspaceDetails}=await vite.ssrLoadModule('/src/navigation-details.jsx');
 const {AgentCanvas}=await vite.ssrLoadModule('/src/shell-panels.jsx');
 const {newChatSetup}=await vite.ssrLoadModule('/src/new-chat.jsx');
 const {fitPanels}=await vite.ssrLoadModule('/src/panel-layout.jsx');
@@ -74,6 +75,17 @@ test('empty Pinned disappears; workspace-only and mixed pins share one section',
  assert.equal(root.root.findAllByProps({'data-sidebar-section':'pinned'}).length,0);
  assert.deepEqual(current.view.navSectionsCollapsed,['pinned']);assert.deepEqual(calls,[]);
  await act(async()=>root.unmount());
+});
+test('pinned workspace stays navigable while mismatched age activity waits for its resource',()=>{
+ const folder={...row,activityCounts:{working:25},chatCount:25};
+ const state={...snapshot,view:{navAge:'24h'},navigationResourceAges:{pinnedNavigation:'all'}};
+ const props={row:folder,state,act:host.dispatch,now:1,open(){},newChat(){},browse(){},compact:true,pinnedShortcut:true};
+ const stale=renderToStaticMarkup(React.createElement(WorkspaceRow,props));
+ assert.match(stale,/Open chats in \/research/);assert.doesNotMatch(stale,/25 chats working/);
+ const fresh=renderToStaticMarkup(React.createElement(WorkspaceRow,{...props,state:{...state,navigationResourceAges:{pinnedNavigation:'24h'}}}));
+ assert.match(fresh,/25 chats working/);
+ const details=renderToStaticMarkup(React.createElement(WorkspaceDetails,{row:folder,countsPending:true,now:1}));
+ assert.match(details,/Updating workspace activity/);assert.doesNotMatch(details,/<dt>Chats|25 working/);
 });
 test('mixed keyboard ordering preserves hidden pins and typed IDs, and workspace opens the browser',async()=>{
  const calls=[],selects=[];

@@ -9,6 +9,7 @@ import {LandingCollection} from './work-landing';
 
 export function WorkspaceRow({row,state,act,now,open,newChat,browse,onEdit,compact=false,pinnedShortcut=false,handle,floating=false,landing=false}){
  const workspace=!!row.workspaceId;
+ const countsPending=pinnedShortcut&&(state.navigationResourceAges?.pinnedNavigation??'all')!==(state.view?.navAge||'all');
  const count=(workspace?row.chatCount:row.descendantWorkspaceCount)||0,noun=workspace?(count===1?'chat':'chats'):(count===1?'workspace':'workspaces');
  const selectedWorkspace=state.view?.workSurface==='workspace'?state.view.workWorkspaceId||state.selectedWorkspaceId:null;
  const selected=workspace&&row.workspaceId===selectedWorkspace;
@@ -17,7 +18,7 @@ export function WorkspaceRow({row,state,act,now,open,newChat,browse,onEdit,compa
  const mixed=state.pinnedItemIds, pins=mixed||state.pinnedWorkspaceIds||[],key=mixed?pinKey:row.workspaceId,index=pins.indexOf(key),orderAction=mixed?'navigation.pinOrder':'workspace.pinOrder';
  const [error,setError]=useState('');
  const move=async offset=>{try{setError('');const result=await act(orderAction,{ids:movePin(pins,key,pins[index+offset])});const receipt=result?.result?.accepted!==undefined?result.result:result;if(receipt?.accepted===false)throw Error(receipt.error||'Could not reorder pins.')}catch(err){setError(err.message||'Could not reorder pins.')}};
- const counts=row.activityCounts||{},summary=counts.attention?{kind:'attention',attentionType:counts.error?'error':counts.decision?'decision':counts.blocked?'blocked':'error',label:`${counts.attention} chats need attention`}:counts.working?{kind:'working',label:`${counts.working} chats working`}:counts.waiting?{kind:'waiting',label:`${counts.waiting} chats waiting`}:row.unread?{kind:'unread',label:`${row.unread} chats with unread activity`}:counts.paused?{kind:'paused',label:`${counts.paused} chats paused`}:null;
+ const counts=countsPending?{}:row.activityCounts||{},summary=counts.attention?{kind:'attention',attentionType:counts.error?'error':counts.decision?'decision':counts.blocked?'blocked':'error',label:`${counts.attention} chats need attention`}:counts.working?{kind:'working',label:`${counts.working} chats working`}:counts.waiting?{kind:'waiting',label:`${counts.waiting} chats waiting`}:!countsPending&&row.unread?{kind:'unread',label:`${row.unread} chats with unread activity`}:counts.paused?{kind:'paused',label:`${counts.paused} chats paused`}:null;
  const paths=!!state.settings?.workspaces?.showPaths;
  const subtitle=pinnedShortcut?pinnedWorkspaceSubtitle(row,paths):paths?row.path:'in '+workspaceContext(row);
  const content=<>{handle}
@@ -31,7 +32,7 @@ export function WorkspaceRow({row,state,act,now,open,newChat,browse,onEdit,compa
  const className=`a-workspace-row ${landing?'a-landing-workspace ':''}${workspace?'is-workspace':''} ${selected?'is-selected':''}${pinnedShortcut?' a-pinned-workspace':''}`;
  if(floating)return <div className={className} data-show-paths={!!state.settings?.workspaces?.showPaths}>{content}<MoreHorizontal className="a-navigation-more"/></div>;
  if(!workspace)return <div className={className} data-show-paths={!!state.settings?.workspaces?.showPaths} data-workspace-path={row.path}>{content}</div>;
- return <NavigationRow contextKey={navigationDetailsContext(state)} className={className} data-show-paths={!!state.settings?.workspaces?.showPaths} data-workspace-path={row.path} data-qualified={!row.customName&&row.pathLabel?.includes('/')} label={row.customName||row.name} details={({close})=><WorkspaceDetails row={row} now={now} actions={<>
+ return <NavigationRow contextKey={navigationDetailsContext(state)} className={className} data-show-paths={!!state.settings?.workspaces?.showPaths} data-workspace-path={row.path} data-qualified={!row.customName&&row.pathLabel?.includes('/')} label={row.customName||row.name} details={({close})=><WorkspaceDetails row={row} now={now} countsPending={countsPending} actions={<>
   <button type="button" className="a-link" data-action="workspace.select" onClick={()=>{close();open(row)}}><MessageCircle/>Open chats</button>
   <button type="button" data-action={row.archived?'workspace.restore':'workspace.archive'} onClick={()=>{close();act(row.archived?'workspace.restore':'workspace.archive',{id:row.workspaceId})}}>{row.archived?'Restore workspace':'Archive workspace'}</button>
   <button type="button" data-action="workspace.pin" aria-label={(row.pinned?'Unpin workspace ':'Pin workspace ')+row.path} onClick={()=>{close();act('workspace.pin',{id:row.workspaceId,pinned:!row.pinned})}}>{row.pinned?<PinOff/>:<Pin/>}{row.pinned?'Unpin workspace':'Pin workspace'}</button>

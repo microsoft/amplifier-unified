@@ -436,7 +436,7 @@ class ShellResources:
                                 built = self.shell.navigation(client, instance, identity=identity,
                                     navigation_resources=frozenset({resource}), _page_only=True)
                             value = page_value(built, resource)
-                            if resource in {'workspaceExplorer', 'workspaceShortcuts'}:
+                            if resource in {'workspaceExplorer', 'workspaceShortcuts', 'pinnedNavigation'}:
                                 value['navigationAge'] = scoped['view'].get('navAge', 'all')
                             own[resource] = self._record(value, previous.get(resource),
                                 prior.get('versions', {}).get(resource, 0))
