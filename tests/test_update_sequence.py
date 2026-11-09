@@ -555,6 +555,7 @@ async def prepare(workspace, **kwargs):
     session._apply_settings(bundle,config)
 session.prepare_dependencies=prepare
 probe,stage=sys.argv[1:]
+sys.path.insert(0,str(Path(probe).parent))
 sys.argv=[probe,stage,'fixture','--profiles',str(Path(stage)/'profiles.json'),'--global-only']
 runpy.run_path(probe,run_name='__main__')
 """
@@ -566,6 +567,7 @@ runpy.run_path(probe,run_name='__main__')
     out,err=await child.communicate()
     assert child.returncode==1,err.decode()
     facts=update_diagnostics.probe_record(out.decode())
+    assert facts is not None,(out.decode(),err.decode())
     assert facts['reason']=='missing-configured-environment'
     assert b'BUNDLE_ENDPOINT' not in out
     private=json.loads((stage/'missing-environment.json').read_text())
