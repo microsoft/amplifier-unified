@@ -32,6 +32,10 @@ try{
  await expect(page.getByRole('slider',{name:'Filter conversations by age'})).toHaveCount(1);
  await expect(area.getByRole('slider')).toHaveCount(0);
  await expect(grouping).toBeVisible();await expect(age).toBeVisible();await expect(age).toHaveValue('5');
+ const sliderBox=await age.boundingBox();
+ await page.mouse.click(sliderBox.x+8,sliderBox.y+sliderBox.height/2);
+ await expect(age).toHaveValue('0');await expect(results).toHaveCount(1);
+ await age.focus();await age.press('End');await expect(area.getByRole('status')).toHaveText('206 chats');
  await area.getByRole('button',{name:'Show more conversations'}).click();
  await expect(area.locator('.a-nav-pagination')).toContainText('41–80');
  await grouping.selectOption('workspace');await expect(area.locator('.a-nav-pagination')).toContainText('1–40');
