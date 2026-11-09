@@ -34,6 +34,19 @@ UNITS = ('canvas-overview.test.mjs', 'shell-panels.test.mjs', 'work-shell.test.m
          'submission-reset.test.mjs', 'composer.test.mjs', 'peer-groups.test.mjs',
          'peer-preview-pages.test.mjs', 'pin-order-settlement.test.mjs')
 
+def selection(scope):
+    """Fixed opt-in integration slice; full coverage remains the default."""
+    if scope not in {'full', 'artifact-feedback'}:
+        raise ValueError('Unknown Canvas qualification scope')
+    return {
+        'scope': scope,
+        'browsers': list(BROWSERS if scope == 'full' else ('canvas-versions-browser.mjs',)),
+        'units': list(UNITS if scope == 'full' else ('canvas-reference.test.mjs', 'inline-media.test.mjs')),
+        'omittedBrowsers': [] if scope == 'full' else [name for name in BROWSERS if name != 'canvas-versions-browser.mjs'],
+        'coverageNote': ('Full fixed Canvas qualification.' if scope == 'full' else
+                         'Artifact feedback integration only; omitted journeys are not requalified or declared passing.'),
+    }
+
 
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -61,14 +74,16 @@ def payload(folder):
 
 
 def initialize():
+    selected = selection(os.environ.get('CANVAS_QUALIFICATION_SCOPE', 'full'))
     OUT.mkdir(parents=True, exist_ok=False)
     tracked = checked('git', 'ls-files', '-z').split('\0')
     source = {name: sha(ROOT / name) for name in tracked if name and not name.startswith('amplifier_web/static/')}
     write(OUT / 'identity.json', {'revision': checked('git', 'rev-parse', 'HEAD'),
           'tree': checked('git', 'rev-parse', 'HEAD^{tree}'), 'sourceSha256': source,
           'runId': os.environ.get('GITHUB_RUN_ID'), 'attempt': os.environ.get('GITHUB_RUN_ATTEMPT'),
-          'selection': 'fixed-canvas-source-installed', 'python': sys.version})
+          'selection': selected, 'python': sys.version})
     write(OUT / 'summary.json', {'status': 'not_started', 'stages': [],
+          'selection': selected,
           'scope': 'Synthetic runtime on hosted Linux; no physical touch/native desktop/screen reader claim'})
 
 
@@ -168,6 +183,8 @@ def run():
     record['status'] = 'running'
     write(OUT / 'summary.json', record)
     identity = json.loads((OUT / 'identity.json').read_text())
+    selected = selection(identity['selection']['scope'])
+    assert selected == identity['selection'] == record['selection']
     assert identity['revision'] == checked('git', 'rev-parse', 'HEAD')
     assert all(sha(ROOT / name) == value for name, value in identity['sourceSha256'].items())
     python = str(ROOT / '.venv/bin/python')
@@ -187,7 +204,7 @@ def run():
             raise RuntimeError('Host imports unavailable')
         if not stage('browser-preflight', ['node', 'tests/canvas-readiness.mjs'], seconds=30):
             raise RuntimeError('Browser unavailable')
-        stage('units', ['node', '--test', *['tests/' + name for name in UNITS]], seconds=120)
+        stage('units', ['node', '--test', *['tests/' + name for name in selected['units']]], seconds=120)
         stage('artifact-feedback-contracts', [python, '-m', 'pytest', '-q',
               str(ROOT / 'tests/test_canvas_feedback.py'),
               str(ROOT / 'tests/test_canvas_versions.py'),
@@ -201,7 +218,8 @@ def run():
               'tests/test_release_qualification.py::test_compact_composer_is_fixed_manual_only_with_independent_failure_evidence',
               'tests/test_peer_qualification.py::test_peer_hosted_route_is_fixed_and_separate',
               'tests/test_browser_check_runner.py::test_compact_composer_peer_preview_and_artifact_keep_automatic_inventory_owners',
-              'tests/test_browser_check_runner.py::test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain')]],
+              'tests/test_browser_check_runner.py::test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain',
+              'tests/test_release_qualification.py::test_canvas_feedback_scope_is_fixed_and_preserves_full_coverage')]],
               seconds=120)
         if not stage('build', ['npm', 'run', 'build'], seconds=180):
             raise RuntimeError('Production build failed')
@@ -214,7 +232,7 @@ def run():
             output = Path(folder) / 'build'
             create(ROOT, output, os.environ)
             shutil.make_archive(str(OUT / 'frontend-build-output'), 'zip', output)
-        for name in BROWSERS:
+        for name in selected['browsers']:
             label = 'source-' + name.removesuffix('.mjs')
             stage(label, ['node', 'tests/' + name], seconds=240,
                   env={'AMPLIFIER_TEST_ARTIFACTS': str(OUT / label / 'artifacts'),
@@ -227,7 +245,7 @@ def run():
             raise RuntimeError('Installed wheel setup failed')
         harness = OUT / 'installed-harness'
         package = json.loads((OUT / 'installed-identity.json').read_text())['package']
-        for name in BROWSERS:
+        for name in selected['browsers']:
             label = 'installed-' + name.removesuffix('.mjs')
             stage(label, ['node', 'tests/' + name], root=harness, seconds=240,
                   env={'AMPLIFIER_TEST_ARTIFACTS': str(OUT / label / 'artifacts'),
