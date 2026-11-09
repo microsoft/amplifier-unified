@@ -226,7 +226,8 @@ async def refresh(manager, stage, project, selected):
         rebound.add(name)
     if set(generated).intersection(selected) != rebound:
         raise ValueError('A generated resolver override is missing before reconciliation.')
-    write_private(path, '\n'.join(json.dumps(key) + ' = ' + toml_value(value) for key, value in data.items()) + '\n')
+    write_private(path, '\n'.join(json.dumps(key) + ' = ' + toml_value(value) for key, value in data.items()) + '\n',
+                  owned_root=manager.home)
     uv = shutil.which('uv')
     await process(uv, 'lock', '--project', str(project), '--python', '3.13',
                   *[arg for name in sorted(selected) for arg in ('--upgrade-package', name, '--refresh-package', name)],

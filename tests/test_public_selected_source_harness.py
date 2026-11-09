@@ -105,6 +105,55 @@ class PublicSelectedHarness(unittest.TestCase):
 
 
 class PinnedCollectorBoundary(unittest.IsolatedAsyncioTestCase):
+    async def test_refresh_forwards_owner_and_preserves_refused_or_recorded_state(self):
+        from amplifier_web import deployment, runtime_environment as runtime
+        from amplifier_web.selected_runtime_dependencies import refresh
+        from unittest.mock import AsyncMock
+        from urllib.parse import urlsplit
+        for boundary in ('forward', 'refuse', 'recorded'):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory) / 'app'
+                stage = home / 'updates/releases' / ('d' * 32)
+                stage.mkdir(parents=True)
+                project = home / 'runtime/candidate'; project.mkdir(parents=True)
+                url, old, new = 'https://example.invalid/dependency', 'a'*40, 'b'*40
+                path = project / 'pyproject.toml'
+                path.write_text('[project]\nname="worker"\nversion="1"\n'
+                    '[tool.uv.sources]\ndependency={git="' + url + '",rev="' + old + '"}\n')
+                pointer = home / 'updates/active.json'
+                pointer.write_text('{"current":"previous"}')
+                before, active = path.read_bytes(), pointer.read_bytes()
+                if boundary == 'recorded':
+                    (stage / 'runtime.lock').write_text('retained-lock')
+                writes = []
+                original = deployment.write_private
+                def private(target, text, *, owned_root=None):
+                    self.assertEqual(owned_root, home)
+                    writes.append(target)
+                    if boundary == 'refuse':
+                        raise PermissionError('private boundary refused')
+                    original(target, text, owned_root=owned_root)
+                process = AsyncMock(return_value='')
+                with patch.object(deployment, 'write_private', private), patch(
+                        'amplifier_web.updates.process', process), patch('shutil.which', return_value='/fixed/uv'), patch.object(
+                        runtime, 'locked_sources', return_value={'dependency': urlsplit(url + '?rev=' + new + '#' + new)}):
+                    args = (SimpleNamespace(home=home), stage, project, {'dependency': {
+                        'sourceKind': 'dependency', 'url': url, 'ref': 'main', 'subdirectory': '',
+                        'previousRevision': old, 'revision': new}})
+                    if boundary == 'forward':
+                        await refresh(*args)
+                        self.assertIn(new, path.read_text())
+                        self.assertEqual(process.await_count, 2)
+                    else:
+                        with self.assertRaises(PermissionError if boundary == 'refuse' else ValueError):
+                            await refresh(*args)
+                        self.assertEqual(path.read_bytes(), before)
+                        process.assert_not_awaited()
+                self.assertEqual(writes, [] if boundary == 'recorded' else [path])
+                self.assertEqual(pointer.read_bytes(), active)
+                if boundary == 'recorded':
+                    self.assertEqual((stage / 'runtime.lock').read_text(), 'retained-lock')
+
     async def test_verified_pinned_root_keeps_its_dependency_constraint(self):
         import subprocess
         from amplifier_web.runtime_policy_reconciliation import Collector
