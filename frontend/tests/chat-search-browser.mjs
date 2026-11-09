@@ -26,6 +26,26 @@ try{
  assert.equal(await page.locator('.a-browser-pins').count(),0);
  assert.ok((await search.boundingBox()).y<300,'search appears above results without scrolling');
  await expect(area.locator('details')).not.toHaveAttribute('open','');
+ // Organization controls are outside Filters. The entire fixture is old, so
+ // finite ranges keep only the selected pin, independent of current page.
+ const grouping=area.getByRole('combobox',{name:'Group conversations'}),age=area.getByRole('slider',{name:'Filter conversations by age'});
+ await expect(grouping).toBeVisible();await expect(age).toBeVisible();await expect(age).toHaveValue('5');
+ await area.getByRole('button',{name:'Show more conversations'}).click();
+ await expect(area.locator('.a-nav-pagination')).toContainText('41–80');
+ await grouping.selectOption('workspace');await expect(area.locator('.a-nav-pagination')).toContainText('1–40');
+ await age.focus();await age.press('Home');await expect(age).toHaveValue('0');await expect(age).toHaveAttribute('aria-valuetext','Within the last 24 hours');
+ await expect(area.getByRole('status')).toHaveText('1 chat');await expect(results).toHaveCount(1);await expect(area.getByRole('heading',{name:'Pinned',exact:true})).toBeVisible();
+ await page.reload();await expect(age).toHaveValue('0');await expect(grouping).toHaveValue('workspace');await expect(results).toHaveCount(1);
+ const other=await browser.newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ await other.goto(`http://127.0.0.1:${port}`);await showFixtureConversation(other,{navPinned:true});
+ await other.getByRole('button',{name:'Search chats',exact:true}).click();
+ await expect(other.getByRole('slider',{name:'Filter conversations by age'})).toHaveValue('5');
+ await expect(other.getByRole('combobox',{name:'Group conversations'})).toHaveValue('recent');await other.close();
+ await grouping.selectOption('status');await age.focus();await age.press('End');await expect(age).toHaveValue('5');
+ await age.press('ArrowLeft');await expect(age).toHaveValue('4');await expect(age).toHaveAttribute('aria-valuetext','Within the last year');
+ await age.press('ArrowRight');await expect(age).toHaveValue('5');
+ await expect(area.getByRole('status')).toHaveText('206 chats');await expect(area.getByRole('heading',{name:'Pick up again',exact:true})).toBeVisible();
+ await grouping.selectOption('recent');
  await search.fill('Image');
  assert.equal(await search.evaluate(el=>getComputedStyle(el).outlineStyle),'none');
  assert.equal(await search.evaluate(el=>getComputedStyle(el.parentElement).outlineStyle),'solid');
@@ -44,12 +64,36 @@ try{
  await area.locator('summary').click();await page.screenshot({path:'/tmp/unified-search-desktop.png'});
  await page.emulateMedia({colorScheme:'dark'});await page.screenshot({path:'/tmp/unified-search-dark.png'});
  await page.setViewportSize({width:390,height:844});await expect(search).toBeVisible();
+ await expect(grouping).toBeVisible();await expect(age).toBeVisible();
  await expect(page.getByRole('button',{name:/^Back(?: to chat)?$/})).toHaveCount(0);
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  // Wait for the responsive navigation state to follow the resized viewport.
  await expect.poll(()=>area.evaluate(el=>el.scrollWidth>el.clientWidth+1)).toBe(false);
+ await page.emulateMedia({forcedColors:'active'});await expect(grouping).toBeVisible();await expect(age).toBeVisible();
+ await age.focus();await age.press('Home');await expect(age).toHaveValue('0');await expect(results).toHaveCount(0);await expect(area.getByRole('heading',{name:'No chats found'})).toBeVisible();
+ await age.press('End');await expect(age).toHaveValue('5');await expect(area.getByRole('status')).toHaveText('3 chats found');
+ await page.emulateMedia({forcedColors:'none'});
  await area.locator('summary').click();await page.screenshot({path:'/tmp/unified-search-mobile.png'});
  await page.setViewportSize({width:1280,height:900});
+ // Workspace Chats uses Home's cards, not the All Chats catalog controls.
+ // Its results must not borrow All Chats' finite age or current search.
+ await grouping.selectOption('status');await age.focus();await age.press('Home');
+ await expect(results).toHaveCount(0);
+ const workspaceId=await page.evaluate(()=>window.amplifier.getState().selectedWorkspaceId);
+ await action('view.update',{patch:{workSurface:'workspace',workWorkspaceId:workspaceId,workWorkspaceTab:'chats'}});
+ const workspaceArea=page.locator('[data-landing="workspace"]'),workspaceCards=workspaceArea.locator('.a-work-card[data-session-id]');
+ await expect(workspaceArea.getByRole('searchbox',{name:'Search your work',exact:true})).toHaveValue('');
+ await expect.poll(()=>page.evaluate(id=>{const snapshot=window.amplifier?.getShellState?.()?.snapshots?.chats;
+  return snapshot?.navigationResources?.includes('workHome')===true&&snapshot.workHome?.scope===id&&snapshot.workHome?.query===''&&!snapshot.navigationResourcePending?.workHome},workspaceId),{timeout:15000}).toBe(true);
+ await expect(workspaceCards).not.toHaveCount(0);
+ await expect(workspaceArea.getByRole('slider',{name:'Filter conversations by age'})).toHaveCount(0);
+ await expect(workspaceArea.getByRole('combobox',{name:'Group conversations'})).toHaveCount(0);
+ assert.ok((await workspaceCards.evaluateAll(cards=>cards.map(card=>card.dataset.sessionId))).every(id=>!id.startsWith('beta-')));
+ assert.equal(await workspaceArea.locator('.a-home-toolbar').count(),1);
+ await action('view.update',{patch:{workSurface:'chats'}});
+ await expect(grouping).toHaveValue('status');await expect(age).toHaveValue('0');await expect(search).toHaveValue('Beta');await expect(results).toHaveCount(0);
+ await age.focus();await age.press('End');await grouping.selectOption('recent');
+ await expect(area.getByRole('status')).toHaveText('3 chats found');
  await search.focus();await search.press('Escape');await expect(search).toHaveValue('');
  await search.press('Escape');await expect(search).toBeFocused();await expect(area).toBeVisible();await expect(draft).toBeHidden();
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),selected);
@@ -80,5 +124,5 @@ try{
  const info=await (await page.request.get(`http://127.0.0.1:${port}/api/fixture/info`)).json();assert.deepEqual(info.runtimeSends,[]);
  assert.deepEqual(errors,[]);
  console.log('Search passed: focused top field, pinned matches, wildcard search, paging reset, archive and sort, no implicit Back/Escape return, delayed same-chat selection followed by newer search, retained draft, compact light/dark and narrow layouts; no model sends.');
-}catch(error){await page?.screenshot({path:'/tmp/unified-search-failure.png'}).catch(()=>{});throw error}
+}catch(error){console.error('Overflow diagnostics',await page?.evaluate(()=>[...document.querySelectorAll('.a-chat-search-page *')].filter(el=>el.scrollWidth>el.clientWidth+1).map(el=>({tag:el.tagName,className:el.className,width:el.clientWidth,scroll:el.scrollWidth,box:el.getBoundingClientRect().toJSON(),css:{minWidth:getComputedStyle(el).minWidth,whiteSpace:getComputedStyle(el).whiteSpace}}))).catch(()=>[]));await page?.screenshot({path:'/tmp/unified-search-failure.png'}).catch(()=>{});throw error}
 finally{await browser?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}}

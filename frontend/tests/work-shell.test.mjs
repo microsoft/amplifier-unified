@@ -21,7 +21,7 @@ const workspace={id:'b',path:'/research',name:'Research',available:true};
 const row={workspaceId:'b',path:'/research',name:'Research',chatCount:1};
 const scope={mode:'all',workspaceId:null,filter:'',selectedSessionId:'a',section:'recent',showAgentCreated:false};
 const page={items:[{id:'b-chat',title:'Research ideas',workspace:'/research',workspaceId:'b'}],scope,total:1,pages:1,index:0,start:0,end:1};
-const snapshot={navigationResources:['pinnedNavigation','recentNavigation','workspaceShortcuts','workspaceExplorer','sidebarSearch','sidebarRecent','sidebarPinned'],view:{},selectedSessionId:'a',selectedWorkspaceId:'b',workspaces:[workspace],library:{bounded:true,workspaceCount:1},workspaceShortcuts:[row],recentShortcuts:page.items,recentNavigation:{...page,remaining:0,limit:20,scope:{...scope,section:'shortcuts',showAgentCreated:false,limit:20,viewRevision:0}},workspaceExplorer:{rows:[row],mode:'recent'},sidebarNavigation:{pinned:{items:[],total:0,pages:1},recent:page,search:{...page,scope:{...scope,section:'search'}},recentView:{}},sharedHistory:{}};
+const snapshot={navigationResources:['pinnedNavigation','recentNavigation','workspaceShortcuts','workspaceExplorer','sidebarSearch','sidebarRecent','sidebarPinned'],view:{},selectedSessionId:'a',selectedWorkspaceId:'b',workspaces:[workspace],library:{bounded:true,workspaceCount:1},workspaceShortcuts:[row],recentShortcuts:page.items,recentNavigation:{...page,remaining:0,limit:20,scope:{...scope,section:'shortcuts',showAgentCreated:false,limit:20,viewRevision:0}},workspaceExplorer:{rows:[row],mode:'recent'},sidebarNavigation:{pinned:{items:[],total:0,pages:1},recent:page,search:{...page,scope:{...scope,section:'search',group:'recent',age:'all'}},recentView:{}},sharedHistory:{}};
 const host={instanceId:'chats',getSnapshot:()=>snapshot,subscribe:()=>()=>{},dispatch:async()=>({accepted:true})};
 const navigation={browse(){},create(){},newChat(){},sidebarView:{},updateSidebar(){}};
 const render=child=>React.createElement(WorkNavigationContext.Provider,{value:navigation},child);
@@ -51,6 +51,7 @@ test('compact sidebar has shortcuts; filtering lives in the main surface',()=>{
  const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>host};
  const main=renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state:{view:{workSurface:'chats'}},act:host.dispatch})));
  assert.match(main,/Research ideas/);assert.match(main,/aria-label="Search chats"/);assert.doesNotMatch(main,/a-browser-pins/);
+ assert.match(main,/aria-label="Group conversations"/);assert.match(main,/aria-label="Filter conversations by age"/);
 });
 test('empty Pinned disappears; workspace-only and mixed pins share one section',async()=>{
  const calls=[];
@@ -180,10 +181,25 @@ test('workspace Chats reuses scoped Home cards below tabs without a second landi
  assert.equal((html.match(/class="a-home-toolbar"/g)||[]).length,1);
  assert.ok(html.indexOf('aria-label="Workspace view"')<html.indexOf('class="a-home-toolbar"'));
  assert.equal((html.match(/class="a-home-intro"/g)||[]).length,1);
- assert.doesNotMatch(html,/a-home-project|aria-label="Work scope"|a-work-layout-label|One thing at a time/);
+ assert.doesNotMatch(html,/a-home-project|aria-label="Work scope"|a-work-layout-label|One thing at a time|Group conversations|Filter conversations by age/);
  assert.match(html,/aria-label="Work view"/);
  current.workHome={...current.workHome,scope:'elsewhere'};
  const stale=markup();assert.doesNotMatch(stale,/Research ideas/);assert.match(stale,/Loading your work/);
+});
+test('All Chats retains catalog grouping and age independently of workspace chat choices',()=>{
+ const choices={navGroup:'status',navAge:'24h'};
+ const current={...snapshot,view:{navRecentView:choices},sidebarNavigation:{...snapshot.sidebarNavigation,
+  recentView:choices,search:{...snapshot.sidebarNavigation.search,scope:{...snapshot.sidebarNavigation.search.scope,group:'status',age:'24h'},
+   items:page.items.map(chat=>({...chat,group:{id:'status:idle',title:'Pick up again'}}))}}};
+ const scopedHost={...host,getSnapshot:()=>current};
+ const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>scopedHost};
+ const state={view:{workSurface:'chats',workWorkspaceId:'b',workWorkspaceChats:{workspaceId:'b',query:'unrelated',pages:{idle:2}}}};
+ const html=renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state,act:host.dispatch})));
+ assert.match(html,/<option value="status" selected="">Status<\/option>/);
+ assert.match(html,/aria-valuetext="Within the last 24 hours"/);
+ assert.match(html,/<h2 class="a-chat-group-heading">Pick up again<\/h2>/);
+ assert.match(html,/Research ideas/);assert.doesNotMatch(html,/a-workspace-chats/);
+ assert.deepEqual(current.view.navRecentView,choices);
 });
 test('workspace view hook restores each destinations original layout key, search, filter and pages',async()=>{
  const prior={window:globalThis.window,sessionStorage:globalThis.sessionStorage},values=new Map();

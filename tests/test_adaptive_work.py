@@ -61,6 +61,31 @@ async def test_status_sidebar_is_independent_bounded_and_uses_same_catalog(servi
     assert missing['unavailable'] and not missing['items']
 
 
+async def test_all_chats_age_and_group_do_not_change_home_or_home_style_workspace(service):
+    from amplifier_web.chat_navigation import frozen_list_clock
+    client = service.shell.client('catalog-home-integration')
+    instance = {'id': 'chats', 'package': 'builtin.chats', 'slot': 'navigation'}
+    client['views']['chats'] = {'view': {'navRecentView': {'navAge': '24h', 'navGroup': 'status'}}, 'generation': 0}
+    service.state['view'].update(workSurface='home', workHomeScope='all')
+    before = deepcopy(client['views'])
+    with frozen_list_clock(1_800_000_000):
+        home = service.shell.navigation(client, instance, navigation_resources=frozenset({'workHome'}))['workHome']
+        assert {row['id'] for row in home['items']} == {'alpha', 'beta'}
+        service.state['view']['workSurface'] = 'chats'
+        all_chats = service.shell.navigation(client, instance, navigation_resources=frozenset({'sidebarSearch'}))
+        search = all_chats['sidebarNavigation']['search']
+        assert search['scope']['age'] == '24h' and search['scope']['group'] == 'status'
+        assert not search['items'], 'Old fixture chats are outside the All Chats age filter'
+        service.state['view'].update(workSurface='workspace', workWorkspaceId='two',
+                                     workWorkspaceChats={'workspaceId': 'two', 'query': 'beta', 'pages': {}})
+        workspace = service.shell.navigation(client, instance, navigation_resources=frozenset({'workHome'}))['workHome']
+        assert workspace['scope'] == 'two' and {row['id'] for row in workspace['items']} == {'beta'}
+        assert all('group' not in row for row in workspace['items']), 'Home cards retain their status-grouped producer'
+        service.state['view']['workSurface'] = 'home'
+        assert service.shell.navigation(client, instance, navigation_resources=frozenset({'workHome'}))['workHome'] == home
+    assert client['views'] == before, 'Browsing never rewrites All Chats grouping/age preferences'
+
+
 async def test_status_sidebar_pages_do_not_mutate_the_catalog(service):
     base = service.state['sessions'][0]
     service.state['sessions'] = [{**deepcopy(base), 'id': f'status-{i}', 'recentActivityAt': i+1} for i in range(125)]
