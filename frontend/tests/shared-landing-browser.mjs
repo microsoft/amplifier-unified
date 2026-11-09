@@ -27,13 +27,15 @@ try{
  browser=await chromium.launch(launchOptions);
  page=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.setDefaultTimeout(15000);page.on('pageerror',error=>report.errors.push(error.message));
- const state=()=>page.evaluate(()=>window.amplifier.getState());
- const shell=()=>page.evaluate(()=>window.amplifier.getShellState().snapshots.chats);
+ // The public API and shell snapshot can be absent during a legitimate reload.
+ // Observations stay pending; callers must still require real matching coverage.
+ const state=()=>page.evaluate(()=>window.amplifier?.getState?.());
+ const shell=()=>page.evaluate(()=>window.amplifier?.getShellState?.()?.snapshots?.chats);
  const act=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const info=async()=>(await page.request.get(`http://127.0.0.1:${port}/api/fixture/info`)).json();
  const landing=page.locator('.a-adaptive-home:visible'),sidebar=page.locator('#workspace-navigation');
  const choose=mode=>landing.getByRole('group',{name:'Work view',exact:true}).getByRole('button',{name:mode,exact:true}).click();
- const settled=()=>expect.poll(async()=>Object.keys((await shell()).navigationResourcePending||{}).length).toBe(0);
+ const settled=()=>expect.poll(async()=>{const snapshot=await shell();return !!snapshot&&Array.isArray(snapshot.navigationResources)&&Object.keys(snapshot.navigationResourcePending||{}).length===0},{timeout:15000}).toBe(true);
  const openSidebar=async()=>{if(!await sidebar.isVisible())await page.locator('#navigation-toggle').click()};
  const destinationCommands=new Set();
  const acceptedDestination=async(surface,click)=>{
@@ -47,7 +49,7 @@ try{
   assert.equal(typeof command.id,'string');assert.ok(command.id);assert.ok(!destinationCommands.has(command.id));destinationCommands.add(command.id);
   const response=await request.response();assert.ok(response);assert.equal(response.request(),request);
   const receipt=await response.json();assert.equal(receipt.accepted,true);
-  await expect.poll(async()=>{const current=await state();return current.client.hostInstanceId===receipt.hostInstanceId&&current.revision>=receipt.stateRevision}).toBe(true);
+  await expect.poll(async()=>{const current=await state();return current?.client?.hostInstanceId===receipt.hostInstanceId&&current?.revision>=receipt.stateRevision},{timeout:15000}).toBe(true);
  };
  const home=async()=>{await openSidebar();await acceptedDestination('home',()=>sidebar.getByRole('button',{name:'Home',exact:true}).click());await expect(landing).toHaveAttribute('data-landing','home');await settled()};
  const allChats=async()=>{await openSidebar();await acceptedDestination('chats',()=>sidebar.getByRole('button',{name:'Search chats',exact:true}).click());await expect(landing.getByRole('heading',{level:1})).toHaveText('All chats');await settled()};
@@ -59,13 +61,13 @@ try{
   await expect(async()=>{
    // Capture coverage and rendered rows together; a new search can omit pending results.
    const observed=await page.evaluate(section=>{
-    const snapshot=window.amplifier.getShellState().snapshots.chats;
-    return {result:snapshot.sidebarNavigation[section],
-     pending:Object.keys(snapshot.navigationResourcePending||{}),
+    const snapshot=window.amplifier?.getShellState?.()?.snapshots?.chats;
+    return {result:snapshot?.sidebarNavigation?.[section],
+     pending:snapshot?Object.keys(snapshot.navigationResourcePending||{}):null,
      ids:[...document.querySelectorAll('.a-adaptive-home .a-landing-chat')].map(row=>row.dataset.sessionId)};
    },section);
    const result=observed.result;
-   assert.equal(observed.pending.length,0);assert.ok(result);
+   assert.ok(observed.pending);assert.equal(observed.pending.length,0);assert.ok(result);
    assert.equal(result.scope.statusFilter,'idle');assert.equal(result.scope.filter,filter);
    assert.ok(result.total>0);assert.equal(result.total,result.activityCounts.idle);
    assert.ok(result.items.every(row=>row.activity.kind==='idle'));
@@ -123,12 +125,12 @@ try{
  await page.keyboard.press('Escape');
  await page.screenshot({path:join(output,'all-chats-brief.png')});
  await landing.getByRole('button',{name:'Show more conversations',exact:true}).click();await settled();
- await expect.poll(async()=>(await shell()).sidebarNavigation.search?.index).toBe(1);
+ await expect.poll(async()=>(await shell())?.sidebarNavigation?.search?.index).toBe(1);
  await choose('Focus');await expect(focusRow()).toHaveCount(1);
  await landing.getByRole('button',{name:'Previous Focus item',exact:true}).click();await settled();
- await expect.poll(async()=>(await shell()).sidebarNavigation.search?.index).toBe(0);
+ await expect.poll(async()=>(await shell())?.sidebarNavigation?.search?.index).toBe(0);
  await landing.getByRole('button',{name:'Next Focus item',exact:true}).click();await settled();
- await expect.poll(async()=>(await shell()).sidebarNavigation.search?.index).toBe(1);
+ await expect.poll(async()=>(await shell())?.sidebarNavigation?.search?.index).toBe(1);
  const later=await focusRow().getAttribute('data-session-id');
  await focusRow().locator('.a-nav-chat-select').click();await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
  await allChats();await expect(focusRow()).toHaveAttribute('data-session-id',later);
@@ -170,7 +172,7 @@ try{
  const workspaceCards=()=>landing.locator('.a-work-card[data-session-id]');
  const workspaceTabs=landing.getByRole('group',{name:'Workspace view',exact:true});
  const workspaceReady=async(query='',id=workspaceId)=>{
-  await expect.poll(async()=>{const snapshot=await shell();return snapshot.navigationResources?.includes('workHome')&&snapshot.workHome?.scope===id&&snapshot.workHome?.query===query}).toBe(true);
+  await expect.poll(async()=>{const snapshot=await shell();return snapshot?.navigationResources?.includes('workHome')===true&&snapshot.workHome?.scope===id&&snapshot.workHome?.requestedScope===id&&snapshot.workHome?.query===query&&!snapshot.navigationResourcePending?.workHome},{timeout:15000}).toBe(true);
   await settled();
  };
  await workspaceReady();
@@ -189,7 +191,7 @@ try{
   await expect(landing.locator('.a-home-toolbar')).toHaveCount(0);
   await expect(landing.getByRole('group',{name:'Work view',exact:true})).toHaveCount(0);
   await expect(landing.getByRole('button',{name:'View appearance',exact:true})).toHaveCount(0);
-  await expect.poll(async()=>((await shell()).navigationResources||[]).includes('workHome')).toBe(false);
+  await expect.poll(async()=>{const snapshot=await shell();return Array.isArray(snapshot?.navigationResources)&&!snapshot.navigationResources.includes('workHome')},{timeout:15000}).toBe(true);
   if(tab==='Files')await expect(landing.getByRole('region',{name:'Workspace files'})).toBeVisible();
   if(tab==='Details'){
    await expect(landing.getByRole('button',{name:'Rename workspace',exact:true})).toBeVisible();
@@ -214,7 +216,7 @@ try{
  await home();await landing.getByLabel('Work scope',{exact:true}).selectOption(otherWorkspace.id);
  await landing.getByRole('searchbox',{name:'Search your work',exact:true}).fill('Beta');
  await landing.getByRole('searchbox',{name:'Search your work',exact:true}).press('Tab');
- await expect.poll(async()=>(await shell()).workHome?.query).toBe('Beta');
+ await expect.poll(async()=>(await shell())?.workHome?.query).toBe('Beta');
  await pickUpAgain().click();await choose('Focus');await expect(workspaceCards()).toHaveCount(1);
  await landing.getByRole('button',{name:'Next Focus item',exact:true}).click();
  const homeChat=await workspaceCards().getAttribute('data-session-id');
@@ -227,7 +229,7 @@ try{
  assert.ok(idle.total>50);assert.ok(idle.items.every(row=>row.activity.kind==='idle'));
  assert.deepEqual(await workspaceCards().evaluateAll(rows=>rows.map(row=>row.dataset.sessionId)),idle.items.map(row=>row.id));
  await landing.getByRole('button',{name:'Next',exact:true}).click();await workspaceReady('Alpha');
- await expect.poll(async()=>(await shell()).workHome?.groups.idle.index).toBe(1);
+ await expect.poll(async()=>(await shell())?.workHome?.groups?.idle?.index).toBe(1);
  // A's later-page Focus and B's Studio/search choices are independent destinations.
  await choose('Focus');await landing.getByRole('button',{name:'Next Focus item',exact:true}).click();
  const alphaCursor=await workspaceCards().getAttribute('data-session-id');
