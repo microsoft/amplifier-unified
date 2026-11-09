@@ -110,10 +110,12 @@ def preparation_key(manager, rows):
     # Hash only runtime configuration and the canonical offered-profile set,
     # not unrelated preferences or the publication counter. Values stay private.
     from .bundles import profile_candidates
+    from .host.config import referenced_environment
     qualification = {key: config.settings.get(key) for key in
         ('config', 'modules', 'overrides', 'configurator', 'routing', 'decision_models')}
+    environment = referenced_environment(qualification, config.config_home / 'keys.env')
     data = [__version__, active_release(manager.home).get('current'), source_key,
-            qualification, profile_candidates(config), selected]
+            qualification, config.active_bundle, profile_candidates(config), environment, selected]
     return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
 

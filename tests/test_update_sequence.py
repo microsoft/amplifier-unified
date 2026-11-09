@@ -288,7 +288,7 @@ async def test_deterministic_disposition_survives_service_reload(manager, monkey
         await service.close()
 
 
-@pytest.mark.parametrize('repair', ['module-config', 'override-config', 'override-disabled'])
+@pytest.mark.parametrize('repair', ['module-config', 'override-config', 'override-disabled', 'key-file'])
 async def test_qualification_configuration_repair_rechecks_same_sources(manager, monkeypatch, repair):
     """Use real host setting application and probe classification inside install.
     Installer/network/profile mounting are not qualified by this scheduling test.
@@ -303,6 +303,9 @@ async def test_qualification_configuration_repair_rechecks_same_sources(manager,
     monkeypatch.setattr(host_config, 'amplifier_home', lambda: shared)
     monkeypatch.setattr(session_files, 'amplifier_home', lambda: shared)
     monkeypatch.delenv('UNIFIED_MISSING_FIXTURE_VALUE', raising=False)
+    # Each validation boundary simulates a fresh worker loading its copied keys.
+    import os
+    monkeypatch.setattr(host_config, '_KEY_FILE_VALUES', {})
     settings={'config': {'tools': [{'module':'tool-fixture','id':'fixture',
         'config':{'value':'${UNIFIED_MISSING_FIXTURE_VALUE}'}}]}}
     def save():host_config.write_private(shared/'settings.yaml',yaml.safe_dump(settings))
@@ -320,7 +323,12 @@ async def test_qualification_configuration_repair_rechecks_same_sources(manager,
         attempts.append(revision)
         config=host_config.read_config(stage,home=stage,shared_home=stage/'shared-config',global_only=True)
         bundle=SimpleNamespace(providers=[],tools=[],hooks=[],session={},agents={})
-        try:_apply_settings(bundle,config)
+        try:
+            with monkeypatch.context() as worker:
+                worker.setattr(host_config.os, 'environ', dict(os.environ))
+                worker.setattr(host_config, '_KEY_FILE_VALUES', {})
+                host_config._load_keys(stage/'shared-config/keys.env')
+                _apply_settings(bundle,config)
         except ValueError as error:
             raise CommandFailure({'probe':probe_failure(error,'prepare')}) from error
         prepared.append(bundle.tools)
@@ -342,8 +350,12 @@ async def test_qualification_configuration_repair_rechecks_same_sources(manager,
         settings['config']['tools'][0]['config']['value']='repaired'
     elif repair=='override-config':
         settings['overrides']={'fixture':{'config':{'value':'repaired'}}}
-    else:
+    elif repair=='override-disabled':
         settings['overrides']={'fixture':{'enabled':False}}
+    else:
+        host_config.write_private(shared/'keys.env', 'UNRELATED_CREDENTIAL=not-a-runtime-input\n')
+        assert update_health.preparation_key(manager,manager.inventory)==before
+        host_config.write_private(shared/'keys.env', 'UNIFIED_MISSING_FIXTURE_VALUE=repaired\n')
     save()
     await manager.check();await manager.tick()
     assert len(attempts)==2 and len(prepared)==1
@@ -351,3 +363,89 @@ async def test_qualification_configuration_repair_rechecks_same_sources(manager,
     assert manager.diagnostics.state['batch']['retry']['mode']=='backoff'
     assert first in manager.diagnostics.state['events']
     assert not updates.active_release(manager.home)
+
+
+async def test_active_profile_repair_rechecks_same_registered_candidates(manager, monkeypatch):
+    import time
+    import yaml
+    from unittest.mock import AsyncMock
+    from amplifier_foundation import Bundle
+    from amplifier_web import update_plan, session_files
+    from amplifier_web.host import config as host_config, session
+    from amplifier_web.update_diagnostics import CommandFailure, probe_failure
+    monkeypatch.chdir(manager.home)
+    shared=manager.home/'shared';shared.mkdir()
+    monkeypatch.setattr(host_config,'amplifier_home',lambda:shared)
+    monkeypatch.setattr(session_files,'amplifier_home',lambda:shared)
+    settings={'bundle':{'active':'unsupported','added':{'unsupported':'fixture:unsupported'}}}
+    def save():host_config.write_private(shared/'settings.yaml',yaml.safe_dump(settings))
+    save()
+    row={**source('included'),'kind':'runtime dependency','package':'amplifier-foundation'}
+    async def inventory(**kw):return [dict(row)]
+    async def remote(*args,**kw):return 'b'*40+' refs/heads/main'
+    async def build(*args):return {'mode':'worker','reason':'fixture','activation':'per-worker'}
+    monkeypatch.setattr(manager,'inventory_sources',inventory)
+    monkeypatch.setattr(updates,'process',remote)
+    monkeypatch.setattr(updates,'foundation_home',lambda home:home/'absent')
+    monkeypatch.setattr(update_plan,'build',build)
+    async def load(*args,**kw):
+        loaded=Bundle(name='unsupported',session={'orchestrator':{'module':'custom-loop'},
+            'context':{'module':'context-simple'}},providers=[{'module':'provider-fixture'}])
+        loaded.prepare=AsyncMock(side_effect=AssertionError('Unsupported profile must not mount'))
+        return None,loaded,'unsupported'
+    monkeypatch.setattr(session,'load_root_bundle',load)
+    monkeypatch.setattr(host_config,'prepare_registry',lambda config:None)
+    calls=[];prepared=[]
+    async def validate(stage, revision):
+        calls.append(revision)
+        config=host_config.read_config(stage,home=stage,shared_home=stage/'shared-config',global_only=True)
+        with monkeypatch.context() as probe:
+            probe.setattr(session,'load_config',lambda *a,**kw:config)
+            try:
+                catalog={}
+                await session.prepare_dependencies(stage,bundle='unsupported',global_only=True,profile_catalog=catalog)
+            except ValueError as error:
+                raise CommandFailure({'probe':probe_failure(error,'prepare')}) from error
+        prepared.append(catalog)
+        raise TimeoutError('fixture stops after profile selection')
+    monkeypatch.setattr(manager,'validate',validate)
+    manager._storage_last_pass=time.time();manager._storage_policy_due=False;manager._update_health_initial=False
+    await manager.check();await manager.install(automatic=True)
+    failure=manager.diagnostics.state['lastFailure']
+    assert failure['probe']['reason']=='incompatible-conversation-loop'
+    assert manager.diagnostics.state['batch']['retry']['mode']=='changed-inputs'
+    await manager.check();await manager.tick();assert len(calls)==1
+    settings['bundle']['active']='work';save()
+    await manager.check();await manager.tick()
+    assert len(calls)==2 and len(prepared)==1
+    assert prepared[0]['unsupported']['supportedLoop'] is False
+    assert failure in manager.diagnostics.state['events']
+    assert not updates.active_release(manager.home)
+
+
+async def test_environment_witness_is_relevant_passive_and_uses_worker_precedence(manager, monkeypatch):
+    import os
+    from amplifier_web.host import config as host_config
+    from amplifier_web.update_health import preparation_key
+    shared=manager.home/'shared';shared.mkdir()
+    monkeypatch.setattr(host_config,'amplifier_home',lambda:shared)
+    monkeypatch.setattr(host_config,'_KEY_FILE_VALUES',{})
+    monkeypatch.delenv('FIXTURE_INPUT',raising=False)
+    host_config.write_private(shared/'settings.yaml',
+        'config:\n  tools:\n  - module: tool-fixture\n    config: {value: \"${FIXTURE_INPUT}\"}\n')
+    rows=[{**source('included'),'latest':'b'*40}]
+    absent=preparation_key(manager,rows)
+    before=dict(os.environ)
+    host_config.write_private(shared/'keys.env','FIXTURE_INPUT=first-secret\n')
+    first=preparation_key(manager,rows)
+    assert first!=absent and dict(os.environ)==before
+    host_config.write_private(shared/'keys.env','FIXTURE_INPUT=second-secret\nUNRELATED=rotated\n')
+    second=preparation_key(manager,rows)
+    assert second!=first and len(second)==64 and 'secret' not in second
+    monkeypatch.setenv('FIXTURE_INPUT','explicit-launch')
+    explicit=preparation_key(manager,rows)
+    host_config.write_private(shared/'keys.env','FIXTURE_INPUT=third-secret\nUNRELATED=rotated-again\n')
+    assert preparation_key(manager,rows)==explicit
+    monkeypatch.setattr(host_config,'_KEY_FILE_VALUES',{'FIXTURE_INPUT':'explicit-launch'})
+    assert preparation_key(manager,rows)!=explicit
+    assert os.environ['FIXTURE_INPUT']=='explicit-launch'  # Scheduling never loads keys.

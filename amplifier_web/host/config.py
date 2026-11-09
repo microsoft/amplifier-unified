@@ -93,8 +93,8 @@ def merge(base, overlay):
     return copy.deepcopy(overlay)
 
 
-def _load_keys(path):
-    """Load keys.env from the caller's declared shared home, never create it."""
+def _read_keys(path):
+    """Read the shared key file with the same private-file/parser boundary."""
     values = {}
     if os.name == "nt":
         from ..windows_files import address, directory
@@ -125,6 +125,12 @@ def _load_keys(path):
             values[name] = " ".join(parsed)
     if os.name == "nt":
         validate_key_environment(values)
+    return values
+
+
+def _load_keys(path):
+    """Load keys.env from the caller's declared shared home, never create it."""
+    values = _read_keys(path)
     # Keep explicitly supplied process environment authoritative, while values
     # this loader previously installed are refreshed (or removed) on remount.
     for name, previous in tuple(_KEY_FILE_VALUES.items()):
@@ -170,6 +176,34 @@ def credential_environment_source(name):
     return "environment"
 
 
+_ENVIRONMENT_REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::([^}]*))?\}")
+
+
+def referenced_environment(value, key_file):
+    """Private effective values for declared references; never mutate environment.
+
+    Used only as input to a private comparison digest, not public diagnostics.
+    Unreferenced credentials and key-file timestamps do not affect that digest.
+    """
+    names = set()
+    def visit(item):
+        if isinstance(item, dict):
+            for child in item.values(): visit(child)
+        elif isinstance(item, list):
+            for child in item: visit(child)
+        elif isinstance(item, str):
+            names.update(match.group(1) for match in _ENVIRONMENT_REFERENCE.finditer(item))
+    visit(value)
+    if not names:
+        return {}
+    saved = _read_keys(key_file)
+    # Same precedence as a fresh worker: explicit launch values win; values
+    # installed by _load_keys refresh from this candidate's copied key file.
+    return {name: (os.environ[name] if name in os.environ and
+                   (name not in _KEY_FILE_VALUES or os.environ[name] != _KEY_FILE_VALUES[name])
+                   else saved.get(name)) for name in sorted(names)}
+
+
 def expand_environment(value, *, environment=None):
     values = os.environ if environment is None else environment
     if isinstance(value, dict):
@@ -187,7 +221,7 @@ def expand_environment(value, *, environment=None):
         if fallback is not None:
             return fallback[1:] if shell_default else fallback
         raise ValueError(f"Configured environment variable {name} is not set; update the shared Amplifier keys.env or environment.")
-    return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::([^}]*))?\}", substitute, value)
+    return _ENVIRONMENT_REFERENCE.sub(substitute, value)
 
 
 @dataclass

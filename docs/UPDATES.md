@@ -245,7 +245,11 @@ and sanitized package identity; they are not transient transport failures.
 The preparation witness includes the canonical source-configuration key, checked
 source rows, application version and active generation. It also includes complete
 module settings/identities, overrides, configurator choices, routing/decision
-configuration and the canonical offered-profile set consumed by qualification.
+configuration, effective active profile and the canonical offered-profile set
+consumed by qualification. Declared environment references contribute only to a
+private digest using the same key-file parser and worker precedence; unrelated
+credentials do not. Computing this witness never loads keys into the process
+environment or exposes their values in diagnostics.
 The dependency graph key alone omits values that can repair a failed profile.
 It excludes the unrelated settings publication counter. Reading, ordinary rechecks and non-runtime preferences do not
 authorize another identical preparation. Explicit retry still runs every guard.
