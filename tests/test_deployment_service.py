@@ -103,6 +103,72 @@ def test_repeat_systemd_install_starts_without_rewrite_backup_or_restart(tmp_pat
     assert calls == [('daemon-reload',), ('enable', deployment_service.UNIT_NAME), ('start', deployment_service.UNIT_NAME)]
 
 
+def test_legacy_shutdown_upgrade_preserves_installed_launch_and_private_backup(tmp_path, monkeypatch):
+    path = deployment_service.unit_path()
+    original = (deployment_service.MARKER + '\n[Unit]\nDescription=Owned app\n\n[Service]\n'
+                'ExecStart=/retained/bin/app --data-dir ' + str(tmp_path) + ' --workspace /retained serve\n'
+                'Environment="PATH=/custom/bin:/usr/bin"\nRestartSec=9\n\n[Install]\nWantedBy=default.target\n')
+    path.write_text(original)
+    calls = []
+    monkeypatch.setattr(deployment_service, '_systemctl', lambda *a, **k: calls.append((a, k)))
+    deployment_service.prepare_managed_shutdown(tmp_path)
+    assert path.read_text() == original.replace('[Service]\n', '[Service]\nKillMode=mixed\n')
+    backup, = tmp_path.glob('unit.service.backup-*')
+    assert backup.read_text() == original
+    assert backup.stat().st_mode & 0o777 == path.stat().st_mode & 0o777 == 0o600
+    modified = path.stat().st_mtime_ns
+    deployment_service.prepare_managed_shutdown(tmp_path)
+    assert path.stat().st_mtime_ns == modified and len(list(tmp_path.glob('*.backup-*'))) == 1
+    assert calls == [(('daemon-reload',), {'timeout': 30})] * 2
+
+
+@pytest.mark.parametrize('selection', ['unmanaged', 'other-root', 'explicit-policy', 'other-platform'])
+def test_shutdown_preparation_leaves_other_owners_and_operator_policy_unchanged(tmp_path, monkeypatch, selection):
+    path = deployment_service.unit_path()
+    content = deployment_service.MARKER + '\n[Service]\nExecStart=/app --data-dir ' + str(tmp_path) + '\n'
+    if selection == 'unmanaged':
+        content = content.replace(deployment_service.MARKER, '# Custom service')
+    elif selection == 'other-root':
+        content = content.replace(str(tmp_path), '/another/data/root')
+    elif selection == 'explicit-policy':
+        content += 'KillMode = control-group\n'
+    else:
+        monkeypatch.setattr(sys, 'platform', 'darwin')
+    path.write_text(content)
+    deployment_service.prepare_managed_shutdown(tmp_path)
+    assert path.read_text() == content and not list(tmp_path.glob('*.backup-*'))
+
+
+def test_failed_reload_is_retried_without_another_backup_or_rewrite(tmp_path, monkeypatch):
+    path = deployment_service.unit_path()
+    path.write_text(deployment_service.MARKER + '\n[Service]\nExecStart=/app\n')
+    calls = []
+    def reload(*args, **kwargs):
+        calls.append(args)
+        if len(calls) == 1:
+            raise RuntimeError('User bus temporarily unavailable')
+    monkeypatch.setattr(deployment_service, '_systemctl', reload)
+    with pytest.raises(RuntimeError, match='User bus'):
+        deployment_service.command('restart')
+    assert calls == [('daemon-reload',)]
+    changed = path.read_bytes(), path.stat().st_mtime_ns
+    deployment_service.command('restart')
+    assert calls == [('daemon-reload',), ('daemon-reload',), ('restart', deployment_service.UNIT_NAME)]
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == changed
+    assert len(list(tmp_path.glob('*.backup-*'))) == 1
+
+
+@pytest.mark.parametrize('operation', ['start', 'stop', 'restart'])
+def test_service_commands_prepare_shutdown_policy_first(tmp_path, monkeypatch, operation):
+    path = deployment_service.unit_path()
+    path.write_text(deployment_service.MARKER + '\n[Service]\nExecStart=/app\n')
+    calls = []
+    monkeypatch.setattr(deployment_service, '_systemctl', lambda *a, **k: calls.append(a))
+    deployment_service.command(operation)
+    assert calls == [('daemon-reload',), (operation, deployment_service.UNIT_NAME)]
+    assert 'KillMode=mixed\n' in path.read_text()
+
+
 def test_uninstall_absent_unit_does_not_disable_service(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(deployment_service, "unit_path", lambda: tmp_path / "missing.service")

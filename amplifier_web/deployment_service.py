@@ -62,11 +62,12 @@ def _launchd_plist() -> dict:
     return contents
 
 
-def _systemctl(*args: str, check: bool = True):
+def _systemctl(*args: str, check: bool = True, timeout: float | None = None):
     if sys.platform != "linux" or not shutil.which("systemctl"):
         raise RuntimeError("This command requires Linux systemd user services.")
     from .reset import user_service_environment
-    return subprocess.run(["systemctl", "--user", *args], check=check, env=user_service_environment())
+    return subprocess.run(["systemctl", "--user", *args], check=check,
+                          env=user_service_environment(), timeout=timeout)
 
 
 def _launchctl(*args: str, check: bool = True, **kwargs):
@@ -90,6 +91,38 @@ def _backup(path: Path, content: str | bytes) -> Path:
             os.fsync(stream.fileno())
         return backup
     raise RuntimeError(f"Could not create a unique backup for {path}")
+
+
+def prepare_managed_shutdown(data_dir: Path | None = None) -> None:
+    """Upgrade an old generated unit before it can signal workers with the host.
+
+    Preserve the installed command/environment and explicit operator policy.
+    Reload even an already-correct unit so a previously failed reload is retryable.
+    This prepares systemd only; it never starts, stops or restarts the app.
+    """
+    if sys.platform != "linux" or not managed_unit(data_dir):
+        return
+    path = unit_path()
+    content = path.read_text()
+    lines = content.splitlines(keepends=True)
+    section, service_header, kill_mode = "", None, None
+    for index, line in enumerate(lines):
+        value = line.strip()
+        if value.startswith("[") and value.endswith("]"):
+            section = value
+            if section == "[Service]":
+                service_header = index
+        elif section == "[Service]" and value.partition("=")[0].strip() == "KillMode":
+            kill_mode = value.partition("=")[2].strip()
+    if service_header is None:
+        raise RuntimeError("The generated service has no Service section; review it before restarting.")
+    if kill_mode is not None and kill_mode != "mixed":
+        return
+    if kill_mode is None:
+        _backup(path, content)
+        lines[service_header] = lines[service_header].rstrip("\r\n") + "\nKillMode=mixed\n"
+        write_private(path, "".join(lines))
+    _systemctl("daemon-reload", timeout=30)
 
 
 def _service_values(data_dir: Path, workspace: str | Path | None) -> tuple[list[str], str, str, Path, Path]:
@@ -359,6 +392,8 @@ def command(name: str, data_dir: Path | None = None) -> None:
         return
     if not managed_unit():
         raise RuntimeError("Amplifier Unified's generated service is not installed.")
+    if name in {"start", "stop", "restart"}:
+        prepare_managed_shutdown(data_dir)
     if name == "start":
         _systemctl("start", UNIT_NAME)
     elif name == "stop":
