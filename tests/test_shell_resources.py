@@ -345,16 +345,19 @@ async def test_browser_frames_prepare_shell_once_and_observe_saved_client_change
         assert first['shellResources'] == old
 
 
-async def test_real_navigation_resources_reassemble_exact_existing_snapshot(service):
+@pytest.mark.parametrize('wanted', [frozenset(sorted(NAVIGATION_RESOURCES)[:16]),
+                                    frozenset(sorted(NAVIGATION_RESOURCES)[16:])])
+async def test_real_navigation_resources_reassemble_exact_existing_snapshot(service, wanted):
     service.clients.attach('resource-real')
     with service.clients.bind('resource-real'):
         owner = resources.ShellResources(service.shell)
-        owner.register('resource-real',1,sorted(NAVIGATION_RESOURCES),resources.scope_for(service.state))
+        # Exercise every resource without exceeding the public demand bound.
+        owner.register('resource-real',1,sorted(wanted),resources.scope_for(service.state))
         envelope = owner.snapshot('resource-real')
         client = service.shell.client('resource-real')
         for instance in client['composition']['instances']:
             expected = service.shell.navigation(client,instance,identity='resource-real',
-                navigation_resources=NAVIGATION_RESOURCES)
+                navigation_resources=wanted)
             actual = {}
             for item in envelope['instances'][instance['id']]['resources'].values():
                 for key,value in item['value'].items():
