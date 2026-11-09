@@ -13,6 +13,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 
 from browser_check_runner import run_scenarios
@@ -21,10 +22,12 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'output/canvas-qualification'
 PUBLIC = ROOT / 'output/canvas-qualification-public'
 BROWSERS = ('canvas-chrome-browser.mjs', 'canvas-dirty-browser.mjs',
+            'canvas-versions-browser.mjs',
             'destination-history-browser.mjs', 'automation-hub-browser.mjs',
             'compact-composer-browser.mjs', 'peer-preview-browser.mjs',
             'pin-rapid-reorder-browser.mjs')
 UNITS = ('canvas-overview.test.mjs', 'shell-panels.test.mjs', 'work-shell.test.mjs',
+         'canvas-reference.test.mjs',
          'canvas-reload-guard.test.mjs', 'canvas-app-viewer.test.mjs', 'navigation-demand.test.mjs',
          'destination-history.test.mjs', 'destination-history-ui.test.mjs', 'api.test.mjs',
          'settings-drafts.test.mjs', 'automation-hub.test.mjs', 'schedule-editor.test.mjs',
@@ -185,6 +188,10 @@ def run():
         if not stage('browser-preflight', ['node', 'tests/canvas-readiness.mjs'], seconds=30):
             raise RuntimeError('Browser unavailable')
         stage('units', ['node', '--test', *['tests/' + name for name in UNITS]], seconds=120)
+        stage('artifact-feedback-contracts', [python, '-m', 'pytest', '-q',
+              str(ROOT / 'tests/test_canvas_feedback.py'),
+              str(ROOT / 'tests/test_canvas_versions.py'),
+              str(ROOT / 'tests/test_canvas_views.py')], seconds=120)
         stage('selector-contracts', [python, '-m', 'pytest', '-q', *[str(ROOT / target) for target in (
               'tests/test_release_qualification.py::test_canvas_qualification_is_fixed_manual_and_installed_not_a_release_gate',
               'tests/test_release_qualification.py::test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget',
@@ -200,6 +207,13 @@ def run():
             raise RuntimeError('Production build failed')
         write(OUT / 'static.json', payload(ROOT / 'amplifier_web/static'))
         shutil.make_archive(str(OUT / 'static'), 'zip', ROOT / 'amplifier_web/static')
+        # Reuse the maintained importer contract, rather than an unverified
+        # static overlay when recovering this exact build into its source PR.
+        from frontend_build_artifact import create
+        with tempfile.TemporaryDirectory(prefix='canvas-build-') as folder:
+            output = Path(folder) / 'build'
+            create(ROOT, output, os.environ)
+            shutil.make_archive(str(OUT / 'frontend-build-output'), 'zip', output)
         for name in BROWSERS:
             label = 'source-' + name.removesuffix('.mjs')
             stage(label, ['node', 'tests/' + name], seconds=240,

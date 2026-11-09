@@ -1400,6 +1400,10 @@ def test_canvas_qualification_is_fixed_manual_and_installed_not_a_release_gate()
     assert 'from browser_check_runner import run_scenarios' in source
     assert "BROWSERS = ('canvas-chrome-browser.mjs', 'canvas-dirty-browser.mjs'," in source
     assert "'destination-history-browser.mjs', 'automation-hub-browser.mjs'," in source
+    assert "'canvas-versions-browser.mjs'" in source
+    assert "'tests/test_canvas_feedback.py'" in source
+    assert "'canvas-reference.test.mjs'" in source
+    assert "from frontend_build_artifact import create" in source
     assert job['steps'][1]['env']['MIXED'] == (
         '${{ inputs.attachment_experience || inputs.multi_quote || inputs.peer_messages || inputs.compact_composer || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption '
         '|| inputs.destination_history || inputs.settings_close_diagnostic }}')

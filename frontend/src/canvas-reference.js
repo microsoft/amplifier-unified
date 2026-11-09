@@ -8,6 +8,7 @@ export function sourceSpans(source,base=0){
    const start=node.position?.start?.offset,end=node.position?.end?.offset;
    if(node.type==='text'&&Number.isInteger(start)&&Number.isInteger(end))return {type:'emphasis',data:{hName:'span',hProperties:{'data-canvas-source-start':base+start,'data-canvas-source-end':base+end}},children:[node]};
    if(['inlineCode','code'].includes(node.type)&&Number.isInteger(start)&&Number.isInteger(end)){
+    if(node.type==='code')node.data={...node.data,hProperties:{...node.data?.hProperties,'data-canvas-fence-offset':base+start}};
     const raw=source.slice(start,end),ticks=/^`+/.exec(raw)?.[0].length||0;
     let at=start;
     if(node.type==='inlineCode'){

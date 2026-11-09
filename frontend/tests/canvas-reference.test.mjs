@@ -37,3 +37,13 @@ test('code source locations exclude fence language and delimiter matches',()=>{
  assert.ok(html.includes(`data-canvas-source-start="${payload}"`));
  assert.ok(html.includes(`data-canvas-source-start="${tick}"`));
 });
+
+test('diagram fence identity uses whole-document UTF-16 offsets across writing blocks and CRLF',()=>{
+ const source='😀 Before\r\n\r\n> ```mermaid\r\n> flowchart LR\r\n> A-->B\r\n> ```\r\n\r\n:::writing{variant="document" id="12345"}\n```dot\ndigraph {a->b}\n```\n:::\n';
+ const html=render(source);
+ for(const language of ['mermaid','dot']){
+  const offset=source.indexOf('```'+language);
+  assert.ok(html.includes(`data-canvas-fence-offset="${offset}"`),`${language} must identify its original fence`);
+ }
+ assert.ok(!render(source,false).includes('data-canvas-fence-offset'));
+});
