@@ -104,6 +104,14 @@ their current semantics. Missing load, configuration, MCP or extension support i
 this experimental path stays unadvertised and fails explicitly without creating
 a replacement session. The existing adapter path keeps its supported behavior.
 
+Interactive approval forwarding is a separate limitation of this first path.
+The existing access-mode owner resolves standing Full; the adapter may join its
+actual settlement without becoming another policy evaluator. A genuinely pending
+request with no supported client surface produces an explicit unavailable result
+and detaches observation, preserving the canonical request and accepted work.
+It cannot silently wait, manufacture a decision, cancel work or authorize replay.
+User-question interaction also needs separate qualification.
+
 This is an experimental in-process boundary around a composite legacy owner,
 not yet a remote authority protocol, a lightweight broker or a new shared
 conversation implementation. Its first evidence must distinguish a failed
