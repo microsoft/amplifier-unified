@@ -10,12 +10,30 @@ export function homePatch(presentation={},extra={},view={}){
   navExpanded:view.navExpanded??false,navPinned:view.navPinned??((presentation.interfaceDetail||presentation.executionDetail)==='detailed'),...extra};
 }
 
-// The workspace tab uses the same chat view, but never borrows Home's choices.
-export function workChatView(view={},workspaceId=null){
- return workspaceId?{workHomeScope:workspaceId,...Object.fromEntries(['View','Filter','Query','Pages'].map(name=>['workHome'+name,view['workWorkspace'+name]]))}:view;
+// Each workspace keeps one bounded set of tab-local choices. Only the active
+// query/page request goes to the producer; the browser's saved map never does.
+function workspaceChatChoices(value={}){
+ return {workHomeFilter:workKinds.includes(value?.workHomeFilter)?value.workHomeFilter:'all',
+  workHomeQuery:typeof value?.workHomeQuery==='string'?value.workHomeQuery.slice(0,500):'',
+  workHomePages:Object.fromEntries(workKinds.filter(kind=>Number.isSafeInteger(value?.workHomePages?.[kind])
+   &&value.workHomePages[kind]>=0&&value.workHomePages[kind]<=1_000_000).map(kind=>[kind,value.workHomePages[kind]]))};
 }
-export function workChatPatch(values,workspaceId=null){
- return workspaceId?Object.fromEntries(Object.entries(values).map(([key,value])=>[key.replace(/^workHome/,'workWorkspace'),value])):values;
+export function readWorkspaceChatChoices(browser,workspaceId){
+ try{return workspaceChatChoices(JSON.parse(browser.sessionStorage.getItem('amplifier.workspace-chats.v1:'+workspaceId)))}catch{return workspaceChatChoices()}
+}
+export function saveWorkspaceChatChoices(browser,workspaceId,values){
+ const choices=workspaceChatChoices(values);
+ try{browser.sessionStorage.setItem('amplifier.workspace-chats.v1:'+workspaceId,JSON.stringify(choices))}catch{}
+ return choices;
+}
+export function workspaceChatQuery(view,workspaceId){
+ const choices=workspaceChatChoices(view);
+ return {workspaceId,query:choices.workHomeQuery,pages:choices.workHomePages};
+}
+export function currentWorkspaceChatQuery(value,view,workspaceId){
+ const query=workspaceChatQuery(view,workspaceId);
+ return value?.workspaceId===workspaceId&&value?.query===query.query
+  &&workKinds.every(kind=>(value?.pages?.[kind]||0)===(query.pages[kind]||0));
 }
 
 // Like chat reading positions, Home's scroll stays in this browser tab. Wait for

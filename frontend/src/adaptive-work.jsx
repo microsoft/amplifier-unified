@@ -8,7 +8,7 @@ import {useChatTitle} from './use-chat-title';
 import {useActivityClock} from './navigation-details';
 import {readItems,unreadChatItems} from './attention';
 import {relativeActivity,activityFor} from './navigation-presentation';
-import {startingWorkView,workChatView,workChatPatch,currentWorkPage,currentWorkContext,workReadingKey,rememberHomeScroll,readFocusCursor,saveFocusCursor,focusPosition,stepFocus} from './adaptive-work.js';
+import {startingWorkView,workspaceChatQuery,currentWorkspaceChatQuery,currentWorkPage,currentWorkContext,workReadingKey,rememberHomeScroll,readFocusCursor,saveFocusCursor,focusPosition,stepFocus} from './adaptive-work.js';
 import {LandingToolbar,WorkLandingFrame,WorkStatusFilters,FocusNavigation} from './work-landing';
 export {WorkViewSwitcher} from './work-landing';
 import {workGroups as groups,workAction} from './work-status';
@@ -34,9 +34,9 @@ export function AdaptiveWorkHome({host,state,act,presentation}){
  return <AdaptiveWorkChats model={model} state={state} act={act} presentation={presentation}/>;
 }
 
-export function AdaptiveWorkChats({model,state,act,presentation={},workspaceId=null}){
- const nav=useContext(WorkNavigationContext),view=workChatView(state.view||{},workspaceId);
- const pinnedScope=workspaceId||model.state.workHomePinnedScope,value=model.state.workHome,ready=hasNavigationResource(model.state,'workHome')&&currentWorkPage(value,view,pinnedScope);
+export function AdaptiveWorkChats({model,state,act,presentation={},workspaceId=null,workspaceView,onWorkspaceView}){
+ const nav=useContext(WorkNavigationContext),view=workspaceId?workspaceView:state.view||{};
+ const pinnedScope=workspaceId||model.state.workHomePinnedScope,value=model.state.workHome,ready=(!workspaceId||currentWorkspaceChatQuery(state.view?.workWorkspaceChats,view,workspaceId))&&hasNavigationResource(model.state,'workHome')&&currentWorkPage(value,view,pinnedScope);
  const level=presentation.interfaceDetail||presentation.executionDetail||'standard',mode=view.workHomeView||startingWorkView(presentation);
  const scope=pinnedScope||view.workHomeScope||'all',filter=view.workHomeFilter||'all',query=view.workHomeQuery||'';
  const context=currentWorkContext(model.state.workHomeContext,view,pinnedScope),workspace=context?.workspace;
@@ -45,7 +45,14 @@ export function AdaptiveWorkChats({model,state,act,presentation={},workspaceId=n
  const [search,setSearch]=useState(query),timer=useRef(null),pendingSearch=useRef(null),flush=useRef(null),searchInput=useRef(null);
  const [focusCursor,setFocusCursor]=useState(()=>readFocusCursor(globalThis.window,focusStorageKey)),focusPending=useRef(null),focusRestore=useRef(null);
  useEffect(()=>{setSearch(query)},[query]);useEffect(()=>()=>flush.current?.(),[]);
- const patch=values=>act('view.update',{patch:workChatPatch(values,workspaceId)});
+ const patch=values=>workspaceId?onWorkspaceView(values):act('view.update',{patch:values});
+ const requestedQuery=workspaceId?JSON.stringify(workspaceChatQuery(view,workspaceId)):null;
+ useEffect(()=>{
+  // A late request from another workspace is never used as this tab's query.
+  // Reassert only the active bounded request, not any saved browser choices.
+  if(workspaceId&&!currentWorkspaceChatQuery(state.view?.workWorkspaceChats,view,workspaceId))
+   act('view.update',{patch:{workWorkspaceChats:JSON.parse(requestedQuery)}});
+ },[requestedQuery,state.view?.workWorkspaceChats]);
  const readingKey=workReadingKey({...view,workHomeScope:scope},mode);
  useLayoutEffect(()=>{
   const scrollPane=workspaceId?pane.current?.closest('.a-adaptive-home'):pane.current;

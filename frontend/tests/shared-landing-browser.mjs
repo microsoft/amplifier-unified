@@ -169,8 +169,8 @@ try{
  const workspaceId=(await state()).view.workWorkspaceId;
  const workspaceCards=()=>landing.locator('.a-work-card[data-session-id]');
  const workspaceTabs=landing.getByRole('group',{name:'Workspace view',exact:true});
- const workspaceReady=async(query='')=>{
-  await expect.poll(async()=>{const snapshot=await shell();return snapshot.navigationResources?.includes('workHome')&&snapshot.workHome?.scope===workspaceId&&snapshot.workHome?.query===query}).toBe(true);
+ const workspaceReady=async(query='',id=workspaceId)=>{
+  await expect.poll(async()=>{const snapshot=await shell();return snapshot.navigationResources?.includes('workHome')&&snapshot.workHome?.scope===id&&snapshot.workHome?.query===query}).toBe(true);
   await settled();
  };
  await workspaceReady();
@@ -228,6 +228,36 @@ try{
  assert.deepEqual(await workspaceCards().evaluateAll(rows=>rows.map(row=>row.dataset.sessionId)),idle.items.map(row=>row.id));
  await landing.getByRole('button',{name:'Next',exact:true}).click();await workspaceReady('Alpha');
  await expect.poll(async()=>(await shell()).workHome?.groups.idle.index).toBe(1);
+ // A's later-page Focus and B's Studio/search choices are independent destinations.
+ await choose('Focus');await landing.getByRole('button',{name:'Next Focus item',exact:true}).click();
+ const alphaCursor=await workspaceCards().getAttribute('data-session-id');
+ await act('view.update',{patch:{workSurface:'workspace',workWorkspaceId:otherWorkspace.id,workWorkspaceTab:'chats'}});
+ await workspaceReady('',otherWorkspace.id);
+ await landing.getByRole('searchbox',{name:'Search your work',exact:true}).fill('Beta');
+ await landing.getByRole('searchbox',{name:'Search your work',exact:true}).press('Tab');await workspaceReady('Beta',otherWorkspace.id);
+ await pickUpAgain().click();await choose('Focus');
+ await landing.getByRole('button',{name:'Next Focus item',exact:true}).click();
+ const betaCursor=await workspaceCards().getAttribute('data-session-id');
+ await choose('Studio');await landing.getByRole('button',{name:'Clear status filter'}).click();
+ await act('view.update',{patch:{workSurface:'workspace',workWorkspaceId:workspaceId}});
+ await workspaceReady('Alpha');await expect(landing).toHaveAttribute('data-view','focus');
+ await expect(pickUpAgain()).toHaveAttribute('aria-pressed','true');
+ assert.equal((await shell()).workHome.groups.idle.index,1);
+ await expect(workspaceCards()).toHaveAttribute('data-session-id',alphaCursor);
+ await page.reload();await workspaceReady('Alpha');await expect(landing).toHaveAttribute('data-view','focus');
+ await expect(workspaceCards()).toHaveAttribute('data-session-id',alphaCursor);
+ await act('view.update',{patch:{workSurface:'workspace',workWorkspaceId:otherWorkspace.id}});
+ await workspaceReady('Beta',otherWorkspace.id);await expect(landing).toHaveAttribute('data-view','studio');
+ await expect(landing.getByRole('group',{name:'Filter work'}).getByRole('button',{name:'Overview',exact:true})).toHaveAttribute('aria-pressed','true');
+ assert.equal((await shell()).workHome.groups.idle.index,0);
+ await pickUpAgain().click();await choose('Focus');
+ await expect(workspaceCards()).toHaveAttribute('data-session-id',betaCursor);
+ await choose('Studio');await landing.getByRole('button',{name:'Clear status filter'}).click();
+ await page.reload();await workspaceReady('Beta',otherWorkspace.id);await expect(landing).toHaveAttribute('data-view','studio');
+ await act('view.update',{patch:{workSurface:'workspace',workWorkspaceId:workspaceId}});
+ await workspaceReady('Alpha');await expect(landing).toHaveAttribute('data-view','focus');
+ await expect(workspaceCards()).toHaveAttribute('data-session-id',alphaCursor);
+ report.checks.push('A Focus/Alpha/idle/page 1 and B Studio/Beta/Overview/page 0 survive A→B→A and reload, with independent Focus cursors');
  await choose('Studio');await landing.evaluate(node=>{node.scrollTop=420});
  await expect.poll(()=>landing.evaluate(node=>node.scrollTop)).toBeGreaterThan(300);
  const workspaceTop=await landing.evaluate(node=>node.scrollTop);

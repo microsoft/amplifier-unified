@@ -166,7 +166,7 @@ async def test_workspace_chat_demand_keeps_current_identity_while_groups_are_pen
     with service.clients.bind('workspace-pending'):
         service.state['view'].update(workSurface='workspace', workWorkspaceId='two',
                                      workHomeScope='one', workHomeQuery='ignored',
-                                     workWorkspaceQuery='beta')
+                                     workWorkspaceChats={'workspaceId': 'two', 'query': 'beta', 'pages': {}})
         owner = service.shell.resources
         owner.register('workspace-pending', 1, ['workHome'], scope_for(service.state))
         envelope = owner.snapshot('workspace-pending')
@@ -176,3 +176,25 @@ async def test_workspace_chat_demand_keeps_current_identity_while_groups_are_pen
     assert 'workHome' not in entry['resources']
     context = entry['resources']['context']['value']['workHomeContext']
     assert context['scope'] == context['requestedScope'] == context['workspace']['id'] == 'two'
+
+
+async def test_custom_full_snapshot_keeps_pin_and_context_when_bundled_workspace_changes(service):
+    digest = await stage(service)
+    record_validation(service, digest)
+    client = service.shell.client('custom-workspace-context')
+    custom = {'id': 'custom', 'package': digest, 'slot': 'navigation',
+              'scope': {'mode': 'pinned', 'workspaceId': 'one'}}
+    client['views']['custom'] = {'view': {'navChatScope': 'workspace'}, 'generation': 0}
+    service.state['view'].update(workSurface='home', workHomeScope='all')
+    before = service.shell.snapshot(client, custom, identity='custom-workspace-context')
+    service.state['view'].update(workSurface='workspace', workWorkspaceId='two',
+                                 workWorkspaceChats={'workspaceId': 'two', 'query': 'beta', 'pages': {}})
+    after = service.shell.snapshot(client, custom, identity='custom-workspace-context',
+                                   navigation_resources=frozenset({'workHome'}))
+    assert after['selectedWorkspaceId'] == after['workHomePinnedScope'] == 'one'
+    assert after['workHomeContext'] == before['workHomeContext']
+    assert after['workHomeContext']['scope'] == after['workHomeContext']['workspace']['id'] == 'one'
+    assert after['workHomeContext']['requestedScope'] == 'all'
+    assert after['chatNavigation'] == before['chatNavigation']
+    assert {row['id'] for row in after['chatNavigation']['items']} == {'alpha'}
+    assert 'workWorkspaceChats' not in after['view'] and 'workHome' not in after

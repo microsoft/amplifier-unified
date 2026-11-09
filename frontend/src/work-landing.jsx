@@ -1,7 +1,7 @@
 import React,{useContext,useLayoutEffect,useRef,useState} from 'react';
 import {ArrowLeft,ArrowRight,SlidersHorizontal,X} from 'lucide-react';
 import {WorkNavigationContext} from './work-navigation';
-import {focusPosition,stepFocus,startingWorkView,workViews,rememberHomeScroll} from './adaptive-work.js';
+import {focusPosition,stepFocus,startingWorkView,workViews,rememberHomeScroll,readWorkspaceChatChoices,saveWorkspaceChatChoices} from './adaptive-work.js';
 import {workGroups} from './work-status';
 import './adaptive-work.css';
 
@@ -17,6 +17,17 @@ export function useLandingLayout(identity,presentation){
  const [saved,setSaved]=useState(()=>readLocal(key,null));
  const mode=workViews.includes(saved)?saved:startingWorkView(presentation);
  return [mode,value=>{if(workViews.includes(value)){setSaved(value);writeLocal(key,value)}}];
+}
+
+export function useWorkspaceChatView(workspaceId,mode,setMode){
+ // Layout keeps useLandingLayout's original per-destination key.
+ const [saved,setSaved]=useState(()=>readWorkspaceChatChoices(globalThis.window,workspaceId)),latest=useRef(saved);
+ const update=values=>{
+  const next=saveWorkspaceChatChoices(globalThis.window,workspaceId,{...latest.current,...values});
+  latest.current=next;setSaved(next);
+  if(values.workHomeView)setMode(values.workHomeView);
+ };
+ return [{...saved,workHomeScope:workspaceId,workHomeView:mode},update];
 }
 
 export function WorkViewSwitcher({value,onChange}){

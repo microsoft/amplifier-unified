@@ -8,8 +8,7 @@ import {createPortal} from 'react-dom';
 import {Home as HomeIcon,Folder,Plus,Search,ChevronRight,ArrowLeft,Settings,Info,MoreHorizontal,MessageCircle,Pin,Archive,Bug,Pencil,Share2,ChevronDown,Trash2,ScanEye,PanelLeft,FileText,Copy,X,AudioLines,Mic,MicOff,Bell,SlidersHorizontal,CalendarClock} from 'lucide-react';
 import {WorkNavigationContext,workSurface} from './work-navigation';
 import {AdaptiveWorkHome,AdaptiveWorkChats} from './adaptive-work.jsx';
-import {startingWorkView} from './adaptive-work.js';
-import {WorkLandingFrame,LandingToolbar,useLandingLayout} from './work-landing';
+import {WorkLandingFrame,LandingToolbar,useLandingLayout,useWorkspaceChatView} from './work-landing';
 import {useNavigationController,NavigationEditor,ChatSearch} from './shell/navigation-components';
 import {WorkspaceCleanup} from './storage-settings';
 import {WorkspaceExplorer} from './workspace-explorer';
@@ -125,8 +124,8 @@ function WorkBrowser({host,workspaceHost,state,act,dispatch,presentation,resourc
  const model=useNavigationController(host,'chats'),workspaceModel=useNavigationController(workspaceHost||host,'workspaces'),now=useActivityClock(),nav=useContext(WorkNavigationContext);
  const surface=workSurface(state),workspace=state.workspaces?.find(row=>row.id===state.view.workWorkspaceId)||workspaceModel.workspace,tab=state.view.workWorkspaceTab||'chats',active=!['chat','home'].includes(surface);
  const identity=surface+(surface==='workspace'?':'+state.view.workWorkspaceId:'');
- const [landingMode,setMode]=useLandingLayout(identity,presentation);
- const mode=surface==='workspace'?(tab==='chats'&&state.view.workWorkspaceView)||startingWorkView(presentation):landingMode;
+ const [mode,setMode]=useLandingLayout(identity,presentation);
+ const [workspaceView,setWorkspaceView]=useWorkspaceChatView(surface==='workspace'?state.view.workWorkspaceId:null,mode,setMode);
  const workspacePending=surface==='workspace'&&(workspaceModel.state.navigationWorkspacePending||model.state.navigationWorkspacePending);
  const setTab=tab=>act('view.update',{patch:{workWorkspaceTab:tab}});
  const view=surface==='chats'?{...model.view,...model.state.sidebarNavigation?.recentView,...model.view.navRecentView,navChatScope:'all'}:{...model.view,navChatScope:'workspace'};
@@ -147,7 +146,7 @@ function WorkBrowser({host,workspaceHost,state,act,dispatch,presentation,resourc
     {tab==='work'&&!workspacePending&&<SharedWorkBrowser workspace={workspace} clientId={state.client?.id} hostInstanceId={state.client?.hostInstanceId} dispatch={dispatch} onOpenChat={id=>dispatch('session.select',{id})}/>}</>}
 
    {page&&<NavigationResourceStatus state={model.state} resource="sidebarSearch" label="chat search" refresh={model.refreshResources}/>}
-   {surface==='workspace'&&workspacePending?<p role="status">Loading workspace…</p>:surface==='workspace'&&!workspace?<p>This workspace is no longer available. Choose another workspace from the sidebar.</p>:surface==='chats'?<ChatSearch page={page} model={model} view={view} viewAct={viewAct} now={now} layout={mode} identity={identity}/>:tab==='chats'&&<AdaptiveWorkChats model={model} state={state} act={act} presentation={presentation} workspaceId={state.view.workWorkspaceId}/>}
+   {surface==='workspace'&&workspacePending?<p role="status">Loading workspace…</p>:surface==='workspace'&&!workspace?<p>This workspace is no longer available. Choose another workspace from the sidebar.</p>:surface==='chats'?<ChatSearch page={page} model={model} view={view} viewAct={viewAct} now={now} layout={mode} identity={identity}/>:tab==='chats'&&<AdaptiveWorkChats model={model} state={state} act={act} presentation={presentation} workspaceId={state.view.workWorkspaceId} workspaceView={workspaceView} onWorkspaceView={setWorkspaceView}/>}
   </>}
  </>}</WorkLandingFrame>;
 }
