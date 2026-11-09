@@ -433,7 +433,10 @@ async def test_native_child_resume_follows_committed_worktree_handoff(tmp_path, 
             assert app._session(sid)['interruptionRevision'] == stop_epoch + 1
             stopped = await execute_tool(coordinator, 'apply_patch', {
                 'type': 'update_file', 'path': 'handoff.txt', 'diff': '@@\n-child\n+after-stop'})
-            assert not stopped.success and stopped.error['effect'] == 'none'
+            assert not stopped.success and stopped.error['code'] == 'work_precondition_unavailable'
+            assert len(access[-1]['checks']) > positive_checks
+            assert access[-1]['checks'][-1]['allowed'] is False
+            assert access[-1]['checks'][-1]['effectAuthorized'] is False
             assert {path: path.read_bytes() for path in before_stop} == before_stop
             access[-1]['positive_checks'] = positive_checks
         await context.add_message({'role': 'user', 'content': prompt})
