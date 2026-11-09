@@ -18,7 +18,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>vite.close());
 const workspace={id:'b',path:'/research',name:'Research',available:true};
 const row={workspaceId:'b',path:'/research',name:'Research',chatCount:1};
-const scope={mode:'all',workspaceId:null,filter:'',selectedSessionId:'a',section:'recent',showAgentCreated:false};
+const scope={mode:'all',workspaceId:null,filter:'',age:'all',selectedSessionId:'a',section:'recent',showAgentCreated:false};
 const page={items:[{id:'b-chat',title:'Research ideas',workspace:'/research',workspaceId:'b'}],scope,total:1,pages:1,index:0,start:0,end:1};
 const snapshot={navigationResources:['pinnedNavigation','recentNavigation','workspaceShortcuts','workspaceExplorer','sidebarSearch','sidebarRecent','sidebarPinned'],view:{},selectedSessionId:'a',selectedWorkspaceId:'b',workspaces:[workspace],library:{bounded:true,workspaceCount:1},workspaceShortcuts:[row],recentShortcuts:page.items,recentNavigation:{...page,remaining:0,limit:20,scope:{...scope,section:'shortcuts',showAgentCreated:false,limit:20,viewRevision:0}},workspaceExplorer:{rows:[row],mode:'recent'},sidebarNavigation:{pinned:{items:[],total:0,pages:1},recent:page,search:{...page,scope:{...scope,section:'search',group:'recent',age:'all'}},recentView:{}},sharedHistory:{}};
 const host={instanceId:'chats',getSnapshot:()=>snapshot,subscribe:()=>()=>{},dispatch:async()=>({accepted:true})};
@@ -471,7 +471,7 @@ test('quiet navigation retains rows without refresh text and keeps failures and 
 function recentFixture(limit=20,showAgentCreated=false,viewRevision=0,total=125){
  const items=Array.from({length:Math.min(limit,total)},(_,i)=>({id:'recent-'+i,title:'Recent '+i,workspace:'/research',workspaceId:'b'}));
  return {items,total,remaining:total-items.length,end:items.length,limit,dataRevision:viewRevision,
-  scope:{mode:'all',workspaceId:null,filter:'',selectedSessionId:'a',section:'shortcuts',showAgentCreated,limit,viewRevision}};
+  scope:{mode:'all',workspaceId:null,filter:'',age:'all',selectedSessionId:'a',section:'shortcuts',showAgentCreated,limit,viewRevision}};
 }
 test('quiet Recent grows past 100 to natural exhaustion with only an explicit keyboard fallback',async()=>{
  let state={...snapshot,recentNavigation:recentFixture(20,false,0,101),view:{navRecentView:{navFilter:'retained'}}},root;
@@ -531,6 +531,25 @@ test('failed Recent read retains rows; explicit Retry reads only current resourc
   assert.equal(api.page.items.length,40);assert.equal(api.error,'');
   assert.equal(calls.length,1);assert.equal(reads.length,1);assert.equal(reads[0],'resources');
  }finally{recentRead=previousRead;await act(async()=>root.unmount())}
+});
+
+test('Recent accepts cached All after a finite range without admitting stale same-query pages',async()=>{
+ let current={...snapshot,view:{navAge:'all'},recentNavigation:{...recentFixture(),dataRevision:10}},api,root;
+ const all=current.recentNavigation,finite={...recentFixture(20,false,0,1),dataRevision:11};
+ finite.scope={...finite.scope,age:'24h'};
+ function Probe(){api=useRecentShortcuts(recentHost({getSnapshot:()=>current}),current,async()=>({accepted:true}));return null}
+ await act(async()=>{root=create(React.createElement(Probe))});
+ assert.equal(api.page.items.length,20);assert.equal(api.busy,false);
+ current={...current,view:{navAge:'24h'},recentNavigation:finite};
+ await act(async()=>root.update(React.createElement(Probe)));
+ assert.equal(api.page.items.length,1);assert.equal(api.busy,false);
+ current={...current,view:{navAge:'all'},recentNavigation:all};
+ await act(async()=>root.update(React.createElement(Probe)));
+ assert.equal(api.page.items.length,20);assert.equal(api.page.dataRevision,10);assert.equal(api.busy,false);
+ current={...current,recentNavigation:{...all,items:[],dataRevision:9}};
+ await act(async()=>root.update(React.createElement(Probe)));
+ assert.equal(api.page.items.length,20);assert.equal(api.page.dataRevision,10);
+ await act(async()=>root.unmount());
 });
 
 test('change and retry share synchronous singleflight; a late response cannot replace a changed scope',async()=>{

@@ -64,6 +64,8 @@ try{
  await age.press('ArrowLeft');await expect(age).toHaveValue('4');await expect(age).toHaveAttribute('aria-valuetext','Within the last year');
  await age.press('ArrowRight');await expect(age).toHaveValue('5');
  await expect(area.getByRole('status')).toHaveText('206 chats');await expect(area.getByRole('heading',{name:'Pick up again',exact:true})).toBeVisible();
+ await expect(page.locator('[data-sidebar-section=recent] .a-nav-chat')).toHaveCount(20);
+ await expect(page.locator('[data-sidebar-section=recent] .a-recent-shortcuts')).toHaveAttribute('aria-busy','false');
  await grouping.selectOption('recent');
  await search.fill('Image');
  assert.equal(await search.evaluate(el=>getComputedStyle(el).outlineStyle),'none');

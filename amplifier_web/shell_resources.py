@@ -435,7 +435,10 @@ class ShellResources:
                                     self.shell.service, 'shell.resources.pages', synchronous=True):
                                 built = self.shell.navigation(client, instance, identity=identity,
                                     navigation_resources=frozenset({resource}), _page_only=True)
-                            own[resource] = self._record(page_value(built, resource), previous.get(resource),
+                            value = page_value(built, resource)
+                            if resource in {'workspaceExplorer', 'workspaceShortcuts'}:
+                                value['navigationAge'] = scoped['view'].get('navAge', 'all')
+                            own[resource] = self._record(value, previous.get(resource),
                                 prior.get('versions', {}).get(resource, 0))
                         except PendingQuery as wait:
                             pending[resource] = {'status': 'retry' if wait.retry_after else 'pending',

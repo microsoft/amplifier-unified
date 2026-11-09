@@ -32,6 +32,7 @@ async def test_grouped_cutoff_expires_through_settled_browser_delivery(service, 
             if resource == 'workHome':
                 return value['workHome']['groups']['idle']
             if resource == 'workspaceShortcuts':
+                assert value['navigationAge'] == '24h'
                 rows = value['workspaceShortcuts']
                 return {'total': sum(row['chatCount'] for row in rows), 'items': [row for row in rows if row['chatCount']]}
             return value[resource]

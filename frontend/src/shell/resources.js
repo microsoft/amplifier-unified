@@ -73,11 +73,12 @@ export function resourceSnapshots(bootstrap,envelope,demand,previous={}){
     ?{view:previous[instance.id].view}:{};
    const pending=Object.fromEntries(demand.resources
     .filter(name=>entry?.pending?.[name]).map(name=>[name,{...entry.pending[name]}]));
-   const snapshot={...retained,...context,generation,navigationResources:[],navigationResourcePending:pending,
+   const snapshot={...retained,...context,generation,navigationResources:[],navigationResourceAges:{},navigationResourcePending:pending,
     navigationResourceScope:[envelope.hostInstanceId,envelope.bootstrapKey,envelope.demandId,generation,...envelope.scope]};
    for(const name of demand.resources){
     const resource=resources[name];if(!resource)continue;
-    const {sidebarNavigation,...fields}=resource.value;
+    const {sidebarNavigation,navigationAge,...fields}=resource.value;
+    if(navigationAge!==undefined)snapshot.navigationResourceAges[name]=navigationAge;
     Object.assign(snapshot,fields);
     if(sidebarNavigation)snapshot.sidebarNavigation={...snapshot.sidebarNavigation,...sidebarNavigation};
     snapshot.navigationResources.push(name);

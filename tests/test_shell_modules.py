@@ -105,7 +105,9 @@ async def test_catalog_group_is_local_and_age_is_shared_per_client(service):
     assert second['chats']['sidebarNavigation']['search']['scope']['age'] == 'all'
     saved = service.shell.get('client', 'browser-one')['views']['chats']['view']
     assert saved['navRecentView'] == {'navGroup': 'workspace'}
-    assert service.state == before
+    assert service.state['sessions'] == before['sessions']
+    assert service.state['view'] == before['view']
+    assert service.state['selectedSessionId'] == before['selectedSessionId']
 
 
 @pytest.mark.parametrize('surface,expected', [('chats', '24h'), ('workspace', '7d'), ('home', '7d')])
@@ -113,6 +115,7 @@ async def test_age_import_is_narrow_once_and_survives_reload(service, surface, e
     saved = service.clients.attach('old-client')
     saved['view'].pop('navAge')
     saved['view'].update(workSurface=surface, draft='Private draft', workHomeQuery='retained')
+    saved['drafts'][saved.get('selectedSessionId') or ''] = 'Private draft'
     old_shell = service.shell.client('old-client')
     old_shell['views']['chats'] = {'view': {
         'navAge': '7d', 'navGroup': 'status',

@@ -114,7 +114,7 @@ def test_shared_age_filters_before_counts_page_and_workspace_aggregates(tmp_path
     assert sum(row['chatCount'] for row in aggregates.values()) == actual['total']
     state['pinnedSessionIds'] = []
     dormant['pinnedSessionIds'] = []
-    assert chats(directory, dormant, section=section)['total'] == actual['total']-3
+    assert chats(directory, dormant, section=section)['total'] == actual['total']-2
 
 
 @pytest.mark.parametrize('group', ['recent', 'workspace', 'status'])

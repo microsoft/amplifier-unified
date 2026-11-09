@@ -42,8 +42,9 @@ async def test_age_is_private_durable_and_never_saves_history(app, monkeypatch):
         app.state['view'].update(workHomePages={'idle': 4}, navStatusPages={'idle': 3})
         before = deepcopy(app.state['sessions'])
     other = deepcopy(app.clients.records['two'])
-    monkeypatch.setattr(app, '_save', lambda: pytest.fail('Age must not save conversations'))
-    result = await command(app, {'navAge': '24h'}, command_id='age')
+    with monkeypatch.context() as patch:
+        patch.setattr(app, '_save', lambda: pytest.fail('Age must not save conversations'))
+        result = await command(app, {'navAge': '24h'}, command_id='age')
     assert result['state']['view']['navAge'] == '24h'
     assert result['state']['view']['draft'] == 'Keep old reading draft'
     assert result['state']['view']['workHomePages'] == result['state']['view']['navStatusPages'] == {}

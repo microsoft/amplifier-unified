@@ -224,7 +224,12 @@ export function useRecentShortcuts(host,state,act){
  };
  const desired=(value,current=latest.current.state)=>({...scopeFor(current),...value});
  const sameQuery=(scope,current)=>Object.entries(scope).every(([key,value])=>key==='selectedSessionId'||scopeFor(current)[key]===value);
- const newer=candidate=>acceptedOwner.current!==owner||(candidate?.scope?.viewRevision??0)>=(accepted.current?.scope?.viewRevision??0)
+ const queryKey=value=>JSON.stringify(['mode','workspaceId','filter','age','section','clientId','instanceId','generation']
+  .map(key=>value?.scope?.[key]??(key==='age'?'all':null)));
+ // Catalog revisions are monotonic only within one query. Returning to a
+ // cached range may legitimately have an older revision than the range left.
+ const newer=candidate=>acceptedOwner.current!==owner||queryKey(candidate)!==queryKey(accepted.current)
+  ||(candidate?.scope?.viewRevision??0)>=(accepted.current?.scope?.viewRevision??0)
   &&((candidate?.scope?.viewRevision??0)>(accepted.current?.scope?.viewRevision??0)
    ||(candidate?.dataRevision??0)>=(accepted.current?.dataRevision??0));
  const accept=candidate=>{

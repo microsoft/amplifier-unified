@@ -52,7 +52,8 @@ export function WorkspaceExplorer({state,act,onOpen,onEdit,heading=true,previewL
  const [query,setQuery]=useState(explorer.filter||''),pendingQuery=useRef(null);
  useEffect(()=>{pendingQuery.current=null;setQuery(explorer.filter||'')},[state.selectedWorkspaceId]);
  useEffect(()=>{if(pendingQuery.current===null||pendingQuery.current===explorer.filter){pendingQuery.current=null;setQuery(explorer.filter||'')}},[explorer.filter]);
- const [requests,setRequests]=useState(0),region=useRef(null);useRegionActivity(region,requests>0||!!state.sharedHistory?.loading);
+ const pending=!!state.navigationResourcePending?.[compact?'workspaceShortcuts':'workspaceExplorer'];
+ const [requests,setRequests]=useState(0),region=useRef(null);useRegionActivity(region,requests>0||pending||!!state.sharedHistory?.loading);
  const patch=async value=>{setRequests(count=>count+1);try{return await act('view.update',{patch:value})}finally{setRequests(count=>count-1)}};
  const browse=path=>{pendingQuery.current=null;setQuery('');return patch({navWorkspacePath:path,navWorkspaceFilter:'',navWorkspacePage:1,navWorkspaceAncestorsOpen:false,navWorkspaceMode:'folders'})};
  const search=value=>{
@@ -82,7 +83,7 @@ export function WorkspaceExplorer({state,act,onOpen,onEdit,heading=true,previewL
   </div>}
   {layout&&!compact?<LandingCollection className="a-workspace-folders" layout={layout} identity={identity} queryKey={[explorer.filter,explorer.mode,explorer.archive,explorer.path]} page={{items:shownRows,total:explorer.totalRows||0,index:page-1,pages,start:explorer.start||0,end:explorer.end||shownRows.length}} onPage={index=>patch({navWorkspacePage:index+1})}>{row=><WorkspaceRow {...{row,state,act,now,open,newChat,browse,onEdit}} landing/>}</LandingCollection>:<div className="a-workspace-folders">{shownRows.map(row=><WorkspaceRow key={row.path} {...{row,state,act,now,open,newChat,browse,onEdit,compact}}/>)}</div>}
   {shownRows.length<rows.length&&<button type="button" className="a-link" onClick={()=>setShowAll(true)}>More workspaces<ChevronRight/></button>}
-  {!rows.length&&!state.sharedHistory?.loading&&<p className="a-nav-empty">{explorer.filter?'No matching workspaces.':'Create a workspace to start a chat.'}</p>}
+  {!rows.length&&pending?<p role="status">Loading workspaces…</p>:!rows.length&&!state.sharedHistory?.loading&&<p className="a-nav-empty">{explorer.filter?'No matching workspaces.':'Create a workspace to start a chat.'}</p>}
   {!compact&&layout!=='focus'&&pages>1&&shownRows.length===rows.length&&<div className="a-nav-pagination a-workspace-pagination"><span>Page {page} of {pages}</span><div><button type="button" className="a-link" aria-label="Show previous workspace folders" data-action="view.update" disabled={page<=1} onClick={()=>patch({navWorkspacePage:page-1})}>Previous</button><button type="button" className="a-link" aria-label="Show more workspace folders" data-action="view.update" disabled={page>=pages} onClick={()=>patch({navWorkspacePage:page+1})}>More<ChevronRight/></button></div></div>}
  </section>;
 }
