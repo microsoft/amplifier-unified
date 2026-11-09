@@ -129,6 +129,11 @@ conversation and input. They do not poll on a timer, send the message, start a
 worker or relax Stop. A source/authentication change invalidates an outstanding
 result. Each check returns its bound conversation/input identities; a generic,
 malformed or conflicting acknowledgement cannot retire the outbox.
+Passive checks do not occupy the mutation queue, so they cannot delay Stop.
+New outbox entries retain their original nonsecret host/account and native-source
+namespace. Projection and acknowledgement require that exact namespace. Legacy
+entries without it remain stored with an explicit notice, rather than being
+silently assigned to the currently connected account or sent again.
 
 An input that left the resident message window may still have positive canonical
 runtime history, even when its command receipt is absent or unreadable. The

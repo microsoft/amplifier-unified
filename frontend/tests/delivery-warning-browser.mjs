@@ -19,7 +19,7 @@ try{
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1280,height:900}});page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(installFixtureEvents);
  await page.addInitScript(()=>{if(!sessionStorage.getItem('fixture-seeded')){
-  sessionStorage.setItem('fixture-seeded','1');sessionStorage.setItem('amplifier.messageOutbox.v1',JSON.stringify([{id:'local',commandId:'original',sessionId:'chat',text:'Keep this historical request and its reference.',attachmentIds:['a'],attachments:[{id:'a',name:'reference.txt',size:12}],status:'unknown',error:'Transport interrupted. Delivery is uncertain.'}]));
+  sessionStorage.setItem('fixture-seeded','1');sessionStorage.setItem('amplifier.messageOutbox.v1',JSON.stringify([{id:'local',commandId:'original',sessionId:'chat',scope:JSON.stringify(['fixture-shell-host','/fixture','chat']),text:'Keep this historical request and its reference.',attachmentIds:['a'],attachments:[{id:'a',name:'reference.txt',size:12}],status:'unknown',error:'Transport interrupted. Delivery is uncertain.'}]));
  }});
  await page.route('**/api/**',async route=>{
   const path=new URL(route.request().url()).pathname,response=shell.response(route.request());

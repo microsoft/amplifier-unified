@@ -82,10 +82,7 @@ async def check(app):
     sid = app._session()['id']
     response = await app.dispatch('conversation.delivery',
         {'sessionId': sid, 'inputId': INPUT_ID}, include_state=False)
-    result = response['result']
-    assert result['sessionId'] == sid
-    assert result['inputId'] == INPUT_ID
-    return result
+    return response['result']
 
 
 @pytest.mark.parametrize('identity_field', [None, 'runtimeSessionId', 'nativeIdentity'])
@@ -100,6 +97,7 @@ async def test_native_confirmation_without_host_evidence_does_not_fabricate_reco
     result = await check(app)
 
     assert result['delivery'] == 'accepted'
+    assert result['sessionId'] == session['id'] and result['inputId'] == INPUT_ID
     assert len(runtime.probes) == 1
     probed, input_id = runtime.probes[0]
     assert input_id == INPUT_ID and probed['id'] == session['id']

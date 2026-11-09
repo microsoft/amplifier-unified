@@ -32,13 +32,14 @@ function DeliveryWarning({message,session,delivery,localDelivery,dispatch,retry,
  const saved=session.messages?.some(m=>m.role==='user'&&m.inputId===inputId);
  const originalSubmission=!!localDelivery&&!saved;
  const working=['working','starting','running','stopping'].includes(session.status);
- const active=working&&session.execution?.currentTurnId===inputId||
-  [delivery,localDelivery,message.delivery,{status:report?.delivery}].some(row=>['sending','queued','queued_for_update'].includes(row?.status));
+ const authoritativeActive=working&&session.execution?.currentTurnId===inputId||
+  [delivery,localDelivery,message.delivery].some(row=>['sending','queued','queued_for_update'].includes(row?.status));
+ const active=authoritativeActive||['sending','queued','queued_for_update'].includes(report?.delivery);
  const dismissible=!!storageKey&&!active&&['failed','unknown'].includes(delivery?.status);
  const check=async()=>{
   if(pending)return;setReport(null);setError('');setConfirm(false);
   try{
-   if(!session.id){setReport({delivery:'not_saved',message:'This message has no confirmed conversation yet. Retry the original submission to check or complete its delivery.'});return;}
+   if(!session.id){setReport({delivery:'not_saved',message:'This message has no confirmed conversation yet. Nothing was sent again.'});return;}
    const result=await checkOwner.run(async()=>{
     const response=await dispatch('conversation.delivery',{sessionId:session.id,inputId},{feedback:false,...(recovery?{deliveryRecovery:recovery}:{})});
     checkedDelivery(response,session.id,inputId);
@@ -52,14 +53,14 @@ function DeliveryWarning({message,session,delivery,localDelivery,dispatch,retry,
  // inference. The existing in-flight owner spans row remounts and manual checks.
  const automatic=useRef(null),attempted=useRef(false);
  automatic.current=()=>{if(recovery?.scope&&inputId&&session.id&&delivery?.status==='unknown'&&
-  !message.steering&&report?.delivery!=='accepted'&&globalThis.navigator?.onLine!==false)void check()};
+  !authoritativeActive&&!message.steering&&report?.delivery!=='accepted'&&globalThis.navigator?.onLine!==false)void check()};
  useEffect(()=>{
-  if(!recovery?.scope||!inputId||!session.id||delivery?.status!=='unknown'||message.steering)return;
+  if(!recovery?.scope||!inputId||!session.id||delivery?.status!=='unknown'||authoritativeActive||message.steering)return;
   if(!attempted.current){attempted.current=true;automatic.current()}
   const reconnect=()=>automatic.current();
   globalThis.window?.addEventListener('amplifier-reconnected',reconnect);
   return()=>globalThis.window?.removeEventListener('amplifier-reconnected',reconnect);
- },[recovery?.scope,recovery?.connection,inputId,session.id,delivery?.status,!!message.steering]);
+ },[recovery?.scope,recovery?.connection,inputId,session.id,delivery?.status,authoritativeActive,!!message.steering]);
  const resend=async()=>{
   if(pending)return;setPending(true);setError('');
   try{

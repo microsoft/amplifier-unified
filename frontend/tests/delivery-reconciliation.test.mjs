@@ -7,6 +7,8 @@ import {createServer} from 'vite';
 
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {MessageDelivery}=await server.ssrLoadModule('/src/message-delivery.jsx');
+const {readOutbox,outboxMessages,useMessageOutbox}=await server.ssrLoadModule('/src/message-outbox.jsx');
+const {deliveryScope}=await server.ssrLoadModule('/src/pending-delivery-checks.js');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
 
@@ -108,6 +110,9 @@ const uncertainResults=[
  ['wrong input',receipt('accepted',{inputId:'other-input'})],
  ['contradictory outer rejection',{...receipt(),accepted:false}],
  ['contradictory result rejection',receipt('accepted',{accepted:false})],
+ ...[0,1,'true','false',null].map(accepted=>[
+  `nonboolean result accepted=${JSON.stringify(accepted)}`,receipt('accepted',{accepted}),
+ ]),
  ['contradictory result status',receipt('accepted',{status:'failed'})],
  ['contradictory result error',receipt('accepted',{error:'The receipt could not be read.'})],
  ['unrecognized delivery',receipt('complete')],
@@ -168,6 +173,29 @@ test('settled unknown is checked once on reconnect, not on unrelated state rende
  assert.equal(f.calls.length,3,'A changed host instance is a new connection epoch');
  await f.update({session:{...f.props.session,revision:3}});
  assert.equal(f.calls.length,3);
+ f.passiveOnly();
+});
+
+test('a previous sending report cannot suppress reconnect after authoritative idle/unknown state',async()=>{
+ let reads=0;
+ const f=await mount({},()=>++reads===1?receipt('sending',{message:'Previously still sending.'}):receipt());
+ assert.equal(f.calls.length,1);
+ assert.match(serialized(f.root),/Previously still sending/);
+ await f.update({
+  session:{...f.props.session,status:'idle',revision:2,execution:{currentTurnId:null}},
+  delivery:{status:'unknown'},localDelivery:null,
+ });
+ assert.equal(f.calls.length,1,'An authoritative frame is not a polling trigger');
+ await reconnect();
+ assert.equal(f.calls.length,2,'Old report activity is not authoritative current activity');
+ assert.doesNotMatch(serialized(f.root),/Delivery not confirmed|Previously still sending/);
+ f.passiveOnly();
+});
+
+test('optional report accepted=true is valid only with the bound positive identity',async()=>{
+ const f=await mount({},()=>receipt('accepted',{accepted:true}));
+ assert.equal(f.calls.length,1);
+ assert.doesNotMatch(serialized(f.root),/Delivery not confirmed/);
  f.passiveOnly();
 });
 
@@ -288,7 +316,7 @@ test('a message with no conversation and no local copy cannot recommend an unava
 
 for(const recovery of [undefined,{scope:'',connection:'instance-1'}]){
  test(`recovery ${recovery?'without scope':'not supplied'} preserves the existing manual-only contract`,async()=>{
-  const f=await mount({recovery},()=>recovery?receipt():{accepted:true,result:{delivery:'accepted'}});
+  const f=await mount({recovery},()=>receipt());
   assert.equal(f.calls.length,0);
   await reconnect();assert.equal(f.calls.length,0);
   await act(async()=>checkButton(f.root).props.onClick());
@@ -297,3 +325,70 @@ for(const recovery of [undefined,{scope:'',connection:'instance-1'}]){
   f.passiveOnly();
  });
 }
+
+const origin=(historyScope='account-one',identity='native-chat',workspace='/fixture')=>JSON.stringify([historyScope,workspace,identity]);
+const retainedEntry=(id,scope)=>({
+ id,commandId:'original',sessionId:'chat',text:`Retained payload ${id}`,attachmentIds:['attachment'],
+ attachments:[{id:'attachment',name:'reference.txt'}],status:'unknown',
+ ...(scope===undefined?{}:{scope}),
+});
+
+test('outbox origin identifies history source, workspace and canonical native chat, not a restart epoch',()=>{
+ const state={client:{historyScope:'account-one',hostInstanceId:'instance-1'}};
+ const session={id:'chat',workspace:'/fixture',runtimeSessionId:'native-chat',nativeIdentity:'unused-fallback'};
+ assert.equal(deliveryScope(state,session),origin());
+ assert.equal(deliveryScope({...state,client:{...state.client,hostInstanceId:'instance-2'}},session),origin());
+ assert.equal(deliveryScope({client:{hostInstanceId:'instance-1'}},session),origin('instance-1'));
+ assert.equal(deliveryScope(state,{id:'chat',workspace:'/fixture',nativeIdentity:'native-chat'}),origin());
+ assert.equal(deliveryScope(state,{id:'chat'}),origin('account-one','chat',null));
+ assert.equal(deliveryScope(state,null),origin('account-one',null,null));
+ assert.equal(deliveryScope({},session),null);
+});
+
+test('persisted outbox projects only exact source/workspace/native identity; legacy payload stays unbound',()=>{
+ const scope=origin(),otherScope=origin('account-two');
+ const rows=[
+  retainedEntry('matching',scope),retainedEntry('other-source',otherScope),
+  retainedEntry('other-workspace',origin('account-one','native-chat','/elsewhere')),
+  retainedEntry('other-native-chat',origin('account-one','different-native-chat')),
+  retainedEntry('legacy-unbound'),
+ ];
+ sessionStorage.setItem('amplifier.messageOutbox.v1',JSON.stringify(rows));
+ const loaded=readOutbox(sessionStorage);
+ assert.deepEqual(loaded,rows,'Reading must not adopt, erase or rewrite an unbound entry');
+ assert.deepEqual(outboxMessages([],loaded,'chat',scope).map(row=>row.id),['matching']);
+ assert.deepEqual(outboxMessages([],loaded,'chat',otherScope).map(row=>row.id),['other-source']);
+ assert.deepEqual(outboxMessages([],loaded,'chat',origin('new-source')),[]);
+ assert.deepEqual(outboxMessages([],loaded,'chat',undefined),[]);
+ const saved={id:'server-message',inputId:'original',role:'user',text:'Server text',delivery:{status:'unknown'}};
+ const projected=outboxMessages([saved],loaded,'chat',otherScope);
+ assert.equal(projected.length,1);
+ assert.equal(projected[0].localDelivery.id,'other-source');
+ assert.equal(projected[0].text,'Server text');
+ assert.deepEqual(JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')),rows);
+});
+
+test('exact scoped acknowledgement survives remount without adopting or clearing same-ID foreign and legacy copies',async()=>{
+ const scope=origin(),otherScope=origin('account-two');
+ const rows=[retainedEntry('old-source',scope),retainedEntry('new-source',otherScope),retainedEntry('legacy-unbound')];
+ sessionStorage.setItem('amplifier.messageOutbox.v1',JSON.stringify(rows));
+ let api,root;
+ function Harness(){api=useMessageOutbox();return null}
+ const render=()=>act(async()=>{root=create(React.createElement(Harness));roots.add(root)});
+ await render();
+ await act(async()=>api.acknowledge('chat','original',receipt().result,undefined));
+ assert.deepEqual(api.entries,rows,'An unbound acknowledgement has no origin authority');
+ await act(async()=>api.acknowledge('chat','original',receipt('unknown').result,otherScope));
+ assert.deepEqual(api.entries,rows,'Generic acceptance and unknown delivery cannot retire payload');
+ await act(async()=>api.acknowledge('chat','original',receipt().result,otherScope));
+ const kept=[rows[0],rows[2]];
+ assert.deepEqual(api.entries,kept,'Only matching scope/chat/input was acknowledged');
+ assert.deepEqual(JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')),kept);
+ await act(async()=>root.unmount());roots.delete(root);
+ await render();
+ assert.deepEqual(api.entries,kept,'Reloading the persisted outbox cannot recreate the acknowledged copy');
+ assert.deepEqual(outboxMessages([],api.entries,'chat',otherScope),[],'Old and unbound copies never project into the new source');
+ await act(async()=>api.update('new-source',{status:'unknown',error:'Late transport error'}));
+ assert.deepEqual(api.entries,kept,'Late errors cannot recreate an acknowledged payload');
+ assert.deepEqual(outboxMessages([],api.entries,'chat',scope).map(row=>row.id),['old-source']);
+});

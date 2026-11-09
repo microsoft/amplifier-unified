@@ -139,12 +139,14 @@ test('exact positive check retires only matching outbox and a late error cannot 
  function Harness(){api=useMessageOutbox();return null}
  await act(async()=>{root=create(React.createElement(Harness))});
  await act(async()=>{
-  api.update('one',{sessionId:'chat',commandId:'input',text:'Keep',attachmentIds:['a'],status:'unknown'});
-  api.update('two',{sessionId:'other',commandId:'input',text:'Other',attachmentIds:[],status:'unknown'});
+  api.update('one',{scope:'source-a',sessionId:'chat',commandId:'input',text:'Keep',attachmentIds:['a'],status:'unknown'});
+  api.update('two',{scope:'source-a',sessionId:'other',commandId:'input',text:'Other',attachmentIds:[],status:'unknown'});
  });
- await act(async()=>api.acknowledge('chat','input',{accepted:true,delivery:'unknown'}));
+ await act(async()=>api.acknowledge('chat','input',{accepted:true,delivery:'unknown'},'source-a'));
  assert.equal(api.entries.length,2);
- await act(async()=>api.acknowledge('chat','input',{delivery:'accepted'}));
+ await act(async()=>api.acknowledge('chat','input',{delivery:'accepted'},'source-b'));
+ assert.equal(api.entries.length,2,'A different source must not retire the saved input');
+ await act(async()=>api.acknowledge('chat','input',{delivery:'accepted'},'source-a'));
  assert.deepEqual(api.entries.map(row=>row.id),['two']);
  await act(async()=>api.update('one',{status:'unknown',error:'Late timeout'}));
  assert.deepEqual(api.entries.map(row=>row.id),['two']);
@@ -174,7 +176,7 @@ test('pending delivery check survives remount without collapse, duplicate reques
  assert.equal(button(root,'Show warning').props.disabled,true);
  await act(async()=>button(root,'Checking…').props.onClick());
  assert.equal(calls,1);
- await act(async()=>{finish({accepted:true,result:{sessionId:'chat',inputId:'original',delivery:'unknown',message:'Settled uncertain'}});await running});
+ await act(async()=>{finish({accepted:true,result:{sessionId:'chat',inputId:'pending',delivery:'unknown',message:'Settled uncertain'}});await running});
  assert.match(JSON.stringify(root.toJSON()),/Settled uncertain/);
  await act(async()=>root.unmount());delete globalThis.sessionStorage;
 });

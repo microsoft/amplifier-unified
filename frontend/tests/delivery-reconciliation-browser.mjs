@@ -30,11 +30,18 @@ let state={
 let historyScope='synthetic-host/account-one';
 const shell=createShellHttpFixture(()=>state);
 const wireState=()=>{const value=shell.state();return {...value,client:{...value.client,historyScope}}};
+const scopeFor=sessionId=>JSON.stringify([historyScope,'/fixture',sessionId]);
 const seed=[
- {id:'local-original',commandId:'original',sessionId:'chat',text:originalText,attachmentIds:['a'],attachments:[{id:'a',name:'reference.txt',size:12}],status:'unknown',error:'Transport interrupted. Delivery is uncertain.'},
- {id:'other-unsent',commandId:'unrelated-input',sessionId:'other',text:'Keep this separate failed input.',attachmentIds:[],status:'failed',error:'Known failure; not eligible for automatic reconciliation.'},
+ {id:'local-original',commandId:'original',sessionId:'chat',scope:scopeFor('chat'),text:originalText,attachmentIds:['a'],attachments:[{id:'a',name:'reference.txt',size:12}],status:'unknown',error:'Transport interrupted. Delivery is uncertain.'},
+ {id:'other-unsent',commandId:'unrelated-input',sessionId:'other',scope:scopeFor('other'),text:'Keep this separate failed input.',attachmentIds:[],status:'failed',error:'Known failure; not eligible for automatic reconciliation.'},
+ {id:'old-source-outbox',commandId:'source-race',sessionId:'other',scope:scopeFor('other'),text:'Private retained payload from account one.',attachmentIds:[],status:'unknown'},
+ // Deliberately the same chat/input as the first accepted read: lack of an origin
+ // must not cause adoption into that conversation or automatic retirement.
+ {id:'legacy-unbound',commandId:'original',sessionId:'chat',text:'Legacy payload with no verified source.',attachmentIds:[],status:'unknown'},
 ];
-const calls=[],pending=[],errors=[],screenshots=[],completed=[];
+const kept=seed.filter(entry=>entry.id!=='local-original');
+const legacyNotice='Earlier pending messages have no verified host identity. They remain saved in this browser and were not sent again.';
+const calls=[],pending=[],errors=[],screenshots=[],completed=[],stops=[];
 const executions=new Map([['chat/original',1]]);
 let senderCounter=0,duplicateExecution=0,vite,browser,page;
 const recoveryCalls=()=>calls.filter(call=>call.action==='conversation.delivery');
@@ -68,14 +75,18 @@ function installSequencedTransport({seed,outboxKey}){
    }
   },
  };
- // This context is created by this test. Its only stored messages are synthetic.
- sessionStorage.setItem(outboxKey,JSON.stringify(seed));
+ // This context is created by this test. Seed once, not on reload: a reload must
+ // inspect the actual persisted outbox, not silently restore the original seed.
+ if(!sessionStorage.getItem('delivery-reconciliation-seeded')){
+  sessionStorage.setItem('delivery-reconciliation-seeded','1');
+  sessionStorage.setItem(outboxKey,JSON.stringify(seed));
+ }
 }
 
 const row=inputId=>page.locator(`[data-input-id="${inputId}"]`);
 const check=inputId=>row(inputId).getByRole('button',{name:'Check delivery',exact:true});
 const checking=inputId=>row(inputId).getByRole('button',{name:'Checking…',exact:true});
-const warning=inputId=>row(inputId).getByText('Delivery not confirmed',{exact:true});
+const warning=inputId=>row(inputId).locator('.a-message-delivery').filter({hasText:'Delivery not confirmed'});
 const outbox=()=>page.evaluate(key=>JSON.parse(sessionStorage.getItem(key)||'[]'),outboxKey);
 async function emit(){
  const revision=++state.revision;
@@ -86,13 +97,13 @@ async function readFor(sessionId,inputId,scope=historyScope){
  await expect.poll(()=>pending.filter(request=>request.body.args.sessionId===sessionId&&request.body.args.inputId===inputId&&request.scope===scope).length).toBe(1);
  return pending.find(request=>request.body.args.sessionId===sessionId&&request.body.args.inputId===inputId&&request.scope===scope);
 }
-async function answer(request,result){
+async function answer(request,result,responseState=wireState()){
  assert.ok(request&&!request.settled,'Each deferred HTTP request is completed exactly once');
  request.settled=true;
  pending.splice(pending.indexOf(request),1);
  // Keep the server message unknown. Receipt reconciliation, not a conveniently
  // changed snapshot, must remove the warning and exact outbox entry.
- await request.route.fulfill({json:{...result,state:wireState()}});
+ await request.route.fulfill({json:{...result,state:responseState}});
 }
 const receipt=(request,delivery='accepted',extra={})=>({
  accepted:true,result:{
@@ -104,6 +115,11 @@ async function screenshot(name){
  const path=`${artifact}/${name}.png`;
  await page.screenshot({path});screenshots.push(path);
 }
+async function assertRetained(){
+ assert.deepEqual(await outbox(),kept,'Foreign, unrelated and unbound payloads stay byte-for-byte unchanged');
+ await expect(page.getByText(legacyNotice,{exact:true})).toBeVisible();
+ await expect(page.getByText('Legacy payload with no verified source.',{exact:true})).toHaveCount(0);
+}
 function assertPassive(){
  assert.equal(senderCounter,0,'No conversation.send or conversation.retry may run');
  assert.equal(duplicateExecution,0,'No synthetic accepted input may execute again');
@@ -114,7 +130,7 @@ async function saveResult(passed,error){
  await writeFile(`${artifact}/browser-result.json`,JSON.stringify({
   passed,evidence:'Real bundled Vite UI; synthetic HTTP/SSE and synthetic execution counters only.',
   viewports:[{width:1280,height:900},{width:390,height:844}],completed,
-  senderCounter,duplicateExecution,calls:recoveryCalls(),effects:effects(),errors,screenshots,
+  senderCounter,duplicateExecution,calls:recoveryCalls(),stops,effects:effects(),errors,screenshots,
   ...(error?{failure:String(error.stack||error)}:{}),
  },null,2));
 }
@@ -137,7 +153,7 @@ try{
   if(path!=='/api/actions')return route.fulfill({json:{ok:true}});
   const body=request.postDataJSON();calls.push(body);
   if(body.action==='conversation.delivery'){
-   pending.push({route,body,scope:historyScope,settled:false});return;
+   pending.push({route,body,scope:historyScope,baseline:structuredClone(wireState()),settled:false});return;
   }
   if(['conversation.send','conversation.retry'].includes(body.action)){
    senderCounter++;
@@ -145,6 +161,13 @@ try{
    if(executions.has(identity))duplicateExecution++;
    executions.set(identity,(executions.get(identity)||0)+1);
    return route.fulfill({json:{accepted:false,error:'This passive fixture refuses all send and retry effects.',state:wireState()}});
+  }
+  if(body.action==='conversation.stop'){
+   assert.equal(request.method(),'POST');
+   stops.push({args:body.args,pendingDelivery:pending.map(read=>({sessionId:read.body.args.sessionId,inputId:read.body.args.inputId})),actionIndex:calls.length-1});
+   const target=state.sessions.find(session=>session.id===body.args.sessionId);
+   assert.ok(target,'Stop must target an existing synthetic conversation');
+   target.status='stopped';target.execution={...target.execution,currentTurnId:null};
   }
   if(body.action==='view.update')state.view={...state.view,...body.args.patch};
   if(body.action==='session.select')state.selectedSessionId=body.args.id;
@@ -157,10 +180,20 @@ try{
  await composer.fill('Keep the next unsent thought');
  const retained=await outbox();
  assert.deepEqual(retained,seed);
+ await expect(page.getByText(legacyNotice,{exact:true})).toBeVisible();
+ await expect(page.getByText('Legacy payload with no verified source.',{exact:true})).toHaveCount(0);
  assert.equal(recoveryCalls().length,0,'Offline mount must not request delivery');
  for(let i=0;i<3;i++){state.sessions[0].title=`Offline state revision ${i}`;await emit();}
  assert.equal(recoveryCalls().length,0);
  completed.push('offline mount and unrelated frames: no delivery requests');
+ await page.reload();
+ await expect(warning('original')).toBeVisible();
+ await expect(row('original')).toHaveCount(1);
+ await expect(composer).toHaveDraft('Keep the next unsent thought');
+ assert.deepEqual(await outbox(),seed,'Reload preserves original origin and unbound copies without duplication');
+ assert.equal(recoveryCalls().length,0);
+ await expect(page.getByText(legacyNotice,{exact:true})).toBeVisible();
+ assertPassive();completed.push('offline reload: same persisted scoped outbox, no duplicate projection or submission');
 
  // Lost ACK recovery: no Check click or retry, and exactly one read after SSE open.
  await page.evaluate(value=>window.fixtureTransport.reconnect(value),wireState());
@@ -172,7 +205,8 @@ try{
  await screenshot('desktop-rechecking');
  await answer(first,receipt(first));
  await expect(warning('original')).toHaveCount(0);
- await expect.poll(async()=>(await outbox()).map(entry=>entry.id)).toEqual(['other-unsent']);
+ await expect.poll(async()=>(await outbox()).map(entry=>entry.id)).toEqual(kept.map(entry=>entry.id));
+ await assertRetained();
  await expect(row('original').getByText(originalText,{exact:true})).toBeVisible();
  await expect(row('original').getByText(/reference.txt/)).toBeVisible();
  await expect(composer).toHaveDraft('Keep the next unsent thought');
@@ -182,6 +216,19 @@ try{
  assert.deepEqual(state.sessions[0].messages[0].delivery.status,'unknown','Fixture did not hide the warning through a snapshot');
  assertPassive();await screenshot('desktop-reconciled');
  completed.push('lost ACK: exact positive automatic receipt; original history, attachment and draft retained; unrelated outbox preserved');
+ // A later authoritative accepted snapshot also cannot clear the legacy entry
+ // with identical chat/input IDs. Reload must not recreate the retired copy.
+ state.sessions[0].messages[0].delivery={status:'accepted'};await emit();
+ await assertRetained();
+ await page.reload();
+ await expect(row('original')).toHaveCount(1);
+ await expect(warning('original')).toHaveCount(0);
+ await expect(composer).toHaveDraft('Keep the next unsent thought');
+ await assertRetained();
+ assert.equal(recoveryCalls().length,1);
+ await page.evaluate(value=>window.fixtureTransport.reconnect(value),wireState());
+ assert.equal(recoveryCalls().length,1);
+ completed.push('accepted snapshot and reload: scoped retirement persists; same-ID legacy payload and notice remain');
 
  // The no-local-copy case represents another browser with only a saved input.
  state.sessions[0].messages=[message('saved-only')];await emit();
@@ -191,7 +238,48 @@ try{
  await expect(warning('saved-only')).toHaveCount(0);
  await expect(row('saved-only').getByText('Synthetic saved request: saved-only',{exact:true})).toBeVisible();
  await expect(row('saved-only').getByText(/reference.txt/)).toBeVisible();
+ await expect(row('original'),'Unbound legacy payload must not project after server original leaves view').toHaveCount(0);
  completed.push('saved exact input reconciles without local copy');
+
+ // A stalled read for an old input must not occupy the queue needed by Stop.
+ // Exercise the rendered button, not window.amplifier.dispatch or a handler stub.
+ state.sessions[0].status='working';
+ state.sessions[0].execution={currentTurnId:'newer-running-input'};
+ state.sessions[0].messages=[message('older-stop-read'),message('newer-running-input',{status:'accepted'})];
+ await emit();
+ const stopRead=await readFor('chat','older-stop-read');
+ const stopButton=page.getByRole('button',{name:'Stop response',exact:true});
+ await expect(stopButton).toBeVisible();await expect(stopButton).toBeEnabled();
+ await expect(checking('older-stop-read')).toBeDisabled();
+ await stopButton.click();
+ await expect.poll(()=>stops.length).toBe(1);
+ assert.equal(stopRead.settled,false,'Stop POST reached the server before the held delivery response');
+ assert.ok(pending.includes(stopRead));
+ assert.deepEqual(stops[0].args,{sessionId:'chat'});
+ assert.ok(stops[0].pendingDelivery.some(read=>read.sessionId==='chat'&&read.inputId==='older-stop-read'));
+ assert.ok(stops[0].actionIndex>calls.indexOf(stopRead.body));
+ await expect(composer).toHaveDraft('Keep the next unsent thought');
+ await answer(stopRead,receipt(stopRead,'unknown'));
+ await expect(check('older-stop-read')).toBeEnabled();
+ await expect(warning('older-stop-read')).toBeVisible();
+ assertPassive();await screenshot('desktop-stop-not-blocked');
+ completed.push('rendered Stop posts once for newer work while old delivery read remains unresolved');
+ state.sessions[0].status='idle';state.sessions[0].execution={currentTurnId:null};
+
+ // A historical sending report must not be mistaken for current execution.
+ state.sessions[0].messages=[message('stale-sending')];await emit();
+ const sendingRead=await readFor('chat','stale-sending');
+ await answer(sendingRead,receipt(sendingRead,'sending',{message:'The prior read observed sending.'}));
+ await expect(row('stale-sending').getByText('The prior read observed sending.',{exact:true})).toBeVisible();
+ state.sessions[0].messages[0].delivery={status:'unknown'};await emit();
+ const sendingCount=recoveryCalls().length;
+ await page.evaluate(()=>window.fixtureTransport.disconnect());
+ await page.evaluate(value=>window.fixtureTransport.reconnect(value),wireState());
+ const refreshed=await readFor('chat','stale-sending');
+ assert.equal(recoveryCalls().length,sendingCount+1);
+ await answer(refreshed,receipt(refreshed));
+ await expect(warning('stale-sending')).toHaveCount(0);
+ assertPassive();completed.push('sending report followed by idle/unknown state permits one reconnect check');
 
  // Absence, malformed/generic acceptance, and conflicting identity never imply
  // success. Each is a new exact input, not a retry loop against one fixture row.
@@ -212,8 +300,9 @@ try{
   await expect(check(inputId)).toBeEnabled();
   for(let revision=0;revision<3;revision++){state.sessions[0].title=`Unrelated ${name} ${revision}`;await emit();}
   assert.equal(recoveryCalls().length,count,'Settled uncertainty must not poll');
-  assert.deepEqual((await outbox()).map(entry=>entry.id),['other-unsent']);
+  await assertRetained();
   if(name==='not-saved'){
+   await expect(row(inputId).getByRole('button',{name:/^(Send again|Retry original submission|Send this message again)$/})).toHaveCount(0);
    await page.setViewportSize({width:390,height:844});
    await expect(warning(inputId)).toBeVisible();
    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Mobile recovery must not overflow');
@@ -246,23 +335,53 @@ try{
  completed.push('pending remount/manual dedup; late positive for another chat does not clear selected warning');
 
  // Source identity is a nonsecret namespace supplied by state.client, not action
- // authority. Replacing it must fence the old request even for identical IDs.
+ // authority. The old scope owns a real persisted local payload with these IDs.
  state.sessions[1].messages=[message('source-race')];await emit();
- const oldScope=historyScope,oldSourceRead=await readFor('other','source-race',oldScope);
+ const oldScope=historyScope;
+ let oldSourceRead=await readFor('other','source-race',oldScope);
+ assert.deepEqual((await outbox()).find(entry=>entry.id==='old-source-outbox'),seed.find(entry=>entry.id==='old-source-outbox'));
+ // The replacement host may answer HTTP before its first SSE baseline. Both
+ // returned identity forms must be checked before acknowledging the old outbox.
+ // No new-host stream frame is injected in these two bounded cases.
+ for(const identityForm of ['top-level','state']){
+  const previousHost=wireState().client.hostInstanceId,responseState=structuredClone(wireState());
+  const reply=receipt(oldSourceRead);
+  if(identityForm==='top-level')reply.hostInstanceId='replacement-host-before-baseline';
+  else responseState.client.hostInstanceId='replacement-host-before-baseline';
+  await answer(oldSourceRead,reply,responseState);
+  await expect(warning('source-race')).toBeVisible();
+  await expect(check('source-race')).toBeEnabled();
+  assert.equal(await page.evaluate(()=>window.amplifier.getState().client.hostInstanceId),previousHost,'A mismatched HTTP reply must not become the new authoritative baseline');
+  await assertRetained();
+  await check('source-race').click();
+  oldSourceRead=await readFor('other','source-race',oldScope);
+  completed.push(`${identityForm} returned host before baseline: old scoped payload retained`);
+ }
  historyScope='synthetic-host/account-two';await emit();
  const newSourceRead=await readFor('other','source-race');
  assert.notEqual(oldSourceRead,newSourceRead);
- await answer(oldSourceRead,receipt(oldSourceRead));
+ await answer(oldSourceRead,receipt(oldSourceRead),oldSourceRead.baseline);
  await expect(warning('source-race')).toBeVisible();
  await expect(checking('source-race')).toBeDisabled();
- await answer(newSourceRead,receipt(newSourceRead,'unknown',{message:'New source has no verified receipt. Nothing was resent.'}));
- await expect(row('source-race').getByText('New source has no verified receipt. Nothing was resent.',{exact:true})).toBeVisible();
- await expect(check('source-race')).toBeEnabled();
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().client.historyScope),historyScope,'Late old state cannot restore its source');
+ await assertRetained();
+ await answer(newSourceRead,receipt(newSourceRead));
+ await expect(warning('source-race')).toHaveCount(0);
+ await assertRetained();
+ // New-source acceptance is not authority to clean up an old-source payload,
+ // whether it arrives in a receipt or a subsequent accepted snapshot.
+ state.sessions[1].messages[0].delivery={status:'accepted'};await emit();
+ await assertRetained();
+ state.sessions[1].messages=[];await emit();
+ await expect(row('source-race')).toHaveCount(0);
+ await expect(page.getByText('Private retained payload from account one.',{exact:true})).toHaveCount(0);
+ await assertRetained();
  assertPassive();await screenshot('mobile-source-isolation');
- completed.push('late positive from old source cannot settle the new source');
+ completed.push('late old-source reply fenced; new positive receipt/snapshot cannot retire or project old scoped payload');
 
  // Exact active input, Stop-held, known failure, queued/sending and steering are
  // not automatically recovered or resumed, even after another SSE open.
+ const excludedCount=recoveryCalls().length;
  state.sessions[1].status='working';
  state.sessions[1].execution={currentTurnId:'active-input'};
  state.sessions[1].messages=[
@@ -274,18 +393,19 @@ try{
   {...message('steering'),steering:{generationId:'run',disposition:'unknown'}},
  ];
  await emit();
- const excludedCount=recoveryCalls().length;
+ assert.equal(recoveryCalls().length,excludedCount,'Excluded states do not check on mount');
  await page.evaluate(()=>window.fixtureTransport.disconnect());
  await page.evaluate(value=>window.fixtureTransport.reconnect(value),wireState());
  await expect(row('stop-held').getByText('Message retained after Stop. Nothing was sent.',{exact:true})).toBeVisible();
- await expect(row('known-failure').getByText('Not sent',{exact:true})).toBeVisible();
+ await expect(row('known-failure').locator('.a-message-delivery').filter({hasText:'Not sent'})).toBeVisible();
  await expect(row('steering').getByText('Steering delivery could not be confirmed. Nothing was resent.',{exact:true})).toBeVisible();
  for(let revision=0;revision<3;revision++)await emit();
  assert.equal(recoveryCalls().length,excludedCount);
- assert.deepEqual((await outbox()).map(entry=>entry.id),['other-unsent']);
+ await assertRetained();
  assertPassive();await screenshot('mobile-held-and-active');
  completed.push('active, Stop-held, failed, sending, queued, update-queued and steering: no automatic check or resend');
  assert.deepEqual(errors,[]);
+ assert.equal(stops.length,1,'Reconnect never replays the explicit Stop');
  assert.equal(pending.length,0,'All synthetic requests settled');
  await saveResult(true);
  console.log(`Delivery reconciliation browser passed: ${completed.length} checkpoints; senderCounter=0, duplicateExecution=0; artifacts ${artifact}`);
