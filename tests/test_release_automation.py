@@ -344,7 +344,7 @@ def test_release_requires_complete_frontend_bytes_in_both_formats(repository, ki
 def source_candidate(repository):
     with (repository / 'pyproject.toml').open('a') as stream:
         stream.write('\n[tool.hatch.build]\nartifacts = ["/amplifier_web/release-source.json"]\n')
-    (repository / '.gitignore').write_text('/dist/\n/amplifier_web/release-source.json\n')
+    (repository / '.gitignore').write_text('/dist/\n/amplifier_web/release-source.json\n__pycache__/\n*.pyc\n')
     git(repository, 'add', '.'); git(repository, 'commit', '-m', 'source record packaging')
     return repository, 'example/app', git(repository, 'rev-parse', 'HEAD'), '1.2.3'
 
