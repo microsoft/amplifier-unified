@@ -102,7 +102,18 @@ def preparation_key(manager, rows):
     source_key, config = configuration(manager)
     keys = ('id', 'kind', 'url', 'ref', 'current', 'latest', 'subdirectory', 'package',
             'status', 'eligible', 'policyOrigin', 'updateTier')
-    selected = [{key: row[key] for key in keys if key in row} for row in rows]
+    selected = []
+    for row in rows:
+        value = {key: row[key] for key in keys if key in row}
+        if (row.get('status') == 'check_failed' and row.get('availabilityFailure') is True
+                and row.get('sourceUpdate') in {'failed', 'dependency-held'}
+                and isinstance(row.get('latest'), str) and re.fullmatch('[a-f0-9]{40}', row['latest'])
+                and row.get('current') != row['latest']):
+            # A receipt-derived retained presentation is the same desired graph
+            # as its pre-suppression update row, not a new qualification input.
+            # Unknown fresh failures never receive this classification.
+            value['status'] = 'update'
+        selected.append(value)
     selected.sort(key=lambda row: json.dumps(row, sort_keys=True))
     # The dependency graph key deliberately omits module values/identities.
     # Qualification consumes them through host.session._apply_settings; fixing

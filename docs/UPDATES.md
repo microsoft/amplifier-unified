@@ -63,11 +63,16 @@ finish its turn before adopting the new one.
   Downloaded or installed files alone do not establish that a session is using
   the new components.
 
-## Partial source failure — first implementation slice (qualification pending)
+## Partial source failure — bounded source-acquisition slice
 
-**Status:** implementation draft for the accepted policy above. Full-path
-qualification is pending; this section is not evidence of shipped or verified
-behavior, nor completion of the broader failure-isolation requirements.
+This implements only the source-acquisition boundary of the accepted direction.
+The focused synthetic qualification uses distinct local Git repositories, a
+real qualified baseline, the ordinary manager/Collector/installer/freeze/profile
+path, atomic promotion, a second branch advance, refusal and rollback. It uses
+prepared/repacked dependencies and a no-model fixture provider; it is not public
+registry provenance, native Windows or busy-worker qualification. Existing
+worker adoption remains a separate qualified boundary. This does not complete
+the broader failure-isolation and process-lifetime requirements.
 
 This slice handles settled pre-install source acquisition failures: an eligible
 source's availability lookup has a known, settled failure, or a legacy app-owned
@@ -113,6 +118,15 @@ source issues. It does not clear a pending replacement, restart or uncertain
 operation, and does not make the failed tier “Up to date.” An unchanged automatic
 check does not silently retry retained failures; a deliberate manual check can
 refresh the desired sources for a new guarded attempt.
+
+Automatic availability freshness is not deliberate retry intent. Unchanged
+retained outcomes survive later unrelated tier promotions through the existing
+generation receipt and reverified source identities. A fresh unknown failure
+cannot borrow an older settled outcome. Cancellation during later preparation
+retains the inspection fence even if the visible diagnostic still names the
+earlier fetch failure. Changes to source identity, desired revision or relevant
+configuration can make new work eligible; a retention-only status projection
+does not.
 
 ## Current implementation and operational behavior
 

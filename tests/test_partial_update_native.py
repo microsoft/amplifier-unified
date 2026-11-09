@@ -755,6 +755,14 @@ async def test_settled_fetch_retains_qualified_a_holds_c_and_advances_moving_b(m
         no_retry = len(commands), len(probes)
         await manager.install(automatic=True)
         assert (len(commands), len(probes)) == no_retry
+        failed_key = manager.diagnostics.state["batch"]["retry"]["inputKey"]
+        generations = set((manager.directory / "releases").iterdir())
+        await manager.check(fresh=False, automatic=True)
+        assert update_health.preparation_key(manager, manager.inventory) == failed_key
+        after_check = len(commands), len(probes)
+        await manager.install(automatic=True)
+        assert (len(commands), len(probes)) == after_check
+        assert set((manager.directory / "releases").iterdir()) == generations
         # Return to the previous qualified mixed generation by the ordinary
         # rollback path. No fresh resolver subset or host restart is introduced.
         await manager.rollback()
