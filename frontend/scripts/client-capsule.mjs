@@ -72,7 +72,9 @@ function exportBuildInputs(destination){
 function verifyBuildInputs(directory,revision){
  // Verification is offline and independent of this checkout's Git state.
  // The consumer supplies the owner revision from its trusted input selection.
- const lock=read(join(directory,inputLock));
+ const lockPath=join(directory,inputLock);
+ if(!lstatSync(lockPath).isFile())throw Error('Expected a regular build input lock: '+lockPath);
+ const lock=read(lockPath);
  if(!/^[a-f0-9]{40}$/.test(revision||'')||lock.schema!==1||lock.kind!=='unified-web-build-inputs'
    ||lock.source?.repository!==repository||lock.source?.revision!==revision||!lock.inputs||typeof lock.inputs!=='object'
    ||Array.isArray(lock.inputs)||!Object.keys(lock.inputs).length){

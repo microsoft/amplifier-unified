@@ -97,3 +97,24 @@ test('malformed or unsupported locks do not pass an empty verification',t=>{
   assert.notEqual(f.run('verify-inputs',f.output,f.revision).status,0);
  }
 });
+
+function rejectsNonregularLock(f){
+ const result=spawnSync(process.execPath,[join(f.source,helper),'verify-inputs',f.output,f.revision],
+  {cwd:f.temporary,encoding:'utf8',timeout:2000,killSignal:'SIGKILL'});
+ assert.equal(result.error,undefined,'Lock verification must exit without blocking on a read');
+ assert.equal(result.status,1,result.stderr);
+ assert.match(result.stderr,/Expected a regular build input lock/);
+}
+
+for(const linked of [false,true])test(`${linked?'Linked FIFO':'FIFO'} lock is rejected before a read can wait for a writer`,{skip:process.platform==='win32'},t=>{
+ const f=fixture(t),path=join(f.output,'build-inputs.lock.json'),fifo=linked?join(f.temporary,'fifo'):path;
+ rmSync(path);execFileSync('mkfifo',[fifo]);
+ if(linked)symlinkSync(fifo,path);
+ rejectsNonregularLock(f);
+});
+
+test('directory lock is rejected before reading its contents',t=>{
+ const f=fixture(t),path=join(f.output,'build-inputs.lock.json');
+ rmSync(path);mkdirSync(path);
+ rejectsNonregularLock(f);
+});
