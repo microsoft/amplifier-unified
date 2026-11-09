@@ -394,6 +394,41 @@ async def test_listener_without_verified_health_times_out_and_keeps_gate(tmp_pat
         await runner.cleanup();sock.close();await service.close()
 
 
+@pytest.mark.parametrize('finish', ['timeout', 'cancel'])
+async def test_slow_target_preparation_cannot_stall_loop_or_reset_budget(tmp_path, monkeypatch, finish):
+    import threading
+    service, manager = make_manager(tmp_path, monkeypatch)
+    started, release = threading.Event(), threading.Event()
+    def slow_targets(manager):
+        started.set()
+        release.wait(3)
+        return [], None
+    monkeypatch.setattr(update_readiness, 'probe_targets', slow_targets)
+    task = asyncio.create_task(update_readiness.wait_for_readiness(
+        manager, 'fixture-token', timeout=.15 if finish == 'timeout' else 2))
+    try:
+        deadline = asyncio.get_running_loop().time() + 1
+        while not started.is_set():
+            assert asyncio.get_running_loop().time() < deadline
+            await asyncio.sleep(.005)
+        # The resolver thread is blocked, but the event loop remains usable.
+        await asyncio.wait_for(asyncio.sleep(.01), .1)
+        assert not release.is_set() and not task.done()
+        if finish == 'cancel':
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            await asyncio.wait_for(task, .5)
+        failure = manager.diagnostics.state['lastFailure']
+        assert failure['errorType'] == ('TimeoutError' if finish == 'timeout' else 'CancelledError')
+        assert service.state['updates']['pendingRestart'] == TARGET
+        assert not any(row['phase'] == 'restart-ack' for row in manager.diagnostics.state['events'])
+    finally:
+        release.set()
+        await service.close()
+
+
 async def test_cancelled_readiness_preserves_marker_and_reports_interruption(tmp_path,monkeypatch):
     service,manager=make_manager(tmp_path,monkeypatch)
     async def handle(request):return web.json_response(health(manager))

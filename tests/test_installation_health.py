@@ -105,7 +105,7 @@ async def test_status_reports_every_verified_listener_and_partial_failure(tmp_pa
     assert result['listenerChecks'][1]['verified'] is (second == 'healthy')
     assert result['ok'] and result['responding']
     assert result['publicUrlsVerified'] is False
-    assert 'not all interfaces' in result['listenerScope']
+    assert result['listenerScopeComplete']
     # A mismatched TLS leaf must fail before any credential reaches that server.
     assert sorted(row[0] for row in observed) == (['127.0.0.1'] if second in {'absent', 'wrong-cert'}
                                                   else ['127.0.0.1', '127.0.0.2'])
@@ -116,7 +116,7 @@ async def test_status_reports_every_verified_listener_and_partial_failure(tmp_pa
     assert ('Host listener: ' + other in text) is (second == 'healthy')
     assert ('Listener not verified: ' + other in text) is (second != 'healthy')
     assert 'Configured public address (not checked)' in text
-    assert 'not all interfaces' in text and 'not enumerated' in text
+    assert 'Only matching authenticated responses are verified' in text
     assert 'synthetic-local-control' not in text
 
 
@@ -232,7 +232,7 @@ async def test_named_and_ipv6_wildcard_binds_verify_only_reached_numeric_address
     assert f'http://[::1]:{port}' in result['listenerUrls']
     assert all('localhost' not in url and '://[::]:' not in url for url in result['listenerUrls'])
     health.display(result)
-    assert 'wildcard binds test loopback only' in capsys.readouterr().out
+    assert 'Probe scope:' in capsys.readouterr().out
 
 
 @pytest.mark.asyncio
@@ -273,6 +273,16 @@ def test_linux_nonlocal_bind_mode_cannot_authorize_a_control_probe(monkeypatch):
     assert update_readiness.local_probe_hosts('untrusted.example') == []
 
 
+def test_ipv4_mapped_ipv6_cannot_bypass_nonlocal_bind_policy(monkeypatch):
+    import socket
+    from amplifier_web import update_readiness
+    monkeypatch.setattr(update_readiness.sys, 'platform', 'linux')
+    monkeypatch.setattr(socket, 'getaddrinfo', lambda *a, **kw:
+        [(socket.AF_INET6, socket.SOCK_STREAM, 6, '', ('::ffff:203.0.113.222', 0, 0, 0))])
+    monkeypatch.setattr(socket, 'socket', lambda *a: pytest.fail('mapped candidate must not reach ownership bind'))
+    assert update_readiness.local_probe_hosts('::ffff:203.0.113.222') == []
+
+
 @pytest.mark.asyncio
 async def test_listener_collection_bounds_concurrency_but_does_not_truncate_binds(tmp_path, monkeypatch):
     from aiohttp import web
@@ -306,3 +316,155 @@ async def test_listener_collection_bounds_concurrency_but_does_not_truncate_bind
         await runner.cleanup()
     assert len(result['listenerUrls']) == 8
     assert peak == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('bind,version', [('0.0.0.0', 4), ('::', 6)])
+async def test_real_wildcard_listener_enumerates_nonloopback_interfaces_without_dns(tmp_path, monkeypatch, bind, version):
+    import ipaddress
+    import socket
+    from aiohttp import web
+    from amplifier_web import __version__, update_readiness
+    from amplifier_web.auth import data_identity
+    from amplifier_web.deployment import load_server_config, save_server_config
+    from amplifier_web.tls import setup_local_ca, ssl_context
+
+    if health.sys.platform not in {'linux', 'darwin'}:
+        pytest.skip('getifaddrs enumeration is qualified only on Linux/macOS')
+    assigned = [host for host in update_readiness.local_interface_addresses()
+                if ipaddress.ip_address(host).version == version]
+    if not any(not ipaddress.ip_address(host).is_loopback for host in assigned):
+        pytest.skip(f'No assigned nonloopback IPv{version} interface on this host')
+    config = setup_local_ca(tmp_path, load_server_config(tmp_path))
+    seen = []
+    async def endpoint(request):
+        assert request.headers['Authorization'] == 'Bearer synthetic-wildcard-control'
+        seen.append(request.transport.get_extra_info('sockname')[0])
+        return web.json_response({'ok': True, 'app': 'amplifier-unified', 'version': __version__,
+                                  'dataIdentity': data_identity(tmp_path)})
+    app = web.Application()
+    app.router.add_get('/api/health', endpoint)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    try:
+        await web.TCPSite(runner, bind, 0, ssl_context=ssl_context(tmp_path, config)).start()
+        port = runner.addresses[0][1]
+        save_server_config(tmp_path, {**config, 'port': port, 'bind': [bind],
+                                     'public_origins': ['https://public-never-resolve.invalid']})
+        token = tmp_path / 'config/auth/control-token'
+        token.parent.mkdir(parents=True)
+        token.write_text('synthetic-wildcard-control')
+        monkeypatch.setattr(health, 'service_state', lambda home: 'running')
+        original = socket.getaddrinfo
+        def numeric_only(host, port, *args, **kwargs):
+            ipaddress.ip_address(host)
+            if port == 0:
+                assert kwargs['flags'] & socket.AI_NUMERICHOST
+            return original(host, port, *args, **kwargs)
+        monkeypatch.setattr(socket, 'getaddrinfo', numeric_only)
+        result = await health.status(tmp_path)
+    finally:
+        await runner.cleanup()
+    expected = {f'https://[{host}]:{port}' if version == 6 else f'https://{host}:{port}'
+                for host in assigned}
+    assert set(result['listenerUrls']) == expected
+    assert any(not ipaddress.ip_address(host).is_loopback for host in seen)
+    assert result['listenerScopeComplete'] and 'getifaddrs snapshot' in result['listenerScope']
+    assert result['publicUrlsVerified'] is False
+
+
+def test_unavailable_wildcard_enumeration_is_explicitly_partial(monkeypatch):
+    from types import SimpleNamespace
+    from amplifier_web import update_readiness
+    def unavailable():
+        raise NotImplementedError('unsupported local interface source')
+    monkeypatch.setattr(update_readiness, 'local_interface_addresses', unavailable)
+    manager = SimpleNamespace(service=SimpleNamespace(port=8941, server_config={
+        'tls': {'method': 'none'}, 'bind': ['0.0.0.0']}))
+    diagnostics = {}
+    urls, _ = update_readiness.probe_targets(manager, diagnostics=diagnostics)
+    assert urls == ['http://127.0.0.1:8941/api/health']
+    assert not diagnostics['listenerScopeComplete']
+    assert 'PARTIAL' in diagnostics['listenerScope'] and 'not all interfaces' in diagnostics['listenerScope']
+
+
+@pytest.mark.parametrize('platform', ['linux', 'darwin'])
+def test_getifaddrs_layouts_ipv4_ipv6_scope_and_release(monkeypatch, platform):
+    import ctypes as c
+    import socket
+    from amplifier_web import update_readiness
+    monkeypatch.setattr(update_readiness.sys, 'platform', platform)
+    buffers, entries, calls = [], [], []
+    class Function:
+        def __init__(self, call):
+            self.call = call
+        def __call__(self, *args):
+            return self.call(*args)
+    def get(output):
+        # The helper's declared ABI supplies the actual ifaddrs structure type.
+        node_type = output._obj._type_
+        for family, host, scope in [(socket.AF_INET, '192.0.2.10', 0),
+                                    (socket.AF_INET6, 'fe80::123', 7),
+                                    (socket.AF_INET, '192.0.2.10', 0)]:
+            data = bytearray(28 if family == socket.AF_INET6 else 16)
+            data[:2] = bytes([len(data), family]) if platform == 'darwin' else family.to_bytes(2, update_readiness.sys.byteorder)
+            offset = 8 if family == socket.AF_INET6 else 4
+            packed = socket.inet_pton(family, host)
+            if platform == 'darwin' and family == socket.AF_INET6:
+                packed = packed[:2] + scope.to_bytes(2, 'big') + packed[4:]
+                scope = 0  # Embedded Darwin scope instead of sin6_scope_id.
+            data[offset:offset + len(packed)] = packed
+            if family == socket.AF_INET6:
+                data[24:28] = scope.to_bytes(4, update_readiness.sys.byteorder)
+            buffer = c.create_string_buffer(bytes(data))
+            buffers.append(buffer)
+            entries.append(node_type(name=b'test0', addr=c.addressof(buffer)))
+        for first, second in zip(entries, entries[1:]):
+            first.next = c.pointer(second)
+        c.cast(output, c.POINTER(c.POINTER(node_type)))[0] = c.pointer(entries[0])
+        return 0
+    from types import SimpleNamespace
+    libc = SimpleNamespace(getifaddrs=Function(get), freeifaddrs=Function(lambda head: calls.append('free')))
+    monkeypatch.setattr(c, 'CDLL', lambda *a, **kw: libc)
+    assert update_readiness.local_interface_addresses() == ['192.0.2.10', 'fe80::123%7']
+    assert calls == ['free']
+
+
+def test_windows_interface_enumeration_is_unqualified(monkeypatch):
+    from amplifier_web import update_readiness
+    monkeypatch.setattr(update_readiness.sys, 'platform', 'win32')
+    with pytest.raises(NotImplementedError, match='Linux and macOS only'):
+        update_readiness.local_interface_addresses()
+
+
+def test_wildcard_snapshot_is_taken_once_and_unowned_candidates_remain_unverified(tmp_path, monkeypatch):
+    import socket
+    from types import SimpleNamespace
+    from amplifier_web import update_readiness
+    from amplifier_web.deployment import load_server_config
+    from amplifier_web.tls import setup_local_ca
+    calls = []
+    def interfaces():
+        calls.append('enumerate')
+        return ['127.0.0.1', '203.0.113.222', '::1']
+    monkeypatch.setattr(update_readiness, 'local_interface_addresses', interfaces)
+    real_socket = socket.socket
+    class OwnedOnly:
+        def __init__(self, *args):
+            self.socket = real_socket(*args)
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            self.socket.close()
+        def bind(self, address):
+            if address[0] in {'203.0.113.222', '::1'}:
+                raise OSError('unowned/unavailable')
+            self.socket.bind(address)
+    monkeypatch.setattr(socket, 'socket', OwnedOnly)
+    config = {**setup_local_ca(tmp_path, load_server_config(tmp_path)), 'bind': ['0.0.0.0', '::']}
+    manager = SimpleNamespace(home=tmp_path, service=SimpleNamespace(port=8941, server_config=config))
+    diagnostics = {}
+    urls, _ = update_readiness.probe_targets(manager, diagnostics=diagnostics)
+    assert calls == ['enumerate']
+    assert urls == ['https://127.0.0.1:8941/api/health']
+    assert not diagnostics['listenerScopeComplete'] and 'PARTIAL' in diagnostics['listenerScope']

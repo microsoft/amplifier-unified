@@ -208,6 +208,24 @@ def certificate_checks(data_dir: Path, config: dict) -> list[dict]:
                '' if valid else ' Certificate is expired or not yet valid. ' + remediation))})
         return valid and not expiring
 
+    ca = None
+    if app_owned:
+        from cryptography.hazmat.primitives import serialization
+        ca_repair = 'Recover the existing CA from backup or plan an explicit CA rotation and redistribute client trust; do not run setup-tls force with an incomplete CA pair.'
+        try:
+            ca = x509.load_pem_x509_certificate(exported_ca_bytes(data_dir))
+            ca_key = serialization.load_pem_private_key((tls_dir(data_dir) / 'ca.key').read_bytes(), None)
+            if ca_key.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo) != ca.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo):
+                raise ValueError('Local CA certificate/key do not match.')
+        except (OSError, ValueError, TypeError) as error:
+            checks.append({'ok': False, 'message': 'Local CA pair is missing or invalid. ' + ca_repair, 'detail': str(error)})
+            repair = ca_repair
+            ca = None
+        else:
+            ca_repair = 'Plan an explicit CA rotation and redistribute trust to clients; setup-tls force preserves this CA and cannot renew it.'
+            if not validity(ca, 'Local CA certificate', ca_repair):
+                repair = ca_repair
+
     validity(leaf, 'TLS leaf certificate', repair)
     try:
         san = leaf.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
@@ -237,15 +255,8 @@ def certificate_checks(data_dir: Path, config: dict) -> list[dict]:
     # Validate against the app CA for its fixed leaf layout. Supplied chains
     # use this machine's system roots, not an unrelated app CA lying on disk.
     if app_owned:
-        try:
-            ca = x509.load_pem_x509_certificate(exported_ca_bytes(data_dir))
-        except (OSError, ValueError) as error:
-            checks.append({'ok': False, 'message': 'Local CA certificate is missing or invalid. Recover the existing CA from backup or plan an explicit CA rotation and redistribute client trust; do not blindly replace it.',
-                           'detail': str(error)})
+        if ca is None:
             return checks
-        ca_repair = 'Plan an explicit CA rotation and redistribute trust to clients; setup-tls force preserves this CA and cannot renew it.'
-        if not validity(ca, 'Local CA certificate', ca_repair):
-            repair = ca_repair
         roots = [ca]
     else:
         roots = [x509.load_der_x509_certificate(value)

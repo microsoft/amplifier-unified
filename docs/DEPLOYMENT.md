@@ -215,14 +215,20 @@ line is a matching authenticated health response with the actual HTTP or HTTPS
 scheme. Failed probes and configured binds remain separate from verified
 listeners; the singular JSON `url` remains the first success, while `listenerUrls`
 contains all successes, `listenerChecks` retains individual failures, and
-`listenerScope` states the evidence limit.
+`listenerScope` states the evidence limit and `listenerScopeComplete` reports
+whether candidate enumeration/admission was complete.
 Service readiness can still be true when one listener responds and another
 probe fails; inspect the individual results. A name is resolved once per pass
 and only locally assigned results are probed, with no second DNS lookup on
-connect. Probes use at most four concurrent two-second requests. Wildcard binds
-test loopback only: **other wildcard listeners may exist and are not enumerated**.
-This is not an OS socket inventory, and it does not infer LAN reachability from
-loopback success. Configured public addresses are listed separately as
+connect. Probes use at most four concurrent two-second requests. On Linux and
+macOS, wildcard binds enumerate assigned IPv4/IPv6 addresses directly through
+the OS `getifaddrs` interface snapshot, including LAN, VPN and scoped link-local
+addresses, without public DNS. Each numeric candidate must still pass a local
+ownership check and authenticated health probe. Unsupported/failed enumeration
+falls back to loopback and reports **PARTIAL** scope, never complete wildcard
+coverage. Interfaces can change after the snapshot. This is not an inventory of
+unconfigured sockets, and it does not infer LAN reachability from loopback
+success. Configured public addresses are listed separately as
 **not checked**: a healthy host does not prove DNS, network access or certificate
 trust on another device. The authenticated status probe never follows redirects
 or selects `public_origins` as credential-bearing probe targets. Nonlocal or

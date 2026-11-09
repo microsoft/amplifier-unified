@@ -270,13 +270,16 @@ def test_supplied_certificate_diagnostics_do_not_recommend_overwriting_with_app_
     assert not host.exists()
 
 
-def test_missing_ca_preserves_other_certificate_findings_and_does_not_regenerate(tmp_path):
+@pytest.mark.parametrize('missing', ['ca.crt', 'ca.key'])
+def test_missing_ca_preserves_other_certificate_findings_and_does_not_regenerate(tmp_path, missing):
     from amplifier_web.deployment import load_server_config
     from amplifier_web.tls import certificate_checks, setup_local_ca
     config = setup_local_ca(tmp_path, load_server_config(tmp_path))
-    (tmp_path / 'config/tls/ca.crt').unlink()
+    (tmp_path / 'config/tls' / missing).unlink()
     config = {**config, 'public_origins': ['https://missing.example']}
     messages = '\n'.join(row['message'] for row in certificate_checks(tmp_path, config))
     assert 'SAN is missing missing.example' in messages
     assert 'Recover the existing CA from backup' in messages
-    assert not (tmp_path / 'config/tls/ca.crt').exists()
+    assert 'Run amplifier-unified setup-tls force' not in messages
+    assert 'do not run setup-tls force' in messages
+    assert not (tmp_path / 'config/tls' / missing).exists()

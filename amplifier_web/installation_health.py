@@ -124,7 +124,8 @@ async def _status_once(home, wait=0):
     try:
         config = load_server_config(home)
         manager = SimpleNamespace(home=home, service=SimpleNamespace(server_config=config, port=config['port']))
-        urls, pin = await asyncio.to_thread(probe_targets, manager)
+        scope = {}
+        urls, pin = await asyncio.to_thread(probe_targets, manager, diagnostics=scope)
         token = (Path(home) / 'config/auth/control-token').read_text().strip()
     except (OSError, ValueError, yaml.YAMLError) as error:
         if initial_state == 'not configured':
@@ -135,8 +136,7 @@ async def _status_once(home, wait=0):
     state = 'unknown'
     listener_checks = []
     diagnostics = {'configuredBinds': config['bind'], 'publicUrls': config['public_origins'],
-                   'publicUrlsVerified': False,
-                   'listenerScope': 'Locally assigned addresses resolved from configured binds; wildcard binds test loopback only, not all interfaces. Other wildcard listeners may exist and are not enumerated.'}
+                   'publicUrlsVerified': False, **scope}
     slots = asyncio.Semaphore(4)
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2), trust_env=False) as client:
         async def check_listener(url):
