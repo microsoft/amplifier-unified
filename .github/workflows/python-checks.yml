@@ -234,7 +234,7 @@ jobs:
           rows = list(ET.parse('output/python-checks/junit.xml').getroot().iter('testcase'))
           assert rows and not any(row.find(kind) is not None for row in rows for kind in ('failure', 'error', 'skipped'))
           native = [row for row in rows if 'test_peer_resume_native' in row.get('classname', '')]
-          assert len(native) == 6, 'Both ordinary and question inputs must cross the real native bridge'
+          assert len(native) == 9, 'Ordinary, question and negative question inputs must cross the real native bridge'
           modules = {}
           for name in ('amplifier_web.peer_resume', 'amplifier_web.collaboration',
                        'amplifier_web.questions', 'amplifier_module_loop_live.orchestrator',

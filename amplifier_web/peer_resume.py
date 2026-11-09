@@ -1,5 +1,6 @@
 """One fresh peer input backed by the commissioning owner's human request."""
 import copy
+import time
 
 from amplifier_operations.coordination import fingerprint
 
@@ -45,6 +46,14 @@ def human_input(app, session):
              'digest': fingerprint({key: record.get(key) for key in
                  ('prompt', 'dependency', 'options', 'contentRevision', 'artifacts', 'answer')})}
     return message, proof
+
+
+def question_settings(app, source, target):
+    """Use existing control/placement and access-policy revisions, not payloads."""
+    return {row['id']: {
+        'control': app.management.recovery_admission_binding(row),
+        'accessRevision': app.access_mode.snapshot(row)['revision'],
+    } for row in (source, target)}
 
 
 def latest_root_generation(target):
@@ -138,7 +147,7 @@ def prepare(app, source, target, value, lineage, boundary):
         'targetHumanMessageId': (latest_intent(target) or {}).get('id'),
         'authorizationKey': key,
         **({'questionAnswer': question,
-            'questionConfigurationRevision': app.state.get('configurationRevision', 0)}
+            'questionSettings': question_settings(app, source, target)}
            if question else {}),
         **({('interruptedRecovery' if interrupted else 'failedRecovery'): recovery} if recovery else {}),
     }
@@ -147,6 +156,13 @@ def prepare(app, source, target, value, lineage, boundary):
 def guard(app, receipt, source, target):
     scope = receipt['humanResume']
     human, question = human_input(app, source)
+    if scope.get('questionAnswer'):
+        # The queue claim is not input admission. Preparation may outlive its
+        # deadline; accepted/unknown operations never use this pending guard.
+        if receipt.get('expiresAt', float('inf')) <= time.time():
+            return 'The question-backed resume expired before input admission.'
+        if scope.get('questionSettings') != question_settings(app, source, target):
+            return 'The question-backed resume settings or placement changed.'
     recovered = scope.get('failedRecovery')
     interrupted = scope.get('interruptedRecovery')
     if reason := safety_halt(target):
@@ -169,7 +185,6 @@ def guard(app, receipt, source, target):
     if (not human or human['id'] != scope['sourceMessageId']
             or human.get('inputId') != scope['sourceInputId']
             or question != scope.get('questionAnswer')
-            or question and scope['questionConfigurationRevision'] != app.state.get('configurationRevision', 0)
             or fingerprint(human.get('text', '')) != scope['textDigest']
             or human.get('createdAt', 0) <= (target.get('lastInterruption') or {}).get('at', 0)
             or (latest_intent(target) or {}).get('id') != scope['targetHumanMessageId']):

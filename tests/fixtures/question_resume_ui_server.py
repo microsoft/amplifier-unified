@@ -30,7 +30,8 @@ class Runtime(PeerRuntime, fixture.Runtime):
         source = self.app._session(session['id'])
         await generation(self.app, source, 'answer-' + input_id, [input_id])
         record = self.app.questions.for_input(source['id'], input_id)
-        if record['answer']['optionId'] != 'resume':
+        assert text == f'Answer to “{record["prompt"]}”:\n{record["answer"]["text"]}\n\nFor: {record["dependency"]}'
+        if '\nKeep it stopped\n' in text:
             self.app._message(source, 'assistant', 'Work remains stopped, as requested.')
         else:
             # The scripted manager uses the public surface, not direct calls to

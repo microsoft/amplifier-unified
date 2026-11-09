@@ -9,7 +9,7 @@ import pytest
 
 pytest.importorskip("amplifier_module_loop_live.orchestrator")
 pytest.importorskip("amplifier_module_context_simple")
-from fixtures.collaboration_native_probe import DirectNativeHost, ScriptedProvider, peer_envelopes, tool_output
+from fixtures.collaboration_native_probe import DirectNativeHost, ScriptedProvider, peer_envelopes, tool_output, message_text
 from amplifier_web import runtime_worker
 from amplifier_web.service import AppService
 
@@ -22,6 +22,10 @@ class Manager(ScriptedProvider):
     async def complete(self, request, **kwargs):
         self.calls += 1
         if self.calls == 1:
+            latest = next(message_text(row) for row in reversed(request.messages) if row.role == 'user')
+            if '\nKeep it stopped\n' in latest:
+                self.negative_delivered = latest
+                return self.final('Kept stopped; no resume request issued.')
             return self.dispatch('inspect-input', 'coordination.context', {'sessionId': self.source['id']})
         if self.calls == 2:
             human = tool_output(request, 'inspect-input')['result']['humanInput']
@@ -46,7 +50,7 @@ class Member(ScriptedProvider):
 
 
 @pytest.mark.parametrize("task_state", ["paused", "blocked", "completed"])
-@pytest.mark.parametrize("input_kind", ["chat", "question"])
+@pytest.mark.parametrize("input_kind", ["chat", "question", "negative_question"])
 async def test_human_instruction_in_manager_reaches_paused_member_native_input(tmp_path, monkeypatch, task_state, input_kind):
     host = DirectNativeHost()
     monkeypatch.setattr(runtime_worker, 'publish', host.publish)
@@ -79,19 +83,28 @@ async def test_human_instruction_in_manager_reaches_paused_member_native_input(t
             # Host stopped state and native saved goal are independently checked.
             # Process re-creation is covered by the companion subprocess test.
             before = copy.deepcopy(member.controls.tasks.snapshot())
-            if input_kind == 'question':
+            if input_kind in {'question', 'negative_question'}:
                 question = (await app.dispatch('question.create', {
                     'sessionId': source['id'], 'prompt': 'Resume the paused member?',
                     'required': True, 'dependency': 'Reconcile the existing member task',
-                    'options': [{'id': 'resume', 'label': 'Resume the paused member'}]}))['result']
+                    'options': [{'id': 'resume', 'label': 'Resume the paused member'},
+                                {'id': 'stop', 'label': 'Keep it stopped'}]}))['result']
                 input_id = 'question:' + question['id'] + ':answer'
                 await app.dispatch('question.answer', {'sessionId': source['id'], 'id': question['id'],
-                    'expectedRevision': 1, 'optionId': 'resume'}, command_id='resume-answer', include_state=False)
+                    'expectedRevision': 1, 'optionId': 'stop' if input_kind == 'negative_question' else 'resume'},
+                    command_id='resume-answer', include_state=False)
             else:
                 input_id = 'resume-human'
                 await app.dispatch('conversation.send', {'sessionId': source['id'], 'text': 'Resume the paused member.'},
                                    command_id=input_id, include_state=False)
             await host.outcome(manager, input_id)
+            if input_kind == 'negative_question':
+                assert 'Answer to “Resume the paused member?”:\nKeep it stopped\n' in parent.negative_delivered
+                assert not host.admissions and child.calls == 0 and parent.calls == 1
+                assert target['status'] == 'stopped'
+                assert member.controls.tasks.record() == before['task']
+                assert not host.errors
+                return
             while not host.admissions:
                 await asyncio.sleep(.01)
             assert host.admissions[0]['accepted'], host.admissions

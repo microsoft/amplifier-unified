@@ -81,7 +81,7 @@ async def test_answer_discovery_requires_exact_canonical_provenance(app, change)
 
 @pytest.mark.parametrize('change', ['answer', 'revision', 'status', 'source_stop', 'target_stop',
                                    'target_input', 'target_question', 'task', 'assignment',
-                                   'settings', 'target'])
+                                   'settings', 'target', 'expiry', 'source_access', 'target_access'])
 async def test_answer_resume_rechecks_at_actual_admission(app, change):
     source, target, human, args = await answered_member(app)
     async def delayed(session, values, guard, emit):
@@ -101,9 +101,25 @@ async def test_answer_resume_rechecks_at_actual_admission(app, change):
             value = app.assignments.current(source)
             value['revision'] += 1
             app.assignments.save(value)
-        elif change == 'settings': app.state['configurationRevision'] += 1
-        else:
+        elif change == 'settings':
+            app.state['configurationRevision'] = app.state.get('configurationRevision', 0) + 1
+        elif change == 'target':
             target['workspace'] = source['workspace'] + '-changed'
+        elif change == 'expiry':
+            row = app.collaboration.receipt(values['inputId'])
+            assert row['delivery'] == 'submitting'
+            row['expiresAt'] = 1
+            app.collaboration.save(values['inputId'], row)
+        else:
+            changed = source if change == 'source_access' else target
+            policy = app.access_mode.snapshot(changed)
+            # A real saved policy transition, after which the simulated runtime
+            # reports its mount refreshed. No transient pending flag may hide
+            # whether the captured access revision itself is checked.
+            await app.dispatch('access.set', {'sessionId': changed['id'], 'scope': 'session',
+                'mode': 'full', 'expectedRevision': policy['revision']}, command_id='change-access')
+            changed['fileAccessPending'] = False
+            changed['configurationPending'] = False
         assert guard(), change
         assert not app.collaboration.admission(target['id'], values)['admitted']
         return {'accepted': False, 'reason': guard()}
@@ -167,6 +183,21 @@ async def test_answer_is_not_a_schedule_repair_or_foreign_assignment_grant(app):
     source, target, human, _ = await answered_member(app)
     assert latest_human(source) != human, 'This narrow change must not expand schedule authority'
     other = app.state['sessions'][1]
+    other['interruptionRevision'] = other.get('interruptionRevision', 0)
     with pytest.raises(AppError):
         await submit(app, source, other, human)
     assert not app.runtime.inputs
+
+
+async def test_question_backed_recovery_preserves_failed_generation(app):
+    from amplifier_web.runtime import RuntimeManager
+    source, target, human, _ = await answered_member(app)
+    target.update(status='error', failure={'generationId': 'failed-turn',
+        'category': 'unknown', 'errorType': 'ValueError', 'effects': 'not_rolled_back'},
+        collaborationGeneration={'id': 'failed-turn', 'terminal': True, 'completed': False})
+    app.runtime.stopped_boundary = RuntimeManager().stopped_boundary
+    before = copy.deepcopy(target['failure'])
+    await submit(app, source, target, human)
+    receipt = await settled(app, 'resume-member', 'accepted')
+    assert receipt['humanResume']['failedRecovery']['failure'] == before
+    assert target['failure'] == before and len(app.runtime.inputs) == 1
