@@ -136,11 +136,12 @@ CPU time. These checks do not establish a bound on unrelated host persistence wo
 
 ## Keep qualification proportional to risk
 
-Follow the [fast publication policy](release-qualification.md#local-first-fast-publication-policy-updated-november-4-2026).
+Follow the [fast publication policy](release-qualification.md#qualification-policy).
 Run the affected regression and changed user flow; use installed built assets when
 the claim depends on packaging or browser/server integration. Reuse exact applicable
-receipts rather than repeating unrelated suites. Broad post-release checks remain
-background follow-up, and this guide adds no blanket merge or publication gate.
+receipts rather than repeating unrelated suites. Broad checks belong to the
+nightly/manual owner, not a routine per-release campaign. This guide adds no blanket
+merge or publication gate.
 
 Keep budgets and measurements with their executable fixture or exact evidence
 record. Update them when workload or contract changes, with a reason and retained
@@ -232,7 +233,17 @@ still visits the retained execution bytes. This short-term reduction in repeated
 conversion is not proof of history-independent work under WS5. Keep measuring
 that remaining cost; do not increase retention limits to make a benchmark pass.
 
-The retired-accounting preparation cache witnesses independent 128-row fragments
+For a synchronous private save, already canonical retired accounting can go
+directly to the existing encoder after the complete input witness excludes custom
+hooks. Check allowed fields, usage values and unique identities first; rows that
+need filtering or ordered reduction keep the original detached projection.
+Borrowed rows must not escape through an inline/public result or survive the save.
+Nested alias edits must still change the exact durable JSON and content hash.
+Prefer removing this redundant projection/decode work to retaining another graph
+or increasing a cache budget. `test_execution_references.py` checks this path
+against the canonical encoder and preserves public deep isolation.
+
+The fallback retired-accounting preparation cache witnesses independent 128-row fragments
 within the same 8 MiB witness and 64 MiB accounting budgets. It retains compact
 JSON and witness digests, decoding detached rows for each save. Non-JSON values
 keep the original projection. Encoding, accounting and committed/provisional
@@ -260,7 +271,7 @@ check changed receipts shared across fragments, removed turns, rejected rows
 and small-budget fallback against complete canonical readback.
 The tests also compare the pending flags and complete saved history after changed
 voice lifecycle, removed turns and rejected placements, including a small-budget
-fallback. This still traverses source witnesses and decodes retired-accounting
+fallback. This still traverses source witnesses and may decode fallback accounting
 fragments; it is not history-independent publication or a fix for unrelated
 storage GC delays.
 
@@ -453,7 +464,7 @@ checks retain global positions, negative indices, private-state filtering and
 stale-revision refusal. Their SQL budgets measure query work, not constant-time
 global ordering or a guaranteed live-host latency.
 
-The additive Extended browser registration runs after publication. The separate
+The additive Extended browser registration belongs to the nightly/manual lane. The separate
 `Client performance smoke` workflow selects affected PR paths and supports manual
 runs; it is not a required status or a publication dependency. Run it locally in
 the owned test environment with the production client built. Its synthetic runtime
