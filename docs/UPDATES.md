@@ -246,10 +246,16 @@ The preparation witness includes the canonical source-configuration key, checked
 source rows, application version and active generation. It also includes complete
 module settings/identities, overrides, configurator choices, routing/decision
 configuration, effective active profile and the canonical offered-profile set
-consumed by qualification. Declared environment references contribute only to a
-private digest using the same key-file parser and worker precedence; unrelated
-credentials do not. Computing this witness never loads keys into the process
-environment or exposes their values in diagnostics.
+consumed by qualification. Environment values do not affect unrelated source-policy
+holds. For an actual missing-environment failure, the qualification probe retains
+only the encountered reference in a private candidate receipt, bound to that
+candidate and attempt. This includes references authored inside bundles without
+loading/composing those bundles on every tick. Retry checks only whether that
+missing value is now available, using the same declared private path, key-file
+parser and fresh-worker precedence as qualification. Absent, stale or malformed
+evidence grants no retry; unknown outcomes still take precedence. No environment
+value is persisted in this receipt or public diagnostics, and checking never
+loads keys into the host process.
 The dependency graph key alone omits values that can repair a failed profile.
 It excludes the unrelated settings publication counter. Reading, ordinary rechecks and non-runtime preferences do not
 authorize another identical preparation. Explicit retry still runs every guard.
