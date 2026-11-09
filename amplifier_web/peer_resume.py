@@ -48,22 +48,44 @@ def human_input(app, session):
     return message, proof
 
 
-def question_settings(app, source, target):
+def next_message_state(row):
+    pending = row.get('pendingBundleSelection')
+    return {'revision': row.get('nextMessageRevision', 0),
+        'appliedRevision': row.get('appliedConfigurationRevision', -1),
+        'bundle': row.get('bundle'), 'desiredBundle': (pending or {}).get('bundle'),
+        'pendingBundle': fingerprint(pending) if pending else None,
+        'pendingModel': fingerprint(row['pendingModelSelection']) if row.get('pendingModelSelection') else None}
+
+
+def question_settings(app, source, target, captured=None):
     """Use existing control/placement and access-policy revisions, not payloads."""
     # AppService may run without a management adapter (including native clients).
     # Snapshot only resident boundary fields; never prepare or inspect a runtime.
-    return {'configurationRevision': app.state.get('configurationRevision', 0),
+    result = {'configurationRevision': app.state.get('configurationRevision', 0),
         'sessions': {row['id']: {
             'accessRevision': app.access_mode.snapshot(row)['revision'],
             'task': {key: (row.get('task') or app.coordination.task(row['id'])).get(key)
                      for key in ('id', 'revision', 'status', 'continuationEpoch')},
             'boundary': fingerprint({key: row.get(key) for key in
-                ('workspace', 'workingDirectory', 'executionRevision', 'bundle', 'selection',
+                ('workspace', 'workingDirectory', 'executionRevision', 'selection',
                  'configurationPendingRevision', 'recoveryControlRevision')}),
+            'nextMessage': next_message_state(row),
             'controls': fingerprint({key: app.state.get('runtimeControl', {}).get(row['id'], {}).get(key)
                 for key in ('configuration.apply', 'configuration.toggle', 'provider.select',
                             'provider.reset', 'mode.set', 'mode.clear', 'budget.set', 'budget.clear')}),
         } for row in (source, target)}}
+    for sid, value in result['sessions'].items():
+        old = (captured or {}).get('sessions', {}).get(sid, {}).get('nextMessage')
+        now = value['nextMessage']
+        if (old and (old['pendingBundle'] or old['pendingModel'])
+                and old['revision'] == now['revision'] == now['appliedRevision']
+                and old['appliedRevision'] < now['appliedRevision']
+                and not now['pendingBundle'] and not now['pendingModel']
+                and now['bundle'] == (old['desiredBundle'] or old['bundle'])):
+            # The real runtime acknowledgement consumed exactly the already-saved
+            # intent. A later edit, wrong bundle/revision or missing ack refuses.
+            value['nextMessage'] = old
+    return result
 
 
 def latest_root_generation(target):
@@ -171,7 +193,7 @@ def guard(app, receipt, source, target):
         # deadline; accepted/unknown operations never use this pending guard.
         if receipt.get('expiresAt', float('inf')) <= time.time():
             return 'The question-backed resume expired before input admission.'
-        if scope.get('questionSettings') != question_settings(app, source, target):
+        if scope.get('questionSettings') != question_settings(app, source, target, scope.get('questionSettings')):
             return 'The question-backed resume settings or placement changed.'
     recovered = scope.get('failedRecovery')
     interrupted = scope.get('interruptedRecovery')

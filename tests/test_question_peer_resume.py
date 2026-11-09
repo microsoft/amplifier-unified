@@ -4,13 +4,21 @@ import copy
 import pytest
 
 from amplifier_web.service import AppError
-from test_assignments import app, agent_action, generation
+from test_assignments import app, agent_action, generation, until
 from test_collaborative_workspaces import settled
 from test_peer_resume import paused_member, submit
 
 
-async def answered_member(app):
+async def answered_member(app, *, next_bundle=False):
     source, target, _ = await paused_member(app)
+    if next_bundle:
+        from amplifier_web.management import Management
+        app.management = Management(app)
+        target.update(status='idle', bundle='anchors',
+                      task={'id': 'paused-report', 'revision': 2, 'status': 'paused',
+                            'maxTurns': 5, 'goalState': {'turns_used': 1}})
+        await app.dispatch('conversation.configure', {'sessionId': target['id'],
+            'expectedRevision': 0, 'bundle': 'next-report'}, command_id='saved-before-answer')
     q = (await agent_action(app, source, 'question.create', {
         'sessionId': source['id'], 'prompt': 'Resume the unfinished report?',
         'required': True, 'dependency': 'Continue the existing report task',
@@ -204,3 +212,57 @@ async def test_question_backed_recovery_preserves_failed_generation(app):
     receipt = await settled(app, 'resume-member', 'accepted')
     assert receipt['humanResume']['failedRecovery']['failure'] == before
     assert target['failure'] == before and len(app.runtime.inputs) == 1
+
+
+@pytest.mark.parametrize('change', ['unchanged', 'later_edit', 'wrong_bundle', 'missing_ack', 'stop', 'placement'])
+async def test_saved_next_message_transition_is_not_an_intervening_edit(app, monkeypatch, change):
+    """Real prepare + runtime acknowledgement + host final admission, no process."""
+    from amplifier_web import draft_defaults, next_message_configuration
+    from amplifier_web.runtime import RuntimeManager
+    source, target, human, _ = await answered_member(app, next_bundle=True)
+    before_task = copy.deepcopy(target['task'])
+    runtime = RuntimeManager()
+    next_message_configuration.bind(app, runtime)
+    async def resolve(*args, **kwargs):
+        assert args[2] == 'next-report'
+        return {'bundle': 'next-report', 'modelCompatible': True, 'selection': None}
+    monkeypatch.setattr(draft_defaults, 'resolve_defaults', resolve)
+    started = []
+    async def start(session, emit, **kwargs):
+        kwargs['guard']()
+        started.append(session['bundle'])
+    monkeypatch.setattr(runtime, 'start', start)
+    original = app.runtime.collaboration_input
+    acknowledgements = []
+    async def preparing(session, args, guard, emit):
+        async def observe(event, payload):
+            if event == 'runtime.nextMessageApplied':
+                acknowledgements.append(copy.deepcopy(payload))
+                if change == 'missing_ack':
+                    target['bundle'] = payload['bundle']
+                    return
+            await emit(event, payload)
+        configuration_guard = await runtime._start_for_input(session, observe)
+        assert started == ['next-report'] and len(acknowledgements) == 1
+        if change == 'later_edit':
+            await app.dispatch('conversation.configure', {'sessionId': target['id'],
+                'expectedRevision': 1, 'bundle': 'later-choice'}, command_id='new-choice')
+        elif change == 'wrong_bundle': target['bundle'] = 'not-the-captured-choice'
+        elif change == 'stop': target['interruptionRevision'] += 1
+        elif change == 'placement': target['executionRevision'] = target.get('executionRevision', 0) + 1
+        if change != 'unchanged':
+            assert guard(), change
+            assert not app.collaboration.admission(target['id'], args)['admitted']
+            return {'accepted': False, 'reason': guard()}
+        configuration_guard()
+        if reason := guard():
+            return {'accepted': False, 'reason': reason}
+        return await original(session, args, guard, emit)
+    app.runtime.collaboration_input = preparing
+    await submit(app, source, target, human)
+    await until(lambda: app.collaboration.receipt('resume-member')['delivery'] in {'accepted', 'suppressed', 'unknown', 'not_sent'})
+    receipt = app.collaboration.receipt('resume-member')
+    assert receipt['delivery'] == ('accepted' if change == 'unchanged' else 'suppressed'), (
+        'Applying the already-saved choice must not consume the answer as a failed resume', receipt)
+    assert target['task'] == before_task
+    assert len(app.runtime.inputs) == (1 if change == 'unchanged' else 0)

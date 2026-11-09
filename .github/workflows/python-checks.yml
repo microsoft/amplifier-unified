@@ -229,6 +229,18 @@ jobs:
           test "$predecessor" -eq 1
           grep -q 'A real UI answer must be exposed without another typed Resume' output/python-checks/predecessor.log
           grep -q '/question-resume-before/amplifier_web/peer_resume.py' output/python-checks/predecessor.log
+          git fetch --no-tags --depth=1 origin b11bc51f29aecaa08bc96358d3129215886cd9de
+          mkdir -p "$RUNNER_TEMP/question-resume-before-next-message"
+          git archive b11bc51f29aecaa08bc96358d3129215886cd9de | tar -x -C "$RUNNER_TEMP/question-resume-before-next-message"
+          cp tests/test_question_peer_resume.py "$RUNNER_TEMP/question-resume-before-next-message/tests/"
+          set +e
+          (cd "$RUNNER_TEMP/question-resume-before-next-message" && "$GITHUB_WORKSPACE/.venv/bin/python" -m pytest -v --tb=short \
+            'tests/test_question_peer_resume.py::test_saved_next_message_transition_is_not_an_intervening_edit[unchanged]') \
+            2>&1 | tee output/python-checks/next-message-predecessor.log
+          predecessor=${PIPESTATUS[0]}
+          set -e
+          test "$predecessor" -eq 1
+          grep -q 'Applying the already-saved choice must not consume the answer as a failed resume' output/python-checks/next-message-predecessor.log
           uv run --no-sync python - <<'PY' > output/python-checks/question-resume-imports.json
           import hashlib, importlib, json, subprocess, xml.etree.ElementTree as ET
           from pathlib import Path
@@ -312,7 +324,7 @@ jobs:
               result[name] = {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
           print(json.dumps(result, indent=2))
           PY
-            "$RUNNER_TEMP/question-resume-installed/bin/python" -m pytest -c /dev/null -o asyncio_mode=auto \
+            "$RUNNER_TEMP/question-resume-installed/bin/python" -m pytest -c /dev/null -o asyncio_mode=auto --rootdir=. \
               -v --tb=short tests/test_question_peer_resume.py tests/test_peer_resume_native.py \
               --junitxml="$GITHUB_WORKSPACE/output/python-checks/installed-junit.xml"
           ) 2>&1 | tee output/python-checks/installed-tests.log
