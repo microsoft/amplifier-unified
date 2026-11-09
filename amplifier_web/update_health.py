@@ -356,6 +356,14 @@ def current(state, evidence=None):
         return result('action-required', 'Component preparation was interrupted',
                       'Automatic component work is paused. A deliberate update can start a new candidate only after settled copy-only preparation is verified; other uncertain effects require diagnostic review.',
                       action='diagnostics')
+    outcomes = state.get('componentResults') or []
+    retained = [row for row in outcomes if row.get('status') in {'failed', 'dependency-held'}]
+    if retained and not state.get('available'):
+        updated = sum(row.get('status') == 'updated' for row in outcomes)
+        return result('action-required', 'Some components kept their working versions',
+                      f'{updated} source records updated; {len(retained)} retained after a source failure or dependency hold. '
+                      'New work uses the qualified combination. Check manually to retry; prior failures remain in history.',
+                      action='sources')
     local_changes = [r for r in state.get('items', []) if r.get('status') == 'local_changes']
     issues = [r for r in state.get('items', []) if r.get('status') == 'check_failed']
     if issues:

@@ -73,7 +73,7 @@ def group_sources(items):
     """
     groups = {}
     for item in items:
-        row = {k: v for k, v in item.items() if k not in {'path', 'url', 'eligible', 'appSelection'}}
+        row = {k: v for k, v in item.items() if k not in {'path', 'url', 'eligible', 'appSelection', 'availabilityFailure'}}
         if row.get('kind') not in {'bundle / module', 'runtime dependency', 'source group'} or not row.get('ref'):
             groups[('id', row['id'])] = row
             continue
@@ -730,7 +730,7 @@ class UpdateManager:
             started = time.monotonic()
             started_at = time.time()
             async with checking(self.check_cache, fresh=fresh, ttl=ttl):
-                await self._check(tier=tier, install=install)
+                await self._check(tier=tier, install=install, fresh=fresh)
             timing = {'startedAt': started_at, 'finishedAt': time.time(),
                       'elapsedMs': round((time.monotonic()-started)*1000), **self.check_cache.stats}
             await self.publish(checkTiming=timing,
@@ -739,7 +739,7 @@ class UpdateManager:
         self.check_task = asyncio.create_task(run())
         return await asyncio.shield(self.check_task)
 
-    async def _check(self, *, tier='application', install=False):
+    async def _check(self, *, tier='application', install=False, fresh=True):
         from .update_sequence import summary
         from .update_health import pending_preparation
         async with self.lock:
@@ -867,7 +867,13 @@ class UpdateManager:
                         if (row.get('kind') == 'smart tool' and row['status'] == 'update'
                                 and state.get('skippedSmartTools', {}).get(skip_key(row)) == row['latest']):
                             row.update(status='skipped', detail='This Smart Tool revision was skipped. A newer revision can still be offered.')
-                    except (ValueError, RuntimeError, TimeoutError): row['status']='check_failed'
+                    except (ValueError, RuntimeError, TimeoutError) as error:
+                        row['status'] = 'check_failed'
+                        from .update_diagnostics import CommandFailure
+                        facts = getattr(error, 'diagnostic_facts', {})
+                        row['availabilityFailure'] = bool(isinstance(error, CommandFailure)
+                            and type(facts.get('exitCode')) is int and facts['exitCode'] > 0
+                            and not facts.get('timedOut'))
                 checked = []
                 for stage in (['included', 'other'] if tier == 'included' else ['other']):
                     selected = [row for row in rows if row.get('updateTier', 'other') == stage]
@@ -880,17 +886,23 @@ class UpdateManager:
                     if sequence[stage]['available'] or (stage == 'included' and sequence[stage]['issues']):break
                 from .update_sequence import verify_app_selection
                 await asyncio.to_thread(verify_app_selection, self, checked)
+                from .update_partial import retained_after_check
+                await asyncio.to_thread(retained_after_check, self, checked, fresh=fresh)
                 self.inventory = checked
                 write_private(self.directory/'inventory.json',json.dumps(checked))
                 public = group_sources(checked)
                 available = sum(row.get('status') == 'update' for row in public)
-                blocked = sequence['stage'] == 'included' and sequence['included']['issues']
+                from .update_partial import availability
+                blocked = sequence['stage'] == 'included' and any(
+                    row.get('status') in {'check_failed', 'local_changes'} and not availability(row)
+                    for row in checked if row.get('updateTier') == 'included')
                 failed_check = any(row.get('status') == 'check_failed' for row in checked)
                 if not available and not blocked:sequence['stage'] = 'complete';sequence['install'] = False
                 from .update_health import refresh as refresh_health
                 await refresh_health(self)
                 await self.publish(phase='error' if blocked and failed_check else 'checked' if blocked else 'available' if available else 'checked',
                     sequence=sequence, items=public+[application], application=application, appAvailable=False,
+                    includedCanProceed=bool(available and not blocked),
                     available=available, lastCheck=time.time(),
                     error='An included component could not be checked. Review its details before continuing.' if blocked and failed_check else None,
                     detail='Included components will be installed before checking the remaining sources.' if sequence['stage']=='included' and available else 'Component check complete.')
@@ -967,7 +979,11 @@ class UpdateManager:
                 async with self.lock:
                     if not reconcile_preparation(self):
                         raise ValueError('The interrupted update has no proof of settled candidate-only preparation. Inspect its diagnostics before another installation; its outcome is not replayed.')
-        if state.get('sequence', {}).get('stage') == 'included' and state['sequence'].get('included', {}).get('issues'):
+        from .update_partial import availability
+        if (state.get('sequence', {}).get('stage') == 'included'
+                and state['sequence'].get('included', {}).get('issues')
+                and (not self.inventory or any(row.get('status') in {'check_failed', 'local_changes'}
+                    and not availability(row) for row in self.inventory if row.get('updateTier') == 'included'))):
             await self.publish(detail='Resolve the included component issues and check again before installing.')
             return
         if state.get('sequence'):
@@ -1078,20 +1094,11 @@ class UpdateManager:
                 await asyncio.to_thread(verify_app_selection, self, self.inventory, stage=stage)
                 # Snapshot shared configuration, never CLI registry or caches.
                 # Candidate preparation resolves declarations into its own store.
-                cache_rows = []
-                for row in candidates:
-                    if row.get('kind') == 'included source':
-                        from .update_sequence import stage_missing
-                        await self.diagnostics.run('ecosystem-fetch', stage_missing, self, stage/'foundation', row)
-                        continue
-                    if row.get('kind') in {'runtime dependency', 'runtime environment'}:
-                        continue
-                    if row.get('sharedSource'):
-                        from .update_sources import stage_binding
-                        await self.diagnostics.run('ecosystem-fetch', stage_binding, self, stage, row)
-                        continue
-                    cache_rows.append(row)
-                await self.stage_cache_sources(stage, cache_rows)
+                from .update_partial import stage_sources, read as partial_read, public_results
+                partial_plan = await stage_sources(self, stage, candidates)
+                partial = partial_read(stage)
+                if partial and not any(row['status'] == 'awaiting-adoption' for row in partial['results'].values()):
+                    raise ValueError('No independent source update remains to qualify.')
                 await asyncio.to_thread(verify_app_selection, self, self.inventory, stage=stage)
                 await self.publish(phase='validating',detail='Preparing dependencies in a separate runtime…')
                 phase='ecosystem-validation'
@@ -1103,11 +1110,14 @@ class UpdateManager:
                     await self.diagnostics.run('ecosystem-runtime-reuse', reuse_runtime, self, stage, plan)
                 else:
                     await self.validate(stage,release)
+                await partial_plan.recheck()
                 await asyncio.to_thread(verify_app_selection, self, self.inventory, stage=stage)
                 write_private(stage/'validated.json',json.dumps({'generationSchema': 1, 'workerProtocol': 1, 'createdAt':time.time(),'sources':len(candidates),'hostVersion':__import__('amplifier_web').__version__, 'updateTier': self.service.state['updates'].get('sequence', {}).get('stage')}))
                 self.diagnostics.clear_failure()
                 self.diagnostics.record('ecosystem-stage','succeeded',commandId=stage_id)
-                await self.publish(phase='staged',pendingRelease=release,detail='Update prepared; making it available to new conversation work.')
+                await self.publish(phase='staged',pendingRelease=release,
+                    componentResults=public_results(partial),
+                    detail='Update prepared; making it available to new conversation work.')
             except BaseException as error:
                 from .update_diagnostics import exception_facts, failure_guidance
                 interrupted=isinstance(error,asyncio.CancelledError)
@@ -1171,7 +1181,13 @@ class UpdateManager:
                 await self.diagnostics.run(phase,process,'git','--literal-pathspecs','-c','core.hooksPath=/dev/null','restore','--source=HEAD','--worktree','--',*artifacts,cwd=target)
             await self.publish(detail='Downloading '+row['label']+'…')
             await guard()
-            await self.diagnostics.run('ecosystem-fetch',process,'git','-c','core.hooksPath=/dev/null','fetch','--depth=1',row['url'],row['latest'],cwd=target)
+            try:
+                await self.diagnostics.run('ecosystem-fetch',process,'git','-c','core.hooksPath=/dev/null','fetch','--depth=1',row['url'],row['latest'],cwd=target)
+            except Exception as error:
+                # Only this exact pre-checkout boundary may be classified as a
+                # settled source acquisition failure by partial preparation.
+                error.source_fetch_failed = True
+                raise
             await guard()
             await self.diagnostics.run('ecosystem-checkout',process,'git','-c','core.hooksPath=/dev/null','checkout','--detach',row['latest'],cwd=target)
             data.update(commit=row['latest'],cached_at=time.strftime('%Y-%m-%dT%H:%M:%S'))
@@ -1343,6 +1359,10 @@ class UpdateManager:
                     await self.validate(self.directory/'releases'/target,target)
                     marker['hostVersion']=__import__('amplifier_web').__version__
                     write_private(self.directory/'releases'/target/'validated.json',json.dumps(marker))
+            from .update_partial import read as partial_read, verify_pointer, adopted_items, public_results
+            partial = partial_read(self.directory / 'releases' / target) if target and not rollback else None
+            if pointer.get('current') != target:
+                verify_pointer(self, partial)
             hot = bool(target and marker.get('generationSchema') == 1 and marker.get('workerProtocol') == 1
                        and callable(getattr(self.service.runtime, 'promote_generation', None)))
             self.diagnostics.capture_activation_retry(target, rollback=rollback)
@@ -1393,7 +1413,14 @@ class UpdateManager:
                     async with self.service.lock:
                         self.service.state['settings']['updates']['autoInstall'] = False
                 tier = marker.get('updateTier') if target else None
-                items=[row for row in self.service.state['updates'].get('items',[]) if row.get('id')=='application'] if rollback else [{**row, **({'status':'current','current':row['latest']} if row.get('status')=='update' and row.get('id')!='application' and row.get('kind')!='smart tool' and (not tier or row.get('updateTier') == tier) else {})} for row in self.service.state['updates'].get('items',[])]
+                current_items = self.service.state['updates'].get('items', [])
+                items = adopted_items(current_items, partial) if partial else (
+                    [row for row in current_items if row.get('id')=='application'] if rollback else
+                    [{**row, **({'status':'current','current':row['latest']} if row.get('status')=='update' and row.get('id')!='application' and row.get('kind')!='smart tool' and (not tier or row.get('updateTier') == tier) else {})} for row in current_items])
+                if partial:
+                    from .update_partial import adopted_inventory
+                    self.inventory = adopted_inventory(self.inventory, partial)
+                    write_private(self.directory / 'inventory.json', json.dumps(self.inventory), owned_root=self.home)
                 sequence = self.service.state['updates'].get('sequence')
                 if sequence:
                     from .update_sequence import summary
@@ -1409,6 +1436,8 @@ class UpdateManager:
                     else:
                         sequence.update(stage='complete', install=False, other=tier_summary)
                 await self.publish(phase='installed',release=target,pendingRelease=None,canRollback=True,items=items,error=None,
+                    componentResults=public_results(partial, adopted=True),
+                    includedCanProceed=False,
                     **({'sequence': sequence} if sequence else {}),
                     available=sum(row.get('status')=='update' for row in items),installedAt=time.time(),detail='Previous ecosystem restored. Automatic installation is now off.' if rollback else 'Update ready for new work. Active conversations adopt it after their current work finishes.')
                 if rollback or 'pendingRollback' in self.service.state['updates']:
