@@ -7,6 +7,7 @@ import pytest
 from amplifier_web.errors import AppError
 from amplifier_web.execution_owner import ExecutionOwner
 from amplifier_web.service import AppService
+from test_automatic_history import app_factory
 
 
 @pytest.fixture
@@ -20,7 +21,7 @@ async def saved(tmp_path):
     await owner.close()
 
 
-async def test_attach_is_metadata_only_and_preserves_committed_location(saved, tmp_path, monkeypatch):
+async def test_attach_is_metadata_only_and_preserves_saved_location(saved, tmp_path, monkeypatch):
     app, owner, runtime, identity = saved
     moved = tmp_path / "committed-checkout"
     moved.mkdir()
@@ -89,3 +90,32 @@ async def test_attachment_does_not_claim_writer_ownership(saved, tmp_path):
         await owner.prompt(identity, "new-input", "Never replace the owner", AsyncMock())
     runtime.start.assert_not_called()
     runtime.send.assert_not_called()
+
+
+async def test_dormant_saved_owner_stays_out_of_live_overlay(app_factory, monkeypatch):
+    from amplifier_web.state_records import load_owner
+    from test_history_directory_persistence import saved_chats
+    app, rows = saved_chats(app_factory, count=2)
+    identity, workspace = rows[-1]["id"], rows[-1]["workspace"]
+    retained = load_owner(app.db, identity)
+    await app.close()
+    restored = app_factory(home=app.data_dir)
+    before = [row["id"] for row in restored.state["sessions"]]
+    assert identity not in before
+    assert restored.directory.resolve(identity)["id"] == identity
+    owner = ExecutionOwner(restored, workspace=workspace, bundle="foundation", origin="ui")
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Dormant attachment must not hydrate or admit its history")
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(restored, "_session", forbidden)
+            patch.setattr(restored, "_admit_session", forbidden)
+            patch.setattr(restored.cold_display, "hydrate", forbidden)
+            patch.setattr(restored.history, "load", forbidden)
+            patch.setattr(restored.history.windows, "read", forbidden)
+            assert await owner.attach(identity, workspace) == identity
+            assert [row["id"] for row in restored.state["sessions"]] == before
+            assert not restored.runtime.started and not restored.runtime.sent
+        assert load_owner(restored.db, identity) == retained
+    finally:
+        await owner.close()
