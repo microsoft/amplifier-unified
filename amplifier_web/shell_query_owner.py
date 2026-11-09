@@ -248,7 +248,12 @@ class ShellQueryOwner:
         if self.idle is not None:
             self.idle.cancel(); self.idle = None
         if self.runner is None:
-            self.runner = asyncio.create_task(self._run())
+            # Payloads retain their exact query minute. Completion notifications
+            # must observe current time, not inherit the caller's display clock.
+            # Preserve every other context (including client and authority).
+            from .chat_navigation import frozen_list_clock
+            with frozen_list_clock(None):
+                self.runner = asyncio.create_task(self._run())
         raise PendingQuery()
 
     def _fail(self, key, delay, interests, *, wait=5):

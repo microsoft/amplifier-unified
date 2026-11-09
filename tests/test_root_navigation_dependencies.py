@@ -19,8 +19,8 @@ async def test_grouped_cutoff_expires_through_settled_browser_delivery(service, 
     client = service.clients.attach('age-client')
     client.update(selectedSessionId='alpha', selectedWorkspaceId='one')
     shell_client = service.shell.client('age-client')
-    shell_client['views']['chats']['view'].update(
-        navAge='24h', navRecentView={'navAge': '24h'})
+    shell_client['views']['chats'] = {'view': {
+        'navAge': '24h', 'navRecentView': {'navAge': '24h'}}}
     service.shell.put('client', 'age-client', shell_client)
     with service.clients.bind('age-client'):
         owner = service.shell.resources
