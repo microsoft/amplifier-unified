@@ -77,6 +77,46 @@ def test_field_validation_distinguishes_append_between_descriptor_and_path_stats
     assert calls >= 2
 
 
+@pytest.mark.parametrize('change', ['edit-and-append', 'aba', 'truncate', 'replace'])
+def test_final_exact_field_revalidation_never_accepts_changed_evidence(owner, monkeypatch, change):
+    session, path = owner
+    write(path, [event(1, result='saved')])
+    reference = read(session)['items'][0]['_eventFields']['output']
+    identity = path.stat()
+    original = windows.os.fstat
+    calls = 0
+
+    def append():
+        with path.open('ab') as stream:
+            stream.write(json.dumps(event(2)).encode() + b'\n')
+    mutate_after_decode(monkeypatch, append)
+
+    def change_after_exact_reread(fd):
+        nonlocal calls
+        info = original(fd)
+        if (info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino):
+            calls += 1
+            if calls == 3:
+                raw = path.read_bytes()
+                if change == 'edit-and-append':
+                    path.write_bytes(raw.replace(b'saved', b'other') + b'{}\n')
+                elif change == 'aba':
+                    path.write_bytes(raw.replace(b'saved', b'other'))
+                    path.write_bytes(raw)
+                elif change == 'truncate':
+                    path.write_bytes(b'{}\n')
+                else:
+                    other = path.with_suffix('.new')
+                    other.write_bytes(raw)
+                    other.replace(path)
+                return original(fd)
+        return info
+    monkeypatch.setattr(windows.os, 'fstat', change_after_exact_reread)
+    with pytest.raises(windows.StaleWindow):
+        windows.read_field(session, reference)
+    assert calls >= 3
+
+
 @pytest.mark.parametrize('change', ['edit', 'edit-and-append', 'truncate', 'replace', 'link'])
 def test_changed_field_is_rejected_even_with_log_growth(owner, monkeypatch, change):
     session, path = owner

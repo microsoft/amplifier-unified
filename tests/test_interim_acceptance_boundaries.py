@@ -58,6 +58,10 @@ async def _emit_resident_calls(service, split):
     session = service._session()
     sid = session['id']
     native = session.get('runtimeSessionId') or sid
+    # This synthetic producer supplies the exact canonical records below.
+    # Declare that ownership, as the real mounted capture hook does, rather
+    # than also requesting Diagnostics' metadata-only fallback copies.
+    session['runtimeReport'] = {'contextIntelligence': {'enabled': True}}
     input_id = 'original-144-input'
     service._message(session, 'user', 'Inspect four files and then 140 more.',
                      'chat', inputId=input_id)
@@ -112,81 +116,6 @@ async def _get(client, params):
     value = await response.json()
     assert response.status == 200, {'request': params, 'status': response.status, 'response': value}
     return value
-
-
-def _observe_live_capture(service, session, monkeypatch):
-    """Bounded metadata-only observation; never flush/retry or change a result."""
-    from amplifier_web.event_window import _source, _stamp
-    from amplifier_web.work_windows import source_identity
-    diagnostics = service.diagnostics
-    windows = service.event_log_view.windows
-    original_persist = diagnostics._persist
-    worker = windows._worker()
-    original_project = worker.project
-    source = source_identity(session)
-    native = source.get('nativeIdentity') or source.get('runtimeSessionId') or source['id']
-    rows, gaps = [], []
-    attempts = 0
-    window_attempts = 0
-
-    def retain(value):
-        if len(rows) < 32:
-            rows.append(value)
-
-    def stamp(source):
-        try:
-            return _stamp(_source(source)[0].stat())
-        except FileNotFoundError:
-            return None
-
-    def persist(items, cfg):
-        nonlocal attempts
-        attempts += 1
-        observe = attempts <= 16
-        summary = None
-        if observe:
-            try:
-                relevant = [item for item in items if item[3] == native]
-                summary = {'kind': 'persist', 'before': stamp(source),
-                           'targetEvents': sorted({item[5] for item in relevant}),
-                           'targetCount': len(relevant)}
-            except Exception:
-                gaps.append('persist-observation')
-        try:
-            return original_persist(items, cfg)
-        finally:
-            if summary is not None:
-                try:
-                    retain({**summary, 'after': stamp(source)})
-                except Exception:
-                    gaps.append('persist-after')
-
-    async def project(inputs, *, key):
-        nonlocal window_attempts
-        is_window = inputs.get('operation') == 'window'
-        if is_window:
-            window_attempts += 1
-        summary = None
-        if is_window and window_attempts <= 32 and len(rows) < 32:
-            try:
-                summary = {'kind': 'window', 'continuation': inputs.get('before') is not None,
-                           'before': stamp(inputs['session'])}
-            except Exception:
-                gaps.append('window-before')
-        result = await original_project(inputs, key=key)
-        if summary is not None:
-            try:
-                retain({**summary, 'after': stamp(inputs['session']),
-                        'status': result.get('status'), 'reason': result.get('reason')})
-            except Exception:
-                gaps.append('window-after')
-        return result
-
-    monkeypatch.setattr(diagnostics, '_persist', persist)
-    monkeypatch.setattr(worker, 'project', project)
-    return lambda: {'rows': rows, 'gaps': gaps[:8], 'persistCalls': attempts,
-                    'windowCalls': window_attempts,
-                    'limited': len(rows) == 32 or attempts > 16 or window_attempts > 32}
 
 
 async def _field(client, reference):
@@ -321,11 +250,8 @@ async def test_144_resident_calls_complete_through_registered_web(
     home = tmp_path / 'app'
     application, runtime = await _start(home, tmp_path, monkeypatch)
     service, client, socket = application['service'], None, None
-    capture = None
     try:
         session, expected, final_id = await _emit_resident_calls(service, split)
-        if phase == 'live':
-            capture = _observe_live_capture(service, session, monkeypatch)
         sid = session['id']
         retired = phase == 'retired-reopen'
         if phase != 'live':
@@ -367,11 +293,6 @@ async def test_144_resident_calls_complete_through_registered_web(
         await _verify(client, service, sid, expected, final_id, retired)
         assert runtime.started == runtime.sent == []
     finally:
-        if capture:
-            try:
-                print('INTERIM-A-CAPTURE', json.dumps(capture()))
-            except Exception:
-                print('INTERIM-A-CAPTURE-UNAVAILABLE')
         if socket is not None:
             await socket.close()
         if client is not None:
@@ -386,6 +307,7 @@ def _discovery_anchor(owner, session):
     saved = {'group': 'event-window:original', 'sessionId': session['id'],
              'source': source_identity(session), 'before': None}
     owner.pages[saved['group']] = saved
+    owner.project(session)
     return saved
 
 
@@ -442,6 +364,39 @@ def test_resident_group_discovery_is_demand_paged_and_revalidates_admission(tmp_
     owner.invalidate({'s'})
     with pytest.raises(ValueError, match='changed'):
         owner.live_pages.read_groups(session, cursor)
+
+
+@pytest.mark.parametrize('change', ['append', 'invalidate', 'tail-before', 'tail-total', 'other-client'])
+def test_initial_older_range_requires_current_complete_tail_witness(tmp_path, monkeypatch, change):
+    from test_resident_work_pages import live_fixture
+    owner, session, _ = live_fixture(tmp_path, monkeypatch, count=144)
+    for row in session['execution']['nodes'][:4]:
+        row['anchorMessageId'] = 'early'
+    saved = _discovery_anchor(owner, session)
+    cursor = owner.live_pages.group_navigation(session, saved, {})['before']
+    owner.live_pages.read_groups(session, cursor)
+    if change == 'append':
+        session['execution']['nodes'].append({**session['execution']['nodes'][-1], 'id': 'new'})
+        with pytest.raises(ValueError, match='changed'):
+            owner.live_pages.read_groups(session, cursor)
+        # A fresh tail projection cannot revive old-length discovery.
+        owner.project(session)
+    elif change == 'invalidate':
+        owner.invalidate({'s'})
+        owner.project(session)
+    elif change == 'tail-before':
+        owner.live_pages.observe_tail(session, {'items': [], 'total': 0, 'before': 'more'})
+    elif change == 'tail-total':
+        owner.live_pages.observe_tail(session, {'items': [], 'total': 101, 'before': None})
+    else:
+        monkeypatch.setattr(owner.live_pages, '_client', lambda: 'other-client')
+    with pytest.raises(ValueError, match='no longer available'):
+        owner.live_pages.read(session, 't@early')
+    # Current tail remains available, not silently replaced by older evidence.
+    assert len(owner.live_pages.read(session, 't@user')['items']) == 100
+    owner.retain_interest({'s'})
+    owner.retain_interest(set())
+    assert not owner.live_pages.tails
 
 
 @pytest.mark.parametrize('mutation', ['source', 'client', 'owner', 'forged'])
@@ -561,3 +516,26 @@ async def test_resident_discovery_handoff_keeps_original_canonical_cursor_withou
         await owner.read('s', cursor)
     await owner.close()
     assert not owner.live_pages.discovery
+
+
+async def test_tail_witness_budget_never_spends_open_group_or_discovery_leases(tmp_path, monkeypatch):
+    from test_resident_work_pages import live_fixture
+    owner, session, _ = live_fixture(tmp_path, monkeypatch, count=144)
+    for row in session['execution']['nodes'][:4]:
+        row['anchorMessageId'] = 'early'
+    saved = _discovery_anchor(owner, session)
+    cursor = owner.live_pages.group_navigation(session, saved, {})['before']
+    owner.live_pages.read_groups(session, cursor)
+    receipts = dict(owner.live_pages.discovery)
+    for index in range(8):
+        monkeypatch.setattr(owner.live_pages, '_client', lambda index=index: f'other-{index}')
+        owner.project(session)
+    assert len(owner.live_pages.tails) == 8
+    assert owner.live_pages.discovery == receipts
+    monkeypatch.setattr(owner.live_pages, '_client', lambda: None)
+    with pytest.raises(ValueError, match='no longer available'):
+        owner.live_pages.read(session, 't@early')
+    owner.project(session)
+    assert len(owner.live_pages.read(session, 't@early')['items']) == 4
+    await owner.close()
+    assert not owner.live_pages.tails

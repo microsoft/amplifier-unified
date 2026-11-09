@@ -27,6 +27,7 @@ class ResidentWorkPages:
         # keeps its existing tail and the browser owns the older-page overlay.
         self.discovery = OrderedDict()
         self.discovery_epoch = 0
+        self.tails = OrderedDict()
         self.interests = set()
         from .open_work_fields import OpenWorkFields
         self.open_fields = OpenWorkFields(self)
@@ -76,6 +77,19 @@ class ResidentWorkPages:
         except (ValueError, TypeError):
             raise ValueError('This Work cursor expired. Close and reopen its steps.') from None
 
+    def observe_tail(self, session, live):
+        # Reuse the just-computed bounded projection. Absence from a truncated
+        # group page is not evidence of absence from the physical tail.
+        key = self._client(), session['id']
+        self.tails.pop(key, None)
+        self.tails[key] = {
+            'stamp': self._stamp(session), 'fence': self.windows._fence(session['id']),
+            'length': len(self.windows.resident_tree(session).get('nodes', [])),
+            'groups': {row['id'] for row in live['items']},
+            'complete': live.get('before') is None and live.get('total') == len(live['items'])}
+        while len(self.tails) > MAX_GROUPS:
+            self.tails.popitem(last=False)
+
     def group_navigation(self, session, page, live):
         # Absence is still loading, not the end of canonical history. Anchor
         # the combined chain to an accepted (possibly empty) canonical page.
@@ -93,6 +107,7 @@ class ResidentWorkPages:
         token = self._token({
             'version': 1,
             'discoveryEpoch': self.discovery_epoch,
+            'length': len(self.windows.resident_tree(session).get('nodes', [])),
             'client': self._client(), 'owner': session['id'], 'stamp': self._stamp(session),
             'fence': self.windows._fence(session['id']), 'end': end, 'savedGroup': saved_group,
             'within': within})
@@ -110,9 +125,10 @@ class ResidentWorkPages:
         stamp, fence = self._stamp(session), self.windows._fence(session['id'])
         end = cursor.get('end') if isinstance(cursor, dict) else None
         if (not isinstance(cursor, dict)
-                or set(cursor) != {'version', 'discoveryEpoch', 'client', 'owner', 'stamp', 'fence', 'end', 'savedGroup', 'within'}
+                or set(cursor) != {'version', 'discoveryEpoch', 'length', 'client', 'owner', 'stamp', 'fence', 'end', 'savedGroup', 'within'}
                 or type(cursor.get('version')) is not int or cursor.get('version') != 1
                 or cursor.get('discoveryEpoch') != self.discovery_epoch
+                or type(cursor.get('length')) is not int or cursor['length'] != len(nodes)
                 or cursor.get('client') != self._client()
                 or cursor.get('owner') != session['id'] or cursor.get('stamp') != stamp
                 or cursor.get('fence') != fence or type(end) is not int or not 0 < end <= len(nodes)
@@ -142,7 +158,8 @@ class ResidentWorkPages:
                 self.discovery_epoch += 1
                 raise ValueError('This Work discovery reached its page limit. Open the conversation again.')
             self.discovery.pop(key, None)
-            self.discovery[key] = {'stamp': stamp, 'fence': fence, 'groups': {row['id'] for row in items}}
+            self.discovery[key] = {'stamp': stamp, 'fence': fence, 'length': len(nodes),
+                                   'groups': {row['id'] for row in items}}
         next_cursor = (self._group_cursor(session, end, saved_group, result['before']) if result['before']
                        else self._group_cursor(session, start, saved_group) if start
                        else saved.get('before') if saved else None)
@@ -159,8 +176,18 @@ class ResidentWorkPages:
         ranges = [(start, end) for (client, identity, start, end, _), receipt in self.discovery.items()
                   if client == self._client() and identity == session['id']
                   and receipt['stamp'] == stamp and receipt['fence'] == fence
+                  and receipt['length'] == len(self.windows.resident_tree(session).get('nodes', []))
                   and group in receipt['groups']]
         return max(ranges, default=None)
+
+    def _initial_range(self, session, group, stamp, fence, count):
+        tail = max(0, count - NODE_LIMIT), count
+        witness = self.tails.get((self._client(), session['id']))
+        if (witness is not None and witness['stamp'] == stamp and witness['fence'] == fence
+                and witness['length'] == count and witness['complete']
+                and group not in witness['groups']):
+            return self._discovered_range(session, group, stamp, fence) or tail
+        return tail
 
     @staticmethod
     def _rows(source, group):
@@ -233,7 +260,8 @@ class ResidentWorkPages:
         nodes = self.windows.resident_tree(session, touch=True).get('nodes', [])
         stamp, fence = self._stamp(session), self.windows._fence(session['id'])
         if before is None:
-            start, end, within = max(0, len(nodes) - NODE_LIMIT), len(nodes), None
+            start, end = self._initial_range(session, group, stamp, fence, len(nodes))
+            within = None
             entry = {'group': group, 'stamp': stamp, 'key': 'resident-work:' + self._token([self._client(), session['id'], group, stamp]),
                      'owner': self._owner_stamp(session), 'ranges': {}, 'ids': {}, 'positions': {}, 'revision': None}
         else:
@@ -249,10 +277,6 @@ class ResidentWorkPages:
                 raise ValueError('Invalid resident Work range.')
         rows, anchors, segment = self._rows(self._source(session, start, end), group)
         if before is None:
-            if segment is None and (discovered := self._discovered_range(session, group, stamp, fence)):
-                start, end = discovered
-                if end <= len(nodes):
-                    rows, anchors, segment = self._rows(self._source(session, start, end), group)
             if segment is None:
                 raise ValueError('This Work is no longer available. Refresh this conversation.')
             entry['revision'] = segment['detailRevision']
@@ -420,3 +444,6 @@ class ResidentWorkPages:
         for key in tuple(self.discovery):
             if key[1] in departed:
                 self.discovery.pop(key, None)
+        for key in tuple(self.tails):
+            if key[1] in departed:
+                self.tails.pop(key, None)
