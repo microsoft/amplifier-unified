@@ -27,6 +27,7 @@ on:
           - updater-expanded-lock
           - native-child-fixtures
           - question-answer-resume
+          - question-answer-installed
       core_wheels:
         description: Qualify published Core wheels and real runtime on both Linux architectures
         type: boolean
@@ -77,6 +78,7 @@ jobs:
               'manager-exception-boundary': ['tests/test_manager_exception_boundary.py', 'tests/test_manager_failure_details.py', 'tests/test_session_health.py', 'tests/test_retained_failure_recovery.py', 'tests/test_runtime.py'],
               'native-child-fixtures': ['tests/test_child_app_assignment_capture.py', 'tests/test_history_scope_native.py', 'tests/test_file_source_native_children.py'],
               'question-answer-resume': ['tests/test_question_peer_resume.py', 'tests/test_peer_resume.py', 'tests/test_peer_resume_native.py', 'tests/test_failed_peer_recovery.py', 'tests/test_retained_failure_recovery.py', 'tests/test_questions.py', 'tests/test_question_handoffs.py'],
+              'question-answer-installed': ['tests/test_question_peer_resume.py', 'tests/test_peer_resume_native.py'],
           }
           selection = os.environ['CHECK_SUITE']
           if selection not in suites:
@@ -188,7 +190,7 @@ jobs:
           print(json.dumps(result, indent=2))
           PY
       - name: Run the selected repair suite
-        if: ${{ env.CHECK_SUITE != 'full' && env.CHECK_SUITE != 'native-child-fixtures' }}
+        if: ${{ env.CHECK_SUITE != 'full' && env.CHECK_SUITE != 'native-child-fixtures' && env.CHECK_SUITE != 'question-answer-installed' }}
         shell: bash
         run: |
           mapfile -t targets < output/python-checks/targets.txt
@@ -248,21 +250,23 @@ jobs:
               'tests': len(rows), 'nativeTests': len(native), 'modules': modules}, indent=2))
           PY
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        if: ${{ env.CHECK_SUITE == 'question-answer-resume' }}
+        if: ${{ env.CHECK_SUITE == 'question-answer-resume' || env.CHECK_SUITE == 'question-answer-installed' }}
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Verify rendered question-answer continuation and package bytes
-        if: ${{ env.CHECK_SUITE == 'question-answer-resume' }}
+        if: ${{ env.CHECK_SUITE == 'question-answer-resume' || env.CHECK_SUITE == 'question-answer-installed' }}
         run: |
           set -euo pipefail
           npm ci --prefix frontend
           npm run build --prefix frontend
-          (cd frontend && npx playwright install --with-deps chromium)
-          AMPLIFIER_TEST_PYTHON="$GITHUB_WORKSPACE/.venv/bin/python" \
-            AMPLIFIER_TEST_ARTIFACTS="$GITHUB_WORKSPACE/output/python-checks/question-browser" \
-            node frontend/tests/question-resume-browser.mjs 2>&1 | tee output/python-checks/question-browser.log
+          if [ "$CHECK_SUITE" = question-answer-resume ]; then
+            (cd frontend && npx playwright install --with-deps chromium)
+            AMPLIFIER_TEST_PYTHON="$GITHUB_WORKSPACE/.venv/bin/python" \
+              AMPLIFIER_TEST_ARTIFACTS="$GITHUB_WORKSPACE/output/python-checks/question-browser" \
+              node frontend/tests/question-resume-browser.mjs 2>&1 | tee output/python-checks/question-browser.log
+          fi
           uv build --wheel --out-dir output/python-checks/dist
           python - <<'PY' > output/python-checks/question-resume-wheel.json
           import hashlib, json, zipfile
@@ -276,9 +280,19 @@ jobs:
           print(json.dumps({'wheel': wheel.name, 'sha256': hashlib.sha256(wheel.read_bytes()).hexdigest(),
                             'sourceAndBuildFilesVerified': len(files)}, indent=2))
           PY
-          uv venv --python .venv/bin/python --system-site-packages "$RUNNER_TEMP/question-resume-installed"
+          uv pip freeze --python .venv/bin/python > output/python-checks/question-freeze.txt
+          python - <<'PY'
+          from pathlib import Path
+          rows = [r for r in Path('output/python-checks/question-freeze.txt').read_text().splitlines()
+                  if not r.startswith(('-e ', '#', 'amplifier-unified'))]
+          Path('output/python-checks/question-installed-requirements.txt').write_text('\n'.join(rows) + '\n')
+          PY
+          uv venv --python 3.13 "$RUNNER_TEMP/question-resume-installed"
+          uv pip install --python "$RUNNER_TEMP/question-resume-installed/bin/python" --no-deps \
+            -r output/python-checks/question-installed-requirements.txt
           uv pip install --python "$RUNNER_TEMP/question-resume-installed/bin/python" --no-deps \
             output/python-checks/dist/*.whl
+          uv pip check --python "$RUNNER_TEMP/question-resume-installed/bin/python"
           mkdir -p "$RUNNER_TEMP/question-resume-package"
           cp -a tests "$RUNNER_TEMP/question-resume-package/"
           (
