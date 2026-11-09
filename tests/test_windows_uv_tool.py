@@ -13,7 +13,10 @@ class WindowsUvLauncherTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        # The fixture, unlike a caller's untrusted installation address, may
+        # choose its real temporary spelling up front. GitHub's Windows TEMP
+        # contains RUNNER~1; macOS /var is a symlink to /private/var.
+        self.root = Path(temporary.name).resolve()
         self.prefix = self.root / "tools/amplifier-unified"
         self.bin = self.root / "bin"
         (self.prefix / "Scripts").mkdir(parents=True)
@@ -248,7 +251,7 @@ class NativeWindowsUvLauncherTests(unittest.TestCase):
         import json
         import shutil
         import uuid
-        root = Path(tempfile.gettempdir()) / ("uv-copy-" + uuid.uuid4().hex)
+        root = Path(tempfile.gettempdir()).resolve() / ("uv-copy-" + uuid.uuid4().hex)
         backend = windows_uv_tool.windows_files
         with backend.directory(root, owned_root=root, create=True):
             pass
