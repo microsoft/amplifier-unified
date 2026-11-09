@@ -585,6 +585,7 @@ def test_real_sdist_build_excludes_untracked_ci_checkouts(repository):
 def test_release_publish_is_rerunnable_without_moving_tags_or_replacing_published_assets(repository,monkeypatch,published):
     dist=distributions(repository);revision=git(repository,'rev-parse','HEAD');calls=[]
     def run(*args,**kwargs):
+        if args[:2] == ('git', 'show'): return git(repository, 'show', args[2])
         calls.append(args)
         if args[:3]==('git','rev-parse','HEAD'):return revision
         if args[:2]==('git','ls-remote'):return revision+'\trefs/tags/v1.2.3'
@@ -600,16 +601,18 @@ def test_release_publish_is_rerunnable_without_moving_tags_or_replacing_publishe
 def test_release_never_moves_a_remote_tag(repository,monkeypatch):
     dist=distributions(repository);revision=git(repository,'rev-parse','HEAD');calls=[]
     def run(*args,**kwargs):
+        if args[:2] == ('git', 'show'): return git(repository, 'show', args[2])
         calls.append(args)
         return revision if args[:2]==('git','rev-parse') else 'b'*40+'\trefs/tags/v1.2.3'
     monkeypatch.setattr(release,'run',run)
     with pytest.raises(ValueError,match='refusing to move'):release.publish(repository,'example/app','v1.2.3',revision,dist)
-    assert len(calls)==3
+    assert len(calls)==2
 
 
 def test_new_release_publishes_only_after_draft_assets_are_uploaded(repository,monkeypatch):
     dist=distributions(repository);revision=git(repository,'rev-parse','HEAD');calls=[]
     def run(*args,**kwargs):
+        if args[:2] == ('git', 'show'): return git(repository, 'show', args[2])
         calls.append(args)
         if args[:3]==('git','rev-parse','HEAD'):return revision
         if args[:3]==('gh','release','list'):return '[]'
@@ -667,11 +670,13 @@ def test_shallow_publication_preserves_remote_tag_identity(repository, monkeypat
 def test_invalid_package_never_creates_a_tag_or_release(repository,monkeypatch):
     dist=distributions(repository);revision=git(repository,'rev-parse','HEAD');calls=[]
     (repository/'amplifier_web/static/assets/app.js').write_text('unvalidated bytes')
-    def run(*args,**kwargs):calls.append(args);return revision
+    def run(*args,**kwargs):
+        if args[:2] == ('git', 'show'): return git(repository, 'show', args[2])
+        calls.append(args); return revision
     monkeypatch.setattr(release,'run',run)
     with pytest.raises(ValueError,match='validated frontend bytes'):
         release.publish(repository,'example/app','v1.2.3',revision,dist)
-    assert calls==[('git','rev-parse','HEAD'), ('git','diff','--exit-code','HEAD','--')]
+    assert calls==[('git','rev-parse','HEAD')]
 
 
 def test_release_requires_notes_for_exact_version_before_any_mutation(repository,monkeypatch):

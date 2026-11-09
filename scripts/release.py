@@ -177,10 +177,12 @@ def verify_frontend(root, names, read, label):
 
 def source_record_bytes(root, repository, revision, version):
     """Source facts, never publication proof; old candidates remain unstamped."""
-    if revision is not None:
-        # A local edit cannot remove the committed candidate's opt-in declaration.
-        run('git', 'diff', '--exit-code', 'HEAD', '--', cwd=root)
-    build = tomllib.loads((root / 'pyproject.toml').read_text()).get('tool', {}).get('hatch', {}).get('build', {})
+    selected = revision or run('git', 'rev-parse', 'HEAD', cwd=root)
+    if not isinstance(selected, str) or not re.fullmatch(r'[0-9a-f]{40}', selected):
+        raise ValueError('Source record requires a full selected commit SHA')
+    # Only the selected commit can opt into the new packaging contract.
+    project = run('git', 'show', selected + ':pyproject.toml', cwd=root)
+    build = tomllib.loads(project).get('tool', {}).get('hatch', {}).get('build', {})
     if '/' + RELEASE_SOURCE not in build.get('artifacts', []):
         return None
     if not isinstance(repository, str) or not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
@@ -189,6 +191,7 @@ def source_record_bytes(root, repository, revision, version):
         raise ValueError('Source record requires a full selected commit SHA')
     if run('git', 'rev-parse', 'HEAD', cwd=root) != revision or version_at(root) != version:
         raise ValueError('Source record does not match the selected checkout')
+    run('git', 'diff', '--exit-code', 'HEAD', '--', cwd=root)
     if run('git', 'ls-files', '--others', '--exclude-standard', cwd=root):
         raise ValueError('Source record requires a clean candidate without untracked inputs')
     value = {'schema': 1, 'repository': repository, 'revision': revision, 'version': version}
