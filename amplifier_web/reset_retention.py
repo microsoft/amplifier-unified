@@ -474,7 +474,9 @@ def archive_ids(home):
         return set()
     try:
         state = _read(root / "state.json")
-        if state.get("dataIdentity") != identity(home):
+        if (not isinstance(state, dict) or state.get("dataIdentity") != identity(home)
+                or not isinstance(state.get("operations"), dict)
+                or any(not isinstance(row, dict) for row in state["operations"].values())):
             raise ValueError("Invalid reset ownership state")
         return {operation for operation, row in state["operations"].items()
                 if row.get("origin") == "in-app"}

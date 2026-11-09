@@ -333,6 +333,16 @@ def test_emergency_script_isolated_actual_external_cleanup(tmp_path):
     assert all((path / "sentinel").read_text() == latest for path in current)
 
 
+@pytest.mark.parametrize("state", [[], {"operations": []}, {"operations": {"a": []}}])
+def test_malformed_catalog_state_protects_manual_archives(tmp_path, state):
+    root = tmp_path / "reset-recovery"
+    root.mkdir()
+    if isinstance(state, dict):
+        state["dataIdentity"] = policy.identity(tmp_path)
+    (root / "state.json").write_text(json.dumps(state))
+    assert policy.archive_ids(tmp_path) is None
+
+
 def test_emergency_direct_script_and_policy_import_without_app_dependencies(tmp_path):
     script = Path(reset.__file__)
     result = subprocess.run([sys.executable, "-I", "-S", str(script),
