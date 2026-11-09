@@ -58,7 +58,6 @@ async def main(home):
             application.pop('releaseNotesWarning', None)
             application.pop('releaseNotes', None)
             if mode=='notes-empty': application['releaseNotes']=[]
-            elif mode=='notes-invalid': application['releaseNotes']={'unexpected':'detail'}
             elif mode=='notes-error': application['releaseNotesWarning']='Release notes could not be refreshed. Showing saved release history.'
             elif mode=='notes-next': application['current']='0.60.1'
             elif mode=='notes-ready':
