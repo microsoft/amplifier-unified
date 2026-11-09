@@ -47,24 +47,6 @@ try{
  assert.equal(await page.locator('.a-settings-sidebar').getByText('Bundles & modules',{exact:true}).count(),0);
  const preferred=page.locator('.a-settings-page-content:not([hidden])').getByLabel('Preferred chat connection',{exact:true});
  await expect(preferred).toBeVisible();
- // A full-width select must not shrink the adjacent explanation to one letter.
- // Exercise the real shared component in both Settings entry points, including
- // widths on either side of the old capability-row breakpoint.
- for(const destination of ['ai-connections','providers']){
-  for(const width of [320,390,600,601,736,960,1280,1920]){
-   await page.setViewportSize({width,height:920});
-   await openSettingsPage(page,destination);
-   if(destination==='providers'&&!await page.locator('#advanced-preferred-chat-connection').isVisible()){
-    await page.getByRole('button',{name:'one fixture-model · credentials ready',exact:true}).click();
-   }
-   await checkPreferenceLayout(destination);
-  }
- }
- await page.emulateMedia({forcedColors:'active'});
- await checkPreferenceLayout('providers-forced-colors');
- await page.emulateMedia({forcedColors:'none'});
- await page.setViewportSize({width:1280,height:920});
- await openSettingsPage(page,'ai-connections');
  const originalPreference=await preferred.inputValue();
  const alternatePreference=await preferred.locator('option').evaluateAll((rows,current)=>rows.find(row=>row.value!==current).value,originalPreference);
  await preferred.selectOption(alternatePreference);
@@ -146,6 +128,21 @@ try{
  await page.setViewportSize({width:390,height:844});await openSettingsPage(page,'ai-connections');
  await page.locator('.a-settings-mobile-head button').first().click();await page.screenshot({path:join(evidence,'settings-everyday-mobile-index.png')});
  await page.locator('[data-settings-section=privacy]').click();await page.screenshot({path:join(evidence,'settings-everyday-mobile-privacy.png')});
+ // Exercise both entry points after the existing behavior journey so mounting
+ // the retained advanced editor cannot add hidden duplicates to its locators.
+ for(const destination of ['ai-connections','providers']){
+  for(const width of [320,390,600,601,736,960,1280,1920]){
+   await page.setViewportSize({width,height:920});
+   await openSettingsPage(page,destination);
+   if(destination==='providers'&&!await page.locator('#advanced-preferred-chat-connection').isVisible()){
+    await page.getByRole('button',{name:'one fixture-model · credentials ready',exact:true}).click();
+   }
+   await checkPreferenceLayout(destination);
+  }
+ }
+ await page.emulateMedia({forcedColors:'active'});
+ await checkPreferenceLayout('providers-forced-colors');
+ await page.emulateMedia({forcedColors:'none'});
  assert.deepEqual(errors,[]);console.log(JSON.stringify({guidedProvider:true,privateDrafts:true,routingPreserved:true,catalogReviewAndRetry:true,installedVsReady:true,layouts,preferenceLayouts:preferenceLayouts.length,browserErrors:0}));
 }catch(error){if(page)await page.screenshot({path:join(evidence,'settings-everyday-failure.png')});throw error}
 finally{await browser?.close();fixture.kill('SIGTERM')}
