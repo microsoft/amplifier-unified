@@ -228,9 +228,11 @@ try{
  await expect(workspacePreview.locator('.a-workspace-result-path')).toBeVisible();
  await expect(workspacePreview.locator('.a-workspace-result-path')).toHaveText('Workspace · team-two');
  await expect(workspacePreview.locator('.a-workspace-identity>svg')).toBeVisible();
- assert.equal((await workspacePreview.boundingBox()).height,54);
+ // The floating container is rotated; compare layout height, not its transformed box.
+ assert.equal(await workspacePreview.evaluate(node=>node.offsetHeight),54);
  await page.keyboard.press('Escape');await page.mouse.up();
  await expect(workspacePreview).toHaveCount(0);
+ await composer.focus();await page.mouse.move(1000,900);
  for(const target of shortcutRows)assert.equal((await target.locator(':scope>.a-navigation-more').boundingBox()).width,0);
  await writeFile(out+'/action-space.json',JSON.stringify(actionSpace,null,2)+'\n');
  await row(b).hover();
