@@ -94,7 +94,9 @@ async def test_after_activation_tick_checks_next_tier_without_waiting_for_interv
     async def check(**kwargs):
         calls.append(kwargs)
         manager.service.state['updates'].update(phase='available',available=1)
-    async def apply():calls.append('install')
+    async def apply(*, automatic):
+        assert automatic
+        calls.append('install')
     monkeypatch.setattr(manager,'check',check)
     monkeypatch.setattr(manager,'install',apply)
     await manager.tick()
@@ -138,3 +140,146 @@ async def test_missing_source_staging_verifies_exact_checked_revision(tmp_path,m
     row={'url':'https://example.invalid/skills','ref':'main','latest':'a'*40}
     with pytest.raises(ValueError,match='moved after checking'):
         await update_sequence.stage_missing(None,destination,row)
+
+
+@pytest.mark.parametrize('case', ['pin', 'exact', 'transport', 'interrupted'])
+async def test_checked_source_failure_retry_disposition_survives_checks_and_restart(manager, monkeypatch, case):
+    """Real check/install/tick/receipts; only remote I/O and costly qualification
+    are fixtures. The actual source guard, not an injected typed error, rejects.
+    This is scheduling proof, not installed-package qualification.
+    """
+    import asyncio
+    import copy
+    import time
+    from amplifier_web import update_health, update_plan, session_files
+    from amplifier_web.runtime_source_alignment import verify_checked_selection
+    from amplifier_web.update_diagnostics import UpdateDiagnostics
+
+    latest = ['b' * 40]
+    row = {**source('included'), 'kind': 'runtime dependency',
+           'package': 'amplifier-foundation'}
+    async def inventory(**kw): return [dict(row)]
+    async def remote(*args, **kw): return latest[0] + ' refs/heads/main'
+    monkeypatch.setattr(manager, 'inventory_sources', inventory)
+    monkeypatch.setattr(updates, 'process', remote)
+    monkeypatch.setattr(updates, 'foundation_home', lambda home: home/'absent')
+    monkeypatch.setattr(session_files, 'amplifier_home', lambda: manager.home/'absent-shared')
+    async def build(*args):
+        return {'mode': 'worker', 'reason': 'fixture', 'activation': 'per-worker'}
+    monkeypatch.setattr(update_plan, 'build', build)
+    calls = []
+    async def preflight():
+        if case == 'transport':
+            raise TimeoutError('private endpoint must not enter diagnostics')
+        if case == 'interrupted':
+            raise asyncio.CancelledError()
+        selected = {'url': row['url'], 'ref': 'main', 'revision': 'a'*40,
+                    'status': 'explicit-pin' if case == 'pin' else 'selected'}
+        verify_checked_selection(
+            {'amplifier-foundation': {**selected, 'revision': latest[0]}},
+            {'packages': {'amplifier-foundation': selected},
+             'batchPaths': {'amplifier-foundation': '/synthetic/private/path'}},
+            exact=case == 'exact')
+    async def validate(stage, revision):
+        calls.append(revision)
+        await manager.diagnostics.run('ecosystem-source-preflight', preflight)
+    monkeypatch.setattr(manager, 'validate', validate)
+    # Keep unrelated periodic storage work out of this scheduler fixture.
+    manager._storage_last_pass = time.time()
+    manager._storage_policy_due = False
+    manager._update_health_initial = False
+    await manager.check()
+    if case == 'interrupted':
+        with pytest.raises(asyncio.CancelledError):
+            await manager.install(automatic=True)
+    else:
+        await manager.install(automatic=True)
+    assert len(calls) == 1
+    assert not updates.active_release(manager.home)
+    diagnostic = manager.diagnostics.state
+    failure = copy.deepcopy(diagnostic['lastFailure'])
+    mode = 'inspect' if case == 'interrupted' else 'backoff' if case == 'transport' else 'changed-inputs'
+    assert diagnostic['batch']['retry']['mode'] == mode
+    if case in {'pin', 'exact'}:
+        assert failure['package'] == 'amplifier-foundation'
+        assert failure['reason'] == ('runtime-source-constraint' if case == 'pin' else 'runtime-resolution-mismatch')
+        status = update_health.current(manager.service.state['updates'], {})
+        assert status['status'] == 'protected'
+        assert status['component'] == 'amplifier-foundation'
+    assert 'private' not in json.dumps(failure)
+    # The persisted diagnostic reconstruction must retain the same disposition.
+    await manager.publish()
+    manager.diagnostics = UpdateDiagnostics(manager)
+    for _ in range(3):
+        await manager.check()
+        await manager.tick()
+    assert len(calls) == 1
+    assert manager.diagnostics.state['lastFailure'] == failure
+    if case == 'interrupted':
+        latest[0] = 'c'*40
+        await manager.check()
+        await manager.tick()
+        assert len(calls) == 1
+        with pytest.raises(ValueError, match='not replayed'):
+            await manager.install()
+        return
+    manager.diagnostics.state['batch']['retry']['retryAt'] = 0
+    await manager.check()
+    await manager.tick()
+    assert len(calls) == (2 if case == 'transport' else 1)
+    if case == 'transport':
+        assert manager.diagnostics.state['batch']['retry']['attempts'] == 2
+        return
+    # Unrelated publication/credential settings do not change the source graph.
+    manager.service.state['configurationRevision'] = manager.service.state.get('configurationRevision', 0) + 1
+    await manager.check()
+    await manager.tick()
+    assert len(calls) == 1
+    latest[0] = 'c'*40
+    await manager.check()
+    await manager.tick()
+    assert len(calls) == 2
+    await manager.install()  # Deliberate retry is still allowed; pin stays protected.
+    assert len(calls) == 3
+    assert not updates.active_release(manager.home)
+
+
+async def test_preparation_witness_tracks_source_policy_not_unrelated_settings(manager):
+    from amplifier_web.update_health import preparation_key
+    from amplifier_web.host.config import write_private
+    rows = [{**source('included'), 'latest': 'b'*40}]
+    config = manager.home/'config/settings.yaml'
+    config.parent.mkdir(exist_ok=True)
+    write_private(config, 'updates:\n  intervalHours: 4\n')
+    original = preparation_key(manager, rows)
+    write_private(config, 'updates:\n  intervalHours: 8\n')
+    manager.service.state['configurationRevision'] = 5
+    assert preparation_key(manager, rows) == original
+    write_private(config, 'sources:\n  bundles:\n    routing-matrix: git+https://example.invalid/custom@v1\n')
+    assert preparation_key(manager, rows) != original
+
+
+async def test_deterministic_disposition_survives_service_reload(manager, monkeypatch):
+    from amplifier_web.update_health import preparation_key, record_retry
+    manager.inventory=[{**source('included'), 'latest':'b'*40, 'status':'update'}]
+    (manager.directory/'inventory.json').write_text(json.dumps(manager.inventory))
+    manager.diagnostics.begin('ecosystem', 'b'*32, components=['amplifier-foundation'])
+    failure=manager.diagnostics.record('ecosystem-source-preflight','failed',
+        reason='runtime-source-constraint',package='amplifier-foundation')
+    record_retry(manager.diagnostics.state['batch'],preparation_key(manager,manager.inventory),failure)
+    await manager.publish(phase='error', error='Source policy conflict')
+    home=manager.home
+    await manager.service.close()
+    service=AppService(home,Runtime(),workspace=home.parent)
+    try:
+        restored=UpdateManager(service);service.update_manager=restored
+        assert restored.diagnostics.state['lastFailure']==failure
+        assert restored.diagnostics.state['batch']['retry']['mode']=='changed-inputs'
+        async def forbidden(*args,**kwargs):pytest.fail('reloaded conflict must not prepare')
+        monkeypatch.setattr(restored,'stage_cache_sources',forbidden)
+        before=set((home/'updates/releases').glob('*'))
+        await restored.install(automatic=True)
+        assert set((home/'updates/releases').glob('*'))==before
+        assert not updates.active_release(home)
+    finally:
+        await service.close()

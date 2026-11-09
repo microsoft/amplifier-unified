@@ -104,8 +104,10 @@ def preparation_key(manager, rows):
             'status', 'eligible', 'policyOrigin', 'updateTier')
     selected = [{key: row[key] for key in keys if key in row} for row in rows]
     selected.sort(key=lambda row: json.dumps(row, sort_keys=True))
-    data = [__version__, active_release(manager.home).get('current'), config,
-            manager.service.state.get('configurationRevision'), selected]
+    # configuration_key already witnesses source declarations. The publication
+    # counter also changes for unrelated settings/credentials, which cannot
+    # repair the same checked graph and must not reauthorize automatic work.
+    data = [__version__, active_release(manager.home).get('current'), config, selected]
     return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
 
