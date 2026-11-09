@@ -3,7 +3,7 @@
 Synthetic sources, no model/provider execution or public network. The candidate
 inherits prepared test dependencies but installers target only its own venv.
 """
-import hashlib
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -76,7 +76,7 @@ async def shared_source(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('binding_suffix,object_suffix', [('', '.git'), ('.git', ''), ('.git', '.git'), ('', '')])
-async def test_shared_binding_uses_canonical_repository_identity(shared_source, binding_suffix, object_suffix):
+async def test_shared_binding_uses_canonical_repository_identity(shared_source, monkeypatch, binding_suffix, object_suffix):
     c = shared_source
     # Exercise both insertion and lookup normalization, not only one direction.
     record = json.loads(c.binding.read_text())
@@ -88,7 +88,7 @@ async def test_shared_binding_uses_canonical_repository_identity(shared_source, 
         from amplifier_foundation.sources.shared import SharedSourceStore
         store = SharedSourceStore(other)
         obj = await store.bind(c.stage / 'foundation/cache', URL, 'main', c.revision, existing=c.obj)
-        os.environ['AMPLIFIER_SOURCE_STORE'] = str(other)
+        monkeypatch.setenv('AMPLIFIER_SOURCE_STORE', str(other))
         c.batch.names[NAME] = obj / SUBDIRECTORY
         c.binding.write_text(json.dumps(record))
     before = c.binding.read_bytes()
@@ -146,6 +146,11 @@ async def test_real_probe_installs_checked_shared_hook_after_adoption_and_freeze
     (project / 'pyproject.toml').write_bytes(manifest.read_bytes())
     await updates.process(uv, 'lock', '--project', str(project), '--python', sys.executable)
     await updates.process(uv, 'venv', '--system-site-packages', '--python', sys.executable, str(project / '.venv'))
+    # uv's system-site-packages means base CPython, not the invoking prepared
+    # venv. Reuse those explicit dependency paths in this disposable interpreter.
+    import site
+    candidate_site = next((project / '.venv/lib').glob('python*/site-packages'))
+    (candidate_site / 'prepared-dependencies.pth').write_text('\n'.join(site.getsitepackages()) + '\n')
     workspace = c.stage / 'qualification-workspace'
     workspace.mkdir()
     shared = c.stage / 'shared-config'
@@ -156,8 +161,9 @@ async def test_real_probe_installs_checked_shared_hook_after_adoption_and_freeze
         folder.mkdir(parents=True)
         (folder / '__init__.py').write_text('# Dependency-free preparation-only fixture\n')
     profile = workspace / 'profile.yaml'
+    from amplifier_web.bundles import SNAPSHOT_VERSION
     profile.write_text(json.dumps({
-        'bundle': {'name': 'fixture'},
+        'bundle': {'name': 'fixture', 'version': SNAPSHOT_VERSION},
         'session': {'orchestrator': {'module': 'loop-streaming'},
                     'context': {'module': 'context-fixture', 'source': str(local / 'context-fixture')}},
         'providers': [{'module': 'provider-fixture', 'source': str(local / 'provider-fixture')}],
@@ -183,7 +189,7 @@ async def test_real_probe_installs_checked_shared_hook_after_adoption_and_freeze
     command = [str(project / '.venv/bin/python'), str(probe), str(workspace), 'fixture',
                '--profiles', str(profiles), '--checked-sources', str(checked),
                '--install-overrides', str(overrides), '--global-only']
-    result = await __import__('asyncio').to_thread(subprocess.run, command, env=env,
+    result = await asyncio.to_thread(subprocess.run, command, env=env,
         text=True, capture_output=True, timeout=90)
     assert result.returncode == 0, result.stdout + result.stderr
     from amplifier_web.update_diagnostics import PROBE_PREFIX
