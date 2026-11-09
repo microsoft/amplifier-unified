@@ -225,8 +225,10 @@ function App(){
   });
  },[acceptState]);
  const dispatch=useCallback((action,args={},meta={})=>{
-  const deliveryTarget=['conversation.delivery','conversation.send'].includes(action)?deliveryRecovery(latest.current,latest.current?.sessions?.find(row=>row.id===args.sessionId)):null,deliveryAuthenticationAtStart=deliveryAuthentication.current;
-  const sameDeliveryTarget=()=>deliveryAuthenticationAtStart===deliveryAuthentication.current&&(!deliveryTarget||JSON.stringify(deliveryTarget)===JSON.stringify(deliveryRecovery(latest.current,latest.current?.sessions?.find(row=>row.id===args.sessionId))));
+  const creatingConversation=action==='session.create'&&args.fromDraft;
+  const readDeliveryTarget=()=>creatingConversation?{scope:deliveryScope(latest.current,null),connection:latest.current?.client?.hostInstanceId}:deliveryRecovery(latest.current,latest.current?.sessions?.find(row=>row.id===args.sessionId));
+  const deliveryTarget=creatingConversation||['conversation.delivery','conversation.send'].includes(action)?readDeliveryTarget():null,deliveryAuthenticationAtStart=deliveryAuthentication.current;
+  const sameDeliveryTarget=()=>deliveryAuthenticationAtStart===deliveryAuthentication.current&&(!deliveryTarget||JSON.stringify(deliveryTarget)===JSON.stringify(readDeliveryTarget()));
   const validDeliveryState=frame=>!deliveryTarget||(sameDeliveryTarget()&&
    (!frame?.client?.hostInstanceId||frame.client.hostInstanceId===deliveryTarget.connection)&&
    (!frame?.client?.historyScope||!latest.current?.client?.historyScope||frame.client.historyScope===latest.current.client.historyScope));
@@ -333,6 +335,7 @@ function App(){
   const dirtyBarrier=canvasDirtyBarrier.current;
   const execute=async()=>{
    if(meta.before)await meta.before;
+   if(deliveryTarget&&!sameDeliveryTarget())throw Error('The delivery target changed. The original submission remains saved.');
    if(action==='conversation.send'&&meta.outboxScope&&(meta.outboxAuthentication!==deliveryAuthentication.current||!outboxMatches({scope:meta.outboxScope},deliveryScope(latest.current,latest.current?.sessions?.find(row=>row.id===args.sessionId)))))
     throw Error('The original message belongs to a different source. Nothing was sent again.');
    if(action==='conversation.delivery'&&(!sameDeliveryTarget()||meta.deliveryRecovery&&JSON.stringify(meta.deliveryRecovery)!==JSON.stringify(deliveryTarget)))
@@ -699,12 +702,28 @@ function App(){
  }
  async function newChat(workspace){preserveOtherDraft(null);stickToBottom.current=true;await act('session.draft',workspace&&typeof workspace==='object'?workspace:workspace?{workspace}:{})}
  function creationSetup(){return {...newChatSetup(pendingView.current.apply(latest.current)),expectedDraftId:latest.current?.attachmentDraftId}}
- async function ensureSession(creation){const current=!creation&&latest.current?.sessions?.find(row=>row.id===latest.current?.selectedSessionId);if(current)return current;if(!creatingSession.current)creatingSession.current=dispatch('session.create',{...(creation?.setup||creationSetup()),fromDraft:true},{id:creation?.id}).catch(error=>{const created=creation?.id&&latest.current?.sessions?.find(row=>row.creationCommandId===creation.id);if(created)return {sessionId:created.id};throw error}).then(result=>{
-  const id=result.sessionId||result.state?.selectedSessionId,created=latest.current?.sessions?.find(row=>row.id===id),payload=stagedDraftPayload.current;
-  if(!created)throw Error('The new conversation is not confirmed in this source. The original submission remains saved.');
-  if(stagedDraft.current&&payload?.sessionId===null){payload.sessionId=created.id;pendingView.current.bindDraft(stagedDraft.current,created.id);draftJournal.bind(draftJournalEntries.current.get(payload),created.id);clearTimeout(draftTimer.current);saveDraft(payload,stagedDraft.current).catch(e=>reportError(e));if(latest.current)setState(pendingView.current.apply(latest.current))}
-  return created;
- }).finally(()=>{creatingSession.current=null});return creatingSession.current}
+ async function ensureSession(creation){
+  const current=!creation&&latest.current?.sessions?.find(row=>row.id===latest.current?.selectedSessionId);
+  if(current)return current;
+  const source=()=>JSON.stringify([deliveryScope(latest.current,null),latest.current?.client?.hostInstanceId,deliveryAuthentication.current]);
+  const binding=source(),assertSource=()=>{if(source()!==binding)throw Error('The delivery target changed. The original submission remains saved.')};
+  if(creatingSession.current&&creatingSession.current.binding!==binding)throw Error('A conversation creation from another source is still settling. Nothing was sent again.');
+  if(!creatingSession.current){
+   const owner={binding,promise:null};
+   owner.promise=dispatch('session.create',{...(creation?.setup||creationSetup()),fromDraft:true},{id:creation?.id}).catch(error=>{
+    assertSource();const created=creation?.id&&latest.current?.sessions?.find(row=>row.creationCommandId===creation.id);
+    if(created)return {sessionId:created.id};throw error;
+   }).then(result=>{
+    assertSource();
+    const id=result.sessionId||result.state?.selectedSessionId,created=latest.current?.sessions?.find(row=>row.id===id),payload=stagedDraftPayload.current;
+    if(!created)throw Error('The new conversation is not confirmed in this source. The original submission remains saved.');
+    if(stagedDraft.current&&payload?.sessionId===null){payload.sessionId=created.id;pendingView.current.bindDraft(stagedDraft.current,created.id);draftJournal.bind(draftJournalEntries.current.get(payload),created.id);clearTimeout(draftTimer.current);saveDraft(payload,stagedDraft.current).catch(e=>reportError(e));if(latest.current)setState(pendingView.current.apply(latest.current))}
+    return created;
+   }).finally(()=>{if(creatingSession.current===owner)creatingSession.current=null});
+   creatingSession.current=owner;
+  }
+  return creatingSession.current.promise;
+ }
  function addFiles(files){
   if(!files?.length||executionUnavailable||historyPending)return;
   const target=latest.current?.selectedSessionId??null,selected=Array.from(files),expectedDraftId=target===null?latest.current?.attachmentDraftId:undefined;
@@ -779,7 +798,8 @@ function App(){
    // their own ordered queue; the send preserves any newer server draft.
    if(session)clearingDraft.catch(error=>reportError(error));
    else await clearingDraft;
-   const current=session||await ensureSession(entry.creation);if(!outboxMatches(entry,deliveryScope(latest.current,session)))return;entry=outbox.update(id,{sessionId:current.id,scope:deliveryScope(latest.current,current)});
+   if(!outboxMatches(entry,deliveryScope(latest.current,session)))throw Error('The delivery target changed. The original submission remains saved.');
+   const current=session||await ensureSession(entry.creation);if(!outboxMatches(entry,deliveryScope(latest.current,session)))throw Error('The delivery target changed. The original submission remains saved.');entry=outbox.update(id,{sessionId:current.id,scope:deliveryScope(latest.current,current)});
    await deliver(entry);
   }catch(error){outbox.update(id,{status:error.receipt?.delivery==='failed'||error.status>=400&&error.status<500&&error.status!==408?'failed':'unknown',error:actionErrorMessage(error)});}
  }

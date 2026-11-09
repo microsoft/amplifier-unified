@@ -77,7 +77,7 @@ async function runCase(kind){
  };
  const assertNoReplay=()=>{
   assert.equal(count('session.create'),1);
-  assert.equal(count('conversation.send'),kind==='unconfirmed-creation'?0:1);
+  assert.equal(count('conversation.send'),['unconfirmed-creation','late-creation'].includes(kind)?0:1);
   assert.equal(count('conversation.retry'),0);
   assert.equal(report.duplicateExecution,0);
   assert.deepEqual(report.providerExecution,[]);
@@ -154,7 +154,77 @@ async function runCase(kind){
   assert.equal(count('conversation.send'),0,'Send waits for a canonical created chat');
   report.checkpoints.push('rendered Send retains initial scoped payload and issues one session.create');
 
-  if(kind==='unconfirmed-creation'){
+  if(kind==='late-creation'){
+   // The initial Send is still waiting on creation, not conversation.send.
+   // Supply a complete canonical A chat in the late receipt so a bare-id or
+   // fallback lookup cannot accidentally make this test pass by being absent.
+   const late=structuredClone(wire());
+   late.sessions.unshift({
+    id:createdId,title:'STALE SOURCE A CREATED CHAT',runtimeSessionId:nativeId,
+    nativeIdentity:'fallback-not-the-owner',workspace,workspaceId:'project',sessionKind:'root',
+    status:'idle',historyManaged:true,historyLoaded:true,messages:[],workers:[],
+    creationCommandId:creation.body.id,
+   });
+   late.selectedSessionId=createdId;delete late.view.newSessionDraft;
+   await page.evaluate(()=>{
+    window.creationSourceAudit=[];
+    window.stopCreationSourceAudit=window.amplifier.subscribe(state=>{
+     window.creationSourceAudit.push({
+      historyScope:state.client?.historyScope,hostInstanceId:state.client?.hostInstanceId,
+      selectedSessionId:state.selectedSessionId,sessionIds:state.sessions.map(session=>session.id),
+     });
+    });
+   });
+   // Keep B on its own new-chat draft. No action follows the source change.
+   source=sourceB;
+   state.sessions[0].title='Source B previous conversation';
+   await emit();
+   const baseline=await current();
+   assert.equal(baseline.client.historyScope,sourceB.historyScope);
+   assert.equal(baseline.client.hostInstanceId,sourceB.hostInstanceId);
+   assert.equal(baseline.selectedSessionId,null);
+   assert.equal(baseline.sessions.some(session=>session.id===createdId),false);
+   await expect(page.locator(`[data-input-id="${original.commandId}"]`)).toHaveCount(0);
+   assert.deepEqual(await outbox(),beforeCreation,'B baseline must not rebind the pending A creation payload');
+   assertNoReplay();
+   report.checkpoints.push('source B new-chat baseline adopted while source A session.create is still held');
+
+   late.revision=state.revision+100; // Higher revision cannot legitimize an old source.
+   report.heldResponse={action:'session.create',status:200,sessionId:createdId,
+    historyScope:late.client.historyScope,hostInstanceId:late.client.hostInstanceId,revision:late.revision};
+   await creation.route.fulfill({json:{accepted:true,sessionId:createdId,state:late}});
+   // This persisted transition proves the real creation/send chain settled;
+   // neither route.fulfill nor an unchanged B DOM proves completion.
+   await expect.poll(async()=>(await outbox()).find(entry=>entry.id===original.id)?.status).toBe('unknown');
+   const retained=await outbox();
+   assert.equal(retained.length,1);
+   assert.deepEqual(retained[0],{...original,status:'unknown',error:retained[0].error},
+    'Only uncertainty/error may change; original A draft scope, identity and payload stay intact');
+   assert.equal(retained[0].scope,newScope);
+   assert.equal(retained[0].sessionId,null);
+   assert.match(retained[0].error,/target changed.*original submission remains saved/i);
+   const selected=await current();
+   assert.equal(selected.client.historyScope,sourceB.historyScope);
+   assert.equal(selected.client.hostInstanceId,sourceB.hostInstanceId);
+   assert.equal(selected.selectedSessionId,null);
+   assert.equal(selected.sessions.some(session=>session.id===createdId),false);
+   await expect(page.getByRole('banner')).toContainText('New chat');
+   await expect(page.getByText(submitted,{exact:true})).toHaveCount(0);
+   await expect(page.getByText('STALE SOURCE A CREATED CHAT',{exact:true})).toHaveCount(0);
+   for(let i=0;i<2;i++)await emit();
+   const adopted=await page.evaluate(()=>window.creationSourceAudit);
+   assert.ok(adopted.length>=3,'Record B baseline and subsequent actual state adoptions, not only unchanged DOM');
+   assert.ok(adopted.every(frame=>frame.historyScope===sourceB.historyScope&&frame.hostInstanceId===sourceB.hostInstanceId&&
+    frame.selectedSessionId===null&&!frame.sessionIds.includes(createdId)),
+   'Late creation success must never transiently adopt A or select its created chat');
+   report.stateAdoptions={count:adopted.length,frames:adopted};
+   await page.evaluate(()=>window.stopCreationSourceAudit());
+   assert.deepEqual(await outbox(),retained);
+   assert.equal(count('conversation.delivery'),0,'Unbound-to-chat A payload cannot reconcile against B');
+   assertNoReplay();
+   await screenshot('source-b-creation-fenced');
+   report.checkpoints.push('higher-revision complete A creation receipt fenced; A new-chat payload stays unknown; zero conversation.send POSTs');
+  }else if(kind==='unconfirmed-creation'){
    // A success-shaped id is not the canonical workspace/native identity record.
    await reply(creation.route,{sessionId:createdId});
    await expect.poll(async()=>(await outbox())[0]?.status).toBe('unknown');
@@ -296,11 +366,11 @@ try{
   ...(process.env.DTU_CHROMIUM_SINGLE_PROCESS?{args:['--no-zygote','--single-process','--disable-gpu']}:{}),
   ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{}),
  });
- for(const kind of ['accepted','late-success','late-session-busy','unconfirmed-creation'])await runCase(kind);
+ for(const kind of ['accepted','late-success','late-session-busy','unconfirmed-creation','late-creation'])await runCase(kind);
  console.log(`New-chat delivery browser passed: ${cases.join(', ')}. Synthetic transport only; no provider execution. Artifacts: ${artifact}`);
 }finally{
  await writeFile(`${artifact}/browser-result.json`,JSON.stringify({
-  passed:cases.length===4,
+  passed:cases.length===5,
   evidence:'Actual rendered new-chat Send with synthetic HTTP/SSE; fresh context per case. No live runtime/provider qualification.',
   reports,
  },null,2));
