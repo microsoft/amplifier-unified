@@ -52,16 +52,23 @@ try{
  const build=await page.evaluate(()=>window.amplifier.getState().client.build);
  assert.deepEqual(build,{serverVersion:identity.serverVersion,frontend:manifest.build});
  const history=async()=>{const response=await context.request.get(base+'/fixture/message-source');assert.equal(response.status(),200);return response.json()};
+ const assistantRendered=async count=>{
+  await expect(page.getByRole('heading',{name:'Ready',exact:true})).toHaveCount(count);
+  const replies=page.getByText('I received your message and attachments.',{exact:true});
+  await expect(replies).toHaveCount(count);await expect(replies.last()).toBeVisible();
+ };
  const send=async(text,count)=>{
   await composer.fill(text);await page.locator('[data-part="composer-primary-action"]').click();
   await expect.poll(async()=> (await history()).sends.length).toBe(count);
   await expect.poll(async()=> (await history()).sessions.flatMap(row=>row.messages||[]).filter(row=>row.role==='assistant').length).toBe(count);
   await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId).status)).toBe('idle');
   await expect(page.getByText(text,{exact:true})).toBeVisible();
+  await assistantRendered(count);
  };
  await send('History through the paired server',1);
  await page.reload();await showFixtureConversation(page);
  await expect(page.getByText('History through the paired server',{exact:true})).toBeVisible();
+ await assistantRendered(1);
  await send('A second accepted message',2);
  await composer.fill('Unfinished paired-server draft');
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.draft)).toBe('Unfinished paired-server draft');
@@ -81,6 +88,7 @@ try{
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.navWidth)).toBe(417);
  await expect.poll(()=>page.evaluate(()=>streamProbe.at(-1).frames['state-delta'])).toBeGreaterThan(deltas);
  await page.reload();await showFixtureConversation(page);await expect(composer).toHaveText('Unfinished paired-server draft');
+ await assistantRendered(2);
  assert.notEqual(await page.evaluate(()=>window.amplifier.getState().client.id),clientId,'Reload creates a new writable client identity');
  assert.deepEqual(await history(),before,'Reconnect/reload preserve canonical history and do not execute work again');
  assert.equal(sends.length,2);assert.equal(new Set(sends.map(row=>row.id)).size,2);
@@ -88,6 +96,6 @@ try{
  console.log(JSON.stringify({passed:true,qualification:'actual-source-server-with-installed-independent-web-artifact',identity,build,
   authRejectsMissingAndInvalidCredential:true,sseSelectedByFixture:true,realSSEDeltaObserved:true,
   sends:2,distinctAcceptedCommandIds:2,historyDigest:hash(JSON.stringify(before.sessions)),historyPreserved:true,
-  draftSurvivedReconnectAndReload:true,limits:['Synthetic runtime/providers, not native execution or model calls','Source server composition, not an unmodified published wheel','No hardware, live adoption, cross-version or AHP qualification']}));
+  assistantRenderedAfterSendAndReload:true,draftSurvivedReconnectAndReload:true,limits:['Synthetic runtime/providers, not native execution or model calls','Source server composition, not an unmodified published wheel','No hardware, live adoption, cross-version or AHP qualification']}));
 }catch(error){failure=error;throw error}
 finally{await finishFixture({label:'Paired web server',close:[['Paired web browser',()=>browser?.close()]],stop,originalError:failure})}
