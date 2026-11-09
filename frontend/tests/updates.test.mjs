@@ -103,6 +103,9 @@ test('missing notes stop claiming loading, reset by target, and accept late data
  await renderAct(async()=>root.update(mount({...next,releaseNotes:[release]})));
  assert.match(text(),/Workspace settings now apply/);
  assert.doesNotMatch(text(),/not arrived|Loading release notes/);
+ await renderAct(async()=>root.update(mount(next)));
+ assert.match(text(),/Loading release notes/);
+ assert.doesNotMatch(text(),/not arrived/);
  assert.deepEqual(calls,[]);
  await renderAct(async()=>root.unmount());
 });

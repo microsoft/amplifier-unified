@@ -9,6 +9,7 @@ function useNotesState(application,context){
  const identity=JSON.stringify([context,application.current,application.runningRevision,missing]);
  const [expired,setExpired]=React.useState(null);
  React.useEffect(()=>{
+  setExpired(null);
   if(!missing)return;
   // The initial compact snapshot may precede Settings detail demand. This is
   // an arrival grace, not evidence that a network request remains in flight.
@@ -64,7 +65,7 @@ export function ReleaseHistory({application,state,act}){
   <div className="a-update-disclosure-body">
   <p className="a-caption">Application release history · installed notes are available offline.</p>
   {application.releaseNotesWarning&&<p className="a-release-notes-warning" role="status">{application.releaseNotesWarning} {tag&&<a href={'https://github.com/microsoft/amplifier-unified/releases/tag/'+tag} target="_blank" rel="noreferrer">View published release</a>}</p>}
-  {!entries&&<p className="a-caption" role="status">{message}</p>}
+  {!entries&&!application.releaseNotesWarning&&<p className="a-caption" role="status">{message}</p>}
   {entries?.length===0&&<p className="a-caption">No release notes are included with this installation.</p>}
   {(entries||[]).map(release=><details key={release.version} className="a-release-entry" open={release.version===application.current||newer(release.version,application.current)}>
    <summary><strong>{release.version} · {release.title}</strong><span className="a-caption">{status(release,application)}</span>{release.notices.length>0&&<span className="a-release-impact">High impact</span>}</summary>

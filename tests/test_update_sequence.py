@@ -244,12 +244,15 @@ async def test_checked_source_failure_retry_disposition_survives_checks_and_rest
     assert not updates.active_release(manager.home)
 
 
-async def test_preparation_witness_tracks_source_policy_not_unrelated_settings(manager):
+async def test_preparation_witness_tracks_source_policy_not_unrelated_settings(manager, monkeypatch):
     from amplifier_web.update_health import preparation_key
     from amplifier_web.host.config import write_private
+    from amplifier_web.host import config as host_config
+    shared = manager.home/'fixture-shared'
+    shared.mkdir()
+    monkeypatch.setattr(host_config, 'amplifier_home', lambda: shared)
     rows = [{**source('included'), 'latest': 'b'*40}]
-    config = manager.home/'config/settings.yaml'
-    config.parent.mkdir(exist_ok=True)
+    config = shared/'settings.yaml'
     write_private(config, 'updates:\n  intervalHours: 4\n')
     original = preparation_key(manager, rows)
     write_private(config, 'updates:\n  intervalHours: 8\n')
