@@ -476,8 +476,11 @@ async def installed_target():
     if not uv or not executable:
         raise ValueError('Install and launch this app with uv tool before applying application updates')
     env=git_environment()
-    tool_root=Path(await process(uv,'tool','dir',env=env,timeout=10)).expanduser().resolve()
-    bin_root=Path(await process(uv,'tool','dir','--bin',env=env,timeout=10)).expanduser().resolve()
+    tool_root=Path(await process(uv,'tool','dir',env=env,timeout=10)).expanduser()
+    bin_root=Path(await process(uv,'tool','dir','--bin',env=env,timeout=10)).expanduser()
+    # Retain lexical Windows components for the native reparse/ACL boundary.
+    if os.name!='nt':
+        tool_root,bin_root=tool_root.resolve(),bin_root.resolve()
     prefix=tool_root/'amplifier-unified'
     launcher=prefix/('Scripts/amplifier-unified.exe' if os.name=='nt' else 'bin/amplifier-unified')
     public_launcher=bin_root/('amplifier-unified.exe' if os.name=='nt' else 'amplifier-unified')
@@ -487,7 +490,12 @@ async def installed_target():
     owns_prefix = Path(sys.prefix).resolve() == prefix.resolve()
     if generation and supports(prefix):
         owns_prefix = owns_prefix or Path(sys.prefix).resolve() == generation['prefix'].resolve()
-    if not owns_prefix or Path(executable).resolve()!=launcher.resolve() or public_launcher.resolve()!=launcher.resolve():
+    if not owns_prefix:
+        raise ValueError('This host is not running from the active uv tool installation. Restart it using that installation before updating; no global tool was changed.')
+    if os.name=='nt':
+        from .windows_uv_tool import validate_launcher
+        validate_launcher(prefix,bin_root,executable)
+    elif Path(executable).resolve()!=launcher.resolve() or public_launcher.resolve()!=launcher.resolve():
         raise ValueError('This host is not running from the active uv tool installation. Restart it using that installation before updating; no global tool was changed.')
     python=Path(sys.prefix)/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
     previous={'version':__version__,'installation':str(prefix),'source':None}
