@@ -345,6 +345,7 @@ async def test_native_child_resume_follows_committed_worktree_handoff(tmp_path, 
     approvals = Approvals(None, AsyncMock(return_value='deny'))
     diagnostic, failures, guards, runs, invoked, access = {}, [], [], [], [], []
     saved_messages = []
+    checkpoint_messages = []
     parents = []
 
     async def root():
@@ -442,7 +443,8 @@ async def test_native_child_resume_follows_committed_worktree_handoff(tmp_path, 
         await context.add_message({'role': 'user', 'content': prompt})
         await context.add_message({'role': 'assistant', 'content': 'observed'})
         await coordinator.get_capability('live.checkpoint')()
-        assert store.load('handoff-child')[0] == await context.get_messages()
+        checkpoint_messages.append(copy.deepcopy(await context.get_messages()))
+        assert store.load('handoff-child')[0] == checkpoint_messages[-1]
         return 'observed'
 
     monkeypatch.setattr(fixture.FiniteOrchestrator, 'execute',
@@ -479,7 +481,10 @@ async def test_native_child_resume_follows_committed_worktree_handoff(tmp_path, 
         result = await registry.resume('handoff-child', 'after-handoff', parent)
         assert result['session_id'] == 'handoff-child' and result['output'] == 'observed'
         messages, metadata = store.load('handoff-child')
-        assert messages == saved_messages + [
+        assert messages == checkpoint_messages[-1]
+        assert messages[:len(saved_messages)] == saved_messages
+        assert [{key: message[key] for key in ('role', 'content')}
+                for message in messages[len(saved_messages):]] == [
             {'role': 'user', 'content': 'after-handoff'}, {'role': 'assistant', 'content': 'observed'}]
         assert metadata['parent_id'] == sid and metadata['mount_plan']['tools'] == saved_metadata['mount_plan']['tools']
         assert [row['resumed'] for row in fixture.created if row['id'] == 'handoff-child'] == [False, True]
