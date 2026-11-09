@@ -588,7 +588,8 @@ test('authored constraint names the source check without claiming local edits',(
  const diagnostics={attemptId:'candidate',lastFailure:failure,events:[failure]};
  const html=render({phase:'error',diagnostics});
  assert.match(html,/amplifier-foundation/);
- assert.match(html,/could not be reconciled with the selected component/);
+ assert.match(html,/protected package source declaration conflicts with the checked update/);
+ assert.match(html,/Unchanged automatic attempts are paused/);
  assert.match(html,/does not establish local edits/);
  assert.doesNotMatch(html,/Local source changes or an explicit dependency override were preserved/);
  const receipt=JSON.parse(diagnosticReceipt(diagnostics));
