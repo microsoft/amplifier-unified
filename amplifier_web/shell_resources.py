@@ -28,7 +28,7 @@ GLOBAL_KEYS = frozenset({'workspaces', 'settings', 'workspaceDefaults', 'pinnedS
     'hiddenNativeWorkspaces'})
 CHAT_GLOBALS = GLOBAL_KEYS - {'sharedHistory', 'locationListing', 'actionStatus'}
 CHAT_FILTERS = ('navChatScope', 'navSort', 'navFilter', 'navStatusFilter', 'navLocationFilter',
-    'navArchive', 'navCollection', 'navChatPage', 'navShowAgentCreated')
+    'navArchive', 'navCollection', 'navChatPage', 'navShowAgentCreated', 'navGroup', 'navAge')
 WORKSPACE_FILTERS = ('navWorkspaceBrowseFor', 'navWorkspacePath', 'navWorkspaceFilter',
     'navWorkspacePage', 'navWorkspaceMode', 'navWorkspaceArchive')
 
@@ -265,9 +265,11 @@ class ShellResources:
         else:
             query = view
         fields = (*CHAT_FILTERS, 'navPinnedPage', 'navRecentLimit', 'navRecentRevision')
+        from .chat_navigation import list_clock
         return (navigation_revision, globals_key,
                 workspace if query.get('navChatScope') != 'all' else None,
-                scoped.get('selectedSessionId'), encoded({key: query.get(key) for key in fields}))
+                scoped.get('selectedSessionId'), encoded({key: query.get(key) for key in fields}),
+                list_clock() if name in {'sidebarSearch', 'sidebarWorkspace'} else None)
 
     @staticmethod
     def _record(value, previous, previous_revision=0):

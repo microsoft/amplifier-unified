@@ -6,7 +6,8 @@ querying history never admits a session or starts its runtime.
 import json
 from typing import Any
 
-from .chat_navigation import ChatPageResult, PAGE_SIZE, valid_recent_limit, _matches
+from .chat_navigation import (ChatPageResult, PAGE_SIZE, valid_recent_limit, _matches,
+                              AGE_SECONDS, list_clock, list_group, group_row)
 from .navigation_summary import path_labels
 
 
@@ -114,6 +115,10 @@ def _chat_query(directory, state, section, *, activity_counts=True):
     if archive != 'active': scope['archive'] = archive
     status = view.get('navStatusFilter', 'all')
     if status != 'all': scope['statusFilter'] = status
+    grouped = section in {'search', 'workspace'}
+    group, age, now = view.get('navGroup', 'recent'), view.get('navAge', 'all'), list_clock()
+    if grouped:
+        scope.update(group=group, age=age)
     where = ["session_kind='root'", '(resolved_workspace_id IS NOT NULL OR managed)']
     if mode == 'workspace':
         where += ['NOT managed', 'resolved_workspace_id=?']
@@ -123,6 +128,9 @@ def _chat_query(directory, state, section, *, activity_counts=True):
     if query:
         where.append('directory_match(?,title,description,id,COALESCE(native_id,id),resolved_workspace,workspace_name)')
         params.append(query)
+    if grouped and age in AGE_SECONDS:
+        where.append('(pin_position IS NOT NULL OR (recent>0 AND recent>=?))')
+        params.append(now-AGE_SECONDS[age])
     if section:
         scope['section'] = section
         if section == 'pinned':
@@ -148,6 +156,15 @@ def _chat_query(directory, state, section, *, activity_counts=True):
     order = f'pin_position IS NULL,CASE WHEN pin_position IS NOT NULL THEN pin_position END,CASE WHEN pin_position IS NULL THEN {ordering} END,ordinal,id'
     if section in {'recent', 'shortcuts'}:
         order = f'{ordering},ordinal,id'
+    if grouped:
+        directory.db.create_function('directory_group_rank', 5,
+            lambda pin, recent, workspace, name, kind:
+                list_group(group, pin is not None, recent, workspace, name, kind, now)[2],
+            deterministic=True)
+        prefix = 'directory_group_rank(pin_position,recent,resolved_workspace_id,workspace_name,activity_kind)'
+        if group == 'workspace':
+            prefix += ",CASE WHEN pin_position IS NULL THEN directory_lower(workspace_name) END,CASE WHEN pin_position IS NULL THEN COALESCE(resolved_workspace_id,'') END"
+        order = prefix + ',' + order
     return sql, params, scope, counts, order, workspaces, total
 
 
@@ -199,6 +216,8 @@ def chats(directory, state: dict[str, Any], *, section: str | None = None) -> Ch
     labels = path_labels(row['path'] for row in workspaces)
     rows = _rows(directory, sql + f' SELECT * FROM filtered ORDER BY {order} LIMIT ? OFFSET ?', [*params,end-start,start])
     result['items'] = [_chat_row(directory,row,labels) for row in rows]
+    if section in {'search', 'workspace'}:
+        result['items'] = [group_row(row, scope['group'], list_clock()) for row in result['items']]
     return result
 
 

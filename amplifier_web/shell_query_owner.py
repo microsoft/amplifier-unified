@@ -24,7 +24,7 @@ QUERY_GLOBALS = frozenset({'workspaces', 'pinnedSessionIds', 'pinnedWorkspaceIds
 WORKSPACE_FIELDS = frozenset({'id', 'path', 'name', 'available', 'archived'})
 VIEW_FIELDS = frozenset({'navChatScope', 'navSort', 'navFilter', 'navStatusFilter',
     'navLocationFilter', 'navArchive', 'navCollection', 'navChatPage', 'navPinnedPage',
-    'navShowAgentCreated', 'navRecentLimit', 'navRecentRevision', 'navWorkspaceArchive'})
+    'navShowAgentCreated', 'navRecentLimit', 'navRecentRevision', 'navWorkspaceArchive', 'navGroup', 'navAge'})
 
 
 class InputLimit(ValueError):

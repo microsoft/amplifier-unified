@@ -34,6 +34,19 @@ def chat(identity,workspace='one',recent=1,**fields):
 def ids(page):return [row['id'] for row in page['items']]
 
 
+@pytest.mark.parametrize('key,values', [
+    ('navGroup', ['recent', 'workspace', 'status']),
+    ('navAge', ['24h', '7d', '30d', '90d', '1y', 'all']),
+])
+def test_catalog_view_preferences_validate_direct_and_nested(key, values):
+    for value in values:
+        for patch in [{key: value}, {'navRecentView': {key: value}}]:
+            assert chat_navigation.view_patch(patch) == patch
+    for value in [None, False, 0, 'invalid']:
+        with pytest.raises(ValueError):
+            chat_navigation.view_patch({key: value})
+
+
 @pytest.mark.parametrize('nested', [False, True])
 @pytest.mark.parametrize('scope', ['workspace', 'all'])
 def test_pick_up_again_accepts_direct_and_nested_filters_without_changing_attention(nested, scope):
