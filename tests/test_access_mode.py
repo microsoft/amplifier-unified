@@ -101,9 +101,16 @@ async def test_enabling_settles_existing_capability_and_permission_but_not_quest
     assert not any(call[0] == 'start' for call in app.runtime.calls)
 
 
-async def test_settlement_join_observes_actual_ack_and_cancelled_join_is_independent(app):
+async def test_settlement_join_observes_actual_ack_and_cancelled_join_is_independent(app, monkeypatch):
     source = app.state['sessions'][0]
     await save(app)
+    await asyncio.sleep(0)
+    await app.access_mode.settle(source['id'], wait=True)
+    settle_once, passes = app.access_mode._settle_once, []
+    async def counted(sid):
+        passes.append(sid)
+        return await settle_once(sid)
+    monkeypatch.setattr(app.access_mode, '_settle_once', counted)
     entered, finish = asyncio.Event(), asyncio.Event()
     replies = []
     async def respond(sid, identity, decision):
@@ -127,6 +134,7 @@ async def test_settlement_join_observes_actual_ack_and_cancelled_join_is_indepen
     await asyncio.gather(first, joined)
     assert source['approvals'][-1]['status'] == 'allow'
     assert len(replies) == 1
+    assert passes == [source['id']]  # Passive joiners don't request another pass.
 
 
 async def test_settlement_join_propagates_owner_failure(app, monkeypatch):

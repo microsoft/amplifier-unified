@@ -364,11 +364,12 @@ class AccessMode:
     async def settle(self, sid, *, wait=False):
         """Retry only resolution of the exact live waiter, never its operation."""
         if sid in self._settling:
-            self._settle_again.add(sid)
             if wait:
                 error = await asyncio.shield(self._settling[sid])
                 if error is not None:
                     raise error
+            else:
+                self._settle_again.add(sid)
             return
         settled = self._settling[sid] = asyncio.get_running_loop().create_future()
         error = None
