@@ -169,6 +169,7 @@ def test_name_qualifiers_use_display_names_across_unpinned_filtered_and_off_page
     # Renaming the other registrations removes the collision, even when unpinned.
     value['workspaces'][1]['name'] = 'Second app'
     value['workspaces'][2]['name'] = 'Other app'
+    value['view']['navWorkspaceFilter'] = ''
     assert 'nameQualifier' not in snapshot(value, pinned_only=True)['rows'][0]
 
 
