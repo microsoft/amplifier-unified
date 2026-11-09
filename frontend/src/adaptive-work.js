@@ -13,7 +13,7 @@ export function homePatch(presentation={},extra={},view={}){
 // Like chat reading positions, Home's scroll stays in this browser tab. Wait for
 // the matching resource before restoring; a loading placeholder has no height.
 export function workReadingKey(view,mode){
- return JSON.stringify([mode,view.workHomeScope||'all',view.workHomeQuery||'',view.workHomeFilter||'all',
+ return JSON.stringify([mode,view.workHomeScope||'all',view.workHomeQuery||'',view.workHomeFilter||'all',view.navAge||'all',
   ...workKinds.map(key=>view.workHomePages?.[key]||0)]);
 }
 export function rememberHomeScroll(pane,key,storageKey='amplifier.work-home-reading.v1'){
@@ -30,6 +30,7 @@ export function rememberHomeScroll(pane,key,storageKey='amplifier.work-home-read
 export function currentWorkPage(value,view={},pinnedScope=null){
  return value?.scope===(pinnedScope||view.workHomeScope||'all')
   &&value?.requestedScope===(view.workHomeScope||'all')&&value?.query===(view.workHomeQuery||'')
+  &&(value?.age||'all')===(view.navAge||'all')
   &&workKinds.every(key=>(value.requestedPages?.[key]||0)===(view.workHomePages?.[key]||0));
 }
 export function currentWorkContext(value,view={},pinnedScope=null){

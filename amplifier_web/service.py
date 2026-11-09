@@ -3546,6 +3546,7 @@ class AppService:
                 allowed.update({'navWorkspaceArchive', 'projectPermissionsDraft', 'planExpanded', 'settingsCanvas', 'setupJourney', 'navArchive', 'navCollection', 'navSort', 'navShowAgentCreated', 'navRecentLimit', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab', 'workspaceStarterEditor', 'configurationDrafts', 'workWorkspaceSettings'})
                 allowed.update({'workHomeView', 'workHomeFilter', 'workHomeScope', 'workHomeQuery', 'workHomePages'})
                 allowed.update({'navMode', 'navStatusCollapsed', 'navStatusExpanded', 'navStatusPages'})
+                allowed.add('navAge')
                 allowed.add('draftDocument')
                 if 'draftDocument' in patch and 'draft' not in patch:
                     raise AppError('Save quoted content with its draft text.')

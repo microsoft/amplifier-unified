@@ -22,7 +22,7 @@ const navigation=new Set(['builtin.chats','builtin.workspaces']);
 const sidebarFields={pinnedNavigation:['pinnedNavigation'],
  recentNavigation:['recentNavigation','recentShortcuts'],
  workspaceShortcuts:['workspaceShortcuts']};
-const queryScope=['mode','workspaceId','filter','clientId','instanceId','generation'];
+const queryScope=['mode','workspaceId','filter','clientId','instanceId','generation','age'];
 function readingResources(bootstrap,instance,prior,snapshot,wanted){
  const retained={};
  if(!prior||prior.generation!==snapshot.generation
@@ -35,6 +35,7 @@ function readingResources(bootstrap,instance,prior,snapshot,wanted){
   ||queryScope.some(key=>prior.recentScope[key]!==snapshot.recentScope[key]))return retained;
  for(const name of wanted){
   if(!sidebarFields[name])continue;
+  if((prior.view?.navAge||'all')!==(snapshot.view?.navAge||'all'))continue;
   if(name==='recentNavigation'&&!!prior.view?.navShowAgentCreated!==!!snapshot.view?.navShowAgentCreated)continue;
   if(name==='pinnedNavigation'&&(prior.view?.navPinnedPage||0)!==(snapshot.view?.navPinnedPage||0))continue;
   const old=prior.navigationResourceRetained?.[name];

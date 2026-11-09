@@ -8,7 +8,8 @@ from amplifier_web.shell_resources import scope_for
 from test_shell_modules import service, settled_resources
 
 
-@pytest.mark.parametrize('resource,section', [('sidebarSearch', 'search'), ('sidebarWorkspace', 'workspace')])
+@pytest.mark.parametrize('resource,section', [('sidebarSearch', 'search'), ('sidebarWorkspace', 'workspace'),
+    ('workHome', None), ('workStatusIdle', None), ('recentNavigation', None), ('workspaceShortcuts', None)])
 async def test_grouped_cutoff_expires_through_settled_browser_delivery(service, monkeypatch, resource, section):
     from amplifier_web import chat_navigation
     now = [1_800_000_000]
@@ -18,16 +19,22 @@ async def test_grouped_cutoff_expires_through_settled_browser_delivery(service, 
     service._save_changes(sessions={'alpha', 'beta'}, globals={'workspaces'})
     client = service.clients.attach('age-client')
     client.update(selectedSessionId='alpha', selectedWorkspaceId='one')
-    shell_client = service.shell.client('age-client')
-    shell_client['views']['chats'] = {'view': {
-        'navAge': '24h', 'navRecentView': {'navAge': '24h'}}}
-    service.shell.put('client', 'age-client', shell_client)
+    client['view']['navAge'] = '24h'
     with service.clients.bind('age-client'):
         owner = service.shell.resources
         owner.register('age-client', 1, [resource], scope_for(service.state))
         await settled_resources(service, 'age-client')
         first = service.browser_state()
-        page = lambda frame: frame['shellResources']['instances']['chats']['resources'][resource]['value']['sidebarNavigation'][section]
+        def page(frame):
+            value = frame['shellResources']['instances']['chats']['resources'][resource]['value']
+            if section:
+                return value['sidebarNavigation'][section]
+            if resource == 'workHome':
+                return value['workHome']['groups']['idle']
+            if resource == 'workspaceShortcuts':
+                rows = value['workspaceShortcuts']
+                return {'total': sum(row['chatCount'] for row in rows), 'items': [row for row in rows if row['chatCount']]}
+            return value[resource]
         assert page(first)['total'] > 0
         assert service.browser_state() is first
         revision = service.state['revision']

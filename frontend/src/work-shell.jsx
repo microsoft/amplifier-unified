@@ -127,10 +127,10 @@ function WorkBrowser({host,workspaceHost,state,act,dispatch,presentation,resourc
  const [mode,setMode]=useLandingLayout(identity,presentation);
  const workspacePending=surface==='workspace'&&(workspaceModel.state.navigationWorkspacePending||model.state.navigationWorkspacePending);
  const setTab=tab=>act('view.update',{patch:{workWorkspaceTab:tab}});
- const view=surface==='chats'?{...model.view,...model.state.sidebarNavigation?.recentView,...model.view.navRecentView,navChatScope:'all'}:{...model.view,navChatScope:'workspace'};
+ const view=surface==='chats'?{...model.view,...model.state.sidebarNavigation?.recentView,...model.view.navRecentView,navAge:model.view.navAge||'all',navChatScope:'all'}:{...model.view,navChatScope:'workspace'};
  const page=surface==='chats'||surface==='workspace'&&tab==='chats'?chatPage({...model.state,view},model.workspace,{section:surface==='chats'?'search':'workspace'}):null;
  const pageResource=surface==='chats'?'sidebarSearch':'sidebarWorkspace';
- const viewAct=(name,args)=>{if(name!=='view.update'||surface!=='chats')return model.act(name,args);const next={...model.state.sidebarNavigation?.recentView,...model.view.navRecentView,...args.patch};if(!Object.hasOwn(args.patch,'navChatPage'))delete next.navChatPage;return model.act(name,{patch:{navRecentView:next}})};
+ const viewAct=(name,args)=>{if(name!=='view.update'||surface!=='chats')return model.act(name,args);const next={...model.state.sidebarNavigation?.recentView,...model.view.navRecentView,...args.patch};delete next.navAge;if(!Object.hasOwn(args.patch,'navChatPage'))delete next.navChatPage;return model.act(name,{patch:{navRecentView:next}})};
  const title=surface==='workspace'?workspacePending?'Loading workspace…':workspace?.name||'Workspace unavailable':surface==='workspaces'?'All workspaces':'All chats';
  const description=surface==='workspace'?'Your chats, files, and related work in one place.':surface==='workspaces'?'Find a workspace, browse its folders, or start something new.':'Find a conversation or see what needs your attention.';
  const readingKey=JSON.stringify([mode,tab,view.navFilter,view.navStatusFilter,view.navArchive,view.navSort,view.navGroup,view.navAge,view.navLocationFilter,view.navShowAgentCreated,page?.index,workspaceModel.state.workspaceExplorer?.page,workspaceModel.state.workspaceExplorer?.filter,workspaceModel.state.workspaceExplorer?.mode,workspaceModel.state.workspaceExplorer?.archive,workspaceModel.state.workspaceExplorer?.path]);

@@ -63,7 +63,7 @@ export function AdaptiveWorkHome({host,state,act,presentation}){
    {!limit&&page.pages>1&&<div className="a-work-pagination"><button type="button" disabled={!page.index} onClick={()=>patch({workHomePages:{...view.workHomePages,[kind]:page.index-1}})}>Previous</button><span>{page.start+1}–{page.end} of {page.total}</span><button type="button" disabled={page.index+1>=page.pages} onClick={()=>patch({workHomePages:{...view.workHomePages,[kind]:page.index+1}})}>Next</button></div>}
   </section>;
  }
- const focusKey=JSON.stringify([scope,view.workHomeScope||'all',query]);
+ const focusKey=JSON.stringify([scope,view.workHomeScope||'all',query,view.navAge||'all']);
  const savedFocus=focusCursor?.key===focusKey?focusCursor:null;
  const focusKind=filter!=='all'?filter:pages[savedFocus?.kind]?.items.length?savedFocus.kind:Object.keys(groups).find(key=>pages[key]?.items.length);
  const focusPage=pages[focusKind],focus=focusPosition(focusPage,savedFocus?.kind===focusKind?savedFocus:null),focusChat=focus&&focusPage.items[focus.index];

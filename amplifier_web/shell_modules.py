@@ -354,8 +354,10 @@ class ShellModules:
         view = dict(client.get('baselineView', {}))
         view.update(client['views'].get(instance['id'], {}).get('view', {}))
         from .adaptive_work import WORK_QUERY_FIELDS
-        view.update({key: state.get('view', {}).get(key) for key in WORK_QUERY_FIELDS})
+        view.update({key: state.get('view', {}).get(key) for key in WORK_QUERY_FIELDS if key != 'navAge'})
         view['navStatusPages'] = state.get('view', {}).get('navStatusPages', {})
+        if instance['package'] in BUILTINS:
+            view['navAge'] = state.get('view', {}).get('navAge', 'all')
         view.setdefault('navWorkspaceMode', 'recent')
         scope = instance.get('scope', {})
         workspace_id = scope.get('workspaceId') if scope.get('mode') == 'pinned' else state.get('selectedWorkspaceId')
@@ -411,10 +413,13 @@ class ShellModules:
             and isinstance(row.get('path'), str) and row['path']), None)
         recent_scope = {'mode': sidebar_home['navChatScope'],
             'workspaceId': recent_workspace['id'] if pinned_scope and recent_workspace else None,
-            'filter': '', 'clientId': identity if identity is not None else self.service.clients.current.get(),
+            'filter': '', 'age': view.get('navAge', 'all'),
+            'clientId': identity if identity is not None else self.service.clients.current.get(),
             'instanceId': instance['id'],
             'generation': client['views'].get(instance['id'], {}).get('generation', 0)}
         recent_view = {**sidebar_home, **view.get('navRecentView', {})}
+        if instance['package'] in BUILTINS:
+            recent_view['navAge'] = view.get('navAge', 'all')
         pins = projections.chats({**scoped, 'view': sidebar_home}, section='pinned') if wants('sidebarPinned') else None
         recent = projections.chats({**scoped, 'view': recent_view}, section='recent') if wants('sidebarRecent') else None
         search = projections.chats({**scoped, 'view': recent_view}, section='search') if wants('sidebarSearch') else None
@@ -723,6 +728,8 @@ class ShellModules:
         elif action == 'shell.view.update':
             instance = self.instance(client, args['instanceId'])
             patch = args['patch']
+            if instance['package'] in BUILTINS and ('navAge' in patch or 'navAge' in patch.get('navRecentView', {})):
+                fail('Use view.update navAge for the shared client activity filter.')
             if instance['slot'] == 'navigation':
                 if set(patch) - VIEW_KEYS or len(encoded(patch)) > 16000:
                     fail('Unsupported or oversized module view state.')

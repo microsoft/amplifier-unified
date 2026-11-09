@@ -101,7 +101,7 @@ async def test_delayed_grouped_completion_keeps_payload_clock_not_notification_c
         row.update(recentActivityAt=now[0]-86400, navigationActivityAt=now[0]-86400)
     owner = prepare(service)
     client = service.shell.client('browser')
-    client['baselineView']['navRecentView'] = {'navAge': '24h'}
+    service.clients.records['browser']['view']['navAge'] = '24h'
     service.shell.put('client', 'browser', client)
     owner.queries.factory = held_projector
     notified = []

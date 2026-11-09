@@ -46,3 +46,15 @@ test('an explicitly pinned navigation component retains its workspace scope',()=
  assert.equal(shown.selectedWorkspaceId,'pinned');assert.equal(shown.navigationWorkspacePending,false);
  assert.equal(shown.view.workWorkspaceId,null);
 });
+
+test('a delayed module view cannot restore a different shared activity range',()=>{
+ const old={selectedWorkspaceId:'a',view:{navAge:'all'},sidebarNavigation:{search:{scope:{age:'all'},items:[{id:'old'}]}}};
+ const state={selectedWorkspaceId:'a',view:{navAge:'24h',workSurface:'chats'}};
+ const next=navigationSnapshot(old,state);
+ assert.equal(next.view.navAge,'24h');
+ assert.equal(next.sidebarNavigation,old.sidebarNavigation,'Retain scope evidence, never relabel the old page');
+ assert.equal(next.sidebarNavigation.search.scope.age,'all');
+ assert.equal(navigationSnapshot(next,state),next);
+ assert.equal(navigationSnapshot(old,state,undefined,false).view.navAge,'all',
+  'Independent custom module view stays under its own contract');
+});

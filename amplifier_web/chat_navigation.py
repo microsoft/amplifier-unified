@@ -57,6 +57,18 @@ def list_clock():
     return saved if saved is not None else int(time.time() // 60) * 60
 
 
+def age_scope(state):
+    """One age/clock witness for discovery, not transcript or registry membership."""
+    age = state.get('view', {}).get('navAge', 'all')
+    return age, state.get('_navigationListClock', list_clock()) if age in AGE_SECONDS else None
+
+
+def within_age(session, state, *, witness=None, pins=None):
+    age, now = age_scope(state) if witness is None else witness
+    return (age not in AGE_SECONDS or session['id'] in (state.get('pinnedSessionIds', ()) if pins is None else pins)
+            or 0 < navigation_activity(session) >= now - AGE_SECONDS[age])
+
+
 @contextmanager
 def frozen_list_clock(now):
     token = _list_clock.set(now)
@@ -417,8 +429,9 @@ def catalog(state, *, indexed=None, pin_first=True, section=None):
     grouped_catalog = section in {'search', 'workspace'}
     group, age = view.get('navGroup', 'recent'), view.get('navAge', 'all')
     now = state.get('_navigationListClock', list_clock())
+    scope['age'] = age
     if grouped_catalog:
-        scope.update(group=group, age=age)
+        scope['group'] = group
     if sort != 'activity':
         scope['sort'] = sort
     location_filter = view.get('navLocationFilter', 'all') if mode == 'all' else 'all'
@@ -459,7 +472,7 @@ def catalog(state, *, indexed=None, pin_first=True, section=None):
         shared_id = session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']
         if not _matches((title, description, session['id'], shared_id, workspace['path'], workspace.get('name', '')), query):
             continue
-        if grouped_catalog and age in AGE_SECONDS and session['id'] not in pins:
+        if age in AGE_SECONDS and session['id'] not in pins:
             at = navigation_activity(session)
             if at <= 0 or at < now - AGE_SECONDS[age]:
                 continue

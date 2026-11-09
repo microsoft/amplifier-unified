@@ -13,7 +13,7 @@ test('appearance chooses arrival only; explicit starting preference wins',()=>{
 test('late pages cannot answer a new project, search or page',()=>{
  const data={scope:'a',requestedScope:'a',query:'launch',requestedPages:{idle:1}};
  assert.equal(currentWorkPage(data,{workHomeScope:'a',workHomeQuery:'launch',workHomePages:{idle:1}}),true);
- for(const changes of [{workHomeScope:'b'},{workHomeQuery:'offsite'},{workHomePages:{idle:2}}])
+ for(const changes of [{workHomeScope:'b'},{workHomeQuery:'offsite'},{workHomePages:{idle:2}},{navAge:'24h'}])
   assert.equal(currentWorkPage(data,{workHomeScope:'a',workHomeQuery:'launch',workHomePages:{idle:1},...changes}),false);
 });
 

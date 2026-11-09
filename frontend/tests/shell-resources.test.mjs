@@ -155,6 +155,8 @@ test('retained sidebar survives pending baseline but clears for new host, module
  assert.deepEqual(resourceSnapshots(bootstrap,moved,changed,waiting).chat.navigationResourceRetained,{});
  const filtered=structuredClone(next);filtered.instances.chat.resources.context.value.view.navShowAgentCreated=true;
  assert.equal(resourceSnapshots(bootstrap,filtered,changed,waiting).chat.navigationResourceRetained.recentNavigation,undefined);
+ const aged=structuredClone(next);aged.instances.chat.resources.context.value.view.navAge='24h';
+ assert.deepEqual(resourceSnapshots(bootstrap,aged,changed,waiting).chat.navigationResourceRetained,{});
  assert.deepEqual(pendingSnapshots(bootstrap,previous,changed,'new-host').chat.navigationResourceRetained,{});
  assert.equal(pendingSnapshots({...bootstrap,instanceGenerations:{...bootstrap.instanceGenerations,chat:2}},previous,changed).chat,undefined);
  assert.deepEqual(pendingSnapshots(bootstrap,previous,{...changed,resources:[]}).chat.navigationResourceRetained,{});

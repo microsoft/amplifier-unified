@@ -40,6 +40,29 @@ async def test_status_sidebar_is_independent_bounded_and_uses_same_catalog(servi
     assert missing['unavailable'] and not missing['items']
 
 
+async def test_shared_age_precedes_home_status_counts_and_pages(service, monkeypatch):
+    from amplifier_web import chat_navigation
+    now = 1_800_000_000
+    monkeypatch.setattr(chat_navigation.time, 'time', lambda: now)
+    service.state['sessions'] = [chat('fresh', recent=now, workspace='one'),
+        chat('old-pin', recent=1), chat('old', recent=1), chat('unknown', recent=0)]
+    for row in service.state['sessions']:
+        row.update(workspace=service.state['workspaces'][0]['path'], messages=[])
+    service.state['pinnedSessionIds'] = ['old-pin']
+    service.projections.invalidate()
+    before = deepcopy(service.state)
+    filtered = {**service.state, 'view': {'navAge': '24h', 'workHomePages': {'idle': 9},
+                                        'navStatusPages': {'idle': 8}}}
+    home = work_home(service, filtered)
+    sidebar = work_status(service, filtered, 'idle')
+    assert home['age'] == sidebar['scope']['age'] == '24h'
+    assert home['groups']['idle']['total'] == sidebar['total'] == 2
+    assert {row['id'] for row in home['items']} == {'fresh', 'old-pin'}
+    assert home['groups']['idle']['index'] == sidebar['index'] == 0
+    assert work_home(service, service.state)['groups']['idle']['total'] == 4
+    assert service.state == before
+
+
 async def test_status_sidebar_pages_do_not_mutate_the_catalog(service):
     base = service.state['sessions'][0]
     service.state['sessions'] = [{**deepcopy(base), 'id': f'status-{i}', 'recentActivityAt': i+1} for i in range(125)]
