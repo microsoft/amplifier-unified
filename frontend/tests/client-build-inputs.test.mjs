@@ -21,7 +21,10 @@ const git=(directory,...args)=>execFileSync('git',args,{cwd:directory,encoding:'
 function fixture(t){
  const temporary=mkdtempSync(join(tmpdir(),'web-inputs-')),source=join(temporary,'source');
  t.after(()=>rmSync(temporary,{recursive:true,force:true}));
- for(const name of ['frontend/src','frontend/public'])mkdirSync(join(source,name),{recursive:true});
+ for(const name of ['frontend/src','frontend/public']){
+  mkdirSync(join(source,name),{recursive:true});
+  writeFileSync(join(source,name,'fixture.txt'),'authored fixture input');
+ }
  const extras=[helper,'frontend/tests/client-artifact-browser.mjs','frontend/tests/shell-http-fixture.mjs',
   'frontend/tests/shell-host.mjs','frontend/tests/build-identity.test.mjs'];
  for(const name of new Set([...buildInputs(source),...shared,...extras])){
