@@ -520,6 +520,26 @@ async def _activate(manager, *, force=None):
     generation=release.get('generation')
     if generation is not None and (not isinstance(generation,str) or not re.fullmatch('[0-9a-f]{32}',generation)):
         raise ValueError('Invalid staged application generation')
+    if sys.platform=='win32':
+        # Recognizing a real uv installation does not qualify host replacement.
+        # The fallback below uses POSIX liveness/signalling and cannot provide
+        # a graceful, exact-owner Windows handoff. Refuse BEFORE drain admission,
+        # promotion, reinstall, runtime cancellation or any restart helper.
+        message=('Automatic Windows application replacement is not available. '
+                 'The running host and prepared candidate are unchanged. '
+                 'Use a qualified manual installation handoff; restarting the '
+                 'current launcher alone does not install this candidate.')
+        manager.diagnostics.begin('application',revision,
+                                  application_extras=release.get('extras'))
+        manager.diagnostics.record('restart-capability','failed',
+                                   errorType='NativeRestartUnavailable')
+        await manager.publish(phase='error',error=message,
+            detail='No application pointer, installed package, worker or process was replaced. '
+                   'The staged receipt is retained; automatic activation will not retry it.')
+        if force is not None:
+            from .update_restart import RestartRejected
+            raise RestartRejected(message)
+        return
     folder=manager.directory/'applications'/revision
     if generation:folder=folder/generation
     marker=folder/'validated.json'
