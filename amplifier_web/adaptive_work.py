@@ -1,6 +1,7 @@
 """Bounded arrival views over the canonical chat catalog; no runtime hydration."""
 
-WORK_QUERY_FIELDS = ('workHomeScope', 'workHomeQuery', 'workHomePages')
+WORK_QUERY_FIELDS = ('workHomeScope', 'workHomeQuery', 'workHomePages',
+                     'workSurface', 'workWorkspaceId', 'workWorkspaceQuery', 'workWorkspacePages')
 STATUS_RESOURCES = {
     'workStatusAttention': 'attention', 'workStatusUnread': 'unread',
     'workStatusWorking': 'working', 'workStatusIdle': 'idle',
@@ -8,11 +9,27 @@ STATUS_RESOURCES = {
 }
 
 
+def work_home_view(view):
+    """Workspace Chats owns its query and pins the shared view to that workspace."""
+    if view.get('workSurface') == 'workspace':
+        return {'workHomeScope': view.get('workWorkspaceId') or '',
+                'workHomeQuery': view.get('workWorkspaceQuery'),
+                'workHomePages': view.get('workWorkspacePages')}
+    return view
+
+
+def work_home_pin(view, pinned_workspace_id=None):
+    return (view.get('workWorkspaceId') or ''
+            if view.get('workSurface') == 'workspace' else pinned_workspace_id)
+
+
 def work_home_context(state, *, pinned_workspace_id=None):
     """Current project identity, independent of asynchronous result pages."""
-    view = state.get('view', {})
+    source_view = state.get('view', {})
+    view = work_home_view(source_view)
     requested_scope = view.get('workHomeScope') or 'all'
-    scope = pinned_workspace_id or requested_scope
+    pin = work_home_pin(source_view, pinned_workspace_id)
+    scope = pin if pin is not None else requested_scope
     workspace = next((row for row in state.get('workspaces', [])
                       if row['id'] == scope and row.get('available') is True
                       and isinstance(row.get('path'), str) and row['path']), None)
@@ -49,7 +66,7 @@ def work_status(service, state, status, *, pinned_workspace_id=None):
 
 def work_home(service, state, *, pinned_workspace_id=None):
     context = work_home_context(state, pinned_workspace_id=pinned_workspace_id)
-    view = state.get('view', {})
+    view = work_home_view(state.get('view', {}))
     query = view.get('workHomeQuery') or ''
     pages = {status: status_page(service, state, context, status, query=query,
                                 index=(view.get('workHomePages') or {}).get(status, 0))

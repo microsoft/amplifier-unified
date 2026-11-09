@@ -10,6 +10,14 @@ export function homePatch(presentation={},extra={},view={}){
   navExpanded:view.navExpanded??false,navPinned:view.navPinned??((presentation.interfaceDetail||presentation.executionDetail)==='detailed'),...extra};
 }
 
+// The workspace tab uses the same chat view, but never borrows Home's choices.
+export function workChatView(view={},workspaceId=null){
+ return workspaceId?{workHomeScope:workspaceId,...Object.fromEntries(['View','Filter','Query','Pages'].map(name=>['workHome'+name,view['workWorkspace'+name]]))}:view;
+}
+export function workChatPatch(values,workspaceId=null){
+ return workspaceId?Object.fromEntries(Object.entries(values).map(([key,value])=>[key.replace(/^workHome/,'workWorkspace'),value])):values;
+}
+
 // Like chat reading positions, Home's scroll stays in this browser tab. Wait for
 // the matching resource before restoring; a loading placeholder has no height.
 export function workReadingKey(view,mode){
@@ -39,16 +47,16 @@ export function currentWorkContext(value,view={},pinnedScope=null){
 
 // A Focus pass is a tab-local reading position, never a shared skip/read state.
 const focusStorageKey='amplifier.work-home-focus.v1';
-export function readFocusCursor(browser){
+export function readFocusCursor(browser,storageKey=focusStorageKey){
  try{
-  const value=JSON.parse(browser.sessionStorage.getItem(focusStorageKey));
+  const value=JSON.parse(browser.sessionStorage.getItem(storageKey));
   return value&&typeof value.key==='string'&&workKinds.includes(value.kind)
    &&Number.isSafeInteger(value.page)&&value.page>=0&&Number.isSafeInteger(value.index)&&value.index>=-1
    &&(value.id===null||typeof value.id==='string')?value:null;
  }catch{return null}
 }
-export function saveFocusCursor(browser,value){
- try{browser.sessionStorage.setItem(focusStorageKey,JSON.stringify(value))}catch{}
+export function saveFocusCursor(browser,value,storageKey=focusStorageKey){
+ try{browser.sessionStorage.setItem(storageKey,JSON.stringify(value))}catch{}
 }
 export function focusPosition(page,cursor){
  if(!page?.items?.length)return null;

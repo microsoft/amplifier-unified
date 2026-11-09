@@ -149,3 +149,30 @@ async def test_pending_recent_resource_keeps_exact_controller_identity(service, 
     assert entry['resources']['context']['value']['recentScope'] == {
         'mode': 'all', 'workspaceId': None, 'filter': '', 'clientId': 'recent-pending',
         'instanceId': 'chats', 'generation': entry['generation']}
+
+
+async def test_workspace_chat_demand_keeps_current_identity_while_groups_are_pending(service, monkeypatch):
+    from amplifier_web.shell_resources import scope_for
+    from amplifier_web.shell_query_owner import PendingQuery
+    service.clients.attach('workspace-pending')
+    calls = []
+    def pending(state, *, section=None):
+        calls.append(section)
+        assert section == 'recent', 'Shared chat demand must not construct the superseded workspace list'
+        assert state['selectedWorkspaceId'] == 'two'
+        assert state['view']['navFilter'] == 'beta'
+        raise PendingQuery()
+    monkeypatch.setattr(service.projections, 'chats', pending)
+    with service.clients.bind('workspace-pending'):
+        service.state['view'].update(workSurface='workspace', workWorkspaceId='two',
+                                     workHomeScope='one', workHomeQuery='ignored',
+                                     workWorkspaceQuery='beta')
+        owner = service.shell.resources
+        owner.register('workspace-pending', 1, ['workHome'], scope_for(service.state))
+        envelope = owner.snapshot('workspace-pending')
+    entry = envelope['instances']['chats']
+    assert calls and all(section == 'recent' for section in calls)
+    assert entry['pending']['workHome']['status'] == 'pending'
+    assert 'workHome' not in entry['resources']
+    context = entry['resources']['context']['value']['workHomeContext']
+    assert context['scope'] == context['requestedScope'] == context['workspace']['id'] == 'two'

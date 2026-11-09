@@ -70,6 +70,16 @@ layout and reading position independently. Focus steps through bounded results
 without changing their read state; Brief provides summaries and Studio exposes a
 denser collection. All layouts retain meaningful empty, unavailable and error states.
 
+The workspace's **Chats** tab reuses Home's status-grouped cards and Focus / Brief /
+Studio controls, pinned to that workspace even when Home has another scope. Its
+single chat toolbar sits below the workspace tabs; there are no workspace-wide
+layout or Display controls. Keep the workspace title and tabs, without a nested
+Home introduction, workspace banner or scope picker. Work, Files and Details remain
+separate tabs. Home and workspace Chats retain independent search, status filters,
+pages, reading positions and Focus passes; returning to one does not reset the other.
+The view choices keep their names and accessible **Work view** group, without a
+visible **Layout** label.
+
 Keep search, sorting, archive/restore, pinning, rename/remove, folder browsing,
 workspace creation/attachment, chat plans, Files, Details and Workspace work where
 applicable. Reuse existing controls rather than recreating their mutation logic.
@@ -132,5 +142,6 @@ dependencies or new summary processing is authorized by this presentation change
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-11-09 | Reuse Home's chat presentation inside workspace Chats, remove workspace-wide appearance controls and the visible Layout label. | Product-owner narrowed implementation request; qualification remains separate. |
 | 2026-10-20 | Extend shared landing presentation, add sidebar Home, restore Workspace terminology, and clarify layout/filter controls. | [Follow-up direction](../ux/decisions/20261020-landing-pages.md). |
 | 2026-10-20 | Adopt the Home/sidebar promises, with plain names and quiet refresh/shared-row corrections. | [Product-owner decision](../ux/decisions/20261020.md); implementation evidence remains separate. |

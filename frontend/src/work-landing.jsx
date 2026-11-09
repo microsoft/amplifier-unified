@@ -20,7 +20,7 @@ export function useLandingLayout(identity,presentation){
 }
 
 export function WorkViewSwitcher({value,onChange}){
- return <div className="a-work-layout"><span className="a-work-layout-label">Layout</span><div className="a-work-view-switch" role="group" aria-label="Work view">{workViews.map(key=><button key={key} type="button" aria-pressed={value===key} onClick={()=>onChange(key)}>{key[0].toUpperCase()+key.slice(1)}</button>)}</div></div>;
+ return <div className="a-work-layout"><div className="a-work-view-switch" role="group" aria-label="Work view">{workViews.map(key=><button key={key} type="button" aria-pressed={value===key} onClick={()=>onChange(key)}>{key[0].toUpperCase()+key.slice(1)}</button>)}</div></div>;
 }
 
 export function LandingToolbar({mode,onMode,presentation={},actions,onReset,home=false}){

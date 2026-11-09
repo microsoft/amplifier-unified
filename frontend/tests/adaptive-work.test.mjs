@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {startingWorkView,homePatch,currentWorkPage,currentWorkContext,focusPosition,stepFocus,readFocusCursor,saveFocusCursor} from '../src/adaptive-work.js';
+import {startingWorkView,homePatch,workChatView,workChatPatch,currentWorkPage,currentWorkContext,focusPosition,stepFocus,readFocusCursor,saveFocusCursor} from '../src/adaptive-work.js';
 test('appearance chooses arrival only; explicit starting preference wins',()=>{
  assert.equal(startingWorkView({interfaceDetail:'minimal'}),'focus');
  assert.equal(startingWorkView({interfaceDetail:'standard'}),'brief');
@@ -15,6 +15,24 @@ test('late pages cannot answer a new project, search or page',()=>{
  assert.equal(currentWorkPage(data,{workHomeScope:'a',workHomeQuery:'launch',workHomePages:{idle:1}}),true);
  for(const changes of [{workHomeScope:'b'},{workHomeQuery:'offsite'},{workHomePages:{idle:2}}])
   assert.equal(currentWorkPage(data,{workHomeScope:'a',workHomeQuery:'launch',workHomePages:{idle:1},...changes}),false);
+});
+
+test('workspace Chats keeps Home choices independent and fences another scope, query or page',()=>{
+ const home={workHomeScope:'home-project',workHomeView:'studio',workHomeQuery:'home',workHomeFilter:'working',workHomePages:{idle:2}};
+ let state={...home,...workChatPatch({workHomeView:'focus',workHomeQuery:'workspace',workHomeFilter:'idle',workHomePages:{idle:1}},'one')};
+ const view=workChatView(state,'one');
+ assert.deepEqual(view,{workHomeScope:'one',workHomeView:'focus',workHomeQuery:'workspace',workHomeFilter:'idle',workHomePages:{idle:1}});
+ const page={scope:'one',requestedScope:'one',query:'workspace',requestedPages:{idle:1}};
+ assert.equal(currentWorkPage(page,view,'one'),true);
+ assert.equal(currentWorkPage(page,workChatView(state,'two'),'two'),false);
+ assert.equal(currentWorkPage(page,workChatView({...state,workWorkspaceQuery:'changed'},'one'),'one'),false);
+ assert.equal(currentWorkPage(page,workChatView({...state,workWorkspacePages:{idle:2}},'one'),'one'),false);
+ state={...state,...workChatPatch({workHomeFilter:'all'},'one')};
+ for(const [key,value] of Object.entries(home))assert.deepEqual(workChatView(state)[key],value);
+ assert.equal(state.workWorkspaceQuery,'workspace','Clearing status retains workspace search');
+ const context={scope:'one',requestedScope:'one',workspace:{id:'one',path:'/one'}};
+ assert.equal(currentWorkContext(context,view,'one'),context);
+ assert.equal(currentWorkContext(context,workChatView(state,'two'),'two'),null);
 });
 
 test('pinned Home accepts its effective project while fencing request and pin changes',()=>{
@@ -94,6 +112,10 @@ test('Focus retains only a tab-local cursor and tolerates unavailable or invalid
  const values=new Map(),browser={sessionStorage:{getItem:key=>values.get(key),setItem:(key,value)=>values.set(key,value)}};
  const cursor={key:'scope/query',kind:'attention',page:2,index:0,id:'chat-a'};
  saveFocusCursor(browser,cursor);assert.deepEqual(readFocusCursor(browser),cursor);
+ const workspaceKey='amplifier.work-focus.v1:workspace:one:chats',workspaceCursor={...cursor,id:'workspace-chat'};
+ saveFocusCursor(browser,workspaceCursor,workspaceKey);
+ assert.deepEqual(readFocusCursor(browser,workspaceKey),workspaceCursor);
+ assert.deepEqual(readFocusCursor(browser),cursor,'Workspace browsing cannot overwrite the Home pass');
  saveFocusCursor(browser,{...cursor,index:'wrong'});assert.equal(readFocusCursor(browser),null);
  const blocked={get sessionStorage(){throw Error('Storage unavailable')}};
  assert.equal(readFocusCursor(blocked),null);assert.doesNotThrow(()=>saveFocusCursor(blocked,cursor));

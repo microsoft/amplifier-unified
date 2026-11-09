@@ -163,6 +163,26 @@ test('workspace details do not compute the hidden chat page',()=>{
  const main=renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state:{view:{workSurface:'workspace',workWorkspaceId:'b',workWorkspaceTab:'details'},workspaces:[workspace]},act:host.dispatch})));
  assert.match(main,/Rename workspace/);assert.doesNotMatch(main,/Research ideas/);
 });
+test('workspace Chats reuses scoped Home cards below tabs without a second landing or sidebar page',()=>{
+ const empty={items:[],total:0,pages:1,index:0,start:0,end:0};
+ const current={...snapshot,navigationResources:['workHome'],
+  workHome:{scope:'b',requestedScope:'b',query:'',requestedPages:{},groups:{attention:page,unread:empty,working:empty,waiting:empty,paused:empty,idle:empty}},
+  workHomeContext:{scope:'b',requestedScope:'b',workspace,unavailable:false}};
+ Object.defineProperty(current,'sidebarNavigation',{enumerable:true,get(){throw Error('Superseded workspace page read')}});
+ const scopedHost={...host,getSnapshot:()=>current};
+ const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>scopedHost};
+ const state={view:{workSurface:'workspace',workWorkspaceId:'b',workHomeScope:'elsewhere',workHomeQuery:'unrelated',workWorkspaceView:'studio'},workspaces:[workspace]};
+ const markup=()=>renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state,act:host.dispatch})));
+ const html=markup();
+ assert.match(html,/a-work-card[^>]*data-session-id="b-chat"/);assert.match(html,/Research ideas/);
+ assert.equal((html.match(/class="a-home-toolbar"/g)||[]).length,1);
+ assert.ok(html.indexOf('aria-label="Workspace view"')<html.indexOf('class="a-home-toolbar"'));
+ assert.equal((html.match(/class="a-home-intro"/g)||[]).length,1);
+ assert.doesNotMatch(html,/a-home-project|aria-label="Work scope"|a-work-layout-label|One thing at a time/);
+ assert.match(html,/aria-label="Work view"/);
+ current.workHome={...current.workHome,scope:'elsewhere'};
+ const stale=markup();assert.doesNotMatch(stale,/Research ideas/);assert.match(stale,/Loading your work/);
+});
 test('Shared Work tab reads only through the rejecting presentation dispatcher and aborts when hidden',async()=>{
  const current={...snapshot},calls=[],acts=[],pending=[];
  Object.defineProperty(current,'sidebarNavigation',{enumerable:true,get(){throw Error('Work must not demand a chat page')}});
