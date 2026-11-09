@@ -16,8 +16,11 @@ const PdfPreview=lazy(()=>import('./pdf-preview'));
 const localReport=()=>Promise.resolve();
 const viewAction=(canvas,act,patch)=>act('canvas.view',{id:canvas.id,patch});
 function useReport(canvas,act,part='preview'){
- // Capture the exact view dispatcher. Late work must not use a newer target.
- return useMemo(()=> (status,message='',detail={})=>{if(canvas.id)return act('canvas.report',{id:canvas.id,part,status,message:String(message).slice(0,2000),...detail})},[canvas.id,canvas.resourceRevision,canvas.generation,part]);
+ // Refresh adapters within one view without retargeting callbacks from an old
+ // definition/generation. Media keeps a stable callback for backpressure.
+ const bound=useMemo(()=>({current:act}),[canvas.id,canvas.viewId,canvas.resourceRevision,canvas.generation,part]);
+ bound.current=act;
+ return useMemo(()=> (status,message='',detail={})=>{if(canvas.id)return bound.current('canvas.report',{id:canvas.id,part,status,message:String(message).slice(0,2000),...detail})},[bound,canvas.id,part]);
 }
 
 export function GifCanvasViewer({canvas,act,reportStatus}){

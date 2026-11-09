@@ -27,7 +27,7 @@ BROWSERS = ('canvas-chrome-browser.mjs', 'canvas-dirty-browser.mjs',
             'compact-composer-browser.mjs', 'peer-preview-browser.mjs',
             'pin-rapid-reorder-browser.mjs')
 UNITS = ('canvas-overview.test.mjs', 'shell-panels.test.mjs', 'work-shell.test.mjs',
-         'canvas-reference.test.mjs',
+         'canvas-reference.test.mjs', 'inline-media.test.mjs',
          'canvas-reload-guard.test.mjs', 'canvas-app-viewer.test.mjs', 'navigation-demand.test.mjs',
          'destination-history.test.mjs', 'destination-history-ui.test.mjs', 'api.test.mjs',
          'settings-drafts.test.mjs', 'automation-hub.test.mjs', 'schedule-editor.test.mjs',
