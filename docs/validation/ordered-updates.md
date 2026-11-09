@@ -134,3 +134,20 @@ fixture Core Git source; it does not qualify public registry transport or Core
 publication. Preserve those limits, the raw prior failures, and the source/run
 identities with any reported result. These affected checks are not a new routine
 release gate or permission to refresh installed user components.
+
+For accepted-public-source follow-up, the manual `python-checks.yml` suite
+`updater-public-selected-source` reuses the existing hosted omitted-ref lane.
+It is not selected by full, nightly, PR, or release qualification. Its fixed
+adapter runs the ordinary manager against synthetic user state, the unchanged
+shipped worker manifest, official registry artifacts and actual public source
+heads. Routing and Foundation revision assertions fail on drift rather than
+substituting a synthetic branch. The existing lock-exact private Loop checkout
+is the sole transport exception and is reported separately; this is not an
+exclusively public graph. No provider account or inference request is supplied.
+
+Retain the candidate/harness identity, resolved and installed graphs, source
+policy, profile qualification, rollback and bounded JUnit outcomes. Raw logs and
+private source remain on the disposable runner; export their hashes and fixed
+failure categories, never private source excerpts. Successful cleanup is reported
+separately from test success. A failed or unknown managed guest check is not
+replayed by this distinct hosted qualification.
