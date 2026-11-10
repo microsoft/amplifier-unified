@@ -2375,12 +2375,19 @@ STORAGE_CONTROLS = {
     "held_resource": "test_windows_read_files.py::test_service_publication_during_held_immutable_resource",
     "ordinary_view": "test_windows_read_files.py::test_service_publication_with_real_mutable_reader[ordinary-view]",
     "ordinary_naming": "test_windows_read_files.py::test_service_publication_with_real_mutable_reader[ordinary-naming]",
+    "rollback_restore": "test_windows_read_files.py::test_service_view_rollback_with_real_presentation_reader[restore-held]",
+    "rollback_remove": "test_windows_read_files.py::test_service_view_rollback_with_real_presentation_reader[remove-held]",
+    "restore_refused": "test_windows_read_files.py::test_service_view_rollback_with_real_presentation_reader[restore-refused]",
+    "remove_refused": "test_windows_read_files.py::test_service_view_rollback_with_real_presentation_reader[remove-refused]",
 }
+STORAGE_ROLLBACK_SCOPES = {"rollback_restore": "restore-held", "rollback_remove": "remove-held",
+                           "restore_refused": "restore-refused", "remove_refused": "remove-refused"}
 STORAGE_READERS = {"held_view": ("naming.initial_name", "held"), "held_naming": ("naming.legacy", "held"),
                    "released_view": ("naming.initial_name", "released"),
                    "released_naming": ("naming.legacy", "released"), "held_resource": ("resource.project", "held"),
                    "ordinary_view": ("naming.initial_name", "ordinary"),
-                   "ordinary_naming": ("naming.legacy", "ordinary")}
+                   "ordinary_naming": ("naming.legacy", "ordinary"),
+                   **{label: ("naming.presentation", scope) for label, scope in STORAGE_ROLLBACK_SCOPES.items()}}
 STORAGE_FILES = ("conftest.py", "test_windows_read_files.py")
 STORAGE_STAGES = frozenset({"binding", "fixture", "installed", "selection", "verify", "complete"})
 
@@ -2395,8 +2402,9 @@ def validate_publication_sharing(value, label):
             return None
         if type(value["schema"]) is not int or value["schema"] != 1:
             return None
-        for key, choices in (("reader", ("naming.initial_name", "naming.legacy", "resource.project")),
-                             ("scope", ("held", "released", "ordinary")), ("platform", ("windows", "posix")),
+        for key, choices in (("reader", ("naming.initial_name", "naming.legacy", "resource.project", "naming.presentation")),
+                             ("scope", ("held", "released", "ordinary", *STORAGE_ROLLBACK_SCOPES.values())),
+                             ("platform", ("windows", "posix")),
                              ("result", ("raised", "returned"))):
             if type(value[key]) is not str or len(value[key]) > 32 or value[key] not in choices:
                 return None
@@ -2452,6 +2460,14 @@ def publication_properties(properties, label, *, require_verified=True):
 def publication_sharing_passed(value, label):
     if value is None or value["platform"] != "windows":
         return False
+    if label in STORAGE_ROLLBACK_SCOPES:
+        # The fixture proves exact injected sqlite3.OperationalError identity,
+        # restored/removed presentation (or GC refusal), held bytes and unchanged
+        # authority before setting verified. Canonical facts call that class other.
+        facts = value["facts"]
+        return (value["result"] == "raised" and facts["truncated"] is False
+                and len(facts["errors"]) == 1 and facts["errors"][0]["class"] == "other"
+                and set(facts["errors"][0]) == {"class", "frames"})
     if label in {"ordinary_view", "ordinary_naming"}:
         facts = value["facts"]
         return (value["result"] == "raised" and facts["truncated"] is False
@@ -2497,7 +2513,7 @@ class StorageResults(NativeResults):
         label = self.node_labels.get(item.nodeid)
         if label is not None and call.when in PHASES - {"outside"} and call.excinfo is not None:
             from amplifier_web.worker_diagnostics import command_failure_facts
-            if len(self.failure_facts) < 21:
+            if len(self.failure_facts) < 33:
                 self.failure_facts.append({"case": label, "phase": call.when,
                                           "facts": command_failure_facts(call.excinfo.value)})
         return None  # Never replace the pytest outcome.
@@ -2608,7 +2624,7 @@ def validate_storage_public(report):
                 assert case["publicationSharingVerified"] is True
                 assert publication_sharing_passed(observation, label)
         facts = selection.get("failureFacts", [])
-        assert type(facts) is list and len(facts) <= 21
+        assert type(facts) is list and len(facts) <= 33
         if facts:
             from amplifier_web.worker_diagnostics import validate_command_failure_facts
             for fact in facts:
@@ -2630,7 +2646,7 @@ def validate_storage_public(report):
 
 
 def storage_run(wheel, receipt, candidate_receipt):
-    """Seven installed storage cells in this isolated interpreter; no cold journey."""
+    """Eleven installed storage cells in this isolated interpreter; no cold journey."""
     if receipt.resolve() in {wheel.resolve(), candidate_receipt.resolve()}:
         return 1  # Never overwrite an input, including on an invalid invocation.
     report = {"schema": 1, "qualification": "installed-storage-sharing-not-runtime-or-device",

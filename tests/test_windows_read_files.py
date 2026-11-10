@@ -1032,6 +1032,12 @@ async def test_service_publication_with_real_mutable_reader(
         # Only this exact path in this owned reader thread pauses. The host's
         # rollback read and all atomic/native primitives are untouched.
         patch.setattr(naming, "_open_presentation", gated_open)
+        if scope == "ordinary":
+            # Preserve the demonstrated original reader/writer pair as the
+            # baseline. The production cells use both new owners, not this path.
+            from amplifier_web import presentation_files
+            from amplifier_web.host.storage import SessionStore
+            patch.setattr(presentation_files, "atomic_write", SessionStore._atomic)
         reader.start(read)
         try:
             await reader.wait_open()
@@ -1124,4 +1130,164 @@ async def test_service_publication_during_held_immutable_resource(publication_ap
     assert projection == reader.retained == original_bytes
     assert signature == resources.detached_signature(source)
     assert resources.read_detached(source) == original
+    record_property("publication_sharing_verified", True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", [
+    "restore-held", "remove-held", "restore-refused", "remove-refused",
+])
+async def test_service_view_rollback_with_real_presentation_reader(
+        publication_app, monkeypatch, record_property, scenario):
+    """Fail after canonical SQLite writes, not by faking the OS sharing result.
+
+    The two refused cells separately inject a rollback-helper OSError to qualify
+    uncertainty/GC handling. They do not claim a native restoration failure.
+    Each case has its own app; no failed event is replayed to demonstrate success.
+    """
+    from amplifier_web import naming, presentation_files, state_records
+    from amplifier_web.session_projection import view_path
+    from amplifier_web.worker_diagnostics import command_failure_facts, validate_command_failure_facts
+
+    app = publication_app
+    session = app._session()
+    sid = session["id"]
+    session["interruptionRevision"] = 7
+    app._save_changes(sessions={sid})
+    view = view_path(app.data_dir, session)
+    original_bytes, original_text = view.read_bytes(), view.read_text()
+    original_messages = json.dumps(session["messages"], sort_keys=True)
+    absent = scenario.startswith("remove")
+    refused = scenario.endswith("refused")
+    if absent:
+        # Missing compatible presentation does not remove its committed SQLite
+        # pointer. This attempt will create a new leaf, then must undo it.
+        view.unlink()
+    if refused:
+        # An actual unreferenced resource makes a no-delete GC assertion useful.
+        orphan = resources.put(app.db, {"rollback-control": "unreferenced resource"})
+        app.db.commit()
+        orphan_path = resources.root(app.db) / (orphan["$resource"] + ".json")
+        assert orphan_path.is_file()
+    before = _publication_snapshot(app)
+    prior = next(row for row in before[0]["sessions"] if row["id"] == sid)
+    assert prior["interruptionRevision"] == 7
+    assert not app._progress_dirty and not app._state.get("_viewRecoveryPending")
+    history = view.parent.parent
+    assert not (history / "transcript.jsonl").exists() and not (history / "events.jsonl").exists()
+    reader = _PublicationRead()
+    writes, removals, commits, rollback_failures = [], [], [], []
+    failure = sqlite3.OperationalError("Injected SQLite failure after state_records.save")
+    rollback_error = OSError(5, "Injected rollback helper refusal")
+    real_write, real_remove, real_save = presentation_files.atomic_write, presentation_files.remove, state_records.save
+
+    def hold_presentation():
+        with naming._open_presentation(view) as stream:
+            return reader.hold(stream)  # genuine production open; retain its exact object
+
+    def observed_write(path, text):
+        if path == view and writes:
+            reader.assert_held()
+            assert not absent and text == original_text
+            if refused:
+                rollback_failures.append("restore")
+                raise rollback_error
+        result = real_write(path, text)
+        if path == view:
+            writes.append(text)
+            if len(writes) == 1:
+                assert text != original_text
+                if absent:
+                    # Called from synchronous publication after the genuine
+                    # write, before state_records.save can fail. No loop work is
+                    # needed by this thread to acknowledge the retained handle.
+                    reader.start(hold_presentation)
+                    assert reader.opened.wait(10) and not reader.failed
+                    assert reader.opens == 1
+                reader.assert_held()
+        return result
+
+    def observed_remove(path, *, missing_ok=True):
+        assert path == view and absent and missing_ok is True
+        reader.assert_held()
+        removals.append("remove")
+        if refused:
+            rollback_failures.append("remove")
+            raise rollback_error
+        return real_remove(path, missing_ok=missing_ok)
+
+    def fail_after_write(db, state, references, session_ids, *args, **kwargs):
+        result = real_save(db, state, references, session_ids, *args, **kwargs)
+        assert db is app.db and set(session_ids) == {sid}
+        assert db.in_transaction and len(writes) == 1 and view.read_text() == writes[0]
+        assert references[sid]["$viewPayload"] != prior["$viewPayload"]
+        assert state_records.load(db)["revision"] == before[0]["revision"] + 1
+        assert _publication_snapshot(app) == before  # Independent connection still sees committed authority.
+        reader.assert_held()
+        commits.append(result)
+        raise failure
+
+    with monkeypatch.context() as patch:
+        patch.setattr(presentation_files, "atomic_write", observed_write)
+        patch.setattr(presentation_files, "remove", observed_remove)
+        patch.setattr(state_records, "save", fail_after_write)
+        try:
+            if not absent:
+                reader.start(hold_presentation)
+                await reader.wait_open()
+            with pytest.raises(sqlite3.OperationalError) as caught:
+                await app.on_runtime_event("runtime.status", {
+                    "sessionId": sid, "status": "working", "detail": "Rollback discriminator",
+                })
+            facts = command_failure_facts(caught.value)
+            assert validate_command_failure_facts(facts) is not None
+            # The original injected SQL failure, not a rollback OSError, is
+            # retained. This is synthetic failure-origin evidence, not a native
+            # SQLite defect or the historical Windows failure's cause.
+            record_property("publication_sharing", json.dumps({
+                "schema": 1, "reader": "naming.presentation", "scope": scenario,
+                "platform": "windows" if os.name == "nt" else "posix",
+                "result": "raised", "facts": facts,
+            }, sort_keys=True))
+            assert caught.value is failure and len(commits) == 1
+            assert failure.args == ("Injected SQLite failure after state_records.save",)
+            assert not facts["truncated"] and len(facts["errors"]) == 1
+            assert facts["errors"][0]["class"] == "other"  # sqlite3.OperationalError is not a public label.
+            assert not app.db.in_transaction and _publication_snapshot(app) == before
+            assert app._session_projection_refs[sid] == prior
+            assert app.state["revision"] == app._saved_revision == before[0]["revision"]
+            assert session["interruptionRevision"] == 7
+            assert app._progress_dirty and app._progress_scope_known
+            assert app._progress_session_ids == {sid}
+            assert json.dumps(session["messages"], sort_keys=True) == original_messages
+            assert not app.runtime.attempts and not app.runtime.workers
+            reader.assert_held()
+            if refused:
+                assert rollback_failures == ["remove" if absent else "restore"]
+                assert app._state.get("_viewRecoveryPending") is True
+                assert str(view) not in app._view_cache
+                assert view.read_text() == writes[0]
+                files = {path.name: path.read_bytes() for path in resources.root(app.db).glob("*.json")}
+                assert resources.marked_references(app.db, app._state) is None
+                assert resources.collect(app.db, app._state) == []
+                app.db.execute("BEGIN IMMEDIATE")
+                try:
+                    assert await resources.marked_references_async(app.db, app._state) is None
+                finally:
+                    app.db.rollback()
+                assert _publication_snapshot(app) == before
+                assert {path.name: path.read_bytes() for path in resources.root(app.db).glob("*.json")} == files
+                assert orphan_path.is_file()
+            else:
+                assert not rollback_failures and not app._state.get("_viewRecoveryPending")
+                if absent:
+                    assert not view.exists() and removals == ["remove"] and len(writes) == 1
+                else:
+                    assert view.read_bytes() == original_bytes and writes == [writes[0], original_text]
+                    assert not removals
+            assert not (history / "transcript.jsonl").exists() and not (history / "events.jsonl").exists()
+        finally:
+            if reader.thread is not None:
+                await reader.finish()
+    assert reader.retained == reader.result == (writes[0] if absent else original_text)
     record_property("publication_sharing_verified", True)

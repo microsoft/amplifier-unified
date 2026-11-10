@@ -2863,10 +2863,12 @@ def test_foreground_cli_actual_outer_cleanup_retains_unknown_owned_jobs(tmp_path
 def storage_observation(label):
     reader, scope = probe.STORAGE_READERS[label]
     ordinary = label in {"ordinary_view", "ordinary_naming"}
+    rollback = label in probe.STORAGE_ROLLBACK_SCOPES
     return {"schema": 1, "reader": reader, "scope": scope, "platform": "windows",
-            "result": "raised" if ordinary else "returned",
+            "result": "raised" if ordinary or rollback else "returned",
             "facts": {"errors": [{"class": "PermissionError", "errno": 13, "winerror": 5, "frames": []}]
-                      if ordinary else [], "truncated": False}}
+                      if ordinary else [{"class": "other", "frames": []}] if rollback else [],
+                      "truncated": False}}
 
 
 def storage_properties(label):
@@ -2890,11 +2892,12 @@ def storage_public_report():
 @pytest.mark.parametrize("fault", [None, "missing", "unexpected", "duplicate", "no-call",
                                   "skipped", "failed", "teardown", "xpass",
                                   "collection-error", "exit-code"])
-def test_storage_controls_require_seven_exact_calls_no_skips_or_collection_errors(fault):
+def test_storage_controls_require_eleven_exact_calls_no_skips_or_collection_errors(fault):
     result = native_result(fault, results=probe.StorageResults())
     assert result["status"] == ("PASS" if fault is None else "FAIL")
     assert set(result["cases"]) == {"held_view", "held_naming", "released_view", "released_naming",
-                                   "held_resource", "ordinary_view", "ordinary_naming"}
+                                   "held_resource", "ordinary_view", "ordinary_naming",
+                                   "rollback_restore", "rollback_remove", "restore_refused", "remove_refused"}
     report = storage_public_report()
     report["selection"] = result
     if fault:
@@ -2926,6 +2929,10 @@ def test_storage_staging_and_selection_leave_default_native_api_unchanged(tmp_pa
         "test_windows_read_files.py::test_service_publication_during_held_immutable_resource",
         "test_windows_read_files.py::test_service_publication_with_real_mutable_reader[ordinary-view]",
         "test_windows_read_files.py::test_service_publication_with_real_mutable_reader[ordinary-naming]",
+        "test_windows_read_files.py::test_service_view_rollback_with_real_presentation_reader[restore-held]",
+        "test_windows_read_files.py::test_service_view_rollback_with_real_presentation_reader[remove-held]",
+        "test_windows_read_files.py::test_service_view_rollback_with_real_presentation_reader[restore-refused]",
+        "test_windows_read_files.py::test_service_view_rollback_with_real_presentation_reader[remove-refused]",
     ]
     tree = ast.parse((ROOT / "tests/test_windows_read_files.py").read_text(encoding="utf-8"))
     functions = {node.name: node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)}
@@ -2941,6 +2948,13 @@ def test_storage_staging_and_selection_leave_default_native_api_unchanged(tmp_pa
              {keyword.arg: ast.literal_eval(keyword.value) for keyword in cell.keywords}) for cell in cells] == [
         ((scope, reader), {"id": scope + "-" + reader})
         for scope in ("held", "released", "ordinary") for reader in ("view", "naming")]
+    rollback = functions["test_service_view_rollback_with_real_presentation_reader"]
+    rollback_params = [dec for dec in rollback.decorator_list if isinstance(dec, ast.Call)
+                       and isinstance(dec.func, ast.Attribute) and dec.func.attr == "parametrize"]
+    assert len(rollback_params) == 1
+    assert ast.literal_eval(rollback_params[0].args[0]) == "scenario"
+    assert ast.literal_eval(rollback_params[0].args[1]) == [
+        "restore-held", "remove-held", "restore-refused", "remove-refused"]
 
 
 def test_storage_route_uses_only_selected_nodes_without_worker_or_cli_journey(tmp_path, monkeypatch):
@@ -3000,10 +3014,10 @@ def test_storage_collection_skip_and_failure_fact_overflow_never_create_pass():
     selection = native_result(results=results)
     assert selection["status"] == "FAIL" and selection["collectionExact"] is False
     node = next(iter(results.node_labels))
-    for _ in range(24):
+    for _ in range(36):
         results.pytest_runtest_makereport(types.SimpleNamespace(nodeid=node),
             types.SimpleNamespace(when="call", excinfo=types.SimpleNamespace(value=RuntimeError("PRIVATE"))))
-    assert len(results.failure_facts) == 21
+    assert len(results.failure_facts) == 33
     report = storage_public_report()
     report.update(status="FAIL", selection=results.finish(1))
     probe.validate_storage_public(report)
@@ -3082,7 +3096,7 @@ def test_storage_selection_invokes_only_staged_cells_and_asyncio_plugin(tmp_path
     result = probe.storage_selection(tmp_path, target, None)
     assert result["status"] == "PASS"
     args, = observed
-    assert args[-7:] == [str(target / "tests" / node) for node in probe.STORAGE_CONTROLS.values()]
+    assert args[-11:] == [str(target / "tests" / node) for node in probe.STORAGE_CONTROLS.values()]
     assert "pytest_asyncio.plugin" in args and "aiohttp.pytest_plugin" not in args
     assert args[args.index("--rootdir") + 1] == args[args.index("--confcutdir") + 1] == str(target)
 
@@ -3467,7 +3481,8 @@ def test_storage_baselines_and_production_results_cannot_be_substituted(label, w
         return ([("publication_sharing", json.dumps(observed)), ("publication_sharing_verified", True)]
                 if case == label else storage_properties(case))
     baseline = label in {"ordinary_view", "ordinary_naming"}
-    expected = winerror == 5 if baseline else winerror is None
+    expected = (winerror == 5 if baseline else
+                winerror is None and label not in probe.STORAGE_ROLLBACK_SCOPES)
     selection = native_result(results=probe.StorageResults(), properties=properties)
     case = selection["cases"][label]
     assert (case["status"] == "PASS") is expected
@@ -3492,3 +3507,39 @@ def test_storage_ordinary_scope_is_bound_only_to_ordinary_baseline_cells(label):
     properties = [("publication_sharing", json.dumps(observation)), ("publication_sharing_verified", True)]
     assert probe.publication_properties(properties, label) is None
     assert probe.publication_properties(properties[:1], label, require_verified=False) is None
+
+
+@pytest.mark.parametrize("label", tuple(probe.STORAGE_ROLLBACK_SCOPES))
+@pytest.mark.parametrize("fault", [None, "returned", "os-error", "truncated", "unverified", "wrong-scope", "private"])
+def test_storage_rollback_cells_require_verified_original_failure_and_exact_scenario(label, fault):
+    import sqlite3
+    from amplifier_web.worker_diagnostics import command_failure_facts
+    original = sqlite3.OperationalError("PRIVATE injected SQLite failure")
+    value = storage_observation(label)
+    value["facts"] = command_failure_facts(original)
+    assert value["facts"] == {"errors": [{"class": "other", "frames": []}], "truncated": False}
+    if fault == "returned":
+        value.update(result="returned", facts={"errors": [], "truncated": False})
+    elif fault == "os-error":
+        value["facts"] = command_failure_facts(OSError(5, "PRIVATE rollback refusal"))
+    elif fault == "truncated":
+        value["facts"]["truncated"] = True
+    elif fault == "wrong-scope":
+        value["scope"] = "held"
+    elif fault == "private":
+        value["facts"]["errors"][0]["message"] = "/private/path"
+    properties = [("publication_sharing", json.dumps(value))]
+    if fault != "unverified":
+        properties.append(("publication_sharing_verified", True))
+    selection = native_result(results=probe.StorageResults(), properties=lambda case:
+                              properties if case == label else storage_properties(case))
+    assert (selection["status"] == "PASS") == (fault is None)
+    assert (selection["cases"][label]["status"] == "PASS") == (fault is None)
+    report = storage_public_report()
+    report.update(status="PASS" if fault is None else "FAIL", selection=selection)
+    probe.validate_storage_public(report)
+    assert "PRIVATE" not in json.dumps(report) and "/private/path" not in json.dumps(report)
+    if fault == "unverified":
+        assert selection["cases"][label]["publicationSharing"] == value
+        assert selection["cases"][label]["publicationSharingVerified"] is False
+    assert len(json.dumps(report).encode("utf-8")) <= 65536
