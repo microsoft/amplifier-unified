@@ -13,23 +13,72 @@ import re
 from .host.components import declarations
 
 
+def _normalized(value, aliases):
+    from .runtime_controls import PLAN_KEYS, SECTIONS, public_config
+
+    value = {key: copy.deepcopy(item) for key, item in public_config(value).items() if key in PLAN_KEYS}
+    for section in SECTIONS:
+        for row in value.setdefault(section, []):
+            row.setdefault('enabled', True)
+    for row in declarations(value):
+        if row.get('source') in aliases:
+            row['source'] = aliases[row['source']]
+    return value
+
+
 def matches(expected, actual, *, sources=None):
     """Normalize only public redaction, default enabled rows and proven sources."""
-    from .runtime_controls import PLAN_KEYS, SECTIONS, public_config
     from .configuration_authority import fingerprint
 
-    def normalized(value, aliases):
-        value = {key: copy.deepcopy(item) for key, item in public_config(value).items() if key in PLAN_KEYS}
-        for section in SECTIONS:
-            for row in value.setdefault(section, []):
-                row.setdefault('enabled', True)
-        for row in declarations(value):
-            if row.get('source') in aliases:
-                row['source'] = aliases[row['source']]
-        return value
-
     # Redacted public equality is not proof of the underlying secret bytes.
-    return fingerprint(normalized(expected, sources or {})) == fingerprint(normalized(actual, {}))
+    return fingerprint(_normalized(expected, sources or {})) == fingerprint(_normalized(actual, {}))
+
+
+def mismatch_summary(expected, actual, *, sources=None):
+    """Fixed section/category labels only; never values, names, keys or digests.
+
+    This explains failed public-plan equality, not secret equality or the cause
+    of a source difference. It cannot authorize relocation or change a verdict.
+    At most eight section entries with six categories each can be returned.
+    """
+    from .configuration_authority import fingerprint
+
+    expected, actual = _normalized(expected, sources or {}), _normalized(actual, {})
+    rows = {id(row) for row in [*declarations(expected), *declarations(actual)]}
+
+    def kinds(left, right):
+        if fingerprint(left) == fingerprint(right):
+            return set()
+        if type(left) is not type(right):
+            return {'type'}
+        if isinstance(left, dict):
+            found = {'presence'} if left.keys() != right.keys() else set()
+            for key in left.keys() & right.keys():
+                if id(left) in rows and key in {'source', 'enabled'}:
+                    if fingerprint(left[key]) != fingerprint(right[key]):
+                        found.add('unproved_source' if key == 'source' else 'enabled')
+                else:
+                    found.update(kinds(left[key], right[key]))
+            return found
+        if isinstance(left, list):
+            if sorted(map(fingerprint, left)) == sorted(map(fingerprint, right)):
+                return {'order'}
+            found = {'presence'} if len(left) != len(right) else set()
+            for before, after in zip(left, right):
+                found.update(kinds(before, after))
+            return found
+        return {'value'}
+
+    result = []
+    # Explicit labels: never interpolate a plan-controlled key, even below agents.
+    for section in ('providers', 'tools', 'hooks', 'session', 'agents', 'spawn', 'context', 'instruction'):
+        if (section in expected) != (section in actual):
+            categories = {'presence'}
+        else:
+            categories = kinds(expected.get(section), actual.get(section))
+        if categories:
+            result.append(f"{section} ({', '.join(sorted(categories))})")
+    return '; '.join(result)
 
 
 def source_aliases(home, worker, expected, actual):
@@ -159,5 +208,7 @@ async def inspect_loaded(management, session, expected, guard):
     row = getattr(management.service.runtime, 'workers', {}).get(session['id'])
     sources = source_aliases(management.service.data_dir, row or {}, expected, inspected['plan'])
     if not matches(expected, inspected['plan'], sources=sources):
-        raise ValueError('Saved configuration does not match loaded-plan readback. Its operation remains unresolved.')
+        summary = mismatch_summary(expected, inspected['plan'], sources=sources)
+        raise ValueError('Saved configuration does not match loaded-plan readback. '
+                         f'Its operation remains unresolved. Mismatch categories: {summary}.')
     return inspected, same_owner
