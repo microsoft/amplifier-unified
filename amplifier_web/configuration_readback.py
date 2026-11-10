@@ -52,7 +52,10 @@ def mismatch_summary(expected, actual, *, sources=None):
         if type(left) is not type(right):
             return {'type'}
         if isinstance(left, dict):
-            found = {'presence'} if left.keys() != right.keys() else set()
+            missing = left.keys() ^ right.keys()
+            special = missing & {'source', 'enabled'} if id(left) in rows or id(right) in rows else set()
+            found = {'presence'} if missing - special else set()
+            found.update('unproved_source' if key == 'source' else 'enabled' for key in special)
             for key in left.keys() & right.keys():
                 if id(left) in rows and key in {'source', 'enabled'}:
                     if fingerprint(left[key]) != fingerprint(right[key]):
