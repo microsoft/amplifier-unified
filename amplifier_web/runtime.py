@@ -1230,6 +1230,7 @@ class RuntimeManager:
             if row.get('windows_owner'):
                 # A malformed/oversized protocol cannot strand a live job after
                 # its sole stdout reader has stopped. Failure retains the owner.
+                reader_cleanup = 'unconfirmed'
                 try:
                     await row['windows_owner'].close()
                     reader_cleanup = 'confirmed'

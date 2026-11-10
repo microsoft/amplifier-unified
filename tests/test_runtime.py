@@ -1263,11 +1263,12 @@ async def test_windows_communication_error_settles_children_only_after_confirmed
     from unittest.mock import AsyncMock
     from amplifier_web import runtime, windows_jobs
     model = windows_runtime_model
-    original_lines = runtime._BoundedWorkerLines
-    monkeypatch.setattr(runtime, '_BoundedWorkerLines', lambda stream: original_lines(stream, limit=256))
     model.identify()
     await model.manager.start({'id': 'protocol-failure'}, model.emit)
     row = model.manager.workers['protocol-failure']
+    # Keep the actual loaded reader class for code-identity diagnostics.
+    # Only its instance limit is reduced to exercise the real overflow path.
+    row['windows_owner'].stdout.limit = 256
     row['backgroundCalls'] = {'background-2', 'background-1'}
     children = {'native-child': 'working', 'background-1': 'working', 'background-2': 'working'}
     original_emit = row['emit']
@@ -1326,6 +1327,47 @@ async def test_windows_communication_error_settles_children_only_after_confirmed
             await row['windows_owner'].completion
             # A failed reader remains diagnostic evidence, not a new test error.
             row['closing'] = True
+        await model.manager.close()
+
+
+async def test_windows_reader_cancelled_cleanup_keeps_original_cause_and_unknown_effect(
+        windows_runtime_model, monkeypatch):
+    from amplifier_web.worker_diagnostics import validate_runtime_failure_witness
+    model = windows_runtime_model
+    model.identify()
+    await model.manager.start({'id': 'cancel-cleanup'}, model.emit)
+    row = model.manager.workers['cancel-cleanup']
+    row['windows_owner'].stdout.limit = 256
+    pending = asyncio.get_running_loop().create_future()
+    row['pending']['cancel-cleanup-fixture'] = pending
+    entered = asyncio.Event()
+    calls = []
+    async def blocked_close():
+        calls.append('close')
+        entered.set()
+        await asyncio.Event().wait()
+    monkeypatch.setattr(row['windows_owner'], 'close', blocked_close)
+    model.job.stdout.feed_data(b'x' * 257)
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        row['reader'].cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await row['reader']
+        with pytest.raises(RuntimeError) as caught:
+            await pending
+        witness = validate_runtime_failure_witness(caught.value._runtime_failure_witness)
+        assert witness['errors'][0]['class'] == 'ValueError'  # Original reader error survives.
+        assert witness['reader'] == {'reason': 'exception', 'phase': 'read', 'frame': 'ready',
+            'exitObserved': False, 'exitCode': None, 'closing': False,
+            'stopReason': 'none', 'cleanup': 'unconfirmed'}
+        assert calls == ['close']
+        assert row['process'].returncode is None and not row.get('executionEnded')
+        assert not any(kind == 'runtime.ended' for kind, _ in model.events)
+        assert model.manager.workers['cancel-cleanup'] is row
+    finally:
+        # Settle only this test's fake job, not a production recovery retry.
+        model.job.finish()
+        await row['windows_owner'].completion
         await model.manager.close()
 
 

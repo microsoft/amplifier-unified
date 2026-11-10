@@ -322,7 +322,7 @@ _READER_ENUMS = {
     'phase': ('read', 'dispatch', 'wait_exit', 'report_exit', 'settle_execution'),
     'frame': ('none', 'ready', 'reply', 'progress', 'status', 'error', 'execution', 'bridge', 'other'),
     'stopReason': ('none', 'stopped', 'configuration', 'shutdown', 'retention', 'other'),
-    'cleanup': ('not_requested', 'confirmed', 'failed'),
+    'cleanup': ('not_requested', 'unconfirmed', 'confirmed', 'failed'),
 }
 
 
