@@ -57,5 +57,6 @@ jobs:
             ${{ runner.temp }}/manual-handoff-evidence/preparation.json
             ${{ runner.temp }}/manual-handoff-evidence/native.json
             ${{ runner.temp }}/manual-handoff-evidence/cleanup.json
+            ${{ runner.temp }}/manual-handoff-evidence/child-progress.json
           if-no-files-found: error
           retention-days: 14

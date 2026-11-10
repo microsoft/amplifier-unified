@@ -16,12 +16,14 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import stat
 import struct
 import subprocess
 import sys
 import sysconfig
 import threading
 import tomllib
+import types
 import uuid
 
 
@@ -48,6 +50,18 @@ def evidence():
     return Path(os.environ['RUNNER_TEMP']).resolve() / 'manual-handoff-evidence'
 
 
+def canonical_temp():
+    # Same existing-ancestor check as windows_user_trial_probe.canonical_temp.
+    original = Path(os.environ['TEMP']).absolute()
+    canonical = original.resolve(strict=True)
+    for path in (original, canonical):
+        for component in (*reversed(path.parents), path):
+            info = component.lstat()
+            assert stat.S_ISDIR(info.st_mode) and not (getattr(info, 'st_file_attributes', 0) & 0x400)
+    assert (original.stat().st_dev, original.stat().st_ino) == (canonical.stat().st_dev, canonical.stat().st_ino)
+    return canonical
+
+
 def failure(report, error):
     report['status'] = 'FAIL'
     report['failure'] = {'type': type(error).__name__}
@@ -59,7 +73,39 @@ def failure(report, error):
     while trace:
         if trace.tb_frame.f_code.co_filename == __file__:
             report['failure']['fixtureLine'] = trace.tb_lineno
+        module = trace.tb_frame.f_globals.get('__name__', '')
+        if module.startswith('amplifier_web.'):
+            report['failure']['producer'] = module + ':' + trace.tb_frame.f_code.co_name + ':' + str(trace.tb_lineno)
         trace = trace.tb_next
+
+
+async def owned_command(argv, root, *, env, cwd, timeout):
+    """Contain setup descendants too; a timeout never proves tree settlement."""
+    try:
+        from amplifier_web.windows_jobs import WindowsOwnedProcess
+    except ImportError:
+        source = Path(__file__).resolve().parents[2] / 'amplifier_web'
+        package = types.ModuleType('handoff_setup')
+        package.__path__ = [str(source)]
+        sys.modules['handoff_setup'] = package
+        module = load('handoff_setup.windows_jobs', source / 'windows_jobs.py')
+        WindowsOwnedProcess = module.WindowsOwnedProcess
+    ownership = json.loads((evidence() / 'ownership.json').read_text())
+    ownership['jobsSettled'] = False
+    save(evidence() / 'ownership.json', ownership)
+    job = await WindowsOwnedProcess.start(argv, cwd=str(cwd), env=env, trusted_python=sys._base_executable)
+    async def drain(stream):
+        while await stream.read(65536):
+            pass
+    readers = [asyncio.create_task(drain(stream)) for stream in (job.stdout, job.stderr)]
+    try:
+        await asyncio.wait_for(job.wait(), timeout)
+    finally:
+        result = await job.close()
+        await asyncio.gather(*readers)
+        ownership['jobsSettled'] = result.active_processes == 0 and job.tree_empty and job.io_finalized
+        save(evidence() / 'ownership.json', ownership)
+    assert ownership['jobsSettled'] and result.payload_returncode == 0
 
 
 def prepare():
@@ -70,21 +116,24 @@ def prepare():
         git = lambda *args: subprocess.check_output(['git', *args], cwd=source, text=True).strip()
         assert not git('status', '--porcelain')
         report['candidate'] = {'head': git('rev-parse', 'HEAD'), 'tree': git('rev-parse', 'HEAD^{tree}')}
-        root = Path(os.environ['RUNNER_TEMP']).resolve() / ('manual-handoff-' + uuid.uuid4().hex)
+        root = canonical_temp() / ('manual-handoff-' + uuid.uuid4().hex)
         assert not root.exists()
+        save(evidence() / 'ownership.json', {'root': str(root), 'jobsSettled': True})
         # Standalone standard-library native boundary before installing packages.
         wf = load('native_handoff_private_setup', source / 'amplifier_web/windows_files.py')
         for path in (root, root / 'tools', root / 'bin', root / 'app', root / 'shared', root / 'workspace'):
             with wf.directory(path, owned_root=root, create=True):
                 pass
-        save(evidence() / 'ownership.json', {'root': str(root), 'jobsSettled': True})
         with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
             stream.write('HANDOFF_ROOT=' + str(root) + '\n')
         release = load('native_handoff_release_source', source / 'scripts/release.py')
         version = tomllib.loads((source / 'pyproject.toml').read_text())['project']['version']
         release.stage_source(source, 'microsoft/amplifier-unified', report['candidate']['head'], version)
         report['stage'] = 'wheel'
-        subprocess.run(['uv', 'build', '--wheel', '--out-dir', str(root / 'wheels')], cwd=source, check=True, timeout=120)
+        uv = shutil.which('uv')
+        assert uv
+        asyncio.run(owned_command([uv, 'build', '--wheel', '--out-dir', str(root / 'wheels')],
+                                  root, cwd=source, env=dict(os.environ), timeout=120))
         wheels = list((root / 'wheels').glob('*.whl'))
         assert len(wheels) == 1
         wheel = wheels[0]
@@ -92,8 +141,8 @@ def prepare():
         env = {**os.environ, 'UV_TOOL_DIR': str(root / 'tools'), 'UV_TOOL_BIN_DIR': str(root / 'bin'),
                'UV_LINK_MODE': 'copy'}
         report['stage'] = 'uv-tool-install'
-        subprocess.run(['uv', 'tool', 'install', '--python', sys.executable,
-                        '--only-binary', 'amplifier-core', str(wheel)], env=env, check=True, timeout=420)
+        asyncio.run(owned_command([uv, 'tool', 'install', '--python', sys.executable,
+            '--only-binary', 'amplifier-core', str(wheel)], root, cwd=root, env=env, timeout=420))
         report.update(status='PASS', stage='prepared')
     except BaseException as error:
         failure(report, error)
@@ -126,11 +175,12 @@ def set_acl(path, root, foreign=False):
 
 
 async def refused(operation):
+    import aiohttp
     try:
         value = operation()
         if hasattr(value, '__await__'):
             await value
-    except (ValueError, OSError, RuntimeError):
+    except (ValueError, OSError, RuntimeError, aiohttp.ClientError):
         return
     raise AssertionError('Negative control unexpectedly passed')
 
@@ -200,6 +250,44 @@ async def exercise(root, wheel, report):
         await refused(lambda: handoff._health(wrong, binding))
         await refused(lambda: handoff._health(manager, {**binding, 'dataIdentity': '0' * 64}))
         passed('wrongHostAndDataIdentityRefused')
+        token_path = home / 'config/auth/control-token'
+        token = token_path.read_bytes()
+        try:
+            write_private(token_path, b'x' * 64, owned_root=home)
+            await refused(lambda: handoff._health(manager, binding))
+            write_private(token_path, b'malformed', owned_root=home)
+            await refused(lambda: handoff._health(manager, binding))
+        finally:
+            write_private(token_path, token, owned_root=home)
+        set_acl(token_path, root, True)
+        try:
+            await refused(lambda: handoff._health(manager, binding))
+        finally:
+            set_acl(token_path, root)
+        assert await handoff._health(manager, binding)
+        passed('wrongMalformedAndForeignAclCredentialRefused')
+        received = []
+        async def catcher(request):
+            received.append(True)
+            return web.json_response({'ok': True})
+        wrong_app = web.Application()
+        wrong_app.router.add_get('/api/health', catcher)
+        wrong_runner = web.AppRunner(wrong_app, access_log=None)
+        other = root / 'other-tls'
+        private(other, root)
+        other_config = tls.setup_local_ca(other, load_server_config(other))
+        try:
+            await wrong_runner.setup()
+            wrong_site = web.TCPSite(wrong_runner, '127.0.0.1', 0, ssl_context=tls.ssl_context(other, other_config))
+            await wrong_site.start()
+            wrong_port = wrong_site._server.sockets[0].getsockname()[1]
+            wrong = SimpleNamespace(home=home, running_identity=manager.running_identity,
+                service=SimpleNamespace(server_config={**config, 'port': wrong_port}))
+            await refused(lambda: handoff._health(wrong, binding))
+            assert received == []
+        finally:
+            await wrong_runner.cleanup()
+        passed('wrongLeafNoBearerDisclosure')
 
         report['stage'] = 'native-negatives'
         public = Path(target[1])
@@ -287,11 +375,13 @@ async def exercise(root, wheel, report):
                 loop.call_soon_threadsafe(entered.set)
                 assert release.wait(10)
         audit = asyncio.create_task(handoff._offloop(read_until_released))
-        await asyncio.wait_for(entered.wait(), 5)
-        audit.cancel()
-        await asyncio.sleep(0)
-        assert not audit.done()
-        release.set()
+        try:
+            await asyncio.wait_for(entered.wait(), 5)
+            audit.cancel()
+            await asyncio.sleep(0)
+            assert not audit.done()
+        finally:
+            release.set()
         try:
             await audit
         except asyncio.CancelledError:
@@ -305,7 +395,7 @@ async def exercise(root, wheel, report):
         # Candidate has a real source stamp but is not the published version.
         # Expected refusal is evidence of non-qualification, not release access.
         await refused(lambda: artifacts.prepare(root / 'official-refusal', binding['version'], binding['revision']))
-        passed('unpublishedCandidateNotOfficiallyQualified')
+        passed('liveAcquisitionDidNotQualifyCandidate')
         report['stage'] = 'controlled-flow'
         await controlled_flow(manager, wheel, proof, report)
         passed('controlledCandidateReconciliation')
@@ -370,6 +460,13 @@ async def controlled_flow(manager, wheel, proof, report):
         artifacts._get = local_acquisition
         args = {'hostInstanceId': manager.service.instance_id,
                 **{key: pending[key] for key in ('revision', 'generation', 'attemptId')}}
+        # Expose safe failing producer frame before reconcile sanitizes the
+        # action result. This calls the same unmodified composed verifier.
+        await handoff.qualify(manager, pending)
+        report['checks']['actualComposedQualifier'] = 'PASS'
+        # Deterministic acquisition mismatch, separate from live lookup refusal.
+        await refused(lambda: artifacts.prepare(manager.directory / 'wrong-source',
+                      binding['version'], '0' * 40))
         receipt = await manager.service.dispatch('updates.reconcileManualHandoff', args, command_id='native-controlled')
         assert receipt['accepted']
         async with asyncio.timeout(120):
@@ -383,9 +480,13 @@ async def controlled_flow(manager, wheel, proof, report):
         duplicate = await manager.service.dispatch('updates.reconcileManualHandoff', args, command_id='native-controlled')
         assert duplicate['duplicate']
         assert not (manager.directory / 'active.json').exists()
+        assert not (manager.directory / 'application-active.json').exists()
+        assert handoff._native_binding(manager) == binding
+        assert state.get('pendingRestart') is None and state.get('pendingReplacement') is None
         report['controlledFlow'] = {'acquisition': 'exact-two-URL-local-HTTP-substitution',
             'pending': 'synthetic-same-version-local-candidate', 'publicAcceptance': False,
-            'result': result['phase'], 'installs': 0, 'restarts': 0, 'promotions': 0}
+            'result': result['phase'], 'installIntent': False, 'bothPointersAbsent': True,
+            'installationBindingUnchanged': True, 'restartReplacementAbsent': True}
     finally:
         artifacts._get = original
         await runner.cleanup()
@@ -411,13 +512,22 @@ def child():
 async def contained():
     from amplifier_web.windows_jobs import WindowsOwnedProcess
     root = Path(os.environ['HANDOFF_ROOT'])
-    env = {**os.environ, 'UV_TOOL_DIR': str(root / 'tools'), 'UV_TOOL_BIN_DIR': str(root / 'bin'),
+    keep = {'SYSTEMROOT', 'WINDIR', 'PATH', 'PATHEXT', 'COMSPEC', 'TEMP', 'TMP',
+            'PROCESSOR_ARCHITECTURE', 'NUMBER_OF_PROCESSORS', 'RUNNER_TEMP', 'GITHUB_ACTIONS', 'HANDOFF_ROOT'}
+    env = {key: value for key, value in os.environ.items() if key.upper() in keep}
+    env.update({'HOME': str(root / 'home'), 'USERPROFILE': str(root / 'home'),
+           'APPDATA': str(root / 'home/roaming'), 'LOCALAPPDATA': str(root / 'home/local'),
+           'AMPLIFIER_UNIFIED_IMPORT_HOME': str(root / 'legacy'),
+           'AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH': str(root / 'capture'),
+           'UV_CACHE_DIR': str(root / 'cache'), 'UV_LINK_MODE': 'copy', 'UV_OFFLINE': '1',
+           'PYTHONUTF8': '1', 'PYTHONDONTWRITEBYTECODE': '1',
+           'UV_TOOL_DIR': str(root / 'tools'), 'UV_TOOL_BIN_DIR': str(root / 'bin'),
            'AMPLIFIER_WEB_HOME': str(root / 'app'), 'AMPLIFIER_HOME': str(root / 'shared'),
            'AMPLIFIER_SESSION_STATE_HOME': str(root / 'session-state'),
            'AMPLIFIER_TERMINAL_HOME': str(root / 'terminal'),
-           'PATH': str(root / 'bin') + os.pathsep + os.environ['PATH']}
-    for key in ('PYTHONPATH', 'AMPLIFIER_SOURCE_STORE', 'AMPLIFIER_RUNTIME_GENERATION', 'AMPLIFIER_APP_GENERATION_EXEC'):
-        env.pop(key, None)
+           'PATH': str(root / 'bin') + os.pathsep + os.environ['PATH']})
+    for folder in ('home/roaming', 'home/local', 'cache'):
+        private(root / folder, root)
     ownership = json.loads((evidence() / 'ownership.json').read_text())
     ownership['jobsSettled'] = False
     save(evidence() / 'ownership.json', ownership)
@@ -444,6 +554,18 @@ async def contained():
     return report['status'] == 'PASS' and ownership['jobsSettled'] and result.payload_returncode == 0
 
 
+def run():
+    try:
+        return asyncio.run(contained())
+    except BaseException as error:
+        root = Path(os.environ['HANDOFF_ROOT'])
+        report = json.loads((root / 'child.json').read_text()) if (root / 'child.json').exists() else {
+            'status': 'FAIL', 'stage': 'outer-job', 'checks': {}, 'publicAcceptance': False}
+        failure(report, error)
+        save(evidence() / 'native.json', report)
+        return False
+
+
 def cleanup():
     owner = evidence() / 'ownership.json'
     if not owner.exists():
@@ -451,8 +573,11 @@ def cleanup():
         return True
     ownership = json.loads(owner.read_text())
     root = Path(ownership['root'])
-    assert root.parent == Path(os.environ['RUNNER_TEMP']).resolve()
+    assert root.parent == canonical_temp()
     assert root.name.startswith('manual-handoff-') and not root.is_symlink()
+    if (root / 'child.json').is_file():
+        # Preserve completed partial facts even if the outer job timed out.
+        shutil.copyfile(root / 'child.json', evidence() / 'child-progress.json')
     if not ownership['jobsSettled']:
         save(evidence() / 'cleanup.json', {'status': 'held-unsettled-job', 'removed': False})
         return False
@@ -467,5 +592,5 @@ if __name__ == '__main__':
     parser.add_argument('operation', choices=('prepare', 'run', 'child', 'cleanup'))
     args = parser.parse_args()
     require_ci()
-    result = asyncio.run(contained()) if args.operation == 'run' else globals()[args.operation]()
+    result = globals()[args.operation]()
     raise SystemExit(0 if result else 1)
