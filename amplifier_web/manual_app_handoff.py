@@ -65,6 +65,27 @@ def require_target(manager, args):
     return witness
 
 
+def awaiting_verification(manager):
+    """Hold a reconcilable target across availability refreshes, not adopt it.
+
+    A manual launch can reach the new server before its explicit verification
+    request. Do not replace that exact settled refusal with another release in
+    the meantime. Native payload/owner/listener proof still belongs to reconcile.
+    """
+    if sys.platform != 'win32':
+        return False
+    from .app_updates import version_tuple
+    try:
+        pending = _state_witness(manager)['pending']
+        current = version_tuple(manager.running_identity.get('version'))
+        staged = version_tuple(pending.get('latest'))
+        return bool(current and staged and current >= staged
+                    and (current != staged
+                         or manager.running_identity.get('revision') == pending['revision']))
+    except (TypeError, ValueError):
+        return False
+
+
 def _read(path):
     from .windows_read_files import open_file
     with open_file(path) as stream:
