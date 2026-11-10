@@ -119,6 +119,12 @@ history-window reads remain with their current owner. Consumers supporting only
 load, including the currently reviewed Conversations connector, are not yet
 qualified for reconnect continuity through this path.
 
+The existing transcript reader also supports bounded forward traversal of raw
+records. It preserves order, rejects gaps and changed sources, and waits for
+each consumer before reading another batch. This is infrastructure for a future
+complete conversation projection: raw model-context records are not themselves
+the public conversation. It adds no execution-owner API or ACP Load capability.
+
 Interactive approval forwarding is a separate limitation of this first path.
 The existing access-mode owner resolves standing Full; the adapter may join its
 actual settlement without becoming another policy evaluator. A genuinely pending
