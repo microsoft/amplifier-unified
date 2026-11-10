@@ -277,7 +277,7 @@ async def test_each_running_version_requires_its_own_official_payload(manager, n
 
 
 @pytest.mark.parametrize('mutation', ['older', 'same-version-revision', 'same-version-hash',
-                                    'same-version-graph', 'extras', 'custom', 'missing-hash', 'wrong-hash'])
+                                    'same-version-graph', 'extras', 'custom', 'malformed-hash', 'wrong-hash'])
 async def test_invalid_manual_install_never_qualifies(manager, native_observations, mutation, tmp_path):
     from amplifier_web import app_release_artifacts as artifacts
     binding, staged, calls = native_observations
@@ -296,13 +296,22 @@ async def test_invalid_manual_install_never_qualifies(manager, native_observatio
         binding['extras'] = ['tui']
     elif mutation == 'custom':
         binding['direct'] = {'url': 'https://example.invalid/custom.whl', 'archive_info': {}}
-    elif mutation == 'missing-hash':
-        binding['direct']['archive_info'] = {}
+    elif mutation == 'malformed-hash':
+        binding['direct']['archive_info'] = {'hashes': 'invalid'}
     else:
         binding['direct']['archive_info']['hashes']['sha256'] = 'c' * 64
     with pytest.raises(ValueError):
         await handoff.qualify(manager, manager.service.state['updates']['pendingApp'])
     assert 'probe' not in calls and manager.service.state['updates']['pendingApp']
+
+
+async def test_uv_empty_archive_info_still_requires_official_and_payload_proof(manager, native_observations):
+    binding, _, calls = native_observations
+    binding['direct']['archive_info'] = {}
+    proof = await handoff.qualify(manager, manager.service.state['updates']['pendingApp'])
+    assert proof['artifact']['sha256'] == 'f' * 64
+    assert ('official-wheel', binding['version'], binding['revision']) in calls
+    assert 'probe' in calls and 'health' in calls
 
 
 @pytest.mark.parametrize('boundary', ['probe', 'dependencies', 'health', 'final-binding', 'final-payload'])

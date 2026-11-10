@@ -239,9 +239,15 @@ async def qualify(manager, pending):
         descriptor = {**published, 'path': str(path)}
         archive_info = direct['archive_info']
         _require(isinstance(archive_info, dict))
-        hashes = archive_info.get('hashes') or {}
-        _require(hashes.get('sha256') == published['sha256']
-                 or archive_info.get('hash') == 'sha256=' + published['sha256'])
+        # uv may leave archive_info empty for an installed local wheel. Its
+        # optional hash is corroboration, never the publication authority:
+        # prepare authenticated the official bytes and _payload independently
+        # checks that checksum and every installed member. Conflicts still fail.
+        _require(not set(archive_info) - {'hash', 'hashes'})
+        hashes = archive_info.get('hashes', {})
+        _require(isinstance(hashes, dict))
+        _require('sha256' not in hashes or hashes['sha256'] == published['sha256'])
+        _require('hash' not in archive_info or archive_info['hash'] == 'sha256=' + published['sha256'])
         if current == previous:
             _require(published['sha256'] == staged['artifact']['sha256'])
         proof = {'binding': binding, 'artifact': descriptor, 'stagedDigest': staged_digest,
