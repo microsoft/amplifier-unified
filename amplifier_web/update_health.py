@@ -333,7 +333,7 @@ def failure_events(state):
     return rows
 
 
-def current(state, evidence=None):
+def current(state, evidence=None, *, manual_verified=None):
     """Pure projection of operation/desired/active state; no IO and no read flags."""
     evidence = evidence or {}
     seq = state.get('sequence') or {}
@@ -376,7 +376,8 @@ def current(state, evidence=None):
                       'New work uses the qualified combination. Check manually to retry; prior failures remain in history.',
                       action='sources')
     local_changes = [r for r in state.get('items', []) if r.get('status') == 'local_changes']
-    issues = [r for r in state.get('items', []) if r.get('status') == 'check_failed']
+    issues = [r for r in state.get('items', []) if r.get('status') == 'check_failed'
+              and r.get('id') != 'application' and r.get('kind') != 'app']
     if issues:
         row = issues[0]
         return result('action-required', 'A source could not be checked',
@@ -400,6 +401,13 @@ def current(state, evidence=None):
         and 0 < application_batch.get('startedAt', 0)
             <= application_result.get('verifiedAt', 0) <= application_batch.get('completedAt', 0))
     def currently_verified(row):
+        manual = state.get('manualHandoff') or {}
+        if (manual.get('phase') == 'manual-handoff-reconciled'
+                and manual_verified is not None and manual_verified == manual.get('requestId')
+                and manual.get('revision') == app.get('runningRevision')
+                and manual.get('version') == app.get('current')
+                and row == manual.get('refusal')):
+            return True  # Exact historical pre-effect refusal, not generic recovery.
         # A later complete, applicable operation proves current readiness for
         # generic preparation/OS failures too, not just a reason-code allowlist.
         # Missing packages and unknown app feature scope remain unverified.
@@ -449,7 +457,14 @@ def current(state, evidence=None):
                       action='tools')
     if state.get('available') or seq.get('nextStage') or any(
             (seq.get(tier) or {}).get('available') for tier in ('included', 'other')):
-        return result('available', 'Updates available', 'The app and eligible components can update while preserving configured pins and local sources.', action='install')
+        return result('available', 'Updates available',
+                      'Eligible component updates can continue independently. The application release check still needs attention.'
+                      if app.get('status') in {'check_failed', 'release_channel_needed'} else
+                      'The app and eligible components can update while preserving configured pins and local sources.', action='install')
+    if app.get('status') in {'check_failed', 'release_channel_needed'}:
+        return result('action-required', 'Application check needs attention',
+                      app.get('detail') or 'The application release could not be checked. Component results remain separate; check for updates again.',
+                      action='check', component='Amplifier Unified')
     if local_changes or seq.get('stage') == 'complete' and app.get('status') == 'current':
         if evidence.get('activationUnknown'):
             return result('unchecked', 'Current components kept',
@@ -477,7 +492,8 @@ def publish(manager):
                 'actionRequired': False, 'action': None, 'component': None}
             return
         evidence = {}
-    state['currentStatus'] = current(state, evidence)
+    state['currentStatus'] = current(state, evidence,
+        manual_verified=getattr(manager, '_manual_handoff_verified', None))
 
 
 async def refresh(manager):

@@ -73,6 +73,12 @@ accepted execution -> runtime admission -> working -> safely evictable when idle
    conversation history merely to make an inspection view current. Preparation
    reuses a request-scoped observation within one fitted request, without reusing
    it across requests or replacing transport-time authority/revocation checks.
+   Full catalog metadata reconciliation commits its changed owners and global
+   records without checkpointing unchanged conversation histories. Pending progress
+   still joins that commit, and failed commits remain recoverable.
+   Text-only history retrieval does not reconstruct execution activity that its
+   consumer discards. Requested activity detail remains available through its
+   explicit display read; omitted detail is not reported as empty coverage.
    Broken: a small update scales with unrelated stored histories. Affected: multi-session hosts.
 
 6. **WS6 — Discover without rereading history.** New native writers publish incremental

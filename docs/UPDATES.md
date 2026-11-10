@@ -107,9 +107,9 @@ Shared-store sources may retain their verified old binding after an availability
 failure. A shared-store fetch failure does **not** establish the same settled
 legacy-fetch boundary; an unknown store mutation fails closed. This slice does
 not partition arbitrary resolver or installer conflicts, infer independence from
-dynamic dependency metadata, or detach component work from an application check
-or restart. Existing application, Smart Tool, activation and unknown-operation
-guards still apply.
+dynamic dependency metadata, or detach component work from a pending application
+replacement or restart. Existing application, Smart Tool, activation and
+unknown-operation guards still apply.
 
 The public `componentResults` receipt reports each source ID, exact revision and
 one of **failed**, **dependency-held**, **awaiting-adoption** or **updated**.
@@ -134,6 +134,39 @@ retains the inspection fence even if the visible diagnostic still names the
 earlier fetch failure. Changes to source identity, desired revision or relevant
 configuration can make new work eligible; a retention-only status projection
 does not.
+
+## Application availability — bounded independence slice
+
+Focused qualification exercises the actual manager, release-metadata parser,
+local Git discovery, source copying, staging and activation-pointer behavior.
+Worker validation is an explicit test seam, not installed-graph or native-worker
+qualification. UI checks cover progress, pending-adoption controls and truthful
+application guidance; synthetic owner state does not establish backend execution.
+Publication and live adoption remain separate evidence.
+
+A completed application availability check returning `current`, `check_failed`
+or `release_channel_needed` permits the existing included-component check path.
+Eligible components can prepare against the running application's declarations
+without a successful release lookup. A known available application update still
+uses the app-first path; other unknown application states do not grant permission
+to proceed. Existing component source, selection, qualification and adoption
+checks remain required.
+
+The application keeps its own status and sanitized failure guidance. Component
+progress and pending adoption remain visible, with duplicate installation controls
+held while work is pending. A component operation failure takes priority over an
+unavailable application check; completed component work does not make that check
+successful or establish that the application is current. Historical failure
+receipts remain unchanged. While components progress or are available, the app
+check warning stays in the overall status even when Settings navigation collapses
+the technical details. Once eligible component work is exhausted, a failed
+application check remains actionable through **Check for updates**.
+
+This slice does not detach work from a pending application replacement or restart,
+partition arbitrary dependency or installer conflicts, or change process-lifetime
+coupling. It does not weaken Stop, cancellation, uncertain-operation inspection
+or unchanged-input retry guards. Application availability is not authorization to
+repeat an unknown installation.
 
 ## Current implementation and operational behavior
 
@@ -177,6 +210,17 @@ Superseded app staging directories and their qualification receipts remain on
 disk. The existing automatic retention owner covers ecosystem generations, not
 app-installation generations; this path does not infer that an older app directory
 is safe to delete.
+
+An explicit `updates.reconcileManualHandoff` verifies an already completed manual
+Windows handoff after the exact retained pre-effect `restart-capability` refusal.
+It is not automatic Windows activation or a historical restart acknowledgement.
+The host independently verifies the current official release wheel, installed
+payload, uv launcher, owner/data identity, dependencies/extras and pinned local
+listener, then rechecks the pending tuple before retiring only that stale intent.
+Missing proof, changed identity or any unfinished replacement remains a refusal.
+The old candidate and failed attempt remain inspectable. Exact retries read
+`manualHandoffResults`; interrupted verification is not replayed. This does not
+grant optional-feature eligibility or promote an inactive component generation.
 
 When a qualified application update is waiting, expand **View active work** to
 find **Force restart…**. Its confirmation explains that running chats, workers,

@@ -313,7 +313,25 @@ async def cache_changes(root):
     inside an isolated staging copy. Untracked files are never removed.
     """
     root = Path(root).resolve()
-    records = (await process('git','--no-optional-locks','status','--porcelain=v1','-z','--untracked-files=no',cwd=root,timeout=10,raw=True)).split(b'\0')
+    from .runtime_qualification import _installed_git_environment, _installed_checkout_environment
+    isolated = _installed_git_environment()
+    checkout = await asyncio.to_thread(_installed_checkout_environment, root, isolated)
+    options = []
+    if checkout is not isolated:
+        # Reuse installed provenance's validated scalar, not personal auth,
+        # includes or rewrites. process() re-sanitizes anonymous environments,
+        # so carry this metadata-only value as an explicit Git argument.
+        last = int(checkout['GIT_CONFIG_COUNT']) - 1
+        options = ['-c', 'core.autocrlf=' + checkout[f'GIT_CONFIG_VALUE_{last}']]
+    records = (await process('git',*options,'--no-optional-locks','status','--porcelain=v1','-z','--untracked-files=no',cwd=root,timeout=10,raw=True)).split(b'\0')
+    changed = None
+    if options and any(record.startswith(b' M ') for record in records):
+        # With optional index writes disabled, status may keep a stat-only M
+        # after changing EOL interpretation. Ask Git for actual worktree edits.
+        # Staged/type/deleted changes below remain protected independently.
+        changed = set((await process('git',*options,'--no-optional-locks','diff',
+            '--no-ext-diff','--no-textconv','--name-only','-z','--',
+            cwd=root,timeout=10,raw=True)).split(b'\0'))
     protected, artifacts = [], []
 
     async def head_entry(path, revision='HEAD'):
@@ -383,6 +401,8 @@ async def cache_changes(root):
         change=record[:2].decode('ascii');path=os.fsdecode(record[3:])
         # Renames/copies have a second NUL-delimited name, even with whitespace.
         if 'R' in change or 'C' in change:index+=1
+        if change == ' M' and changed is not None and os.fsencode(path) not in changed:
+            continue
         if change not in {' M',' T'}:
             protected.append(path);continue
         if path=='wiki_weaver/_version.py':
@@ -464,6 +484,10 @@ class UpdateManager:
             if state.get('phase')=='activating':state['pendingApp']=None
             state.update(phase='interrupted', detail='The update was interrupted; installed sources were not replayed.')
         state.setdefault('phase', 'idle')
+        # A read-only manual verifier interrupted by host exit is not replayed.
+        for result in state.get('manualHandoffResults', {}).values():
+            if result.get('status') == 'queued':
+                result.update(status='interrupted', detail='Manual verification was interrupted; no handoff success was inferred.')
         state['applicationCheckPending'] = False
         from .app_features import reconcile_requests
         reconcile_requests(state)
@@ -657,6 +681,11 @@ class UpdateManager:
         return classify(self.home, rows, selection=selection)
 
     async def command(self, action, args=None, command_id=None):
+        if getattr(self, '_manual_handoff_commit_unknown', False):
+            return  # Saved commit is unreadable; reload observes it, never replay.
+        if action == 'reconcileManualHandoff':
+            from .manual_app_handoff import reconcile
+            return await reconcile(self, args, command_id)
         if self.awaiting_restart() and action not in {'featureInstall', 'forceRestart'}:return
         previous_error=self.service.state['updates'].get('error')
         previous_event=self.diagnostics.state.get('latest',{}).get('id')
@@ -711,6 +740,7 @@ class UpdateManager:
         return bool(pending) and all(row.get('runnerSource') or row.get('failure') for row in pending)
 
     async def check(self, *, tier='application', install=False, fresh=True, automatic=False):
+        if getattr(self, '_manual_handoff_commit_unknown', False):return
         state = self.service.state['updates']
         if (self.closed or self.awaiting_restart() or state.get('pendingRelease') or (state.get('pendingSmartTools') and not self.independent_tool_results(state))
                 or (state.get('pendingApp') or {}).get('featureSelection')):
@@ -759,6 +789,15 @@ class UpdateManager:
                     from .app_updates import check_staged
                     await check_staged(self)
                 return
+            from .manual_app_handoff import continuing, verify_continuation
+            manual = continuing(self)
+            if manual and tier == 'application' and automatic:
+                tier = state['sequence']['stage']
+                install = state['sequence'].get('install') is True
+            if manual and tier != 'application':
+                await verify_continuation(self)
+            else:
+                manual = False  # A fresh explicit check starts the usual app-first cycle.
             sequence = ({'stage': 'application', 'install': install,
                          'included': summary([], checked=False), 'other': summary([], checked=False)}
                         if tier == 'application' else {**state.get('sequence', {}), 'stage': tier, 'install': install})
@@ -782,15 +821,16 @@ class UpdateManager:
                         application['releaseNotesWarning']='Release notes could not be refreshed. Showing saved release history.'
                     application['runningRevision'] = self.running_identity['revision']
                     app_available = application.get('status') == 'update'
-                    # Do not inventory or resolve dependencies against an app
-                    # version that is about to be replaced.
+                    # A selected app replacement still owns the next activation.
+                    # An unavailable release check does not select a replacement:
+                    # independently check the running app's component declarations.
                     self.inventory = []
                     write_private(self.directory/'inventory.json', '[]')
                     await self.publish(application=application, appAvailable=app_available,
                                        items=[application], available=int(app_available))
-                    if app_available or application.get('status') != 'current':
+                    if app_available or application.get('status') not in {'current', 'check_failed', 'release_channel_needed'}:
                         await self.publish(phase='available' if app_available else 'error', lastCheck=time.time(),
-                            error=None if app_available else application.get('detail') or 'The application release could not be checked. Try again before checking components.',
+                            error=None if app_available else application.get('detail') or 'The application check returned an unrecognized outcome. Check again before continuing.',
                             detail='App update available. Included components will be checked after the new app restarts.' if app_available else 'Component checks are waiting for the application check.')
                         return
                     tier = 'included'
@@ -903,9 +943,10 @@ class UpdateManager:
                 from .update_health import refresh as refresh_health
                 await refresh_health(self)
                 await self.publish(phase='error' if blocked and failed_check else 'checked' if blocked else 'available' if available else 'checked',
-                    sequence=sequence, items=public+[application], application=application, appAvailable=False,
+                    sequence=sequence, items=public+[application], application=application,
+                    appAvailable=state.get('appAvailable', False) if manual else False,
                     includedCanProceed=bool(available and not blocked),
-                    available=available, lastCheck=time.time(),
+                    available=available + int(manual and state.get('appAvailable', False)), lastCheck=time.time(),
                     error='An included component could not be checked. Review its details before continuing.' if blocked and failed_check else None,
                     detail='Included components will be installed before checking the remaining sources.' if sequence['stage']=='included' and available else 'Component check complete.')
             except Exception:
@@ -968,8 +1009,13 @@ class UpdateManager:
         await activate(self)
 
     async def install(self, *, automatic=False):
+        if getattr(self, '_manual_handoff_commit_unknown', False):return
         if self.awaiting_restart() or self.lock.locked():return
         state = self.service.state['updates']
+        from .manual_app_handoff import verify_continuation
+        manual = await verify_continuation(self)
+        if manual and automatic and state.get('sequence', {}).get('install') is not True:
+            return  # Verification without saved Install intent installs nothing.
         from .update_health import pending_preparation, reconcile_preparation
         # Independent app/tool owners may proceed without clearing or replaying
         # component work. Their diagnostics.begin must retain this operation.
@@ -1001,7 +1047,7 @@ class UpdateManager:
         if self.service.state['updates'].get('pendingRelease'):
             await self.activate()
             return
-        if self.service.state['updates'].get('appAvailable'):
+        if self.service.state['updates'].get('appAvailable') and not manual:
             await self.app()
             return
         pending = state.get('pendingSmartTools', [])
@@ -1026,6 +1072,9 @@ class UpdateManager:
             await self.installSmartTools()
             return
         async with self.lock:
+            if manual:
+                if not await verify_continuation(self, full=True):
+                    raise ValueError('The manual handoff continuation was superseded.')
             if not self.inventory:
                 path=self.directory/'inventory.json'
                 self.inventory=json.loads(path.read_text()) if path.exists() else []
@@ -1523,6 +1572,7 @@ class UpdateManager:
         await self.activate(rollback=True)
 
     async def tick(self):
+        if getattr(self, '_manual_handoff_commit_unknown', False):return
         settings=self.service.state['settings'].get('updates',{})
         state=self.service.state['updates']
         from .update_drain import observe_waiters
@@ -1530,6 +1580,11 @@ class UpdateManager:
         if self.awaiting_restart():return
         if getattr(self, '_update_health_initial', False):
             self._update_health_initial = False
+            from .manual_app_handoff import verify_current
+            try:
+                await verify_current(self, full=True)
+            except (ValueError, OSError, RuntimeError, KeyError, TypeError):
+                self._manual_handoff_verified = None
             from .update_health import refresh as refresh_health
             await refresh_health(self)
             await self.publish()
@@ -1595,7 +1650,10 @@ class UpdateManager:
             await self.check(fresh=False, automatic=True)
         state=self.service.state['updates']
         managed_preview=state.get('appAvailable') and state.get('application',{}).get('canInstall') is False
-        if not managed_preview and (settings.get('autoInstall',True) or state.get('sequence', {}).get('install')) and state.get('phase')=='available' and state.get('available',0):
+        sequence = state.get('sequence', {})
+        install_intent = (sequence.get('install') if sequence.get('manualHandoff')
+                          else settings.get('autoInstall', True) or sequence.get('install'))
+        if not managed_preview and install_intent and state.get('phase')=='available' and state.get('available',0):
             await self.install(automatic=True)
             return
         if self.independent_tool_results(state) and (state.get('phase') not in {'error', 'interrupted'} or any(

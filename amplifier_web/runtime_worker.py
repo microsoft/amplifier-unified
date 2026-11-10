@@ -933,6 +933,7 @@ class Worker:
                     write_guard=self.activation_gate.check_current, resolved_root=resolved_root,
                     execution_workspace=config.get("workingDirectory"), install_overrides=install_overrides,
                     owner_session_id=config.get("ownerSessionId"),
+                    ephemeral_mcp_servers=config.get("ephemeralMcpServers"),
                     startup_timing=startup_timing)
             if qualified_overrides is not None:
                 active_install_overrides(self.home, str(qualified_overrides))
@@ -1486,8 +1487,10 @@ class Worker:
                 raise
             publish({'op':'reply', 'id':data.get('id'), 'result':{'interrupted':True}})
         except Exception as exc:
+            from amplifier_web.worker_diagnostics import command_failure_facts
+            facts = command_failure_facts(exc)
             reply = {"op": "reply", "id": data.get("id"),
-                     "error": f"{type(exc).__name__}: {exc}"}
+                     "error": f"{type(exc).__name__}: {exc}", "failureFacts": facts}
             from amplifier_web.runtime import RuntimeStartupError
             preparation_failed = isinstance(exc, RuntimeStartupError)
             if preparation_failed:
@@ -1734,8 +1737,8 @@ class Worker:
                 result = {"accepted": True, "inputId": input_id}
             elif op == "control":
                 arguments = data.get("arguments", {})
-                if data['operation'] in {'conversation.steer', 'schedule.submit', 'observation.submit',
-                                         'coordination.submit', 'coordination.steer', 'coordination.deliver', 'history.edit'}:
+                from amplifier_web.runtime_protocol import INPUT_CONTROLS
+                if data['operation'] in INPUT_CONTROLS:
                     input_id = arguments['operationId'] if data['operation'] == 'history.edit' else arguments['inputId']
                     self.bind_input_context(input_id, data, arguments.get('context_binding'))
                 if data['operation'] in {'configuration.apply', 'configuration.patchPlacement.bind'}:
@@ -1825,7 +1828,10 @@ class Worker:
             if identity:
                 publish({"op": "reply", "id": identity, "result": result})
         except Exception as exc:
-            publish({"op": "reply", "id": identity, "error": f"{type(exc).__name__}: {exc}"})
+            from amplifier_web.worker_diagnostics import command_failure_facts
+            facts = command_failure_facts(exc)
+            publish({"op": "reply", "id": identity, "error": f"{type(exc).__name__}: {exc}",
+                     "failureFacts": facts})
 
     async def read(self):
         transport = None
