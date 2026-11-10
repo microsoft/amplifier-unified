@@ -6,6 +6,7 @@ import {writeFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {openSettingsPage} from './browser-settings.mjs';
+import {createShellHttpFixture,installFixtureEvents} from './shell-http-fixture.mjs';
 const python=fixturePython(process.env.UNIFIED_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)));
 const output=process.env.UNIFIED_BROWSER_EVIDENCE||(process.env.AMPLIFIER_TEST_ARTIFACTS+'/update-progress');if(!process.env.UNIFIED_BROWSER_EVIDENCE&&!process.env.AMPLIFIER_TEST_ARTIFACTS)throw Error('Owned artifact directory required');
 const fixture=spawn(python,['-u',fileURLToPath(new URL('../../tests/fixtures/update_progress_server.py',import.meta.url))]);
@@ -333,6 +334,122 @@ try{
  assert.ok(await page.evaluate(()=>window.amplifier.getState().updates.diagnostics.events.some(event=>event.status==='failed')));
  assert.deepEqual((await observations()).calls,{check:2,install:0,rollback:0});
  result.statusProjection={retryKeepsAttention:true,currentOperationOwnsHeading:true,fullScopeRetained:true,boundedBatchPreview:true,coveredActivationSettles:true,reloadConsistent:true,failedHistoryPreserved:true};
+ // Consumer-only availability cases use the same served client in an isolated
+ // browser context. The maintained HTTP adapter supplies synthetic owner state;
+ // event delivery is synthetic too. This does not qualify scheduler, installation,
+ // source selection, persistence or real SSE transitions for these added cases.
+ const beforeAvailability=await readObservations();
+ const availabilityState=await page.evaluate(()=>{
+  const s=window.amplifier.getState();
+  return {revision:1,settings:s.settings,runtime:s.runtime,view:s.view,sessions:s.sessions,
+   workspaces:s.workspaces,selectedSessionId:s.selectedSessionId,selectedWorkspaceId:s.selectedWorkspaceId,
+   setup:s.setup,canvas:{open:false},attention:{items:[]}};
+ });
+ const failedAppCheck={id:'application',kind:'app',label:'Amplifier Unified',current:confirmedAppResult.version,
+  runningRevision:confirmedAppResult.revision,status:'check_failed',channel:'github-releases',
+  checkStage:'release_metadata',checkReason:'unavailable',
+  detail:'Could not read published-release metadata. No update was installed by this check.'};
+ const componentAttempt='9'.repeat(32),availabilityCases=[],availabilityActions=[];
+ function availabilityUpdates(phase){
+  const complete=phase==='installed',pending=phase==='staged';
+  return {application:failedAppCheck,applicationResult:confirmedAppResult,phase,error:null,initialPreparation:false,
+   appAvailable:false,available:complete?0:1,includedCanProceed:true,
+   items:[failedAppCheck,{id:'independent-fixture',kind:'bundle / module',label:'Independent fixture component',
+    updateTier:'included',status:complete?'current':'update',eligible:true,current:(complete?'b':'a').repeat(40),latest:'b'.repeat(40)}],
+   sequence:{stage:complete?'complete':'included',install:!complete,
+    included:{status:complete?'current':'available',available:complete?0:1,issues:0},
+    other:{status:complete?'current':'waiting',available:0,issues:0}},
+   pendingRelease:pending?componentAttempt:null,plan:pending?{activation:'per-worker'}:{},
+   componentResults:pending||complete?[{id:'independent-fixture',status:complete?'updated':'awaiting-adoption',revision:'b'.repeat(40)}]:[],
+   diagnostics:{attemptId:componentAttempt,batch:{attemptId:componentAttempt,kind:'ecosystem',tier:'included',
+    components:['independent-fixture'],componentCount:1,startedAt:confirmedAppResult.verifiedAt+1},events:[]},
+   probeProgress:phase==='validating'?{attemptId:componentAttempt,phase:'prepare',completed:2,total:3}:null,
+   detail:phase==='checking'?'Checking included components…':'Preparing independent components.',
+   currentStatus:complete?{status:'action-required',title:'Application check needs attention',detail:failedAppCheck.detail,
+    actionRequired:true,action:'check',component:failedAppCheck.label}:
+    {status:pending?'waiting':'working',title:'Updating Amplifier',detail:'Component work continues independently.',actionRequired:false}};
+ }
+ availabilityState.updates=availabilityUpdates('checking');
+ const availabilityShell=createShellHttpFixture(()=>availabilityState);
+ const availabilityPage=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:headers});
+ availabilityPage.on('pageerror',error=>errors.push(error.message));
+ result.availabilityIndependence={syntheticHTTPState:true,syntheticEventDelivery:true,backendTransitionsQualified:false,cases:availabilityCases};
+ try{
+  await availabilityPage.addInitScript(installFixtureEvents);
+  await availabilityPage.route('**/api/**',async route=>{
+   const request=route.request(),path=new URL(request.url()).pathname,response=availabilityShell.response(request);
+   if(response!==undefined)return route.fulfill({json:response});
+   if(path==='/api/state')return route.fulfill({json:availabilityShell.state()});
+   if(path==='/api/actions'&&request.method()==='GET')return route.fulfill({json:[]});
+   if(path!=='/api/actions')return route.fulfill({json:{ok:true}});
+   const envelope=request.postDataJSON(),command=envelope.action==='shell.command'?(envelope.args?.command||envelope.args):envelope;
+   if(command.action?.startsWith('updates.')){
+    availabilityActions.push(command.action);
+    return route.fulfill({status:403,json:{accepted:false,error:'Availability UI fixture forbids update effects'}});
+   }
+   if(command.action==='view.update')availabilityState.view={...availabilityState.view,...command.args.patch};
+   availabilityState.revision++;
+   return route.fulfill({json:{accepted:true,state:availabilityShell.state()}});
+  });
+  await availabilityPage.goto(base);await availabilityPage.waitForSelector('#amp-one');await openSettingsPage(availabilityPage,'updates');
+  const panel=availabilityPage.locator('[data-part="updates"]'),heading=panel.locator('[data-part="application-update"]').first();
+  const appStatus=panel.locator('.a-app-update-status'),appIssue=panel.getByRole('alert').filter({hasText:failedAppCheck.detail});
+  for(const [phase,label,title] of [['checking','checking','Checking for updates'],['validating','validating','Finishing your update'],
+   ['staged','pending','Finishing your update'],['installed','complete','Application check needs attention']]){
+   availabilityState.updates=availabilityUpdates(phase);availabilityState.revision++;
+   await availabilityPage.evaluate(value=>window.emitState(value),availabilityShell.state());
+   for(const [size,width,height] of [['desktop',1280,950],['mobile',320,844]]){
+    await availabilityPage.setViewportSize({width,height});
+    await expect(heading.getByRole('heading',{level:4})).toHaveText(title);
+    await expect(panel.locator('[data-part="ecosystem-update-details"]')).toHaveAttribute('open','');
+    await expect(appStatus).toHaveText('Needs attention');await expect(appIssue.first()).toBeVisible();
+    await expect(heading).not.toContainText('You’re up to date');
+    await expect(appStatus).not.toContainText('Latest release installed');
+    await expect(heading.locator('[data-part="confirmed-application-result"]')).toHaveText(confirmedAppText);
+    await expect(panel.locator('[data-action="updates.install"]')).toHaveCount(0);
+    if(phase==='installed'){
+     await expect(panel).not.toHaveAttribute('aria-busy','true');
+     await expect(heading.locator('.a-progress-spinner')).toHaveCount(0);
+     for(const button of await panel.locator('[data-action="updates.check"]').all())await expect(button).toBeEnabled();
+     await expect(panel.locator('.a-update-current-action button')).toHaveText('Check for updates');
+     await expect(panel.locator('[data-part="component-update-results"]')).toContainText('Independent fixture component · Updated');
+    }else{
+     await expect(panel).toHaveAttribute('aria-busy','true');
+     await expect(heading.locator('.a-progress-spinner')).toBeVisible();
+     await expect(panel.locator('[data-action="updates.check"]')).toBeDisabled();
+     if(phase==='checking')await expect(heading).toContainText('Checking included components');
+     if(phase==='validating'){
+      await expect(panel).toContainText('2 of 3 completed');
+      await expect(panel.locator('[data-part="update-batch"]')).toContainText('independent-fixture');
+     }
+     if(phase==='staged')await expect(panel.locator('[data-part="component-update-results"]')).toContainText('Awaiting adoption');
+    }
+    const saved=await availabilityPage.evaluate(()=>{const u=window.amplifier.getState().updates;
+     return {phase:u.phase,application:u.application,applicationResult:u.applicationResult,componentResults:u.componentResults};});
+    assert.deepEqual(saved.application,failedAppCheck);assert.deepEqual(saved.applicationResult,confirmedAppResult);
+    assert.equal(saved.phase,phase);assert.deepEqual(availabilityActions,[]);
+    await expect.poll(()=>availabilityPage.locator('.a-dialog').evaluate(el=>el.scrollWidth-el.clientWidth),
+     {message:'independent component progress and app guidance must fit the dialog'}).toBeLessThanOrEqual(1);
+    await heading.scrollIntoViewIfNeeded();
+    const screenshot=output+`-app-check-${label}-${size}.png`;
+    await availabilityPage.screenshot({path:screenshot});
+    let appFailureScreenshot;
+    if(phase==='installed'){
+     await appIssue.first().scrollIntoViewIfNeeded();
+     appFailureScreenshot=output+`-app-check-attention-${size}.png`;
+     await availabilityPage.screenshot({path:appFailureScreenshot});
+    }
+    availabilityCases.push({phase,size,width,screenshot,appFailureScreenshot,title:await heading.getByRole('heading',{level:4}).innerText(),
+     busy:await panel.getAttribute('aria-busy')==='true',appFailureVisible:true,duplicateInstallAbsent:true,
+     originalApplicationResultPreserved:true,applicationCheck:saved.application,componentResults:saved.componentResults});
+   }
+  }
+ }catch(error){await availabilityPage.screenshot({path:output+'-app-check-failed.png'});throw error}
+ finally{await availabilityPage.close()}
+ assert.equal(availabilityCases.length,8);
+ assert.deepEqual(await readObservations(),beforeAvailability);
+ result.availabilityIndependence.originalApplicationResult=confirmedAppResult;
+ result.availabilityIndependence.noUpdateEffects=true;
  assert.deepEqual(errors,[]);result.status='passed';result.checks={progress:true,componentIdentity:true,completedMilestones:true,partialSuccess:true,partialSuccessReload:true,staleAppResultExcluded:true,unconfirmedRestartExcluded:true,savedPreferences:true,unknownIntervalPreserved:true,explicitCheckFailureRetry:true,noInstallEffects:true,noPrematureActivation:true,waitingDistinct:true,activationBusy:true,duplicateInstallDisabled:true,reducedMotion:true,retryAfterFailure:true,completionRestoresControls:true,failureDistinct:true,reload:true,mobileOverflow:false};result.browserErrors=errors;result.browserVersion=browser.version();
 }catch(error){result.status='failed';result.error=String(error);if(page)await page.screenshot({path:output+'-failed.png'});throw error}
 finally{try{await browser?.close()}finally{fixture.kill('SIGTERM');await new Promise(resolve=>{if(fixture.exitCode!==null)return resolve();const timer=setTimeout(()=>{fixture.kill('SIGKILL');resolve()},10000);fixture.once('exit',()=>{clearTimeout(timer);resolve()})});result.fixtureLog=log;await writeFile(output+'.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));}}

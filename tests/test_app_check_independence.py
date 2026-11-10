@@ -82,7 +82,8 @@ def validation_boundary(component, monkeypatch, *, fail=False):
         # The real planner must not mistake this unknown bundle for safe data.
         assert json.loads((stage / 'plan.json').read_text())['mode'] == 'worker'
         if fail:
-            raise ProtectedRuntimeSource('fixture-component', 'runtime-source-constraint')
+            # Use the diagnostic owner's public package-name allowlist.
+            raise ProtectedRuntimeSource('amplifier-fixture-component', 'runtime-source-constraint')
 
     observer = AsyncMock(side_effect=validate)
     monkeypatch.setattr(c.manager, 'validate', observer)
@@ -191,7 +192,7 @@ async def test_component_failure_stays_actionable_and_unchanged_automatic_retry_
     assert state['application']['status'] == 'check_failed'
     assert state['currentStatus']['status'] == 'protected'
     assert state['currentStatus']['action'] == 'sources'
-    assert state['currentStatus']['component'] == 'fixture-component'
+    assert state['currentStatus']['component'] == 'amplifier-fixture-component'
     failure = copy.deepcopy(c.manager.diagnostics.state['lastFailure'])
     retry = copy.deepcopy(c.manager.diagnostics.state['batch']['retry'])
     assert retry['mode'] == 'changed-inputs'
