@@ -381,7 +381,7 @@ try{
  const beforeAvailability=await readObservations();
  const availabilityState=await page.evaluate(()=>{
   const s=window.amplifier.getState();
-  return {revision:1,settings:s.settings,runtime:s.runtime,view:s.view,sessions:s.sessions,
+  return {revision:1,settings:s.settings,runtime:s.runtime,view:{},sessions:s.sessions,
    workspaces:s.workspaces,selectedSessionId:s.selectedSessionId,selectedWorkspaceId:s.selectedWorkspaceId,
    setup:s.setup,canvas:{open:false},attention:{items:[]}};
  });
@@ -390,11 +390,11 @@ try{
   checkStage:'release_metadata',checkReason:'unavailable',
   detail:'Could not read published-release metadata. No update was installed by this check.'};
  const componentAttempt='9'.repeat(32),availabilityCases=[],availabilityActions=[];
- function availabilityUpdates(phase){
+ function availabilityUpdates(phase,application=failedAppCheck){
   const complete=phase==='installed',pending=phase==='staged';
-  return {application:failedAppCheck,applicationResult:confirmedAppResult,phase,error:null,initialPreparation:false,
+  return {application,applicationResult:confirmedAppResult,phase,error:null,initialPreparation:false,
    appAvailable:false,available:complete?0:1,includedCanProceed:true,
-   items:[failedAppCheck,{id:'independent-fixture',kind:'bundle / module',label:'Independent fixture component',
+   items:[application,{id:'independent-fixture',kind:'bundle / module',label:'Independent fixture component',
     updateTier:'included',status:complete?'current':'update',eligible:true,current:(complete?'b':'a').repeat(40),latest:'b'.repeat(40)}],
    sequence:{stage:complete?'complete':'included',install:!complete,
     included:{status:complete?'current':'available',available:complete?0:1,issues:0},
@@ -409,11 +409,19 @@ try{
     actionRequired:true,action:'check',component:failedAppCheck.label}:
     {status:pending?'waiting':'working',title:'Updating Amplifier',detail:'Component work continues independently.',actionRequired:false}};
  }
- availabilityState.updates=availabilityUpdates('checking');
+ // Enter Settings before the failed check arrives. Section navigation deliberately
+ // collapses disclosures through settingsRootVisit; navigating after seeding an
+ // existing failure tests that reset, not automatic visibility on failure arrival.
+ // This new client also starts with its own view, not the old client's draft.
+ availabilityState.updates=availabilityUpdates('checking',{
+  id:failedAppCheck.id,kind:failedAppCheck.kind,label:failedAppCheck.label,current:failedAppCheck.current,
+  runningRevision:failedAppCheck.runningRevision,channel:failedAppCheck.channel,status:'not_checked',
+  detail:'Checking for a published application release.'});
  const availabilityShell=createShellHttpFixture(()=>availabilityState);
  const availabilityPage=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:headers});
  availabilityPage.on('pageerror',error=>errors.push(error.message));
- result.availabilityIndependence={syntheticHTTPState:true,syntheticEventDelivery:true,backendTransitionsQualified:false,cases:availabilityCases};
+ result.availabilityIndependence={syntheticHTTPState:true,syntheticEventDelivery:true,backendTransitionsQualified:false,
+  scenario:'application-check failure arrives after Settings navigation',existingFailureNavigationQualified:false,cases:availabilityCases};
  try{
   await availabilityPage.addInitScript(installFixtureEvents);
   await availabilityPage.route('**/api/**',async route=>{
@@ -434,12 +442,17 @@ try{
   await availabilityPage.goto(base);await availabilityPage.waitForSelector('#amp-one');await openSettingsPage(availabilityPage,'updates');
   const panel=availabilityPage.locator('[data-part="updates"]'),heading=panel.locator('[data-part="application-update"]').first();
   const appStatus=panel.locator('.a-app-update-status'),appIssue=panel.getByRole('alert').filter({hasText:failedAppCheck.detail});
+  await expect(appStatus).toHaveText('Not checked');
+  await expect(panel.locator('[data-part="ecosystem-update-details"]')).not.toHaveAttribute('open','');
+  assert.equal(await availabilityPage.evaluate(()=>window.amplifier.getState().updates.application.status),'not_checked');
+  result.availabilityIndependence.uncheckedNavigationBaseline=true;
   for(const [phase,label,title] of [['checking','checking','Checking for updates'],['validating','validating','Finishing your update'],
    ['staged','pending','Finishing your update'],['installed','complete','Application check needs attention']]){
    availabilityState.updates=availabilityUpdates(phase);availabilityState.revision++;
    await availabilityPage.evaluate(value=>window.emitState(value),availabilityShell.state());
    for(const [size,width,height] of [['desktop',1280,950],['mobile',320,844]]){
     await availabilityPage.setViewportSize({width,height});
+    await expect.poll(()=>availabilityPage.evaluate(()=>window.amplifier.getState().updates.application.status)).toBe('check_failed');
     await expect(heading.getByRole('heading',{level:4})).toHaveText(title);
     await expect(panel.locator('[data-part="ecosystem-update-details"]')).toHaveAttribute('open','');
     await expect(appStatus).toHaveText('Needs attention');await expect(appIssue.first()).toBeVisible();
@@ -484,7 +497,15 @@ try{
      originalApplicationResultPreserved:true,applicationCheck:saved.application,componentResults:saved.componentResults});
    }
   }
- }catch(error){await availabilityPage.screenshot({path:output+'-app-check-failed.png'});throw error}
+ }catch(error){
+  result.availabilityIndependence.failureObservation=await availabilityPage.evaluate(()=>{
+   const state=window.amplifier?.getState(),details=document.querySelector('[data-part="ecosystem-update-details"]');
+   return {phase:state?.updates?.phase,application:state?.updates?.application,currentStatus:state?.updates?.currentStatus,
+    settingsRootVisit:state?.view?.settingsRootVisit,detailsOpen:details?.open,
+    applicationLabel:document.querySelector('.a-app-update-status')?.textContent};
+  });
+  await availabilityPage.screenshot({path:output+'-app-check-failed.png'});throw error;
+ }
  finally{await availabilityPage.close()}
  assert.equal(availabilityCases.length,8);
  assert.deepEqual(await readObservations(),beforeAvailability);
