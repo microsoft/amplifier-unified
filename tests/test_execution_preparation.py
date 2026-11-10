@@ -317,9 +317,9 @@ def test_six_interleaved_histories_reuse_fragments_within_existing_total_budget(
     for owner, tree in histories.items():
         assert save(owner, tree) == expected[owner]
     calls, encoded = [], []
-    project, dumps = session_projection.accounting_projection, json.dumps
+    project, dumps = session_projection._accounting_records, json.dumps
     with monkeypatch.context() as patch:
-        patch.setattr(session_projection, 'accounting_projection', lambda tree, **kw: (
+        patch.setattr(session_projection, '_accounting_records', lambda tree, **kw: (
             calls.append(len(tree.get('retiredUsageNodes', []))), project(tree, **kw))[1])
         patch.setattr(json, 'dumps', lambda value, *a, **kw: (
             encoded.append(len(value)) if type(value) is list and value else None,
