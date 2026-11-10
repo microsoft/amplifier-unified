@@ -6,7 +6,7 @@ No production native verifier, owner identity, uv target or listener is mocked.
 """
 import argparse
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 import ctypes
 import hashlib
 import importlib.util
@@ -60,6 +60,49 @@ def canonical_temp():
             assert stat.S_ISDIR(info.st_mode) and not (getattr(info, 'st_file_attributes', 0) & 0x400)
     assert (original.stat().st_dev, original.stat().st_ino) == (canonical.stat().st_dev, canonical.stat().st_ino)
     return canonical
+
+
+@contextmanager
+def token_user_default_owner():
+    """Elevated CI fixture: create new files as TokenUser, never repair files.
+
+    Restore this process token's default owner after its contained installer
+    exits. This changes neither account policy nor existing filesystem ACLs.
+    """
+    c = ctypes
+    from ctypes import wintypes as w
+    adv, kernel = c.WinDLL('advapi32', use_last_error=True), c.WinDLL('kernel32', use_last_error=True)
+    kernel.GetCurrentProcess.restype = w.HANDLE
+    adv.OpenProcessToken.argtypes = [w.HANDLE, w.DWORD, c.POINTER(w.HANDLE)]
+    adv.OpenProcessToken.restype = w.BOOL
+    adv.GetTokenInformation.argtypes = [w.HANDLE, c.c_int, c.c_void_p, w.DWORD, c.POINTER(w.DWORD)]
+    adv.GetTokenInformation.restype = w.BOOL
+    adv.SetTokenInformation.argtypes = [w.HANDLE, c.c_int, c.c_void_p, w.DWORD]
+    adv.SetTokenInformation.restype = w.BOOL
+    kernel.CloseHandle.argtypes, kernel.CloseHandle.restype = [w.HANDLE], w.BOOL
+    token = w.HANDLE()
+    if not adv.OpenProcessToken(kernel.GetCurrentProcess(), 0x8 | 0x80, c.byref(token)):
+        raise c.WinError(c.get_last_error())
+    def info(kind):
+        size = w.DWORD()
+        adv.GetTokenInformation(token, kind, None, 0, c.byref(size))
+        value = c.create_string_buffer(size.value)
+        if not adv.GetTokenInformation(token, kind, value, size, c.byref(size)):
+            raise c.WinError(c.get_last_error())
+        return value
+    try:
+        original, user = info(4), info(1)
+        sid = c.cast(user, c.POINTER(c.c_void_p))[0]
+        owner = c.c_void_p(sid)
+        if not adv.SetTokenInformation(token, 4, c.byref(owner), c.sizeof(owner)):
+            raise c.WinError(c.get_last_error())
+        try:
+            yield
+        finally:
+            if not adv.SetTokenInformation(token, 4, original, len(original)):
+                raise c.WinError(c.get_last_error())
+    finally:
+        kernel.CloseHandle(token)
 
 
 def failure(report, error):
@@ -148,8 +191,10 @@ def prepare():
         env = {**os.environ, 'UV_TOOL_DIR': str(root / 'tools'), 'UV_TOOL_BIN_DIR': str(root / 'bin'),
                'UV_LINK_MODE': 'copy'}
         report['stage'] = 'uv-tool-install'
-        asyncio.run(owned_command([uv, 'tool', 'install', '--python', sys.executable,
-            '--no-build-package', 'amplifier-core', str(wheel)], root, cwd=root, env=env, timeout=420))
+        with token_user_default_owner():
+            asyncio.run(owned_command([uv, 'tool', 'install', '--python', sys.executable,
+                '--no-build-package', 'amplifier-core', str(wheel)], root, cwd=root, env=env, timeout=420))
+        report['creationPolicy'] = 'process-token-default-owner-TokenUser-restored'
         report.update(status='PASS', stage='prepared')
     except BaseException as error:
         failure(report, error)
