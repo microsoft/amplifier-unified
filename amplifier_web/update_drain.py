@@ -187,12 +187,30 @@ async def observe_waiters(manager):
     """Inspect only enrolled owners; an idle event alone is not checkpoint proof."""
     service = manager.service
     current = service.state['updates'].get('drain') or {}
-    if current.get('phase') != 'waiting':
+    if current.get('phase') != 'waiting' or any(
+            service.state['updates'].get(key) for key in ('pendingRestart', 'pendingReplacement')):
         return
     def retained(row):
         return (service.state['updates'].get('drain') is current
                 and current.get('phase') == 'waiting'
                 and current['workers'].get(row['sessionId']) is row)
+
+    async def observe_checkpoint(sid, row, worker):
+        if worker.get('runtimeOwnerId') != row['owner']:
+            result = {'unknown': True, 'waitingFor': ['original-owner-unavailable']}
+        else:
+            try:
+                result = await service.runtime.handoff_boundary(sid, row['boundaryId'], update=True,
+                    receipt={'updateWait': {'owner': row['owner'], 'observeOnly': True}})
+            except Exception:
+                result = {'unknown': True, 'waitingFor': ['boundary-outcome-unknown']}
+        async with service.lock:
+            if retained(row):
+                row.update(result)
+                save_wait(service, row, 'unknown' if row.get('unknown') else
+                          'checkpoint_ready' if row.get('ready') else 'waiting')
+                service._publish_changes(globals={'updates'})
+
     for sid, row in list(current['workers'].items()):
         if not retained(row):
             continue
@@ -210,7 +228,15 @@ async def observe_waiters(manager):
             continue
         reason = row.get('suppressed') or continuation_guard(service, {'updateYield': row}, authority_only=True)
         pending = service.state['updates'].get('pendingApp') or {}
-        if any(pending.get(key) != current['target'].get(key) for key in ('attemptId', 'revision', 'generation')):
+        changed = any(pending.get(key) != current['target'].get(key) for key in ('attemptId', 'revision', 'generation'))
+        withdrawn = changed and not reason and not row.get('unknown')
+        if withdrawn and not row.get('ready'):
+            # Keep the hook until the current turn has actually yielded. Merely
+            # cancelling it can race that yield and strand an active objective.
+            await observe_checkpoint(sid, row, worker)
+            if not retained(row) or not row.get('ready') or row.get('unknown'):
+                continue
+        if changed and not reason:
             reason = 'The staged update changed; this wait cannot follow a different target.'
         if reason:
             cancelled = False
@@ -229,12 +255,20 @@ async def observe_waiters(manager):
             async with service.lock:
                 if not retained(row):
                     continue
-                row.update(suppressed=reason)
-                save_wait(service, row, 'suppressed')
+                resume = (withdrawn and cancelled and not row.get('unknown')
+                          and not continuation_guard(service, {'updateYield': row}, authority_only=True))
+                if resume:
+                    row['withdrawn'] = True
+                else:
+                    row['suppressed'] = reason
+                save_wait(service, row, 'withdrawn' if resume else 'suppressed')
                 if cancelled:
                     # Retain the old command receipt, not an active slot that
                     # prevents this owner from making a fresh explicit wait.
                     del current['workers'][sid]
+                if resume:
+                    enqueue_goal(service, current, row)
+                    save_wait(service, row, 'withdrawn')
                 service._publish_changes(globals={'updates'})
             service._task(service.collaboration.drain(sid))
             continue
@@ -242,31 +276,7 @@ async def observe_waiters(manager):
             continue
         if row.get('ready'):
             continue
-        if worker.get('runtimeOwnerId') != row['owner']:
-            async with service.lock:
-                if not retained(row):
-                    continue
-                row.update(unknown=True, waitingFor=['original-owner-unavailable'])
-                save_wait(service, row, 'unknown')
-                service._publish_changes(globals={'updates'})
-            continue
-        try:
-            result = await service.runtime.handoff_boundary(sid, row['boundaryId'], update=True,
-                receipt={'updateWait': {'owner': row['owner'], 'observeOnly': True}})
-        except Exception:
-            async with service.lock:
-                if not retained(row):
-                    continue
-                row.update(unknown=True, waitingFor=['boundary-outcome-unknown'])
-                save_wait(service, row, 'unknown')
-                service._publish_changes(globals={'updates'})
-            continue
-        async with service.lock:
-            if not retained(row):
-                continue
-            row.update(result)
-            save_wait(service, row, 'checkpoint_ready' if row.get('ready') else 'waiting')
-            service._publish_changes(globals={'updates'})
+        await observe_checkpoint(sid, row, worker)
     async with service.lock:
         if (service.state['updates'].get('drain') is current and current.get('phase') == 'waiting'
                 and all(row.get('suppressed') for row in current['workers'].values())):
@@ -386,6 +396,11 @@ def continuation_guard(service, request, *, authority_only=False):
         if not authority_only and (row.get('suppressed') or row.get('unknown')):
             return row.get('suppressed') or 'The saved native boundary has an unknown outcome.'
         if request.get('terminalOutcome'):
+            if row.get('withdrawn'):
+                if not row.get('ready') or held(service) or any(
+                        service.state['updates'].get(key) for key in ('pendingRestart', 'pendingReplacement')):
+                    return 'The withdrawn wait has no checkpoint or replacement is still underway.'
+                return
             manager = service.update_manager
             current = service.state['updates'].get('drain') or {}
             if (current.get('phase') != 'released' or row['updateTarget'] != current.get('target')
@@ -406,9 +421,9 @@ def verified_target(manager, drain):
 
 def enqueue_goal(service, drain, row):
     goal, task = row.get('yieldedGoal'), row.get('task')
-    if row.get('explicit') and (not row.get('ready') or row['updateTarget'] != drain.get('target')
-            or drain.get('result') != 'installed'
-            or not verified_target(service.update_manager, drain)):
+    if row.get('explicit') and (not row.get('ready') or not row.get('withdrawn') and (
+            row['updateTarget'] != drain.get('target') or drain.get('result') != 'installed'
+            or not verified_target(service.update_manager, drain))):
         return
     if not goal or not task or task.get('status') != 'active':
         return
@@ -433,7 +448,8 @@ def enqueue_goal(service, drain, row):
             if row.get('explicit'):
                 row['continuationRequestId'] = receipt['requestId']
             return
-    identity = 'update-wait:' + drain['attemptId'] + ':' + sid
+    identity = ('update-wait-withdrawn:' + row['boundaryId'] if row.get('withdrawn') else
+                'update-wait:' + drain['attemptId'] + ':' + sid)
     owner = service.collaboration
     saved = service.db.execute('SELECT receipt FROM commands WHERE id=?', (identity,)).fetchone()
     if saved:
@@ -445,7 +461,8 @@ def enqueue_goal(service, drain, row):
         request = {'accepted': True, 'commandAction': 'updates.app', 'requestId': identity,
             'senderSessionId': sid, 'target': {'sessionId': sid}, 'workspace': session['workspace'],
             'origin': 'system', 'protocol': PROTOCOL, 'subscription': wait, 'updateYield': proof,
-            'terminalOutcome': {'status': 'observed', 'kind': 'observation', 'outcome': 'update-ready',
+            'terminalOutcome': {'status': 'observed', 'kind': 'observation',
+                'outcome': 'update-withdrawn' if row.get('withdrawn') else 'update-ready',
                 'qualified': False, 'outcomeRevision': 1,
                 'text': ('The updated app is ready. ' if drain.get('result') == 'installed' else 'The app update was withdrawn before replacement. ') +
                         'Continue the existing task from its saved progress. '

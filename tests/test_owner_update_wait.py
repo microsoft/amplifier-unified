@@ -643,6 +643,134 @@ async def enroll_other_owner(h):
         h.sid = original
 
 
+@pytest.mark.parametrize('changed', ['attemptId', 'revision', 'generation', 'withdrawn'])
+async def test_changed_staged_update_continues_checkpointed_goal_once_without_claiming_adoption(waiting, changed):
+    h = waiting
+    await h.ready()
+    original = copy.deepcopy(h.row)
+    task = copy.deepcopy(h.controller.tasks.record())
+    goal = copy.deepcopy(h.controller.coordinator.session_state['goal'])
+    if changed == 'withdrawn':
+        h.app.state['updates']['pendingApp'] = None
+    else:
+        h.app.state['updates']['pendingApp'][changed] = 'e' * len(h.release[changed])
+    await drain.observe_waiters(h.manager)
+    await h.settle()
+    await drain.observe_waiters(h.manager)
+    await h.settle()
+    assert len(h.runtime.admitted) == 1
+    admitted = h.runtime.admitted[0]
+    assert admitted['task'] == task
+    assert admitted['goal'] == goal
+    assert all(admitted['goal'][key] == value for key, value in original['yieldedGoal'].items())
+    assert not h.runtime.sent
+    receipt = (await h.wait())['result']
+    assert receipt['status'] == 'withdrawn'
+    assert receipt['boundary']['boundaryId'] == original['boundaryId']
+    assert receipt['boundary']['updateTarget'] == original['updateTarget']
+    assert receipt['boundary']['continuationRequestId'] == admitted['inputId']
+    assert h.receipts('updates.app')[0]['terminalOutcome']['outcome'] == 'update-withdrawn'
+    assert not h.app.state['updates'].get('applicationResult')
+    assert len(h.receipts('coordination.send')) == 1
+
+
+async def test_changed_update_waits_for_native_checkpoint_before_releasing_its_goal(waiting):
+    h = waiting
+    await h.wait()
+    h.app.state['updates']['pendingApp'] = None
+    await drain.observe_waiters(h.manager)
+    assert not h.runtime.admitted and not any(call[2] for call in h.runtime.boundary_calls)
+    assert h.sid in h.app.state['updates']['drain']['workers']
+    await h.yield_turn(park=False)
+    await drain.observe_waiters(h.manager)
+    assert not h.runtime.admitted and not any(call[2] for call in h.runtime.boundary_calls)
+    h.runtime.native[h.sid].parked = True
+    await drain.observe_waiters(h.manager)
+    await h.settle()
+    assert len(h.runtime.admitted) == 1
+
+
+@pytest.mark.parametrize('acknowledgement', ['lost', 'missing'])
+async def test_withdrawn_update_needs_positive_boundary_cancellation(waiting, acknowledgement):
+    h = waiting
+    await h.ready()
+    original = copy.deepcopy(h.row)
+    h.app.state['updates']['pendingApp'] = None
+    if acknowledgement == 'lost':
+        h.runtime.lose_boundary_ack = True
+    else:
+        h.runtime.handoff_boundary = AsyncMock(return_value={'ready': True})
+    with pytest.raises((TimeoutError, RuntimeError)):
+        await drain.observe_waiters(h.manager)
+    assert h.row == original
+    assert not h.runtime.admitted and not h.receipts('updates.app')
+
+
+@pytest.mark.parametrize('pending', ['pendingRestart', 'pendingReplacement'])
+async def test_withdrawn_update_does_not_cancel_an_unresolved_replacement(waiting, pending):
+    h = waiting
+    await h.ready()
+    original = copy.deepcopy(h.row)
+    h.app.state['updates'].update(pendingApp=None, **{pending: {'phase': 'unknown'}})
+    await drain.observe_waiters(h.manager)
+    assert h.row == original
+    assert not any(call[2] for call in h.runtime.boundary_calls)
+    assert not h.runtime.admitted and not h.receipts('updates.app')
+
+
+@pytest.mark.parametrize('changed', ['stop', 'completed', 'input', 'access', 'pendingReplacement'])
+async def test_withdrawn_continuation_rechecks_current_authority_before_transport(waiting, changed):
+    h = waiting
+    await h.ready()
+    h.app.state['updates']['pendingApp'] = None
+
+    async def invalidate():
+        if changed == 'stop':
+            await h.app.dispatch('conversation.stop', {'sessionId': h.sid},
+                                 command_id='late-stop', include_state=False)
+        elif changed == 'completed':
+            await h.change_task(changed)
+        elif changed == 'input':
+            h.app._message(h.app._session(h.sid), 'user', 'A new direction',
+                           inputId='later-human-input', inputOrigin='ui', delivery={'status': 'accepted'})
+        elif changed == 'access':
+            await h.app.dispatch('access.set', {
+                'sessionId': h.sid, 'scope': 'session', 'mode': 'ask',
+                'expectedRevision': h.app.access_mode.snapshot(h.app._session(h.sid))['revision'],
+            }, command_id='late-access-change', include_state=False)
+        else:
+            h.app.state['updates'][changed] = {'phase': 'unknown'}
+
+    h.runtime.before_admission = invalidate
+    await drain.observe_waiters(h.manager)
+    await h.settle()
+    assert len(h.runtime.admission_calls) == 1
+    assert len(h.runtime.guard_reasons) == 1 and h.runtime.guard_reasons[0]
+    assert not h.runtime.admitted and not h.runtime.sent
+    requests = h.receipts('coordination.send')
+    assert len(requests) == 1 and requests[0]['delivery'] in {'not_sent', 'suppressed'}
+    await h.app.collaboration.drain(h.sid)
+    await h.settle()
+    assert len(h.runtime.admission_calls) == 1
+
+
+async def test_withdrawn_update_uses_queued_child_result_instead_of_extra_wakeup(waiting):
+    h = waiting
+    created = await h.commission_child()
+    await h.wait()
+    await h.report_child(created)
+    await h.yield_turn()
+    assert await drain.prepare(h.manager, h.release)
+    h.app.state['updates']['pendingApp'] = None
+    await drain.observe_waiters(h.manager)
+    await h.settle()
+    returned = created['subscription']['continuationId']
+    assert [row['inputId'] for row in h.runtime.admitted] == [returned]
+    assert h.app.collaboration.receipt(returned)['delivery'] == 'accepted'
+    assert (await h.wait())['result']['boundary']['continuationRequestId'] == returned
+    assert not h.receipts('updates.app')
+
+
 @pytest.mark.parametrize('already_suppressed', [False, True])
 async def test_confirmed_superseded_wait_allows_fresh_wait_while_other_owner_waits(waiting, already_suppressed):
     h = waiting

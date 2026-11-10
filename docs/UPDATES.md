@@ -734,6 +734,15 @@ and the continuation's `coordination.result` reference when queued. Adoption is
 not proof that the continuation was admitted or completed. Do not submit another
 wait to recover an uncertain one. No blocked tasks are resumed in bulk.
 
+If the staged target changes or is withdrawn before replacement, the host waits
+for the enrolled owner's positive native checkpoint, then cancels that exact
+boundary. Confirmed cancellation releases one continuation of the same active
+objective, with its used allowance intact. An eligible queued result still takes
+precedence. This is recorded as `update-withdrawn`, not successful adoption; it
+does not follow the replacement target or require a human nudge. Missing
+cancellation acknowledgement and unresolved replacement remain retained. The
+same Stop, task, authority and fresh-input checks apply again at admission.
+
 When fresh input supersedes a wait, confirmation from the exact original worker
 that its boundary is cancelled frees that owner's active wait slot. The original
 command receipt remains suppressed, including any earlier unknown admission. A
