@@ -1108,16 +1108,19 @@ class AppService:
                                 message_preparation=self._message_preparation, pending_messages=pending_messages,
                                 execution_preparation=self._execution_preparation, pending_execution=pending_execution)
             pending_clients = self.clients.save(defer_ack=True)
+            preserve_globals = {'updates'} if getattr(
+                getattr(self, 'update_manager', None), '_manual_handoff_commit_unknown', False) else set()
             if record_only:
                 # Persist sanitized global presentation just as full checkpoints
                 # do (not the live canvas body that persist() externalized).
                 record_state = {**self._state, **{key: saved[key] for key in global_keys if key in saved}}
                 changed_global_keys = save_working(self.db, record_state, pending_references, admitted_ids, global_keys=global_keys,
-                                                   deleted=deleted_ids)
+                                                   deleted=deleted_ids, preserve_globals=preserve_globals)
             else:
                 saved['runtimeControl'] = {identity: saved_cold(record)
                                            for identity, record in saved.get('runtimeControl', {}).items()}
-                changed_global_keys = save_working(self.db, saved, pending_references, admitted_ids, deleted=deleted_ids)
+                changed_global_keys = save_working(self.db, saved, pending_references, admitted_ids,
+                    deleted=deleted_ids, preserve_globals=preserve_globals)
             self.directory.sync((row for row in self._state['sessions']
                                  if row['id'] in admitted_ids and row['id'] in pending_references), self._state,
                                 deleted=(admitted_ids - pending_references.keys()) | deleted_ids)
@@ -3719,6 +3722,8 @@ class AppService:
                     values += ({'recovery': self.management.recovery_admission_binding(target)},)
                 pending.append((self.management.command, values))
             elif action == "updates.failureDisposition":
+                if getattr(self.update_manager, '_manual_handoff_commit_unknown', False):
+                    raise AppError('The update commit is unknown. Reload the host before changing update state.', 409)
                 if origin not in {'ui', 'user'}:
                     raise AppError('Closing update uncertainty requires an explicit user action.', 403)
                 if not self.update_manager: raise AppError("Update service is unavailable.")
@@ -3728,6 +3733,8 @@ class AppService:
                     raise AppError(str(error), 409) from None
             elif action.startswith("updates."):
                 if not self.update_manager: raise AppError("Update service is unavailable.")
+                if getattr(self.update_manager, '_manual_handoff_commit_unknown', False):
+                    raise AppError('The update commit is unknown. Reload the host before changing update state.', 409)
                 if action == 'updates.reconcileManualHandoff':
                     from .manual_app_handoff import require_target
                     try:

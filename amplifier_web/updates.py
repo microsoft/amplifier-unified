@@ -681,6 +681,8 @@ class UpdateManager:
         return classify(self.home, rows, selection=selection)
 
     async def command(self, action, args=None, command_id=None):
+        if getattr(self, '_manual_handoff_commit_unknown', False):
+            return  # Saved commit is unreadable; reload observes it, never replay.
         if action == 'reconcileManualHandoff':
             from .manual_app_handoff import reconcile
             return await reconcile(self, args, command_id)
@@ -738,6 +740,7 @@ class UpdateManager:
         return bool(pending) and all(row.get('runnerSource') or row.get('failure') for row in pending)
 
     async def check(self, *, tier='application', install=False, fresh=True, automatic=False):
+        if getattr(self, '_manual_handoff_commit_unknown', False):return
         state = self.service.state['updates']
         if (self.closed or self.awaiting_restart() or state.get('pendingRelease') or (state.get('pendingSmartTools') and not self.independent_tool_results(state))
                 or (state.get('pendingApp') or {}).get('featureSelection')):
@@ -1005,6 +1008,7 @@ class UpdateManager:
         await activate(self)
 
     async def install(self, *, automatic=False):
+        if getattr(self, '_manual_handoff_commit_unknown', False):return
         if self.awaiting_restart() or self.lock.locked():return
         state = self.service.state['updates']
         from .manual_app_handoff import verify_continuation
@@ -1567,6 +1571,7 @@ class UpdateManager:
         await self.activate(rollback=True)
 
     async def tick(self):
+        if getattr(self, '_manual_handoff_commit_unknown', False):return
         settings=self.service.state['settings'].get('updates',{})
         state=self.service.state['updates']
         from .update_drain import observe_waiters
@@ -1574,6 +1579,11 @@ class UpdateManager:
         if self.awaiting_restart():return
         if getattr(self, '_update_health_initial', False):
             self._update_health_initial = False
+            from .manual_app_handoff import verify_current
+            try:
+                await verify_current(self, full=True)
+            except (ValueError, OSError, RuntimeError, KeyError, TypeError):
+                self._manual_handoff_verified = None
             from .update_health import refresh as refresh_health
             await refresh_health(self)
             await self.publish()

@@ -330,3 +330,230 @@ async def test_failed_or_mutated_current_proof_remains_failure(manager, native_o
         monkeypatch.setattr(handoff, '_health', mutate)
     with pytest.raises(ValueError):
         await handoff.qualify(manager, manager.service.state['updates']['pendingApp'])
+
+
+@pytest.mark.parametrize('after_save', [False, True])
+async def test_failed_publication_reads_commit_before_reporting_outcome(manager, proof, monkeypatch, after_save):
+    state, args = manager.service.state['updates'], target(manager)
+    manager.service._save_changes(globals={'updates'})
+    before = copy.deepcopy(state['pendingApp'])
+    publish = manager.service._publish_changes
+    calls = 0
+    def failure(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            if after_save:
+                publish(**kwargs)
+            raise OSError('fixture publication failure')
+        return publish(**kwargs)
+    monkeypatch.setattr(manager.service, '_publish_changes', failure)
+    result = await handoff.reconcile(manager, args, 'publication')
+    assert result['status'] == ('succeeded' if after_save else 'rejected')
+    durable = handoff._saved_updates(manager)
+    assert durable[handoff.RESULTS]['publication'] == result
+    if after_save:
+        assert state['pendingApp'] is None and durable['pendingApp'] is None
+    else:
+        assert state['pendingApp'] == durable['pendingApp'] == before
+        assert 'manualHandoff' not in state and not handoff.continuing(manager)
+
+
+async def test_unknown_commit_read_does_not_retry_or_enable_work(manager, proof, monkeypatch):
+    args = target(manager)
+    publish = manager.service._publish_changes
+    def committed_but_unreadable(**kwargs):
+        publish(**kwargs)
+        raise OSError('projection failed')
+    def unreadable(manager):
+        raise OSError('readback failed')
+    monkeypatch.setattr(manager.service, '_publish_changes', committed_but_unreadable)
+    monkeypatch.setattr(handoff, '_saved_updates', unreadable)
+    result = await handoff.reconcile(manager, args, 'unreadable')
+    assert result['status'] == 'unknown' and manager._manual_handoff_commit_unknown
+    assert manager.service.state['updates']['pendingApp']
+    async def fail(*args, **kwargs):
+        pytest.fail('Unknown commit cannot run updater work')
+    monkeypatch.setattr(manager, 'app', fail)
+    monkeypatch.setattr(manager, 'inventory_sources', fail)
+    await manager.tick()
+    await manager.install()
+    await manager.check()
+    assert await handoff.reconcile(manager, args, 'unreadable') == result
+
+
+async def test_completed_receipt_revalidates_after_reload_without_recreating_intent(manager, proof, monkeypatch):
+    await handoff.reconcile(manager, target(manager), 'completed-reload')
+    state = manager.service.state['updates']
+    state['sequence'].update(stage='complete', install=False)
+    state['sequence'].pop('nextStage', None)
+    state['phase'] = 'checked'
+    restored = UpdateManager(manager.service)
+    restored._storage_last_pass = time.time()
+    restored._storage_policy_due = False
+    before = copy.deepcopy(state['sequence'])
+    calls = []
+    async def installed_target():
+        return ('uv', 'fixture-launcher', Path(sys.prefix) / 'Scripts/python.exe', {'installation': sys.prefix})
+    async def health(*args):
+        calls.append('health')
+        return proof['tlsPin']
+    async def no_install(*args, **kwargs):
+        pytest.fail('Revalidating current installation is not installation intent')
+    monkeypatch.setattr(app_updates, 'installed_target', installed_target)
+    monkeypatch.setattr(handoff, '_health', health)
+    monkeypatch.setattr(restored, 'install', no_install)
+    await restored.tick()
+    assert calls == ['health'] and state['sequence'] == before
+    assert restored._manual_handoff_verified == 'completed-reload'
+    assert not handoff.continuing(restored)
+
+
+async def test_private_proof_is_not_published_in_updates(manager, proof):
+    await handoff.reconcile(manager, target(manager), 'private-proof')
+    state = manager.service.state['updates']
+    encoded = json.dumps(state)
+    assert 'fixture-owner' not in encoded and 'fixture-data' not in encoded
+    assert 'fixture-launcher' not in encoded and 'directories' not in state['manualHandoff']
+    assert 'proof' not in state['manualHandoff']
+    assert handoff._proof(manager, state['manualHandoff']) == proof
+    assert handoff._saved_updates(manager)['manualHandoff'] == state['manualHandoff']
+
+
+@pytest.mark.parametrize('action', ['updates.check', 'updates.rollback'])
+async def test_new_dispatched_intent_during_continuation_health_refuses(manager, proof, monkeypatch, action):
+    await handoff.reconcile(manager, target(manager), 'intent')
+    state = manager.service.state['updates']
+    calls = []
+    async def queued(*args):
+        calls.append(args[0])
+    monkeypatch.setattr(manager, 'command', queued)
+    async def installed_target():
+        return ('uv', 'fixture-launcher', Path(sys.prefix) / 'Scripts/python.exe', {'installation': sys.prefix})
+    async def health(*args):
+        await manager.service.dispatch(action, {}, command_id='new-intent')
+        return proof['tlsPin']
+    monkeypatch.setattr(app_updates, 'installed_target', installed_target)
+    monkeypatch.setattr(handoff, '_health', health)
+    before = copy.deepcopy(state['sequence'])
+    with pytest.raises(ValueError):
+        await handoff.verify_continuation(manager, full=True)
+    assert state['sequence'] == before
+    assert manager._manual_handoff_verified is None
+
+
+async def test_public_action_exact_retry_retains_single_result(manager, proof, monkeypatch):
+    done = asyncio.Event()
+    command = manager.command
+    async def observed(*args):
+        try:
+            return await command(*args)
+        finally:
+            done.set()
+    monkeypatch.setattr(manager, 'command', observed)
+    args = target(manager)
+    first = await manager.service.dispatch('updates.reconcileManualHandoff', args, command_id='public-reconcile')
+    await asyncio.wait_for(done.wait(), 10)
+    assert manager.service.state['updates'][handoff.RESULTS]['public-reconcile']['status'] == 'succeeded'
+    second = await manager.service.dispatch('updates.reconcileManualHandoff', args, command_id='public-reconcile')
+    assert second['duplicate'] is True and first['requestId'] == second['requestId']
+    assert first['accepted'] and second['accepted']
+    assert second['state']['updates'][handoff.RESULTS]['public-reconcile']['status'] == 'succeeded'
+
+
+@pytest.mark.parametrize('after_save', [False, True])
+async def test_unknown_commit_survives_dispatch_and_full_shutdown_save(manager, proof, monkeypatch, after_save):
+    from amplifier_web.service import AppError
+    state = manager.service.state['updates']
+    manager.service._save_changes(globals={'updates'})
+    publish, saved_read = manager.service._publish_changes, handoff._saved_updates
+    def failed(**kwargs):
+        if after_save:
+            publish(**kwargs)
+        raise OSError('publication failure')
+    monkeypatch.setattr(manager.service, '_publish_changes', failed)
+    monkeypatch.setattr(handoff, '_saved_updates', lambda manager: (_ for _ in ()).throw(OSError('read refused')))
+    result = await handoff.reconcile(manager, target(manager), 'commit-unknown')
+    assert result['status'] == 'unknown'
+    monkeypatch.setattr(manager.service, '_publish_changes', publish)
+    durable_before = saved_read(manager)
+    with pytest.raises(AppError, match='commit is unknown'):
+        await manager.service.dispatch('updates.check', {}, command_id='after-unknown')
+    manager.service._save_changes(globals={'updates', 'settings'})
+    manager.service._save_full(reason='Test normal shutdown preservation')
+    assert saved_read(manager) == durable_before
+    assert bool(durable_before.get('manualHandoff')) == after_save
+    assert bool(durable_before.get('pendingApp')) != after_save
+
+
+@pytest.mark.parametrize('changed', [False, True])
+async def test_final_scan_is_offloop_and_state_is_rechecked(manager, proof, monkeypatch, changed):
+    import threading
+    entered, release = asyncio.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    original = handoff._final_verify
+    def paused(*args):
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5)
+        return original(*args)
+    monkeypatch.setattr(handoff, '_final_verify', paused)
+    task = asyncio.create_task(handoff.reconcile(manager, target(manager), 'offloop'))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        # This lock/action is available during the expensive package scan.
+        async with asyncio.timeout(2), manager.service.lock:
+            if changed:
+                manager.service.state['updates']['intentRevision'] = 10
+            assert not task.done()
+    finally:
+        release.set()
+    result = await task
+    assert result['status'] == ('rejected' if changed else 'succeeded')
+
+
+async def test_cancelled_final_scan_settles_handles_before_return(manager, proof, monkeypatch):
+    import threading
+    entered, release, settled = asyncio.Event(), threading.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    def paused(*args):
+        loop.call_soon_threadsafe(entered.set)
+        try:
+            assert release.wait(5)
+        finally:
+            settled.set()
+    monkeypatch.setattr(handoff, '_final_verify', paused)
+    task = asyncio.create_task(handoff.reconcile(manager, target(manager), 'cancel-scan'))
+    await asyncio.wait_for(entered.wait(), 5)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert settled.is_set()
+    assert manager.service.state['updates']['pendingApp']
+
+
+def test_pinned_reader_rechecks_path_identity_and_closes_all_handles(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from amplifier_web import windows_read_files
+    path = tmp_path / 'payload'
+    path.write_bytes(b'bytes')
+    signature, opened, closed = [1], [], []
+    @contextmanager
+    def open_file(name):
+        with open(name, 'rb') as stream:
+            stream.identity = signature[0]
+            opened.append(stream)
+            try:
+                yield stream
+            finally:
+                closed.append(stream)
+    monkeypatch.setattr(windows_read_files, 'open_file', open_file)
+    monkeypatch.setattr(windows_read_files, 'stream_signature', lambda stream: stream.identity)
+    with pytest.raises(ValueError):
+        with handoff._pinned_reader() as read:
+            assert read(path) == b'bytes'
+            signature[0] = 2
+    assert opened == closed or set(opened) == set(closed)
+    assert all(stream.closed for stream in opened)

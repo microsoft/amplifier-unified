@@ -6,6 +6,7 @@ It grants no restart, feature-install, generation promotion or input replay.
 """
 import asyncio
 import copy
+from contextlib import contextmanager, ExitStack
 import hashlib
 from importlib import metadata
 import json
@@ -123,8 +124,63 @@ def _payload(proof):
     from .app_installation_proof import verify_payload
     from .app_release_artifacts import verify
     verify(proof['artifact'], proof['binding']['version'], proof['binding']['revision'])
-    return verify_payload(proof['artifact']['path'], metadata.distribution('amplifier-unified'),
-                          Path(sys.prefix), Path(sys.prefix) / 'Scripts', read_bytes=_read)
+    with _pinned_reader() as read:
+        result = verify_payload(proof['artifact']['path'], metadata.distribution('amplifier-unified'),
+            Path(sys.prefix), Path(sys.prefix) / 'Scripts', read_bytes=read, sha256=proof['artifact']['sha256'])
+        # Repeat membership as well as contents while the first pass retains
+        # its leaf handles. Unknown additions are not silently imported.
+        _require(verify_payload(proof['artifact']['path'], metadata.distribution('amplifier-unified'),
+            Path(sys.prefix), Path(sys.prefix) / 'Scripts', read_bytes=read,
+            sha256=proof['artifact']['sha256']) == result)
+        return result
+
+
+@contextmanager
+def _pinned_reader():
+    """One off-loop audit: deny writes and recheck names, not a new registry."""
+    from .windows_read_files import open_file, stream_signature
+    with ExitStack() as stack:
+        observed = {}
+        def read(path):
+            path = Path(path)
+            if path not in observed:
+                stream = stack.enter_context(open_file(path))
+                observed[path] = (stream, stream_signature(stream))
+            stream, signature = observed[path]
+            _require(stream_signature(stream) == signature)
+            stream.seek(0)
+            raw = stream.read(128 * 1024 * 1024 + 1)
+            _require(len(raw) <= 128 * 1024 * 1024)
+            return raw
+        yield read
+        for path, (stream, signature) in observed.items():
+            _require(stream_signature(stream) == signature)
+            with open_file(path) as current:
+                _require(stream_signature(current) == signature)
+
+
+async def _offloop(function, *args):
+    """A cancelled read-only audit must finish closing its handles, not commit."""
+    task = asyncio.create_task(asyncio.to_thread(function, *args))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            await task
+        except Exception:
+            pass
+        raise
+
+
+def _final_verify(manager, pending, proof):
+    # manager.lock excludes the updater's other effects. Native readers reject
+    # mutation during their I/O. This is not an atomic snapshot against a
+    # same-account external writer after this read-only observation finishes.
+    _require(_native_binding(manager) == proof['binding'])
+    _require(_staged(manager, pending)[1] == proof['stagedDigest'])
+    _require(_payload(proof) == proof['payload'])
+    _require(_native_binding(manager) == proof['binding'])
+    _require(_staged(manager, pending)[1] == proof['stagedDigest'])
 
 
 async def _health(manager, binding):
@@ -190,7 +246,7 @@ async def qualify(manager, pending):
             _require(published['sha256'] == staged['artifact']['sha256'])
         proof = {'binding': binding, 'artifact': descriptor, 'stagedDigest': staged_digest,
                  'launcher': str(target[1]), 'hostInstanceId': manager.service.instance_id}
-        proof['payload'] = await asyncio.to_thread(_payload, proof)
+        proof['payload'] = await _offloop(_payload, proof)
     output = await app_updates.process(target[2], '-I', '-c', app_updates.PROBE,
         *binding['extras'], **app_updates.browser_process_options(manager, binding['extras']), timeout=30)
     report = probe_record(output)
@@ -200,7 +256,7 @@ async def qualify(manager, pending):
     proof['tlsPin'] = await _health(manager, binding)
     _require(await app_updates.installed_target() == target)
     _require(await asyncio.to_thread(_native_binding, manager) == binding)
-    _require(await asyncio.to_thread(_payload, proof) == proof['payload'])
+    _require(await _offloop(_payload, proof) == proof['payload'])
     return proof
 
 
@@ -214,23 +270,22 @@ async def reconcile(manager, args, request_id):
             _require(not manager.check_task or manager.check_task.done(),
                      'An application check is still in flight.')
             witness = require_target(manager, args)
+            host = copy.deepcopy(manager.running_identity)
             proof = await qualify(manager, witness['pending'])
+            proof_digest = await _offloop(_save_proof, manager, request_id, proof)
+            await _offloop(_final_verify, manager, witness['pending'], proof)
             async with manager.service.lock:
                 _require(require_target(manager, args) == witness)
-                _require(_native_binding(manager) == proof['binding'])
-                _require(_staged(manager, witness['pending'])[1] == proof['stagedDigest'])
-                _require(_payload(proof) == proof['payload'])
+                _require(manager.running_identity == host)
                 result = {'requestId': request_id, 'status': 'succeeded', 'phase': PHASE,
                           'target': copy.deepcopy(args), 'verifiedAt': time.time(),
                           'version': proof['binding']['version'], 'revision': proof['binding']['revision']}
+                before = copy.deepcopy(state)
                 state[RESULTS][request_id] = result
-                from .host.config import write_private
                 # Private payload is never copied into routine UI/agent state.
                 # The public receipt retains one hash-bound proof reference.
-                encoded = json.dumps(proof, sort_keys=True)
-                write_private(_proof_path(manager, request_id), encoded)
                 state['manualHandoff'] = {**result,
-                    'proofDigest': hashlib.sha256(encoded.encode()).hexdigest(),
+                    'proofDigest': proof_digest,
                     'refusal': witness['failure']}
                 # Preserve every original diagnostic/candidate. This is neither
                 # restart-ack nor archive eligibility for optional feature work.
@@ -242,7 +297,32 @@ async def reconcile(manager, args, request_id):
                 manager._manual_handoff_verified = request_id
                 from .update_health import publish
                 publish(manager)
-                manager.service._publish_changes(globals={'updates'})
+                try:
+                    manager.service._publish_changes(globals={'updates'})
+                except Exception:
+                    # Publication can fail after SQLite committed. Read exactly
+                    # this owner, not all stored conversations, before deciding.
+                    try:
+                        manager.service.db.rollback()
+                        saved = _saved_updates(manager)
+                    except Exception:
+                        state.clear()
+                        state.update(before)
+                        manager._manual_handoff_verified = None
+                        manager._manual_handoff_commit_unknown = True
+                        state[RESULTS][request_id] = {'requestId': request_id, 'status': 'unknown',
+                            'detail': 'The reconciliation commit could not be read. Update work is held until host reload; do not repeat this request.'}
+                        return copy.deepcopy(state[RESULTS][request_id])
+                    if (saved.get(RESULTS, {}).get(request_id) != result
+                            or saved.get('manualHandoff') != state['manualHandoff']
+                            or saved.get('pendingApp') is not None
+                            or saved.get('sequence') != state['sequence']):
+                        state.clear()
+                        state.update(before)
+                        manager._manual_handoff_verified = None
+                        raise
+                    # The exact commit landed. Keep the durable success, not a
+                    # contradictory rejected result from a failed projection.
             manager.wakeup.set()
             return copy.deepcopy(result)
         except BaseException as error:
@@ -271,15 +351,31 @@ def _proof_path(manager, request_id):
     return manager.directory / 'manual-handoffs' / (hashlib.sha256(request_id.encode()).hexdigest() + '.json')
 
 
+def _save_proof(manager, request_id, proof):
+    from .host.config import write_private
+    encoded = json.dumps(proof, sort_keys=True)
+    write_private(_proof_path(manager, request_id), encoded, owned_root=manager.home)
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _saved_updates(manager):
+    from .state_records import restore, EMPTY_BASE
+    row = manager.service.db.execute(
+        "SELECT kind,id,value FROM state_records WHERE kind='global' AND id='updates'").fetchone()
+    _require(row is not None, 'The durable update owner could not be read.')
+    return restore(EMPTY_BASE, [row])['updates']
+
+
 def _proof(manager, result):
     raw = _read(_proof_path(manager, result['requestId']))
     _require(hashlib.sha256(raw).hexdigest() == result['proofDigest'])
     return json.loads(raw)
 
 
-async def verify_continuation(manager, *, full=False):
-    """Reobserve on reload and before component work; never install from a copy."""
-    if not continuing(manager):
+async def verify_current(manager, *, full=False):
+    """Reverify current identity even after its sequence completed; no intent."""
+    state = manager.service.state['updates']
+    if (state.get('manualHandoff') or {}).get('phase') != PHASE:
         return False
     result = copy.deepcopy(manager.service.state['updates']['manualHandoff'])
     sequence = copy.deepcopy(manager.service.state['updates'].get('sequence'))
@@ -296,16 +392,22 @@ async def verify_continuation(manager, *, full=False):
         from .app_updates import installed_target
         target = await installed_target()
         _require(str(target[1]) == proof['launcher'])
-        _require(await asyncio.to_thread(_payload, proof) == proof['payload'])
+        _require(await _offloop(_payload, proof) == proof['payload'])
         _require(await _health(manager, proof['binding']) == proof['tlsPin'])
         _require(await asyncio.to_thread(_native_binding, manager) == proof['binding'])
     _require(manager.service.state['updates'].get('manualHandoff') == result
              and manager.service.state['updates'].get('sequence') == sequence
-             and manager.service.state['updates'].get('intentRevision', 0) == intent
-             and continuing(manager))
+             and manager.service.state['updates'].get('intentRevision', 0) == intent)
     _require(manager.service.state['updates'].get('pendingReplacement') is None
              and manager.service.state['updates'].get('pendingRestart') is None
              and manager.service.state['updates'].get('pendingRollback') is None
              and not manager.service.state['updates'].get('pendingApp'))
     manager._manual_handoff_verified = result['requestId']
     return True
+
+
+async def verify_continuation(manager, *, full=False):
+    """Current proof grants component work only to this unfinished sequence."""
+    if not continuing(manager):
+        return False
+    return await verify_current(manager, full=full) and continuing(manager)

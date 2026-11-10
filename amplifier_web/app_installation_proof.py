@@ -36,7 +36,7 @@ def _matches(raw, row):
         hashlib.sha256(raw).digest()).decode().rstrip('='), str(len(raw))))
 
 
-def verify_payload(wheel, distribution, prefix, scripts, *, read_bytes):
+def verify_payload(wheel, distribution, prefix, scripts, *, read_bytes, sha256=None):
     """Compare all shipped bytes and narrowly allow uv-generated metadata/scripts.
 
     Based on the maintained native trial's candidate_members check. The caller
@@ -49,7 +49,10 @@ def verify_payload(wheel, distribution, prefix, scripts, *, read_bytes):
     info = 'amplifier_unified-' + distribution.version + '.dist-info'
     record = info + '/RECORD'
     # Read the archive through the same guarded reader as installed files.
-    with zipfile.ZipFile(io.BytesIO(read_bytes(Path(wheel)))) as archive:
+    wheel_bytes = read_bytes(Path(wheel))
+    if sha256 is not None:
+        _require(hashlib.sha256(wheel_bytes).hexdigest() == sha256)
+    with zipfile.ZipFile(io.BytesIO(wheel_bytes)) as archive:
         names = [entry.filename for entry in archive.infolist() if not entry.is_dir()]
         _require(len(names) == len(set(names)))
         _require(all(not PurePosixPath(name).is_absolute()
