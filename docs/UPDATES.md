@@ -747,6 +747,12 @@ is durably queued. A storage failure or full inbox retries from that checkpoint,
 including after restart, without repeating native cancellation or minting another
 continuation.
 
+Another update may proceed while that withdrawn continuation waits for inbox
+space. Its release must preserve the original recovery receipt and retry it after
+replacement settles, including across restart or another update. That recovery
+remains a withdrawal, not adoption of the newer target, and does not cancel the
+already cancelled native boundary again.
+
 When fresh input supersedes a wait, confirmation from the exact original worker
 that its boundary is cancelled frees that owner's active wait slot. The original
 command receipt remains suppressed, including any earlier unknown admission. A

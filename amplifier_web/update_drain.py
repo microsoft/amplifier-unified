@@ -102,6 +102,15 @@ def save_wait(service, row, status):
         service.collaboration.save(row['commandId'], receipt)
 
 
+def pending_waiters(current):
+    workers = current.get('workers', {})
+    if current.get('phase') == 'waiting':
+        return workers
+    # A different update may finish before a withdrawn wait can queue its
+    # continuation. Carry that durable recovery through the next boundary.
+    return {sid: row for sid, row in workers.items() if row.get('withdrawn')}
+
+
 async def wait_for_update(service, args, command_id, *, origin, guard=None):
     """Enroll one caller, not all active work, in the existing native boundary."""
     from .errors import AppError
@@ -139,7 +148,7 @@ async def wait_for_update(service, args, command_id, *, origin, guard=None):
             raise AppError('Another update boundary is still retained; inspect it before proceeding.', 409)
         if current.get('phase') != 'waiting':
             current = {'attemptId': expected['attemptId'], 'target': expected, 'phase': 'waiting',
-                       'hostInstanceId': service.instance_id, 'workers': {}, 'messages': []}
+                       'hostInstanceId': service.instance_id, 'workers': pending_waiters(current), 'messages': []}
         if session['id'] in current['workers']:
             raise AppError('This owner already has a saved update wait. Inspect updates.drain.', 409)
         from .task_binding import continuation_epoch
@@ -187,12 +196,13 @@ async def observe_waiters(manager):
     """Inspect only enrolled owners; an idle event alone is not checkpoint proof."""
     service = manager.service
     current = service.state['updates'].get('drain') or {}
-    if current.get('phase') != 'waiting' or any(
+    phase = current.get('phase')
+    if phase not in {'waiting', 'released'} or any(
             service.state['updates'].get(key) for key in ('pendingRestart', 'pendingReplacement')):
         return
     def retained(row):
         return (service.state['updates'].get('drain') is current
-                and current.get('phase') == 'waiting'
+                and current.get('phase') == phase
                 and current['workers'].get(row['sessionId']) is row)
 
     async def observe_checkpoint(sid, row, worker):
@@ -212,7 +222,7 @@ async def observe_waiters(manager):
                 service._publish_changes(globals={'updates'})
 
     for sid, row in list(current['workers'].items()):
-        if not retained(row):
+        if not retained(row) or phase == 'released' and not row.get('withdrawn'):
             continue
         if row.get('initializing') and current.get('hostInstanceId') != service.instance_id:
             async with service.lock:
@@ -347,7 +357,7 @@ def begin_replacement(manager, release):
     service = manager.service
     identity = manager.diagnostics.state['attemptId']
     prior = service.state['updates'].get('drain') or {}
-    workers = prior.get('workers', {}) if prior.get('phase') == 'waiting' else {}
+    workers = pending_waiters(prior)
     service.state['updates']['drain'] = {
         'attemptId': identity,
         'target': {'attemptId': identity, 'revision': release['revision'],
@@ -473,7 +483,9 @@ def enqueue_goal(service, drain, row):
             'terminalOutcome': {'status': 'observed', 'kind': 'observation',
                 'outcome': 'update-withdrawn' if row.get('withdrawn') else 'update-ready',
                 'qualified': False, 'outcomeRevision': 1,
-                'text': ('The updated app is ready. ' if drain.get('result') == 'installed' else 'The app update was withdrawn before replacement. ') +
+                'text': ('The requested update wait was withdrawn. ' if row.get('withdrawn') else
+                         'The updated app is ready. ' if drain.get('result') == 'installed' else
+                         'The app update was withdrawn before replacement. ') +
                         'Continue the existing task from its saved progress. '
                         'Keep its used budget and current instructions. Do not repeat previous inputs or completed or uncertain effects.'}}
         owner.insert(identity, identity, request)
@@ -508,6 +520,8 @@ async def finish(manager, reason):
     manager._releasing_update_inputs = True
     try:
         for sid, row in drain['workers'].items():
+            if row.get('withdrawn'):
+                continue  # This exact cancellation is already durably confirmed.
             worker = getattr(service.runtime, 'workers', {}).get(sid)
             if worker and worker.get('runtimeOwnerId') == row['owner']:
                 await service.runtime.handoff_boundary(sid, row['boundaryId'], cancel=True)
@@ -549,6 +563,8 @@ async def finish(manager, reason):
                 pass
         async with service.lock:
             for row in drain['workers'].values():
+                if row.get('withdrawn'):
+                    continue  # Ordinary observation retains/retries its original continuation.
                 eligible = (reason == 'installed' and row.get('updateTarget') == drain['target']
                     and not continuation_guard(service, {'updateYield': row}))
                 if row.get('explicit') and not eligible:

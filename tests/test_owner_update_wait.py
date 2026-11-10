@@ -264,7 +264,7 @@ class UpdateWait:
         if successor:
             self.manager.running_identity = {
                 'version': self.release['version'], 'revision': self.release['revision'],
-                'instanceId': 'new-fixture-process'}
+                'instanceId': self.app.instance_id}
             assert self.app.instance_id != self.old_instance
 
     def health(self, **changes):
@@ -763,6 +763,83 @@ async def test_withdrawn_update_retains_wait_until_inbox_space_returns(waiting, 
     assert len(h.runtime.admitted) == 1
     assert len([call for call in h.runtime.boundary_calls if call[2]]) == 1
     assert len(h.receipts('updates.app')) == len(h.receipts('coordination.send')) == 1
+    assert h.sid not in h.app.state['updates']['drain']['workers']
+
+
+@pytest.mark.parametrize('replacements', [('installed',), ('withdrawn',), ('installed', 'installed')])
+async def test_withdrawn_backpressured_wait_survives_other_replacements(waiting, monkeypatch, replacements):
+    h = waiting
+    await h.ready()
+    original = copy.deepcopy(h.row)
+    task = copy.deepcopy(h.controller.tasks.record())
+    goal = copy.deepcopy(h.controller.coordinator.session_state['goal'])
+    cancellations = 0
+
+    def full(*args, **kwargs):
+        raise AppError('Synthetic full inbox', 429)
+
+    with monkeypatch.context() as patch:
+        for index, outcome in enumerate(replacements):
+            # A newer update can proceed while the old wait's continuation
+            # lacks inbox space, including another update after release.
+            h.release = {**h.release, 'attemptId': str(index + 1) * 32,
+                         'revision': str(index + 1) * 40, 'generation': str(index + 1) * 32}
+            h.manager.diagnostics.begin('application', h.release['revision'], h.release['attemptId'])
+            h.app.state['updates']['pendingApp'] = copy.deepcopy(h.release)
+            patch.setattr(h.app.collaboration, 'require_inbox_slot', full)
+            assert await drain.prepare(h.manager, h.release)
+            assert h.row['withdrawn'] and h.row['ready']
+            assert h.row['updateTarget'] == original['updateTarget']
+            h.replace()
+            cancellations += len([call for call in h.runtime.boundary_calls if call[2]])
+            h.runtime.boundary_calls.clear()
+            if outcome == 'installed':
+                await h.reconnect(successor=True)
+                patch.setattr(h.app.collaboration, 'require_inbox_slot', full)
+                await h.confirm()
+            else:
+                h.app.state['updates'].update(phase='error', pendingApp=None, pendingRestart=None, pendingReplacement=None)
+            await drain.finish(h.manager, outcome)
+            await drain.observe_waiters(h.manager)
+            await h.settle()
+            assert h.app.state['updates']['drain']['phase'] == 'released'
+            assert h.row['withdrawn'] and not h.row.get('suppressed')
+            assert not h.runtime.admitted
+            assert (await h.wait())['result']['status'] == 'withdrawn'
+            assert not any(call[2] for call in h.runtime.boundary_calls)
+        if len(replacements) > 1:
+            # Enrollment by another owner must also preserve this recovery
+            # when it opens a new waiting drain after a completed release.
+            h.release = {**h.release, 'attemptId': '3' * 32,
+                         'revision': '3' * 40, 'generation': '3' * 32}
+            h.manager.diagnostics.begin('application', h.release['revision'], h.release['attemptId'])
+            h.app.state['updates'].update(phase='app-staged', pendingApp=copy.deepcopy(h.release))
+            h.app.state['updates']['application']['canInstall'] = True
+            original_sid = h.sid
+            h.sid = await h.new_task('Another owner waiting for a later update')
+            try:
+                await h.wait(args={'sessionId': h.sid, 'expectedRevision': 1,
+                                   'target': target(h.manager)}, command='later-owner-wait')
+            finally:
+                h.sid = original_sid
+            assert len(h.app.state['updates']['drain']['workers']) == 2
+            assert h.row['withdrawn'] and h.row['updateTarget'] == original['updateTarget']
+    for _ in range(2):
+        await drain.observe_waiters(h.manager)
+        await h.settle()
+    assert cancellations == 1
+    assert not any(call[2] for call in h.runtime.boundary_calls)
+    assert len(h.runtime.admitted) == 1
+    assert h.runtime.admitted[0]['task'] == task
+    assert h.runtime.admitted[0]['goal'] == goal
+    assert len(h.receipts('updates.app')) == len(h.receipts('coordination.send')) == 1
+    receipt = (await h.wait())['result']
+    assert receipt['status'] == 'withdrawn'
+    assert receipt['boundary']['updateTarget'] == original['updateTarget']
+    assert receipt['boundary']['continuationRequestId'] == h.runtime.admitted[0]['inputId']
+    source = h.receipts('updates.app')[0]['terminalOutcome']
+    assert source['outcome'] == 'update-withdrawn'
+    assert 'updated app is ready' not in source['text']
     assert h.sid not in h.app.state['updates']['drain']['workers']
 
 
