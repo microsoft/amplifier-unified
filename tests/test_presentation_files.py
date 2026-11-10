@@ -328,10 +328,17 @@ def test_presentation_remove_close_failure_reports_completed_removal(windows_mod
     assert model.removed and model.events == ['open', 'remove', 'close']
 
 
-def test_presentation_missing_native_primitive_refuses_before_open(windows_model, tmp_path):
+@pytest.mark.parametrize('operation', ['write', 'remove'])
+def test_presentation_missing_native_primitive_refuses_before_open(windows_model, tmp_path, operation):
+    import errno
     del windows_model.kernel.SetFileInformationByHandle
-    with pytest.raises(NotImplementedError, match='no fallback'):
-        presentation.atomic_write(tmp_path / 'view.json', 'new')
+    with pytest.raises(OSError, match='no fallback') as caught:
+        if operation == 'write':
+            presentation.atomic_write(tmp_path / 'view.json', 'new')
+        else:
+            presentation.remove(tmp_path / 'view.json')
+    assert caught.value.errno == errno.ENOSYS
+    assert isinstance(caught.value.__cause__, AttributeError)
     assert not windows_model.events
 
 

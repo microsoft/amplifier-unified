@@ -9,6 +9,7 @@ policy, retries, delete-first replacement or legacy fallback belongs here.
 """
 from contextlib import contextmanager
 import ctypes as C
+import errno
 import os
 from pathlib import Path
 import uuid
@@ -43,7 +44,8 @@ class _WindowsAPI:
             try:
                 function = getattr(kernel, name)
             except AttributeError as error:
-                raise NotImplementedError(
+                raise OSError(
+                    errno.ENOSYS,
                     'Presentation publication requires native rename/removal support; no fallback'
                 ) from error
             function.restype, function.argtypes = result, args
