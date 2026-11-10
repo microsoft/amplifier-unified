@@ -220,7 +220,7 @@ def test_committed_and_provisional_reference_metadata_share_fragment_budget(db):
     for row in rows.values(): save(cache, db, row, rows)
     assert len(cache.references) == 2 and cache.entries
     committed = dict(cache.references)
-    original_keys = set(cache.entries)
+    observed_keys = set(cache.entries)
     pending = {}
     # Compact witnesses leave room for more owners; still saturate the shared
     # budget and prove provisional references participate in eviction.
@@ -228,10 +228,13 @@ def test_committed_and_provisional_reference_metadata_share_fragment_budget(db):
         row = rows.setdefault(name, owner(name))
         row['execution']['nodes'][-1]['nested'][0] = 'provisional replacement'
         cache.reference(db, row, row['execution'], pending)
+        observed_keys.update(cache.entries)
         assert any(entry is not None for entry in pending.values())
         assert cache.references == committed
         assert cache.bytes + cache.accounting_bytes + cache._reserved(pending) <= 2 * cache.MAX_BYTES
-    assert not original_keys <= set(cache.entries)
+    # Pressure must evict fragments, without prescribing which reuse policy
+    # chooses them. Frequently reused original fragments may remain cached.
+    assert not observed_keys <= set(cache.entries)
     db.commit(); cache.committed(pending, rows)
     assert cache.bytes + cache.accounting_bytes + cache._reserved({}) <= 2 * cache.MAX_BYTES
 

@@ -53,6 +53,12 @@ An object identity, list length or file size alone does not prove unchanged nest
 content. Count cache-validation work too. Moving a full scan to another process
 changes responsiveness, but does not by itself reduce total work or memory.
 
+Exercise interleaved owners whose combined history exceeds a cache's capacity,
+not only warm inputs that fit. A scan must not evict every reusable fragment
+before its next use. Count re-encoding as well as retained bytes, and pair reuse
+with exact readback, nested edits and owner retirement. Prefer changing admission
+to increasing the memory budget when one-pass scans cause this churn.
+
 Saved output records own their immutable bodies. Their list/read/image actions
 must not hydrate or copy the conversation transcript to validate output ownership.
 An output write retains its location and execution revision across an asynchronous

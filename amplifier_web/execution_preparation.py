@@ -280,6 +280,10 @@ class ExecutionPreparation:
                 self.bytes -= self.entries.popitem(last=False)[1][2]
             self.entries[key] = (witness, text, charge, token, summary)
             self.bytes += charge
+            # Admit new fragments at the eviction end. A second use promotes
+            # them above one-pass scans from other large histories.
+            if old is None:
+                self.entries.move_to_end(key, last=False)
             return text, token, summary
         return text, None, summary
 
