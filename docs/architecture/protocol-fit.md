@@ -116,8 +116,7 @@ an earlier input. Root identity and saved history survive a fresh owned service.
 Full `session/load` remains unadvertised: ACP requires complete visible-history
 replay, which a bounded recent-message page cannot satisfy. Existing passive
 history-window reads remain with their current owner. Consumers supporting only
-load, including the currently reviewed Conversations connector, are not yet
-qualified for reconnect continuity through this path.
+load are not yet qualified for reconnect continuity through this path.
 
 The existing transcript reader also supports bounded forward traversal of raw
 records. It preserves order, rejects gaps and changed sources, and waits for
