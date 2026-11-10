@@ -59,6 +59,8 @@ try{
   const boxes=await sidebar.locator('.a-sidebar-modes button').evaluateAll(nodes=>nodes.map(node=>{const r=node.getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,right:r.right}}));
   assert.equal(boxes.length,4);assert.ok(boxes.every(box=>Math.abs(box.top-boxes[0].top)<2));
   assert.ok(boxes.every((box,i)=>!i||box.left>=boxes[i-1].right-1));
+  const rail=await sidebar.boundingBox();assert.ok(boxes.every(box=>box.left>=rail.x&&box.right<=rail.x+rail.width));
+  assert.ok(await newChat.evaluate(node=>{const r=node.getBoundingClientRect();return node.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))}));
   await expect(newChat).toHaveText('');await expect(newChat).toHaveAttribute('title','New chat');
  };
  await oneRow();
@@ -90,6 +92,7 @@ try{
   const box=await menu.boundingBox(),footerBox=await sidebar.locator('.a-work-footer').boundingBox();
   assert.ok(box.y>=0&&box.y+box.height<=footerBox.y+footerBox.height&&box.x>=0);
   assert.ok(await menu.evaluate(node=>{const r=node.getBoundingClientRect();return node.contains(document.elementFromPoint(r.left+r.width/2,r.top+10))}));
+  assert.ok(await menu.getByRole('button',{name:'What the agent sees',exact:true}).evaluate(node=>{const r=node.getBoundingClientRect();return node.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))}));
   await page.screenshot({path:join(output,name+'.png')});
   await page.keyboard.press('Escape');await expect(menu).toHaveCount(0);await expect(options).toBeFocused();
  };
@@ -126,6 +129,9 @@ try{
  await act('view.update',{patch:{navAge:'24h'}});await settled();await resetScroll();
  await page.screenshot({path:join(output,'compact-short-list.png')});
  await act('view.update',{patch:{navAge:'all',navWidth:320}});
+ await page.locator('#amp-one').evaluate(node=>{node.style.fontSize='20px';node.style.setProperty('--a-text-sm','16px')});
+ await oneRow();await page.screenshot({path:join(output,'compact-enlarged-text.png')});
+ await page.locator('#amp-one').evaluate(node=>{node.style.removeProperty('font-size');node.style.removeProperty('--a-text-sm')});
  await page.setViewportSize({width:390,height:844});
  if(!await sidebar.isVisible())await page.locator('#navigation-toggle').click();
  await oneRow();await resetScroll();await page.screenshot({path:join(output,'compact-mobile.png')});
