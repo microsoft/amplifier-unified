@@ -318,16 +318,19 @@ try{
  await stage('installed');
  const observations=async()=>{const response=await page.request.get(base+'/fixture/update-observations');assert.ok(response.ok());return response.json()};
  assert.deepEqual((await observations()).calls,{check:0,install:0,rollback:0});
- if(!await advanced.getByText('Update preferences',{exact:true}).isVisible())await advanced.locator('summary').first().click();
+ // Wait for the SSE frame and its error-disclosure effect before interacting.
+ // An immediate visibility check can race that effect and close details again.
+ await assertCurrentHealth('protected','Component source needs review','sources');
+ await expect(advanced).toHaveAttribute('open','');
  await updates.getByText('Update preferences',{exact:true}).click();
  const frequency=updates.getByLabel('Check for updates',{exact:true}),automatic=updates.getByRole('checkbox',{name:'Automatically check for updates',exact:true});
  await expect(frequency).toHaveValue('');await expect(updates.getByText('Your saved schedule checks every 7 hours. It stays in effect until you choose a new interval.',{exact:true})).toBeVisible();
  await automatic.click();await expect.poll(async()=>(await observations()).preferences.autoCheck).toBe(false);await expect(automatic).not.toBeChecked();assert.equal((await observations()).preferences.intervalHours,7);
- await page.reload();await openSettingsPage(page,'updates');if(!await updates.getByText('Update preferences',{exact:true}).isVisible())await advanced.locator('summary').first().click();if(!await frequency.isVisible())await updates.getByText('Update preferences',{exact:true}).click();
+ await page.reload();await openSettingsPage(page,'updates');await assertCurrentHealth('protected','Component source needs review','sources');await expect(advanced).toHaveAttribute('open','');if(!await frequency.isVisible())await updates.getByText('Update preferences',{exact:true}).click();
  await expect(automatic).not.toBeChecked();await expect(frequency).toHaveValue('');assert.equal((await observations()).preferences.intervalHours,7);
  await frequency.selectOption('24');await expect.poll(async()=>(await observations()).preferences.intervalHours).toBe(24);await automatic.click();
  await expect.poll(async()=>(await observations()).preferences.autoCheck).toBe(true);await expect(automatic).toBeChecked();assert.deepEqual((await observations()).calls,{check:0,install:0,rollback:0});
- await page.reload();await openSettingsPage(page,'updates');if(!await updates.getByText('Update preferences',{exact:true}).isVisible())await advanced.locator('summary').first().click();if(!await frequency.isVisible())await updates.getByText('Update preferences',{exact:true}).click();
+ await page.reload();await openSettingsPage(page,'updates');await assertCurrentHealth('protected','Component source needs review','sources');await expect(advanced).toHaveAttribute('open','');if(!await frequency.isVisible())await updates.getByText('Update preferences',{exact:true}).click();
  await expect(automatic).toBeChecked();await expect(frequency).toHaveValue('24');
  // Explicit checks carry their own outcome; a successful lookup cannot clear
  // a retained component failure without matching recovery.
