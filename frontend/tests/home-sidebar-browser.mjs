@@ -136,7 +136,9 @@ try{
  await oneRow();await page.screenshot({path:join(output,'compact-enlarged-text.png')});
  await page.locator('#amp-one').evaluate(node=>{node.style.removeProperty('font-size');node.style.removeProperty('--a-text-sm')});
  await page.setViewportSize({width:390,height:844});
- if(!await sidebar.isVisible())await page.locator('#navigation-toggle').click();
+ await expect(page.locator('.a-layout')).toHaveAttribute('data-narrow','true');
+ await act('view.update',{patch:{navExpanded:false}});
+ await expect(sidebar).toBeHidden();await page.locator('#navigation-toggle').click();await expect(sidebar).toBeVisible();
  await oneRow();await resetScroll();await page.screenshot({path:join(output,'compact-mobile.png')});
  await scroller.evaluate(node=>{node.scrollTop=node.scrollHeight});await inspectFooter('compact-mobile-footer');
  await page.keyboard.press('Escape');await expect(sidebar).toBeHidden();
