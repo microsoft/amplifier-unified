@@ -137,8 +137,12 @@ does not.
 
 ## Application availability — bounded independence slice
 
-**Implementation boundary; focused qualification is pending.** This is not yet
-published or installed-package evidence.
+Focused qualification exercises the actual manager, release-metadata parser,
+local Git discovery, source copying, staging and activation-pointer behavior.
+Worker validation is an explicit test seam, not installed-graph or native-worker
+qualification. UI checks cover progress, pending-adoption controls and truthful
+application guidance; synthetic owner state does not establish backend execution.
+Publication and live adoption remain separate evidence.
 
 A completed application availability check returning `current`, `check_failed`
 or `release_channel_needed` permits the existing included-component check path.
