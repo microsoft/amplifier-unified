@@ -119,6 +119,7 @@ def failure(report, error):
         module = trace.tb_frame.f_globals.get('__name__', '')
         if module.startswith('amplifier_web.'):
             report['failure']['producer'] = module + ':' + trace.tb_frame.f_code.co_name + ':' + str(trace.tb_lineno)
+            report['failure'].setdefault('producerFrames', []).append(report['failure']['producer'])
         trace = trace.tb_next
 
 
@@ -277,6 +278,12 @@ async def exercise(root, wheel, report):
         await web.SockSite(runner, reservation, ssl_context=tls.ssl_context(home, config)).start()
         manager = app['service'].update_manager
         binding = handoff._native_binding(manager)
+        archive_info = (binding.get('direct') or {}).get('archive_info')
+        report['archiveInfo'] = {
+            'isObject': isinstance(archive_info, dict),
+            'empty': archive_info == {},
+            'hasHash': isinstance(archive_info, dict) and 'hash' in archive_info,
+            'hasSha256': isinstance(archive_info, dict) and 'sha256' in (archive_info.get('hashes') or {})}
         assert binding['revision'] == report['candidate']['head']
         assert binding['ownerSid'] == browser_entry.current_owner_sid()
         passed('actualTokenUserDataAndInstallation')
