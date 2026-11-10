@@ -233,6 +233,7 @@ ACTION_DEFINITIONS = {
     "updates.diagnostics": ("Collect a sanitized update support report, including source provenance, without credentials, chat content or private paths.", schema()),
     "updates.forceRestart": ("Explicitly confirm interrupting active work to restart into one staged qualified app. Saved history and unresolved checkout fences remain; no work is replayed.", schema({"confirm":{"enum":[True]},"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(200)}, ["confirm","hostInstanceId","revision","generation","attemptId"])),
     "updates.install": ("Stage and validate available application or ecosystem updates; activate when idle. Application updates restart the host.", schema()),
+    "updates.reconcileManualHandoff": ("Verify an already completed manual Windows app handoff against the exact retained pre-effect refusal and the actual installed official wheel, owner, launcher, dependencies and pinned listener. Does not install, restart or promote. Preserves existing whole-sequence Install intent. Read updates.manualHandoffResults for the durable result; never replay an unknown request.", schema({"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(32)}, ["hostInstanceId","revision","generation","attemptId"])),
     "updates.rollback": ("Restore the previous ecosystem version when idle", schema()),
     "settings.update": ("Change voice, workspace or update defaults. Update checks support intervalHours 1, 4, 8 or 24.", schema({"patch": {"type": "object"}})),
     "theme.apply": ("Apply a complete single-file CSS skin", schema({"name": string(100), "css": string(1000000)})),
@@ -1985,7 +1986,7 @@ class AppService:
         if action == 'runtime.control' and args.get('operation', '').startswith(('task.', 'capacity.')):
             action, args = args['operation'], {**args.get('args', {}), 'sessionId': args.get('sessionId')}
         defer_publish = action == 'smartTools.appCall' and not include_state
-        if action.startswith(("smartTools.","providers.")) or action in {'updates.featureInstall', 'updates.forceRestart'} or action.startswith('permissions.') and args.get('scope') == 'session':
+        if action.startswith(("smartTools.","providers.")) or action in {'updates.featureInstall', 'updates.forceRestart', 'updates.reconcileManualHandoff'} or action.startswith('permissions.') and args.get('scope') == 'session':
             command_id = command_id or str(uuid.uuid4())
         if action not in ACTION_DEFINITIONS:
             raise AppError("Unknown action: " + action, 404)
@@ -3727,6 +3728,14 @@ class AppService:
                     raise AppError(str(error), 409) from None
             elif action.startswith("updates."):
                 if not self.update_manager: raise AppError("Update service is unavailable.")
+                if action == 'updates.reconcileManualHandoff':
+                    from .manual_app_handoff import require_target
+                    try:
+                        require_target(self.update_manager, args)
+                    except ValueError as error:
+                        raise AppError(str(error), 409) from None
+                    self.state['updates'].setdefault('manualHandoffResults', {})[command_id] = {
+                        'requestId': command_id, 'status': 'queued'}
                 if action == 'updates.forceRestart':
                     if origin not in {'ui', 'user'}:
                         raise AppError('Force restart requires explicit user confirmation in Updates.', 403)
@@ -3742,6 +3751,7 @@ class AppService:
                         'updatedAt':time.time(), 'detail':'Feature installation requested; awaiting qualification.'}
                     while len(rows) > 20:
                         rows.pop(next(iter(rows)))
+                self.state['updates']['intentRevision'] = self.state['updates'].get('intentRevision', 0) + 1
                 pending.append((self.update_manager.command, (action.split(".")[1],copy.deepcopy(args),command_id)))
             elif action == "settings.update":
                 patch = dict(args["patch"])
@@ -3926,7 +3936,7 @@ class AppService:
             if action in {"feedback.submit", "feedback.get", "feedback.comment", "feedback.reconcile", "feedback.update", "feedback.close", "feedback.reopen",
                           "feedback.attachments.review", "feedback.attachments.add", "feedback.attachments.reconcile"}:
                 receipt["requestId"] = args['requestId']
-            if action in {'updates.featureInstall', 'updates.forceRestart'}:
+            if action in {'updates.featureInstall', 'updates.forceRestart', 'updates.reconcileManualHandoff'}:
                 receipt['requestId'] = command_id
             if command_id:
                 self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))

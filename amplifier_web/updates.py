@@ -484,6 +484,10 @@ class UpdateManager:
             if state.get('phase')=='activating':state['pendingApp']=None
             state.update(phase='interrupted', detail='The update was interrupted; installed sources were not replayed.')
         state.setdefault('phase', 'idle')
+        # A read-only manual verifier interrupted by host exit is not replayed.
+        for result in state.get('manualHandoffResults', {}).values():
+            if result.get('status') == 'queued':
+                result.update(status='interrupted', detail='Manual verification was interrupted; no handoff success was inferred.')
         state['applicationCheckPending'] = False
         from .app_features import reconcile_requests
         reconcile_requests(state)
@@ -677,6 +681,9 @@ class UpdateManager:
         return classify(self.home, rows, selection=selection)
 
     async def command(self, action, args=None, command_id=None):
+        if action == 'reconcileManualHandoff':
+            from .manual_app_handoff import reconcile
+            return await reconcile(self, args, command_id)
         if self.awaiting_restart() and action not in {'featureInstall', 'forceRestart'}:return
         previous_error=self.service.state['updates'].get('error')
         previous_event=self.diagnostics.state.get('latest',{}).get('id')
@@ -779,6 +786,15 @@ class UpdateManager:
                     from .app_updates import check_staged
                     await check_staged(self)
                 return
+            from .manual_app_handoff import continuing, verify_continuation
+            manual = continuing(self)
+            if manual and tier == 'application' and automatic:
+                tier = state['sequence']['stage']
+                install = state['sequence'].get('install') is True
+            if manual and tier != 'application':
+                await verify_continuation(self)
+            else:
+                manual = False  # A fresh explicit check starts the usual app-first cycle.
             sequence = ({'stage': 'application', 'install': install,
                          'included': summary([], checked=False), 'other': summary([], checked=False)}
                         if tier == 'application' else {**state.get('sequence', {}), 'stage': tier, 'install': install})
@@ -923,9 +939,10 @@ class UpdateManager:
                 from .update_health import refresh as refresh_health
                 await refresh_health(self)
                 await self.publish(phase='error' if blocked and failed_check else 'checked' if blocked else 'available' if available else 'checked',
-                    sequence=sequence, items=public+[application], application=application, appAvailable=False,
+                    sequence=sequence, items=public+[application], application=application,
+                    appAvailable=state.get('appAvailable', False) if manual else False,
                     includedCanProceed=bool(available and not blocked),
-                    available=available, lastCheck=time.time(),
+                    available=available + int(manual and state.get('appAvailable', False)), lastCheck=time.time(),
                     error='An included component could not be checked. Review its details before continuing.' if blocked and failed_check else None,
                     detail='Included components will be installed before checking the remaining sources.' if sequence['stage']=='included' and available else 'Component check complete.')
             except Exception:
@@ -990,6 +1007,10 @@ class UpdateManager:
     async def install(self, *, automatic=False):
         if self.awaiting_restart() or self.lock.locked():return
         state = self.service.state['updates']
+        from .manual_app_handoff import verify_continuation
+        manual = await verify_continuation(self)
+        if manual and automatic and state.get('sequence', {}).get('install') is not True:
+            return  # Verification without saved Install intent installs nothing.
         from .update_health import pending_preparation, reconcile_preparation
         # Independent app/tool owners may proceed without clearing or replaying
         # component work. Their diagnostics.begin must retain this operation.
@@ -1021,7 +1042,7 @@ class UpdateManager:
         if self.service.state['updates'].get('pendingRelease'):
             await self.activate()
             return
-        if self.service.state['updates'].get('appAvailable'):
+        if self.service.state['updates'].get('appAvailable') and not manual:
             await self.app()
             return
         pending = state.get('pendingSmartTools', [])
@@ -1046,6 +1067,9 @@ class UpdateManager:
             await self.installSmartTools()
             return
         async with self.lock:
+            if manual:
+                if not await verify_continuation(self, full=True):
+                    raise ValueError('The manual handoff continuation was superseded.')
             if not self.inventory:
                 path=self.directory/'inventory.json'
                 self.inventory=json.loads(path.read_text()) if path.exists() else []
@@ -1615,7 +1639,10 @@ class UpdateManager:
             await self.check(fresh=False, automatic=True)
         state=self.service.state['updates']
         managed_preview=state.get('appAvailable') and state.get('application',{}).get('canInstall') is False
-        if not managed_preview and (settings.get('autoInstall',True) or state.get('sequence', {}).get('install')) and state.get('phase')=='available' and state.get('available',0):
+        sequence = state.get('sequence', {})
+        install_intent = (sequence.get('install') if sequence.get('manualHandoff')
+                          else settings.get('autoInstall', True) or sequence.get('install'))
+        if not managed_preview and install_intent and state.get('phase')=='available' and state.get('available',0):
             await self.install(automatic=True)
             return
         if self.independent_tool_results(state) and (state.get('phase') not in {'error', 'interrupted'} or any(
