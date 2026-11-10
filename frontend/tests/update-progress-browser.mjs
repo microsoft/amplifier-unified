@@ -262,6 +262,9 @@ try{
  await openSettingsPage(page,'updates');
  await stage('waiting');
  await expect(overview).toContainText('Waiting for your work to finish');
+ // Earlier failures opened details deliberately. A working transition does not
+ // discard that disclosure state; close it explicitly to test progressive access.
+ if(await advanced.evaluate(element=>element.open))await advanced.locator('summary').first().click();
  await expect(updates.locator('[data-part="update-support"]')).not.toBeVisible();
  await page.screenshot({path:output+'-waiting-dark.png'});
  await updates.locator('[data-part="update-blockers"]>summary').click();
