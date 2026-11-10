@@ -3692,6 +3692,52 @@ def test_default_runtime_probe_admission_diagnostic_is_closed_and_preserves_unkn
                 'errors': [{'class': 'RuntimeError', 'frames': [], **patch}]})
 
 
+@pytest.mark.parametrize('origin,status,errors', [
+    ('worker_reply', 'valid', [{'class': 'PermissionError', 'errno': 13, 'winerror': 5, 'frames': []}]),
+    ('worker_reply', 'invalid', []),
+    ('reader_disconnect', 'not_applicable', []),
+])
+def test_default_runtime_probe_copies_only_canonical_failure_witness(origin, status, errors):
+    fixture = _default_runtime_probe_module()
+    error = RuntimeError('SECRET /private/provider')
+    error._runtime_failure_witness = {'schema': 1, 'origin': origin,
+        'factsStatus': status, 'errors': errors, 'truncated': False}
+    facts = fixture.failure_facts(error, 'input_admission')
+    fixture.validate_diagnostic(facts)
+    assert facts['runtimeFailure'] == error._runtime_failure_witness
+    assert facts['runtimeFailure'] is not error._runtime_failure_witness
+    assert facts['runtimeFailure']['errors'] is not errors
+    assert 'SECRET' not in json.dumps(facts) and '/private' not in json.dumps(facts)
+    assert len(json.dumps(facts).encode()) < 2048
+    assert not any(key in facts for key in ('accepted', 'effectAdmitted', 'retry'))
+    assert 'runtimeFailure' not in fixture.failure_facts(error, 'runtime_start')
+    class Foreign(RuntimeError):
+        pass
+    foreign = Foreign('SECRET')
+    foreign._runtime_failure_witness = error._runtime_failure_witness
+    assert 'runtimeFailure' not in fixture.failure_facts(foreign, 'input_admission')
+
+
+@pytest.mark.parametrize('patch', [
+    {'origin': 'SECRET'}, {'schema': True}, {'message': 'SECRET'},
+    {'factsStatus': 'valid'}, {'errors': [{'class': 'PrivateError', 'frames': []}]},
+    {'errors': [{'class': 'OSError', 'errno': True, 'frames': []}]},
+    {'errors': [{'class': 'RuntimeError', 'frames': [{'source': '/private', 'offset': 1}]}]},
+    {'errors': [{}] * 10000},
+])
+def test_default_runtime_probe_rejects_malformed_failure_witness(patch):
+    fixture = _default_runtime_probe_module()
+    witness = {'schema': 1, 'origin': 'reader_disconnect', 'factsStatus': 'not_applicable',
+               'errors': [], 'truncated': False, **patch}
+    error = RuntimeError('SECRET')
+    error._runtime_failure_witness = witness
+    facts = fixture.failure_facts(error, 'input_admission')
+    assert 'runtimeFailure' not in facts
+    assert 'SECRET' not in json.dumps(facts)
+    with pytest.raises(AssertionError):
+        fixture.validate_diagnostic({**facts, 'runtimeFailure': witness})
+
+
 async def test_default_runtime_probe_diagnostic_fault_keeps_failed_outer_owner(tmp_path, monkeypatch):
     from unittest.mock import AsyncMock
     from amplifier_web import windows_jobs

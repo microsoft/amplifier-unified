@@ -997,6 +997,16 @@ class RuntimeManager:
                     input_id = None if peer_input else tracked_input
                     future = row["pending"].get(data.get("id"))
                     error = _worker_error(data) if data.get('error') else None
+                    if error is not None:
+                        from .worker_diagnostics import validate_command_failure_facts
+                        facts = validate_command_failure_facts(data.get('failureFacts'))
+                        # Origin is established by this reader branch, never by
+                        # worker-supplied prose. This is diagnostic evidence only:
+                        # a reply error does not establish non-admission.
+                        error._runtime_failure_witness = {
+                            'schema': 1, 'origin': 'worker_reply',
+                            'factsStatus': 'valid' if facts is not None else 'invalid',
+                            **(facts if facts is not None else {'errors': [], 'truncated': False})}
                     if isinstance(error, RuntimeStartupError):
                         row['preparation_error'] = error
                         reported_error = str(error)
@@ -1223,8 +1233,12 @@ class RuntimeManager:
                 row.get('sendInputs', {}).clear()
                 for future in row["pending"].values():
                     if not future.done():
-                        future.set_exception(RuntimeHostClosingError() if row.get('stop_reason') == 'shutdown'
-                                             else RuntimeError("Amplifier worker disconnected"))
+                        error = (RuntimeHostClosingError() if row.get('stop_reason') == 'shutdown'
+                                 else RuntimeError("Amplifier worker disconnected"))
+                        error._runtime_failure_witness = {
+                            'schema': 1, 'origin': 'reader_disconnect',
+                            'factsStatus': 'not_applicable', 'errors': [], 'truncated': False}
+                        future.set_exception(error)
 
     async def _execution_ended(self, sid, row, status):
         """Only confirmed process exit settles its native children/background calls."""

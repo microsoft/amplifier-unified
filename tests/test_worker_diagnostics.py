@@ -383,3 +383,358 @@ def test_private_startup_facts_fault_and_write_fault_never_replace_original(tmp_
     finally:
         capture.close()
     assert error.args == ('original cancellation',)
+
+
+def _command_facts_fixture():
+    return {'errors': [{'class': 'RuntimeError', 'frames': [
+        {'source': 'worker.command_serial', 'offset': 17}]}], 'truncated': False}
+
+
+def _command_traceback(function, *, count=1, offset=7):
+    """Use an unstarted coroutine's actual code; no command or worker runs."""
+    import types
+    coroutine = function(None, {})
+    try:
+        frame = coroutine.cr_frame
+        result = None
+        for _ in range(count):
+            result = types.TracebackType(result, frame, 0, function.__code__.co_firstlineno + offset)
+        return result
+    finally:
+        coroutine.close()
+
+
+def test_command_failure_facts_never_read_secret_prose_subclass_properties_or_locals():
+    from amplifier_web.worker_diagnostics import command_failure_facts, validate_command_failure_facts
+    touched = []
+    class PrivateSecretError(RuntimeError):
+        def __str__(self):
+            touched.append('str')
+            raise AssertionError('private string')
+        def __repr__(self):
+            touched.append('repr')
+            raise AssertionError('private repr')
+        def __getattribute__(self, key):
+            touched.append(key)
+            raise AssertionError('private attribute')
+        @property
+        def __traceback__(self):
+            touched.append('traceback descriptor')
+            raise AssertionError('private traceback')
+        @property
+        def __cause__(self):
+            touched.append('cause descriptor')
+            raise AssertionError('private cause')
+    secret = 'private-token https://private.invalid /private/secret.py secret-argument'
+    error = PrivateSecretError(secret, object())
+    BaseException.__cause__.__set__(error, ValueError(secret))
+    facts = command_failure_facts(error)
+    assert facts == {'errors': [{'class': 'other', 'frames': []},
+                                {'class': 'ValueError', 'frames': []}], 'truncated': False}
+    assert validate_command_failure_facts(facts) == facts
+    assert not touched and secret not in json.dumps(facts)
+    class EqualType(type):
+        def __eq__(self, other): raise AssertionError('class equality called')
+        def __hash__(self): raise AssertionError('class hashed')
+    class Impostor(RuntimeError, metaclass=EqualType):
+        pass
+    assert command_failure_facts(Impostor(secret))['errors'] == [{'class': 'other', 'frames': []}]
+
+
+def test_command_failure_facts_known_types_do_not_format_arguments_or_process_payloads():
+    import subprocess
+    from amplifier_web.worker_diagnostics import command_failure_facts
+    class SecretArgument:
+        def __str__(self): raise AssertionError('argument formatted')
+        def __repr__(self): raise AssertionError('argument represented')
+    argument = SecretArgument()
+    for error, label in (
+            (RuntimeError(argument), 'RuntimeError'),
+            (asyncio.CancelledError(argument), 'CancelledError'),
+            (subprocess.TimeoutExpired(argument, argument, output=argument, stderr=argument), 'TimeoutExpired'),
+            (type('TimeoutExpired', (Exception,), {})(argument), 'other')):
+        assert command_failure_facts(error) == {
+            'errors': [{'class': label, 'frames': []}], 'truncated': False}
+
+
+@pytest.mark.parametrize('method,label', [
+    ('command', 'worker.command'), ('_command_serial', 'worker.command_serial')])
+def test_command_failure_frame_labels_require_loaded_code_identity_not_equal_clones(method, label):
+    import types
+    from amplifier_web.runtime_worker import Worker
+    from amplifier_web.worker_diagnostics import command_failure_facts
+    function = getattr(Worker, method)
+    error = RuntimeError('private argument')
+    error.__traceback__ = _command_traceback(function)
+    assert command_failure_facts(error) == {
+        'errors': [{'class': 'RuntimeError', 'frames': [{'source': label, 'offset': 7}]}],
+        'truncated': False}
+    clone = function.__code__.replace()
+    assert clone == function.__code__ and clone is not function.__code__
+    copied = types.FunctionType(clone, function.__globals__, function.__name__)
+    error.__traceback__ = _command_traceback(copied)
+    assert command_failure_facts(error)['errors'][0]['frames'] == []
+    # Matching names and arbitrary traceback filenames are never exported.
+    copied = types.FunctionType(clone.replace(co_filename='/private/token.py'), function.__globals__)
+    error.__traceback__ = _command_traceback(copied)
+    assert command_failure_facts(error)['errors'][0]['frames'] == []
+    assert '/private/token.py' not in json.dumps(command_failure_facts(error))
+
+
+def test_command_frame_owner_supports_script_main_without_imports(monkeypatch):
+    import builtins
+    import types
+    from amplifier_web import runtime_worker, worker_diagnostics as diagnostics
+    error = RuntimeError('private')
+    error.__traceback__ = _command_traceback(runtime_worker.Worker._command_serial)
+    script = types.ModuleType('__main__')
+    script.__file__ = runtime_worker.__file__
+    script.Worker = runtime_worker.Worker
+    monkeypatch.delitem(sys.modules, 'amplifier_web.runtime_worker')
+    monkeypatch.setitem(sys.modules, '__main__', script)
+    def no_import(*args, **kwargs):
+        raise AssertionError('diagnostics must not import packages')
+    monkeypatch.setattr(builtins, '__import__', no_import)
+    facts = diagnostics.command_failure_facts(error)
+    assert facts == {'errors': [{'class': 'RuntimeError', 'frames': [
+        {'source': 'worker.command_serial', 'offset': 7}]}], 'truncated': False}
+    script.__file__ = '/private/unrelated/runtime_worker.py'
+    assert diagnostics.command_failure_facts(error)['errors'][0]['frames'] == []
+    monkeypatch.setitem(sys.modules, 'amplifier_web.runtime_worker', types.SimpleNamespace(Worker=script.Worker))
+    assert diagnostics.command_failure_facts(error)['errors'][0]['frames'] == []
+
+
+def test_command_failure_chain_context_cycles_and_empty_input_are_bounded():
+    from amplifier_web.worker_diagnostics import command_failure_facts
+    rows = [{'class': 'RuntimeError', 'frames': []}]
+    chain = [RuntimeError('private') for _ in range(8)]
+    for left, right in zip(chain, chain[1:]):
+        left.__cause__ = right
+    assert command_failure_facts(chain[0]) == {'errors': rows * 4, 'truncated': True}
+    chain[3].__cause__ = None
+    assert command_failure_facts(chain[0]) == {'errors': rows * 4, 'truncated': False}
+    chain[0].__cause__ = chain[0]
+    assert command_failure_facts(chain[0]) == {'errors': rows, 'truncated': True}
+    error = RuntimeError('private')
+    error.__context__ = TimeoutError('private context')
+    assert command_failure_facts(error)['errors'] == rows + [{'class': 'TimeoutError', 'frames': []}]
+    error.__suppress_context__ = True
+    assert command_failure_facts(error) == {'errors': rows, 'truncated': False}
+    error.__cause__ = ValueError('private cause')
+    assert command_failure_facts(error)['errors'] == rows + [{'class': 'ValueError', 'frames': []}]
+    assert command_failure_facts(None) == {'errors': [], 'truncated': True}
+
+
+@pytest.mark.parametrize('count,truncated', [(5, False), (6, True), (128, True), (129, True)])
+def test_command_frame_retention_is_bounded(count, truncated):
+    from amplifier_web.runtime_worker import Worker
+    from amplifier_web.worker_diagnostics import command_failure_facts
+    error = RuntimeError('private')
+    error.__traceback__ = _command_traceback(Worker._command_serial, count=count)
+    assert command_failure_facts(error) == {
+        'errors': [{'class': 'RuntimeError', 'frames': [
+            {'source': 'worker.command_serial', 'offset': 7}] * 5}], 'truncated': truncated}
+
+
+def test_command_frame_scan_stops_after_128_unapproved_nodes():
+    from amplifier_web.runtime_worker import Worker
+    from amplifier_web.worker_diagnostics import command_failure_facts
+    async def unknown(self, data):
+        raise AssertionError('must not run')
+    error = RuntimeError('private')
+    error.__traceback__ = _command_traceback(unknown, count=128)
+    assert command_failure_facts(error) == {
+        'errors': [{'class': 'RuntimeError', 'frames': []}], 'truncated': False}
+    last = error.__traceback__
+    while last.tb_next is not None:
+        last = last.tb_next
+    last.tb_next = _command_traceback(Worker.command)
+    assert command_failure_facts(error) == {
+        'errors': [{'class': 'RuntimeError', 'frames': []}], 'truncated': True}
+
+
+@pytest.mark.parametrize('offset', [-1, 0, 1_000_000, 1_000_001])
+def test_command_frame_offset_bounds(offset):
+    from amplifier_web.runtime_worker import Worker
+    from amplifier_web.worker_diagnostics import command_failure_facts
+    error = RuntimeError('private')
+    error.__traceback__ = _command_traceback(Worker.command, offset=offset)
+    valid = 0 <= offset <= 1_000_000
+    assert command_failure_facts(error) == {
+        'errors': [{'class': 'RuntimeError', 'frames': [
+            {'source': 'worker.command', 'offset': offset}] if valid else []}], 'truncated': not valid}
+
+
+@pytest.mark.parametrize('number', [-(2**31), 0, 2**32 - 1, -(2**31) - 1, 2**32, True, 1.0, '13', None])
+def test_command_numeric_facts_and_validator_require_exact_bounded_integers(number):
+    import subprocess
+    from amplifier_web.worker_diagnostics import command_failure_facts, validate_command_failure_facts
+    valid = type(number) is int and -(2**31) <= number < 2**32
+    os_error = OSError('private path')
+    os_error.errno = number
+    os_error.winerror = number
+    for error, label, keys in (
+            (os_error, 'OSError', ('errno', 'winerror')),
+            (subprocess.CalledProcessError(number, 'private command', output='private'), 'CalledProcessError', ('returncode',))):
+        expected = {'errors': [{'class': label, 'frames': [],
+                               **({key: number for key in keys} if valid else {})}], 'truncated': False}
+        assert command_failure_facts(error) == expected
+        assert validate_command_failure_facts(expected) == expected
+        wire = {'errors': [{'class': label, 'frames': [], **{key: number for key in keys}}], 'truncated': False}
+        assert (validate_command_failure_facts(wire) is not None) == valid
+
+
+def test_command_facts_validator_deep_copies_and_round_trips_closed_schema():
+    from amplifier_web.worker_diagnostics import validate_command_failure_facts
+    original = _command_facts_fixture()
+    result = validate_command_failure_facts(json.loads(json.dumps(original)))
+    assert result == original
+    direct = validate_command_failure_facts(original)
+    direct['errors'][0]['frames'][0]['offset'] = 99
+    direct['errors'][0]['frames'].append({'source': 'worker.command', 'offset': 0})
+    direct['errors'].append({'class': 'other', 'frames': []})
+    assert original == _command_facts_fixture()
+
+
+@pytest.mark.parametrize('mutation', [
+    lambda v: v.update(secret='private'),
+    lambda v: v.pop('errors'),
+    lambda v: v.update(errors=()),
+    lambda v: v.update(errors=[{}] * 5),
+    lambda v: v.update(truncated=0),
+    lambda v: v.update(errors=[None]),
+    lambda v: v['errors'][0].update(message='private'),
+    lambda v: v['errors'][0].pop('frames'),
+    lambda v: v['errors'][0].update(**{'class': 'PrivateSecretError'}),
+    lambda v: v['errors'][0].update(**{'class': 'x' * 8193}),
+    lambda v: v['errors'][0].update(frames=[{}] * 6),
+    lambda v: v['errors'][0].update(frames=()),
+    lambda v: v['errors'][0].update(frames=[None]),
+    lambda v: v['errors'][0].update(errno=13),
+    lambda v: v['errors'][0].update(returncode=1),
+    lambda v: v['errors'][0]['frames'][0].update(file='/private/path'),
+    lambda v: v['errors'][0]['frames'][0].pop('source'),
+    lambda v: v['errors'][0]['frames'][0].update(source='/private/path'),
+    lambda v: v['errors'][0]['frames'][0].update(offset=True),
+    lambda v: v['errors'][0]['frames'][0].update(offset=-1),
+    lambda v: v['errors'][0]['frames'][0].update(offset=1_000_001),
+    lambda v: v['errors'][0]['frames'][0].update(offset=1.0),
+])
+def test_command_facts_validator_refuses_malformed_nested_unknown_and_oversize_values(mutation):
+    from amplifier_web.worker_diagnostics import validate_command_failure_facts
+    value = _command_facts_fixture()
+    mutation(value)
+    assert validate_command_failure_facts(value) is None
+
+
+def test_command_validators_reject_container_scalar_subclasses_and_cycles():
+    from amplifier_web.worker_diagnostics import validate_command_failure_facts
+    class BadDict(dict):
+        def __iter__(self): raise AssertionError('private iterator')
+    class BadList(list):
+        def __iter__(self): raise AssertionError('private iterator')
+    class BadString(str):
+        def __eq__(self, other): raise AssertionError('private comparison')
+        def __hash__(self): raise AssertionError('private hash')
+    class Int(int):
+        pass
+    assert validate_command_failure_facts(BadDict(_command_facts_fixture())) is None
+    for key, value in (('class', BadString('RuntimeError')), ('frames', BadList()),
+                       ('frames', [{'source': BadString('worker.command'), 'offset': 0}]),
+                       ('frames', [{'source': 'worker.command', 'offset': Int(0)}])):
+        facts = _command_facts_fixture()
+        facts['errors'][0][key] = value
+        assert validate_command_failure_facts(facts) is None
+    cyclic = {'errors': [], 'truncated': False}
+    cyclic['errors'].append(cyclic)
+    assert validate_command_failure_facts(cyclic) is None
+    facts = _command_facts_fixture()
+    facts['errors'][0]['frames'][0] = facts
+    assert validate_command_failure_facts(facts) is None
+    class HostileKey:
+        def __hash__(self): return 0
+        def __eq__(self, other): raise AssertionError('key compared')
+    assert validate_command_failure_facts({HostileKey(): False, 'errors': []}) is None
+
+
+def test_command_fact_faults_fail_closed_and_serialized_limit_is_enforced(monkeypatch):
+    from amplifier_web import worker_diagnostics as diagnostics
+    original = RuntimeError('private original')
+    def failed():
+        raise asyncio.CancelledError('private diagnostic fault')
+    monkeypatch.setattr(diagnostics, '_command_frame_codes', failed)
+    assert diagnostics.command_failure_facts(original) == {'errors': [], 'truncated': True}
+    assert original.args == ('private original',)
+    facts = _command_facts_fixture()
+    size = len(json.dumps(facts).encode('utf-8'))
+    monkeypatch.setattr(diagnostics, '_COMMAND_MAX_BYTES', size)
+    assert diagnostics.validate_command_failure_facts(facts) == facts
+    monkeypatch.setattr(diagnostics, '_COMMAND_MAX_BYTES', size - 1)
+    assert diagnostics.validate_command_failure_facts(facts) is None
+
+
+@pytest.mark.parametrize('origin,status', [
+    ('worker_reply', 'valid'), ('worker_reply', 'invalid'), ('reader_disconnect', 'not_applicable')])
+def test_runtime_failure_witness_is_closed_and_accessor_returns_deep_copy(origin, status):
+    from amplifier_web.worker_diagnostics import runtime_failure_witness, validate_runtime_failure_witness
+    facts = _command_facts_fixture() if status == 'valid' else {'errors': [], 'truncated': False}
+    witness = {'schema': 1, 'origin': origin, 'factsStatus': status, **facts}
+    error = RuntimeError('private original message')
+    error._runtime_failure_witness = witness
+    result = runtime_failure_witness(error)
+    assert result == witness == validate_runtime_failure_witness(witness)
+    if status == 'valid':
+        result['errors'][0]['frames'][0]['offset'] = 99
+        assert witness['errors'][0]['frames'][0]['offset'] == 17
+    result['errors'].append({'class': 'other', 'frames': []})
+    assert len(witness['errors']) == (1 if status == 'valid' else 0)
+    assert error.args == ('private original message',)
+    assert runtime_failure_witness(RuntimeError('private unannotated')) is None
+    class Subclass(RuntimeError):
+        pass
+    unknown = Subclass('private')
+    unknown._runtime_failure_witness = witness
+    assert runtime_failure_witness(unknown) is None
+
+
+@pytest.mark.parametrize('mutation', [
+    lambda v: v.update(schema=True),
+    lambda v: v.update(schema=2),
+    lambda v: v.update(schema=1.0),
+    lambda v: v.update(message='private'),
+    lambda v: v.pop('origin'),
+    lambda v: v.update(origin='private'),
+    lambda v: v.update(factsStatus='private'),
+    lambda v: v.update(factsStatus='not_applicable'),
+    lambda v: v.update(origin='reader_disconnect'),
+    lambda v: v.update(factsStatus='invalid'),
+    lambda v: v.update(errors=[], truncated=True, factsStatus='invalid'),
+    lambda v: v.update(origin='reader_disconnect', factsStatus='not_applicable'),
+    lambda v: v.update(origin='reader_disconnect', factsStatus='not_applicable', errors=[], truncated=True),
+    lambda v: v.update(origin='reader_disconnect', factsStatus='invalid', errors=[]),
+    lambda v: v['errors'][0]['frames'][0].update(source='private' * 8192),
+])
+def test_runtime_failure_witness_refuses_invalid_shapes_and_status_combinations(mutation):
+    from amplifier_web.worker_diagnostics import runtime_failure_witness, validate_runtime_failure_witness
+    witness = {'schema': 1, 'origin': 'worker_reply', 'factsStatus': 'valid', **_command_facts_fixture()}
+    mutation(witness)
+    assert validate_runtime_failure_witness(witness) is None
+    error = RuntimeError('private')
+    error._runtime_failure_witness = witness
+    assert runtime_failure_witness(error) is None
+
+
+def test_runtime_failure_witness_enforces_complete_serialized_size(monkeypatch):
+    from amplifier_web import worker_diagnostics as diagnostics
+    facts = {'errors': [{'class': 'ConnectionAbortedError', 'errno': -(2**31), 'winerror': 2**32 - 1,
+                         'frames': [{'source': 'worker.command_serial', 'offset': 1_000_000}] * 5}] * 4,
+             'truncated': True}
+    witness = {'schema': 1, 'origin': 'worker_reply', 'factsStatus': 'valid', **facts}
+    assert diagnostics.validate_runtime_failure_witness(witness) == witness
+    assert len(json.dumps(witness).encode('utf-8')) < 8192
+    size = len(json.dumps(witness).encode('utf-8'))
+    monkeypatch.setattr(diagnostics, '_COMMAND_MAX_BYTES', size)
+    assert diagnostics.validate_runtime_failure_witness(witness) == witness
+    monkeypatch.setattr(diagnostics, '_COMMAND_MAX_BYTES', size - 1)
+    assert diagnostics.validate_command_failure_facts(facts) == facts
+    assert diagnostics.validate_runtime_failure_witness(witness) is None
