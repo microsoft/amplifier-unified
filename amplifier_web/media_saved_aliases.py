@@ -269,7 +269,7 @@ def discover(stream, value, message_id, facts):
     matches = [fact for fact in facts if fact[0] == message_id]
     if requested:
         identity = row_identity(stream, value, requested[0])
-        matches = [fact for fact in facts if fact[0] == identity]
+        matches = [fact for fact in facts if identity in (fact[0], fact[5])]
     if len(matches) != 1 or matches[0][1] != 'assistant' or not matches[0][2]:
         raise ValueError(ERROR)
     fact = matches[0]
@@ -287,7 +287,7 @@ def discover(stream, value, message_id, facts):
                 or row.get('observation') or row.get('observation_id')
                 or type(row.get('nativeIndex')) is not int or row['nativeIndex'] != fact[3]
                 or row.get('nativeMessageId') not in (None, fact[0])
-                or row_identity(stream, value, row) != fact[0]):
+                or row_identity(stream, value, row) not in (fact[0], fact[5])):
             raise ValueError(ERROR)
         if row['id'] == fact[0]:
             canonical += 1
