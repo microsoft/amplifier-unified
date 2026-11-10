@@ -103,3 +103,29 @@ def test_indexed_read_and_navigation_ignore_old_text_projection_caches(tmp_path,
     assert [fact[3] for fact in facts] == [1, 2]
     assert read(range(2)) == page['messages']
     assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+
+
+@pytest.mark.parametrize('visibility', ['internal', 'developer'])
+def test_private_input_copy_still_makes_canonical_input_identity_ambiguous(tmp_path, monkeypatch, visibility):
+    from amplifier_web.automatic_history import alias_input_originals
+    from amplifier_web.conversation_navigation import source
+
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path))
+    directory = tmp_path / 'projects/project/sessions/native'
+    directory.mkdir(parents=True)
+    provenance = {'amplifier_input': {'version': 1, 'kind': 'user', 'id': 'same-input'}}
+    raw = [
+        {'role': 'user', 'content': [{'type': 'text', 'text': 'Private copy', 'visibility': visibility}], 'metadata': provenance},
+        {'role': 'user', 'content': 'Public input', 'metadata': provenance},
+    ]
+    (directory / 'transcript.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in raw))
+    original = {'id': 'retained', 'role': 'user', 'text': 'Original', 'inputId': 'same-input'}
+    scope = {'id': 'conversation', 'nativeIdentity': 'native', 'nativeProject': 'project',
+             'historyManaged': True, 'messages': [original]}
+    page = read_transcript(scope, include_activity=False)
+    facts, read = source(scope)
+    assert page['total'] == 1 and len(facts) == 1
+    assert page['messages'][0]['nativeInputAmbiguous'] is True
+    assert read([0]) == page['messages']
+    assert alias_input_originals(scope, page['messages']) == page['messages']
+    assert scope['messages'] == [original]

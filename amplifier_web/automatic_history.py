@@ -188,7 +188,7 @@ def read_transcript(session, *, before=None, limit=100, diagnostics=None, includ
         row = display_message(value, index, session)
         internal = row or display_message(value, index, session, include_internal=True)
         return (row['id'] if row else None, internal['id'] if internal else None,
-                value.get('role'), row.get('nativeInputId') if row else None)
+                value.get('role'), internal.get('nativeInputId') if internal else None)
 
     with measure(service, 'history.transcript.facts', synchronous=True, session_id=session['id']):
         facts = (messages.project('unified-display-v5:' + str(native_id), project)
