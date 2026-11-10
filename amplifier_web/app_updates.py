@@ -1,5 +1,6 @@
 """Public GitHub release channel; candidate tool installation is isolated."""
 import asyncio
+import copy
 import json
 import os
 from pathlib import Path
@@ -642,7 +643,7 @@ async def _activate(manager, *, force=None):
         from .application_generations import bootstrap_identity
         if bootstrap_identity(helper_python.parent.parent) != validated.get('installation'):
             raise ValueError('The qualified application installation changed')
-    from .application_generations import supports, can_read_candidate
+    from .application_generations import active, supports, can_read_candidate
     bootstrap = Path(previous['installation']) if previous.get('installation') else Path(sys.prefix)
     can_promote = bool(generation and supports(bootstrap))
     if can_promote and artifact is not None:
@@ -660,6 +661,29 @@ async def _activate(manager, *, force=None):
         # durable replacement fence or any interruption of the serving host.
         await manager.diagnostics.run('replacement-artifact', asyncio.to_thread,
             artifacts.verify, artifact, validated['version'], revision)
+    recovery = None
+    if can_promote and force is None and not selected:
+        # Capture the serving graph and launch pointer BEFORE changing either.
+        # In-place reinstalls have no untouched old environment to restore.
+        from .app_features import running_application
+        from .application_generations import bootstrap_identity
+        try:
+            old_pointer = active(manager.home)
+            old_prefix = Path(installed_python).parent.parent
+            if old_prefix.resolve() != (old_pointer['prefix'] if old_pointer else bootstrap).resolve():
+                raise ValueError('The serving interpreter does not match the previous launch target')
+            if old_pointer and old_pointer['bootstrap'] != bootstrap_identity(bootstrap):
+                raise ValueError('The previous launch target belongs to another bootstrap')
+            running_app = running_application(manager)
+            recovery = {'pointer': old_pointer, 'python': installed_python, 'extras': extras,
+                'artifact': previous_artifact, 'installation': bootstrap_identity(old_prefix),
+                'bootstrap': bootstrap_identity(bootstrap),
+                'identity': dict(manager.running_identity),
+                'graph': sorted([*host_graph, running_app], key=lambda row: row['name'])}
+        except (OSError, ValueError, metadata.PackageNotFoundError):
+            # Lack of old-host proof does not invalidate a qualified candidate,
+            # but cannot authorize reopening the old host after a failed probe.
+            pass
     async with manager.service.lock:
         if force is not None:
             from .update_restart import require
@@ -690,6 +714,9 @@ async def _activate(manager, *, force=None):
             begin_replacement(manager, release)
         manager.service.state['updates'].update(phase='activating',pendingReplacement=replacement,detail='Installing the app update and restarting…')
         manager.service._publish_changes(globals={'updates'})
+        if recovery is not None:
+            recovery['replacement'] = copy.deepcopy(replacement)
+    promoted = None
     try:
         if force is not None:
             # The durable replacement gate precedes interruption. Runtime.close
@@ -711,6 +738,7 @@ async def _activate(manager, *, force=None):
         # environment is itself the live target: no second install or relocation.
         if can_promote:
             target = manager.diagnostics.sync('replacement-promote', promote, manager.home, validated, bootstrap)
+            promoted = target
             installed_python = target['prefix'] / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
         else:
             await manager.diagnostics.run('replacement-install',process,uv,'tool','install','--force',*resolution_args,install_requirement(release['revision'],extras,artifact),env=git_environment(),timeout=900)
@@ -731,13 +759,27 @@ async def _activate(manager, *, force=None):
                               detail='The replacement outcome is unknown. No installation or conversation work will be replayed.')
         raise
     except Exception as error:
-        if selected:
-            await record(manager, selected['requestId'], 'error', detail='Feature replacement could not be verified. Its files may have changed; work remains paused until a new host proves the qualified installation.')
+        from .update_diagnostics import exception_type
         last=manager.diagnostics.state.get('latest',{})
         phase=last.get('phase','activation')
         if last.get('status')!='failed':
-            from .update_diagnostics import exception_type
             manager.diagnostics.record(phase,'failed',errorType=exception_type(error))
+        if promoted is not None and recovery is not None:
+            try:
+                if await restore_promoted_application(manager, promoted, recovery, bootstrap):
+                    return
+            except asyncio.CancelledError:
+                await manager.publish(phase='interrupted', pendingApp=None,
+                    error='Application recovery was interrupted. Work remains paused until the installation and launch target are verified.',
+                    detail='No installation or conversation work was replayed.')
+                raise
+            except Exception as recovery_error:
+                # Keep both the original probe failure and recovery failure.
+                # An unknown restore never grants runtime admission.
+                manager.diagnostics.record('replacement-recovery', 'failed',
+                                           errorType=exception_type(recovery_error))
+        if selected:
+            await record(manager, selected['requestId'], 'error', detail='Feature replacement could not be verified. Its files may have changed; work remains paused until a new host proves the qualified installation.')
         await manager.publish(phase='error',pendingApp=None,error='Application update failed during '+phase.replace('-',' ')+'. Its files may have changed; work remains paused. Review the diagnostic receipt and repair the qualified installation before restarting.',
                               detail='The replacement outcome is unknown. Package presence is not verified installation success.')
         return
@@ -784,6 +826,53 @@ with open(logpath,'a') as log:
     import signal
     manager.diagnostics.record('restart-request','succeeded')
     os.kill(os.getpid(),signal.SIGTERM)
+
+
+async def restore_promoted_application(manager, promoted, recovery, bootstrap):
+    """Verify the untouched serving installation before undoing its promotion."""
+    from .application_generations import bootstrap_identity, restore
+    from .app_features import running_application
+    from .update_diagnostics import probe_record
+
+    python = recovery['python']
+    extras = recovery['extras']
+    output = await manager.diagnostics.run('replacement-previous-probe', process,
+        python, '-I', '-c', PROBE, *extras, **browser_process_options(manager, extras), timeout=30)
+    report = probe_record(output)
+    if (not report or report.get('ok') is not True or report.get('stage') != 'complete'
+            or report.get('isolated') is not True or report.get('packageInEnvironment') is not True):
+        manager.diagnostics.record('replacement-previous-probe', 'failed', errorType='ValueError')
+        raise ValueError('The previous installation did not pass isolated verification')
+    verified_version(manager, output, recovery['identity']['version'], 'replacement-previous-version')
+    graph = await manager.diagnostics.run('replacement-previous-components', components.read_graph,
+        process, python, **({'artifact': recovery['artifact']} if recovery['artifact'] is not None else {}))
+    async with manager.service.lock:
+        state = manager.service.state['updates']
+        if (state.get('pendingReplacement') != recovery['replacement'] or state.get('pendingRestart')
+                or manager.running_identity != recovery['identity']
+                or installed_extras() != extras
+                or bootstrap_identity(Path(python).parent.parent) != recovery['installation']
+                or graph != recovery['graph']
+                or sorted([*components.installed_graph(), running_application(manager)],
+                          key=lambda row: row['name']) != recovery['graph']):
+            manager.diagnostics.record('replacement-previous-components', 'failed', errorType='ValueError')
+            raise ValueError('The serving installation or replacement changed during recovery')
+        manager.diagnostics.sync('replacement-restore', restore, manager.home, promoted,
+                                 recovery['pointer'], bootstrap, expected_bootstrap=recovery['bootstrap'])
+        # Pointer and old installation are now verified; retain the failed
+        # update, and let ordinary drain settlement release only unsent inputs.
+        before = copy.deepcopy(state)
+        state.update(phase='error', pendingApp=None, pendingReplacement=None, appAvailable=True,
+            error='The application update could not be verified. The previous application was verified and restored.',
+            detail='The verified previous application was restored and is usable. Review update diagnostics before trying the update again.')
+        try:
+            manager.service._publish_changes(globals={'updates'})
+        except BaseException:
+            state.clear()
+            state.update(before)
+            raise  # An unconfirmed state commit must not open this host's gate.
+    manager.wakeup.set()
+    return True
 
 
 async def request_managed_restart(manager):

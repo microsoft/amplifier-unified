@@ -80,24 +80,38 @@ def base_installation(monkeypatch, tmp_path):
 
 
 def test_packaging_probe_rejects_broken_login_dependency(tmp_path):
-    import os
     import subprocess
     import sys
-
-    # Model the observed wheel's undeclared import in a fresh child process.
-    # A candidate with a usable server but broken PAM must not replace the host.
-    (tmp_path / 'pam.py').write_text('raise ModuleNotFoundError("missing PAM dependency")\n')
-    # Keep the app under test importable when this checkout uses dependencies
-    # from a separate environment. Otherwise an unrelated namespace package can
-    # fail before the deliberately broken login dependency is even reached.
-    source = str(Path(app_updates.__file__).resolve().parent.parent)
-    env = {**os.environ, 'PYTHONPATH': os.pathsep.join(
-        [str(tmp_path), source, os.environ.get('PYTHONPATH', '')])}
-    result = subprocess.run([sys.executable, '-c', app_updates.PROBE],
-                            cwd=tmp_path, env=env, capture_output=True, text=True)
-    assert result.returncode != 0
     from amplifier_web.update_diagnostics import probe_record
-    assert probe_record(result.stdout)['errorType']=='ModuleNotFoundError'
+
+    # Synthetic probe control flow, not installed-wheel qualification. Reach
+    # login even when project source and the dependency interpreter are separate.
+    package = tmp_path / 'amplifier_web'
+    package.mkdir()
+    (package / '__init__.py').write_text('__version__="99.0.0"\n')
+    (package / 'server.py').write_text('def create_app(): pass\n')
+    (package / 'static').mkdir()
+    (package / 'static/index.html').write_text('')
+    ui_use = tmp_path / 'amplifier_ui_use'
+    ui_use.mkdir()
+    (ui_use / '__init__.py').write_text('')
+    (ui_use / 'browser.py').write_text('def observation_for(*args): pass\n')
+    (tmp_path / 'pam.py').write_text('raise ModuleNotFoundError("missing PAM dependency")\n')
+    runner = (
+        'import sys\n'
+        'sys.path.insert(0,sys.argv[1])\n'
+        'sys.prefix=sys.argv[1]\n'
+        'sys.argv=sys.argv[:1]\n'
+        'exec(' + repr(app_updates.PROBE) + ')\n'
+    )
+    result = subprocess.run([sys.executable, '-I', '-S', '-c', runner, str(tmp_path)],
+                            cwd=tmp_path, capture_output=True, text=True, timeout=30)
+    record = probe_record(result.stdout)
+    assert result.returncode == 1
+    assert record is not None
+    assert record['ok'] is False and record['isolated'] is True
+    assert record['packageInEnvironment'] is True and record['frontendPresent'] is True
+    assert record['stage'] == 'login' and record['errorType'] == 'ModuleNotFoundError'
     assert 'missing PAM dependency' not in result.stdout+result.stderr
 
 

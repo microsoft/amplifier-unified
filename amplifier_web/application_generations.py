@@ -70,6 +70,19 @@ def bootstrap_identity(prefix):
 
 
 def promote(home, validated, bootstrap):
+    with _pointer_lock(home):
+        return _promote(home, validated, bootstrap)
+
+
+def _pointer_lock(home):
+    from filelock import FileLock
+
+    folder = Path(home) / 'updates'
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return FileLock(folder / 'application-active.lock', timeout=0, mode=0o600)
+
+
+def _promote(home, validated, bootstrap):
     from .deployment import write_private
 
     pointer = active(home)
@@ -89,6 +102,34 @@ def promote(home, validated, bootstrap):
         }
     write_private(Path(home) / "updates/application-active.json", json.dumps(record))
     return active(home)
+
+
+def restore(home, promoted, previous, bootstrap, *, expected_bootstrap):
+    """Restore only the exact pointer this promotion replaced, never an install."""
+    with _pointer_lock(home):
+        _restore(home, promoted, previous, bootstrap, expected_bootstrap)
+
+
+def _restore(home, promoted, previous, bootstrap, expected_bootstrap):
+    from .deployment import write_private
+
+    if (active(home) != promoted or promoted['bootstrap'] != expected_bootstrap
+            or bootstrap_identity(bootstrap) != expected_bootstrap):
+        raise ValueError('The application launch target changed during recovery')
+    expected = {key: value for key, value in (previous or {}).items()
+                if key not in {'folder', 'prefix', 'previous'}}
+    if promoted.get('previous') != (expected or None):
+        raise ValueError('The previous application generation does not match this promotion')
+    if previous is not None and previous['bootstrap'] != expected_bootstrap:
+        raise ValueError('The previous application belongs to a different bootstrap')
+    path = Path(home) / 'updates/application-active.json'
+    if previous is None:
+        path.unlink()
+    else:
+        write_private(path, json.dumps({key: value for key, value in previous.items()
+                                       if key not in {'folder', 'prefix'}}))
+    if active(home) != previous:
+        raise ValueError('The previous application launch target was not restored')
 
 
 def verify_candidate(target):
