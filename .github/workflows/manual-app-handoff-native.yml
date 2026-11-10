@@ -55,6 +55,7 @@ jobs:
           name: manual-app-handoff-native
           path: |
             ${{ runner.temp }}/manual-handoff-evidence/preparation.json
+            ${{ runner.temp }}/manual-handoff-evidence/preparation-command.json
             ${{ runner.temp }}/manual-handoff-evidence/native.json
             ${{ runner.temp }}/manual-handoff-evidence/cleanup.json
             ${{ runner.temp }}/manual-handoff-evidence/child-progress.json

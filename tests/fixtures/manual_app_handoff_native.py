@@ -94,9 +94,11 @@ async def owned_command(argv, root, *, env, cwd, timeout):
     ownership['jobsSettled'] = False
     save(evidence() / 'ownership.json', ownership)
     job = await WindowsOwnedProcess.start(argv, cwd=str(cwd), env=env, trusted_python=sys._base_executable)
+    observed = bytearray()
     async def drain(stream):
-        while await stream.read(65536):
-            pass
+        while chunk := await stream.read(65536):
+            if len(observed) < 65536:
+                observed.extend(chunk[:65536-len(observed)])
     readers = [asyncio.create_task(drain(stream)) for stream in (job.stdout, job.stderr)]
     try:
         await asyncio.wait_for(job.wait(), timeout)
@@ -105,6 +107,11 @@ async def owned_command(argv, root, *, env, cwd, timeout):
         await asyncio.gather(*readers)
         ownership['jobsSettled'] = result.active_processes == 0 and job.tree_empty and job.io_finalized
         save(evidence() / 'ownership.json', ownership)
+        save(evidence() / 'preparation-command.json', {
+            'settled': ownership['jobsSettled'], 'exitCode': result.payload_returncode,
+            'unexpectedArgument': b'unexpected argument' in observed,
+            'dependencyResolutionFailure': b'No solution found' in observed,
+            'networkFailure': any(value in observed for value in (b'Failed to fetch', b'failed to download'))})
     assert ownership['jobsSettled'] and result.payload_returncode == 0
 
 
@@ -142,7 +149,7 @@ def prepare():
                'UV_LINK_MODE': 'copy'}
         report['stage'] = 'uv-tool-install'
         asyncio.run(owned_command([uv, 'tool', 'install', '--python', sys.executable,
-            '--only-binary', 'amplifier-core', str(wheel)], root, cwd=root, env=env, timeout=420))
+            '--no-build-package', 'amplifier-core', str(wheel)], root, cwd=root, env=env, timeout=420))
         report.update(status='PASS', stage='prepared')
     except BaseException as error:
         failure(report, error)
