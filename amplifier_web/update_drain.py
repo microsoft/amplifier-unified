@@ -229,18 +229,20 @@ async def observe_waiters(manager):
         reason = row.get('suppressed') or continuation_guard(service, {'updateYield': row}, authority_only=True)
         pending = service.state['updates'].get('pendingApp') or {}
         changed = any(pending.get(key) != current['target'].get(key) for key in ('attemptId', 'revision', 'generation'))
-        withdrawn = changed and not reason and not row.get('unknown')
+        withdrawn = (changed or row.get('withdrawn')) and not reason and not row.get('unknown')
         if withdrawn and not row.get('ready'):
             # Keep the hook until the current turn has actually yielded. Merely
             # cancelling it can race that yield and strand an active objective.
             await observe_checkpoint(sid, row, worker)
             if not retained(row) or not row.get('ready') or row.get('unknown'):
                 continue
-        if changed and not reason:
+        if (changed or row.get('withdrawn')) and not reason:
             reason = 'The staged update changed; this wait cannot follow a different target.'
         if reason:
-            cancelled = False
-            if worker.get('runtimeOwnerId') == row['owner']:
+            # A saved withdrawn row proves this exact native cancellation. A
+            # storage retry (including after restart) must not repeat it.
+            cancelled = row.get('withdrawn') is True
+            if not cancelled and worker.get('runtimeOwnerId') == row['owner']:
                 try:
                     result = await service.runtime.handoff_boundary(sid, row['boundaryId'], cancel=True,
                         receipt={'updateWait': {'owner': row['owner']}})
@@ -262,13 +264,20 @@ async def observe_waiters(manager):
                 else:
                     row['suppressed'] = reason
                 save_wait(service, row, 'withdrawn' if resume else 'suppressed')
+                if resume:
+                    # Commit the confirmed checkpoint/cancellation first. Keep
+                    # its slot if source creation or continuation publication
+                    # fails, so an ordinary tick can finish the durable queue.
+                    service._publish_changes(globals={'updates'})
+                    queued = enqueue_goal(service, current, row)
+                    save_wait(service, row, 'withdrawn')
+                    if queued is False:
+                        service._publish_changes(globals={'updates'})
+                        continue
                 if cancelled:
                     # Retain the old command receipt, not an active slot that
                     # prevents this owner from making a fresh explicit wait.
                     del current['workers'][sid]
-                if resume:
-                    enqueue_goal(service, current, row)
-                    save_wait(service, row, 'withdrawn')
                 service._publish_changes(globals={'updates'})
             service._task(service.collaboration.drain(sid))
             continue
@@ -475,6 +484,8 @@ def enqueue_goal(service, drain, row):
         if request['subscription'].get('lastClaimedRevision'):
             row['continuationRequestId'] = owner.continuation_identity(
                 request['subscription'], request['subscription']['lastClaimedRevision'])
+    # A temporary inbox limit retains the waiter for a later ordinary tick.
+    return request['subscription'].get('status') != 'backpressured'
 
 
 async def finish(manager, reason):

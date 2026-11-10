@@ -690,6 +690,82 @@ async def test_changed_update_waits_for_native_checkpoint_before_releasing_its_g
     assert len(h.runtime.admitted) == 1
 
 
+@pytest.mark.parametrize('failure', ['source', 'publication', 'acknowledgement'])
+@pytest.mark.parametrize('restart', [False, True])
+async def test_withdrawn_update_retains_cancelled_wait_until_continuation_is_durable(waiting, monkeypatch, failure, restart):
+    h = waiting
+    await h.ready()
+    task = copy.deepcopy(h.controller.tasks.record())
+    goal = copy.deepcopy(h.controller.coordinator.session_state['goal'])
+    h.app.state['updates']['pendingApp'] = None
+    insert, publish = h.app.collaboration.insert, h.app._publish_changes
+
+    def fail_source(identity, digest, receipt):
+        if receipt.get('commandAction') == 'updates.app':
+            raise OSError('Synthetic source receipt storage failure')
+        return insert(identity, digest, receipt)
+
+    def fail_publication(*args, **kwargs):
+        if kwargs.get('sessions'):
+            if failure == 'acknowledgement':
+                publish(*args, **kwargs)
+            raise OSError('Synthetic continuation publication failure')
+        return publish(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        if failure == 'source':
+            patch.setattr(h.app.collaboration, 'insert', fail_source)
+        else:
+            patch.setattr(h.app, '_publish_changes', fail_publication)
+        with pytest.raises(OSError, match='Synthetic'):
+            await drain.observe_waiters(h.manager)
+    assert h.row['withdrawn'] and h.row['ready']
+    assert len([call for call in h.runtime.boundary_calls if call[2]]) == 1
+    # The updater can publish its error without losing the retained waiter.
+    h.app._publish_changes(globals={'updates'})
+    await h.settle()
+    assert not h.runtime.admitted
+    if restart:
+        await h.reconnect()
+        assert h.row['withdrawn'] and h.row['ready']
+        assert not h.runtime.workers  # The old cancellation must not be repeated.
+    calls = len(h.runtime.boundary_calls)
+    for _ in range(2):
+        await drain.observe_waiters(h.manager)
+        await h.settle()
+    assert len(h.runtime.boundary_calls) == calls
+    assert len(h.runtime.admitted) == 1
+    assert h.runtime.admitted[0]['task'] == task
+    assert h.runtime.admitted[0]['goal'] == goal
+    assert len(h.receipts('updates.app')) == len(h.receipts('coordination.send')) == 1
+    assert not h.runtime.sent
+    assert h.sid not in h.app.state['updates']['drain']['workers']
+
+
+async def test_withdrawn_update_retains_wait_until_inbox_space_returns(waiting, monkeypatch):
+    from amplifier_web.errors import AppError
+    h = waiting
+    await h.ready()
+    h.app.state['updates']['pendingApp'] = None
+
+    def full(*args, **kwargs):
+        raise AppError('Synthetic full inbox', 429)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(h.app.collaboration, 'require_inbox_slot', full)
+        await drain.observe_waiters(h.manager)
+        await h.settle()
+    assert h.row['withdrawn'] and h.row['ready']
+    assert not h.runtime.admitted
+    assert h.receipts('updates.app')[0]['subscription']['status'] == 'backpressured'
+    await drain.observe_waiters(h.manager)
+    await h.settle()
+    assert len(h.runtime.admitted) == 1
+    assert len([call for call in h.runtime.boundary_calls if call[2]]) == 1
+    assert len(h.receipts('updates.app')) == len(h.receipts('coordination.send')) == 1
+    assert h.sid not in h.app.state['updates']['drain']['workers']
+
+
 @pytest.mark.parametrize('acknowledgement', ['lost', 'missing'])
 async def test_withdrawn_update_needs_positive_boundary_cancellation(waiting, acknowledgement):
     h = waiting

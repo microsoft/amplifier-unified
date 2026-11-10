@@ -742,6 +742,10 @@ precedence. This is recorded as `update-withdrawn`, not successful adoption; it
 does not follow the replacement target or require a human nudge. Missing
 cancellation acknowledgement and unresolved replacement remain retained. The
 same Stop, task, authority and fresh-input checks apply again at admission.
+The confirmed checkpoint and cancellation remain saved until the continuation
+is durably queued. A storage failure or full inbox retries from that checkpoint,
+including after restart, without repeating native cancellation or minting another
+continuation.
 
 When fresh input supersedes a wait, confirmation from the exact original worker
 that its boundary is cancelled frees that owner's active wait slot. The original
