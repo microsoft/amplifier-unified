@@ -112,6 +112,7 @@ try{
  const pinTarget=baseline.state.sessions.find(row=>row.nativeIdentity==='alpha-198');
  await act('session.pin',{id:pinTarget.id,pinned:true});await settled();
  const pinnedRow=sidebar.locator(`[data-sidebar-section=pinned] [data-session-id="${pinTarget.id}"]`);
+ await pinnedRow.hover();
  await pinnedRow.getByRole('button',{name:/Details and actions/}).click();await expect(details).toBeVisible();
  assert.deepEqual(await details.locator('code').allTextContents(),['alpha-198',pinTarget.workspace]);
  assert.ok(await details.evaluate(node=>[...node.querySelectorAll('.a-navigation-copy,dl')].findIndex(n=>n.textContent.includes('Session ID'))<[...node.querySelectorAll('.a-navigation-copy,dl')].findIndex(n=>n.textContent.startsWith('Workspace'))));
@@ -123,7 +124,8 @@ try{
  await expect(pinnedRow.getByRole('button',{name:/Details and actions/})).toBeFocused();
  if(!originalPins.includes(pinTarget.id))await act('session.pin',{id:pinTarget.id,pinned:false});
  await settled();await resetScroll();
- await sidebar.locator(`[data-session-id="${pinTarget.id}"]`).first().getByRole('button',{name:/Details and actions/}).click();
+ const unpinnedRow=sidebar.locator(`[data-session-id="${pinTarget.id}"]`).first();await unpinnedRow.hover();
+ await unpinnedRow.getByRole('button',{name:/Details and actions/}).click();
  await expect(details.getByRole('button',{name:'Pin '+pinTarget.title,exact:true})).toBeVisible();
  await page.screenshot({path:join(output,'compact-unpinned-flyout.png')});await page.keyboard.press('Escape');
  await act('view.update',{patch:{navAge:'24h'}});await settled();await resetScroll();
