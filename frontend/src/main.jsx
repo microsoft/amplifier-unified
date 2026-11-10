@@ -680,7 +680,11 @@ function App(){
   const save=(async()=>{
   // Autosave may become ready before the first conversation has an ID. Keep its
   // original optimistic position, then save against the conversation it created.
-  if(payload.sessionId===null&&creatingSession.current){const current=await creatingSession.current;payload.sessionId=current.id;pendingView.current.bindDraft(token,current.id);draftJournal.bind(draftJournalEntries.current.get(payload),current.id)}
+  if(payload.sessionId===null&&creatingSession.current){
+   const owner=creatingSession.current,current=await owner.promise;
+   owner.assertSource();
+   payload.sessionId=current.id;pendingView.current.bindDraft(token,current.id);draftJournal.bind(draftJournalEntries.current.get(payload),current.id);
+  }
   try{const result=await dispatch('view.update',payload,{pendingViewToken:token});if(draftJournal.acknowledge(draftJournalEntries.current.get(payload)))setDraftStorageError(false);return result}
   catch(error){
    // A failed autosave must leave the current unsent text available for retry.
@@ -709,7 +713,7 @@ function App(){
   const binding=source(),assertSource=()=>{if(source()!==binding)throw Error('The delivery target changed. The original submission remains saved.')};
   if(creatingSession.current&&creatingSession.current.binding!==binding)throw Error('A conversation creation from another source is still settling. Nothing was sent again.');
   if(!creatingSession.current){
-   const owner={binding,promise:null};
+   const owner={binding,promise:null,assertSource};
    owner.promise=dispatch('session.create',{...(creation?.setup||creationSetup()),fromDraft:true},{id:creation?.id}).catch(error=>{
     assertSource();const created=creation?.id&&latest.current?.sessions?.find(row=>row.creationCommandId===creation.id);
     if(created)return {sessionId:created.id};throw error;

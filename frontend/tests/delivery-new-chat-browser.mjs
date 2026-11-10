@@ -1,7 +1,9 @@
 // Real Vite UI, synthetic HTTP/SSE only. No model, runtime, or provider execution.
 // Intentional first sends belong to this fixture, not the passive-recovery counts.
 // Run from frontend: node tests/delivery-new-chat-browser.mjs
+// Focus: AMPLIFIER_DELIVERY_NEW_CHAT_CASE=pending-next-draft node tests/delivery-new-chat-browser.mjs
 import {createShellHttpFixture,installFixtureEvents} from './shell-http-fixture.mjs';
+import {shellScope,sameScope} from '../src/shell/resources.js';
 import './composer-test-helpers.mjs';
 import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
@@ -16,6 +18,9 @@ const sourceB={historyScope:'synthetic-host/account-b',hostInstanceId:'fixture-h
 const workspace='/fixture',createdId='created',nativeId='native-created';
 const createdScope=JSON.stringify([sourceA.historyScope,workspace,nativeId]);
 const newScope=JSON.stringify([sourceA.historyScope,null,null]);
+const allCases=['accepted','late-success','late-session-busy','unconfirmed-creation','late-creation','pending-next-draft'];
+const selectedCases=process.env.AMPLIFIER_DELIVERY_NEW_CHAT_CASE?[process.env.AMPLIFIER_DELIVERY_NEW_CHAT_CASE]:allCases;
+assert.ok(selectedCases.every(kind=>allCases.includes(kind)),`Unknown AMPLIFIER_DELIVERY_NEW_CHAT_CASE; choose ${allCases.join(', ')}`);
 const cases=[],reports=[];let vite,browser;
 
 function initialState(){
@@ -52,15 +57,27 @@ function identify(value,source){
 
 async function runCase(kind){
  const report={case:kind,passed:false,checkpoints:[],errors:[],externalRequests:[],providerExecution:[],
-  intentionalSendCount:0,retryCount:0,duplicateExecution:0,screenshots:[]};
+  intentionalSendCount:0,retryCount:0,duplicateExecution:0,screenshots:[],staleShellDemands:[]};
  reports.push(report);
  const context=await browser.newContext({viewport:{width:1280,height:900}});
  const page=await context.newPage();
- let state=initialState(),source=sourceA,creation,send;
+ let state=initialState(),source=sourceA,creation,send,nextDraftSave,nextDraftText,nextDraftEvidence;
  const actions=[],seenSends=new Set(),shell=createShellHttpFixture(()=>state);
  const wire=()=>identify(shell.state(),source);
  const current=()=>page.evaluate(()=>window.amplifier.getState());
  const outbox=()=>page.evaluate(key=>JSON.parse(sessionStorage.getItem(key)||'[]'),outboxKey);
+ const journal=()=>page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier.pendingDrafts.v1')||'null'));
+ const resumeJournal=()=>page.evaluate(async()=>{
+  const key='amplifier.pendingDrafts.v1',before=sessionStorage.getItem(key),saved=JSON.parse(before||'null');
+  // Exercise the exported production parser against a copy. resume() persists
+  // ownership, so never run the probe against the live composer's storage.
+  const values=new Map(before===null?[]:[[key,before]]);
+  const storage={getItem:name=>values.get(name)??null,setItem:(name,value)=>values.set(name,value),removeItem:name=>values.delete(name)};
+  const {createDraftJournal}=await import('/src/draft-journal.js');
+  const resumed=createDraftJournal('synthetic-resume-probe',()=>storage);
+  resumed.resume(saved?.owner);
+  return {entries:resumed.entries(),liveUnchanged:sessionStorage.getItem(key)===before};
+ });
  const count=action=>actions.filter(row=>row.action===action).length;
  const screenshot=async name=>{
   const path=`${artifact}/${kind}-${name}.png`;
@@ -93,6 +110,25 @@ async function runCase(kind){
     report.externalRequests.push(request.url());return route.abort('blockedbyclient');
    }
    if(!address.pathname.startsWith('/api/'))return route.continue();
+   if(['/api/shell','/api/shell/resources'].includes(address.pathname)){
+    const demand=address.pathname==='/api/shell/resources'?request.postDataJSON():{
+     clientId:address.searchParams.get('clientId'),demandId:Number(address.searchParams.get('demandId')),
+     resources:JSON.parse(address.searchParams.get('navigationResources')),scope:JSON.parse(address.searchParams.get('scope')),
+    };
+    // Scope can legitimately change between request dispatch and this fixture
+    // handling it. Match shell_resources.register's bounded 409, rather than
+    // letting the simpler shared fixture's sameScope assertion obscure the
+    // delivery regression. Do not change state, grant stale coverage, or weaken
+    // any source-adoption/journal assertions below.
+    if(Array.isArray(demand.scope)&&demand.scope.length===5&&
+     demand.scope.every(value=>value===null||typeof value==='string')&&!sameScope(demand.scope,shellScope(state))){
+     assert.equal(demand.clientId,shell.state().client.id);
+     assert.ok(Number.isSafeInteger(demand.demandId)&&demand.demandId>0);
+     assert.ok(Array.isArray(demand.resources));
+     report.staleShellDemands.push({demandId:demand.demandId,scope:demand.scope,currentScope:shellScope(state)});
+     return route.fulfill({status:409,json:{error:'Shell scope changed; request the current client scope.'}});
+    }
+   }
    const response=shell.response(request);
    if(response!==undefined)return route.fulfill({json:identify(response,source)});
    if(address.pathname==='/api/state')return route.fulfill({json:wire()});
@@ -127,6 +163,10 @@ async function runCase(kind){
     return reply(route,{result:{sessionId:body.args.sessionId,inputId:body.args.inputId,
      delivery:'unknown',message:'Synthetic passive read only. Nothing was resent.'}});
    }
+   if(kind==='pending-next-draft'&&nextDraftText!==undefined&&body.action==='view.update'&&body.args.patch?.draft===nextDraftText){
+    assert.equal(nextDraftSave,undefined,'One newer draft autosave must have one pending owner');
+    nextDraftSave={route,body};return;
+   }
    if(body.action==='workspace.list')return reply(route,{result:{items:state.workspaces,nextOffset:null}});
    if(body.action==='view.update')state.view={...state.view,...body.args.patch};
    if(body.action==='session.select')state.selectedSessionId=body.args.id;
@@ -153,6 +193,65 @@ async function runCase(kind){
   assert.equal(creation.body.args.workspace,workspace);
   assert.equal(count('conversation.send'),0,'Send waits for a canonical created chat');
   report.checkpoints.push('rendered Send retains initial scoped payload and issues one session.create');
+
+  if(kind==='pending-next-draft'){
+   // Establish the baseline and matching shell demand before timing the real
+   // composer edit. The fixture does not advance clocks or invoke saveDraft.
+   await emit();
+   await expect.poll(()=>page.evaluate(()=>{
+    const current=window.amplifier.getState(),shell=window.amplifier.getShellState();
+    return !!shell&&shell.hostInstanceId===current.client.hostInstanceId&&shell.shellResources?.scope?.[0]===null;
+   })).toBe(true);
+   await expect(composer).toHaveDraft('');
+   nextDraftText=submitted; // Deliberately identical text, but a newer revision.
+   await page.evaluate(expectedText=>{
+    const nativeSetTimeout=window.setTimeout,watch={scheduled:[],fired:[],armed:true};
+    const read=()=>JSON.parse(sessionStorage.getItem('amplifier.pendingDrafts.v1')||'null');
+    window.nextDraftAutosaveEvidence=watch;
+    window.setTimeout=function(callback,delay,...args){
+     const staged=read(),row=staged?.rows?.find(row=>row.text===expectedText);
+     if(!watch.armed||delay!==220||typeof callback!=='function'||!row)
+      return nativeSetTimeout.call(this,callback,delay,...args);
+     watch.armed=false;
+     watch.scheduled.push({at:performance.now(),journal:staged});
+     // Observe the actual registered callback at its actual browser deadline.
+     // One microtask after it runs also exposes await(nonPromise)'s premature
+     // bind; the fixed callback instead remains waiting on owner.promise.
+     return nativeSetTimeout.call(this,function(...values){
+      try{return callback.apply(this,values)}
+      finally{queueMicrotask(()=>{
+       watch.fired.push({at:performance.now(),journal:read()});
+       window.setTimeout=nativeSetTimeout;
+      })}
+     },delay,...args);
+    };
+   },nextDraftText);
+   await composer.fill(nextDraftText);
+   await page.waitForFunction(()=>window.nextDraftAutosaveEvidence.fired.length===1,null,{timeout:5000});
+   nextDraftEvidence=await page.evaluate(()=>window.nextDraftAutosaveEvidence);
+   report.autosaveCallback=nextDraftEvidence;
+   const staged=nextDraftEvidence.scheduled[0].journal;
+   const stagedRow=staged.rows.find(row=>row.text===nextDraftText);
+   assert.ok(stagedRow&&typeof stagedRow.revision==='string');
+   assert.equal(stagedRow.sessionId,null);
+   const saved=await journal(),pendingRow=saved?.rows?.find(row=>row.revision===stagedRow.revision);
+   report.pendingDraftJournal=saved;
+   assert.ok(pendingRow,'The newer draft revision must remain journaled while creation is pending');
+   assert.ok(Object.hasOwn(pendingRow,'sessionId'),
+    'AUTOSAVE CAUSAL REGRESSION: pending draft lost sessionId after the real callback; awaiting the owner object bound undefined instead of waiting for owner.promise');
+   assert.equal(pendingRow.sessionId,null,'No canonical conversation exists yet; autosave must retain explicit null sessionId');
+   assert.equal(pendingRow.text,nextDraftText);
+   assert.deepEqual(saved,staged,'Pending creation cannot rewrite the newer journal revision or payload');
+   const resumed=await resumeJournal();
+   assert.equal(resumed.liveUnchanged,true);
+   assert.deepEqual(resumed.entries,[stagedRow],'Actual createDraftJournal.resume must recover the explicit null-session draft');
+   report.pendingDraftResume=resumed.entries;
+   assert.equal(nextDraftSave,undefined,'Autosave cannot post a draft until the creation owner resolves');
+   assert.equal(count('conversation.send'),0);
+   assert.deepEqual(await outbox(),beforeCreation);
+   await expect(composer).toHaveDraft(nextDraftText);
+   report.checkpoints.push('real 220ms autosave fired while creation held; explicit null sessionId/revision/text remain resumable without premature draft POST');
+  }
 
   if(kind==='late-creation'){
    // The initial Send is still waiting on creation, not conversation.send.
@@ -264,7 +363,48 @@ async function runCase(kind){
    assertNoReplay();
    report.checkpoints.push('canonical workspace/native identity binds outbox; exact first conversation.send posts once');
 
-   if(kind==='accepted'){
+   if(kind==='pending-next-draft'){
+    await expect.poll(()=>!!nextDraftSave).toBe(true);
+    assert.equal(nextDraftSave.body.args.sessionId,createdId);
+    assert.equal(nextDraftSave.body.args.patch.draft,nextDraftText);
+    assert.equal(actions.filter(row=>row.action==='view.update'&&row.args.patch?.draft===nextDraftText&&row.args.sessionId===createdId).length,1);
+    const stagedRow=nextDraftEvidence.scheduled[0].journal.rows.find(row=>row.text===nextDraftText);
+    const bound=await journal(),boundRow=bound?.rows?.find(row=>row.revision===stagedRow.revision);
+    assert.ok(boundRow,'The same newer draft revision must remain journaled until its own autosave ACK');
+    assert.equal(boundRow.sessionId,createdId);
+    assert.equal(boundRow.text,nextDraftText);
+    assert.equal(boundRow.revision,stagedRow.revision);
+    const resumed=await resumeJournal();
+    assert.equal(resumed.liveUnchanged,true);
+    assert.equal(resumed.entries.length,1);
+    assert.deepEqual(resumed.entries[0],boundRow);
+    report.boundDraftResume=resumed.entries;
+    await expect(composer).toHaveDraft(nextDraftText);
+    assert.equal(send.body.args.text,submitted);
+    assertNoReplay();
+    report.checkpoints.push('canonical creation binds the same newer draft revision to created chat; only the original submission posts');
+
+    // Hold the newer autosave ACK through the original send ACK. The server's
+    // older empty draft must not clear the newer identical local draft.
+    assert.equal(state.view.draft,'');
+    created.messages=[{id:'received',inputId:send.body.id,role:'user',text:submitted,delivery:{status:'accepted'}}];
+    await reply(send.route,{delivery:'accepted'});
+    await expect.poll(async()=>(await outbox()).length).toBe(0);
+    await expect(composer).toHaveDraft(nextDraftText);
+    assert.deepEqual(await journal(),bound);
+    await expect(page.locator(`[data-input-id="${send.body.id}"]`)).toHaveCount(1);
+    assertNoReplay();
+    await screenshot('newer-draft-after-first-ack');
+    state.view={...state.view,...nextDraftSave.body.args.patch};
+    await reply(nextDraftSave.route);
+    await expect.poll(async()=>(await journal())?.rows?.length??0).toBe(0);
+    await expect(composer).toHaveDraft(nextDraftText);
+    await page.reload();await expect(composer).toHaveDraft(nextDraftText);
+    await expect(page.locator(`[data-input-id="${send.body.id}"]`)).toHaveCount(1);
+    assert.deepEqual(await outbox(),[]);
+    assertNoReplay();
+    report.checkpoints.push('late first ACK leaves newer identical draft intact; its own autosave ACK and reload preserve it without a second send');
+   }else if(kind==='accepted'){
     created.messages=[{id:'received',inputId:send.body.id,role:'user',text:submitted,delivery:{status:'accepted'}}];
     await reply(send.route,{delivery:'accepted'});
     await expect.poll(async()=>(await outbox()).length).toBe(0);
@@ -366,11 +506,11 @@ try{
   ...(process.env.DTU_CHROMIUM_SINGLE_PROCESS?{args:['--no-zygote','--single-process','--disable-gpu']}:{}),
   ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{}),
  });
- for(const kind of ['accepted','late-success','late-session-busy','unconfirmed-creation','late-creation'])await runCase(kind);
+ for(const kind of selectedCases)await runCase(kind);
  console.log(`New-chat delivery browser passed: ${cases.join(', ')}. Synthetic transport only; no provider execution. Artifacts: ${artifact}`);
 }finally{
  await writeFile(`${artifact}/browser-result.json`,JSON.stringify({
-  passed:cases.length===5,
+  passed:cases.length===selectedCases.length,selectedCases,completedCases:cases,
   evidence:'Actual rendered new-chat Send with synthetic HTTP/SSE; fresh context per case. No live runtime/provider qualification.',
   reports,
  },null,2));
