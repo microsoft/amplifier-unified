@@ -275,8 +275,8 @@ input witness and owner match. Derive that digest during the existing content pa
 do not add another traversal, decoded history cache or retention budget. Changed
 retired content, owner or custom values must take canonical validation again. The
 same regression checks repeated current updates, nested edits, rejected fields,
-duplicate identities and exact readback. Keep the accounting identity map through
-placement projection instead of rebuilding it from its list representation.
+duplicate identities and exact readback. Placement lookup must still use receipt
+identities after canonical copying; custom copy hooks can change those identities.
 
 The fallback retired-accounting preparation cache witnesses independent 128-row fragments
 within the same 8 MiB witness and 64 MiB accounting budgets. It retains compact

@@ -114,20 +114,18 @@ def _receipt_copy(receipt):
 
 
 def accounting_projection(tree, *, _retired=None):
-    return list(_accounting_records(tree, _retired=_retired).values())
-
-
-def _accounting_records(tree, *, _retired=None):
     scalar_types = (str, int, float, bool, type(None))
-    retired = [row for row in tree.get('retiredUsageNodes', [])]
-    live = [(row, True) for row in tree.get('nodes', [])
+    rows = [(row, False) for row in tree.get('retiredUsageNodes', [])]
+    retired_count = len(rows)
+    rows.extend((row, True) for row in tree.get('nodes', [])
                 if row.get('liveObservation') and row.get('kind') in {'llm', 'worker'}
-                and not row.get('nativeHistory')]
+                and not row.get('nativeHistory'))
     # Preserve the existing membership snapshot and live lookup order before
     # witnessing retired values: custom live hooks can edit the older receipts.
-    prepared = (_retired(retired)
+    prepared = (_retired([row for row, _ in rows[:retired_count]])
                 if _retired is not None and type(tree) is dict else None)
-    rows = [(row, False) for row in retired] + live if prepared is None else live
+    if prepared is not None:
+        rows = rows[retired_count:]
     saved = ({(row.get('sessionId'), row['id']): row for row in prepared}
              if prepared is not None else {})
     for row, display in rows:
@@ -177,7 +175,7 @@ def _accounting_records(tree, *, _retired=None):
                 if field in prior:
                     record[field] = _accounting_copy(prior[field])
         saved[key] = record
-    return saved
+    return list(saved.values())
 
 
 def _observed_work(row, turns, accounting):
@@ -235,8 +233,8 @@ def _stored_nodes(rows, turn_ids, receipts):
 
 def _stored_execution_fields(tree, *, _retired=None):
     """Canonical fields and placement dependencies, before projecting nodes."""
-    receipts = _accounting_records(tree, _retired=_retired)
-    accounting = list(receipts.values())
+    accounting = accounting_projection(tree, _retired=_retired)
+    receipts = {(row.get('sessionId'), row['id']): row for row in accounting}
     turns = [row for row in tree.get('turns', []) if not any(
         row.get(key) for key in ('nativeHistory', 'canonicalHistory'))]
     turn_ids = {row['id'] for row in turns}
