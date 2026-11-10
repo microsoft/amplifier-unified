@@ -175,8 +175,10 @@ async def test_real_worker_resolution_fresh_and_supported_upgrade(tmp_path, monk
     assert {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in baseline.iterdir()} == before
     for label, python in (("fresh", fresh_python), ("upgrade", upgraded_python)):
         (tmp_path / label).mkdir(exist_ok=True)
-        subprocess.run([str(python), "-I", "-c", ARTIFACT_SMOKE, str(tmp_path / label / "artifacts")],
-                       check=True, timeout=30)
+        artifact_result = subprocess.run(
+            [str(python), "-I", "-c", ARTIFACT_SMOKE, str(tmp_path / label / "artifacts")],
+            capture_output=True, text=True, timeout=30)
+        assert artifact_result.returncode == 0, artifact_result.stderr
         subprocess.run([str(python), "-I", str(ROOT / "tests/test_filelock_compatibility.py")],
                        check=True, timeout=30)
     # No active pointer or old environment was changed by preparation. Exercise

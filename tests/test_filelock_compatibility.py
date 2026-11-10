@@ -1,5 +1,6 @@
 """Real portable checks for the FileLock/AsyncFileLock APIs used by Unified."""
 import asyncio
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -21,7 +22,7 @@ except Timeout:
 
 
 class FileLockCompatibilityTests(unittest.TestCase):
-    def test_nested_hold_timeout_exception_release_and_persistent_path(self):
+    def test_nested_hold_timeout_exception_release_and_reacquisition(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "receipt.lock"
             lock = FileLock(path, timeout=0)
@@ -42,7 +43,10 @@ class FileLockCompatibilityTests(unittest.TestCase):
                     self.assertEqual(contender(), "busy")
                     raise ValueError("body failed")
             self.assertFalse(lock.is_locked)
-            self.assertTrue(path.exists())
+            # Unix retains the inode; Windows may remove the path on release.
+            # Contention and reacquisition, not path existence, prove ownership.
+            if os.name != "nt":
+                self.assertTrue(path.exists())
             self.assertEqual(contender(), "acquired")
 
 
@@ -67,7 +71,8 @@ class AsyncFileLockCompatibilityTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(waiter.is_locked)
                     raise ValueError("body failed")
             self.assertFalse(waiter.is_locked)
-            self.assertTrue(path.exists())
+            if os.name != "nt":
+                self.assertTrue(path.exists())
             async with AsyncFileLock(path, timeout=1):
                 self.assertTrue(path.exists())
 
