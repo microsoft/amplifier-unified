@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from amplifier_web.configuration_readback import matches, source_aliases
+from amplifier_web.configuration_readback import matches, mismatch_summary, source_aliases
 from amplifier_web.configuration_recovery import receipt_path
 from amplifier_web.runtime_controls import override_path
 from amplifier_web.service import AppError
@@ -187,6 +187,73 @@ async def saved_failure(b):
     return saved
 
 
+@pytest.mark.parametrize('change, category', [
+    ('value', 'tools (value)'), ('type', 'tools (type)'),
+    ('presence', 'tools (presence)'), ('enabled', 'tools (enabled)'),
+    ('source', 'tools (unproved_source)'), ('order', 'providers (order)'),
+    ('section', 'instruction (presence)'),
+])
+def test_readback_diagnostics_use_only_fixed_sections_and_categories(change, category):
+    expected, actual = plan(2), plan(2)
+    if change == 'value':
+        actual['tools'][0]['config']['limit'] = 99
+    elif change == 'type':
+        actual['tools'][0]['config']['limit'] = '99'
+    elif change == 'presence':
+        actual['tools'][0]['config']['PRIVATE_FIELD'] = 'PRIVATE_VALUE'
+    elif change == 'enabled':
+        actual['tools'][0]['enabled'] = False
+    elif change == 'source':
+        actual['tools'][0]['source'] = '/PRIVATE_PATH'
+    elif change == 'section':
+        actual['instruction'] = 'PRIVATE_INSTRUCTION'
+    else:
+        expected['providers'] = [{'module': 'PRIVATE_PROVIDER', 'id': 'one'},
+                                 {'module': 'PRIVATE_PROVIDER', 'id': 'two'}]
+        actual['providers'] = list(reversed(expected['providers']))
+    original = copy.deepcopy((expected, actual))
+    assert not matches(expected, actual)
+    assert mismatch_summary(expected, actual) == category
+    assert (expected, actual) == original
+    assert not matches(expected, actual)  # Reporting never repairs a mismatch.
+
+
+def test_readback_diagnostics_share_only_existing_comparison_normalizations(tmp_path):
+    expected, actual, worker = qualified_sources(tmp_path)
+    expected['tools'][0].pop('enabled', None)
+    expected['tools'][0]['config']['api_key'] = 'PRIVATE_EXPECTED_SECRET'
+    actual['tools'][0]['config']['api_key'] = 'PRIVATE_ACTUAL_SECRET'
+    aliases = source_aliases(tmp_path, worker, expected, actual)
+    # Existing public redaction equality is not a claim about secret bytes.
+    assert matches(expected, actual, sources=aliases)
+    assert mismatch_summary(expected, actual, sources=aliases) == ''
+    actual['tools'][0]['config']['limit'] = '[REDACTED]'
+    assert not matches(expected, actual, sources=aliases)
+    assert mismatch_summary(expected, actual, sources=aliases) == 'tools (type)'
+    # Paths inside config are data even when a declaration alias is proven.
+    actual['tools'][0]['config']['limit'] = 2
+    expected['tools'][0]['config']['source'] = '/PRIVATE_OLD'
+    actual['tools'][0]['config']['source'] = '/PRIVATE_NEW'
+    assert not matches(expected, actual, sources=aliases)
+    assert mismatch_summary(expected, actual, sources=aliases) == 'tools (value)'
+
+
+def test_readback_diagnostics_bound_nested_private_agents_and_json_types():
+    expected, actual = plan(2), plan(2)
+    for target in (expected, actual):
+        target['agents'] = {'PRIVATE_AGENT': {'tools': [
+            {'module': 'PRIVATE_MODULE', 'source': '/PRIVATE_SOURCE',
+             'config': {'PRIVATE_FIELD': 1}}]}}
+    actual['agents']['PRIVATE_AGENT']['tools'][0]['config']['PRIVATE_FIELD'] = True
+    actual['agents']['PRIVATE_AGENT']['tools'][0]['source'] = '/PRIVATE_OTHER_SOURCE'
+    assert not matches(expected, actual)  # JSON bool and number stay distinct.
+    assert mismatch_summary(expected, actual) == 'agents (type, unproved_source)'
+    # Arbitrary row counts, names and keys never grow the diagnostic output.
+    expected['agents'] = {f'PRIVATE_AGENT_{i}': {'instruction': 'PRIVATE_OLD'} for i in range(1000)}
+    actual['agents'] = {f'PRIVATE_AGENT_{i}': {'instruction': 'PRIVATE_NEW'} for i in range(1000)}
+    assert mismatch_summary(expected, actual) == 'agents (value)'
+
+
 async def finish_resume(b, *, operator=False):
     if operator:
         saved = operation(b)
@@ -261,6 +328,8 @@ async def test_saved_resume_refuses_changed_original_boundary(boundary, changed)
 async def test_saved_resume_keeps_fence_when_readback_or_authority_changes(boundary, changed):
     b = boundary
     saved = await saved_failure(b)
+    sealed = receipt_path(saved['attempts'][-1]).read_bytes()
+    config = override_path(b.owner['id']).read_bytes()
     control = b.runtime.control
     async def changed_read(sid, name, args, **kwargs):
         result = await control(sid, name, args, **kwargs)
@@ -284,6 +353,13 @@ async def test_saved_resume_keeps_fence_when_readback_or_authority_changes(bound
     assert operation(b)['attempts'] == saved['attempts'] and b.owner['configurationBusy']
     assert b.runtime.calls[len(before):] == ['configuration.inspect']
     assert not b.runtime.inputs
+    assert receipt_path(saved['attempts'][-1]).read_bytes() == sealed
+    assert override_path(b.owner['id']).read_bytes() == config
+    if changed in {'plan', 'path'}:
+        category = 'tools (value)' if changed == 'plan' else 'tools (unproved_source)'
+        error = operation(b)['state']['error']
+        assert error == ('Saved configuration does not match loaded-plan readback. '
+                         f'Its operation remains unresolved. Mismatch categories: {category}.')
 
 
 @pytest.mark.parametrize('adopted, saved_readback, promoted', [
