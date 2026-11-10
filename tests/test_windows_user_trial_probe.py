@@ -2225,11 +2225,12 @@ def test_workflow_keeps_old_lane_commands_and_bounded_installed_candidate_job():
     workflow = yaml.safe_load((ROOT / ".github/workflows/platform-mechanisms.yml").read_text())
     # Strip only EOF scalar newline; appending a new job adds one to the prior
     # final block in YAML. No command, matrix, dependency or budget may change.
-    golden = {"passive-process-check": "805c016a876edb93a512cf19e0c265a0bffc69ff2042c44bf68fdae8fe07dae0",
-              "windows-private-config-tls": "7e73ef72ea372e123ecff0c8a5b3831268a629faf2a22054877241b9b9128c29"}
+    # Frozen 177b9c98 commands, including the already accepted bootstrap lane.
+    golden = {"passive-process-check": "fa89a68443d5cbbda12ea3513cd5cfa12bb5cb42adbf0f7744f240fdeb3b3d8b",
+              "windows-private-config-tls": "557dd004afccf2bff8d53e3a40ad62ca232ee6a218ba1a56e9bbda71ad302987"}
     for name, expected in golden.items():
         job = copy.deepcopy(workflow["jobs"][name])
-        assert job.pop("if") == "${{ !inputs.foreground_only }}"
+        assert job.pop("if") == "${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}"
         if name == "windows-private-config-tls":
             job["steps"][-1]["run"] = job["steps"][-1]["run"].rstrip("\n")
         assert hashlib.sha256(json.dumps(job, sort_keys=True).encode()).hexdigest() == expected
@@ -2240,7 +2241,8 @@ def test_workflow_keeps_old_lane_commands_and_bounded_installed_candidate_job():
     assert '"pytest-asyncio>=1.4,<2"' in commands and '"pytest-aiohttp>=1.1,<2"' in commands
     assert job["env"]["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
     assert "-I -B $probe --run" in commands
-    upload = job["steps"][-1]["with"]
+    upload = next(step["with"] for step in job["steps"]
+                  if step.get("name") == "Upload only allowlisted public facts, never scratch or raw diagnostics")
     assert upload["path"] == "${{ runner.temp }}/ut/evidence/result.json"
     assert "*" not in upload["path"]
 
@@ -2261,9 +2263,23 @@ def test_default_command_job_is_separate_finite_and_requires_real_native_node():
     assert sum(step.get("timeout-minutes", 0) for step in job["steps"]) < job["timeout-minutes"]
     offline = workflow["jobs"]["windows-user-trial"]
     preserved_offline = copy.deepcopy(offline)
-    assert preserved_offline.pop("if") == "${{ !inputs.foreground_only }}"
+    assert preserved_offline.pop("if") == "${{ inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only) }}"
+    # Remove only the new opt-in diagnostic steps/conditions before comparing
+    # every default-path byte to the frozen accepted candidate.
+    added = {
+        "Reject conflicting storage diagnostic selections",
+        "Require deterministic native event-publication sharing controls",
+        "Upload bounded event-publication sharing result",
+    }
+    assert added <= {step.get("name") for step in preserved_offline["steps"]}
+    preserved_offline["steps"] = [step for step in preserved_offline["steps"] if step.get("name") not in added]
+    for step in preserved_offline["steps"]:
+        if step.get("name") in {
+                "Require native prerequisite cells then probe private auth, tool, Stop and host resume",
+                "Check update recovery caller preserves declared private paths"}:
+            assert step.pop("if") == "${{ !inputs.storage_only }}"
     assert hashlib.sha256(json.dumps(preserved_offline, sort_keys=True).encode()).hexdigest() == (
-        "63f6f5e0f127cad785dd9946d6d0558362fecf7f13f8afadf39c6853e6fc0eb8")
+        "0e3ec4076be0fc54ca80116f6e612ddfb8c926bf0f0cc0abd28b2a6603f3ebe4")
     assert offline["timeout-minutes"] == 15
     commands = "\n".join(step.get("run", "") for step in job["steps"])
     for forbidden in ("UV_OFFLINE", "prepare_project(", "NetworkGuard(", "runtime.command =", "--editable"):
@@ -2641,10 +2657,11 @@ def test_foreground_cli_only_dispatch_preserves_accepted_cells_and_normal_admiss
     assert event["workflow_dispatch"]["inputs"]["foreground_only"] == {
         "description": "Run only installed foreground CLI diagnosis; reuses accepted public/cold evidence, does not requalify it",
         "type": "boolean", "default": False}
-    for name in ("passive-process-check", "windows-private-config-tls", "windows-user-trial"):
-        assert workflow["jobs"][name]["if"] == "${{ !inputs.foreground_only }}"
+    for name in ("passive-process-check", "windows-private-config-tls"):
+        assert workflow["jobs"][name]["if"] == "${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}"
+    assert workflow["jobs"]["windows-user-trial"]["if"] == "${{ inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only) }}"
     assert job["needs"] == "windows-user-trial"
-    assert job["if"] == "${{ !cancelled() && (inputs.foreground_only || needs.windows-user-trial.result == 'success') }}"
+    assert job["if"] == "${{ !inputs.bootstrap_only && !inputs.storage_only && !cancelled() && (inputs.foreground_only || needs.windows-user-trial.result == 'success') }}"
     cold = next(s for s in job["steps"] if s.get("name", "").startswith("Require one native cold"))
     assert cold["if"] == "${{ !inputs.foreground_only }}" and cold["timeout-minutes"] == 21
     cli = next(s for s in job["steps"] if s.get("name", "").startswith("Require installed foreground"))
