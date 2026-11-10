@@ -70,7 +70,8 @@ async def promoted(managed, monkeypatch, request):
                 managed.on_previous()
                 if managed.previous_failure:
                     raise managed.previous_failure
-            version = HOST_APP["version"] if Path(args[0]) == old_python else "99.0.0"
+            version = (HOST_APP["version"] if Path(args[0]) == old_python else
+                       next(row["version"] for row in candidate if row["name"] == "amplifier-unified"))
             return "AMPLIFIER_UPDATE_PROBE=" + json.dumps({
                 "ok": True, "stage": "complete", "version": version,
                 "isolated": True, "packageInEnvironment": True, "frontendPresent": True, "loginAvailable": True,
@@ -154,6 +155,49 @@ async def test_probe_cancellation_does_not_start_recovery(promoted):
     assert work_paused(promoted.service.state)
     assert generations.active(promoted.manager.home)
     promoted.restart.assert_not_awaited()
+
+
+@pytest.mark.parametrize("slow", [False, True])
+async def test_controlled_cold_import_through_real_timeout_process(promoted, monkeypatch, tmp_path, slow):
+    import sys
+    from amplifier_web.updates import process as real_process
+
+    module = tmp_path / "controlled_cold_import.py"
+    entered = tmp_path / "entered"
+    module.write_text(
+        "import time\nfrom pathlib import Path\n"
+        f"Path({str(entered)!r}).touch()\n"
+        f"time.sleep({10 if slow else 0.02})\n")
+    probe = (
+        "import importlib.util,sys\n"
+        "spec=importlib.util.spec_from_file_location('controlled_import',sys.argv[1])\n"
+        "spec.loader.exec_module(importlib.util.module_from_spec(spec))\n")
+    original = app_updates.process
+    promoted.candidate_failure = None
+
+    async def process(*args, **kwargs):
+        if app_updates.PROBE in args and Path(args[0]) != promoted.old_python:
+            assert work_paused(promoted.service.state)
+            # Use the production termination/wait path and an actual importing
+            # child, reducing only this synthetic fixture's deadline.
+            await real_process(sys.executable, "-I", "-c", probe, module, timeout=1)
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(app_updates, "process", process)
+    await app_updates.activate(promoted.manager)
+    assert entered.is_file()
+    if slow:
+        assert generations.active(promoted.manager.home) is None
+        assert not work_paused(promoted.service.state)
+        assert any(row["phase"] == "replacement-probe" and row["status"] == "failed"
+                   and row["errorType"] == "CommandTimeout"
+                   for row in promoted.manager.diagnostics.state["events"])
+        promoted.restart.assert_not_awaited()
+    else:
+        assert generations.active(promoted.manager.home)
+        assert work_paused(promoted.service.state)
+        assert promoted.service.state["updates"]["pendingRestart"]
+        promoted.restart.assert_awaited_once()
 
 
 async def test_successful_cold_probe_keeps_normal_managed_restart(promoted):
