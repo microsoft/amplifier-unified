@@ -1134,6 +1134,118 @@ async def test_service_publication_during_held_immutable_resource(publication_ap
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "nt", reason="Real Windows traversal sharing requires NTFS")
+@pytest.mark.parametrize("scope", ["held", "released"])
+async def test_service_publication_during_resource_traversal(
+        publication_app, monkeypatch, record_property, scope):
+    """Hold real pre-yield pins, not a substituted handle or injected OS error.
+
+    The two cells have independent stores. A failure is never replayed after
+    releasing the handle. This proves a mechanism, not the historical holder.
+    """
+    from amplifier_web import windows_read_files
+    from amplifier_web.session_projection import view_path
+
+    app = publication_app
+    session = app._session()
+    sid = session["id"]
+    session["interruptionRevision"] = 7
+    app._save_changes(sessions={sid})
+    before = _publication_snapshot(app)
+    prior = next(row for row in before[0]["sessions"] if row["id"] == sid)
+    source = resources.detach(app.db, prior["$viewPayload"]["$resource"])
+    original = resources.read_detached(source)
+    leaf = windows_read_files.address(source.directory / (source.identity + ".json"))
+    view = view_path(app.data_dir, session)
+    old_view = view.read_bytes()
+    messages = json.dumps(session["messages"], sort_keys=True)
+    opened, release = threading.Event(), threading.Event()
+    pins, closed, result, failures = [], [], [], []
+    real_open = windows_read_files._ReadAPI.open_read
+    real_close = windows_read_files._ReadAPI.close
+    real_signature = windows_read_files._ReadAPI.signature
+    gated = False
+
+    def tracked_open(api, path, parent=None, *, directory):
+        handle = real_open(api, path, parent, directory=directory)
+        if threading.current_thread() is thread and directory:
+            pins.append((api, handle))
+        return handle
+
+    def tracked_close(api, handle):
+        try:
+            return real_close(api, handle)
+        finally:
+            if threading.current_thread() is thread and (api, handle) in pins:
+                closed.append((api, handle))
+
+    def gated_signature(api, handle, path=None):
+        nonlocal gated
+        value = real_signature(api, handle, path)
+        if threading.current_thread() is thread and path == leaf and not gated:
+            gated = True
+            assert pins and not closed
+            opened.set()
+            assert release.wait(30), "Traversal release timed out"
+        return value
+
+    def read():
+        try:
+            result.append(resources.read_detached(source))
+        except BaseException as error:
+            failures.append(error)
+        finally:
+            opened.set()
+
+    thread = threading.Thread(target=read, name="resource-traversal", daemon=True)
+    with monkeypatch.context() as patch:
+        patch.setattr(windows_read_files._ReadAPI, "open_read", tracked_open)
+        patch.setattr(windows_read_files._ReadAPI, "close", tracked_close)
+        patch.setattr(windows_read_files._ReadAPI, "signature", gated_signature)
+        thread.start()
+        try:
+            assert await asyncio.to_thread(opened.wait, 10)
+            assert gated and pins and not closed and not failures
+            if scope == "released":
+                release.set()
+                await asyncio.to_thread(thread.join, 10)
+                assert not thread.is_alive() and not failures
+                assert len(closed) == len(pins) and set(closed) == set(pins)
+            facts = await _observed_publication(app, ("runtime.status", {
+                "sessionId": sid, "status": "working", "detail": "Traversal discriminator",
+            }), "resource.traversal", scope, record_property)
+            if scope == "held":
+                assert thread.is_alive() and not release.is_set() and not closed
+            after = _publication_snapshot(app)
+            if facts["errors"] or facts["truncated"]:
+                # Preserve failure/rollback evidence before asserting the desired
+                # independent-publication behavior. Shutdown is not a retry.
+                assert after == before and view.read_bytes() == old_view
+                assert app._progress_dirty
+                assert session["interruptionRevision"] == 7
+                assert json.dumps(session["messages"], sort_keys=True) == messages
+                assert not app.runtime.attempts
+            assert facts == {"errors": [], "truncated": False}
+            assert after[0]["revision"] == before[0]["revision"] + 1
+            saved = next(row for row in after[0]["sessions"] if row["id"] == sid)
+            assert saved["$viewPayload"] != prior["$viewPayload"]
+            value = app.state_resource(saved["$viewPayload"]["$resource"])
+            assert value["status"] == "working"
+            assert value["progress"]["detail"] == "Traversal discriminator"
+            assert json.loads(view.read_text()) == value
+            assert not app._progress_dirty
+        finally:
+            release.set()
+            await asyncio.to_thread(thread.join, 10)
+            assert not thread.is_alive(), "Traversal reader did not join"
+            assert not failures, "Traversal reader failed"
+            assert len(closed) == len(pins) and set(closed) == set(pins)
+    assert result == [original]
+    assert resources.read_detached(source) == original
+    record_property("publication_sharing_verified", True)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("scenario", [
     "restore-held", "remove-held", "restore-refused", "remove-refused",
 ])

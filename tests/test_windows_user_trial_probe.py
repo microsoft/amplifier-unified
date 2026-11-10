@@ -2892,12 +2892,13 @@ def storage_public_report():
 @pytest.mark.parametrize("fault", [None, "missing", "unexpected", "duplicate", "no-call",
                                   "skipped", "failed", "teardown", "xpass",
                                   "collection-error", "exit-code"])
-def test_storage_controls_require_eleven_exact_calls_no_skips_or_collection_errors(fault):
+def test_storage_controls_require_thirteen_exact_calls_no_skips_or_collection_errors(fault):
     result = native_result(fault, results=probe.StorageResults())
     assert result["status"] == ("PASS" if fault is None else "FAIL")
     assert set(result["cases"]) == {"held_view", "held_naming", "released_view", "released_naming",
                                    "held_resource", "ordinary_view", "ordinary_naming",
-                                   "rollback_restore", "rollback_remove", "restore_refused", "remove_refused"}
+                                   "rollback_restore", "rollback_remove", "restore_refused", "remove_refused",
+                                   "traversal_held", "traversal_released"}
     report = storage_public_report()
     report["selection"] = result
     if fault:
@@ -2933,6 +2934,8 @@ def test_storage_staging_and_selection_leave_default_native_api_unchanged(tmp_pa
         "test_windows_read_files.py::test_service_view_rollback_with_real_presentation_reader[remove-held]",
         "test_windows_read_files.py::test_service_view_rollback_with_real_presentation_reader[restore-refused]",
         "test_windows_read_files.py::test_service_view_rollback_with_real_presentation_reader[remove-refused]",
+        "test_windows_read_files.py::test_service_publication_during_resource_traversal[held]",
+        "test_windows_read_files.py::test_service_publication_during_resource_traversal[released]",
     ]
     tree = ast.parse((ROOT / "tests/test_windows_read_files.py").read_text(encoding="utf-8"))
     functions = {node.name: node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)}
@@ -3014,10 +3017,10 @@ def test_storage_collection_skip_and_failure_fact_overflow_never_create_pass():
     selection = native_result(results=results)
     assert selection["status"] == "FAIL" and selection["collectionExact"] is False
     node = next(iter(results.node_labels))
-    for _ in range(36):
+    for _ in range(42):
         results.pytest_runtest_makereport(types.SimpleNamespace(nodeid=node),
             types.SimpleNamespace(when="call", excinfo=types.SimpleNamespace(value=RuntimeError("PRIVATE"))))
-    assert len(results.failure_facts) == 33
+    assert len(results.failure_facts) == 39
     report = storage_public_report()
     report.update(status="FAIL", selection=results.finish(1))
     probe.validate_storage_public(report)
@@ -3096,7 +3099,7 @@ def test_storage_selection_invokes_only_staged_cells_and_asyncio_plugin(tmp_path
     result = probe.storage_selection(tmp_path, target, None)
     assert result["status"] == "PASS"
     args, = observed
-    assert args[-11:] == [str(target / "tests" / node) for node in probe.STORAGE_CONTROLS.values()]
+    assert args[-13:] == [str(target / "tests" / node) for node in probe.STORAGE_CONTROLS.values()]
     assert "pytest_asyncio.plugin" in args and "aiohttp.pytest_plugin" not in args
     assert args[args.index("--rootdir") + 1] == args[args.index("--confcutdir") + 1] == str(target)
 
@@ -3332,7 +3335,8 @@ def test_storage_publication_bad_properties_cannot_pass_or_export_private_values
         probe.validate_storage_public(report)
 
 
-@pytest.mark.parametrize("label", ("held_view", "held_naming", "released_view", "released_naming", "held_resource"))
+@pytest.mark.parametrize("label", ("held_view", "held_naming", "released_view", "released_naming",
+                                 "held_resource", "traversal_held", "traversal_released"))
 def test_storage_production_cells_require_returned_empty_facts(label):
     def properties(case):
         value = storage_observation(case)
@@ -3543,3 +3547,82 @@ def test_storage_rollback_cells_require_verified_original_failure_and_exact_scen
         assert selection["cases"][label]["publicationSharing"] == value
         assert selection["cases"][label]["publicationSharingVerified"] is False
     assert len(json.dumps(report).encode("utf-8")) <= 65536
+
+
+@pytest.mark.parametrize("scope", ("held", "released"))
+@pytest.mark.parametrize("fault", (None, "reader", "scope", "private", "private-facts", "posix", "truncated"))
+def test_storage_traversal_binding_and_closed_receipt_require_exact_windows_return(scope, fault):
+    label = "traversal_" + scope
+    node = "test_windows_read_files.py::test_service_publication_during_resource_traversal[" + scope + "]"
+    assert probe.STORAGE_CONTROLS[label] == node
+    assert probe.StorageResults().node_labels["tests/" + node] == label
+    value = storage_observation(label)
+    assert value == {"schema": 1, "reader": "resource.traversal", "scope": scope, "platform": "windows",
+                     "result": "returned", "facts": {"errors": [], "truncated": False}}
+    if fault == "reader":
+        value["reader"] = "resource.project"  # A yielded leaf is not pre-yield traversal.
+    elif fault == "scope":
+        value["scope"] = "released" if scope == "held" else "held"
+    elif fault == "private":
+        value["path"] = "/PRIVATE/reader"
+    elif fault == "private-facts":
+        value["facts"]["message"] = "PRIVATE"
+    elif fault == "posix":
+        value["platform"] = "posix"
+    elif fault == "truncated":
+        value["facts"]["truncated"] = True
+    properties = [("publication_sharing", json.dumps(value)), ("publication_sharing_verified", True)]
+    selection = native_result(results=probe.StorageResults(), properties=lambda case:
+                              properties if case == label else storage_properties(case))
+    assert (selection["status"] == "PASS") == (fault is None)
+    assert (selection["cases"][label]["status"] == "PASS") == (fault is None)
+    report = storage_public_report()
+    report.update(status="PASS" if fault is None else "FAIL", selection=selection)
+    probe.validate_storage_public(report)
+    assert "PRIVATE" not in json.dumps(report)
+    assert len(json.dumps(report).encode("utf-8")) <= 65536
+    if fault is not None:
+        # Revalidation of the original observation also refuses a forged PASS.
+        case = selection["cases"][label]
+        case.update(status="PASS", publicationSharing=value, publicationSharingVerified=True)
+        selection["status"] = report["status"] = "PASS"
+        with pytest.raises((AssertionError, KeyError, TypeError, ValueError)):
+            probe.validate_storage_public(report)
+
+
+@pytest.mark.parametrize("scope", ("held", "released"))
+@pytest.mark.parametrize("outcome", ("failed", "skipped", "passed"))
+def test_storage_traversal_partial_failure_is_retained_not_accepted(scope, outcome):
+    label = "traversal_" + scope
+    observed = storage_observation(label)
+    if outcome != "skipped":
+        # Synthetic model of an unexpected sharing refusal, not native evidence.
+        observed.update(result="raised", facts={"errors": [
+            {"class": "PermissionError", "errno": 13, "winerror": 32, "frames": []}], "truncated": False})
+    results = probe.StorageResults()
+    results.pytest_collection_finish(types.SimpleNamespace(
+        items=[types.SimpleNamespace(nodeid=node) for node in results.node_labels]))
+    for node, case in results.node_labels.items():
+        for phase in ("setup", "call", "teardown"):
+            properties = storage_properties(case)
+            if case == label:
+                properties = [("publication_sharing", json.dumps(observed))]
+                if outcome == "skipped":
+                    properties.append(("publication_sharing_verified", True))
+            results.pytest_runtest_logreport(types.SimpleNamespace(
+                nodeid=node, when=phase, outcome=outcome if case == label and phase == "call" else "passed",
+                user_properties=properties if phase == "call" else []))
+    selection = results.finish(1 if outcome == "failed" else 0)
+    case = selection["cases"][label]
+    assert case["status"] == selection["status"] == "FAIL"
+    assert case["publicationSharing"] == observed
+    assert case["publicationSharingVerified"] is (outcome == "skipped")
+    assert case["skips"] == (1 if outcome == "skipped" else 0)
+    assert case["failures"] == (1 if outcome == "failed" else 0)
+    assert case["callsPassed"] == (1 if outcome == "passed" else 0)
+    report = storage_public_report()
+    report.update(status="FAIL", selection=selection)
+    probe.validate_storage_public(report)
+    case["status"] = selection["status"] = report["status"] = "PASS"
+    with pytest.raises(AssertionError):
+        probe.validate_storage_public(report)
