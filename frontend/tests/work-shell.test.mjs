@@ -52,7 +52,7 @@ test('compact sidebar has shortcuts; filtering lives in the main surface',()=>{
  const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>host};
  const main=renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state:{view:{workSurface:'chats'}},act:host.dispatch})));
  assert.match(main,/Research ideas/);assert.match(main,/aria-label="Search chats"/);assert.doesNotMatch(main,/a-browser-pins/);
- assert.match(main,/aria-label="Group conversations"/);assert.match(main,/aria-label="Filter conversations by age"/);
+ assert.match(main,/aria-label="Group conversations"/);assert.doesNotMatch(main,/aria-label="Filter conversations by age"/);
 });
 test('empty Pinned disappears; workspace-only and mixed pins share one section',async()=>{
  const calls=[];
@@ -208,7 +208,7 @@ test('All Chats retains local grouping and global age independently of workspace
  const state={view:{workSurface:'chats',workWorkspaceId:'b',workWorkspaceChats:{workspaceId:'b',query:'unrelated',pages:{idle:2}}}};
  const html=renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state,act:host.dispatch})));
  assert.match(html,/<option value="status" selected="">Status<\/option>/);
- assert.match(html,/aria-valuetext="Within the last 24 hours"/);
+ assert.doesNotMatch(html,/aria-label="Filter conversations by age"/);
  assert.match(html,/<h2 class="a-chat-group-heading">Pick up again<\/h2>/);
  assert.match(html,/Research ideas/);assert.doesNotMatch(html,/a-workspace-chats/);
  assert.deepEqual(current.view.navRecentView,choices);

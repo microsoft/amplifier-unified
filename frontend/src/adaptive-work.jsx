@@ -35,7 +35,7 @@ export function AdaptiveWorkHome({host,state,act,presentation}){
 }
 
 export function AdaptiveWorkChats({model,state,act,presentation={},workspaceId=null,workspaceView,onWorkspaceView}){
- const nav=useContext(WorkNavigationContext),view=workspaceId?workspaceView:state.view||{};
+ const nav=useContext(WorkNavigationContext),view=workspaceId?{...workspaceView,navAge:state.view?.navAge||'all'}:state.view||{};
  const pinnedScope=workspaceId||model.state.workHomePinnedScope,value=model.state.workHome,ready=(!workspaceId||currentWorkspaceChatQuery(state.view?.workWorkspaceChats,view,workspaceId))&&hasNavigationResource(model.state,'workHome')&&currentWorkPage(value,view,pinnedScope);
  const level=presentation.interfaceDetail||presentation.executionDetail||'standard',mode=view.workHomeView||startingWorkView(presentation);
  const scope=pinnedScope||view.workHomeScope||'all',filter=view.workHomeFilter||'all',query=view.workHomeQuery||'';

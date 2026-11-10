@@ -41,6 +41,10 @@ test('A to B to A restores bounded workspace choices and cursor without sharing 
  assert.equal(currentWorkPage(page,{...view,workHomeScope:'two'},'two'),false);
  assert.equal(currentWorkPage(page,{...view,workHomeQuery:'changed'},'one'),false);
  assert.equal(currentWorkPage(page,{...view,workHomePages:{idle:2}},'one'),false);
+    const finite={...view,navAge:'24h'};
+    assert.equal(currentWorkPage({...page,age:'24h'},finite,'one'),true);
+    assert.equal(currentWorkPage({...page,age:'all'},finite,'one'),false);
+    assert.deepEqual(workspaceChatQuery(finite,'one'),request,'Shared age never enters workspace-local requests');
  saveWorkspaceChatChoices(browser,'one',{...choices,workHomeFilter:'all'});
  assert.equal(readWorkspaceChatChoices(browser,'one').workHomeQuery,'workspace','Clearing status retains workspace search');
  const context={scope:'one',requestedScope:'one',workspace:{id:'one',path:'/one'}};
