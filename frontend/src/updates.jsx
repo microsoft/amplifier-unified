@@ -77,9 +77,9 @@ export function UpdateSettings({state,act}){
  const expanded=!!state.view?.maintenanceDraft?.updatesExpanded;
   const advancedRef=React.useRef(null),advancedId=React.useId();
   const diagnosticsExpanded=!!state.view?.maintenanceDraft?.updateDiagnosticsExpanded;
-  const [detailsOpen,setDetailsOpen]=React.useState(()=>overview.tone==='error'||expanded||diagnosticsExpanded);
+  const [detailsOpen,setDetailsOpen]=React.useState(()=>overview.tone==='error'||appStatus.state==='failed'||expanded||diagnosticsExpanded);
   const [detailsNotice,setDetailsNotice]=React.useState('');
-  React.useEffect(()=>{if(overview.tone==='error')setDetailsOpen(true)},[overview.tone]);
+  React.useEffect(()=>{if(overview.tone==='error'||appStatus.state==='failed')setDetailsOpen(true)},[overview.tone,appStatus.state]);
   React.useEffect(()=>{if(expanded||diagnosticsExpanded)setDetailsOpen(true)},[expanded,diagnosticsExpanded]);
   function revealDetails(action){
    const sources=action==='sources';
@@ -110,7 +110,7 @@ export function UpdateSettings({state,act}){
    {overview.waiting&&!overview.runnerOnlyPending&&!!updates.blockers?.length&&<details className="a-update-work" data-part="update-blockers"><summary>View active work ({updates.blockers.length})</summary><ul>{updates.blockers.map((item,index)=><li key={index}>{item.label}{item.sessionId&&<> — <button type="button" className="a-link" data-action="session.select" onClick={async()=>{const result=await act('session.select',{id:item.sessionId});if(result&&result.accepted!==false)await act('view.update',{patch:{panel:null,workSurface:'chat'}})}}>{item.title||'Open conversation'}</button></>}</li>)}</ul><p className="a-caption">Idle chats alone don’t hold up the update. Background workers, calls, and tools may still need to finish.</p><UpdateRestart updates={updates} act={act}/></details>}
   {overview.current?.actionRequired&&<div className="a-update-current-action">
    {overview.current.component&&<p className="a-caption">Component: {overview.current.component}</p>}
-   <button className="a-soft" data-action={overview.current.action==='check'?'updates.check':'view.update'} aria-controls={overview.current.action==='check'?undefined:advancedId} aria-expanded={overview.current.action==='check'?undefined:detailsOpen} onClick={()=>overview.current.action==='check'?act('updates.check'):revealDetails(overview.current.action)}>{overview.current.action==='check'?'Check current components':overview.current.action==='sources'?'Review source details':'View update diagnostics'}</button>
+   <button className="a-soft" data-action={overview.current.action==='check'?'updates.check':'view.update'} aria-controls={overview.current.action==='check'?undefined:advancedId} aria-expanded={overview.current.action==='check'?undefined:detailsOpen} onClick={()=>overview.current.action==='check'?act('updates.check'):revealDetails(overview.current.action)}>{overview.current.action==='check'?(overview.current.component===(application.label||'Amplifier Unified')?'Check for updates':'Check current components'):overview.current.action==='sources'?'Review source details':'View update diagnostics'}</button>
    {detailsNotice&&<p className="a-caption" role="status">{detailsNotice}</p>}
    <p className="a-caption">The current installation is kept. Review the supported next step before retrying.</p>
   </div>}
