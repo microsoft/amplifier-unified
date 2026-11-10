@@ -156,10 +156,10 @@ def display_message(row, index, session, *, include_internal=False):
     # Request-boundary steering persists the same canonical input ID under a
     # different delivery kind. Keep it for exact web/native reconciliation;
     # neither the role nor a host-looking text envelope proves peer authorship.
-    if (row['role'] == 'user' and isinstance(provenance, dict)
-            and provenance.get('version') == 1 and provenance.get('kind') in ('user', 'steer')
-            and isinstance(provenance.get('id'), str) and 0 < len(provenance['id']) <= 200):
-        input_identity = {'nativeInputId': provenance['id']}
+    from .input_status import native_input_id
+    exact_input = native_input_id(row['role'], provenance)
+    if exact_input:
+        input_identity = {'nativeInputId': exact_input}
     if isinstance(provenance,dict) and provenance.get('version')==1 and provenance.get('kind')=='service' and all(isinstance(provenance.get(key),str) and 0<len(provenance[key])<=128 for key in ('id','source')):
         observation={'observation':{key:provenance[key] for key in ('id','source','call_id') if key in provenance}}
         from .recovery_observations import recovery_facts

@@ -248,7 +248,7 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         return kind, {**base,**{key:event[key] for key in ('name','description','completedInputs','nameRevision') if key in event}}
     if kind == "execution.event":
         event = event.get("event", {})
-        allowed = ("id", "revision", "producerId", "budgetRevision", "admittedAt", "parentId", "turnId", "sessionId", "rootSessionId", "kind", "phase", "label",
+        allowed = ("id", "revision", "producerId", "budgetRevision", "admittedAt", "parentId", "turnId", "admissionInputId", "generationId", "purpose", "sessionId", "rootSessionId", "kind", "phase", "label",
             "toolCallId", "provider", "model", "parentProvider", "routing", "runId", "startedAt", "endedAt", "usage", "summary", "input", "output", "error", "lifecycle", "failure", "liveObservation")
         public = {key:event[key] for key in allowed if key in event and (key not in {"input", "output", "error"} or event.get("kind") == "tool")}
         from .tool_observations import metadata as tool_metadata
@@ -286,6 +286,8 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
             **metadata(event),
             **{key: event[key] for key in ("scheduled_monitor_input_id", "scheduled_monitor_only", "observation_input_id", "observation_id") if key in event}}
     if kind in {"generation.started", "generation.finished", "generation.failed", "generation.detached"}:
+        if 'observedAt' in event:
+            base['observedAt'] = event.get('observedAt')
         identity = event.get("sessionId") or event.get("session_id") or session_id
         root = event.get("rootSessionId") or event.get("root_session_id") or session_id
         return "runtime.generation", {**base, "sessionId": identity, "rootSessionId": root, "event": kind,

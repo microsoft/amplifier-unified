@@ -89,7 +89,7 @@ import {VoiceVisualControls,SharingIndicator} from './voice-visual.jsx';
 import {sessionStatus} from './session-status';
 import './markdown-content.css';
 import {FeedbackPanel,FeedbackNotice} from './feedback';
-import {notificationBody,desktopNotificationsEnabled,notificationMessages} from './notifications';
+import {notificationEvents,takeNotifications,showBrowserNotification} from './notifications';
 import {ConversationWork,useInterimReplies} from './interim-replies.jsx';
 import {executionData,turnPlacements,splitWork,conversationWorkRows} from './timeline-data';
 import {LiveActivity} from './live-activity';
@@ -190,14 +190,16 @@ function App(){
   }
  },[]);
  effectHandler.current=handleEffects;
- const stateWaiters=useRef(new Set()),stateRecovery=useRef(null);
+ const stateWaiters=useRef(new Set()),stateRecovery=useRef(null),notifySnapshot=useRef(()=>{});
  const enqueueSettings=useRef(createSettingsActionQueue()),providerReadQueue=useRef(Promise.resolve()),handledActionResults=useRef(new WeakSet());
  const acceptState=useCallback((next,historyOptions={})=>{
   if(!next||typeof next!=='object')return;
   if(serverState.current && next.client?.hostInstanceId===serverState.current.client?.hostInstanceId && next.revision<serverState.current.revision)return;
   const unchangedPresentation=!historyOptions.baseline&&next.view?.panel!=='agent'&&onlyStateRevisionChanged(serverState.current,next);
-  if(!latest.current){for(const effect of next.deviceCommands||[])if(effect.id)seenEffects.current.add(effect.id);for(const m of notificationMessages(next))lastNotify.current.add(m.id)}
+  if(!latest.current){for(const effect of next.deviceCommands||[])if(effect.id)seenEffects.current.add(effect.id);for(const m of notificationEvents(next))lastNotify.current.add(m.id)}
   else effectHandler.current(next.deviceCommands);
+  // Device effects follow accepted snapshots even when hidden UI rendering pauses.
+  notifySnapshot.current(next);
   const previousSession=latest.current?.sessions?.find(s=>s.id===latest.current.selectedSessionId),nextSession=next.sessions?.find(s=>s.id===next.selectedSessionId);
   if(previousSession?.id===nextSession?.id&&Number(nextSession?.sharedHistoryOffset)<Number(previousSession?.sharedHistoryOffset)&&messagesPane.current){
    const pane=messagesPane.current,top=pane.getBoundingClientRect().top,anchor=[...pane.querySelectorAll('[data-message-id]')].find(node=>node.getBoundingClientRect().bottom>top);
@@ -624,17 +626,12 @@ function App(){
  useLayoutEffect(()=>{chatScroll.current?.settleLayout()},[session?.workProjection?.status,session?.id,shell.ready]);
  useLayoutEffect(()=>{resizeComposer(composerRef.current);chatScroll.current?.update()},[draft,state?.selectedSessionId,shell.ready]);
  useEffect(()=>{const resize=()=>resizeComposer(composerRef.current);window.addEventListener('resize',resize);return()=>window.removeEventListener('resize',resize)},[]);
- useEffect(()=>{
-  if(!state)return;
-  for(const m of notificationMessages(state)){
-   if(lastNotify.current.has(m.id))continue;
-   lastNotify.current.add(m.id);
-   if(desktopNotificationsEnabled(state.notificationSettings) && connected && 'Notification'in window && Notification.permission==='granted' && (document.hidden||m.sessionId!==state.selectedSessionId)){
-    const notice=new Notification('Amplifier',{body:notificationBody(m,state.notificationSettings),icon:logo,tag:m.id});
-    notice.onclick=()=>{window.focus();act('session.select',{id:m.sessionId});act('view.update',{patch:{mode:'text'}})};
-   }
+ notifySnapshot.current=next=>{
+  for(const m of takeNotifications(next,lastNotify.current,{connected,permission:window.Notification?.permission,hidden:document.hidden})){
+   void showBrowserNotification(m,next.notificationSettings,{icon:logo,onClick:()=>{window.focus();act('session.select',{id:m.sessionId});act('view.update',{patch:{mode:'text'}})}})
+    .catch(()=>{/* Platform delivery is best-effort; never replay or affect work. */});
   }
- },[state,connected,act]);
+ };
  useEffect(()=>{voiceClient.current=new VoiceClient({request,onAction:(name,args)=>dispatch(name,args),onState:value=>{setVoice(value);if(value.status!=='connected')visualClient.current?.stop()},onError:reportError});visualClient.current=new VoiceVisualClient({request,onState:setVisual,getVoice:()=>({...voiceClient.current?.state,sessionId:latest.current?.voice?.sessionId})});computerClient.current=new ComputerVisualClient({request,onState:setComputerVisual,getSession:()=>latest.current?.selectedSessionId});return()=>{computerClient.current?.dispose();visualClient.current?.dispose();voiceClient.current?.dispose()}},[]);
  useEffect(()=>{computerClient.current?.sync(null,connected,state?.computerVisual)},[connected,state?.computerVisual,state?.selectedSessionId]);
  useEffect(()=>{visualClient.current?.sync(voice,connected,state?.voice?.visual)},[voice,connected,state?.voice?.visual]);
@@ -906,7 +903,7 @@ function App(){
   setPresentation:patch=>shell.setPresentation(patch).catch(reportError)};
  const previewVisible=!!peerPreview.active&&!browsing;
  const layoutState=browsing?{...settingsState,canvas:{...state?.canvas,open:false}}:previewVisible?{...settingsState,peerPreview:true,canvas:{...state?.canvas,open:true}}:settingsState;
- const renderMessage=(row,options={})=><MessageEntry key={row.id} message={row.message} session={session||{id:null}} state={state} act={act} stamp={nowLabel} working={working} forkTurn={turnEnds.get(row.id)} newest={newest.has(row.id)} retry={retryMessage} discard={discardMessage} dispatch={dispatch} {...options}/>;
+ const renderMessage=(row,options={})=><MessageEntry key={row.id} message={row.message} session={session||{id:null}} state={state} connected={connected} statusCurrent={!detail.focused} act={act} stamp={nowLabel} working={working} forkTurn={turnEnds.get(row.id)} newest={newest.has(row.id)} retry={retryMessage} discard={discardMessage} dispatch={dispatch} {...options}/>;
  const renderRow=row=>row.kind==='artifacts'?<ArtifactLinks key={row.id} state={state} message={row.message} act={act} dispatch={dispatch}/>:row.kind==='work'?<ConversationWork key={row.id} row={row} data={execution} state={state} act={act} dispatch={dispatch} session={session} working={working} renderMessage={renderMessage}/>:row.kind==='peers'?<PeerRun key={row.id} row={row} session={session} state={state} renderMessage={renderMessage}/>:renderMessage(row);
  if(!state||!shell.ready)return <AppReloadContext.Provider value={appReload}><div className="boot"><AppReloadNotice/><img src={logo}/><h1>Amplifier</h1><p>{error||shell.error||'Connecting to your workspace…'}</p>{(error||shell.error)&&<><button onClick={()=>{setBootAttempt(value=>value+1);shell.refresh()}}>Retry connection</button><p><a href="?shell=recovery">Open recovery mode</a></p></>}</div></AppReloadContext.Provider>;
  return <PeerPresentation.Provider value={peerPresentation}><ArchiveContext.Provider value={archiveValue}><WorkNavigationContext.Provider value={workNavigation}><ShellContext.Provider value={shell}><AppReloadContext.Provider value={appReload}><div id="amp-one" {...appAppearanceState(state,connected,streamClient!==null)} data-work-surface={workSurface(state)} ref={root} data-layout={presentation.layout||view.layout||'balanced'} data-interface-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-execution-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-density={presentation.density||'comfortable'} style={{colorScheme:scheme,...(presentation.accent?{'--a-accent':presentation.accent}:{})}} data-theme-scheme={themeScheme} data-decorations={presentation.decorations===false?'off':'on'} data-part="app">

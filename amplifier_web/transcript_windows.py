@@ -36,6 +36,7 @@ def _native_page(reader, source, before, limit):
     from .automatic_history import directory
     from .shared_state_probe import text_content
     from .session_store import message_time
+    from .input_status import native_input_id
     result = reader.read_window(directory(source), {
         'project': source['nativeProject'],
         'nativeId': source.get('nativeIdentity') or source.get('runtimeSessionId') or source['id']},
@@ -48,13 +49,21 @@ def _native_page(reader, source, before, limit):
         value = item['value']
         at = message_time(value)
         text = text_content(value)
+        metadata = value.get('metadata') or {}
+        exact_input = native_input_id(value.get('role'), metadata.get('amplifier_input'))
         items.append({'id': item['displayId'], 'role': value['role'],
+            **({'nativeInputId': exact_input} if exact_input else {}),
             '_windowDigest': hashlib.sha256(text.encode()).hexdigest(),
             'text': text, 'source': 'native', 'via': 'chat',
             'createdAt': at or source.get('createdAt', 0), 'timestampKnown': at is not None,
             'displayOnly': True, 'windowKey': window['windowKey'],
             'sourceReference': {'kind': 'transcript-window', 'byteOffset': item['byteOffset'],
                                 'revision': window['revision'], 'restoreCursor': window['restoreCursor']}})
+    from collections import Counter
+    counts = Counter(row.get('nativeInputId') for row in items)
+    for row in items:
+        if row.get('nativeInputId') and counts[row['nativeInputId']] > 1:
+            row['nativeInputAmbiguous'] = True
     return {'items': items, **window, 'coverage': {'kind': 'native-saved', **result['coverage']},
             'unavailableRanges': result['unavailableRanges'], '_owner': source}
 
@@ -271,7 +280,10 @@ class TranscriptWindows:
         # unsupported annotation fields or decorate native display-only rows.
         current = self.service._session(session_id, hydrate=False)
         annotations = dict.get(current, 'messageAnnotations', {})
+        from .input_status import annotate as input_annotation
         for index, row in enumerate(result['items']):
+            row = input_annotation(current, row)
+            result['items'][index] = row
             if not row.get('displayOnly'):
                 from .browser_detail import compact
                 result['items'][index] = compact(row, session_id, 'messages', 4096)

@@ -190,7 +190,7 @@ class StateProjections:
                   if key not in fields and key != 'messageQuotes'}
         result.update(body)
         from .peer_attribution import display_annotations
-        result['messageAnnotations'] = display_annotations(row)
+        result['messageAnnotations'] = display_annotations(row, (message.get('id') for message in result.get('messages', [])))
         return result
 
     def attention(self, state, *, session_ids=None):

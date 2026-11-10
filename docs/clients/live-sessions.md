@@ -163,6 +163,58 @@ The optional `expectedRevision` checks the app's global state revision, includin
 presentation changes; it is not a per-session revision. Do not use it as a
 mandatory send precondition during active streaming.
 
+### Per-input work observations
+
+User messages with an exact `inputId` (or a validated native `amplifier_input`
+marker exposed as `nativeInputId`) may carry additive `inputStatus`:
+
+```json
+{"version":1,"inputId":"exact-input","phase":"working","basis":"execution_observed","startedAt":1794300000.25,"updatedAt":1794300000.25,"generationId":"exact-generation"}
+```
+
+Phases are `queued`, `included`, `working`, `waiting`, `done`, `failed`, and
+`unknown`. `basis` is a
+content-free evidence label: `generation_started`, `execution_observed`,
+`generation_finished`, `waiting_workers`, `generation_failed`,
+`generation_detached`, `steering_queued`, `steering_context`, `steering_failed`,
+`steering_unknown`, `human_decision`, `execution_interrupted`, or `no_evidence`.
+Optional `startedAt`, `updatedAt`, and `endedAt` are observed Unix seconds;
+`generationId` is included only when exact. Missing timestamps are not zero.
+The timer starts at relevant root execution/generation observation, never at
+optimistic send admission. Steering queueing is `queued`; confirmed context
+insertion is `included`. Neither starts a work timer or proves execution,
+fitted-request membership, or model reading. A later observed execution whose
+exact `admissionInputId` matches can promote either to `working`; an ambient
+generation for another input cannot. Only `working` supports a live timer;
+waiting freezes at `updatedAt` (or its observed root `endedAt`), and queued,
+included, and unknown never imply an active timer.
+Provider-call `admissionInputId` identifies its execution cause, **not** membership
+in the final fitted model request or proof that a model read/obeyed that input.
+Display `turnId`, session busy/idle, and tool outcomes cannot establish success.
+
+`done` means that exact root turn/response finished, not that the user's objective
+was accomplished. A finished generation with `active_job_ids` is `waiting`
+(`waiting_workers`), not done. Exact failure/detachment evidence takes precedence
+over completion; late calls/starts cannot reopen a settled generation. An
+explicit newer observed generation can start a retry under the same input ID.
+After loss/Stop marks an observation `execution_interrupted`, late terminals of
+any outcome cannot replace it; only a genuine newer generation start can retry.
+Waiting for a human requires exact input/generation question or approval
+evidence; ambient pending questions/approvals do not qualify. Current native
+approval events without that binding do not produce `human_decision`.
+
+These small receipts use existing durable annotations and are joined by exact
+input identity after message-history/window overlays; they survive reload and
+generation-tail eviction without storing another transcript or platform ledger.
+Bounded native windows preserve valid input markers without claiming global
+marker uniqueness; detected ambiguous/conflicting markers are not joined.
+Lost execution, Stop, or host restart changes unresolved observations to unknown,
+stopping their active timer without inferring rollback or replay. Legacy or
+missing evidence stays unknown (or omits this field when no exact identity is
+available). This observation never changes delivery/admission authority:
+**Received** is a client fallback only for that input's exact
+`delivery.status: "accepted"`, not generic command acceptance or later activity.
+
 ### Next-message choices
 
 `conversation.configure` saves `{sessionId, expectedRevision, bundle?, selection?,

@@ -74,19 +74,21 @@ def interrupt_owned_workers(session, runtime_owner):
 
 def interrupt_unfinished(session):
     """Settle lost execution without interpreting a later warm worker as success."""
+    from .input_status import interrupt
+    status_changed = interrupt(session)
     reference = dict.get(session, '_coldFields', {}).get('execution', {})
     if (not dict.__contains__(session, 'execution')
             and (reference.get('pendingWork') is False or
                  'pendingWork' not in reference and reference.get('pendingObservation') is False
                  and session.get('status') not in {'working', 'starting', 'ready', 'stopping'})
             and session.get('status') != 'working'):
-        return False
+        return status_changed
     tree = session.get('execution', {})
     independent = voice_usage_turns(tree)
     live = any(turn.get('phase') in LIVE_PHASES and turn['id'] not in independent
                for turn in tree.get('turns', []))
     if not live and session.get('status') != 'working':
-        return False
+        return status_changed
     finish(session, 'interrupted')
     session['status'] = 'interrupted'
     if not session.get('error'):
@@ -178,7 +180,7 @@ def ingest(session,event):
     tree=ensure_turn(session,None)
     identity=event.get('id')
     if not identity:return
-    allowed={'id','revision','producerId','budgetRevision','admittedAt','parentId','turnId','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','routing','runId','parentProvider','startedAt','endedAt','usage','summary','input','output','error','lifecycle','failure','liveObservation'}
+    allowed={'id','revision','producerId','budgetRevision','admittedAt','parentId','turnId','admissionInputId','generationId','purpose','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','routing','runId','parentProvider','startedAt','endedAt','usage','summary','input','output','error','lifecycle','failure','liveObservation'}
     safe={k:v for k,v in event.items() if k in allowed}
     from .tool_observations import metadata as tool_metadata
     safe.update(tool_metadata(event))
@@ -216,6 +218,8 @@ def ingest(session,event):
         node.update(safe)
     else:
         node=safe;tree['nodes'].append(node)
+    from .input_status import execution as observe_input_execution
+    observe_input_execution(session, event)
     # Tool output/progress cannot change model-call usage. Preserve the existing
     # aggregates when neither call membership nor ownership/turn mapping changed.
     # A late parent or an unassigned turn still requires the complete rebuild.
@@ -317,6 +321,10 @@ def fail_generation(session, input_ids):
 
 
 def finish(session,status='completed'):
+    from .input_status import interrupt
+    # Legacy call-only evidence has no terminal generation correlation. Idle
+    # cannot turn it into Done or leave an unconfirmed timer running forever.
+    interrupt(session, unbound_only=status == 'completed')
     tree=session.get('execution',{})
     ended=time.time()
     independent = voice_usage_turns(tree)

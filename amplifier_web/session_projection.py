@@ -67,7 +67,7 @@ def migrate(home, state):
 # from native events. Keep metadata in the existing accounting projection only;
 # never persist action bodies or lazy event-file references here.
 ACCOUNTING_FIELDS = {'id', 'revision', 'producerId', 'budgetRevision', 'admittedAt',
-    'parentId', 'turnId', 'sessionId', 'rootSessionId', 'kind', 'phase', 'provider',
+    'parentId', 'turnId', 'admissionInputId', 'generationId', 'purpose', 'sessionId', 'rootSessionId', 'kind', 'phase', 'provider',
     'model', 'startedAt', 'endedAt', 'usage', 'lifecycle',
     'assignmentId', 'assignmentRevision', 'assignmentReservation'}
 ACCOUNTING_USAGE_FIELDS = {'inputTokens', 'outputTokens', 'totalTokens',
@@ -211,7 +211,7 @@ def _observed_work(row, turns, accounting):
         result = _receipt_copy(receipt)
     else:
         return None
-    fields = {'id', 'parentId', 'turnId', 'sessionId', 'rootSessionId', 'kind',
+    fields = {'id', 'parentId', 'turnId', 'admissionInputId', 'generationId', 'purpose', 'sessionId', 'rootSessionId', 'kind',
               'phase', 'label', 'tool', 'toolCallId', 'toolObservationId',
               'revision', 'startedAt', 'endedAt', 'runId', 'lifecycle'}
     result.update({key: value for key, value in row.items() if key in fields

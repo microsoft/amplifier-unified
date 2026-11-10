@@ -34,6 +34,21 @@ def test_normal_chat_retains_live_facts_without_settings_history():
     assert result['runtimeControl']['chat']['configuration.providers'] == {'provider': 'ready'}
 
 
+def test_off_chat_notification_candidates_are_content_free_before_demand_filter():
+    state = heavy()
+    state['attention']['items'] += [
+        {'id': 'question:q', 'sessionId': 'other', 'fingerprint': 'v1', 'read': False,
+         'title': 'Private question', 'detail': 'Private details'},
+        {'id': 'approval:a', 'sessionId': 'other', 'fingerprint': 'v2', 'read': True,
+         'detail': 'Private arguments'}]
+    result = project(state)
+    assert result['notificationAttention'] == [
+        {'id': 'question:q', 'sessionId': 'other', 'fingerprint': 'v1', 'read': False},
+        {'id': 'approval:a', 'sessionId': 'other', 'fingerprint': 'v2', 'read': True}]
+    assert not any(row.get('sessionId') == 'other' for row in result['attention']['items'])
+    assert 'Private' not in json.dumps(result['notificationAttention'])
+
+
 def test_requested_resources_arrive_and_retire_without_deleting_evidence():
     state = heavy()
     for page, key in [('updates', 'updates'), ('smart-tools', 'smartTools')]:

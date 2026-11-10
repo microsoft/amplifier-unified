@@ -6,7 +6,18 @@ import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {newestMessageIds,completedTurnEnds,MessageEntry,ForkTurn}=await server.ssrLoadModule('/src/message-actions.jsx');
 const {PeerPresentation}=await server.ssrLoadModule('/src/peer-message.jsx');
+const {InputStatus}=await server.ssrLoadModule('/src/input-status.jsx');
 test.after(()=>server.close());
+test('status disclosure exposes timing and freezes historical/disconnected observations',()=>{
+ const message={id:'u',role:'user',inputId:'one',inputStatus:{version:1,inputId:'one',phase:'working',basis:'execution_observed',startedAt:100,updatedAt:142}};
+ for(const props of [{current:false},{connected:false}]){
+  const html=renderToStaticMarkup(React.createElement(InputStatus,{message,...props}));
+  assert.match(html,/Working last observed/);assert.match(html,/0:42/);
+  assert.match(html,/Status observed/);assert.doesNotMatch(html,/<summary[^>]*aria-label=/);
+ }
+ const queued=renderToStaticMarkup(React.createElement(InputStatus,{message:{...message,inputStatus:{version:1,inputId:'one',phase:'queued',basis:'steering_queued',updatedAt:142}}}));
+ assert.match(queued,/Status observed/);assert.doesNotMatch(queued,/Execution observed/);
+});
 test('fork controls follow the last assistant entry in each completed user turn',()=>{
  const messages=[{id:'u1',role:'user',inputId:'1'},{id:'a1',role:'assistant'},{id:'a2',role:'assistant'},{id:'u2',role:'user',inputId:'2'},{id:'a3',role:'assistant'}];
  const session={status:'working',messages,execution:{turns:[{inputId:'1',phase:'completed'},{inputId:'2',phase:'running'}]}};

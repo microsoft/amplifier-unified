@@ -92,9 +92,9 @@ def query(session, *, message_id=None, window=False, _raw_window=False):
     from .message_interactions import annotate
     from .peer_attribution import derive, display_annotations
     selected = derive(session, read(range(start,end)))
-    annotation_source = {'messageAnnotations': display_annotations(session)}
+    annotation_source = {'messageAnnotations': display_annotations(session, (row.get('id') for row in selected))}
     messages = selected if _raw_window else [
-        compact(annotate(annotation_source,row),session['id'],'messages',TEXT_LIMIT) for row in selected]
+        compact(annotate(annotation_source,row,status_source=session),session['id'],'messages',TEXT_LIMIT) for row in selected]
     anchors={row['id'] for row in messages}
     _,segments=work_segments(with_window(session, selected),
         select_groups=lambda rows: [row for row in rows if row.get('anchorMessageId') in anchors])
