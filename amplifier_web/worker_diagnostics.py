@@ -157,6 +157,11 @@ _READER_FRAME_SOURCES = (
     ('amplifier_web.runtime', None, '_wait_worker', 'runtime.wait'),
     ('amplifier_web.runtime', '_WindowsWorkerOwner', 'wait', 'runtime.windows_wait'),
     ('amplifier_web.runtime_event_batches', 'BufferedLines', 'next', 'runtime.buffered_next'),
+    ('amplifier_web.service', 'AppService', 'on_runtime_event', 'service.event'),
+    ('amplifier_web.session_projection', None, 'persist', 'storage.projection'),
+    ('amplifier_web.resource_files', None, 'write_prepared', 'storage.resource'),
+    ('amplifier_web.host.storage', 'SessionStore', '_atomic', 'storage.atomic'),
+    ('amplifier_web.naming', None, 'persist', 'storage.naming'),
 )
 _COMMAND_FRAME_LABELS = frozenset({'worker.command', 'worker.command_serial',
                                  *(label for _, _, _, label in _READER_FRAME_SOURCES)})
@@ -203,6 +208,10 @@ def _command_frame_codes():
                 continue
             namespace = vars(owner)
         function = namespace.get(method)
+        # Only this approved static method has a descriptor to unwrap. Never
+        # invoke arbitrary descriptors or inspect a shared decorator wrapper.
+        if label == 'storage.atomic' and type(function) is staticmethod:
+            function = function.__func__
         if type(function) is types.FunctionType:
             codes.append((function.__code__, label))
     return codes

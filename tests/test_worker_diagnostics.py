@@ -973,3 +973,221 @@ def test_reader_witness_rejects_hostile_subclasses_cycles_and_malformed_facts():
         witness = {'schema': 1, 'origin': 'worker_reply', 'factsStatus': 'invalid',
                    'errors': [], 'truncated': False, 'reader': reader}
         assert validate_runtime_failure_witness(witness) is None
+
+
+_STORAGE_FRAME_LABELS = (
+    'service.event', 'storage.projection', 'storage.resource', 'storage.atomic', 'storage.naming',
+)
+
+
+def _storage_frame_fixture(monkeypatch, label):
+    """Actual code objects; injected early failures prevent persistence or path IO."""
+    from types import SimpleNamespace
+    from amplifier_web import naming, resource_files, service, session_projection
+    from amplifier_web.host import storage
+    def failed(*args, **kwargs):
+        raise PermissionError(13, 'private fixture token', '/private/fixture/path')
+    class FailedState:
+        __iter__ = failed
+    monkeypatch.setattr(naming, 'directory_for', failed)
+    monkeypatch.setattr(storage, 'tempfile', SimpleNamespace(mkstemp=failed))
+    slot = vars(storage.SessionStore)['_atomic']
+    assert type(slot) is staticmethod
+    fixtures = {
+        'service.event': (service.AppService, 'on_runtime_event', service.AppService.on_runtime_event,
+                          (None, 'private-event', {})),
+        'storage.projection': (session_projection, 'persist', session_projection.persist,
+                               (None, FailedState(), {})),
+        'storage.resource': (resource_files, 'write_prepared', resource_files.write_prepared,
+                             (SimpleNamespace(mkdir=failed), None)),
+        'storage.atomic': (storage.SessionStore, '_atomic', slot.__func__,
+                           (SimpleNamespace(parent='/private/fixture'), 'private text')),
+        'storage.naming': (naming, 'persist', naming.persist, (None, {})),
+    }
+    return fixtures[label]
+
+
+def _storage_traceback(function, args, *, asynchronous=False):
+    if asynchronous:
+        return _command_traceback(function, args=args)
+    try:
+        function(*args)
+    except PermissionError as error:
+        frame = error.__traceback__
+        while frame is not None:
+            if frame.tb_frame.f_code is function.__code__:
+                return frame
+            frame = frame.tb_next
+        raise AssertionError('fixture did not enter the selected code') from None
+    raise AssertionError('fixture did not fail before persistence')
+
+
+@pytest.mark.parametrize('label', _STORAGE_FRAME_LABELS)
+def test_storage_frame_labels_require_exact_loaded_code_not_clones_or_imports(monkeypatch, label):
+    import builtins
+    import types
+    from amplifier_web import worker_diagnostics as diagnostics
+    _, _, function, args = _storage_frame_fixture(monkeypatch, label)
+    frame = _storage_traceback(function, args, asynchronous=label == 'service.event')
+    error = PermissionError(13, 'private token', '/private/path')
+    error.winerror = 32
+    error.__traceback__ = types.TracebackType(None, frame.tb_frame, 0, function.__code__.co_firstlineno + 7)
+    clone = function.__code__.replace()
+    assert clone == function.__code__ and clone is not function.__code__
+    copied = types.FunctionType(clone, function.__globals__, function.__name__)
+    copied.__kwdefaults__ = function.__kwdefaults__
+    cloned_error = PermissionError(13, 'private clone')
+    cloned_error.__traceback__ = _storage_traceback(copied, args, asynchronous=label == 'service.event')
+    def no_import(*args, **kwargs):
+        raise AssertionError('facts must not import their owners')
+    with monkeypatch.context() as patch:
+        patch.setattr(builtins, '__import__', no_import)
+        facts = diagnostics.command_failure_facts(error)
+        assert facts == {'errors': [{'class': 'PermissionError', 'errno': 13, 'winerror': 32,
+                                    'frames': [{'source': label, 'offset': 7}]}], 'truncated': False}
+        assert diagnostics.command_failure_facts(cloned_error)['errors'][0]['frames'] == []
+        assert diagnostics.validate_command_failure_facts(facts) == facts
+        for module in ('amplifier_web.service', 'amplifier_web.session_projection',
+                       'amplifier_web.resource_files', 'amplifier_web.host.storage', 'amplifier_web.naming'):
+            patch.delitem(sys.modules, module)
+        assert diagnostics.command_failure_facts(error) == {
+            'errors': [{'class': 'PermissionError', 'errno': 13, 'winerror': 32, 'frames': []}],
+            'truncated': False}
+    witness = {**_reader_witness_fixture('exception'), **facts}
+    witness['reader'].update(phase='dispatch', frame='progress')
+    validated = diagnostics.validate_runtime_failure_witness(witness)
+    assert validated == witness
+    validated['errors'][0]['frames'][0]['offset'] = 9
+    validated['reader']['phase'] = 'read'
+    assert witness['errors'][0]['frames'][0]['offset'] == 7
+    assert witness['reader']['phase'] == 'dispatch'
+    assert 'private' not in json.dumps(witness)
+    assert len(json.dumps(witness).encode('utf-8')) <= 8192
+    for number in (True, 13.0, '32', -(2**31) - 1, 2**32):
+        invalid = diagnostics.validate_runtime_failure_witness(witness)
+        invalid['errors'][0]['winerror'] = number
+        assert diagnostics.validate_runtime_failure_witness(invalid) is None
+    invalid = diagnostics.validate_runtime_failure_witness(witness)
+    invalid['errors'][0]['frames'][0]['offset'] = True
+    assert diagnostics.validate_runtime_failure_witness(invalid) is None
+    witness['errors'][0]['frames'][0]['filename'] = '/private/path'
+    assert diagnostics.validate_runtime_failure_witness(witness) is None
+
+
+@pytest.mark.parametrize('label', _STORAGE_FRAME_LABELS)
+@pytest.mark.parametrize('descriptor_kind', ['hostile', 'static_subclass', 'classmethod', 'static'])
+def test_storage_frame_registry_only_unwraps_exact_atomic_staticmethod(monkeypatch, label, descriptor_kind):
+    from amplifier_web import worker_diagnostics as diagnostics
+    owner, name, function, args = _storage_frame_fixture(monkeypatch, label)
+    error = PermissionError(13, 'private descriptor')
+    error.__traceback__ = _storage_traceback(function, args, asynchronous=label == 'service.event')
+    touched = []
+    class HostileDescriptor:
+        def __get__(self, *args):
+            touched.append('get')
+            raise AssertionError('arbitrary descriptor invoked')
+        @property
+        def __func__(self):
+            touched.append('func')
+            raise AssertionError('arbitrary function wrapper inspected')
+    class StaticSubclass(staticmethod):
+        def __get__(self, *args):
+            touched.append('subclass get')
+            raise AssertionError('staticmethod subclass invoked')
+        def __getattribute__(self, name):
+            touched.append(name)
+            raise AssertionError('staticmethod subclass inspected')
+    descriptor = {'hostile': HostileDescriptor(), 'static_subclass': StaticSubclass(function),
+                  'classmethod': classmethod(function), 'static': staticmethod(function)}[descriptor_kind]
+    monkeypatch.setattr(owner, name, descriptor)
+    facts = diagnostics.command_failure_facts(error)
+    approved = label == 'storage.atomic' and descriptor_kind == 'static'
+    assert facts['errors'][0]['frames'] == (
+        [{'source': label, 'offset': error.__traceback__.tb_lineno - function.__code__.co_firstlineno}]
+        if approved else [])
+    assert facts['truncated'] is False
+    assert not touched
+
+
+def test_atomic_staticmethod_wrapped_nonfunction_is_never_inspected(monkeypatch):
+    from amplifier_web import worker_diagnostics as diagnostics
+    owner, name, function, args = _storage_frame_fixture(monkeypatch, 'storage.atomic')
+    error = RuntimeError('private')
+    error.__traceback__ = _storage_traceback(function, args)
+    touched = []
+    class Callable:
+        def __call__(self, *args):
+            touched.append('call')
+            raise AssertionError('wrapper called')
+        @property
+        def __code__(self):
+            touched.append('code')
+            raise AssertionError('wrapper code inspected')
+    monkeypatch.setattr(owner, name, staticmethod(Callable()))
+    assert diagnostics.command_failure_facts(error) == {
+        'errors': [{'class': 'RuntimeError', 'frames': []}], 'truncated': False}
+    assert not touched
+
+
+@pytest.mark.parametrize('offset', [-1, 0, 1_000_000, 1_000_001])
+def test_storage_frame_offsets_keep_existing_closed_bounds(monkeypatch, offset):
+    import types
+    from amplifier_web import worker_diagnostics as diagnostics
+    _, _, function, args = _storage_frame_fixture(monkeypatch, 'storage.atomic')
+    frame = _storage_traceback(function, args)
+    error = RuntimeError('private')
+    error.__traceback__ = types.TracebackType(None, frame.tb_frame, 0, function.__code__.co_firstlineno + offset)
+    valid = 0 <= offset <= 1_000_000
+    facts = diagnostics.command_failure_facts(error)
+    assert facts == {'errors': [{'class': 'RuntimeError', 'frames': [
+        {'source': 'storage.atomic', 'offset': offset}] if valid else []}], 'truncated': not valid}
+    wire = {'errors': [{'class': 'RuntimeError', 'frames': [
+        {'source': 'storage.atomic', 'offset': offset}]}], 'truncated': False}
+    assert (diagnostics.validate_command_failure_facts(wire) is not None) == valid
+
+
+def test_real_atomic_replace_permission_error_keeps_only_closed_facts(tmp_path, monkeypatch):
+    """Real atomic body and tmp files, synthetic replace failure; not a native Windows qualification."""
+    from pathlib import Path
+    from types import SimpleNamespace
+    from amplifier_web.host import storage
+    from amplifier_web import worker_diagnostics as diagnostics
+    path = tmp_path / 'private-checkpoint.json'
+    path.write_text('original', encoding='utf-8')
+    secret = 'private token https://private.invalid body'
+    failure = PermissionError(13, secret, str(path))
+    failure.winerror = 32
+    replaced = []
+    def fail_replace(source, destination):
+        assert Path(source).parent == tmp_path and destination == path
+        assert Path(source).read_text(encoding='utf-8') == secret
+        replaced.append((source, destination))
+        raise failure
+    # Scope the injection to this module. fchmod is not portable and permissions
+    # are not under test; fdopen/write/flush/fsync/temp cleanup remain real.
+    native_os = storage.os
+    monkeypatch.setattr(storage, 'os', SimpleNamespace(
+        fdopen=native_os.fdopen, fchmod=lambda *args: None, fsync=native_os.fsync,
+        replace=fail_replace, path=native_os.path, unlink=native_os.unlink))
+    slot = vars(storage.SessionStore)['_atomic']
+    assert type(slot) is staticmethod
+    with pytest.raises(PermissionError) as caught:
+        storage.SessionStore._atomic(path, secret)
+    assert caught.value is failure and len(replaced) == 1
+    assert path.read_text(encoding='utf-8') == 'original'
+    assert list(tmp_path.iterdir()) == [path]
+    frame = failure.__traceback__
+    while frame is not None and frame.tb_frame.f_code is not slot.__func__.__code__:
+        frame = frame.tb_next
+    assert frame is not None
+    offset = frame.tb_lineno - slot.__func__.__code__.co_firstlineno
+    assert 0 <= offset <= 1_000_000
+    facts = diagnostics.command_failure_facts(failure)
+    assert facts == {'errors': [{'class': 'PermissionError', 'errno': 13, 'winerror': 32,
+                                'frames': [{'source': 'storage.atomic', 'offset': offset}]}],
+                     'truncated': False}
+    witness = {**_reader_witness_fixture('exception'), **facts}
+    witness['reader'].update(phase='dispatch', frame='progress', cleanup='confirmed')
+    assert diagnostics.validate_runtime_failure_witness(witness) == witness
+    assert str(tmp_path) not in json.dumps(witness) and secret not in json.dumps(witness)
+    assert failure.filename == str(path) and failure.strerror == secret
