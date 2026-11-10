@@ -33,6 +33,45 @@ def save(cache, db, row, owners=None):
     return result
 
 
+def test_new_fitting_working_set_displaces_idle_owner_during_changing_saves(db, monkeypatch):
+    cache = ExecutionPreparation()
+    rows = {name: owner(name) for name in ('old', 'new')}
+    for name, row in rows.items():
+        row['execution']['nodes'] = row['execution']['nodes'][:256]
+        row['execution']['nodes'][0]['text'] += name
+        row['execution']['revision'] = 0
+    # Warm two old fragments, then leave that owner resident but inactive.
+    save(cache, db, rows['old'], rows)
+    rows['old']['execution']['revision'] = 1
+    save(cache, db, rows['old'], rows)
+    cache.MAX_BYTES = (cache.bytes + cache._reserved({}) + 8192) // 2
+    assert sum(entry[2] for key, entry in cache.entries.items() if key[1] == 'nodes') > cache.MAX_BYTES
+    encoded, original = [], json.dumps
+    def observe(value, *args, **kwargs):
+        if type(value) is list and value and isinstance(value[0], dict) and 'nested' in value[0]:
+            encoded.append(len(value))
+        return original(value, *args, **kwargs)
+    work, references = [], []
+    for revision in range(8):
+        # The complete resource changes each time, so whole-resource reuse
+        # cannot conceal repeated encoding of the new owner's stable fragments.
+        rows['new']['execution']['revision'] = revision
+        expected = resource_files.prepare(rows['new']['execution'])
+        encoded.clear()
+        with monkeypatch.context() as patch:
+            patch.setattr(json, 'dumps', observe)
+            result = save(cache, db, rows['new'], rows)
+        work.append(sum(encoded)); references.append(result['$resource'])
+        assert result['$resource'] == expected.identity
+        assert resource_files.read_detached(resource_files.detach(db, result['$resource'])) == rows['new']['execution']
+        assert cache.bytes + cache.accounting_bytes + cache._reserved({}) <= 2 * cache.MAX_BYTES
+    assert len(set(references)) == 8
+    assert work[-2:] == [0, 0], 'A later fitting working set must not starve behind an idle owner'
+    rows['new']['execution']['nodes'][128]['nested'].append('changed after reuse')
+    result = save(cache, db, rows['new'], rows)
+    assert result['$resource'] == resource_files.prepare(rows['new']['execution']).identity
+
+
 def test_two_owners_reuse_only_after_every_fresh_witness(db, monkeypatch):
     cache = ExecutionPreparation()
     rows = {name: owner(name) for name in ('one', 'two')}
