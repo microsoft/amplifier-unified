@@ -230,7 +230,8 @@ async def test_worker_captures_original_error_before_string_reply(monkeypatch, o
     reply = next(row for row in replies if row.get('op') == 'reply')
     facts = validate_command_failure_facts(reply['failureFacts'])
     assert facts is not None
-    assert facts['errors'][0]['class'] == ('PermissionError' if outer else 'ValueError')
+    # The inner path rejects an unstarted worker before interpreting its op.
+    assert facts['errors'][0]['class'] == ('PermissionError' if outer else 'RuntimeError')
     if outer:
         assert facts['errors'][0]['errno'] == 13
     assert 'PRIVATE' not in json.dumps(facts) and '/secret' not in json.dumps(facts)

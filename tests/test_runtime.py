@@ -3863,6 +3863,21 @@ def test_default_runtime_probe_public_pass_requires_outer_cleanup_proof():
              'treeEmpty': True, 'ioFinalized': True, 'outputDiscarded': False}
     public = {**inner, 'schema': 2, 'outerJob': outer}
     fixture.validate_report(public)
+    for witness in [
+        {'schema': 1, 'origin': 'reader_disconnect', 'factsStatus': 'not_applicable',
+         'errors': [], 'truncated': False},
+        {'schema': 1, 'origin': 'worker_reply', 'factsStatus': 'invalid',
+         'errors': [], 'truncated': False},
+        {'schema': 1, 'origin': 'worker_reply', 'factsStatus': 'valid',
+         'errors': [{'class': 'RuntimeError', 'frames': []}], 'truncated': False},
+    ]:
+        diagnostic = {'checkpoint': 'input_admission', 'errors': [], 'runtimeFailure': witness}
+        fixture.validate_diagnostic(diagnostic)
+        with pytest.raises(AssertionError):
+            fixture.validate_inner_report({**inner, 'diagnostic': diagnostic})
+        with pytest.raises(AssertionError):
+            fixture.validate_report({**public, 'diagnostic': diagnostic})
+        fixture.validate_report({**public, 'status': 'FAIL', 'diagnostic': diagnostic})
     for patch in ({'status': 'unknown'}, {'timedOut': True}, {'activeProcesses': 1},
                   {'treeEmpty': False}, {'ioFinalized': False}, {'outputDiscarded': True}):
         with pytest.raises(AssertionError):

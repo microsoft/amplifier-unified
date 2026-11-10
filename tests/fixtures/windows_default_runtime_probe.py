@@ -1042,6 +1042,7 @@ def validate_inner_report(report):
         assert "workerStartup" not in report
         assert "startup" not in report or report["startup"]["diagnosticStatus"] == "PASS"
         assert "diagnostic" not in report or not report["diagnostic"]["errors"]
+        assert "runtimeFailure" not in report.get("diagnostic", {})
         assert all(report["checks"].values()) and report["stage"] == "complete"
         assert all(report[name] is not None for name in ("wheelSha256", "manifestSha256", "lockSha256"))
         assert set(report["appHashes"]) == set(APP_FILES)
