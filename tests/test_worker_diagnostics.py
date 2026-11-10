@@ -390,10 +390,10 @@ def _command_facts_fixture():
         {'source': 'worker.command_serial', 'offset': 17}]}], 'truncated': False}
 
 
-def _command_traceback(function, *, count=1, offset=7):
+def _command_traceback(function, *, count=1, offset=7, args=None):
     """Use an unstarted coroutine's actual code; no command or worker runs."""
     import types
-    coroutine = function(None, {})
+    coroutine = function(*(args if args is not None else (None, {})))
     try:
         frame = coroutine.cr_frame
         result = None
@@ -673,12 +673,28 @@ def test_command_fact_faults_fail_closed_and_serialized_limit_is_enforced(monkey
     assert diagnostics.validate_command_failure_facts(facts) is None
 
 
-@pytest.mark.parametrize('origin,status', [
-    ('worker_reply', 'valid'), ('worker_reply', 'invalid'), ('reader_disconnect', 'not_applicable')])
-def test_runtime_failure_witness_is_closed_and_accessor_returns_deep_copy(origin, status):
+def _reader_snapshot_fixture(reason='eof'):
+    return {'reason': reason, 'phase': 'read', 'frame': 'none', 'exitObserved': False,
+            'exitCode': None, 'closing': False, 'stopReason': 'none', 'cleanup': 'not_requested'}
+
+
+def _reader_witness_fixture(reason='eof'):
+    facts = {'errors': [], 'truncated': False} if reason == 'eof' else _command_facts_fixture()
+    return {'schema': 1, 'origin': 'reader_disconnect',
+            'factsStatus': 'not_applicable' if reason == 'eof' else 'valid',
+            **facts, 'reader': _reader_snapshot_fixture(reason)}
+
+
+@pytest.mark.parametrize('origin,status,reason', [
+    ('worker_reply', 'valid', None), ('worker_reply', 'invalid', None),
+    ('reader_disconnect', 'not_applicable', 'eof'),
+    ('reader_disconnect', 'valid', 'exception'), ('reader_disconnect', 'valid', 'cancelled')])
+def test_runtime_failure_witness_is_closed_and_accessor_returns_deep_copy(origin, status, reason):
     from amplifier_web.worker_diagnostics import runtime_failure_witness, validate_runtime_failure_witness
     facts = _command_facts_fixture() if status == 'valid' else {'errors': [], 'truncated': False}
     witness = {'schema': 1, 'origin': origin, 'factsStatus': status, **facts}
+    if origin == 'reader_disconnect':
+        witness['reader'] = _reader_snapshot_fixture(reason)
     error = RuntimeError('private original message')
     error._runtime_failure_witness = witness
     result = runtime_failure_witness(error)
@@ -686,6 +702,9 @@ def test_runtime_failure_witness_is_closed_and_accessor_returns_deep_copy(origin
     if status == 'valid':
         result['errors'][0]['frames'][0]['offset'] = 99
         assert witness['errors'][0]['frames'][0]['offset'] == 17
+    if origin == 'reader_disconnect':
+        result['reader']['phase'] = 'wait_exit'
+        assert witness['reader']['phase'] == 'read'
     result['errors'].append({'class': 'other', 'frames': []})
     assert len(witness['errors']) == (1 if status == 'valid' else 0)
     assert error.args == ('private original message',)
@@ -707,11 +726,13 @@ def test_runtime_failure_witness_is_closed_and_accessor_returns_deep_copy(origin
     lambda v: v.update(factsStatus='private'),
     lambda v: v.update(factsStatus='not_applicable'),
     lambda v: v.update(origin='reader_disconnect'),
+    lambda v: v.update(reader=_reader_snapshot_fixture()),
     lambda v: v.update(factsStatus='invalid'),
     lambda v: v.update(errors=[], truncated=True, factsStatus='invalid'),
-    lambda v: v.update(origin='reader_disconnect', factsStatus='not_applicable'),
-    lambda v: v.update(origin='reader_disconnect', factsStatus='not_applicable', errors=[], truncated=True),
-    lambda v: v.update(origin='reader_disconnect', factsStatus='invalid', errors=[]),
+    lambda v: v.update(origin='reader_disconnect', factsStatus='not_applicable', reader=_reader_snapshot_fixture()),
+    lambda v: v.update(origin='reader_disconnect', factsStatus='not_applicable', errors=[], truncated=True,
+                       reader=_reader_snapshot_fixture()),
+    lambda v: v.update(origin='reader_disconnect', factsStatus='invalid', errors=[], reader=_reader_snapshot_fixture()),
     lambda v: v['errors'][0]['frames'][0].update(source='private' * 8192),
 ])
 def test_runtime_failure_witness_refuses_invalid_shapes_and_status_combinations(mutation):
@@ -724,12 +745,15 @@ def test_runtime_failure_witness_refuses_invalid_shapes_and_status_combinations(
     assert runtime_failure_witness(error) is None
 
 
-def test_runtime_failure_witness_enforces_complete_serialized_size(monkeypatch):
+@pytest.mark.parametrize('origin', ['worker_reply', 'reader_disconnect'])
+def test_runtime_failure_witness_enforces_complete_serialized_size(monkeypatch, origin):
     from amplifier_web import worker_diagnostics as diagnostics
     facts = {'errors': [{'class': 'ConnectionAbortedError', 'errno': -(2**31), 'winerror': 2**32 - 1,
                          'frames': [{'source': 'worker.command_serial', 'offset': 1_000_000}] * 5}] * 4,
              'truncated': True}
-    witness = {'schema': 1, 'origin': 'worker_reply', 'factsStatus': 'valid', **facts}
+    witness = {'schema': 1, 'origin': origin, 'factsStatus': 'valid', **facts}
+    if origin == 'reader_disconnect':
+        witness['reader'] = _reader_snapshot_fixture('exception')
     assert diagnostics.validate_runtime_failure_witness(witness) == witness
     assert len(json.dumps(witness).encode('utf-8')) < 8192
     size = len(json.dumps(witness).encode('utf-8'))
@@ -738,3 +762,214 @@ def test_runtime_failure_witness_enforces_complete_serialized_size(monkeypatch):
     monkeypatch.setattr(diagnostics, '_COMMAND_MAX_BYTES', size - 1)
     assert diagnostics.validate_command_failure_facts(facts) == facts
     assert diagnostics.validate_runtime_failure_witness(witness) is None
+
+
+def _reader_frame_fixture(label):
+    from amplifier_web import runtime, runtime_event_batches
+    return {
+        'runtime.reader': (runtime.RuntimeManager._read, (None, 'private-sid', {})),
+        'runtime.readline': (runtime._BoundedWorkerLines.readline, (None,)),
+        'runtime.wait': (runtime._wait_worker, ({},)),
+        'runtime.windows_wait': (runtime._WindowsWorkerOwner.wait, (None,)),
+        'runtime.buffered_next': (runtime_event_batches.BufferedLines.next, (None,)),
+    }[label]
+
+
+@pytest.mark.parametrize('label', [
+    'runtime.reader', 'runtime.readline', 'runtime.wait', 'runtime.windows_wait', 'runtime.buffered_next'])
+def test_reader_frames_require_exact_loaded_code_identity_and_never_import(monkeypatch, label):
+    import builtins
+    import types
+    from amplifier_web import worker_diagnostics as diagnostics
+    function, args = _reader_frame_fixture(label)
+    error = RuntimeError('private-token /private/path https://private.invalid')
+    error.__traceback__ = _command_traceback(function, args=args)
+    clone = function.__code__.replace()
+    assert clone == function.__code__ and clone is not function.__code__
+    copied = types.FunctionType(clone, function.__globals__, function.__name__)
+    cloned_error = RuntimeError('private clone')
+    cloned_error.__traceback__ = _command_traceback(copied, args=args)
+    secret_clone = types.FunctionType(
+        clone.replace(co_filename='/private/token.py'), function.__globals__, function.__name__)
+    secret_error = RuntimeError('private filename')
+    secret_error.__traceback__ = _command_traceback(secret_clone, args=args)
+    def no_import(*args, **kwargs):
+        raise AssertionError('diagnostics must not import packages')
+    with monkeypatch.context() as patch:
+        patch.setattr(builtins, '__import__', no_import)
+        facts = diagnostics.command_failure_facts(error)
+        assert facts == {'errors': [{'class': 'RuntimeError', 'frames': [
+            {'source': label, 'offset': 7}]}], 'truncated': False}
+        assert diagnostics.validate_command_failure_facts(facts) == facts
+        assert diagnostics.command_failure_facts(cloned_error)['errors'][0]['frames'] == []
+        assert diagnostics.command_failure_facts(secret_error)['errors'][0]['frames'] == []
+        # Unloaded canonical owners must not be imported or matched by filename.
+        patch.delitem(sys.modules, 'amplifier_web.runtime')
+        patch.delitem(sys.modules, 'amplifier_web.runtime_event_batches')
+        assert diagnostics.command_failure_facts(error)['errors'][0]['frames'] == []
+    assert 'private' not in json.dumps(facts)
+
+
+def test_reader_frame_discovery_rejects_arbitrary_module_and_class_objects(monkeypatch):
+    import types
+    from amplifier_web import runtime, worker_diagnostics as diagnostics
+    error = RuntimeError('private')
+    error.__traceback__ = _command_traceback(runtime.RuntimeManager._read, args=(None, 'private', {}))
+    def touched(*args):
+        raise AssertionError('arbitrary owner inspected')
+    class HostileModule(types.ModuleType):
+        __getattribute__ = touched
+    for module in (types.SimpleNamespace(RuntimeManager=runtime.RuntimeManager),
+                   HostileModule('amplifier_web.runtime')):
+        monkeypatch.setitem(sys.modules, 'amplifier_web.runtime', module)
+        assert diagnostics.command_failure_facts(error)['errors'][0]['frames'] == []
+    module = types.ModuleType('amplifier_web.runtime')
+    class HostileType(type):
+        __getattribute__ = touched
+    module.RuntimeManager = HostileType('RuntimeManager', (), {'_read': runtime.RuntimeManager._read})
+    monkeypatch.setitem(sys.modules, 'amplifier_web.runtime', module)
+    assert diagnostics.command_failure_facts(error)['errors'][0]['frames'] == []
+
+
+@pytest.mark.parametrize('reason', ['eof', 'exception', 'cancelled'])
+@pytest.mark.parametrize('status', ['valid', 'invalid', 'not_applicable'])
+def test_reader_witness_reason_requires_exact_facts_status(reason, status):
+    from amplifier_web.worker_diagnostics import validate_runtime_failure_witness
+    value = _reader_witness_fixture(reason)
+    value['factsStatus'] = status
+    expected = 'not_applicable' if reason == 'eof' else 'valid'
+    result = validate_runtime_failure_witness(value)
+    assert (result is not None) == (status == expected)
+    if result is not None:
+        assert result == value
+
+
+@pytest.mark.parametrize('reason', ['exception', 'cancelled'])
+def test_reader_witness_reuses_bounded_causal_facts_without_changing_exception(reason):
+    from amplifier_web.worker_diagnostics import command_failure_facts, validate_runtime_failure_witness
+    error = asyncio.CancelledError('private cancellation') if reason == 'cancelled' else RuntimeError('private failure')
+    error.__cause__ = PermissionError(13, 'private error', '/private/path')
+    function, args = _reader_frame_fixture('runtime.reader')
+    error.__traceback__ = _command_traceback(function, args=args)
+    witness = {**_reader_witness_fixture(reason), **command_failure_facts(error)}
+    assert validate_runtime_failure_witness(witness) == witness
+    assert witness['errors'] == [
+        {'class': 'CancelledError' if reason == 'cancelled' else 'RuntimeError',
+         'frames': [{'source': 'runtime.reader', 'offset': 7}]},
+        {'class': 'PermissionError', 'frames': [], 'errno': 13}]
+    assert error.__cause__.filename == '/private/path'
+    assert 'private' not in json.dumps(witness)
+    # A failed fact capture remains explicitly truncated, not invented prose.
+    witness.update(errors=[], truncated=True)
+    assert validate_runtime_failure_witness(witness) == witness
+
+
+@pytest.mark.parametrize('key,values', [
+    ('phase', ('read', 'dispatch', 'wait_exit', 'report_exit', 'settle_execution')),
+    ('frame', ('none', 'ready', 'reply', 'progress', 'status', 'error', 'execution', 'bridge', 'other')),
+    ('stopReason', ('none', 'stopped', 'configuration', 'shutdown', 'retention', 'other')),
+    ('cleanup', ('not_requested', 'confirmed', 'failed')),
+    ('closing', (False, True)),
+])
+def test_reader_snapshot_accepts_each_closed_enum_and_boolean(key, values):
+    from amplifier_web.worker_diagnostics import validate_runtime_failure_witness
+    for item in values:
+        witness = _reader_witness_fixture('exception')
+        witness['reader'][key] = item
+        assert validate_runtime_failure_witness(witness) == witness
+
+
+@pytest.mark.parametrize('observed', [False, True])
+@pytest.mark.parametrize('code', [None, -(2**31), 0, 2**32 - 1, -(2**31) - 1, 2**32,
+                                  False, True, 1.0, '0', [], {}])
+def test_reader_exit_code_requires_exact_bounded_integer_and_observed_exit(observed, code):
+    from amplifier_web.worker_diagnostics import validate_runtime_failure_witness
+    witness = _reader_witness_fixture()
+    witness['reader'].update(exitObserved=observed, exitCode=code)
+    valid = code is None or observed and type(code) is int and -(2**31) <= code < 2**32
+    result = validate_runtime_failure_witness(witness)
+    assert (result is not None) == valid
+    if valid:
+        assert result == witness  # Observed True plus None stays unknown, not zero.
+
+
+@pytest.mark.parametrize('key', [
+    'reason', 'phase', 'frame', 'exitObserved', 'exitCode', 'closing', 'stopReason', 'cleanup'])
+def test_reader_snapshot_requires_every_field(key):
+    from amplifier_web.worker_diagnostics import validate_runtime_failure_witness
+    witness = _reader_witness_fixture()
+    del witness['reader'][key]
+    assert validate_runtime_failure_witness(witness) is None
+
+
+@pytest.mark.parametrize('key', ['reason', 'phase', 'frame', 'stopReason', 'cleanup'])
+@pytest.mark.parametrize('item', ['private-token/path', 'x' * 8193, None, 1, [], {}])
+def test_reader_snapshot_rejects_unknown_prose_oversize_and_nonstring_enums(key, item):
+    from amplifier_web.worker_diagnostics import validate_runtime_failure_witness
+    witness = _reader_witness_fixture()
+    witness['reader'][key] = item
+    assert validate_runtime_failure_witness(witness) is None
+
+
+@pytest.mark.parametrize('key', ['exitObserved', 'closing'])
+@pytest.mark.parametrize('item', [0, 1, 'false', None, [], {}])
+def test_reader_snapshot_requires_exact_booleans(key, item):
+    from amplifier_web.worker_diagnostics import validate_runtime_failure_witness
+    witness = _reader_witness_fixture()
+    witness['reader'][key] = item
+    assert validate_runtime_failure_witness(witness) is None
+
+
+@pytest.mark.parametrize('mutation', [
+    lambda v: v.pop('reader'),
+    lambda v: v.update(reader=None),
+    lambda v: v.update(reader=[]),
+    lambda v: v.update(reader='private'),
+    lambda v: v.update(inputOutcome='accepted'),
+    lambda v: v.update(errors=_command_facts_fixture()['errors']),
+    lambda v: v.update(truncated=True),
+    lambda v: v['reader'].update(message='private'),
+    lambda v: v['reader'].update(errors=[]),
+    lambda v: v['reader'].update(exitCode=0),
+])
+def test_reader_witness_rejects_missing_or_extra_shape_and_eof_error_facts(mutation):
+    from amplifier_web.worker_diagnostics import runtime_failure_witness, validate_runtime_failure_witness
+    witness = _reader_witness_fixture()
+    mutation(witness)
+    assert validate_runtime_failure_witness(witness) is None
+    error = RuntimeError('private original')
+    error._runtime_failure_witness = witness
+    assert runtime_failure_witness(error) is None
+
+
+def test_reader_witness_rejects_hostile_subclasses_cycles_and_malformed_facts():
+    from amplifier_web.worker_diagnostics import validate_runtime_failure_witness
+    class BadDict(dict):
+        def __iter__(self): raise AssertionError('private iterator')
+    class BadString(str):
+        def __eq__(self, other): raise AssertionError('private comparison')
+        def __hash__(self): raise AssertionError('private hash')
+    class Int(int):
+        pass
+    witness = _reader_witness_fixture('exception')
+    assert validate_runtime_failure_witness(BadDict(witness)) is None
+    witness['reader'] = BadDict(witness['reader'])
+    assert validate_runtime_failure_witness(witness) is None
+    for key, item in (('reason', BadString('exception')), ('phase', BadString('read')),
+                      ('exitCode', Int(0))):
+        witness = _reader_witness_fixture('exception')
+        witness['reader'].update(exitObserved=True)
+        witness['reader'][key] = item
+        assert validate_runtime_failure_witness(witness) is None
+    witness = _reader_witness_fixture('exception')
+    witness['reader']['phase'] = witness['reader']
+    assert validate_runtime_failure_witness(witness) is None
+    for errors in (None, (), [{}], [{'class': 'other', 'frames': [{'source': 'private', 'offset': 1}]}]):
+        witness = _reader_witness_fixture('exception')
+        witness['errors'] = errors
+        assert validate_runtime_failure_witness(witness) is None
+    # Even an empty/None reader key is forbidden on a worker-reply envelope.
+    for reader in (None, {}, _reader_snapshot_fixture()):
+        witness = {'schema': 1, 'origin': 'worker_reply', 'factsStatus': 'invalid',
+                   'errors': [], 'truncated': False, 'reader': reader}
+        assert validate_runtime_failure_witness(witness) is None

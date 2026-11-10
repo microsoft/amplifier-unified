@@ -151,7 +151,15 @@ _COMMAND_ERROR_CLASSES = tuple((kind, kind.__name__) for kind in _COMMAND_ERROR_
 _COMMAND_CLASS_LABELS = frozenset(label for _, label in _COMMAND_ERROR_CLASSES) | {'other'}
 _COMMAND_OS_LABELS = frozenset(label for kind, label in _COMMAND_ERROR_CLASSES
                              if issubclass(kind, OSError))
-_COMMAND_FRAME_LABELS = frozenset({'worker.command', 'worker.command_serial'})
+_READER_FRAME_SOURCES = (
+    ('amplifier_web.runtime', 'RuntimeManager', '_read', 'runtime.reader'),
+    ('amplifier_web.runtime', '_BoundedWorkerLines', 'readline', 'runtime.readline'),
+    ('amplifier_web.runtime', None, '_wait_worker', 'runtime.wait'),
+    ('amplifier_web.runtime', '_WindowsWorkerOwner', 'wait', 'runtime.windows_wait'),
+    ('amplifier_web.runtime_event_batches', 'BufferedLines', 'next', 'runtime.buffered_next'),
+)
+_COMMAND_FRAME_LABELS = frozenset({'worker.command', 'worker.command_serial',
+                                 *(label for _, _, _, label in _READER_FRAME_SOURCES)})
 _COMMAND_MAX_ERRORS = 4
 _COMMAND_MAX_FRAMES = 5
 _COMMAND_FRAME_SCAN = 128
@@ -184,6 +192,19 @@ def _command_frame_codes():
             function = methods.get(method)
             if type(function) is types.FunctionType:
                 codes.append((function.__code__, label))
+    for module_name, class_name, method, label in _READER_FRAME_SOURCES:
+        module = sys.modules.get(module_name)
+        if type(module) is not types.ModuleType:
+            continue
+        namespace = vars(module)
+        if class_name is not None:
+            owner = namespace.get(class_name)
+            if type(owner) is not type:
+                continue
+            namespace = vars(owner)
+        function = namespace.get(method)
+        if type(function) is types.FunctionType:
+            codes.append((function.__code__, label))
     return codes
 
 
@@ -296,10 +317,42 @@ def validate_command_failure_facts(value):
         return None
 
 
+_READER_ENUMS = {
+    'reason': ('eof', 'exception', 'cancelled'),
+    'phase': ('read', 'dispatch', 'wait_exit', 'report_exit', 'settle_execution'),
+    'frame': ('none', 'ready', 'reply', 'progress', 'status', 'error', 'execution', 'bridge', 'other'),
+    'stopReason': ('none', 'stopped', 'configuration', 'shutdown', 'retention', 'other'),
+    'cleanup': ('not_requested', 'confirmed', 'failed'),
+}
+
+
+def _validated_reader(value):
+    """Copy a closed termination snapshot, not an input/outcome assertion."""
+    if not _command_keys(value, ('reason', 'phase', 'frame', 'exitObserved', 'exitCode',
+                                 'closing', 'stopReason', 'cleanup')):
+        return None
+    result = {}
+    for key, choices in _READER_ENUMS.items():
+        item = value[key]
+        if type(item) is not str or len(item) > 32 or item not in choices:
+            return None
+        result[key] = item
+    for key in ('exitObserved', 'closing'):
+        if type(value[key]) is not bool:
+            return None
+        result[key] = value[key]
+    code = value['exitCode']
+    if code is not None and (not _command_number(code) or not result['exitObserved']):
+        return None
+    # An observed exit with no code is possible for the Windows owner.
+    result['exitCode'] = code
+    return result
+
+
 def validate_runtime_failure_witness(value):
-    """Validate the host's causal envelope without inventing missing facts."""
+    """Copy a closed causal envelope; reader facts do not prove input outcomes."""
     try:
-        if not _command_keys(value, ('schema', 'origin', 'factsStatus', 'errors', 'truncated')):
+        if not _command_keys(value, ('schema', 'origin', 'factsStatus', 'errors', 'truncated'), ('reader',)):
             return None
         if type(value['schema']) is not int or value['schema'] != 1:
             return None
@@ -308,12 +361,21 @@ def validate_runtime_failure_witness(value):
             return None
         if (origin, status) not in (
                 ('worker_reply', 'valid'), ('worker_reply', 'invalid'),
-                ('reader_disconnect', 'not_applicable')):
+                ('reader_disconnect', 'valid'), ('reader_disconnect', 'not_applicable')):
+            return None
+        reader = None
+        if origin == 'reader_disconnect':
+            reader = _validated_reader(value.get('reader'))
+            if reader is None or status != ('not_applicable' if reader['reason'] == 'eof' else 'valid'):
+                return None
+        elif 'reader' in value:
             return None
         facts = validate_command_failure_facts({'errors': value['errors'], 'truncated': value['truncated']})
         if facts is None or status != 'valid' and (facts['errors'] or facts['truncated']):
             return None
         result = {'schema': 1, 'origin': origin, 'factsStatus': status, **facts}
+        if reader is not None:
+            result['reader'] = reader
         return result if len(json.dumps(result).encode('utf-8')) <= _COMMAND_MAX_BYTES else None
     except BaseException:
         return None

@@ -1286,6 +1286,8 @@ async def test_windows_communication_error_settles_children_only_after_confirmed
     cleanup_error = windows_jobs.CleanupError(model.job)
     if cleanup_fails:
         model.job.close = AsyncMock(side_effect=cleanup_error)
+    pending = asyncio.get_running_loop().create_future()
+    row['pending']['reader-failure-fixture'] = pending
     model.job.stdout.feed_data(b'x' * 257)  # real bounded-line failure after readiness
     try:
         if cleanup_fails:
@@ -1306,6 +1308,17 @@ async def test_windows_communication_error_settles_children_only_after_confirmed
             assert len([kind for kind, _ in model.events if kind == 'runtime.ended']) == 1
         if not stopping:
             assert any(kind == 'runtime.error' for kind, _ in model.events)
+        from amplifier_web.worker_diagnostics import validate_runtime_failure_witness
+        with pytest.raises(RuntimeError) as caught:
+            await pending
+        witness = validate_runtime_failure_witness(caught.value._runtime_failure_witness)
+        assert witness['origin'] == 'reader_disconnect' and witness['factsStatus'] == 'valid'
+        assert witness['errors'][0]['class'] == 'ValueError'
+        assert any(frame['source'] == 'runtime.readline' for frame in witness['errors'][0]['frames'])
+        assert witness['reader'] == {'reason': 'exception', 'phase': 'read', 'frame': 'ready',
+            'exitObserved': False, 'exitCode': None, 'closing': stopping,
+            'stopReason': 'stopped' if stopping else 'none',
+            'cleanup': 'failed' if cleanup_fails else 'confirmed'}
     finally:
         if cleanup_fails:
             # The fake remains retained until this test-only task teardown.
@@ -3692,6 +3705,12 @@ def test_default_runtime_probe_admission_diagnostic_is_closed_and_preserves_unkn
                 'errors': [{'class': 'RuntimeError', 'frames': [], **patch}]})
 
 
+def _reader_eof_facts():
+    return {'reason': 'eof', 'phase': 'settle_execution', 'frame': 'ready',
+            'exitObserved': True, 'exitCode': 7, 'closing': False,
+            'stopReason': 'none', 'cleanup': 'not_requested'}
+
+
 @pytest.mark.parametrize('origin,status,errors', [
     ('worker_reply', 'valid', [{'class': 'PermissionError', 'errno': 13, 'winerror': 5, 'frames': []}]),
     ('worker_reply', 'invalid', []),
@@ -3702,6 +3721,8 @@ def test_default_runtime_probe_copies_only_canonical_failure_witness(origin, sta
     error = RuntimeError('SECRET /private/provider')
     error._runtime_failure_witness = {'schema': 1, 'origin': origin,
         'factsStatus': status, 'errors': errors, 'truncated': False}
+    if origin == 'reader_disconnect':
+        error._runtime_failure_witness['reader'] = _reader_eof_facts()
     facts = fixture.failure_facts(error, 'input_admission')
     fixture.validate_diagnostic(facts)
     assert facts['runtimeFailure'] == error._runtime_failure_witness
@@ -3728,7 +3749,7 @@ def test_default_runtime_probe_copies_only_canonical_failure_witness(origin, sta
 def test_default_runtime_probe_rejects_malformed_failure_witness(patch):
     fixture = _default_runtime_probe_module()
     witness = {'schema': 1, 'origin': 'reader_disconnect', 'factsStatus': 'not_applicable',
-               'errors': [], 'truncated': False, **patch}
+               'errors': [], 'truncated': False, 'reader': _reader_eof_facts(), **patch}
     error = RuntimeError('SECRET')
     error._runtime_failure_witness = witness
     facts = fixture.failure_facts(error, 'input_admission')
@@ -3865,7 +3886,7 @@ def test_default_runtime_probe_public_pass_requires_outer_cleanup_proof():
     fixture.validate_report(public)
     for witness in [
         {'schema': 1, 'origin': 'reader_disconnect', 'factsStatus': 'not_applicable',
-         'errors': [], 'truncated': False},
+         'errors': [], 'truncated': False, 'reader': _reader_eof_facts()},
         {'schema': 1, 'origin': 'worker_reply', 'factsStatus': 'invalid',
          'errors': [], 'truncated': False},
         {'schema': 1, 'origin': 'worker_reply', 'factsStatus': 'valid',
