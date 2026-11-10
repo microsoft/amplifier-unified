@@ -1525,9 +1525,9 @@ def test_failure_record_omits_prose_tracebacks_and_symbols():
     probe.validate_public(value)
 
 
-def native_result(fault=None):
+def native_result(fault=None, *, results=None, properties=None):
     """Model pytest reports, never invoke native tests or their OS effects."""
-    results = probe.NativeResults()
+    results = probe.NativeResults() if results is None else results
     nodes = list(results.node_labels)
     selected = nodes[:-1] if fault == "missing" else list(nodes)
     if fault == "unexpected":
@@ -1545,6 +1545,8 @@ def native_result(fault=None):
                 outcome = "skipped" if fault == "skipped" else (
                     "failed" if fault in {"failed", "teardown"} else "passed")
             row = types.SimpleNamespace(nodeid=node, when=phase, outcome=outcome)
+            if isinstance(results, probe.StorageResults) and phase == "call":
+                row.user_properties = (storage_properties if properties is None else properties)(results.node_labels[node])
             if fault == "xpass" and node == nodes[0] and phase == "call":
                 row.wasxfail = "private reason"
             results.pytest_runtest_logreport(row)
@@ -2836,3 +2838,509 @@ def test_foreground_cli_actual_outer_cleanup_retains_unknown_owned_jobs(tmp_path
     if unknown:
         assert (seen[0] / "private-marker").read_text() == "synthetic"
     probe.validate_cli_public(result)
+
+
+def storage_observation(label):
+    reader, scope = probe.STORAGE_READERS[label]
+    held_mutable = label in {"held_view", "held_naming"}
+    return {"schema": 1, "reader": reader, "scope": scope, "platform": "windows",
+            "result": "raised" if held_mutable else "returned",
+            "facts": {"errors": [{"class": "PermissionError", "errno": 13, "winerror": 32, "frames": []}]
+                      if held_mutable else [], "truncated": False}}
+
+
+def storage_properties(label):
+    return [("publication_sharing", json.dumps(storage_observation(label))),
+            ("publication_sharing_verified", True)]
+
+
+def storage_public_report():
+    return {"schema": 1, "qualification": "installed-storage-sharing-not-runtime-or-device",
+            "publicAcceptance": False, "candidate": {"head": "a"*40, "tree": "b"*40},
+            "status": "PASS", "stage": "complete", "sourceBound": True, "probeSha256": "c"*64,
+            "testSources": {name: "d"*64 for name in probe.STORAGE_FILES},
+            "installation": {"wheelSha256": "e"*64, "verifiedMembers": 101},
+            "installedStable": True, "productionModules": 7,
+            "selection": native_result(results=probe.StorageResults()),
+            "network": {"blockedOptionalIpv6Probes": 0, "unknownAttempts": 0,
+                        "infrastructureSocketpairBinds": 1},
+            "processAttempts": 0, "scratchRemoved": True}
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "unexpected", "duplicate", "no-call",
+                                  "skipped", "failed", "teardown", "xpass",
+                                  "collection-error", "exit-code"])
+def test_storage_controls_require_five_exact_calls_no_skips_or_collection_errors(fault):
+    result = native_result(fault, results=probe.StorageResults())
+    assert result["status"] == ("PASS" if fault is None else "FAIL")
+    assert set(result["cases"]) == {"held_view", "held_naming", "released_view", "released_naming", "held_resource"}
+    report = storage_public_report()
+    report["selection"] = result
+    if fault:
+        with pytest.raises(AssertionError):
+            probe.validate_storage_public(report)
+        report["status"] = "FAIL"
+    assert probe.validate_storage_public(report) is report
+
+
+def test_storage_staging_and_selection_leave_default_native_api_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setattr(probe, "private_directory",
+                        lambda path, root: path.mkdir(parents=True, exist_ok=False))
+    target, hashes = probe._stage_control_files(tmp_path, ROOT / "tests", probe.STORAGE_FILES)
+    assert set(hashes) == {"conftest.py", "test_windows_read_files.py"}
+    assert set(path.name for path in target.iterdir()) == {"tests"}
+    assert set(path.name for path in (target / "tests").iterdir()) == set(probe.STORAGE_FILES)
+    for name, fingerprint in hashes.items():
+        assert fingerprint == probe.digest((ROOT / "tests" / name).read_bytes())
+        assert (target / "tests" / name).read_bytes() == (ROOT / "tests" / name).read_bytes()
+    assert probe.NativeResults.controls is probe.NATIVE_CONTROLS
+    assert len(probe.NativeResults().node_labels) == len(probe.NATIVE_CONTROLS) == 18
+    assert not set(probe.STORAGE_CONTROLS.values()) & set(probe.NATIVE_CONTROLS.values())
+    assert probe.validate_public(report())["publicAcceptance"] is False
+    assert list(probe.STORAGE_CONTROLS.values()) == [
+        "test_windows_read_files.py::test_service_publication_with_real_mutable_reader[held-view]",
+        "test_windows_read_files.py::test_service_publication_with_real_mutable_reader[held-naming]",
+        "test_windows_read_files.py::test_service_publication_with_real_mutable_reader[released-view]",
+        "test_windows_read_files.py::test_service_publication_with_real_mutable_reader[released-naming]",
+        "test_windows_read_files.py::test_service_publication_during_held_immutable_resource",
+    ]
+    tree = ast.parse((ROOT / "tests/test_windows_read_files.py").read_text(encoding="utf-8"))
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)}
+    assert "test_service_publication_during_held_immutable_resource" in functions
+    mutable = functions["test_service_publication_with_real_mutable_reader"]
+    parameters = [(ast.literal_eval(dec.args[0]), ast.literal_eval(dec.args[1]))
+                  for dec in mutable.decorator_list if isinstance(dec, ast.Call)
+                  and isinstance(dec.func, ast.Attribute) and dec.func.attr == "parametrize"]
+    assert parameters == [("reader_kind", ["view", "naming"]), ("scope", ["held", "released"])]
+
+
+def test_storage_route_uses_only_selected_nodes_without_worker_or_cli_journey(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(probe, "storage_run",
+                        lambda *args: seen.append(args) or 1)
+    def forbidden(*args):
+        raise AssertionError("unrelated journey")
+    for name in ("run", "cli_run", "native_controls", "host", "worker_entry"):
+        monkeypatch.setattr(probe, name, forbidden)
+    wheel, receipt, candidate = (tmp_path / name for name in ("candidate.whl", "storage.json", "candidate.json"))
+    monkeypatch.setattr(sys, "argv", [SPEC.origin, "--storage-run", str(wheel),
+                                    "--receipt", str(receipt), "--candidate-receipt", str(candidate)])
+    assert probe.main() == 1
+    assert seen == [(wheel.resolve(), receipt.resolve(), candidate.resolve())]
+
+
+def test_existing_run_route_still_dispatches_default_journey(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(probe, "run", lambda *args: seen.append(args) or 0)
+    monkeypatch.setattr(probe, "storage_run", lambda *args: pytest.fail("storage route not selected"))
+    wheel, receipt = tmp_path / "candidate.whl", tmp_path / "result.json"
+    monkeypatch.setattr(sys, "argv", [SPEC.origin, "--run", str(wheel), "--receipt", str(receipt)])
+    assert probe.main() == 0
+    assert seen == [(wheel.resolve(), receipt.resolve())]
+
+
+@pytest.mark.parametrize("extra", [[], ["--receipt", "result.json"], ["--candidate-receipt", "candidate.json"],
+                                  ["--receipt", "result.json", "--candidate-receipt", "candidate.json", "--run", "other.whl"]])
+def test_storage_route_refuses_missing_receipts_and_mixed_routes(monkeypatch, extra):
+    monkeypatch.setattr(sys, "argv", [SPEC.origin, "--storage-run", "candidate.whl", *extra])
+    with pytest.raises(SystemExit) as error:
+        probe.main()
+    assert error.value.code == 2
+
+
+def test_storage_result_observer_uses_canonical_facts_without_private_pytest_prose():
+    results = probe.StorageResults()
+    node = next(iter(results.node_labels))
+    error = PermissionError(13, "PRIVATE-TOKEN", "/private/path")
+    error.winerror = 32
+    assert results.pytest_runtest_makereport(
+        types.SimpleNamespace(nodeid=node),
+        types.SimpleNamespace(when="call", excinfo=types.SimpleNamespace(value=error))) is None
+    assert results.failure_facts == [{"case": "held_view", "phase": "call", "facts": {
+        "errors": [{"class": "PermissionError", "errno": 13, "winerror": 32, "frames": []}],
+        "truncated": False}}]
+    report = storage_public_report()
+    report.update(status="FAIL", selection=results.finish(1))
+    probe.validate_storage_public(report)
+    assert "PRIVATE" not in json.dumps(report) and "/private" not in json.dumps(report)
+
+
+def test_storage_collection_skip_and_failure_fact_overflow_never_create_pass():
+    results = probe.StorageResults()
+    results.pytest_collectreport(types.SimpleNamespace(failed=False, skipped=True))
+    selection = native_result(results=results)
+    assert selection["status"] == "FAIL" and selection["collectionExact"] is False
+    node = next(iter(results.node_labels))
+    for _ in range(18):
+        results.pytest_runtest_makereport(types.SimpleNamespace(nodeid=node),
+            types.SimpleNamespace(when="call", excinfo=types.SimpleNamespace(value=RuntimeError("PRIVATE"))))
+    assert len(results.failure_facts) == 15
+    report = storage_public_report()
+    report.update(status="FAIL", selection=results.finish(1))
+    probe.validate_storage_public(report)
+    report["selection"]["failureFacts"].append(copy.deepcopy(results.failure_facts[0]))
+    with pytest.raises(AssertionError):
+        probe.validate_storage_public(report)
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda r: r.update(message="PRIVATE"),
+    lambda r: r.update(qualification="cold-runtime-pass"),
+    lambda r: r.update(schema=True),
+    lambda r: r.update(scratchRemoved=False),
+    lambda r: r.update(sourceBound=False),
+    lambda r: r.update(installedStable=False),
+    lambda r: r.update(productionModules=True),
+    lambda r: r.update(processAttempts=1),
+    lambda r: r["network"].update(unknownAttempts=1),
+    lambda r: r["candidate"].update(head="PRIVATE"),
+    lambda r: r["testSources"].update(extra="a"*64),
+    lambda r: r["testSources"].pop("conftest.py"),
+    lambda r: r["selection"]["cases"]["held_view"].update(skips=1),
+    lambda r: r["selection"].update(collectionExact=False),
+    lambda r: r["installation"].update(path="/private"),
+])
+def test_storage_public_validator_rejects_false_pass_and_private_fields(mutation):
+    report = storage_public_report()
+    probe.validate_storage_public(report)
+    mutation(report)
+    with pytest.raises((AssertionError, TypeError, KeyError, ValueError)):
+        probe.validate_storage_public(report)
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda f: f.update(message="PRIVATE"),
+    lambda f: f.update(case="private-test-name"),
+    lambda f: f.update(phase="private-phase"),
+    lambda f: f["facts"].update(secret="PRIVATE"),
+    lambda f: f["facts"]["errors"][0].update(message="/private/path"),
+    lambda f: f["facts"]["errors"][0].update(winerror=True),
+    lambda f: f["facts"]["errors"][0].update(frames=[{"source": "/private", "offset": 0}]),
+])
+def test_storage_public_validator_refuses_malformed_canonical_failure_facts(mutation):
+    report = storage_public_report()
+    report["status"] = report["selection"]["status"] = "FAIL"
+    fact = {"case": "held_view", "phase": "call", "facts": {
+        "errors": [{"class": "PermissionError", "errno": 13, "winerror": 32, "frames": []}],
+        "truncated": False}}
+    report["selection"]["failureFacts"] = [fact]
+    probe.validate_storage_public(report)
+    mutation(fact)
+    with pytest.raises((AssertionError, TypeError, KeyError, ValueError)):
+        probe.validate_storage_public(report)
+
+
+def test_storage_selection_invokes_only_staged_cells_and_asyncio_plugin(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    observed = []
+    monkeypatch.setattr(probe, "control_socketpairs", lambda guard: nullcontext())
+    def main(arguments, plugins):
+        observed.append(arguments)
+        results, = plugins
+        assert isinstance(results, probe.StorageResults)
+        model = probe.StorageResults()
+        nodes = list(model.node_labels)
+        results.pytest_collection_finish(types.SimpleNamespace(
+            items=[types.SimpleNamespace(nodeid=node) for node in nodes]))
+        for node in nodes:
+            for phase in ("setup", "call", "teardown"):
+                results.pytest_runtest_logreport(types.SimpleNamespace(
+                    nodeid=node, when=phase, outcome="passed",
+                    user_properties=storage_properties(results.node_labels[node]) if phase == "call" else []))
+        return 0
+    monkeypatch.setattr(pytest, "main", main)
+    target = tmp_path / "native-controls"
+    result = probe.storage_selection(tmp_path, target, None)
+    assert result["status"] == "PASS"
+    args, = observed
+    assert args[-5:] == [str(target / "tests" / node) for node in probe.STORAGE_CONTROLS.values()]
+    assert "pytest_asyncio.plugin" in args and "aiohttp.pytest_plugin" not in args
+    assert args[args.index("--rootdir") + 1] == args[args.index("--confcutdir") + 1] == str(target)
+
+
+@pytest.mark.parametrize("event", ["subprocess.Popen", "os.system", "os.posix_spawn", "os.spawn", "os.exec"])
+def test_storage_guard_refuses_process_attempt_without_arguments_or_effects(event):
+    guard = object.__new__(probe.StorageGuard)
+    guard.process_attempts = 0
+    with pytest.raises(PermissionError, match="Storage control process boundary"):
+        guard.process_audit(event, ("PRIVATE executable", "PRIVATE arguments"))
+    assert guard.process_attempts == 1
+    assert probe.StorageGuard.audit is probe.NetworkGuard.audit
+
+
+@pytest.mark.parametrize("fault", [None, "candidate", "skipped", "malformed", "cleanup",
+                                  "source-changed", "source-missing", "installed-changed", "network", "process"])
+def test_storage_run_models_source_binding_fail_closed_and_private_cleanup(tmp_path, monkeypatch, fault):
+    """Run harness control flow with inert audit/pytest/install boundaries, not Windows cells."""
+    candidate_path, receipt = tmp_path / "candidate.json", tmp_path / "storage.json"
+    candidate = {"head": "a"*40, "tree": "b"*40}
+    probe.write_json(candidate_path, {"candidate": candidate})
+    hooks, roots, audited, selected = [], [], [], []
+    monkeypatch.setattr(probe, "sys", types.SimpleNamespace(
+        flags=types.SimpleNamespace(isolated=True, dont_write_bytecode=True, optimize=0),
+        path=[], addaudithook=hooks.append))
+    monkeypatch.setattr(probe, "require_ci", lambda: None)
+    monkeypatch.setattr(probe, "candidate", lambda source: (
+        {**candidate, "head": "f"*40} if fault == "candidate" else candidate))
+    monkeypatch.setenv("TEMP", str(tmp_path))
+    monkeypatch.setattr(probe, "canonical_temp", Path)
+    monkeypatch.setattr(probe, "private_directory", lambda path, root: path.mkdir(parents=True, exist_ok=True))
+    monkeypatch.setattr(probe, "sanitize", roots.append)
+    guard = types.SimpleNamespace(probes=0, blocked=0, pair_binds=1, process_attempts=0,
+                                  audit=lambda *args: None, process_audit=lambda *args: None,
+                                  verify=lambda: None)
+    monkeypatch.setattr(probe, "StorageGuard", lambda log: guard)
+    def installed(wheel):
+        audited.append(wheel)
+        return {"wheelSha256": ("f" if fault == "installed-changed" and len(audited) == 2 else "e")*64,
+                "verifiedMembers": 101}
+    monkeypatch.setattr(probe, "installed", installed)
+    monkeypatch.setattr(probe, "storage_imports", lambda: 7)
+    def selection(root, target, supplied_guard):
+        selected.append(target)
+        assert supplied_guard is guard and Path.cwd() == root
+        assert len(hooks) == 2 and len(audited) == 1
+        print("PRIVATE pytest detail /private/path")
+        if fault == "source-changed":
+            (target / "tests/conftest.py").write_text("PRIVATE changed source")
+        if fault == "source-missing":
+            (target / "tests/conftest.py").unlink()
+        if fault == "network":
+            guard.blocked = 1
+        if fault == "process":
+            guard.process_attempts = 1
+        result = native_result("skipped" if fault == "skipped" else None, results=probe.StorageResults())
+        if fault == "malformed":
+            result["failureFacts"] = [{"case": "held_view", "phase": "call",
+                                      "facts": {"message": "PRIVATE"}}]
+        return result
+    monkeypatch.setattr(probe, "storage_selection", selection)
+    if fault == "cleanup":
+        def refuse(path):
+            raise PermissionError("PRIVATE cleanup")
+        monkeypatch.setattr(probe, "shutil", types.SimpleNamespace(rmtree=refuse))
+    before = Path.cwd()
+    assert probe.storage_run(tmp_path / "candidate.whl", receipt, candidate_path) == (0 if fault is None else 1)
+    assert Path.cwd() == before
+    result = json.loads(receipt.read_text(encoding="utf-8"))
+    probe.validate_storage_public(result)
+    assert result["status"] == ("PASS" if fault is None else "FAIL")
+    assert "PRIVATE" not in receipt.read_text() and str(tmp_path) not in receipt.read_text()
+    assert json.loads(candidate_path.read_text()) == {"candidate": candidate}
+    if fault == "candidate":
+        assert not roots and not audited and not selected and not result["sourceBound"]
+    else:
+        assert len(roots) == len(selected) == 1 and len(audited) == 2
+        assert roots[0].exists() == (fault == "cleanup")
+        assert result["scratchRemoved"] == (fault != "cleanup")
+        if fault == "cleanup":
+            assert "PRIVATE" in (roots[0] / "diagnostics-storage.log").read_text()
+        if fault == "malformed":
+            assert result["selection"] is None
+
+
+def test_storage_route_does_not_remove_uncreated_scratch_or_overwrite_inputs(tmp_path, monkeypatch):
+    candidate = tmp_path / "candidate.json"
+    probe.write_json(candidate, {"candidate": {"head": "a"*40, "tree": "b"*40}})
+    original = candidate.read_bytes()
+    assert probe.storage_run(tmp_path / "wheel.whl", candidate, candidate) == 1
+    assert candidate.read_bytes() == original
+    root = tmp_path / ("us-" + "a"*12)
+    root.mkdir()
+    marker = root / "owned-elsewhere"
+    marker.write_text("PRIVATE")
+    monkeypatch.setattr(probe, "sys", types.SimpleNamespace(
+        flags=types.SimpleNamespace(isolated=True, dont_write_bytecode=True, optimize=0), path=[]))
+    monkeypatch.setattr(probe, "require_ci", lambda: None)
+    monkeypatch.setattr(probe, "candidate", lambda source: json.loads(original)["candidate"])
+    monkeypatch.setattr(probe, "canonical_temp", lambda value: tmp_path)
+    monkeypatch.setattr(probe, "uuid", types.SimpleNamespace(uuid4=lambda: types.SimpleNamespace(hex="a"*32)))
+    monkeypatch.setenv("TEMP", str(tmp_path))
+    receipt = tmp_path / "result.json"
+    assert probe.storage_run(tmp_path / "wheel.whl", receipt, candidate) == 1
+    assert marker.read_text() == "PRIVATE"
+    assert json.loads(receipt.read_text())["scratchRemoved"] is False
+
+
+@pytest.mark.parametrize("fault", [None, "checkout", "unrecorded", "missing", "fake"])
+def test_storage_import_audit_rejects_checkout_or_unowned_production_modules(tmp_path, monkeypatch, fault):
+    prefix = tmp_path / "installed"
+    package = prefix / "amplifier_web"
+    root = types.ModuleType("amplifier_web")
+    root.__file__ = str(package / "__init__.py")
+    child = types.ModuleType("amplifier_web.service")
+    child.__file__ = str(package / "service.py")
+    files = ["amplifier_web/__init__.py", "amplifier_web/service.py"]
+    if fault == "checkout":
+        child.__file__ = str(tmp_path / "checkout/amplifier_web/service.py")
+        files.append("../checkout/amplifier_web/service.py")
+    elif fault == "unrecorded":
+        files.pop()
+    elif fault == "missing":
+        del child.__file__
+    elif fault == "fake":
+        child = types.SimpleNamespace(__file__=child.__file__)
+    monkeypatch.setattr(probe, "sys", types.SimpleNamespace(
+        prefix=str(prefix), modules={"amplifier_web": root, "amplifier_web.service": child}))
+    monkeypatch.setattr(probe, "metadata", types.SimpleNamespace(distribution=lambda name:
+        types.SimpleNamespace(files=files, locate_file=lambda path: prefix / path)))
+    if fault is None:
+        assert probe.storage_imports() == 2
+    else:
+        with pytest.raises((AssertionError, KeyError)):
+            probe.storage_imports()
+
+
+@pytest.mark.parametrize("label", tuple(probe.STORAGE_CONTROLS))
+def test_storage_publication_properties_are_exact_case_bound_deep_copies(label):
+    original = storage_observation(label)
+    # Actual production validator builds new errors/frame containers as well.
+    if original["facts"]["errors"]:
+        original["facts"]["errors"][0]["frames"] = [{"source": "storage.atomic", "offset": 8}]
+    copied = probe.validate_publication_sharing(original, label)
+    assert copied == original and copied is not original and copied["facts"] is not original["facts"]
+    if copied["facts"]["errors"]:
+        copied["facts"]["errors"][0]["frames"][0]["offset"] = 9
+        assert original["facts"]["errors"][0]["frames"][0]["offset"] == 8
+    properties = [("publication_sharing", json.dumps(original)), ("publication_sharing_verified", True)]
+    captured = probe.publication_properties(properties, label)
+    assert captured == original
+    properties[0] = ("publication_sharing", "PRIVATE")
+    assert captured == original  # Later pytest property mutation cannot rewrite retained facts.
+    results = probe.StorageResults()
+    result = native_result(results=results)
+    case = result["cases"][label]
+    assert case["status"] == "PASS" and case["publicationSharingVerified"] is True
+    case["publicationSharing"]["facts"]["errors"].append({"class": "other", "frames": []})
+    assert results.finish(0)["cases"][label]["publicationSharing"] == storage_observation(label)
+    assert all(row["publicationSharingVerified"] is True for row in results.finish(0)["cases"].values())
+
+
+@pytest.mark.parametrize("fault", [
+    "missing", "missing-verified", "unverified", "integer-verified", "string-verified", "extra-property",
+    "duplicate-property", "dict-property", "bad-json", "oversized", "duplicate-json-key", "secret", "schema",
+    "reader", "scope", "platform", "posix", "result", "empty-raised", "wrong-class", "wrong-errno",
+    "wrong-winerror", "bool-winerror", "truncated", "private-frame", "private-facts",
+])
+def test_storage_publication_bad_properties_cannot_pass_or_export_private_values(fault):
+    def changed(label):
+        properties = storage_properties(label)
+        if label != "held_view":
+            return properties
+        value = storage_observation(label)
+        if fault == "missing":
+            return []
+        if fault == "missing-verified":
+            return properties[:1]
+        if fault in {"unverified", "integer-verified", "string-verified"}:
+            return [properties[0], ("publication_sharing_verified",
+                                   {"unverified": False, "integer-verified": 1, "string-verified": "True"}[fault])]
+        if fault == "extra-property":
+            return [*properties, ("PRIVATE-property", "/private/path")]
+        if fault == "duplicate-property":
+            return [properties[0], properties[0]]
+        if fault == "dict-property":
+            return [("publication_sharing", value), properties[1]]
+        if fault in {"bad-json", "oversized", "duplicate-json-key"}:
+            raw = {"bad-json": "{PRIVATE", "oversized": "x"*16385,
+                   "duplicate-json-key": json.dumps(value)[:-1] + ', "schema": 1}'}[fault]
+            return [("publication_sharing", raw), properties[1]]
+        if fault == "secret":
+            value["message"] = "/private/path PRIVATE-TOKEN"
+        elif fault == "schema":
+            value["schema"] = True
+        elif fault == "reader":
+            value["reader"] = "naming.legacy"
+        elif fault == "scope":
+            value["scope"] = "released"
+        elif fault == "platform":
+            value["platform"] = "PRIVATE"
+        elif fault == "posix":
+            value.update(platform="posix", result="returned", facts={"errors": [], "truncated": False})
+        elif fault == "result":
+            value["result"] = "returned"
+        elif fault == "empty-raised":
+            value["facts"]["errors"] = []
+        elif fault == "wrong-class":
+            value["facts"]["errors"][0]["class"] = "OSError"
+        elif fault == "wrong-errno":
+            value["facts"]["errors"][0]["errno"] = 22
+        elif fault == "wrong-winerror":
+            value["facts"]["errors"][0]["winerror"] = 5
+        elif fault == "bool-winerror":
+            value["facts"]["errors"][0]["winerror"] = True
+        elif fault == "truncated":
+            value["facts"]["truncated"] = True
+        elif fault == "private-frame":
+            value["facts"]["errors"][0]["frames"] = [{"source": "/private/path", "offset": 0}]
+        elif fault == "private-facts":
+            value["facts"]["message"] = "PRIVATE"
+        return [("publication_sharing", json.dumps(value)), properties[1]]
+    selection = native_result(results=probe.StorageResults(), properties=changed)
+    assert selection["status"] == selection["cases"]["held_view"]["status"] == "FAIL"
+    assert selection["cases"]["held_view"]["callsPassed"] == 1  # Original pytest pass stays observed.
+    assert all(selection["cases"][label]["status"] == "PASS" for label in probe.STORAGE_CONTROLS if label != "held_view")
+    report = storage_public_report()
+    report.update(status="FAIL", selection=selection)
+    probe.validate_storage_public(report)
+    assert "PRIVATE" not in json.dumps(report) and "/private/path" not in json.dumps(report)
+    report["status"] = "PASS"
+    with pytest.raises(AssertionError):
+        probe.validate_storage_public(report)
+
+
+@pytest.mark.parametrize("label", ("released_view", "released_naming", "held_resource"))
+def test_storage_released_and_resource_cells_require_returned_empty_facts(label):
+    def properties(case):
+        value = storage_observation(case)
+        if case == label:
+            value.update(result="raised", facts=storage_observation("held_view")["facts"])
+        return [("publication_sharing", json.dumps(value)), ("publication_sharing_verified", True)]
+    selection = native_result(results=probe.StorageResults(), properties=properties)
+    assert selection["status"] == selection["cases"][label]["status"] == "FAIL"
+    assert selection["cases"][label]["publicationSharing"]["result"] == "raised"
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda c: c.pop("publicationSharing"),
+    lambda c: c.update(publicationSharing=None, publicationSharingVerified=False),
+    lambda c: c.update(publicationSharingVerified=1),
+    lambda c: c.update(publicationSharingVerified=False),
+    lambda c: c["publicationSharing"].update(message="PRIVATE"),
+    lambda c: c["publicationSharing"].update(reader="naming.legacy"),
+    lambda c: c["publicationSharing"].update(scope="released"),
+    lambda c: c["publicationSharing"].update(platform="posix"),
+    lambda c: c["publicationSharing"]["facts"]["errors"][0].update(winerror=5),
+])
+def test_storage_public_receipt_revalidates_each_successful_discriminator(mutation):
+    report = storage_public_report()
+    mutation(report["selection"]["cases"]["held_view"])
+    with pytest.raises((AssertionError, KeyError, TypeError, ValueError)):
+        probe.validate_storage_public(report)
+
+
+@pytest.mark.parametrize("missing", tuple(probe.STORAGE_FILES))
+def test_storage_source_staging_cannot_certify_missing_fixture(tmp_path, monkeypatch, missing):
+    source = tmp_path / "source"
+    source.mkdir()
+    for name in probe.STORAGE_FILES:
+        if name != missing:
+            (source / name).write_bytes((ROOT / "tests" / name).read_bytes())
+    monkeypatch.setattr(probe, "private_directory", lambda path, root: path.mkdir(parents=True))
+    with pytest.raises(FileNotFoundError):
+        probe._stage_control_files(tmp_path / "scratch", source, probe.STORAGE_FILES)
+
+
+def test_storage_unknown_case_and_other_phase_properties_are_not_published():
+    results = probe.StorageResults()
+    result = native_result(results=results)
+    assert result["status"] == "PASS"
+    node = next(iter(results.node_labels))
+    for nodeid, phase in ((node, "teardown"), ("PRIVATE/node.py::private_test", "call")):
+        results.pytest_runtest_logreport(types.SimpleNamespace(
+            nodeid=nodeid, when=phase, outcome="passed", user_properties=[
+                ("publication_sharing", "PRIVATE"), ("publication_sharing_verified", True)]))
+    changed = results.finish(0)
+    assert changed["status"] == "FAIL"  # Duplicate/unexpected pytest events are still failures.
+    assert "PRIVATE" not in json.dumps(changed)
+    assert changed["cases"]["held_view"]["publicationSharing"] == storage_observation("held_view")
