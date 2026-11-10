@@ -7,6 +7,7 @@ import tomllib
 from types import SimpleNamespace
 
 import pytest
+from packaging.requirements import Requirement
 from packaging.markers import default_environment
 
 from amplifier_web import runtime_environment as runtime
@@ -21,6 +22,9 @@ NAME = 'fixture-component'
 URL = 'https://example.invalid/retained-component'
 OLD, NEW = 'a' * 40, 'b' * 40
 BASE = {'project': {'name': 'worker', 'version': '1'}}
+MEMORY = 'amplifier-memory'
+MEMORY_HOOK = 'amplifier-module-hooks-memory-inject'
+MEMORY_URL = 'https://github.com/microsoft/amplifier-bundle-memory'
 
 
 def encode(data):
@@ -147,6 +151,68 @@ async def test_real_resolver_preserves_pin_and_rejects_hidden_incompatibility(tm
         assert not (runtime.receipt_directory(tmp_path / 'app', 'e' * 32) / 'runtime.lock').exists()
     else:
         retained.verify(project)
+
+
+async def test_real_worker_lock_keeps_app_memory_source_with_pinned_module(tmp_path, monkeypatch):
+    uv = shutil.which('uv')
+    assert uv, 'This resolver regression requires the qualification environment to provide uv'
+    shipped = tomllib.loads(runtime.manifest_path().read_text())
+    memory_requirement = next(value for value in shipped['project']['dependencies']
+                              if Requirement(value).name == MEMORY)
+    memory_overrides = [value for value in shipped['tool']['uv']['override-dependencies']
+                        if Requirement(value).name == MEMORY]
+
+    repo = tmp_path / 'memory'; repo.mkdir()
+    git(repo, 'init', '-b', 'main')
+    git(repo, 'config', 'user.name', 'Fixture')
+    git(repo, 'config', 'user.email', 'fixture@example.invalid')
+    root_backend = BACKEND.replace('fixture_component', 'amplifier_memory').replace(
+        'fixture-component', MEMORY)
+    local_url = repo.as_uri()
+    local_requirement = memory_requirement.replace(MEMORY_URL, local_url)
+    local_overrides = [value.replace(MEMORY_URL, local_url) for value in memory_overrides]
+    (repo / 'pyproject.toml').write_text('[project]\nname="' + MEMORY + '"\nversion="1.0"\n'
+        '[build-system]\nrequires=[]\nbuild-backend="backend"\nbackend-path=["."]\n')
+    (repo / 'backend.py').write_text(root_backend)
+    git(repo, 'add', '.'); git(repo, 'commit', '-m', 'memory root')
+    old = git(repo, 'rev-parse', 'HEAD')
+
+    hook = repo / 'modules/hooks-memory-inject'; hook.mkdir(parents=True)
+    dependency = MEMORY + ' @ git+' + local_url + '@' + old
+    hook.joinpath('pyproject.toml').write_text('[project]\nname="' + MEMORY_HOOK + '"\nversion="1.0"\n'
+        'dependencies=[' + json.dumps(dependency) + ']\n[build-system]\nrequires=[]\n'
+        'build-backend="backend"\nbackend-path=["."]\n')
+    hook.joinpath('backend.py').write_text(BACKEND.replace('fixture_component', 'memory_hook').replace(
+        'fixture-component', MEMORY_HOOK).replace('Version: 1.0\\n',
+        'Version: 1.0\\nRequires-Dist: ' + dependency + '\\n'))
+    git(repo, 'add', '.'); git(repo, 'commit', '-m', 'memory hook')
+    hook_revision = git(repo, 'rev-parse', 'HEAD')
+    (repo / 'revision.txt').write_text('new main')
+    git(repo, 'add', '.'); git(repo, 'commit', '-m', 'advance memory main')
+    current = git(repo, 'rev-parse', 'HEAD')
+
+    baseline = {'project': {'name': 'worker', 'version': '1',
+                            'requires-python': '>=3.13', 'dependencies': [local_requirement]},
+                'tool': {'uv': {'override-dependencies': local_overrides}}}
+    content = runtime.augmented_manifest(encode(baseline), [{
+        'kind': 'runtime dependency', 'package': MEMORY_HOOK, 'url': local_url,
+        'ref': hook_revision, 'subdirectory': 'modules/hooks-memory-inject',
+    }])
+    policy = tomllib.loads(content.decode())
+    applied_memory = [value for value in policy['tool']['uv']['override-dependencies']
+                      if Requirement(value).name == MEMORY]
+    assert applied_memory == local_overrides
+    assert MEMORY not in policy['tool']['amplifier-unified']['generated-source-overrides']
+
+    monkeypatch.setenv('UV_NO_INDEX', '1')
+    monkeypatch.delenv('UV_OFFLINE', raising=False)
+    monkeypatch.setenv('UV_PYTHON_DOWNLOADS', 'never')
+    monkeypatch.setenv('UV_CACHE_DIR', str(tmp_path / 'uv-cache'))
+    project = runtime.prepare_project(tmp_path / 'app', 'f' * 32, content=content)
+    await updates.process(uv, 'lock', '--project', str(project), '--python', sys.executable, timeout=90)
+    locked = runtime.locked_sources(project)
+    assert locked[MEMORY].fragment == current
+    assert locked[MEMORY_HOOK].fragment == hook_revision
 
 
 @pytest.mark.parametrize('case', ['direct', 'active-extra', 'inactive-extra', 'inactive-marker', 'unrelated', 'root'])
