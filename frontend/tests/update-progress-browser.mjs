@@ -389,7 +389,7 @@ try{
   runningRevision:confirmedAppResult.revision,status:'check_failed',channel:'github-releases',
   checkStage:'release_metadata',checkReason:'unavailable',
   detail:'Could not read published-release metadata. No update was installed by this check.'};
- const componentAttempt='9'.repeat(32),availabilityCases=[],availabilityActions=[];
+ const componentAttempt='9'.repeat(32),availabilityCases=[],availabilityNavigationCases=[],availabilityActions=[];
  function availabilityUpdates(phase,application=failedAppCheck){
   const complete=phase==='installed',pending=phase==='staged';
   return {application,applicationResult:confirmedAppResult,phase,error:null,initialPreparation:false,
@@ -421,7 +421,8 @@ try{
  const availabilityPage=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:headers});
  availabilityPage.on('pageerror',error=>errors.push(error.message));
  result.availabilityIndependence={syntheticHTTPState:true,syntheticEventDelivery:true,backendTransitionsQualified:false,
-  scenario:'application-check failure arrives after Settings navigation',existingFailureNavigationQualified:false,cases:availabilityCases};
+  scenario:'application-check failure arrives after Settings navigation',existingFailureNavigationQualified:false,
+  cases:availabilityCases,navigationCases:availabilityNavigationCases};
  try{
   await availabilityPage.addInitScript(installFixtureEvents);
   await availabilityPage.route('**/api/**',async route=>{
@@ -442,6 +443,8 @@ try{
   await availabilityPage.goto(base);await availabilityPage.waitForSelector('#amp-one');await openSettingsPage(availabilityPage,'updates');
   const panel=availabilityPage.locator('[data-part="updates"]'),heading=panel.locator('[data-part="application-update"]').first();
   const appStatus=panel.locator('.a-app-update-status'),appIssue=panel.getByRole('alert').filter({hasText:failedAppCheck.detail});
+  const summaryWarning=heading.locator('[data-part="application-check-attention"]');
+  const summaryWarningText='Application check needs attention. '+failedAppCheck.detail+' Component results are separate.';
   await expect(appStatus).toHaveText('Not checked');
   await expect(panel.locator('[data-part="ecosystem-update-details"]')).not.toHaveAttribute('open','');
   assert.equal(await availabilityPage.evaluate(()=>window.amplifier.getState().updates.application.status),'not_checked');
@@ -461,12 +464,14 @@ try{
     await expect(heading.locator('[data-part="confirmed-application-result"]')).toHaveText(confirmedAppText);
     await expect(panel.locator('[data-action="updates.install"]')).toHaveCount(0);
     if(phase==='installed'){
+     await expect(summaryWarning).toHaveCount(0);
      await expect(panel).not.toHaveAttribute('aria-busy','true');
      await expect(heading.locator('.a-progress-spinner')).toHaveCount(0);
      for(const button of await panel.locator('[data-action="updates.check"]').all())await expect(button).toBeEnabled();
      await expect(panel.locator('.a-update-current-action button')).toHaveText('Check for updates');
      await expect(panel.locator('[data-part="component-update-results"]')).toContainText('Independent fixture component · Updated');
     }else{
+     await expect(summaryWarning).toHaveText(summaryWarningText);await expect(summaryWarning).toBeVisible();
      await expect(panel).toHaveAttribute('aria-busy','true');
      await expect(heading.locator('.a-progress-spinner')).toBeVisible();
      await expect(panel.locator('[data-action="updates.check"]')).toBeDisabled();
@@ -497,6 +502,46 @@ try{
      originalApplicationResultPreserved:true,applicationCheck:saved.application,componentResults:saved.componentResults});
    }
   }
+  // A known failure followed by explicit Settings-section navigation is a
+  // different journey: the navigation owner deliberately collapses details.
+  // The summary warning must remain visible without reopening that disclosure.
+  // Run after all eight arrival cases so their automatic-open assertions stand.
+  for(const phase of ['validating','staged']){
+   await availabilityPage.setViewportSize({width:1280,height:950});
+   availabilityState.updates=availabilityUpdates(phase);availabilityState.revision++;
+   await availabilityPage.evaluate(value=>window.emitState(value),availabilityShell.state());
+   await expect(heading.getByRole('heading',{level:4})).toHaveText('Finishing your update');
+   const beforeNavigation=await availabilityPage.evaluate(()=>window.amplifier.getState().updates);
+   const priorVisit=await availabilityPage.evaluate(()=>window.amplifier.getState().view.settingsRootVisit);
+   await openSettingsPage(availabilityPage,'updates');
+   await expect.poll(()=>availabilityPage.evaluate(()=>window.amplifier.getState().view.settingsRootVisit)).not.toBe(priorVisit);
+   for(const [size,width,height] of [['desktop',1280,950],['mobile',320,844]]){
+    await availabilityPage.setViewportSize({width,height});
+    await expect(panel.locator('[data-part="ecosystem-update-details"]')).not.toHaveAttribute('open','');
+    await expect(appIssue.first()).not.toBeVisible();
+    await expect(summaryWarning).toHaveCount(1);await expect(summaryWarning).toHaveText(summaryWarningText);
+    await expect(summaryWarning).toBeVisible();
+    assert.equal(await summaryWarning.evaluate(element=>!!element.closest('details')),false);
+    await expect(heading.getByRole('heading',{level:4})).toHaveText('Finishing your update');
+    await expect(panel).toHaveAttribute('aria-busy','true');await expect(heading.locator('.a-progress-spinner')).toBeVisible();
+    await expect(panel.locator('[data-action="updates.check"]')).toBeDisabled();
+    await expect(panel.locator('[data-action="updates.install"]')).toHaveCount(0);
+    await expect(heading).not.toContainText('You’re up to date');
+    await expect(heading.locator('[data-part="confirmed-application-result"]')).toHaveText(confirmedAppText);
+    if(phase==='staged')await expect(panel.locator('[data-part="component-update-results"]')).toContainText('Awaiting adoption');
+    const afterNavigation=await availabilityPage.evaluate(()=>window.amplifier.getState().updates);
+    assert.deepEqual(afterNavigation,beforeNavigation);assert.deepEqual(afterNavigation.application,failedAppCheck);
+    assert.deepEqual(afterNavigation.applicationResult,confirmedAppResult);assert.deepEqual(availabilityActions,[]);
+    await expect.poll(()=>availabilityPage.locator('.a-dialog').evaluate(el=>el.scrollWidth-el.clientWidth)).toBeLessThanOrEqual(1);
+    await heading.scrollIntoViewIfNeeded();
+    const screenshot=output+`-app-check-navigation-${phase}-${size}.png`;
+    await availabilityPage.screenshot({path:screenshot});
+    availabilityNavigationCases.push({phase,size,width,screenshot,detailsCollapsed:true,summaryWarningVisible:true,
+     componentProgressBusy:true,duplicateInstallAbsent:true,originalApplicationResultPreserved:true,noUpdateEffects:true});
+   }
+  }
+  assert.equal(availabilityNavigationCases.length,4);
+  result.availabilityIndependence.existingFailureNavigationQualified=true;
  }catch(error){
   result.availabilityIndependence.failureObservation=await availabilityPage.evaluate(()=>{
    const state=window.amplifier?.getState(),details=document.querySelector('[data-part="ecosystem-update-details"]');

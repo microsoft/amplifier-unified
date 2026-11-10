@@ -193,6 +193,40 @@ const failedApplicationCheck={...application,status:'check_failed',latest:null,c
  detail:'Could not read published-release metadata. No update was installed by this check.'};
 const independentComponentUpdate={phase:'available',application:failedApplicationCheck,items:[failedApplicationCheck,component],
  sequence:{stage:'included',included:{available:1,issues:0},other:{status:'waiting'}}};
+test('app-check summary warning survives collapsed details during available and progressing component work',async()=>{
+ for(const patch of [
+  {},
+  {phase:'validating'},
+  {phase:'staged',pendingRelease:'candidate',plan:{activation:'per-worker'}},
+ ]){
+  const updates={...independentComponentUpdate,...patch},before=JSON.stringify(updates),calls=[];
+  let root;
+  try{
+   await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:state(updates),act:(...args)=>calls.push(args)}))});
+   const details=root.root.findByProps({'data-part':'ecosystem-update-details'});
+   await renderAct(async()=>details.props.onToggle({currentTarget:{open:false}}));
+   assert.equal(details.props.open,false);
+   const overall=root.root.findByProps({'data-part':'application-update'});
+   const warnings=overall.findAllByProps({'data-part':'application-check-attention'});
+   assert.equal(warnings.length,1);
+   assert.equal(warnings[0].children.join(''),'Application check needs attention. '+failedApplicationCheck.detail+' Component results are separate.');
+   assert.equal(details.findAllByProps({'data-part':'application-check-attention'}).length,0);
+   assert.deepEqual(calls,[]);assert.equal(JSON.stringify(updates),before);
+  }finally{await renderAct(async()=>root?.unmount())}
+ }
+});
+test('app-check summary warning is absent for current application and terminal app attention',()=>{
+ for(const phase of ['available','validating']){
+  const html=render({...independentComponentUpdate,phase,application,items:[application,component]});
+  assert.doesNotMatch(html,/data-part="application-check-attention"/);
+ }
+ const html=render({phase:'installed',application:failedApplicationCheck,sequence:{stage:'complete'},
+  currentStatus:{status:'action-required',title:'Application check needs attention',detail:failedApplicationCheck.detail,
+   actionRequired:true,action:'check',component:failedApplicationCheck.label}});
+ assert.doesNotMatch(html,/data-part="application-check-attention"/);
+ assert.match(html,/<h4>Application check needs attention<\/h4>/);
+ assert.match(html,/Could not read published-release metadata/);
+});
 test('component validation stays visibly in progress beside the failed app check',()=>{
  const html=render({...independentComponentUpdate,phase:'validating',
   diagnostics:{attemptId:'components',batch:{attemptId:'components',kind:'ecosystem',tier:'included',components:['foundation'],startedAt:1}},
