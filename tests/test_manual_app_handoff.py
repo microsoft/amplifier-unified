@@ -231,6 +231,16 @@ async def test_preventive_hold_never_borrows_missing_native_proof(manager, monke
     assert state['sequence']['stage'] == 'application'
 
 
+def test_scheduling_hold_does_not_copy_release_notes_or_history(manager, monkeypatch):
+    monkeypatch.setattr(handoff, 'sys', SimpleNamespace(platform='win32'))
+    manager.service.state['updates']['pendingApp']['releaseNotes'] = [
+        {'changes': ['retained history'] * 1000}]
+    def forbidden(*args, **kwargs):
+        pytest.fail('Scheduling must not copy pending release history')
+    monkeypatch.setattr(handoff, 'copy', SimpleNamespace(deepcopy=forbidden))
+    assert handoff.awaiting_verification(manager)
+
+
 @pytest.mark.parametrize('install', [False, True])
 async def test_713_to_714_with_720_available_reaches_normal_component_stage(manager, proof, monkeypatch, install):
     state = manager.service.state['updates']
