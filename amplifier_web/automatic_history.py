@@ -134,10 +134,13 @@ def display_message(row, index, session, *, include_internal=False):
 
 
 @retry_indexed_read
-def read_transcript(session, *, before=None, limit=100, diagnostics=None):
-    """Read a display page, or a full view for ordered web-history merging."""
+def read_transcript(session, *, before=None, limit=100, diagnostics=None, include_activity=True):
+    """Read display messages, optionally with their saved execution activity.
+
+    Text-only retrieval omits activity entirely; browser pages retain it by
+    default. Neither path changes canonical history or its display identities.
+    """
     from types import SimpleNamespace
-    from .native_activity import activity_page
     # The reader receives only the thread-safe metrics owner, never app state.
     service = SimpleNamespace(performance_diagnostics=diagnostics)
     root = directory(session)
@@ -204,13 +207,17 @@ def read_transcript(session, *, before=None, limit=100, diagnostics=None):
     for row in visible:
         if input_counts[row.get('nativeInputId')] > 1:
             row['nativeInputAmbiguous'] = True
-    with measure(service, 'history.activity', synchronous=True, session_id=session['id']):
-        activity = activity_page(reader, messages, visible, service=service)
-    activity['diagnostics'] = [dict(code=d.code, source=d.source, line=d.line, severity=d.severity)
-                               for d in diagnostics] + activity['diagnostics']
-    return {'messages': visible, 'offset': rows[0][0] if rows else 0,
-            'userOffset': rows[0][1] if rows else 0, 'total': total, 'revision': start,
-            'activity': activity, 'hiddenMessages': hidden}
+    result = {'messages': visible, 'offset': rows[0][0] if rows else 0,
+              'userOffset': rows[0][1] if rows else 0, 'total': total, 'revision': start,
+              'hiddenMessages': hidden}
+    if include_activity:
+        from .native_activity import activity_page
+        with measure(service, 'history.activity', synchronous=True, session_id=session['id']):
+            activity = activity_page(reader, messages, visible, service=service)
+        activity['diagnostics'] = [dict(code=d.code, source=d.source, line=d.line, severity=d.severity)
+                                   for d in diagnostics] + activity['diagnostics']
+        result['activity'] = activity
+    return result
 
 
 def remove_internal_copies(session, hidden):
@@ -926,11 +933,11 @@ class AutomaticHistory:
                         state['sharedHistory']['reconciliation'] = reconciliation
                     self.last_scan = snapshot
                     if changed:
-                        if delta_mode and not full_merge:
-                            # Native directory changes still need a committed
-                            # publication, but unchanged registries are not its
-                            # write scope. The service retains its independent
-                            # detail-facts and pending-progress broadening guards.
+                        if delta_mode:
+                            # A full metadata reconciliation still tracks every
+                            # changed owner and global above; it does not require
+                            # checkpointing unrelated conversation histories.
+                            # Pending progress joins this scope in the service.
                             self.service._publish_changes(sessions=touched, globals=globals_changed,
                                                           detail_only=resident_detail_only and not globals_changed)
                         else:

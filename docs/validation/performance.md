@@ -53,6 +53,15 @@ An object identity, list length or file size alone does not prove unchanged nest
 content. Count cache-validation work too. Moving a full scan to another process
 changes responsiveness, but does not by itself reduce total work or memory.
 
+Exercise interleaved owners whose combined history exceeds a cache's capacity,
+not only warm inputs that fit. A scan must not evict every reusable fragment
+before its next use. Count re-encoding as well as retained bytes, and pair reuse
+with exact readback, nested edits and owner retirement. Prefer changing admission
+to increasing the memory budget when one-pass scans cause this churn.
+Also switch from a warm owner that stays resident but becomes idle to a new
+working set that fits the existing budget. Changing saves must eventually reuse
+the new fragments; scan resistance must not protect idle entries indefinitely.
+
 Saved output records own their immutable bodies. Their list/read/image actions
 must not hydrate or copy the conversation transcript to validate output ownership.
 An output write retains its location and execution revision across an asynchronous
@@ -86,6 +95,24 @@ Also vary retained body bytes with the row count fixed. A constant SQL instructi
 count can still hide repeated parsing of large bound JSON parameters. Scalar
 queries should not bind unused bodies; measure parameter/statement bytes as well
 as rows and preserve the authorized full-detail read.
+
+Membership-only counts also have no dependency on historical read receipts.
+Hold catalog membership and current notices fixed while growing that history;
+root, child and archive counts should keep the same query work and bound bytes.
+Current execution, preparation and loading counts likewise exclude notice bodies
+and historical read receipts. Catalog discovery must not publish removals for
+directories that were never admitted as chats. Exercise both notifications and
+missed-notification recovery, followed by a real first transcript and deletion;
+quiet repeated discovery must not hide those actual membership changes.
+Attention projections must still observe current read fingerprints and reviewed
+errors, including when they request only scalar fields alongside notice values.
+Notice-detail and receipt consumers should not repeat owner activity aggregation
+when they already join the exact current receipts themselves. Measure the full
+multi-query projection with old read history, as well as its selected results.
+Record the SQLite version with query-work measurements. When development and
+CI or installed environments use different versions, compare the affected query
+plans: flattening and automatic-index choices can turn a linear join into a
+repeated scan. Keep global fact projections separate from demanded item bodies.
 
 Prefer stable work assertions at the affected boundary: rows read or visited,
 records copied/encoded, queries, publications, frames/bytes, retained cache bytes
@@ -218,6 +245,14 @@ forced refreshes. It also checks exact returned history, the selected draft and
 the absence of runtime starts or sends. Growing or refreshing one conversation
 must not serialize unrelated history queries behind its display work.
 
+Text-only agent history read/search also omits execution activity reconstruction.
+Its canonical transcript, native input identities, voice/peer alignment and scope
+checks remain unchanged. `test_text_history_does_not_read_execution_events` rejects
+execution-log reads through the actual text query, including relocated logs, and
+checks that ordinary browser history still returns saved tool activity. Compare
+query outputs and event-read counts while growing retained events independently
+of transcript text; an output limit alone does not bound work before filtering.
+
 Internal admission reads keep their loading fence in memory and commit the final
 history or error once. They must not serialize the same retained execution merely
 to announce that the read has started. Explicit client history loads keep their
@@ -260,6 +295,15 @@ Nested alias edits must still change the exact durable JSON and content hash.
 Prefer removing this redundant projection/decode work to retaining another graph
 or increasing a cache budget. `test_execution_references.py` checks this path
 against the canonical encoder and preserves public deep isolation.
+
+When current work changes but retired accounting does not, reuse successful shape
+validation from the existing committed reference only after the fresh builtin-only
+input witness and owner match. Derive that digest during the existing content pass;
+do not add another traversal, decoded history cache or retention budget. Changed
+retired content, owner or custom values must take canonical validation again. The
+same regression checks repeated current updates, nested edits, rejected fields,
+duplicate identities and exact readback. Placement lookup must still use receipt
+identities after canonical copying; custom copy hooks can change those identities.
 
 The fallback retired-accounting preparation cache witnesses independent 128-row fragments
 within the same 8 MiB witness and 64 MiB accounting budgets. It retains compact

@@ -33,6 +33,45 @@ def save(cache, db, row, owners=None):
     return result
 
 
+def test_new_fitting_working_set_displaces_idle_owner_during_changing_saves(db, monkeypatch):
+    cache = ExecutionPreparation()
+    rows = {name: owner(name) for name in ('old', 'new')}
+    for name, row in rows.items():
+        row['execution']['nodes'] = row['execution']['nodes'][:256]
+        row['execution']['nodes'][0]['text'] += name
+        row['execution']['revision'] = 0
+    # Warm two old fragments, then leave that owner resident but inactive.
+    save(cache, db, rows['old'], rows)
+    rows['old']['execution']['revision'] = 1
+    save(cache, db, rows['old'], rows)
+    cache.MAX_BYTES = (cache.bytes + cache._reserved({}) + 8192) // 2
+    assert sum(entry[2] for key, entry in cache.entries.items() if key[1] == 'nodes') > cache.MAX_BYTES
+    encoded, original = [], json.dumps
+    def observe(value, *args, **kwargs):
+        if type(value) is list and value and isinstance(value[0], dict) and 'nested' in value[0]:
+            encoded.append(len(value))
+        return original(value, *args, **kwargs)
+    work, references = [], []
+    for revision in range(8):
+        # The complete resource changes each time, so whole-resource reuse
+        # cannot conceal repeated encoding of the new owner's stable fragments.
+        rows['new']['execution']['revision'] = revision
+        expected = resource_files.prepare(rows['new']['execution'])
+        encoded.clear()
+        with monkeypatch.context() as patch:
+            patch.setattr(json, 'dumps', observe)
+            result = save(cache, db, rows['new'], rows)
+        work.append(sum(encoded)); references.append(result['$resource'])
+        assert result['$resource'] == expected.identity
+        assert resource_files.read_detached(resource_files.detach(db, result['$resource'])) == rows['new']['execution']
+        assert cache.bytes + cache.accounting_bytes + cache._reserved({}) <= 2 * cache.MAX_BYTES
+    assert len(set(references)) == 8
+    assert work[-2:] == [0, 0], 'A later fitting working set must not starve behind an idle owner'
+    rows['new']['execution']['nodes'][128]['nested'].append('changed after reuse')
+    result = save(cache, db, rows['new'], rows)
+    assert result['$resource'] == resource_files.prepare(rows['new']['execution']).identity
+
+
 def test_two_owners_reuse_only_after_every_fresh_witness(db, monkeypatch):
     cache = ExecutionPreparation()
     rows = {name: owner(name) for name in ('one', 'two')}
@@ -220,7 +259,7 @@ def test_committed_and_provisional_reference_metadata_share_fragment_budget(db):
     for row in rows.values(): save(cache, db, row, rows)
     assert len(cache.references) == 2 and cache.entries
     committed = dict(cache.references)
-    original_keys = set(cache.entries)
+    observed_keys = set(cache.entries)
     pending = {}
     # Compact witnesses leave room for more owners; still saturate the shared
     # budget and prove provisional references participate in eviction.
@@ -228,10 +267,13 @@ def test_committed_and_provisional_reference_metadata_share_fragment_budget(db):
         row = rows.setdefault(name, owner(name))
         row['execution']['nodes'][-1]['nested'][0] = 'provisional replacement'
         cache.reference(db, row, row['execution'], pending)
+        observed_keys.update(cache.entries)
         assert any(entry is not None for entry in pending.values())
         assert cache.references == committed
         assert cache.bytes + cache.accounting_bytes + cache._reserved(pending) <= 2 * cache.MAX_BYTES
-    assert not original_keys <= set(cache.entries)
+    # Pressure must evict fragments, without prescribing which reuse policy
+    # chooses them. Frequently reused original fragments may remain cached.
+    assert not observed_keys <= set(cache.entries)
     db.commit(); cache.committed(pending, rows)
     assert cache.bytes + cache.accounting_bytes + cache._reserved({}) <= 2 * cache.MAX_BYTES
 
@@ -365,6 +407,54 @@ def test_current_save_does_not_recopy_canonical_retired_accounting(db, monkeypat
     projection = session_projection.accounting_projection(tree)
     projection[128]['assignmentReservation']['tokens'].append(100)
     assert tree['retiredUsageNodes'][128]['assignmentReservation']['tokens'] == [128, 99]
+
+
+def test_current_progress_reuses_retired_validation_without_retaining_rows(db, monkeypatch):
+    from amplifier_web import execution_preparation, session_projection
+    cache, row = ExecutionPreparation(), observed_owner()
+    calls, original = [], execution_preparation._canonical_retired
+    def validate(rows):
+        calls.append(len(rows))
+        return original(rows)
+    monkeypatch.setattr(execution_preparation, '_canonical_retired', validate)
+    tree = row['execution']
+    for step in range(5):
+        tree['nodes'][-1]['revision'] = step + 1
+        tree['turns'][0]['phase'] = 'running' if step % 2 else 'waiting'
+        expected = resource_files.prepare(session_projection.stored_execution(tree))
+        result = save_projected(cache, db, row)
+        assert result['$resource'] == expected.identity
+    assert calls == [300], 'Current progress must not revalidate every unchanged retired receipt'
+    assert type(cache.references[row['id']].retired_digest) is bytes
+    assert len(cache.references[row['id']].retired_digest) == 32
+    assert cache.bytes + cache.accounting_bytes + cache._reserved({}) <= 2 * cache.MAX_BYTES
+
+
+@pytest.mark.parametrize('change', ['extra-field', 'usage-bool', 'duplicate', 'nested', 'owner'])
+def test_retired_validation_reuse_observes_changes_after_warm_save(db, monkeypatch, change):
+    from amplifier_web import execution_preparation, session_projection
+    cache, row = ExecutionPreparation(), observed_owner()
+    save_projected(cache, db, row)
+    tree = row['execution']
+    receipt = tree['retiredUsageNodes'][128]
+    if change == 'extra-field': receipt['prompt'] = 'Must not be retained'
+    elif change == 'usage-bool': receipt['usage']['inputTokens'] = True
+    elif change == 'duplicate': receipt.update(id='0', revision=3)
+    elif change == 'nested': receipt['assignmentReservation']['tokens'].append(99)
+    else: row['runtimeSessionId'] = 'changed-owner'
+    tree['nodes'][-1]['revision'] += 1
+    calls, original = [], execution_preparation._canonical_retired
+    def validate(rows):
+        calls.append(len(rows))
+        return original(rows)
+    monkeypatch.setattr(execution_preparation, '_canonical_retired', validate)
+    expected = resource_files.prepare(session_projection.stored_execution(tree))
+    result = save_projected(cache, db, row)
+    assert result['$resource'] == expected.identity
+    assert resource_files.read_detached(resource_files.detach(db, result['$resource'])) == json.loads(expected.text)
+    assert calls == [300]
+    if change in {'extra-field', 'usage-bool', 'duplicate'}:
+        assert cache.references[row['id']].retired_digest is None
 
 
 @pytest.mark.parametrize('change', ['extra-field', 'usage-extra', 'usage-bool', 'usage-none',

@@ -154,10 +154,20 @@ def test_retired_custom_values_and_nonstandard_keys_keep_original_projection():
     cache = ExecutionPreparation()
     rows = [{'id': str(i), 'kind': 'llm', 'sessionId': 'a', 'revision': 1} for i in range(130)]
     rows[0]['id'] = Renamed('original-key')
+    rows[0].update(producerId='producer', rootSessionId='a', turnId='turn')
     assert cache.retired('a', rows) is None
-    tree = {'retiredUsageNodes': rows, 'nodes': [{**rows[0], 'revision': 2, 'liveObservation': True}]}
-    assert stored_execution(tree, _retired=lambda snapshot: cache.retired('a', snapshot)) == stored_execution(tree)
+    tree = {'retiredUsageNodes': rows, 'turns': [{'id': 'turn'}],
+            'nodes': [{**rows[0], 'revision': 2, 'liveObservation': True}]}
+    # Placement lookup uses the copied receipt identity. The custom hook changes
+    # that identity, so the original observation must not acquire the new receipt.
+    for project in (lambda: stored_execution(tree), lambda: stored_execution(
+            tree, _retired=lambda snapshot: cache.retired('a', snapshot))):
+        saved = project()
+        assert saved['retiredUsageNodes'][0]['id'] == 'changed-key'
+        assert saved['nodes'] == []
     rows[0]['id'] = '0'
+    tree['nodes'] = [{**rows[0], 'revision': 2, 'liveObservation': True}]
+    assert stored_execution(tree)['nodes'][0]['id'] == '0'
     rows[1]['revision'] = float('nan')
     assert cache.retired('a', rows) is None
     rows[1]['revision'] = 1
@@ -332,3 +342,45 @@ def test_six_interleaved_histories_reuse_fragments_within_existing_total_budget(
     # unchanged list is rebuilt merely because another active owner saved.
     assert calls == [256] * 12
     assert encoded == []
+
+
+def test_interleaved_histories_larger_than_cache_keep_reusing_recent_fragments(monkeypatch):
+    cache = ExecutionPreparation()
+    cache.MAX_BYTES = 150000
+    histories = {
+        str(owner): {'nodes': [
+            {'id': str(i), 'text': f'{owner}:{i}:' + 'x' * 256,
+             'nested': {'values': [i]}}
+            for i in range(256)], 'turns': [], 'retiredUsageNodes': []}
+        for owner in range(6)}
+    expected = {owner: resource_files.prepare(value) for owner, value in histories.items()}
+    assert sum(len(value.text) for value in expected.values()) > 2 * cache.MAX_BYTES
+    for owner, value in histories.items():
+        assert cache.prepare(owner, value) == expected[owner]
+    encoded = []
+    dumps = json.dumps
+    with monkeypatch.context() as patch:
+        def observe(value, *args, **kwargs):
+            if type(value) is list and value:
+                encoded.append(len(value))
+            return dumps(value, *args, **kwargs)
+        patch.setattr(json, 'dumps', observe)
+        for _ in range(2):
+            for owner, value in histories.items():
+                assert cache.prepare(owner, value) == expected[owner]
+                assert cache.bytes + cache.accounting_bytes <= 2 * cache.MAX_BYTES
+    # A cyclic scan larger than capacity must not cause every unchanged row to
+    # be encoded again. This checks saved bytes and work, not a cache's ordering.
+    assert sum(encoded) < 2 * 6 * 256
+    for owner, value in histories.items():
+        shared = {'values': ['changed']}
+        value['nodes'][127]['nested'] = value['nodes'][128]['nested'] = shared
+        assert cache.prepare(owner, value) == resource_files.prepare(value)
+        shared['values'].append('changed again')
+        assert cache.prepare(owner, value) == resource_files.prepare(value)
+    cache.retain({'5'})
+    assert all(key[0] == '5' for key in cache.entries)
+    replacement = tree()
+    assert cache.prepare('5', replacement) == resource_files.prepare(replacement)
+    cache.retain(())
+    assert cache.bytes == 0 and not cache.entries

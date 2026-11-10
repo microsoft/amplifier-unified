@@ -233,6 +233,7 @@ ACTION_DEFINITIONS = {
     "updates.diagnostics": ("Collect a sanitized update support report, including source provenance, without credentials, chat content or private paths.", schema()),
     "updates.forceRestart": ("Explicitly confirm interrupting active work to restart into one staged qualified app. Saved history and unresolved checkout fences remain; no work is replayed.", schema({"confirm":{"enum":[True]},"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(200)}, ["confirm","hostInstanceId","revision","generation","attemptId"])),
     "updates.install": ("Stage and validate available application or ecosystem updates; activate when idle. Application updates restart the host.", schema()),
+    "updates.reconcileManualHandoff": ("Verify an already completed manual Windows app handoff against the exact retained pre-effect refusal and the actual installed official wheel, owner, launcher, dependencies and pinned listener. Does not install, restart or promote. Preserves existing whole-sequence Install intent. Read updates.manualHandoffResults for the durable result; never replay an unknown request.", schema({"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(32)}, ["hostInstanceId","revision","generation","attemptId"])),
     "updates.rollback": ("Restore the previous ecosystem version when idle", schema()),
     "settings.update": ("Change voice, workspace or update defaults. Update checks support intervalHours 1, 4, 8 or 24.", schema({"patch": {"type": "object"}})),
     "theme.apply": ("Apply a complete single-file CSS skin", schema({"name": string(100), "css": string(1000000)})),
@@ -1107,16 +1108,19 @@ class AppService:
                                 message_preparation=self._message_preparation, pending_messages=pending_messages,
                                 execution_preparation=self._execution_preparation, pending_execution=pending_execution)
             pending_clients = self.clients.save(defer_ack=True)
+            preserve_globals = {'updates'} if getattr(
+                getattr(self, 'update_manager', None), '_manual_handoff_commit_unknown', False) else set()
             if record_only:
                 # Persist sanitized global presentation just as full checkpoints
                 # do (not the live canvas body that persist() externalized).
                 record_state = {**self._state, **{key: saved[key] for key in global_keys if key in saved}}
                 changed_global_keys = save_working(self.db, record_state, pending_references, admitted_ids, global_keys=global_keys,
-                                                   deleted=deleted_ids)
+                                                   deleted=deleted_ids, preserve_globals=preserve_globals)
             else:
                 saved['runtimeControl'] = {identity: saved_cold(record)
                                            for identity, record in saved.get('runtimeControl', {}).items()}
-                changed_global_keys = save_working(self.db, saved, pending_references, admitted_ids, deleted=deleted_ids)
+                changed_global_keys = save_working(self.db, saved, pending_references, admitted_ids,
+                    deleted=deleted_ids, preserve_globals=preserve_globals)
             self.directory.sync((row for row in self._state['sessions']
                                  if row['id'] in admitted_ids and row['id'] in pending_references), self._state,
                                 deleted=(admitted_ids - pending_references.keys()) | deleted_ids)
@@ -1129,13 +1133,13 @@ class AppService:
             self.db.rollback()
             for record, key, value in reversed(normalization_undo):
                 record[key] = value
-            from .host.storage import SessionStore
+            from .presentation_files import atomic_write, remove
             for path, text in reversed(view_undo):
                 try:
                     if text is None:
-                        path.unlink(missing_ok=True)
+                        remove(path, missing_ok=True)
                     else:
-                        SessionStore._atomic(path, text)
+                        atomic_write(path, text)
                 except OSError:
                     # This presentation may already contain new blob roots.
                     # Mark storage uncertain until a successful save repairs it;
@@ -1271,9 +1275,10 @@ class AppService:
     def _publish_changes(self, *, sessions=(), globals=(), detail_only=False):
         """Save only changed authority, then publish the affected projection.
 
-        Empty sessions means no conversation writes. Catalog membership changes
-        still require the explicit full reconciliation path. Pending progress
-        scopes are joined by _publish, so a receipt never loses earlier work.
+        Empty sessions means no conversation writes. Callers must declare every
+        changed owner and global, including during catalog reconciliation; unknown
+        scope uses the explicit full path. Pending progress scopes are joined by
+        _publish, so a receipt never loses earlier work.
         """
         globals = set(globals)
         updater = getattr(self, 'update_manager', None)
@@ -1984,7 +1989,7 @@ class AppService:
         if action == 'runtime.control' and args.get('operation', '').startswith(('task.', 'capacity.')):
             action, args = args['operation'], {**args.get('args', {}), 'sessionId': args.get('sessionId')}
         defer_publish = action == 'smartTools.appCall' and not include_state
-        if action.startswith(("smartTools.","providers.")) or action in {'updates.featureInstall', 'updates.forceRestart'} or action.startswith('permissions.') and args.get('scope') == 'session':
+        if action.startswith(("smartTools.","providers.")) or action in {'updates.featureInstall', 'updates.forceRestart', 'updates.reconcileManualHandoff'} or action.startswith('permissions.') and args.get('scope') == 'session':
             command_id = command_id or str(uuid.uuid4())
         if action not in ACTION_DEFINITIONS:
             raise AppError("Unknown action: " + action, 404)
@@ -3545,7 +3550,9 @@ class AppService:
                 allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "aiConnectionEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsRootVisit", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "canvasOverviewWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navSectionsCollapsed", "navRecentView", "navPinnedPage", "navFilter", "navChatPage", "navChatScope", "navLocationFilter", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "feedbackCorrectionDraft", "feedbackLifecycleDraft", "diagnosticsDraft"}
                 allowed.update({'navWorkspaceArchive', 'projectPermissionsDraft', 'planExpanded', 'settingsCanvas', 'setupJourney', 'navArchive', 'navCollection', 'navSort', 'navShowAgentCreated', 'navRecentLimit', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab', 'workspaceStarterEditor', 'configurationDrafts', 'workWorkspaceSettings'})
                 allowed.update({'workHomeView', 'workHomeFilter', 'workHomeScope', 'workHomeQuery', 'workHomePages'})
+                allowed.add('workWorkspaceChats')
                 allowed.update({'navMode', 'navStatusCollapsed', 'navStatusExpanded', 'navStatusPages'})
+                allowed.add('navAge')
                 allowed.add('draftDocument')
                 if 'draftDocument' in patch and 'draft' not in patch:
                     raise AppError('Save quoted content with its draft text.')
@@ -3715,6 +3722,8 @@ class AppService:
                     values += ({'recovery': self.management.recovery_admission_binding(target)},)
                 pending.append((self.management.command, values))
             elif action == "updates.failureDisposition":
+                if getattr(self.update_manager, '_manual_handoff_commit_unknown', False):
+                    raise AppError('The update commit is unknown. Reload the host before changing update state.', 409)
                 if origin not in {'ui', 'user'}:
                     raise AppError('Closing update uncertainty requires an explicit user action.', 403)
                 if not self.update_manager: raise AppError("Update service is unavailable.")
@@ -3724,6 +3733,16 @@ class AppService:
                     raise AppError(str(error), 409) from None
             elif action.startswith("updates."):
                 if not self.update_manager: raise AppError("Update service is unavailable.")
+                if getattr(self.update_manager, '_manual_handoff_commit_unknown', False):
+                    raise AppError('The update commit is unknown. Reload the host before changing update state.', 409)
+                if action == 'updates.reconcileManualHandoff':
+                    from .manual_app_handoff import require_target
+                    try:
+                        require_target(self.update_manager, args)
+                    except ValueError as error:
+                        raise AppError(str(error), 409) from None
+                    self.state['updates'].setdefault('manualHandoffResults', {})[command_id] = {
+                        'requestId': command_id, 'status': 'queued'}
                 if action == 'updates.forceRestart':
                     if origin not in {'ui', 'user'}:
                         raise AppError('Force restart requires explicit user confirmation in Updates.', 403)
@@ -3739,6 +3758,7 @@ class AppService:
                         'updatedAt':time.time(), 'detail':'Feature installation requested; awaiting qualification.'}
                     while len(rows) > 20:
                         rows.pop(next(iter(rows)))
+                self.state['updates']['intentRevision'] = self.state['updates'].get('intentRevision', 0) + 1
                 pending.append((self.update_manager.command, (action.split(".")[1],copy.deepcopy(args),command_id)))
             elif action == "settings.update":
                 patch = dict(args["patch"])
@@ -3923,7 +3943,7 @@ class AppService:
             if action in {"feedback.submit", "feedback.get", "feedback.comment", "feedback.reconcile", "feedback.update", "feedback.close", "feedback.reopen",
                           "feedback.attachments.review", "feedback.attachments.add", "feedback.attachments.reconcile"}:
                 receipt["requestId"] = args['requestId']
-            if action in {'updates.featureInstall', 'updates.forceRestart'}:
+            if action in {'updates.featureInstall', 'updates.forceRestart', 'updates.reconcileManualHandoff'}:
                 receipt['requestId'] = command_id
             if command_id:
                 self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
@@ -4191,58 +4211,105 @@ class AppService:
             raise AppError(str(exc),409,code=receipt['code']) from exc
 
     async def _check_delivery(self, sid, input_id):
-        from .message_delivery import find_message, receipt_delivery
-        async with self.lock:
-            session = copy.deepcopy(self._session(sid))
+        from .message_delivery import find_message, receipt_delivery, receipt_mapping
+        from .session_files import validate_id
+
+        def source_anchor(session):
+            workspace = session.get('workspace')
+            if not isinstance(workspace, str) or not workspace or not Path(workspace).is_absolute():
+                return None  # Never infer a native source from the process directory.
+            try:
+                validate_id(session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'])
+            except (KeyError, ValueError):
+                return None
+            return tuple(session.get(key) for key in ('id', 'workspace', 'runtimeSessionId', 'nativeIdentity'))
+
+        def saved_evidence(session):
             question = self.questions.for_input(sid, input_id)
             row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
+            receipt = receipt_mapping(row[0]) if row else None
             receipt_status = receipt_delivery(row[0], sid, input_id) if row else None
-        message = find_message(session, input_id)
-        if message is None and question is not None:
-            # The answer record survives a cold/pruned message projection.
-            # Its exact input binding permits a passive evidence probe, not send.
-            message = {'delivery': question['delivery']}
-        if message is None and receipt_status is not None:
-            # Exact command delivery survives a bounded/pruned message view.
-            # Command admission alone (accepted=True) is not input delivery.
-            message = {'delivery': {'status': receipt_status}}
-        if message is None:
-            return {'delivery': 'not_saved', 'message': 'This app has no saved copy. You can try sending the original message again with the same delivery identity.'}
-        if message.get('steering'):
-            # Admission is distinct from application. Checking must not route a
-            # held correction through ordinary input or wake a retired worker.
-            return {'delivery': message['delivery']['status'], 'steering': copy.deepcopy(message['steering']),
-                    'message': 'Steering status: ' + message['steering']['disposition'] + '. This correction is bound to its original run and was not sent again.'}
-        status = message.get('delivery', {}).get('status', 'unknown')
-        if receipt_status == 'accepted':
-            status = 'accepted'
-        if status in {'queued_for_update', 'held'}:
-            return {'delivery': status, 'message': message['delivery'].get('reason') or 'Saved for delivery after the app update. Nothing has been sent yet.'}
-        if status != 'accepted' and self.runtime and hasattr(self.runtime, 'delivery'):
+            conflict = receipt is not None and any(
+                key in receipt and receipt[key] != value for key, value in (
+                    ('sessionId', sid), ('inputId', input_id),
+                    ('action', 'conversation.send'), ('commandAction', 'conversation.send')))
+            message = find_message(session, input_id)
+            if message is None and question is not None:
+                message = {'delivery': question['delivery']}
+            if message is None and receipt_status is not None:
+                message = {'delivery': {'status': receipt_status}}
+            if receipt_status is not None and not (message.get('steering') or
+                    message.get('delivery', {}).get('status') in {'queued_for_update', 'held'}):
+                steering = receipt.get('steering')
+                if isinstance(steering, dict) and isinstance(steering.get('disposition'), str):
+                    message = {'delivery': {'status': receipt_status}, 'steering': steering}
+                elif steering:
+                    conflict = True
+                elif receipt_status in {'queued_for_update', 'held'}:
+                    message = {'delivery': {'status': receipt_status}}
+            status = message.get('delivery', {}).get('status', 'unknown') if message else (
+                'unknown' if row else 'not_saved')
+            protected = bool(message and message.get('steering')) or status in {'queued_for_update', 'held'}
+            if not protected and (receipt_status == 'accepted' or
+                    question is not None and question['delivery']['status'] == 'accepted'):
+                status = 'accepted'
+            # _delivery can reconcile a message with unreadable receipt bytes,
+            # but must not rewrite a contradictory/incomplete receipt mapping.
+            writable = row is None or receipt is None or receipt_status is not None
+            return message, status, protected, conflict, writable
+
+        def result(status, session, message=None):
+            value = {'sessionId': sid, 'inputId': input_id, 'delivery': status,
+                     'source': {'workspace': session.get('workspace') or None,
+                                'nativeIdentity': session.get('runtimeSessionId') or
+                                session.get('nativeIdentity') or session['id']}}
+            if message and message.get('steering'):
+                return {**value, 'steering': copy.deepcopy(message['steering']),
+                        'message': 'Steering status: ' + message['steering']['disposition'] + '. This correction is bound to its original run and was not sent again.'}
+            if status in {'queued_for_update', 'held'}:
+                return {**value, 'message': message['delivery'].get('reason') or 'Saved for delivery after the app update. Nothing has been sent yet.'}
+            return {**value, 'message': {
+                'accepted': 'Amplifier received this message. It was not sent again.',
+                'sending': 'The original send is still in progress. Nothing was sent again.',
+                'failed': 'The worker failed to start before this message was sent. Your saved message is available to retry.',
+                'not_saved': 'Delivery could not be confirmed from saved evidence. This does not prove non-delivery. Checking does not resend it.',
+            }.get(status, 'Delivery is still uncertain. Checking does not resend it. Sending again may repeat work if the earlier attempt ran.')}
+
+        async with self.lock:
+            session = copy.deepcopy(self._session(sid))
+            message, status, protected, conflict, _ = saved_evidence(session)
+        if protected:
+            return result(status, session, message)
+        if conflict:
+            return result('unknown', session)
+        anchor = source_anchor(session)
+        runtime = self.runtime
+        evidence = None
+        # The canonical source, not a resident bubble or receipt, anchors this
+        # read. Missing host evidence must not hide positive native evidence.
+        if status != 'accepted' and anchor is not None and runtime and hasattr(runtime, 'delivery'):
             try:
-                evidence = await self.runtime.delivery(session, input_id)
-                if evidence == 'accepted':
-                    status = 'accepted'
+                evidence = await runtime.delivery(session, input_id)
             except Exception:
                 pass  # A failed probe cannot prove that the input was not delivered.
         async with self.lock:
             current = self._session(sid)
-            current_message = find_message(current, input_id)
-            current_question = self.questions.for_input(sid, input_id)
-            row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
-            current_receipt_status = receipt_delivery(row[0], sid, input_id) if row else None
-            if ((current_message and current_message.get('delivery', {}).get('status') == 'accepted') or
-                    (current_question and current_question['delivery']['status'] == 'accepted') or
-                    current_receipt_status == 'accepted'):
+            message, status, protected, conflict, writable = saved_evidence(current)
+            if protected:
+                return result(status, current, message)
+            if conflict:
+                return result('unknown', current)
+            if (evidence == 'accepted' and anchor is not None
+                    and source_anchor(current) == anchor and self.runtime is runtime):
                 status = 'accepted'
-            if status == 'accepted':
+            # Current positive evidence wins a late unknown probe. A source
+            # change invalidates only the old probe, not a new exact receipt.
+            # A native-only confirmation returns evidence; it invents no host
+            # message, command receipt or delivery metadata.
+            if status == 'accepted' and message is not None and writable:
                 self._delivery(current, input_id, status)
                 self._publish_changes(sessions={sid})
-        return {'delivery': status, 'message': {
-            'accepted': 'Amplifier received this message. It was not sent again.',
-            'sending': 'The original send is still in progress. Nothing was sent again.',
-            'failed': 'The worker failed to start before this message was sent. Your saved message is available to retry.',
-        }.get(status, 'Delivery is still uncertain. Checking does not resend it. Sending again may repeat work if the earlier attempt ran.')}
+            return result(status, current, message)
 
     async def _retry_message(self, session, text, input_id, original_status, original_turn, known_undelivered=False):
         result = await self._send(session, text, input_id, preserve_draft=True, retry=True, known_undelivered=known_undelivered)
@@ -4721,7 +4788,8 @@ class AppService:
                 directory=SessionStore.for_app(self.data_dir,session['workspace']).directory(session.get('runtimeSessionId') or session['id'])
                 directory.mkdir(parents=True,exist_ok=True,mode=0o700)
                 data=legacy(directory);data['naming_completed_inputs']=payload.get('completedInputs',[])
-                SessionStore._atomic(directory/'naming.json',json.dumps(data))
+                from .presentation_files import atomic_write
+                atomic_write(directory/'naming.json',json.dumps(data))
             elif kind == "execution.event":
                 self._ingest_runtime_execution(session, payload)
             elif kind == 'runtime.delivery' and 'peerAdmission' not in payload:
@@ -5343,9 +5411,9 @@ class AppService:
         if operation == "voice.visual.read":
             return self.voice_visual.read(session_id, args.get("captureId"))
         if operation == "outputs.image.read":
-            return await self.outputs.image_async(session_id, args.get('id'), args.get('sha256'))
+            return await self.outputs.image_async(session_id, args.get('id'), args.get('sha256'), scope=args.get('scope', 'workspace'))
         if operation == "outputs.images.read":
-            return await self.outputs.images_async(session_id, args.get('images'))
+            return await self.outputs.images_async(session_id, args.get('images'), scope=args.get('scope', 'workspace'))
         if operation in {'context.manifest', 'context.read'}:
             bindings = args.get('_contextBindings', [])
             async with self.lock:

@@ -71,6 +71,16 @@ CODE_LABELS = {
     "runtime_readline": ("amplifier_web.runtime", "_BoundedWorkerLines.readline"),
     "runtime_write": ("amplifier_web.runtime", "RuntimeManager._write"),
     "service_send": ("amplifier_web.service", "AppService._send"),
+    "service_dispatch": ("amplifier_web.service", "AppService.dispatch"),
+    "service_dispatch_action": ("amplifier_web.service", "AppService._dispatch"),
+    "naming_persist": ("amplifier_web.naming", "persist"),
+    "naming_policy": ("amplifier_web.naming", "set_automatic"),
+    "naming_metadata_set": ("amplifier_foundation.session.metadata", "SessionMetadataStore.set_name"),
+    "naming_metadata_save": ("amplifier_foundation.session.history", "SessionHistoryStore._save_metadata_unlocked"),
+    "naming_metadata_write": ("amplifier_foundation.session.history", "SessionHistoryStore._write_prepared"),
+    "naming_backup_write": ("amplifier_foundation.io.files", "write_with_backup"),
+    "naming_atomic_write": ("amplifier_foundation.io.files", "_write_atomic"),
+    "naming_private_write": ("amplifier_foundation.session._windows_history", "write_prepared"),
     "runtime_send": ("amplifier_web.runtime", "RuntimeManager.send"),
     "runtime_input_start": ("amplifier_web.runtime", "RuntimeManager._start_for_input"),
     "runtime_reply": ("amplifier_web.runtime", "RuntimeManager._reply"),
@@ -221,6 +231,10 @@ def failure_facts(error, name):
 
 def _failure_facts(error, name):
     assert name in CHECKPOINTS
+    witness = None
+    if name == "input_admission" and type(error) is RuntimeError:
+        from amplifier_web.worker_diagnostics import runtime_failure_witness
+        witness = runtime_failure_witness(error)
     codes = {}
     for label, (module_name, qualname) in CODE_LABELS.items():
         value = sys.modules.get(module_name)
@@ -263,12 +277,17 @@ def _failure_facts(error, name):
         error = cause if cause is not None else (
             None if BaseException.__getattribute__(error, "__suppress_context__")
             else BaseException.__getattribute__(error, "__context__"))
-    return {"checkpoint": name, "errors": rows}
+    return {"checkpoint": name, "errors": rows,
+            **({"runtimeFailure": witness} if witness is not None else {})}
 
 
 def validate_diagnostic(value):
-    assert type(value) is dict and set(value) == {"checkpoint", "errors"}
+    assert type(value) is dict and {"checkpoint", "errors"} <= set(value) <= {"checkpoint", "errors", "runtimeFailure"}
     assert type(value["checkpoint"]) is str and value["checkpoint"] in CHECKPOINTS
+    if "runtimeFailure" in value:
+        from amplifier_web.worker_diagnostics import validate_runtime_failure_witness
+        assert value["checkpoint"] == "input_admission"
+        assert validate_runtime_failure_witness(value["runtimeFailure"]) is not None
     assert type(value["errors"]) is list and len(value["errors"]) <= 4
     for row in value["errors"]:
         assert type(row) is dict and {"class", "frames"} <= set(row) <= {"class", "frames", "errno", "winerror", "returncode", "reason"}
@@ -1023,6 +1042,7 @@ def validate_inner_report(report):
         assert "workerStartup" not in report
         assert "startup" not in report or report["startup"]["diagnosticStatus"] == "PASS"
         assert "diagnostic" not in report or not report["diagnostic"]["errors"]
+        assert "runtimeFailure" not in report.get("diagnostic", {})
         assert all(report["checks"].values()) and report["stage"] == "complete"
         assert all(report[name] is not None for name in ("wheelSha256", "manifestSha256", "lockSha256"))
         assert set(report["appHashes"]) == set(APP_FILES)
