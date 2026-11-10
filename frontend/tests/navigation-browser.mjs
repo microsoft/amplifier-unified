@@ -48,7 +48,7 @@ try{
  assert.equal(await landingTitle.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
  await expect(chatrow(selected).locator('.a-nav-chat-select')).toHaveAccessibleName(await landingTitle.innerText());
  assert.equal(await shortcuts.locator('.a-nav-chat-title').first().evaluate(el=>getComputedStyle(el).whiteSpace),'nowrap');
- assert.deepEqual(await details.locator('code').allTextContents(),[initial.paths.one,'alpha-201']);
+ assert.deepEqual(await details.locator('code').allTextContents(),['alpha-201',initial.paths.one]);
  await page.context().grantPermissions(['clipboard-read','clipboard-write']);
  await details.getByRole('button',{name:'Copy session id',exact:true}).click();
  assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'alpha-201');
@@ -58,7 +58,7 @@ try{
  await chatSearch.fill(initial.quietSession);await chatrow(initial.quietSession).waitFor();
  await chatrow(initial.quietSession).hover();
  await chatrow(initial.quietSession).getByRole('button',{name:/Details and actions/}).click();await details.waitFor();
- assert.deepEqual(await details.locator('code').allTextContents(),[initial.paths.one,initial.quietSession]);await page.keyboard.press('Escape');
+ assert.deepEqual(await details.locator('code').allTextContents(),[initial.quietSession,initial.paths.one]);await page.keyboard.press('Escape');
  await chatSearch.fill('');await expect(recent.locator('.a-nav-chat')).toHaveCount(40);
  await recent.getByRole('button',{name:'Show more conversations'}).click();
  await expect.poll(async()=>(await snapshot()).sidebarNavigation.search.index).toBe(1);
