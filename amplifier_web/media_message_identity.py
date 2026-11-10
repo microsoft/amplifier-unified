@@ -1,7 +1,7 @@
 """Media-only canonical identity facts; never hydrate transcript bodies."""
 import copy
 
-from .media_saved_aliases import valid_id
+from .media_saved_aliases import matches_body, valid_id
 
 
 class StaleMediaIdentityError(ValueError):
@@ -81,7 +81,7 @@ def check_claimants(value, message_id, fact, rows, canonical_ids):
                 or type(row.get('nativeIndex')) is not int or row['nativeIndex'] != fact[3]
                 or row.get('nativeMessageId') not in (None, fact[0])
                 or not isinstance(text, str)
-                or display_identity(value, row['nativeIndex'], 'assistant', text) not in (fact[0], fact[5])):
+                or not matches_body(fact, row, display_identity(value, row['nativeIndex'], 'assistant', text))):
             raise ValueError(ERROR)
         if row['id'] == fact[0]:
             canonical += 1

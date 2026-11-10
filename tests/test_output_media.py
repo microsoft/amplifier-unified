@@ -1734,7 +1734,8 @@ async def test_private_block_projection_keeps_actual_media_attachment(media_app,
 
 
 @pytest.mark.parametrize('view', ['raw', 'public'])
-@pytest.mark.parametrize('change', [None, 'text', 'binding', 'index', 'duplicate', 'native-alias', 'rewrite-private'])
+@pytest.mark.parametrize('change', [None, 'text', 'binding', 'index', 'duplicate', 'native-alias',
+                                    'rewrite-private', 'unbound-alias', 'unbound-rewrite'])
 def test_media_public_projection_qualifies_body_and_preserves_raw_guards(tmp_path, monkeypatch, view, change):
     import copy
     import io
@@ -1764,21 +1765,26 @@ def test_media_public_projection_qualifies_body_and_preserves_raw_guards(tmp_pat
         rows.append(copy.deepcopy(rows[0]))
     elif change == 'native-alias':
         rows[0]['id'] = requested = 'forged-native-spelling'
-    elif change == 'rewrite-private':
+    elif change in ('unbound-alias', 'unbound-rewrite'):
+        rows[0].update(id='retained-alias', source='amplifier')
+        rows[0].pop('nativeMessageId', None)
+        requested = 'retained-alias'
+        scope['historyManaged'] = False
+    if change in ('rewrite-private', 'unbound-rewrite'):
         raw['content'][1]['text'] = 'Private rewrite'
     path = directory / 'transcript.jsonl'
     path.write_text(json.dumps(raw) + '\n')
     before = path.read_bytes()
-    facts, _ = source(scope)
+    facts, _ = source({**scope, 'historyManaged': True})
     session = {**scope, 'messages': rows}
-    if change:
+    if change and not (change == 'unbound-alias' and view == 'raw'):
         with pytest.raises(ValueError):
             resolve(snapshot(session, requested), requested)
         with pytest.raises(ValueError):
             discover(io.BytesIO(json.dumps(rows).encode()), scope, requested, facts)
     else:
-        assert resolve(snapshot(session, requested), requested)['fact'][0] == requested
-        assert discover(io.BytesIO(json.dumps(rows).encode()), scope, requested, facts)[0][0] == requested
+        assert resolve(snapshot(session, requested), requested)['fact'][0] == displayed['id']
+        assert discover(io.BytesIO(json.dumps(rows).encode()), scope, requested, facts)[0][0] == displayed['id']
     assert path.read_bytes() == before
 
 

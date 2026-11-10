@@ -25,6 +25,12 @@ def native_scope(value):
     return dict.get(value, 'nativeIdentity') or dict.get(value, 'runtimeSessionId') or dict.__getitem__(value, 'id')
 
 
+def matches_body(fact, row, identity):
+    # Public text alone cannot witness a private-only canonical rewrite.
+    return (identity == fact[0] or identity == fact[5]
+            and fact[0] in (row.get('id'), row.get('nativeMessageId')))
+
+
 def binding_hint(session, reference, rows):
     """Producer-only, bounded/body-free metadata inside the existing reference.
 
@@ -287,7 +293,7 @@ def discover(stream, value, message_id, facts):
                 or row.get('observation') or row.get('observation_id')
                 or type(row.get('nativeIndex')) is not int or row['nativeIndex'] != fact[3]
                 or row.get('nativeMessageId') not in (None, fact[0])
-                or row_identity(stream, value, row) not in (fact[0], fact[5])):
+                or not matches_body(fact, row, row_identity(stream, value, row))):
             raise ValueError(ERROR)
         if row['id'] == fact[0]:
             canonical += 1
