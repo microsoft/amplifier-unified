@@ -1,6 +1,7 @@
 """Bounded arrival views over the canonical chat catalog; no runtime hydration."""
 
 WORK_QUERY_FIELDS = ('workHomeScope', 'workHomeQuery', 'workHomePages', 'navAge')
+BUNDLED_WORK_QUERY_FIELDS = ('workSurface', 'workWorkspaceId', 'workWorkspaceChats')
 STATUS_RESOURCES = {
     'workStatusAttention': 'attention', 'workStatusUnread': 'unread',
     'workStatusWorking': 'working', 'workStatusIdle': 'idle',
@@ -8,11 +9,27 @@ STATUS_RESOURCES = {
 }
 
 
+def work_home_inputs(state, *, pinned_workspace_id=None, workspace_chats=False):
+    """Normalize only the bundled workspace consumer, not public navigation."""
+    view = state.get('view', {})
+    if workspace_chats and view.get('workSurface') == 'workspace':
+        workspace_id = view.get('workWorkspaceId') or ''
+        request = view.get('workWorkspaceChats') or {}
+        if request.get('workspaceId') != workspace_id:
+            request = {}
+        return ({**state, 'view': {'workHomeScope': workspace_id,
+                                  'workHomeQuery': request.get('query'),
+                                  'workHomePages': request.get('pages'),
+                                  'navAge': view.get('navAge', 'all')}},
+                workspace_id)
+    return state, pinned_workspace_id
+
+
 def work_home_context(state, *, pinned_workspace_id=None):
     """Current project identity, independent of asynchronous result pages."""
     view = state.get('view', {})
     requested_scope = view.get('workHomeScope') or 'all'
-    scope = pinned_workspace_id or requested_scope
+    scope = pinned_workspace_id if pinned_workspace_id is not None else requested_scope
     workspace = next((row for row in state.get('workspaces', [])
                       if row['id'] == scope and row.get('available') is True
                       and isinstance(row.get('path'), str) and row['path']), None)

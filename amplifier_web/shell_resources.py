@@ -232,13 +232,16 @@ class ShellResources:
                     encoded({'index': (view.get('navStatusPages') or {}).get(STATUS_RESOURCES[name], 0),
                              'navAge': view.get('navAge', 'all')}), self._age_clock(scoped))
         if name == 'workHome':
-            from .adaptive_work import WORK_QUERY_FIELDS
+            from .adaptive_work import work_home_inputs, WORK_QUERY_FIELDS
+            from .shell_modules import BUILTINS
+            work_state, work_pin = work_home_inputs(scoped,
+                pinned_workspace_id=instance.get('scope', {}).get('workspaceId') if instance.get('scope', {}).get('mode') == 'pinned' else None,
+                workspace_chats=instance['package'] in BUILTINS)
+            query = work_state.get('view', {})
             return (((root_navigation_revision, workspace_revision), None), self._epochs(CHAT_GLOBALS),
-                    view.get('workHomeScope'), scoped.get('selectedSessionId'),
-                    encoded({**{key: view.get(key) for key in WORK_QUERY_FIELDS},
-                             'pinnedWorkspaceId': instance.get('scope', {}).get('workspaceId')
-                             if instance.get('scope', {}).get('mode') == 'pinned' else None}),
-                    self._age_clock(scoped))
+                    query.get('workHomeScope'), scoped.get('selectedSessionId'),
+                    encoded({**{key: query.get(key) for key in WORK_QUERY_FIELDS},
+                             'pinnedWorkspaceId': work_pin}), self._age_clock(work_state))
         saved = view.get('navRecentLimit', 20)
         from .chat_navigation import RECENT_LIMITS
         saved = saved if type(saved) is int and saved in RECENT_LIMITS else 20

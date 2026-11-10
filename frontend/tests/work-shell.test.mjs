@@ -10,6 +10,7 @@ const {WorkSurface,LiveChatActivity,WorkspaceFiles}=await vite.ssrLoadModule('/s
 const {ConversationList,PinnedItems,useRecentShortcuts}=await vite.ssrLoadModule('/src/shell/navigation-components.jsx');
 const {WorkspaceExplorer,WorkspaceRow}=await vite.ssrLoadModule('/src/workspace-explorer.jsx');
 const {WorkspaceDetails}=await vite.ssrLoadModule('/src/navigation-details.jsx');
+const {useLandingLayout,useWorkspaceChatView}=await vite.ssrLoadModule('/src/work-landing.jsx');
 const {AgentCanvas}=await vite.ssrLoadModule('/src/shell-panels.jsx');
 const {newChatSetup}=await vite.ssrLoadModule('/src/new-chat.jsx');
 const {fitPanels}=await vite.ssrLoadModule('/src/panel-layout.jsx');
@@ -51,6 +52,7 @@ test('compact sidebar has shortcuts; filtering lives in the main surface',()=>{
  const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>host};
  const main=renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state:{view:{workSurface:'chats'}},act:host.dispatch})));
  assert.match(main,/Research ideas/);assert.match(main,/aria-label="Search chats"/);assert.doesNotMatch(main,/a-browser-pins/);
+ assert.match(main,/aria-label="Group conversations"/);assert.match(main,/aria-label="Filter conversations by age"/);
 });
 test('empty Pinned disappears; workspace-only and mixed pins share one section',async()=>{
  const calls=[];
@@ -174,6 +176,66 @@ test('workspace details do not compute the hidden chat page',()=>{
  const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>scopedHost};
  const main=renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state:{view:{workSurface:'workspace',workWorkspaceId:'b',workWorkspaceTab:'details'},workspaces:[workspace]},act:host.dispatch})));
  assert.match(main,/Rename workspace/);assert.doesNotMatch(main,/Research ideas/);
+});
+test('workspace Chats reuses scoped Home cards below tabs without a second landing or sidebar page',()=>{
+ const empty={items:[],total:0,pages:1,index:0,start:0,end:0};
+ const current={...snapshot,navigationResources:['workHome'],
+  workHome:{scope:'b',requestedScope:'b',query:'',requestedPages:{},groups:{attention:page,unread:empty,working:empty,waiting:empty,paused:empty,idle:empty}},
+  workHomeContext:{scope:'b',requestedScope:'b',workspace,unavailable:false}};
+ Object.defineProperty(current,'sidebarNavigation',{enumerable:true,get(){throw Error('Superseded workspace page read')}});
+ const scopedHost={...host,getSnapshot:()=>current};
+ const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>scopedHost};
+ const state={view:{workSurface:'workspace',workWorkspaceId:'b',workHomeScope:'elsewhere',workHomeQuery:'unrelated',
+  workWorkspaceChats:{workspaceId:'b',query:'',pages:{}}},workspaces:[workspace]};
+ const markup=()=>renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state,act:host.dispatch})));
+ const html=markup();
+ assert.match(html,/a-work-card[^>]*data-session-id="b-chat"/);assert.match(html,/Research ideas/);
+ assert.equal((html.match(/class="a-home-toolbar"/g)||[]).length,1);
+ assert.ok(html.indexOf('aria-label="Workspace view"')<html.indexOf('class="a-home-toolbar"'));
+ assert.equal((html.match(/class="a-home-intro"/g)||[]).length,1);
+ assert.doesNotMatch(html,/a-home-project|aria-label="Work scope"|a-work-layout-label|One thing at a time|Group conversations|Filter conversations by age/);
+ assert.match(html,/aria-label="Work view"/);
+ current.workHome={...current.workHome,scope:'elsewhere'};
+ const stale=markup();assert.doesNotMatch(stale,/Research ideas/);assert.match(stale,/Loading your work/);
+});
+test('All Chats retains local grouping and global age independently of workspace chat choices',()=>{
+ const choices={navGroup:'status'};
+ const current={...snapshot,view:{navAge:'24h',navRecentView:choices},sidebarNavigation:{...snapshot.sidebarNavigation,
+  recentView:choices,search:{...snapshot.sidebarNavigation.search,scope:{...snapshot.sidebarNavigation.search.scope,group:'status',age:'24h'},
+   items:page.items.map(chat=>({...chat,group:{id:'status:idle',title:'Pick up again'}}))}}};
+ const scopedHost={...host,getSnapshot:()=>current};
+ const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>scopedHost};
+ const state={view:{workSurface:'chats',workWorkspaceId:'b',workWorkspaceChats:{workspaceId:'b',query:'unrelated',pages:{idle:2}}}};
+ const html=renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state,act:host.dispatch})));
+ assert.match(html,/<option value="status" selected="">Status<\/option>/);
+ assert.match(html,/aria-valuetext="Within the last 24 hours"/);
+ assert.match(html,/<h2 class="a-chat-group-heading">Pick up again<\/h2>/);
+ assert.match(html,/Research ideas/);assert.doesNotMatch(html,/a-workspace-chats/);
+ assert.deepEqual(current.view.navRecentView,choices);
+});
+test('workspace view hook restores each destinations original layout key, search, filter and pages',async()=>{
+ const prior={window:globalThis.window,sessionStorage:globalThis.sessionStorage},values=new Map();
+ const storage={getItem:key=>values.get(key),setItem:(key,value)=>values.set(key,value)};
+ globalThis.window={sessionStorage:storage};globalThis.sessionStorage=storage;
+ let current,root;
+ function Legacy(){current=useLandingLayout('workspace:one',{});return null}
+ function Probe({id}){const [mode,setMode]=useLandingLayout('workspace:'+id,{});current=useWorkspaceChatView(id,mode,setMode);return null}
+ const mount=async(id)=>act(async()=>root.update(React.createElement(Probe,{key:id,id})));
+ try{
+  await act(async()=>{root=create(React.createElement(Legacy))});
+  await act(async()=>current[1]('focus'));
+  await mount('one');assert.equal(current[0].workHomeView,'focus','Retain layout chosen before the extraction');
+  await act(async()=>current[1]({workHomeQuery:'alpha',workHomeFilter:'idle',workHomePages:{idle:1}}));
+  const first=structuredClone(current[0]);
+  await mount('two');assert.equal(current[0].workHomeView,'brief');
+  await act(async()=>current[1]({workHomeView:'studio',workHomeQuery:'beta',workHomeFilter:'working',workHomePages:{working:2}}));
+  const second=structuredClone(current[0]);
+  await mount('one');assert.deepEqual(current[0],first);
+  await mount('two');assert.deepEqual(current[0],second);
+  await act(async()=>root.unmount());root=null;
+  await act(async()=>{root=create(React.createElement(Probe,{id:'one'}))});
+  assert.deepEqual(current[0],first,'Reload/remount uses only this workspace saved choices');
+ }finally{if(root)await act(async()=>root.unmount());Object.assign(globalThis,prior)}
 });
 test('Shared Work tab reads only through the rejecting presentation dispatcher and aborts when hidden',async()=>{
  const current={...snapshot},calls=[],acts=[],pending=[];

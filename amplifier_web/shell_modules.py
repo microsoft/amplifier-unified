@@ -353,8 +353,9 @@ class ShellModules:
         state = self.service.state
         view = dict(client.get('baselineView', {}))
         view.update(client['views'].get(instance['id'], {}).get('view', {}))
-        from .adaptive_work import WORK_QUERY_FIELDS
-        view.update({key: state.get('view', {}).get(key) for key in WORK_QUERY_FIELDS if key != 'navAge'})
+        from .adaptive_work import WORK_QUERY_FIELDS, BUNDLED_WORK_QUERY_FIELDS
+        fields = (*WORK_QUERY_FIELDS, *BUNDLED_WORK_QUERY_FIELDS) if instance['package'] in BUILTINS else WORK_QUERY_FIELDS
+        view.update({key: state.get('view', {}).get(key) for key in fields if key != 'navAge'})
         view['navStatusPages'] = state.get('view', {}).get('navStatusPages', {})
         if instance['package'] in BUILTINS:
             view['navAge'] = state.get('view', {}).get('navAge', 'all')
@@ -425,8 +426,10 @@ class ShellModules:
         search = projections.chats({**scoped, 'view': recent_view}, section='search') if wants('sidebarSearch') else None
         workspace_chats = projections.chats({**scoped, 'view': {**view, 'navChatScope': 'workspace'}}, section='workspace') if wants('sidebarWorkspace') else None
         recent_navigation = projections.chats({**scoped, 'view': sidebar_home}, section='shortcuts') if wants('recentNavigation') else None
-        from .adaptive_work import work_home, work_home_context, work_status, STATUS_RESOURCES
-        work = work_home(self.service, scoped, pinned_workspace_id=workspace_id if pinned_scope else None) if wants('workHome') and instance['package'] in BUILTINS else None
+        from .adaptive_work import work_home, work_home_context, work_home_inputs, work_status, STATUS_RESOURCES
+        work_state, work_pin = work_home_inputs(scoped, pinned_workspace_id=workspace_id if pinned_scope else None,
+                                               workspace_chats=instance['package'] in BUILTINS)
+        work = work_home(self.service, work_state, pinned_workspace_id=work_pin) if wants('workHome') and instance['package'] in BUILTINS else None
         # Bundled Status pages are explicit demand, not additions to third-party
         # full snapshots. Identical Home queries reuse the projection cache.
         status_pages = {name: work_status(self.service, scoped, status,
@@ -474,7 +477,7 @@ class ShellModules:
         result = {} if _page_only else {'view': view, 'viewRevision': client['views'].get(instance['id'], {}).get('viewRevision', 0),
                 'recentScope': recent_scope,
                 'workHomePinnedScope': workspace_id if pinned_scope else None,
-                'workHomeContext': work_home_context(scoped, pinned_workspace_id=workspace_id if pinned_scope else None),
+                'workHomeContext': work_home_context(work_state, pinned_workspace_id=work_pin),
                 'navigationActivityById': activity_by_id,
                 'selectedWorkspaceId': workspace_id, 'selectedSessionId': state.get('selectedSessionId'),
                 'workspaces': [copy.deepcopy(workspace)] if workspace else [],

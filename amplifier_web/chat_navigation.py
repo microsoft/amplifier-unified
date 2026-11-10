@@ -314,6 +314,12 @@ def view_patch(patch):
     # Browsing is client presentation, never a change to the active chat/folder.
     if 'workSurface' in patch and patch['workSurface'] not in ('chat', 'workspace', 'workspaces', 'chats', 'home'):
         raise ValueError('Choose home, chat, workspace, workspaces or chats.')
+    if 'workWorkspaceChats' in patch:
+        request = patch['workWorkspaceChats']
+        if not isinstance(request, dict) or set(request) != {'workspaceId', 'query', 'pages'}:
+            raise ValueError('Supply the active workspace chat query.')
+        view_patch({'workHomeScope': request['workspaceId'], 'workHomeQuery': request['query'],
+                    'workHomePages': request['pages']})
     if 'workHomeView' in patch and patch['workHomeView'] not in ('focus', 'brief', 'studio'):
         raise ValueError('Choose Focus, Brief or Studio.')
     if 'workHomeFilter' in patch and patch['workHomeFilter'] not in ('all', 'attention', 'unread', 'working', 'idle', 'waiting', 'paused'):

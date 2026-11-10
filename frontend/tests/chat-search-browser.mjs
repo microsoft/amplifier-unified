@@ -104,17 +104,29 @@ try{
  await area.locator('summary').click();await page.screenshot({path:'/tmp/unified-search-mobile.png'});
  await page.setViewportSize({width:1280,height:900});
  if(!await age.isVisible())await page.getByRole('button',{name:'Open navigation',exact:true}).click();
- // Workspace landing uses the same controls and headings without retargeting
- // the active chat or overwriting the All chats preferences.
+ // Workspace Chats uses Home's cards, not the All Chats catalog controls.
+ // Its query remains independent, but the sidebar age is shared.
+ await grouping.selectOption('status');await age.focus();await age.press('Home');
+ await expect(results).toHaveCount(0);
  const workspaceId=await page.evaluate(()=>window.amplifier.getState().selectedWorkspaceId);
  await action('view.update',{patch:{workSurface:'workspace',workWorkspaceId:workspaceId,workWorkspaceTab:'chats'}});
- const workspaceArea=page.locator('[data-landing="workspace"]'),workspaceAge=age,workspaceGroup=workspaceArea.getByRole('combobox',{name:'Group conversations'});
- await expect(workspaceArea.getByRole('slider')).toHaveCount(0);
- await expect(workspaceAge).toBeVisible();await expect(workspaceAge).toHaveValue('5');
- await workspaceGroup.selectOption('workspace');await expect(workspaceArea.getByRole('heading',{name:'Pinned',exact:true})).toBeVisible();
- await workspaceAge.focus();await workspaceAge.press('Home');await expect(workspaceArea.locator('.a-nav-chat-select')).toHaveCount(1);
- await action('view.update',{patch:{workSurface:'chats'}});await expect(grouping).toHaveValue('recent');await expect(age).toHaveValue('0');await expect(search).toHaveValue('Beta');
- await age.press('End');await expect(age).toHaveValue('5');await expect(results).toHaveCount(3);
+ const workspaceArea=page.locator('[data-landing="workspace"]'),workspaceCards=workspaceArea.locator('.a-work-card[data-session-id]');
+ await expect(workspaceArea.getByRole('searchbox',{name:'Search your work',exact:true})).toHaveValue('');
+ await expect.poll(()=>page.evaluate(id=>{const snapshot=window.amplifier?.getShellState?.()?.snapshots?.chats;
+  return snapshot?.navigationResources?.includes('workHome')===true&&snapshot.workHome?.scope===id&&snapshot.workHome?.query===''&&!snapshot.navigationResourcePending?.workHome},workspaceId),{timeout:15000}).toBe(true);
+ await expect(workspaceCards).toHaveCount(1);
+ await expect(age).toHaveValue('0');
+ await expect(workspaceArea.getByRole('slider',{name:'Filter conversations by age'})).toHaveCount(0);
+ await expect(workspaceArea.getByRole('combobox',{name:'Group conversations'})).toHaveCount(0);
+ assert.ok((await workspaceCards.evaluateAll(cards=>cards.map(card=>card.dataset.sessionId))).every(id=>!id.startsWith('beta-')));
+ await age.focus();await age.press('End');
+ await expect.poll(()=>workspaceCards.count()).toBeGreaterThan(1);
+ await age.press('Home');await expect(workspaceCards).toHaveCount(1);
+ assert.equal(await workspaceArea.locator('.a-home-toolbar').count(),1);
+ await action('view.update',{patch:{workSurface:'chats'}});
+ await expect(grouping).toHaveValue('status');await expect(age).toHaveValue('0');await expect(search).toHaveValue('Beta');await expect(results).toHaveCount(0);
+ await age.focus();await age.press('End');await grouping.selectOption('recent');
+ await expect(area.getByRole('status')).toHaveText('3 chats found');
  await search.focus();await search.press('Escape');await expect(search).toHaveValue('');
  await search.press('Escape');await expect(search).toBeFocused();await expect(area).toBeVisible();await expect(draft).toBeHidden();
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),selected);
