@@ -119,6 +119,9 @@ export const zoomMetrics=page=>page.evaluate(()=>({dpr:devicePixelRatio,innerWid
 export async function nativeTab(page){
  await page.bringToFront();
  const context=page.context(),opened=context.waitForEvent('page',{timeout:5000});
+ // Observe rejection before input can throw. Keep the original promise so a
+ // page-wait failure still propagates when the chord itself succeeds.
+ void opened.catch(()=>{});
  nativeKey('Control_L','t');
  return opened;
 }

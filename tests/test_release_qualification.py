@@ -510,6 +510,69 @@ def test_media_native_helper_uses_real_input_and_bounded_owned_cleanup():
     assert "result.update(status='uncertain' if started else 'rejected'" in keyboard
 
 
+@pytest.mark.parametrize('mode', ['rejected', 'uncertain', 'page-rejected', 'success'])
+def test_media_native_tab_retains_input_failure_and_observes_page_wait(tmp_path, mode):
+    import subprocess
+    source = (ROOT / 'frontend/tests/inline-media-native-input.mjs').read_text()
+    helper = re.search(r'export async function nativeTab\(page\)\{\n.*?\n\}', source, re.S)
+    assert helper, 'Exercise the maintained helper without loading browser dependencies'
+    evidence_path = tmp_path / 'native-tab-final.json'
+    program = """
+import assert from 'node:assert/strict';
+import {writeFileSync} from 'node:fs';
+import {setImmediate as nextTurn} from 'node:timers/promises';
+const mode=MODE,evidencePath=EVIDENCE;
+const inputError=Object.assign(Error('original native input '+mode),{input:{status:mode}});
+const pageError=Error('later page wait rejected');
+const openedPage={id:'synthetic-page'};
+let attempts=0,waits=0,eventSettled=false,cleanup=false,failure=null,result;
+function nativeKey(...keys){
+ attempts++;assert.deepEqual(keys,['Control_L','t']);
+ if(mode==='rejected'||mode==='uncertain')throw inputError;
+}
+const page={async bringToFront(){},context(){return {
+ waitForEvent(name,options){
+  waits++;assert.equal(name,'page');assert.equal(options.timeout,5000);
+  return new Promise((resolve,reject)=>setImmediate(()=>{
+   eventSettled=true;
+   if(mode==='success')resolve(openedPage);else reject(pageError);
+  }));
+ }
+}}};
+HELPER
+try{result=await nativeTab(page)}
+catch(error){failure=error}
+finally{
+ // Model async cleanup crossing the event-loop boundary where an abandoned
+ // promise would terminate Node under --unhandled-rejections=strict.
+ await nextTurn();await nextTurn();cleanup=true;
+ writeFileSync(evidencePath,JSON.stringify({mode,attempts,waits,eventSettled,cleanup,
+  success:result===openedPage,error:failure?.message||null,
+  inputStatus:failure?.input?.status||null,
+  originalIdentity:failure===(mode==='page-rejected'?pageError:inputError)}));
+}
+""".replace('MODE', json.dumps(mode)).replace('EVIDENCE', json.dumps(str(evidence_path))).replace(
+        'HELPER', helper.group(0))
+    result = subprocess.run(
+        ['node', '--unhandled-rejections=strict', '--input-type=module', '-e', program],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    saved = json.loads(evidence_path.read_text())
+    assert saved['attempts'] == saved['waits'] == 1
+    assert saved['eventSettled'] is True and saved['cleanup'] is True
+    assert saved['success'] is (mode == 'success')
+    if mode == 'success':
+        assert saved['error'] is None
+    elif mode == 'page-rejected':
+        assert saved['originalIdentity'] is True
+        assert saved['error'] == 'later page wait rejected'
+    else:
+        assert saved['originalIdentity'] is True
+        assert saved['inputStatus'] == mode
+        assert saved['error'] == 'original native input ' + mode
+
+
 def test_media_native_preflight_retains_launch_failure(tmp_path):
     import subprocess
     source = (ROOT / 'frontend/tests/inline-media-native-preflight.mjs').read_text()
