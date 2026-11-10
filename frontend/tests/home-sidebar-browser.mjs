@@ -56,6 +56,7 @@ try{
  const menu=sidebar.getByRole('group',{name:'App options',exact:true});
  const resetScroll=()=>scroller.evaluate(node=>{node.scrollTop=0});
  const oneRow=async()=>{
+  await expect.poll(()=>sidebar.evaluate(node=>{const rail=node.getBoundingClientRect();return [...node.querySelectorAll('.a-sidebar-modes button')].every(button=>{const box=button.getBoundingClientRect();return box.left>=rail.left&&box.right<=rail.right})})).toBe(true);
   const boxes=await sidebar.locator('.a-sidebar-modes button').evaluateAll(nodes=>nodes.map(node=>{const r=node.getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,right:r.right}}));
   assert.equal(boxes.length,4);assert.ok(boxes.every(box=>Math.abs(box.top-boxes[0].top)<2));
   assert.ok(boxes.every((box,i)=>!i||box.left>=boxes[i-1].right-1));
