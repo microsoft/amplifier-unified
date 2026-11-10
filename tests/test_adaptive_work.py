@@ -38,6 +38,7 @@ def test_workspace_normalization_is_explicit_not_a_context_side_effect():
     state = {'view': {'workSurface': 'workspace', 'workWorkspaceId': 'two',
                        'navAge': '24h', 'workHomeScope': 'all',
                        'workWorkspaceChats': {'workspaceId': 'two', 'query': 'beta', 'pages': {}}},
+             '_navigationListClock': 1_800_000_000,
              'workspaces': [{'id': key, 'name': key, 'path': '/'+key, 'available': True} for key in ('one', 'two')]}
     before = deepcopy(state)
     untouched, pin = work_home_inputs(state, pinned_workspace_id='one')
@@ -47,6 +48,7 @@ def test_workspace_normalization_is_explicit_not_a_context_side_effect():
     assert work_home_context(normalized, pinned_workspace_id=pin)['workspace']['id'] == 'two'
     assert normalized['view']['workHomeQuery'] == 'beta'
     assert normalized['view']['navAge'] == '24h'
+    assert normalized['_navigationListClock'] == state['_navigationListClock']
     assert state == before
 
 

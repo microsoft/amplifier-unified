@@ -195,6 +195,10 @@ test('workspace Chats reuses scoped Home cards below tabs without a second landi
  assert.equal((html.match(/class="a-home-intro"/g)||[]).length,1);
  assert.doesNotMatch(html,/a-home-project|aria-label="Work scope"|a-work-layout-label|One thing at a time|Group conversations|Filter conversations by age/);
  assert.match(html,/aria-label="Work view"/);
+ state.view.navAge='24h';
+ const staleAge=markup();assert.doesNotMatch(staleAge,/Research ideas/);assert.match(staleAge,/Loading your work/);
+ current.workHome={...current.workHome,age:'24h'};
+ assert.match(markup(),/Research ideas/);
  current.workHome={...current.workHome,scope:'elsewhere'};
  const stale=markup();assert.doesNotMatch(stale,/Research ideas/);assert.match(stale,/Loading your work/);
 });

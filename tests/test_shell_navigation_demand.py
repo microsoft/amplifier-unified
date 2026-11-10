@@ -115,7 +115,7 @@ async def test_recent_controller_scope_does_not_depend_on_page(service, monkeypa
                 'scope': {'mode': 'pinned', 'workspaceId': workspace} if pinned else {'mode': 'all'}}
     full = service.shell.navigation(client, instance, identity='recent-controller')
     expected_scope = {'mode': 'workspace' if pinned else 'all', 'workspaceId': expected,
-        'filter': '', 'clientId': 'recent-controller', 'instanceId': 'chats',
+        'filter': '', 'age': 'all', 'clientId': 'recent-controller', 'instanceId': 'chats',
         'generation': client['views'].get('chats', {}).get('generation', 0)}
     assert full['recentScope'] == expected_scope
     assert {key: full['recentNavigation']['scope'][key] for key in expected_scope} == expected_scope
@@ -147,7 +147,7 @@ async def test_pending_recent_resource_keeps_exact_controller_identity(service, 
     assert entry['pending']['recentNavigation']['status'] == 'pending'
     assert 'recentNavigation' not in entry['resources']
     assert entry['resources']['context']['value']['recentScope'] == {
-        'mode': 'all', 'workspaceId': None, 'filter': '', 'clientId': 'recent-pending',
+        'mode': 'all', 'workspaceId': None, 'filter': '', 'age': 'all', 'clientId': 'recent-pending',
         'instanceId': 'chats', 'generation': entry['generation']}
 
 

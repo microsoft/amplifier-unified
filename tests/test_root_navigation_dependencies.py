@@ -234,6 +234,9 @@ async def test_workspace_pin_reorder_does_not_accumulate_mixed_pages(service):
 
 @pytest.mark.parametrize('count', [270, 2700, 27000])
 async def test_scale_six_queries_reuse_100_observations(service, tmp_path, monkeypatch, count):
+    from amplifier_web import chat_navigation
+    # The reuse oracle changes child facts only, not relative-time inputs.
+    monkeypatch.setattr(chat_navigation, 'list_clock', lambda: 1_800_000_000)
     from amplifier_web.native_catalog import CatalogRows, CatalogPatchRows
     from test_native_directory import seed
     from test_history_directory_query_budget import measure_sql
@@ -293,6 +296,20 @@ async def test_scale_six_queries_reuse_100_observations(service, tmp_path, monke
             'p99Ms':times[98],'maxMs':times[-1], 'maxVm':max(row['vm'] for row in samples),
             'rootQueryCalls':0, 'decodedOverlayRows':reuse_decoded},
         'realChange':{'ms':changed_ms,'vm':changed_vm}, 'samples':samples}))
+
+
+async def test_search_clock_transition_invalidates_only_its_relative_time_identity(service, monkeypatch):
+    from amplifier_web import chat_navigation
+    now = [1_800_000_000]
+    monkeypatch.setattr(chat_navigation, 'list_clock', lambda: now[0])
+    service._save_changes(sessions={'alpha', 'beta'}, globals={'workspaces'})
+    state = {**service.state, 'view': {**service.state['view'], 'navChatScope': 'all'}}
+    first = service.projections.chats(state, section='search')
+    shortcuts = service.projections.chats(state, section='shortcuts')
+    assert service.projections.chats(state, section='search') is first
+    now[0] += 60
+    assert service.projections.chats(state, section='search') is not first
+    assert service.projections.chats(state, section='shortcuts') is shortcuts
 
 
 async def test_explicit_unknown_invalidation_drops_untracked_global_pages(service):
