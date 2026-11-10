@@ -96,6 +96,19 @@ count can still hide repeated parsing of large bound JSON parameters. Scalar
 queries should not bind unused bodies; measure parameter/statement bytes as well
 as rows and preserve the authorized full-detail read.
 
+Membership-only counts also have no dependency on historical read receipts.
+Hold catalog membership and current notices fixed while growing that history;
+root, child and archive counts should keep the same query work and bound bytes.
+Attention projections must still observe current read fingerprints and reviewed
+errors, including when they request only scalar fields alongside notice values.
+Notice-detail and receipt consumers should not repeat owner activity aggregation
+when they already join the exact current receipts themselves. Measure the full
+multi-query projection with old read history, as well as its selected results.
+Record the SQLite version with query-work measurements. When development and
+CI or installed environments use different versions, compare the affected query
+plans: flattening and automatic-index choices can turn a linear join into a
+repeated scan. Keep global fact projections separate from demanded item bodies.
+
 Prefer stable work assertions at the affected boundary: rows read or visited,
 records copied/encoded, queries, publications, frames/bytes, retained cache bytes
 or runtime starts. Pick the counts that expose the regression; avoid tests that
