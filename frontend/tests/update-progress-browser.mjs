@@ -46,6 +46,19 @@ try{
   {message:'mobile dialog must fit after responsive reflow'}).toBeLessThanOrEqual(1);
  await page.screenshot({path:output+'-mobile.png'});
  const stage=async value=>{const response=await page.request.post(base+'/fixture/update-progress',{data:{stage:value}});assert.ok(response.ok(),await response.text())};
+ // Terminal presentation comes from canonical currentStatus, not the client's
+ // sequence fallback or the old per-attempt attention cards. Assert its exact
+ // classification first, then require the visible heading and detail to agree.
+ const currentHealth=()=>page.evaluate(()=>window.amplifier.getState().updates.currentStatus);
+ const assertCurrentHealth=async(status,title,action)=>{
+  await expect.poll(async()=>{const value=await currentHealth();return {status:value?.status,title:value?.title,action:value?.action};})
+   .toEqual({status,title,action});
+  const value=await currentHealth();
+  await expect(overview.getByRole('heading',{level:4})).toHaveText(title);
+  await expect(overview.locator('#update-action-status')).toHaveText(value.detail);
+  assert.equal(value.actionRequired,true);
+  return value;
+ };
  // A failed chat control belongs to that command, not the host updater. Keep
  // genuine update failures, blockers and saved preferences independently visible.
  const readObservations=async()=>{const response=await page.request.get(base+'/fixture/update-observations');assert.ok(response.ok());return response.json()};
@@ -59,7 +72,8 @@ try{
  for(let index=1;index<=3;index++)await expect(updates.locator('[data-part="update-blockers"]')).toContainText(`Running fixture chat ${index}`);
  assert.deepEqual(await readObservations(),beforeControlError);
  await stage('unrelated-control-update-failed');
- await expect(overview).toContainText('Updates need attention');
+ await assertCurrentHealth('action-required','Update needs attention','diagnostics');
+ await expect(overview.locator('#update-action-status')).toHaveText('Synthetic restart failed; the update remains fenced.');
  await expect(updates.getByRole('alert').filter({hasText:'Synthetic restart failed; the update remains fenced.'}).first()).toBeVisible();
  await expect(page.locator('[data-part="settings-experience"]')).not.toContainText('Unsupported runtime control');
  assert.deepEqual(await readObservations(),beforeControlError);
@@ -91,12 +105,12 @@ try{
  await page.reload();await page.waitForSelector('#amp-one');
  if(!await overview.isVisible())await openSettingsPage(page,'updates');
  await expect(install).toHaveCount(0);await expect(overview).toContainText('Finishing your update');
- await stage('failed');await expect(overview).toContainText('Updates need attention');
+ await stage('failed');await assertCurrentHealth('action-required','Update needs attention','diagnostics');
  await expect(updates).not.toContainText('Other components installed at');
  await expect(install).toBeEnabled();
  await expect(overview.locator('.a-progress-spinner')).toHaveCount(0);
  await stage('source-mismatch');
- await expect(overview).toContainText('Updates need attention');
+ await assertCurrentHealth('action-required','Update needs attention','diagnostics');
  await expect(updates).toContainText('A component changed to a different source during update preparation.');
  await expect(updates).toContainText('Amplifier kept the current components active.');
  await expect(updates).toContainText('amplifier-foundation');
@@ -109,14 +123,16 @@ try{
  const confirmedAppText=await overview.locator('[data-part="confirmed-application-result"]').innerText();
  assert.equal(confirmedAppResult.phase,'restart-ack');
  await stage('component-source-changed');
- // The exact current batch owns the heading; older unresolved episodes stay visible.
- await expect(overview.getByRole('heading',{level:4})).toHaveText('Some components were not updated');
- await expect(overview.locator('#update-action-status')).toContainText('Check for updates again before retrying');
+ // Current health owns the heading; the exact failed batch and verified app
+ // result remain separate evidence instead of becoming another health ledger.
+ await assertCurrentHealth('action-required','Update could not finish','diagnostics');
+ await expect(overview.locator('#update-action-status')).toHaveText('Worker sources changed while checking. Check for updates again.');
  await expect(overview.locator('[data-part="confirmed-application-result"]')).toHaveText(confirmedAppText);
  const changedFailure=await page.evaluate(()=>{
   const {updates,attention}=window.amplifier.getState();
   return {lastFailure:updates.diagnostics.lastFailure,batch:updates.diagnostics.batch,
-   applicationResult:updates.applicationResult,actionRequired:attention.items.some(item=>item.actionRequired&&item.firstFailure?.id===updates.diagnostics.lastFailure.id)};
+   applicationResult:updates.applicationResult,actionRequired:attention.items.some(item=>item.id==='updates:current'&&
+    item.actionRequired&&item.detail===updates.currentStatus.detail)};
  });
  assert.equal(changedFailure.lastFailure.reason,'runtime-source-changed');
  assert.equal(changedFailure.lastFailure.status,'failed');
@@ -125,13 +141,14 @@ try{
  assert.deepEqual(changedFailure.batch.components,['amplifier-foundation']);
  assert.equal(changedFailure.actionRequired,true);
  assert.deepEqual(changedFailure.applicationResult,confirmedAppResult);
- await expect(advanced.locator('.a-update-failure[role="alert"]')).toContainText('Worker sources changed while checking. Let source changes finish, then check for updates again.');
+ await expect(advanced.locator('.a-update-failure[role="status"]')).toContainText('Worker sources changed while checking. Let source changes finish, then check for updates again.');
  await expect(check).toBeEnabled();
  await page.reload();await page.waitForSelector('#amp-one');
  if(!await overview.isVisible())await openSettingsPage(page,'updates');
  await expect(overview.locator('[data-part="confirmed-application-result"]')).toHaveText(confirmedAppText);
- await expect(overview.getByRole('heading',{level:4})).toHaveText('Some components were not updated');
- await expect(overview.locator('#update-action-status')).toContainText('Affected batch: amplifier-foundation');
+ await assertCurrentHealth('action-required','Update could not finish','diagnostics');
+ await expect(overview.locator('#update-action-status')).toHaveText('Worker sources changed while checking. Check for updates again.');
+ assert.deepEqual(await page.evaluate(()=>window.amplifier.getState().updates.diagnostics.batch.components),['amplifier-foundation']);
  assert.deepEqual(await page.evaluate(()=>window.amplifier.getState().updates.applicationResult),confirmedAppResult);
  assert.deepEqual(await page.evaluate(()=>window.amplifier.getState().updates.diagnostics.lastFailure),changedFailure.lastFailure);
  await page.setViewportSize({width:320,height:844});
@@ -140,7 +157,7 @@ try{
  // A declaration constraint is not evidence of local edits or an override.
  // Publish it over the same HTTP/SSE path; retain the exact confirmed app receipt.
  const beforeConstraint=await readObservations();
- const constraintGuidance='A package source declaration could not be reconciled with the selected component. The current components remain active. This does not establish local edits. Share the update diagnostics for review; do not remove pins or caches to bypass this check.';
+ const constraintGuidance='A protected package source declaration conflicts with the checked update. Current components remain active. This does not establish local edits. Unchanged automatic attempts are paused. A compatible update to the declaring component or a deliberate source-configuration change is needed; do not remove pins or caches to bypass this check.';
  const terminalDetail='Component update preparation failed. Current components remain active.';
  const appOnlyDetail='The latest published application release is installed.';
  const constraintState=()=>page.evaluate(()=>{
@@ -151,18 +168,20 @@ try{
  });
  const assertConstraint=async()=>{
   await expect.poll(async()=>(await constraintState()).lastFailure?.reason).toBe('runtime-source-constraint');
-  await expect(overview.getByRole('heading',{level:4})).toHaveText('Some components were not updated');
+  await assertCurrentHealth('protected','Component source needs review','sources');
   await expect(overview.locator('[data-part="confirmed-application-result"]')).toHaveText(confirmedAppText);
-  await expect(overview.locator('#update-action-status')).toContainText('Review the component issue below before trying again');
+  await expect(overview.locator('#update-action-status')).toHaveText(constraintGuidance);
   await expect(overview).not.toContainText('You’re up to date');
   await expect(check).toBeEnabled();
   await expect(overview.locator('.a-progress-spinner')).toHaveCount(0);
-  const issue=advanced.locator('.a-update-failure[role="alert"]');
+  const issue=advanced.locator('.a-update-failure[role="status"]');
   await expect(issue).toBeVisible();
   await expect(issue).toContainText('amplifier-foundation');
   await expect(issue).toContainText('ProtectedRuntimeSource');
   await expect(issue).toContainText(constraintGuidance);
-  await expect(updates.getByRole('alert').filter({hasText:constraintGuidance}).first()).toBeVisible();
+  await expect(overview.locator('#update-action-status')).toBeVisible();
+  await expect(updates.locator('.a-update-current-action')).toContainText('amplifier-foundation');
+  await expect(updates.locator('.a-update-current-action button')).toHaveText('Review source details');
   await expect(advanced.getByText(appOnlyDetail,{exact:true})).toBeVisible();
   await expect(updates).not.toContainText('Local source changes or an explicit dependency override were preserved.');
   await expect(updates).not.toContainText('The latest published application release and checked components are installed.');
@@ -207,27 +226,28 @@ try{
  await page.setViewportSize({width:320,height:844});
  await expect.poll(()=>page.locator('.a-dialog').evaluate(el=>el.scrollWidth-el.clientWidth),
   {message:'constraint guidance must fit the narrow dialog'}).toBeLessThanOrEqual(1);
- await advanced.locator('.a-update-failure[role="alert"]').scrollIntoViewIfNeeded();
+ await advanced.locator('.a-update-failure[role="status"]').scrollIntoViewIfNeeded();
  await page.screenshot({path:output+'-source-constraint-mobile.png'});
  assert.deepEqual(await readObservations(),beforeConstraint);
  result.constraintFailure.afterReload=constraintAfterReload;
  result.constraintFailure.noUpdateEffects=true;
  await stage('app-result-stale');
  await expect(overview).not.toContainText('Application updated successfully');
- await expect(overview.getByRole('heading',{level:4})).toHaveText('Updates need attention');
+ await assertCurrentHealth('protected','Component source needs review','sources');
  await stage('application-confirmed');await stage('unconfirmed-restart');
  await expect(overview).toContainText('Waiting for restart confirmation');
  await expect(overview).not.toContainText('Application updated successfully');
  await stage('clear-app-result');await page.setViewportSize({width:1280,height:950});
  // These synthetic completion/check stages do not establish matching recovery
  // of the failure recorded after this batch began. Do not infer it from phase.
- await stage('adopting');await expect(overview.getByRole('heading',{level:4})).toHaveText('Component update needs attention');await expect(updates).toContainText('2 conversation workers are finishing on earlier components.');await expect(check).toBeEnabled();
+ await stage('adopting');await assertCurrentHealth('protected','Component source needs review','sources');await expect(updates).toContainText('2 conversation workers are finishing on earlier components.');await expect(check).toBeEnabled();
  const adoption=await page.evaluate(()=>{const u=window.amplifier.getState().updates;return {workers:u.adoption,phase:u.phase,stage:u.sequence.stage,restarting:!!u.pendingRestart}});
  assert.deepEqual(adoption,{workers:{pendingWorkers:2,activeWorkers:2},phase:'installed',stage:'complete',restarting:false});
  await stage('installed');await expect(updates).toContainText('Other components installed at');
  await expect(updates).toContainText('Included components installed at');
- await expect(overview.getByRole('heading',{level:4})).toHaveText('Component update needs attention');
- await expect(overview.locator('#update-action-status')).toContainText('runtime-source-constraint');
+ await assertCurrentHealth('protected','Component source needs review','sources');
+ await expect(overview.locator('#update-action-status')).toHaveText(constraintGuidance);
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().updates.diagnostics.lastFailure.reason),'runtime-source-constraint');
  await expect(overview).not.toContainText('You’re up to date');
  await expect(check).toBeEnabled();await expect(install).toHaveCount(0);
  await expect(overview.locator('.a-progress-spinner')).toHaveCount(0);
@@ -271,7 +291,10 @@ try{
  await expect(summary).not.toContainText('Now installed');
  await page.screenshot({path:output+'-release-during.png'});
  await stage('summary-after');await expect(summary).toContainText('Now installed · 0.20.206');
- await expect(overview).toContainText('Finishing test runner update');await expect(overview).toContainText('Application updated successfully');
+ // This runner-only transition did not verify recovery of the earlier
+ // component failure. Keep that health warning alongside the app receipt.
+ await assertCurrentHealth('protected','Component source needs review','sources');await expect(overview).toContainText('Application updated successfully');
+ assert.deepEqual(await page.evaluate(()=>window.amplifier.getState().updates.pendingSmartTools),[{id:'runner',runnerSource:true}]);
  await page.reload();await openSettingsPage(page,'updates');await expect(summary).toContainText('Now installed · 0.20.206');
  await expect.poll(noticeRead).toBe(false);
  await page.screenshot({path:output+'-release-after.png'});
@@ -287,7 +310,7 @@ try{
  await expect(summary.getByRole('link')).toHaveAttribute('href','https://github.com/microsoft/amplifier-unified/releases/tag/v0.20.204');
  await expect(summary).not.toContainText('Clearer update summaries');
  await stage('summary-reset');await page.setViewportSize({width:1280,height:950});
- result.releaseSummary={before:true,exactQueuedTarget:true,newerDiscovery:true,uncertainRestart:true,confirmedWithRunnerWait:true,reload:true,missingNotes:true,phone:true,noticeReadSeparate:true};
+ result.releaseSummary={before:true,exactQueuedTarget:true,newerDiscovery:true,uncertainRestart:true,confirmedWithRunnerPending:true,componentFailureStillActionable:true,reload:true,missingNotes:true,phone:true,noticeReadSeparate:true};
  // Ordinary preferences retain an unfamiliar saved interval until explicitly changed.
  await stage('installed');
  const observations=async()=>{const response=await page.request.get(base+'/fixture/update-observations');assert.ok(response.ok());return response.json()};
@@ -305,18 +328,24 @@ try{
  await expect(automatic).toBeChecked();await expect(frequency).toHaveValue('24');
  // Explicit checks carry their own outcome; a successful lookup cannot clear
  // a retained component failure without matching recovery.
- await check.click();await expect(overview.getByRole('heading',{level:4})).toHaveText('Updates need attention');await expect(updates).toContainText('Synthetic update lookup failed. Check again.');assert.equal((await observations()).calls.check,1);
- await check.click();await expect(overview.getByRole('heading',{level:4})).toHaveText('Component update needs attention');await expect(overview.locator('#update-action-status')).toContainText('runtime-source-constraint');await expect(overview).not.toContainText('You’re up to date');await expect(updates.getByText('Synthetic update lookup failed. Check again.',{exact:true})).toHaveCount(0);assert.deepEqual((await observations()).calls,{check:2,install:0,rollback:0});
+ await check.click();await assertCurrentHealth('protected','Component source needs review','sources');
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().updates.error)).toBe('Synthetic update lookup failed. Check again.');
+ await expect(overview.locator('#update-action-status')).toHaveText(constraintGuidance);assert.equal((await observations()).calls.check,1);
+ await check.click();await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().updates.error)).toBe(null);
+ await assertCurrentHealth('protected','Component source needs review','sources');await expect(overview.locator('#update-action-status')).toHaveText(constraintGuidance);await expect(overview).not.toContainText('You’re up to date');await expect(updates.getByText('Synthetic update lookup failed. Check again.',{exact:true})).toHaveCount(0);assert.deepEqual((await observations()).calls,{check:2,install:0,rollback:0});
  // One status projection governs headline, details and retry state, including
- // reload. A check alone left attention above; only the captured covered batch
- // is settled by this fixture's synthetic activation receipt.
+ // reload. This fixture records completion but never installs or verifies an
+ // active graph. Even a matching synthetic batch cannot prove current health.
  const priorIssues=await page.evaluate(()=>window.amplifier.getState().attention.items.filter(item=>item.page==='updates'&&item.actionRequired).map(item=>item.id));
- assert.ok(priorIssues.length);
+ assert.deepEqual(priorIssues,['updates:current']);
+ const priorFailureHistory=await page.evaluate(()=>window.amplifier.getState().updates.diagnostics.activeFailures);
  await expect(advanced).toHaveAttribute('open','');
  await stage('covered-retry');
  await expect(overview).toContainText('Updating other components');
  await expect(check).toBeDisabled();
- assert.deepEqual(await page.evaluate(()=>window.amplifier.getState().attention.items.filter(item=>item.page==='updates'&&item.actionRequired).map(item=>item.id)),priorIssues);
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().updates.currentStatus.status)).toBe('working');
+ assert.deepEqual(await page.evaluate(()=>window.amplifier.getState().attention.items.filter(item=>item.page==='updates'&&item.actionRequired).map(item=>item.id)),[]);
+ assert.deepEqual(await page.evaluate(()=>window.amplifier.getState().updates.diagnostics.activeFailures),priorFailureHistory);
  await page.reload();await openSettingsPage(page,'updates');
  await expect(overview).toContainText('Updating other components');
  await expect(check).toBeDisabled();
@@ -325,15 +354,19 @@ try{
  await expect(updates.locator('[data-part="update-batch"]')).not.toContainText('fixture-component-5');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().updates.diagnostics.batch.components.length),8);
  await stage('covered-activation');
- await expect(overview.getByRole('heading',{level:4})).toHaveText('You’re up to date');
+ await assertCurrentHealth('protected','Component source needs review','sources');
+ await expect(overview).not.toContainText('You’re up to date');
  await expect(check).toBeEnabled();
- await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().attention.items.filter(item=>item.page==='updates'&&item.actionRequired).length)).toBe(0);
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().attention.items.filter(item=>item.page==='updates'&&item.actionRequired).map(item=>item.id))).toEqual(priorIssues);
+ assert.deepEqual(await page.evaluate(()=>window.amplifier.getState().updates.diagnostics.activeFailures),priorFailureHistory);
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().updates.diagnostics.completedBatches.at(-1).phase),'ecosystem-activation');
  await page.reload();await openSettingsPage(page,'updates');
- await expect(overview.getByRole('heading',{level:4})).toHaveText('You’re up to date');
- await expect(advanced.locator('summary').first()).toHaveText('Advanced details');
+ await assertCurrentHealth('protected','Component source needs review','sources');
+ await expect(overview).not.toContainText('You’re up to date');
+ await expect(advanced.locator('summary').first()).toHaveText('Advanced details · review issue');
  assert.ok(await page.evaluate(()=>window.amplifier.getState().updates.diagnostics.events.some(event=>event.status==='failed')));
  assert.deepEqual((await observations()).calls,{check:2,install:0,rollback:0});
- result.statusProjection={retryKeepsAttention:true,currentOperationOwnsHeading:true,fullScopeRetained:true,boundedBatchPreview:true,coveredActivationSettles:true,reloadConsistent:true,failedHistoryPreserved:true};
+ result.statusProjection={retryKeepsFailureHistory:true,currentOperationOwnsHeading:true,fullScopeRetained:true,boundedBatchPreview:true,syntheticActivationDoesNotProveRecovery:true,attentionReturnsWithoutVerifiedGraph:true,reloadConsistent:true,failedHistoryPreserved:true};
  // Consumer-only availability cases use the same served client in an isolated
  // browser context. The maintained HTTP adapter supplies synthetic owner state;
  // event delivery is synthetic too. This does not qualify scheduler, installation,
