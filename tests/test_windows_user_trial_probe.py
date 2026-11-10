@@ -2267,11 +2267,14 @@ def test_default_command_job_is_separate_finite_and_requires_real_native_node():
     # Remove only the new opt-in diagnostic steps/conditions before comparing
     # every default-path byte to the frozen accepted candidate.
     added = {
-        "Reject conflicting storage diagnostic selections",
-        "Require deterministic native event-publication sharing controls",
-        "Upload bounded event-publication sharing result",
+        "Reject conflicting storage diagnostic selections": "${{ inputs.storage_only && (inputs.bootstrap_only || inputs.foreground_only) }}",
+        "Require deterministic native event-publication sharing controls": "${{ inputs.storage_only }}",
+        "Upload bounded event-publication sharing result": "${{ always() && inputs.storage_only }}",
     }
-    assert added <= {step.get("name") for step in preserved_offline["steps"]}
+    for name, condition in added.items():
+        selected = [step for step in preserved_offline["steps"] if step.get("name") == name]
+        assert len(selected) == 1
+        assert selected[0]["if"] == condition
     preserved_offline["steps"] = [step for step in preserved_offline["steps"] if step.get("name") not in added]
     for step in preserved_offline["steps"]:
         if step.get("name") in {
