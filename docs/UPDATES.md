@@ -157,7 +157,9 @@ progress and pending adoption remain visible, with duplicate installation contro
 held while work is pending. A component operation failure takes priority over an
 unavailable application check; completed component work does not make that check
 successful or establish that the application is current. Historical failure
-receipts remain unchanged. Once eligible component work is exhausted, a failed
+receipts remain unchanged. While components progress or are available, the app
+check warning stays in the overall status even when Settings navigation collapses
+the technical details. Once eligible component work is exhausted, a failed
 application check remains actionable through **Check for updates**.
 
 This slice does not detach work from a pending application replacement or restart,
