@@ -2407,10 +2407,14 @@ def validate_publication_sharing(value, label):
         return None
 
 
-def publication_properties(properties, label):
-    """Only two exact pytest properties; reject duplicates, unknowns and prose."""
+def publication_properties(properties, label, *, require_verified=True):
+    """Copy closed observation; by default require the exact final verification.
+
+    The failure recorder may retain the lone observation from before a later
+    assertion failed. A supplied verification must still be exactly True.
+    """
     try:
-        if type(properties) is not list or len(properties) != 2:
+        if type(properties) is not list or len(properties) not in (1, 2):
             return None
         selected = {}
         for pair in properties:
@@ -2422,7 +2426,10 @@ def publication_properties(properties, label):
                 return None
             selected[key] = value
         raw = selected["publication_sharing"]
-        if selected["publication_sharing_verified"] is not True or type(raw) is not str or len(raw) > 16384:
+        if ((require_verified or "publication_sharing_verified" in selected)
+                and selected.get("publication_sharing_verified") is not True):
+            return None
+        if type(raw) is not str or len(raw) > 16384:
             return None
         if len(raw.encode("utf-8")) > 16384:
             return None
@@ -2457,19 +2464,26 @@ class StorageResults(NativeResults):
     def __init__(self, guard=None):
         super().__init__(guard)
         self.publication = {}
+        self.publication_verified = {}
 
     def pytest_runtest_logreport(self, report):
         super().pytest_runtest_logreport(report)
         label = self.node_labels.get(report.nodeid)
         if label is not None and report.when == "call":
-            self.publication[label] = publication_properties(getattr(report, "user_properties", None), label)
+            properties = getattr(report, "user_properties", None)
+            observation = publication_properties(properties, label, require_verified=False)
+            self.publication[label] = observation
+            # A valid two-property record necessarily contains the exact True
+            # flag; a valid one-property record is observation, not verification.
+            self.publication_verified[label] = observation is not None and len(properties) == 2
 
     def finish(self, exit_code):
         result = super().finish(exit_code)
         for label, case in result["cases"].items():
             observation = validate_publication_sharing(self.publication.get(label), label)
-            case.update(publicationSharing=observation, publicationSharingVerified=observation is not None)
-            if not publication_sharing_passed(observation, label):
+            verified = observation is not None and self.publication_verified.get(label) is True
+            case.update(publicationSharing=observation, publicationSharingVerified=verified)
+            if not verified or not publication_sharing_passed(observation, label):
                 case["status"] = "FAIL"
         if not all(case["status"] == "PASS" for case in result["cases"].values()):
             result["status"] = "FAIL"
@@ -2579,13 +2593,15 @@ def validate_storage_public(report):
             assert type(case["publicationSharingVerified"]) is bool
             observation = validate_publication_sharing(case["publicationSharing"], label)
             if case["publicationSharing"] is not None:
-                assert observation is not None and case["publicationSharingVerified"] is True
+                assert observation is not None
+                assert case["publicationSharingVerified"] is True or case["status"] == "FAIL"
             else:
                 assert case["publicationSharingVerified"] is False
             for key in ("collected", "callsPassed", "skips", "failures"):
                 number(case[key])
             if case["status"] == "PASS":
                 assert (case["collected"], case["callsPassed"], case["skips"], case["failures"]) == (1, 1, 0, 0)
+                assert case["publicationSharingVerified"] is True
                 assert publication_sharing_passed(observation, label)
         facts = selection.get("failureFacts", [])
         assert type(facts) is list and len(facts) <= 15

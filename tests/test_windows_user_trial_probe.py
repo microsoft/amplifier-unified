@@ -3364,3 +3364,82 @@ def test_storage_unknown_case_and_other_phase_properties_are_not_published():
     assert changed["status"] == "FAIL"  # Duplicate/unexpected pytest events are still failures.
     assert "PRIVATE" not in json.dumps(changed)
     assert changed["cases"]["held_view"]["publicationSharing"] == storage_observation("held_view")
+
+
+@pytest.mark.parametrize("label", tuple(probe.STORAGE_CONTROLS))
+@pytest.mark.parametrize("outcome", ("passed", "failed"))
+def test_storage_unverified_observation_survives_later_assertion_without_pass(label, outcome):
+    """Synthetic reports only: retention proves neither the native result nor its cause."""
+    results = probe.StorageResults()
+    properties = storage_properties(label)[:1]
+    expected = storage_observation(label)
+    assert probe.publication_properties(properties, label) is None  # Default stays strict.
+    assert probe.publication_properties(properties, label, require_verified=False) == expected
+    nodes = list(results.node_labels)
+    results.pytest_collection_finish(types.SimpleNamespace(
+        items=[types.SimpleNamespace(nodeid=node) for node in nodes]))
+    for node in nodes:
+        case_label = results.node_labels[node]
+        for phase in ("setup", "call", "teardown"):
+            failed = case_label == label and phase == "call" and outcome == "failed"
+            if failed:
+                results.pytest_runtest_makereport(types.SimpleNamespace(nodeid=node),
+                    types.SimpleNamespace(when=phase,
+                        excinfo=types.SimpleNamespace(value=AssertionError("PRIVATE later assertion"))))
+            results.pytest_runtest_logreport(types.SimpleNamespace(
+                nodeid=node, when=phase, outcome="failed" if failed else "passed",
+                user_properties=(properties if case_label == label else storage_properties(case_label))
+                                if phase == "call" else []))
+    # Mutation of the source property and returned copy cannot change retained facts.
+    properties[0] = ("publication_sharing", "PRIVATE invalid late replacement")
+    selection = results.finish(1 if outcome == "failed" else 0)
+    case = selection["cases"][label]
+    assert case["publicationSharing"] == expected
+    assert case["publicationSharingVerified"] is False
+    assert case["status"] == selection["status"] == "FAIL"
+    assert case["callsPassed"] == (1 if outcome == "passed" else 0)
+    assert case["failures"] == (1 if outcome == "failed" else 0)
+    assert all(row["status"] == "PASS" for name, row in selection["cases"].items() if name != label)
+    if outcome == "failed":
+        assert selection["failureFacts"] == [{"case": label, "phase": "call", "facts": {
+            "errors": [{"class": "AssertionError", "frames": []}], "truncated": False}}]
+    report = storage_public_report()
+    report.update(status="FAIL", selection=selection)
+    probe.validate_storage_public(report)
+    assert "PRIVATE" not in json.dumps(report)
+    case["publicationSharing"]["facts"]["errors"].append({"class": "other", "frames": []})
+    assert results.finish(1)["cases"][label]["publicationSharing"] == expected
+    case["publicationSharing"] = expected
+    case["status"] = "PASS"
+    # Even a successful pytest call with the expected Windows facts cannot pass
+    # without the fixture's explicit final verification.
+    with pytest.raises(AssertionError):
+        probe.validate_storage_public(report)
+
+
+@pytest.mark.parametrize("fault", ("malformed", "private", "duplicate", "unknown", "false-flag", "integer-flag"))
+def test_storage_partial_capture_discards_malformed_or_private_observations(fault):
+    label = "held_view"
+    properties = storage_properties(label)[:1]
+    if fault == "malformed":
+        properties[0] = ("publication_sharing", "{PRIVATE")
+    elif fault == "private":
+        value = storage_observation(label)
+        value["facts"]["errors"][0]["message"] = "/private/path PRIVATE"
+        properties[0] = ("publication_sharing", json.dumps(value))
+    elif fault == "duplicate":
+        properties.append(properties[0])
+    elif fault == "unknown":
+        properties.append(("PRIVATE-property", "/private/path"))
+    else:
+        properties.append(("publication_sharing_verified", False if fault == "false-flag" else 1))
+    assert probe.publication_properties(properties, label, require_verified=False) is None
+    selection = native_result(results=probe.StorageResults(), properties=lambda name:
+                              properties if name == label else storage_properties(name))
+    case = selection["cases"][label]
+    assert case["publicationSharing"] is None and case["publicationSharingVerified"] is False
+    assert case["status"] == selection["status"] == "FAIL"
+    report = storage_public_report()
+    report.update(status="FAIL", selection=selection)
+    probe.validate_storage_public(report)
+    assert "PRIVATE" not in json.dumps(report) and "/private/path" not in json.dumps(report)
