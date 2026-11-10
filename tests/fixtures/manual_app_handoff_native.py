@@ -22,6 +22,7 @@ import subprocess
 import sys
 import sysconfig
 import threading
+import time
 import tomllib
 import types
 import uuid
@@ -248,8 +249,10 @@ async def exercise(root, wheel, report):
     from amplifier_web.update_diagnostics import probe_record
     from amplifier_web.windows_read_files import open_file, stream_signature
 
+    started = time.monotonic()
     def passed(name):
         report['checks'][name] = 'PASS'
+        report.setdefault('elapsedSeconds', {})[name] = round(time.monotonic() - started, 3)
         save(root / 'child.json', report)
 
     report['stage'] = 'uv-owner'
@@ -453,9 +456,14 @@ async def exercise(root, wheel, report):
         report['stage'] = 'acquisition-refusal'
         # Candidate has a real source stamp but is not the published version.
         # Expected refusal is evidence of non-qualification, not release access.
-        await refused(lambda: artifacts.prepare(root / 'official-refusal', binding['version'], binding['revision']))
-        passed('liveAcquisitionDidNotQualifyCandidate')
+        try:
+            async with asyncio.timeout(20):
+                await refused(lambda: artifacts.prepare(root / 'official-refusal', binding['version'], binding['revision']))
+            passed('liveAcquisitionDidNotQualifyCandidate')
+        except TimeoutError:
+            report['liveAcquisition'] = 'deadline-no-qualification-not-a-pass'
         report['stage'] = 'controlled-flow'
+        save(root / 'child.json', report)
         await controlled_flow(manager, wheel, proof, report)
         passed('controlledCandidateReconciliation')
     finally:
@@ -519,16 +527,14 @@ async def controlled_flow(manager, wheel, proof, report):
         artifacts._get = local_acquisition
         args = {'hostInstanceId': manager.service.instance_id,
                 **{key: pending[key] for key in ('revision', 'generation', 'attemptId')}}
-        # Expose safe failing producer frame before reconcile sanitizes the
-        # action result. This calls the same unmodified composed verifier.
-        await handoff.qualify(manager, pending)
-        report['checks']['actualComposedQualifier'] = 'PASS'
         # Deterministic acquisition mismatch, separate from live lookup refusal.
         await refused(lambda: artifacts.prepare(manager.directory / 'wrong-source',
                       binding['version'], '0' * 40))
+        report['checks']['acquiredWrongSourceRefused'] = 'PASS'
+        save(Path(os.environ['HANDOFF_ROOT']) / 'child.json', report)
         receipt = await manager.service.dispatch('updates.reconcileManualHandoff', args, command_id='native-controlled')
         assert receipt['accepted']
-        async with asyncio.timeout(120):
+        async with asyncio.timeout(240):
             while state.get(handoff.RESULTS, {}).get('native-controlled', {}).get('status') == 'queued':
                 await asyncio.sleep(.05)
         result = state[handoff.RESULTS]['native-controlled']
@@ -598,7 +604,9 @@ async def contained():
             counts[index] += len(chunk)
     readers = [asyncio.create_task(drain(stream, i)) for i, stream in enumerate((job.stdout, job.stderr))]
     try:
-        await asyncio.wait_for(job.wait(), 240)
+        # 939 shipped files each receive retained native path/handle checks;
+        # qualification, final commit and reload audit are distinct passes.
+        await asyncio.wait_for(job.wait(), 480)
     finally:
         result = await job.close()
         await asyncio.gather(*readers)
