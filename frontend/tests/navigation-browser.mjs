@@ -84,11 +84,12 @@ try{
  await page.screenshot({path:out+'/workspace-flyout.png'});await page.keyboard.press('Escape');
  await workspaceBrowser.getByRole('button',{name:'Open chats in '+initial.paths.two,exact:true}).click();
  const workspaceChats=workspaceBrowser;
- await expect(workspaceChats.locator('.a-nav-chat')).toHaveCount(3);
+ const workspaceCards=workspaceChats.locator('.a-work-card[data-session-id]');
+ await expect(workspaceCards).toHaveCount(3);
  assert.equal(await workspaceBrowser.locator('.a-workspace-explorer').count(),0);
- const beta=(await snapshot()).sidebarNavigation.workspace.items[0];
- await workspaceChats.getByRole('searchbox',{name:'Filter conversations'}).fill('Beta 001');
- await expect(workspaceChats.locator('.a-nav-chat')).toHaveCount(1);
+ const beta=(await info()).state.sessions.find(row=>row.nativeIdentity==='beta-002');
+ await workspaceChats.getByRole('searchbox',{name:'Search your work',exact:true}).fill('Beta 001');
+ await expect(workspaceCards).toHaveCount(1);
  await page.getByRole('button',{name:'Search chats',exact:true}).click();
  await expect(recent.getByRole('status')).toHaveText('206 chats');
  await workspaces.getByRole('button',{name:'All workspaces',exact:true}).click();await search.waitFor();
