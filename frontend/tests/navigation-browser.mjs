@@ -87,7 +87,9 @@ try{
  const workspaceCards=workspaceChats.locator('.a-work-card[data-session-id]');
  await expect(workspaceCards).toHaveCount(3);
  assert.equal(await workspaceBrowser.locator('.a-workspace-explorer').count(),0);
- const beta=(await info()).state.sessions.find(row=>row.nativeIdentity==='beta-002');
+ const workspaceState=(await info()).state;
+ const beta=workspaceState.sessions.find(row=>row.nativeIdentity==='beta-002');
+ const betaWorkspaceName=workspaceState.workspaces.find(row=>row.id===beta.workspaceId).name;
  await workspaceChats.getByRole('searchbox',{name:'Search your work',exact:true}).fill('Beta 001');
  await expect(workspaceCards).toHaveCount(1);
  await page.getByRole('button',{name:'Search chats',exact:true}).click();
@@ -116,7 +118,7 @@ try{
  await expect(recent.getByRole('status')).toHaveText('206 chats');assert.deepEqual(await pinnedContents(),contents);
  const third=pinned.locator('[data-order-id="session:'+beta.id+'"]'),first=pinned.locator('[data-order-id="session:'+selected+'"]');
  await expect(third.locator('.a-nav-chat-workspace')).toBeVisible();
- await expect(third.locator('.a-nav-chat-workspace')).toHaveText(beta.workspaceName);
+ await expect(third.locator('.a-nav-chat-workspace')).toHaveText(betaWorkspaceName);
  const drag=async()=>{
   const handle=third.getByRole('button',{name:/Reorder/});await handle.scrollIntoViewIfNeeded();
   const a=await handle.boundingBox(),b=await first.boundingBox();
@@ -125,7 +127,7 @@ try{
  await drag();const floating=page.locator('.a-reorder-floating');
  await expect(floating).toBeVisible();assert.ok((await floating.innerText()).includes(beta.title));
  await expect(floating.locator('.a-nav-chat-workspace')).toBeVisible();
- await expect(floating.locator('.a-nav-chat-workspace')).toHaveText(beta.workspaceName);assert.equal(await floating.locator('.a-navigation-age').isVisible(),await third.locator('.a-navigation-age').isVisible());
+ await expect(floating.locator('.a-nav-chat-workspace')).toHaveText(betaWorkspaceName);assert.equal(await floating.locator('.a-navigation-age').isVisible(),await third.locator('.a-navigation-age').isVisible());
  await expect(pinned.locator('.a-order-insertion')).toBeVisible();await expect(pinned.locator('.a-order-placeholder')).toHaveCount(1);
  const floatBox=await floating.boundingBox();assert.ok(floatBox.width>150&&floatBox.x>=0);assert.equal(await floating.locator('.a-nav-chat').evaluate(el=>el.offsetHeight),await third.locator('.a-nav-chat').evaluate(el=>el.offsetHeight));
  await page.screenshot({path:out+'/pin-drag.png'});await page.keyboard.press('Escape');await page.mouse.up();
