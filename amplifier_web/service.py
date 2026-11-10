@@ -4238,8 +4238,11 @@ class AppService:
             writable = row is None or receipt is None or receipt_status is not None
             return message, status, protected, conflict, writable
 
-        def result(status, message=None):
-            value = {'sessionId': sid, 'inputId': input_id, 'delivery': status}
+        def result(status, session, message=None):
+            value = {'sessionId': sid, 'inputId': input_id, 'delivery': status,
+                     'source': {'workspace': session.get('workspace') or None,
+                                'nativeIdentity': session.get('runtimeSessionId') or
+                                session.get('nativeIdentity') or session['id']}}
             if message and message.get('steering'):
                 return {**value, 'steering': copy.deepcopy(message['steering']),
                         'message': 'Steering status: ' + message['steering']['disposition'] + '. This correction is bound to its original run and was not sent again.'}
@@ -4256,9 +4259,9 @@ class AppService:
             session = copy.deepcopy(self._session(sid))
             message, status, protected, conflict, _ = saved_evidence(session)
         if protected:
-            return result(status, message)
+            return result(status, session, message)
         if conflict:
-            return result('unknown')
+            return result('unknown', session)
         anchor = source_anchor(session)
         runtime = self.runtime
         evidence = None
@@ -4273,9 +4276,9 @@ class AppService:
             current = self._session(sid)
             message, status, protected, conflict, writable = saved_evidence(current)
             if protected:
-                return result(status, message)
+                return result(status, current, message)
             if conflict:
-                return result('unknown')
+                return result('unknown', current)
             if (evidence == 'accepted' and anchor is not None
                     and source_anchor(current) == anchor and self.runtime is runtime):
                 status = 'accepted'
@@ -4286,7 +4289,7 @@ class AppService:
             if status == 'accepted' and message is not None and writable:
                 self._delivery(current, input_id, status)
                 self._publish_changes(sessions={sid})
-        return result(status, message)
+            return result(status, current, message)
 
     async def _retry_message(self, session, text, input_id, original_status, original_turn, known_undelivered=False):
         result = await self._send(session, text, input_id, preserve_draft=True, retry=True, known_undelivered=known_undelivered)

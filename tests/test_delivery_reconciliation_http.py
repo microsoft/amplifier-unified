@@ -119,6 +119,30 @@ async def http_app(tmp_path, authenticated_client):
         await h.client.close()
 
 
+@pytest.mark.parametrize('identities', [
+    {}, {'nativeIdentity': 'native-fallback'},
+    {'runtimeSessionId': 'runtime-source', 'nativeIdentity': 'unused-fallback'},
+])
+async def test_compact_delivery_receipt_binds_effective_native_source_without_state(http_app, identities):
+    h = await http_app(GatedRuntime('read-only'))
+    session = h.service._session(h.sid)
+    session.update(identities)
+    h.runtime.evidence.add((h.sid, INPUT))  # Passive-source witness, no send effect.
+    response = await h.client.post('/api/actions',
+        headers={'X-Amplifier-State-Transport': 'delta-v1'},
+        json={'action': 'conversation.delivery', 'args': {'sessionId': h.sid, 'inputId': INPUT}})
+    assert response.status == 200
+    body = await response.json()
+    assert 'state' not in body
+    assert body['hostInstanceId'] == h.service.instance_id
+    assert body['result']['delivery'] == 'accepted'
+    assert body['result']['source'] == {
+        'workspace': session['workspace'],
+        'nativeIdentity': identities.get('runtimeSessionId') or identities.get('nativeIdentity') or h.sid,
+    }
+    assert h.runtime.sent == []
+
+
 async def test_admitted_send_survives_lost_http_ack_and_confirms_exactly_once(http_app):
     h = await http_app(GatedRuntime('lost-http'))
     args = {'sessionId': h.sid, 'text': 'one original input'}

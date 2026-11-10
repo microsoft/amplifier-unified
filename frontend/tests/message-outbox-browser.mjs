@@ -16,7 +16,7 @@ async function nextDelivery(inputId){await until(()=>deliveryWaiting.some(item=>
 function deliveryReply(item,delivery,extra={}){
  const {sessionId,inputId}=item.body.args;
  assert.equal(item.body.action,'conversation.delivery');assert.equal(sessionId,'chat');assert.equal(typeof inputId,'string');
- return item.route.fulfill({json:{accepted:true,result:{...extra,sessionId,inputId,delivery},state:shell.state()}});
+ return item.route.fulfill({json:{accepted:true,result:{...extra,sessionId,inputId,delivery,source:item.source},state:shell.state()}});
 }
 const chat=()=>state.sessions.find(s=>s.id===state.selectedSessionId);
 async function emit(){state.revision++;await page.evaluate(state=>window.emitState(state),shell.state())}
@@ -38,6 +38,8 @@ try{
   // a particular delayed read hold it; other reads return exact-bound unknown.
   const item={route,body,client:route.request().headers()['x-amplifier-client']};
   if(body.action==='conversation.delivery'){
+   const target=state.sessions.find(session=>session.id===body.args.sessionId);
+   item.source={workspace:target.workspace||null,nativeIdentity:target.runtimeSessionId||target.nativeIdentity||target.id};
    if(deferredDelivery.has(body.args.inputId)){deliveryWaiting.push(item);return}
    return deliveryReply(item,'unknown',{message:unknownDelivery});
   }

@@ -226,12 +226,13 @@ function App(){
  },[acceptState]);
  const dispatch=useCallback((action,args={},meta={})=>{
   const creatingConversation=action==='session.create'&&args.fromDraft;
-  const readDeliveryTarget=()=>creatingConversation?{scope:deliveryScope(latest.current,null),connection:latest.current?.client?.hostInstanceId}:deliveryRecovery(latest.current,latest.current?.sessions?.find(row=>row.id===args.sessionId));
+  const readDeliveryTarget=(frame=latest.current)=>creatingConversation?{scope:deliveryScope(frame,null),connection:frame?.client?.hostInstanceId}:deliveryRecovery(frame,frame?.sessions?.find(row=>row.id===args.sessionId));
   const deliveryTarget=creatingConversation||['conversation.delivery','conversation.send'].includes(action)?readDeliveryTarget():null,deliveryAuthenticationAtStart=deliveryAuthentication.current;
   const sameDeliveryTarget=()=>deliveryAuthenticationAtStart===deliveryAuthentication.current&&(!deliveryTarget||JSON.stringify(deliveryTarget)===JSON.stringify(readDeliveryTarget()));
   const validDeliveryState=frame=>!deliveryTarget||(sameDeliveryTarget()&&
    (!frame?.client?.hostInstanceId||frame.client.hostInstanceId===deliveryTarget.connection)&&
-   (!frame?.client?.historyScope||!latest.current?.client?.historyScope||frame.client.historyScope===latest.current.client.historyScope));
+   (!frame?.client?.historyScope||!latest.current?.client?.historyScope||frame.client.historyScope===latest.current.client.historyScope)&&
+   (!frame||creatingConversation||JSON.stringify(readDeliveryTarget(frame))===JSON.stringify(deliveryTarget)));
   const capabilityCard=isCapabilityCardAction(action,args,meta);
   const capabilityRead=capabilityCard&&action==='capability.read'?capabilityStopFence.current.beginRead(args):null;
   // Capture eligibility BEFORE passive recovery: this preflight cannot become
@@ -386,6 +387,13 @@ function App(){
      const returnedSource=result.state?.client?.historyScope,currentSource=latest.current?.client?.historyScope;
      if(!sameDeliveryTarget()||deliveryTarget&&returnedHost!==deliveryTarget.connection||returnedSource&&currentSource&&returnedSource!==currentSource)throw Error('The delivery target changed. Nothing was sent again.');
      checkedDelivery(result,args.sessionId,args.inputId);
+     // Compact replies omit state. Their observation still carries the exact
+     // native source: a matching chat/input alone cannot retire another source.
+     const source=result.result.source;
+     if(!source||!(source.workspace===null||typeof source.workspace==='string'&&source.workspace.length>0)||
+        typeof source.nativeIdentity!=='string'||!source.nativeIdentity||
+        deliveryScope(latest.current,{workspace:source.workspace,nativeIdentity:source.nativeIdentity})!==deliveryTarget?.scope)
+      throw Error('The delivery source could not be verified. Nothing was sent again.');
      outbox.acknowledge(args.sessionId,args.inputId,result.result,deliveryTarget?.scope);
      if(result.result?.delivery==='accepted'){
       try{sessionStorage.removeItem('amplifier.deliveryWarning.v1:'+JSON.stringify([args.sessionId,args.inputId]))}catch{}

@@ -160,8 +160,10 @@ async function runCase(kind){
     return route.fulfill({status:409,json:{accepted:false,error:'Fixture has no provider or runtime.'}});
    }
    if(body.action==='conversation.delivery'){
+    const target=state.sessions.find(session=>session.id===body.args.sessionId);
+    const deliverySource={workspace:target.workspace||null,nativeIdentity:target.runtimeSessionId||target.nativeIdentity||target.id};
     return reply(route,{result:{sessionId:body.args.sessionId,inputId:body.args.inputId,
-     delivery:'unknown',message:'Synthetic passive read only. Nothing was resent.'}});
+     source:deliverySource,delivery:'unknown',message:'Synthetic passive read only. Nothing was resent.'}});
    }
    if(kind==='pending-next-draft'&&nextDraftText!==undefined&&body.action==='view.update'&&body.args.patch?.draft===nextDraftText){
     assert.equal(nextDraftSave,undefined,'One newer draft autosave must have one pending owner');

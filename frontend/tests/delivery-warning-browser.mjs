@@ -29,8 +29,10 @@ try{
   if(path!=='/api/actions')return route.fulfill({json:{ok:true}});
   const body=route.request().postDataJSON();calls.push(body);
   if(body.action==='conversation.delivery'){
-   if(holdChecks&&body.args.sessionId==='chat'){pending.push({route,body});return}
-   return route.fulfill({json:{accepted:true,result:{...body.args,delivery:'unknown',message:'Still uncertain. Nothing was resent.'},state:shell.state()}});
+   const target=state.sessions.find(session=>session.id===body.args.sessionId);
+   const source={workspace:target.workspace||null,nativeIdentity:target.runtimeSessionId||target.nativeIdentity||target.id};
+   if(holdChecks&&body.args.sessionId==='chat'){pending.push({route,body,source});return}
+   return route.fulfill({json:{accepted:true,result:{...body.args,source,delivery:'unknown',message:'Still uncertain. Nothing was resent.'},state:shell.state()}});
   }
   if(body.action==='view.update')state.view={...state.view,...body.args.patch};
   if(body.action==='session.select')state.selectedSessionId=body.args.id;
@@ -57,7 +59,8 @@ try{
  await original().getByRole('button',{name:'Check delivery',exact:true}).click();
  await expect(original().getByRole('button',{name:'Dismiss warning',exact:true})).toBeDisabled();
  await expect.poll(()=>pending.length).toBe(1);
- await pending.shift().route.fulfill({json:{accepted:true,result:{sessionId:'chat',inputId:'original',delivery:'unknown',message:'Still uncertain. Nothing was resent.'},state:shell.state()}});
+ const unknownCheck=pending.shift();
+ await unknownCheck.route.fulfill({json:{accepted:true,result:{sessionId:'chat',inputId:'original',source:unknownCheck.source,delivery:'unknown',message:'Still uncertain. Nothing was resent.'},state:shell.state()}});
  holdChecks=false;
  await expect(original().getByRole('button',{name:'Dismiss warning',exact:true})).toBeEnabled();
  await original().getByRole('button',{name:'Dismiss warning',exact:true}).click();
@@ -87,7 +90,8 @@ try{
  await expect(original().getByRole('button',{name:'Checking…',exact:true})).toBeVisible();
  assert.equal(pending.length,1,'Remount does not issue a duplicate read');
  state.sessions[0].messages=[];state.revision++;
- await pending.shift().route.fulfill({json:{accepted:true,result:{sessionId:'chat',inputId:'original',delivery:'accepted',message:'Received. Not resent.'},state:shell.state()}});
+ const acceptedCheck=pending.shift();
+ await acceptedCheck.route.fulfill({json:{accepted:true,result:{sessionId:'chat',inputId:'original',source:acceptedCheck.source,delivery:'accepted',message:'Received. Not resent.'},state:shell.state()}});
  await expect.poll(async()=>(await outbox()).length).toBe(0);
  assert.equal(await page.evaluate(()=>sessionStorage.getItem('amplifier.deliveryWarning.v1:'+JSON.stringify(['chat','original']))),null);
  await expect(original()).toHaveCount(0);

@@ -127,8 +127,11 @@ an unresolved input becomes visible and after a connection is restored. Manual
 and automatic checks share one in-flight owner for the exact host/account source,
 conversation and input. They do not poll on a timer, send the message, start a
 worker or relax Stop. A source/authentication change invalidates an outstanding
-result. Each check returns its bound conversation/input identities; a generic,
-malformed or conflicting acknowledgement cannot retire the outbox.
+result. Each check returns its bound conversation/input identities and observed
+workspace/effective native identity, including compact replies without state.
+Both that source and any returned target-session frame must match the original
+scope before acknowledgement or state adoption. A generic, malformed or
+conflicting acknowledgement cannot retire the outbox.
 Passive checks do not occupy the mutation queue, so they cannot delay Stop.
 New outbox entries retain their original nonsecret host/account and native-source
 namespace. Projection and acknowledgement require that exact namespace. Legacy

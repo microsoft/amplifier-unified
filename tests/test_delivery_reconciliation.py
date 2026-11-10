@@ -98,6 +98,10 @@ async def test_native_confirmation_without_host_evidence_does_not_fabricate_reco
 
     assert result['delivery'] == 'accepted'
     assert result['sessionId'] == session['id'] and result['inputId'] == INPUT_ID
+    assert result['source'] == {
+        'workspace': session['workspace'],
+        'nativeIdentity': session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'],
+    }
     assert len(runtime.probes) == 1
     probed, input_id = runtime.probes[0]
     assert input_id == INPUT_ID and probed['id'] == session['id']
