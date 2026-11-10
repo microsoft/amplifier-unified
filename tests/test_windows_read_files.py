@@ -1020,15 +1020,13 @@ async def test_service_publication_with_real_mutable_reader(
     reader = _PublicationRead()
     real_open = (lambda path: path.open("r")) if scope == "ordinary" else naming._open_presentation
 
+    from contextlib import contextmanager
+    @contextmanager
     def gated_open(path):
-        stream = real_open(path)  # genuine selected reader, no OS flag injection
-        if threading.current_thread() is reader.thread and path == target:
-            try:
+        with real_open(path) as stream:  # genuine reader, no OS flag injection
+            if threading.current_thread() is reader.thread and path == target:
                 reader.hold(stream)
-            except BaseException:
-                stream.close()
-                raise
-        return stream
+            yield stream
 
     with monkeypatch.context() as patch:
         # Only this exact path in this owned reader thread pauses. The host's

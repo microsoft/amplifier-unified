@@ -1,4 +1,6 @@
 """Native session names with a disposable Unified presentation cache."""
+from contextlib import contextmanager, ExitStack
+import io
 import json
 import os
 import re
@@ -130,6 +132,7 @@ def claim_refinement(directory, base, user_digest):
         return True
 
 
+@contextmanager
 def _open_presentation(path):
     """Read replaceable naming presentation, not a private/immutable snapshot.
 
@@ -138,7 +141,9 @@ def _open_presentation(path):
     belong to these two legacy presentation reads.
     """
     if os.name != 'nt':
-        return path.open('r')
+        with path.open('r') as stream:
+            yield stream
+        return
     import ctypes as C
     import msvcrt
 
@@ -163,15 +168,17 @@ def _open_presentation(path):
         close(handle)
         raise
     try:
-        # Python owns decoding/universal newlines, with the same default encoding
-        # as Path.read_text. The stream now owns this descriptor and exact handle.
-        return os.fdopen(fd, 'r')
-    except BaseException as error:
-        try:
-            os.close(fd)
-        except OSError:
-            error.add_note('Presentation descriptor cleanup failed.')
-        raise
+        # The context alone owns fd. A failed wrapper constructor may consume
+        # and close its input; closefd=False prevents it from closing/recycling
+        # our descriptor before the outer cleanup. Unwind wrappers first.
+        with ExitStack() as wrappers:
+            raw = wrappers.enter_context(io.FileIO(fd, 'r', closefd=False))
+            buffered = wrappers.enter_context(io.BufferedReader(raw))
+            text = wrappers.enter_context(io.TextIOWrapper(buffered))
+            # Default encoding and universal newlines match Path.read_text.
+            yield text
+    finally:
+        os.close(fd)
 
 
 def legacy(directory):
