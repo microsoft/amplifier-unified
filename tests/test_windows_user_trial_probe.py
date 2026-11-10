@@ -2862,11 +2862,11 @@ def test_foreground_cli_actual_outer_cleanup_retains_unknown_owned_jobs(tmp_path
 
 def storage_observation(label):
     reader, scope = probe.STORAGE_READERS[label]
-    held_mutable = label in {"held_view", "held_naming"}
+    ordinary = label in {"ordinary_view", "ordinary_naming"}
     return {"schema": 1, "reader": reader, "scope": scope, "platform": "windows",
-            "result": "raised" if held_mutable else "returned",
-            "facts": {"errors": [{"class": "PermissionError", "errno": 13, "winerror": 32, "frames": []}]
-                      if held_mutable else [], "truncated": False}}
+            "result": "raised" if ordinary else "returned",
+            "facts": {"errors": [{"class": "PermissionError", "errno": 13, "winerror": 5, "frames": []}]
+                      if ordinary else [], "truncated": False}}
 
 
 def storage_properties(label):
@@ -2890,10 +2890,11 @@ def storage_public_report():
 @pytest.mark.parametrize("fault", [None, "missing", "unexpected", "duplicate", "no-call",
                                   "skipped", "failed", "teardown", "xpass",
                                   "collection-error", "exit-code"])
-def test_storage_controls_require_five_exact_calls_no_skips_or_collection_errors(fault):
+def test_storage_controls_require_seven_exact_calls_no_skips_or_collection_errors(fault):
     result = native_result(fault, results=probe.StorageResults())
     assert result["status"] == ("PASS" if fault is None else "FAIL")
-    assert set(result["cases"]) == {"held_view", "held_naming", "released_view", "released_naming", "held_resource"}
+    assert set(result["cases"]) == {"held_view", "held_naming", "released_view", "released_naming",
+                                   "held_resource", "ordinary_view", "ordinary_naming"}
     report = storage_public_report()
     report["selection"] = result
     if fault:
@@ -2923,15 +2924,23 @@ def test_storage_staging_and_selection_leave_default_native_api_unchanged(tmp_pa
         "test_windows_read_files.py::test_service_publication_with_real_mutable_reader[released-view]",
         "test_windows_read_files.py::test_service_publication_with_real_mutable_reader[released-naming]",
         "test_windows_read_files.py::test_service_publication_during_held_immutable_resource",
+        "test_windows_read_files.py::test_service_publication_with_real_mutable_reader[ordinary-view]",
+        "test_windows_read_files.py::test_service_publication_with_real_mutable_reader[ordinary-naming]",
     ]
     tree = ast.parse((ROOT / "tests/test_windows_read_files.py").read_text(encoding="utf-8"))
     functions = {node.name: node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)}
     assert "test_service_publication_during_held_immutable_resource" in functions
     mutable = functions["test_service_publication_with_real_mutable_reader"]
-    parameters = [(ast.literal_eval(dec.args[0]), ast.literal_eval(dec.args[1]))
-                  for dec in mutable.decorator_list if isinstance(dec, ast.Call)
+    parameters = [dec for dec in mutable.decorator_list if isinstance(dec, ast.Call)
                   and isinstance(dec.func, ast.Attribute) and dec.func.attr == "parametrize"]
-    assert parameters == [("reader_kind", ["view", "naming"]), ("scope", ["held", "released"])]
+    assert len(parameters) == 1 and ast.literal_eval(parameters[0].args[0]) == "scope,reader_kind"
+    cells = parameters[0].args[1].elts
+    assert all(isinstance(cell, ast.Call) and isinstance(cell.func, ast.Attribute)
+               and cell.func.attr == "param" for cell in cells)
+    assert [(tuple(ast.literal_eval(arg) for arg in cell.args),
+             {keyword.arg: ast.literal_eval(keyword.value) for keyword in cell.keywords}) for cell in cells] == [
+        ((scope, reader), {"id": scope + "-" + reader})
+        for scope in ("held", "released", "ordinary") for reader in ("view", "naming")]
 
 
 def test_storage_route_uses_only_selected_nodes_without_worker_or_cli_journey(tmp_path, monkeypatch):
@@ -2991,10 +3000,10 @@ def test_storage_collection_skip_and_failure_fact_overflow_never_create_pass():
     selection = native_result(results=results)
     assert selection["status"] == "FAIL" and selection["collectionExact"] is False
     node = next(iter(results.node_labels))
-    for _ in range(18):
+    for _ in range(24):
         results.pytest_runtest_makereport(types.SimpleNamespace(nodeid=node),
             types.SimpleNamespace(when="call", excinfo=types.SimpleNamespace(value=RuntimeError("PRIVATE"))))
-    assert len(results.failure_facts) == 15
+    assert len(results.failure_facts) == 21
     report = storage_public_report()
     report.update(status="FAIL", selection=results.finish(1))
     probe.validate_storage_public(report)
@@ -3073,7 +3082,7 @@ def test_storage_selection_invokes_only_staged_cells_and_asyncio_plugin(tmp_path
     result = probe.storage_selection(tmp_path, target, None)
     assert result["status"] == "PASS"
     args, = observed
-    assert args[-5:] == [str(target / "tests" / node) for node in probe.STORAGE_CONTROLS.values()]
+    assert args[-7:] == [str(target / "tests" / node) for node in probe.STORAGE_CONTROLS.values()]
     assert "pytest_asyncio.plugin" in args and "aiohttp.pytest_plugin" not in args
     assert args[args.index("--rootdir") + 1] == args[args.index("--confcutdir") + 1] == str(target)
 
@@ -3245,7 +3254,7 @@ def test_storage_publication_properties_are_exact_case_bound_deep_copies(label):
 def test_storage_publication_bad_properties_cannot_pass_or_export_private_values(fault):
     def changed(label):
         properties = storage_properties(label)
-        if label != "held_view":
+        if label != "ordinary_view":
             return properties
         value = storage_observation(label)
         if fault == "missing":
@@ -3286,7 +3295,7 @@ def test_storage_publication_bad_properties_cannot_pass_or_export_private_values
         elif fault == "wrong-errno":
             value["facts"]["errors"][0]["errno"] = 22
         elif fault == "wrong-winerror":
-            value["facts"]["errors"][0]["winerror"] = 5
+            value["facts"]["errors"][0]["winerror"] = 32
         elif fault == "bool-winerror":
             value["facts"]["errors"][0]["winerror"] = True
         elif fault == "truncated":
@@ -3297,9 +3306,9 @@ def test_storage_publication_bad_properties_cannot_pass_or_export_private_values
             value["facts"]["message"] = "PRIVATE"
         return [("publication_sharing", json.dumps(value)), properties[1]]
     selection = native_result(results=probe.StorageResults(), properties=changed)
-    assert selection["status"] == selection["cases"]["held_view"]["status"] == "FAIL"
-    assert selection["cases"]["held_view"]["callsPassed"] == 1  # Original pytest pass stays observed.
-    assert all(selection["cases"][label]["status"] == "PASS" for label in probe.STORAGE_CONTROLS if label != "held_view")
+    assert selection["status"] == selection["cases"]["ordinary_view"]["status"] == "FAIL"
+    assert selection["cases"]["ordinary_view"]["callsPassed"] == 1  # Original pytest pass stays observed.
+    assert all(selection["cases"][label]["status"] == "PASS" for label in probe.STORAGE_CONTROLS if label != "ordinary_view")
     report = storage_public_report()
     report.update(status="FAIL", selection=selection)
     probe.validate_storage_public(report)
@@ -3309,12 +3318,12 @@ def test_storage_publication_bad_properties_cannot_pass_or_export_private_values
         probe.validate_storage_public(report)
 
 
-@pytest.mark.parametrize("label", ("released_view", "released_naming", "held_resource"))
-def test_storage_released_and_resource_cells_require_returned_empty_facts(label):
+@pytest.mark.parametrize("label", ("held_view", "held_naming", "released_view", "released_naming", "held_resource"))
+def test_storage_production_cells_require_returned_empty_facts(label):
     def properties(case):
         value = storage_observation(case)
         if case == label:
-            value.update(result="raised", facts=storage_observation("held_view")["facts"])
+            value.update(result="raised", facts=storage_observation("ordinary_view")["facts"])
         return [("publication_sharing", json.dumps(value)), ("publication_sharing_verified", True)]
     selection = native_result(results=probe.StorageResults(), properties=properties)
     assert selection["status"] == selection["cases"][label]["status"] == "FAIL"
@@ -3330,11 +3339,11 @@ def test_storage_released_and_resource_cells_require_returned_empty_facts(label)
     lambda c: c["publicationSharing"].update(reader="naming.legacy"),
     lambda c: c["publicationSharing"].update(scope="released"),
     lambda c: c["publicationSharing"].update(platform="posix"),
-    lambda c: c["publicationSharing"]["facts"]["errors"][0].update(winerror=5),
+    lambda c: c["publicationSharing"]["facts"]["errors"][0].update(winerror=32),
 ])
 def test_storage_public_receipt_revalidates_each_successful_discriminator(mutation):
     report = storage_public_report()
-    mutation(report["selection"]["cases"]["held_view"])
+    mutation(report["selection"]["cases"]["ordinary_view"])
     with pytest.raises((AssertionError, KeyError, TypeError, ValueError)):
         probe.validate_storage_public(report)
 
@@ -3419,7 +3428,7 @@ def test_storage_unverified_observation_survives_later_assertion_without_pass(la
 
 @pytest.mark.parametrize("fault", ("malformed", "private", "duplicate", "unknown", "false-flag", "integer-flag"))
 def test_storage_partial_capture_discards_malformed_or_private_observations(fault):
-    label = "held_view"
+    label = "ordinary_view"
     properties = storage_properties(label)[:1]
     if fault == "malformed":
         properties[0] = ("publication_sharing", "{PRIVATE")
@@ -3443,3 +3452,43 @@ def test_storage_partial_capture_discards_malformed_or_private_observations(faul
     report.update(status="FAIL", selection=selection)
     probe.validate_storage_public(report)
     assert "PRIVATE" not in json.dumps(report) and "/private/path" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("label", tuple(probe.STORAGE_CONTROLS))
+@pytest.mark.parametrize("winerror", (None, 5, 32))
+def test_storage_baselines_and_production_results_cannot_be_substituted(label, winerror):
+    """Synthetic records: Win32 never qualifies either the fix or the Win5 baseline."""
+    observed = storage_observation(label)
+    observed.update(result="returned" if winerror is None else "raised", facts={
+        "errors": [] if winerror is None else [
+            {"class": "PermissionError", "errno": 13, "winerror": winerror, "frames": []}],
+        "truncated": False})
+    def properties(case):
+        return ([("publication_sharing", json.dumps(observed)), ("publication_sharing_verified", True)]
+                if case == label else storage_properties(case))
+    baseline = label in {"ordinary_view", "ordinary_naming"}
+    expected = winerror == 5 if baseline else winerror is None
+    selection = native_result(results=probe.StorageResults(), properties=properties)
+    case = selection["cases"][label]
+    assert (case["status"] == "PASS") is expected
+    assert (selection["status"] == "PASS") is expected
+    assert case["publicationSharingVerified"] is True
+    assert case["publicationSharing"] == observed  # Keep failures without relabeling them.
+    report = storage_public_report()
+    report.update(status="PASS" if expected else "FAIL", selection=selection)
+    probe.validate_storage_public(report)
+    assert len(json.dumps(report).encode("utf-8")) <= 65536
+    if not expected:
+        case["status"] = selection["status"] = report["status"] = "PASS"
+        with pytest.raises(AssertionError):
+            probe.validate_storage_public(report)
+
+
+@pytest.mark.parametrize("label", tuple(probe.STORAGE_CONTROLS))
+def test_storage_ordinary_scope_is_bound_only_to_ordinary_baseline_cells(label):
+    observation = storage_observation(label)
+    observation["scope"] = "held" if label.startswith("ordinary_") else "ordinary"
+    assert probe.validate_publication_sharing(observation, label) is None
+    properties = [("publication_sharing", json.dumps(observation)), ("publication_sharing_verified", True)]
+    assert probe.publication_properties(properties, label) is None
+    assert probe.publication_properties(properties[:1], label, require_verified=False) is None

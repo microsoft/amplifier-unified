@@ -1,5 +1,6 @@
 """Native session names with a disposable Unified presentation cache."""
 import json
+import os
 import re
 from pathlib import Path
 
@@ -129,9 +130,55 @@ def claim_refinement(directory, base, user_digest):
         return True
 
 
+def _open_presentation(path):
+    """Read replaceable naming presentation, not a private/immutable snapshot.
+
+    Keep ordinary path following and text decoding. On Windows the retained
+    leaf must allow its publisher to replace it; no traversal pins or ACL policy
+    belong to these two legacy presentation reads.
+    """
+    if os.name != 'nt':
+        return path.open('r')
+    import ctypes as C
+    import msvcrt
+
+    filename = str(path)
+    if '\0' in filename:
+        raise ValueError('embedded null character')
+    kernel = C.WinDLL('kernel32', use_last_error=True)
+    create, close = kernel.CreateFileW, kernel.CloseHandle
+    create.restype = C.c_void_p
+    create.argtypes = [C.c_wchar_p, C.c_uint32, C.c_uint32, C.c_void_p,
+                       C.c_uint32, C.c_uint32, C.c_void_p]
+    close.restype, close.argtypes = C.c_int32, [C.c_void_p]
+    # GENERIC_READ, SHARE_READ|WRITE|DELETE, OPEN_EXISTING, NORMAL attributes.
+    # NULL security attributes make the handle non-inheritable. No reparse flag:
+    # like Path.read_text, this follows an ordinary symlink and accepts relative paths.
+    handle = create(filename, 0x80000000, 7, None, 3, 0x80, None)
+    if handle == C.c_void_p(-1).value:
+        raise C.WinError(C.get_last_error())
+    try:
+        fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY | os.O_NOINHERIT)
+    except BaseException:
+        close(handle)
+        raise
+    try:
+        # Python owns decoding/universal newlines, with the same default encoding
+        # as Path.read_text. The stream now owns this descriptor and exact handle.
+        return os.fdopen(fd, 'r')
+    except BaseException as error:
+        try:
+            os.close(fd)
+        except OSError:
+            error.add_note('Presentation descriptor cleanup failed.')
+        raise
+
+
 def legacy(directory):
     try:
-        value = json.loads((Path(directory) / 'naming.json').read_text())
+        with _open_presentation(Path(directory) / 'naming.json') as stream:
+            text = stream.read()
+        value = json.loads(text)
         return {k: v for k, v in value.items() if k in FIELDS} if isinstance(value, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -157,7 +204,9 @@ def initial_name(directory, session=None):
     old = legacy(directory)
     if session is None:
         try:
-            session = json.loads((Path(directory) / 'unified' / 'view.json').read_text())
+            with _open_presentation(Path(directory) / 'unified' / 'view.json') as stream:
+                text = stream.read()
+            session = json.loads(text)
         except (OSError, ValueError):
             session = {}
     if not isinstance(session, dict):

@@ -968,14 +968,22 @@ async def _observed_publication(app, event, reader, scope, record_property):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("reader_kind", ["view", "naming"])
-@pytest.mark.parametrize("scope", ["held", "released"])
+@pytest.mark.parametrize("scope,reader_kind", [
+    pytest.param("held", "view", id="held-view"),
+    pytest.param("held", "naming", id="held-naming"),
+    pytest.param("released", "view", id="released-view"),
+    pytest.param("released", "naming", id="released-naming"),
+    pytest.param("ordinary", "view", id="ordinary-view"),
+    pytest.param("ordinary", "naming", id="ordinary-naming"),
+])
 async def test_service_publication_with_real_mutable_reader(
         publication_app, monkeypatch, record_property, reader_kind, scope):
     """Characterize sharing, NOT the identity of the historical CI reader.
 
     Each released case has its own app/SQLite/target, not a retry of failed
-    publication. View initialization is conditional on missing native naming;
+    publication. The ordinary control selects the original Path.open reader
+    and must still demonstrate WinError 5 at replacement on native Windows.
+    View initialization is conditional on missing native naming;
     naming progress here deliberately replaces an EXISTING leaf, not first create.
     """
     from amplifier_web import naming
@@ -1010,13 +1018,12 @@ async def test_service_publication_with_real_mutable_reader(
     original_view = view.read_bytes()
     prior = next(row for row in before[0]["sessions"] if row["id"] == sid)
     reader = _PublicationRead()
-    real_open = Path.open
+    real_open = (lambda path: path.open("r")) if scope == "ordinary" else naming._open_presentation
 
-    def gated_open(path, *args, **kwargs):
-        stream = real_open(path, *args, **kwargs)  # unchanged native open/share flags
+    def gated_open(path):
+        stream = real_open(path)  # genuine selected reader, no OS flag injection
         if threading.current_thread() is reader.thread and path == target:
             try:
-                assert (args[0] if args else kwargs.get("mode", "r")) == "r"
                 reader.hold(stream)
             except BaseException:
                 stream.close()
@@ -1025,22 +1032,22 @@ async def test_service_publication_with_real_mutable_reader(
 
     with monkeypatch.context() as patch:
         # Only this exact path in this owned reader thread pauses. The host's
-        # rollback read, other paths and all atomic/native primitives are untouched.
-        patch.setattr(Path, "open", gated_open)
+        # rollback read and all atomic/native primitives are untouched.
+        patch.setattr(naming, "_open_presentation", gated_open)
         reader.start(read)
         try:
             await reader.wait_open()
             if scope == "released":
                 await reader.finish()
             facts = await _observed_publication(app, event, label, scope, record_property)
-            if scope == "held":
+            if scope != "released":
                 reader.assert_held()
             after = _publication_snapshot(app)
-            if os.name == "nt" and scope == "held":
+            if os.name == "nt" and scope == "ordinary":
                 assert not facts["truncated"] and len(facts["errors"]) == 1
                 error = facts["errors"][0]
                 assert (error["class"], error.get("errno"), error.get("winerror")) == (
-                    "PermissionError", 13, 32)
+                    "PermissionError", 13, 5)
                 expected_sources = (["service.event", "storage.projection", "storage.atomic"]
                                     if reader_kind == "view" else ["service.event", "storage.atomic"])
                 assert [frame["source"] for frame in error["frames"]] == expected_sources
@@ -1054,7 +1061,8 @@ async def test_service_publication_with_real_mutable_reader(
                     # uncertainty instead of treating the live mutation as saved.
                     assert app._state.get("_viewRecoveryPending") is True
             else:
-                # POSIX may replace an open leaf; never fake a Windows refusal.
+                # The production reader permits replacement without losing its
+                # original object. POSIX ordinary opens also permit replacement.
                 assert facts == {"errors": [], "truncated": False}
                 assert after[0]["revision"] == before[0]["revision"] + 1
                 assert not app._progress_dirty
