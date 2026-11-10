@@ -72,11 +72,12 @@ def test_current_attention_does_not_repeat_receipt_aggregation(tmp_path):
         actual = directory_attention.snapshot(directory, state, selected)
         assert actual['unread'] == expected['unread'] + 1
         assert all(not item['read'] for item in actual['items'] if item['id'] == reviewed['id'])
-    print(json.dumps({'currentAttentionReceiptWork': measurements}))
+    print(json.dumps({'sqliteVersion': sqlite3.sqlite_version, 'currentAttentionReceiptWork': measurements}))
     # 600 current notices, six admitted/selected owners, 20k historical receipts.
     # These ceilings permit the necessary exact receipt joins/global counts,
     # without repeating a whole owner-status aggregation in each SELECT.
-    # The former query used 2.02M / 0.51M instructions on this fixture.
+    # Repeated aggregation used 2.02M / 0.51M instructions on SQLite 3.53;
+    # flattening the exact joins used 49.4M / 0.75M on SQLite 3.45.
     assert max(row['vm'] for row in measurements if row['operation'] == 'snapshot') < 1_400_000
     assert max(row['vm'] for row in measurements if row['operation'] == 'receipts') < 400_000
     assert len(state['sessions']) == 6
