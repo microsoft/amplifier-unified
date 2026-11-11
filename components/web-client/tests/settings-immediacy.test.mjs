@@ -161,21 +161,46 @@ test('notification toggle writes one preference without committing or clearing p
  t.after(()=>{for(const [key,value] of Object.entries(prior)){if(value===undefined)delete globalThis[key];else globalThis[key]=value}});
  const calls=[];let renderer;
  let state={view:{maintenanceDraft:{notifyServer:'https://unfinished.example'}},notificationSettings:{desktop:true,preview:false,enabled:false,server:'https://ntfy.sh'}};
- const send=async(action,args)=>{calls.push([action,args]);return {accepted:true,operationId:'toggle'}};
+ const originalDraft=structuredClone(state.view.maintenanceDraft);
+ const send=async(action,args)=>{calls.push([action,args]);return {accepted:true,operationId:`toggle-${calls.length}`}};
  const render=()=>React.createElement(NotificationSettings,{state,act:send});
  await act(()=>{renderer=create(render())});
+ const toggle=name=>{
+  const labels=renderer.root.findAllByType('label').filter(label=>label.children.includes(name)||label.findAllByType('strong').some(node=>node.children.includes(name)));
+  assert.equal(labels.length,1,`Unique notification label: ${name}`);
+  return labels[0].findByProps({type:'checkbox'});
+ };
+ const checkDraft=()=>{
+  assert.equal(renderer.root.findByProps({id:'notify-token'}).props.value,'unsaved-secret');
+  assert.equal(renderer.root.findByProps({id:'notify-topic'}).props.value,'unsaved-topic');
+  assert.equal(renderer.root.findByProps({id:'notify-server'}).props.value,'https://unfinished.example');
+  assert.deepEqual(state.view.maintenanceDraft,originalDraft);
+  assert.equal(toggle('On another device').props.checked,false);
+ };
+ const complete=async(phase,patch={})=>{
+  state={...state,notificationSettings:{...state.notificationSettings,...patch},actionStatus:{'notifications.save':{commandId:`toggle-${calls.length}`,phase,error:phase==='error'?'Offline':undefined}}};
+  await act(()=>renderer.update(render()));
+ };
  try{
-  const inputs=renderer.root.findAllByType('input');
-  await act(()=>inputs.find(n=>n.props.id==='notify-token').props.onChange({target:{value:'unsaved-secret'}}));
-  await act(()=>inputs.find(n=>n.props.type==='checkbox'&&n.props.checked===true).props.onChange({target:{checked:false}}));
+  await act(()=>renderer.root.findByProps({id:'notify-token'}).props.onChange({target:{value:'unsaved-secret'}}));
+  await act(()=>renderer.root.findByProps({id:'notify-topic'}).props.onChange({target:{value:'unsaved-topic'}}));
+  await act(()=>toggle('On this device').props.onChange({target:{checked:false}}));
   assert.deepEqual(calls,[['notifications.save',{patch:{desktop:false}}]]);
-  assert.equal(renderer.root.findAllByType('input').filter(n=>n.props.type==='checkbox')[1].props.checked,false);
-  state={...state,actionStatus:{'notifications.save':{commandId:'toggle',phase:'ready'}}};await act(()=>renderer.update(render()));
-  assert.equal(renderer.root.findByProps({id:'notify-token'}).props.value,'unsaved-secret');
-  await act(()=>renderer.root.findAllByType('input').filter(n=>n.props.type==='checkbox')[3].props.onChange({target:{checked:true}}));
+  assert.equal(toggle('On this device').props.checked,false);checkDraft();
+  await complete('ready',{desktop:false});checkDraft();
+  const decision='Questions and approval requests on this device';
+  assert.equal(toggle(decision).props.checked,false);
+  await act(()=>toggle(decision).props.onChange({target:{checked:true}}));
+  assert.deepEqual(calls.at(-1),['notifications.save',{patch:{needsInput:true}}]);
+  assert.equal(toggle(decision).props.checked,true);assert.equal(toggle(decision).props.disabled,true);checkDraft();
+  await complete('ready',{needsInput:true});
+  assert.equal(toggle(decision).props.checked,true);assert.equal(toggle(decision).props.disabled,false);checkDraft();
+  await act(()=>toggle('Include a response preview').props.onChange({target:{checked:true}}));
   assert.deepEqual(calls.at(-1),['notifications.save',{patch:{preview:true}}]);
-  state={...state,actionStatus:{'notifications.save':{commandId:'toggle',phase:'error',error:'Offline'}}};await act(()=>renderer.update(render()));
-  assert.equal(renderer.root.findAllByType('input').filter(n=>n.props.type==='checkbox')[3].props.checked,false);
-  assert.equal(renderer.root.findByProps({id:'notify-token'}).props.value,'unsaved-secret');
+  assert.equal(toggle('Include a response preview').props.checked,true);checkDraft();
+  await complete('error');
+  assert.equal(toggle('Include a response preview').props.checked,false);
+  assert.equal(toggle(decision).props.checked,true);checkDraft();
+  assert.deepEqual(calls,[['notifications.save',{patch:{desktop:false}}],['notifications.save',{patch:{needsInput:true}}],['notifications.save',{patch:{preview:true}}]]);
  }finally{await act(()=>renderer.unmount())}
 });
