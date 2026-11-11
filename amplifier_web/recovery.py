@@ -38,7 +38,8 @@ def _read_reset_configuration(path, home):
             return content
     from .staged_sources import owned_path
     owned_path(path, home)
-    with path.open('rb') as stream:
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, 'rb') as stream:
         info = os.fstat(stream.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             raise ValueError('Reset configuration must be a private regular file: ' + str(path.relative_to(home)))

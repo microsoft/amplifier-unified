@@ -551,6 +551,23 @@ def test_reset_refuses_missing_declared_source_despite_opaque_cache_values(
     assert saved.module.exists()
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX FIFO admission')
+def test_reset_configuration_fifo_is_rejected_without_waiting_for_writer(tmp_path):
+    from amplifier_web.recovery import _read_reset_configuration
+    home = tmp_path / "app"
+    path = home / "sessions/chat/configuration.json"
+    path.parent.mkdir(parents=True)
+    os.mkfifo(path)
+    # A subprocess deadline makes a regression fail instead of wedging reset.
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "from pathlib import Path; from amplifier_web.recovery import _read_reset_configuration; "
+         "import sys; _read_reset_configuration(Path(sys.argv[1]), Path(sys.argv[2]))",
+         str(path), str(home)], capture_output=True, text=True, timeout=5)
+    assert result.returncode != 0
+    assert "private regular file" in result.stderr
+
+
 @pytest.mark.parametrize("problem", ["missing", "metadata", "dirty", "context", "child-context"])
 def test_reset_preparation_refuses_unreconstructable_references_before_any_write(tmp_path, legacy_saved_plan, problem):
     from amplifier_web.recovery import prepare_reset_configurations
