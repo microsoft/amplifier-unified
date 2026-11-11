@@ -33,6 +33,7 @@ def settled_fetch(error):
 def availability(row):
     return (row.get('status') == 'check_failed' and row.get('availabilityFailure') is True
             and row.get('eligible') and row.get('url') and row.get('ref')
+            and isinstance(row.get('current'), str)
             and re.fullmatch('[a-f0-9]{40}', row.get('current', '')))
 
 
