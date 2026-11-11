@@ -143,9 +143,10 @@ def installed_package_source(distribution_name, package_name):
 
 
 class HostComponents:
-    def __init__(self, sources=None, installed=None):
+    def __init__(self, sources=None, installed=None, *, resolved_plan=False):
         self.sources = dict(sources or {})
         self.installed = dict(installed or {})
+        self.resolved_plan = resolved_plan
         self.repositories = {}
         self.roots = {}
         self.path_roots = {}
