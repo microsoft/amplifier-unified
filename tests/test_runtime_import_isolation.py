@@ -30,6 +30,8 @@ def test_apply_settings_does_not_require_server_dependencies():
         for name in ('ActivationGate', 'NativeTranscriptGuard', 'NativeTranscriptConflict'):
             if hasattr(native_session, name):
                 delattr(native_session, name)
+        if hasattr(native_session.SharedSessionStore, 'acquire_async'):
+            delattr(native_session.SharedSessionStore, 'acquire_async')
         sys.modules['aiohttp'] = None
         # Dependency preparation must remain importable in a retained worker
         # before an included update installs the execution-only session APIs.
@@ -77,6 +79,9 @@ def test_worker_scripts_do_not_expose_host_site_packages(tmp_path, entrypoint, r
     (foundation / "history.py").write_text("class SessionHistoryStore: pass\n")
     (foundation / "jsonl.py").write_text("class TranscriptIndex: pass\n")
     (foundation / "activation.py").write_text("class ActivationGate: pass\n")
+    (foundation / "shared_state.py").write_text(
+        "class SharedSessionStore:\n async def acquire_async(self, **kwargs): pass\n"
+    )
     (foundation / "transcript_guard.py").write_text(
         "class NativeTranscriptGuard: pass\nclass NativeTranscriptConflict(RuntimeError): pass\n"
     )

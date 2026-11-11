@@ -902,8 +902,8 @@ class Worker:
                     self.shared_store_stamp = file_stamp
                     self.activation_gate = ActivationGate()
                 if self.shared_handle is None:
-                    self.shared_handle = await asyncio.to_thread(
-                        self.shared_store.acquire, app="amplifier-unified", pid=os.getpid())
+                    self.shared_handle = await self.shared_store.acquire_async(
+                        app="amplifier-unified", pid=os.getpid())
             with startup_timing.phase('worker.recovery'):
                 if recover_bundle:
                     from amplifier_web.bundle_selection import BundleTransaction
@@ -1202,8 +1202,8 @@ class Worker:
 
         if not self.parked:
             return
-        handle = await asyncio.to_thread(
-            self.shared_store.acquire, app="amplifier-unified", pid=os.getpid())
+        handle = await self.shared_store.acquire_async(
+            app="amplifier-unified", pid=os.getpid())
         try:
             history_stamp = self.history_stamp()
             from amplifier_web.shared_state import configuration_stamp

@@ -16,6 +16,10 @@ from amplifier_web.runtime_qualification import RuntimeDependencyError, require_
     ('transcript_guard', None),
     ('transcript_guard', SimpleNamespace(NativeTranscriptConflict=RuntimeError)),
     ('transcript_guard', SimpleNamespace(NativeTranscriptGuard=object)),
+    ('shared_state', None),
+    ('shared_state', SimpleNamespace(SharedSessionStore=object)),
+    ('shared_state', SimpleNamespace(SharedSessionStore=type('SyncStore', (), {
+        'acquire_async': lambda self, **kwargs: None}))),
 ])
 def test_missing_session_api_requires_explicit_component_update(monkeypatch, module, installed):
     monkeypatch.setitem(sys.modules, 'amplifier_foundation.session.' + module, installed)
@@ -43,7 +47,7 @@ def test_unrelated_import_failure_is_not_reported_as_missing_api(monkeypatch, er
     assert caught.value is error
 
 
-@pytest.mark.parametrize('missing', ['activation', 'transcript_guard', None])
+@pytest.mark.parametrize('missing', ['activation', 'transcript_guard', 'shared_state', None])
 def test_final_update_probe_requires_api_before_mount(tmp_path, monkeypatch, capsys, missing):
     available = missing is None
     import importlib.util
@@ -77,7 +81,7 @@ def test_final_update_probe_requires_api_before_mount(tmp_path, monkeypatch, cap
         assert facts['errorType'] == 'RuntimeDependencyError'
 
 
-@pytest.mark.parametrize('missing', ['activation', 'transcript_guard'])
+@pytest.mark.parametrize('missing', ['activation', 'transcript_guard', 'shared_state'])
 async def test_old_worker_refuses_before_native_ownership_or_history(tmp_path, monkeypatch, missing):
     from amplifier_foundation.session import SharedSessionStore
     from amplifier_web.runtime_worker import Worker
