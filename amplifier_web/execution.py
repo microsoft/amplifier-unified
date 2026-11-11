@@ -72,6 +72,66 @@ def interrupt_owned_workers(session, runtime_owner):
                  or worker.get('persistent') and worker.get('status') == 'idle')):
             worker.update(status='interrupted', updatedAt=time.time())
 
+
+def bind_runtime_turn(session, payload):
+    """Only observed native admission/generation can own a prepared public turn."""
+    owner = payload.get('runtimeOwnerId')
+    if not owner:
+        return
+    inputs = payload.get('input_ids', []) if payload.get('event') == 'generation.started' else [payload.get('inputId')]
+    for turn in session.get('execution', {}).get('turns', []):
+        if turn.get('inputId', turn['id']) in inputs:
+            turn['runtimeOwnerId'] = owner
+            if payload.get('generation_id'):
+                turn['generationId'] = payload['generation_id']
+
+
+def interrupt_runtime_execution(session, runtime_owner):
+    """Confirmed process loss settles its records, not the next prepared input.
+
+    Missing attribution is unknown, never evidence that a replacement's work
+    belonged to this process. Whole-host restore retains interrupt_unfinished.
+    """
+    if not runtime_owner:
+        return False
+    tree = session.get('execution', {})
+    independent = voice_usage_turns(tree)
+    owned = [turn for turn in tree.get('turns', [])
+             if turn.get('runtimeOwnerId') == runtime_owner and turn['id'] not in independent]
+    live = [turn for turn in owned if turn.get('phase') in LIVE_PHASES]
+    current = next((turn for turn in owned if turn['id'] == tree.get('currentTurnId')), None)
+    current_lost = current is not None and current in live
+    # Reuse the canonical input uncertainty reducer on exact owned annotations.
+    # A newer retry's generation cannot inherit the prior process's loss.
+    from .input_status import interrupt, PREFIX
+    annotations = session.get('messageAnnotations', {})
+    selected = {PREFIX + turn.get('inputId', turn['id']): annotations[PREFIX + turn.get('inputId', turn['id'])]
+                for turn in live if PREFIX + turn.get('inputId', turn['id']) in annotations
+                and annotations[PREFIX + turn.get('inputId', turn['id'])].get('inputStatus', {}).get('generationId')
+                    in (None, turn.get('generationId'))}
+    interrupt({'messageAnnotations': selected})
+    ended = time.time()
+    for turn in live:
+        turn.update(phase='interrupted', endedAt=ended)
+    changed = False
+    for node in tree.get('nodes', []):
+        if (node.get('runtimeOwnerId') == runtime_owner and node.get('phase') in LIVE_PHASES
+                and not node.get('endedAt') and not voice_usage_node(node)):
+            node.update(phase='interrupted', endedAt=ended)
+            changed = True
+    if changed:
+        refresh_usage(tree)
+    if current_lost:
+        session['status'] = 'interrupted'
+        if not session.get('error'):
+            summary = 'Work was interrupted before its outcome could be confirmed.'
+            session.update(error=summary, errorAt=ended, failure={
+                'category': 'execution_interrupted', 'summary': summary,
+                'guidance': 'Some actions may have finished. Review saved results before continuing; no work was replayed.',
+                'errorType': 'ExecutionInterrupted', 'recordedAt': ended})
+    return current_lost
+
+
 def interrupt_unfinished(session):
     """Settle lost execution without interpreting a later warm worker as success."""
     from .input_status import interrupt
@@ -180,7 +240,7 @@ def ingest(session,event):
     tree=ensure_turn(session,None)
     identity=event.get('id')
     if not identity:return
-    allowed={'id','revision','producerId','budgetRevision','admittedAt','parentId','turnId','admissionInputId','generationId','purpose','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','routing','runId','parentProvider','startedAt','endedAt','usage','summary','input','output','error','lifecycle','failure','liveObservation'}
+    allowed={'id','revision','producerId','budgetRevision','admittedAt','parentId','turnId','admissionInputId','generationId','runtimeOwnerId','purpose','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','routing','runId','parentProvider','startedAt','endedAt','usage','summary','input','output','error','lifecycle','failure','liveObservation'}
     safe={k:v for k,v in event.items() if k in allowed}
     from .tool_observations import metadata as tool_metadata
     safe.update(tool_metadata(event))

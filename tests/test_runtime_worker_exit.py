@@ -127,3 +127,105 @@ async def test_exit_preserves_unbound_replaced_and_terminal_rows(tmp_path, owner
         assert session['workers'] == before
     finally:
         await service.close()
+
+
+async def test_idle_old_process_exit_does_not_interrupt_preparing_next_input(tmp_path):
+    """Match ordinary send: the new public turn precedes replacement prep."""
+    from amplifier_web.execution import ensure_turn, finish
+    runtime = RuntimeManager(command=['unused'])
+    service = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    session = service._new_session({'title': 'Next input'})
+    service.state['sessions'] = [session]
+    ensure_turn(session, 'old-input')
+    finish(session)
+    ensure_turn(session, 'new-input')
+    session['status'] = 'working'
+    session['workers'] = [{'id': 'old-child', 'status': 'running', 'runtimeOwnerId': 'old-owner'}]
+    try:
+        # Actual runtime producer and service consumer, not a reason-only bypass.
+        await runtime._execution_ended(session['id'], {'emit': service.on_runtime_event,
+            'runtimeOwnerId': 'old-owner', 'inputId': 'old-input', 'stop_reason': 'configuration'}, 'stopped')
+        turn = next(turn for turn in session['execution']['turns'] if turn['id'] == 'new-input')
+        assert turn['phase'] == 'running'
+        assert session['status'] == 'working' and 'failure' not in session and 'error' not in session
+        assert session['workers'][0]['status'] == 'interrupted'
+    finally:
+        await service.close()
+
+
+@pytest.mark.parametrize('reason', ['configuration', 'stopped', 'shutdown', None])
+async def test_exit_settles_only_bound_foreground_and_keeps_unknown_delivery(tmp_path, reason):
+    from amplifier_web.execution import ensure_turn
+    runtime = RuntimeManager(command=['unused'])
+    service = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    session = service._new_session({'title': 'Owned foreground'})
+    service.state['sessions'] = [session]
+    ensure_turn(session, 'owned-input')
+    session['status'] = 'working'
+    message = service._message(session, 'user', 'Unknown prior effects', inputId='owned-input',
+                               delivery={'status': 'unknown'})
+    try:
+        await service.on_runtime_event('runtime.generation', {'sessionId': session['id'],
+            'rootSessionId': session['id'], 'event': 'generation.started',
+            'generation_id': 'owned-generation', 'input_ids': ['owned-input'],
+            'runtimeOwnerId': 'owned-process'})
+        await runtime._execution_ended(session['id'], {'emit': service.on_runtime_event,
+            'runtimeOwnerId': 'owned-process', **({'stop_reason': reason} if reason else {})}, 'interrupted')
+        assert session['execution']['turns'][0]['phase'] == 'interrupted'
+        assert session['failure']['category'] == 'execution_interrupted'
+        assert message['delivery']['status'] == 'unknown'  # No inferred non-delivery/replay.
+        assert session['collaborationGeneration']['terminal'] is True
+        assert not runtime.workers
+    finally:
+        await service.close()
+
+
+@pytest.mark.parametrize('generation_started', [False, True])
+async def test_late_old_exit_cannot_settle_reused_input_new_attempt(tmp_path, generation_started):
+    from amplifier_web.execution import ensure_turn
+    runtime = RuntimeManager(command=['unused'])
+    service = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    session = service._new_session({'title': 'Retry binding'})
+    service.state['sessions'] = [session]
+    tree = ensure_turn(session, 'same-input')
+    session['status'] = 'working'
+    turn = tree['turns'][0]
+    turn.update(runtimeOwnerId='old-process', generationId='old-generation', phase='interrupted')
+    # Ordinary explicit retry reopens this row before a replacement starts.
+    turn.update(phase='running', retriedAt=1)
+    turn.pop('runtimeOwnerId')
+    turn.pop('generationId')
+    if generation_started:
+        await service.on_runtime_event('runtime.generation', {'sessionId': session['id'],
+            'rootSessionId': session['id'], 'event': 'generation.started',
+            'generation_id': 'new-generation', 'input_ids': ['same-input'],
+            'runtimeOwnerId': 'new-process'})
+    tree['nodes'] = [
+        {'id': 'old-child-call', 'kind': 'tool', 'phase': 'running', 'runtimeOwnerId': 'old-process',
+         'turnId': 'same-input', 'sessionId': 'child', 'rootSessionId': session['id']},
+        {'id': 'old-terminal', 'kind': 'tool', 'phase': 'completed', 'endedAt': 1,
+         'runtimeOwnerId': 'old-process', 'turnId': 'same-input'},
+        {'id': 'new-call', 'kind': 'llm', 'phase': 'running', 'runtimeOwnerId': 'new-process',
+         'turnId': 'same-input'},
+        {'id': 'old-background', 'kind': 'llm', 'phase': 'running', 'lifecycle': 'background',
+         'runtimeOwnerId': 'old-process', 'turnId': 'same-input'},
+        {'id': 'voice:session', 'kind': 'llm', 'phase': 'running', 'lifecycle': 'voice',
+         'runtimeOwnerId': 'old-process', 'turnId': 'voice'},
+    ]
+    session['streamingText'] = 'Replacement stream'
+    active = copy.deepcopy(session.get('collaborationGeneration'))
+    try:
+        await runtime._execution_ended(session['id'], {'emit': service.on_runtime_event,
+            'runtimeOwnerId': 'old-process', 'stop_reason': 'configuration',
+            'backgroundCalls': {'old-background'}}, 'stopped')
+        assert turn['phase'] == 'running'
+        assert session['status'] == 'working' and 'failure' not in session
+        assert session['streamingText'] == 'Replacement stream'
+        assert session.get('collaborationGeneration') == active
+        assert tree['nodes'][0]['phase'] == 'interrupted'
+        assert tree['nodes'][1]['phase'] == 'completed'
+        assert tree['nodes'][2]['phase'] == 'running'
+        assert tree['nodes'][3]['phase'] == 'interrupted'
+        assert tree['nodes'][4]['phase'] == 'running'
+    finally:
+        await service.close()

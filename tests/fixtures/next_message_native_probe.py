@@ -51,7 +51,7 @@ async def until(predicate):
             await asyncio.sleep(.02)
 
 
-async def run(root, regression=False, binding=False):
+async def run(root, regression=False, binding=False, lifecycle=False):
     root.mkdir(parents=True, exist_ok=False)
     home, shared, workspace = (root/name for name in ('app', 'shared', 'workspace'))
     shared.mkdir(); workspace.mkdir()
@@ -161,6 +161,16 @@ async def run(root, regression=False, binding=False):
     app = await create_app(home, workspace=workspace, runtime=runtime, voice=False,
         background_updates=False, preload_providers=False)
     service = app['service']; runtime.app_bridge, runtime.home = service.app_bridge, home
+    endings = []
+    original_event = service.on_runtime_event
+    async def observed_event(kind, payload):
+        await original_event(kind, payload)
+        if kind == 'runtime.ended':
+            current = service._session(payload['sessionId'])
+            endings.append({'reason': payload.get('reason'), 'owner': payload.get('runtimeOwnerId'),
+                'turns': {turn['id']: turn['phase'] for turn in current.get('execution', {}).get('turns', [])},
+                'failure': (current.get('failure') or {}).get('category')})
+    service.on_runtime_event = observed_event
     client = TestClient(TestServer(app))
     report = {'regression': regression, 'versions': {name: importlib.metadata.version(name) for name in
         ('amplifier-core', 'amplifier-foundation', 'amplifier-module-loop-live', 'amplifier-module-context-simple')},
@@ -193,6 +203,39 @@ async def run(root, regression=False, binding=False):
             assert len(calls.read_text().splitlines()) == 1
             # Keep the existing exactly-once oracle focused on the next inputs.
             calls.write_text('')
+        if lifecycle:
+            outcomes = []
+            for revision, bundle, model, effort, identity in (
+                    (0, bundles[0], 'second', 'high', 'model-only'),
+                    (1, bundles[1], 'first', 'low', 'bundle-change')):
+                starts, count = len(worker_processes), len(calls.read_text().splitlines())
+                await action('conversation.configure', {'sessionId': sid, 'expectedRevision': revision,
+                    'bundle': bundle, 'selection': {'instance': 'fixture', 'model': model, 'effort': effort}},
+                    'save-' + identity)
+                assert len(worker_processes) == starts and len(calls.read_text().splitlines()) == count
+                assert current.get('modelConnectionKey')
+                await action('conversation.send', {'sessionId': sid, 'text': identity,
+                    'expectedConfigurationRevision': revision + 1}, identity)
+                await until(lambda: current.get('collaborationGeneration', {}).get('terminal'))
+                await until(lambda: runtime.workers.get(sid, {}).get('parked'))
+                turn = next(turn for turn in current['execution']['turns'] if turn['id'] == identity)
+                observed = [json.loads(line) for line in calls.read_text().splitlines()]
+                outcomes.append({'input': identity, 'phase': turn['phase'], 'error': current.get('error'),
+                    'revision': current.get('appliedConfigurationRevision'), 'model': observed[-1]['model'],
+                    'effort': observed[-1]['effort']})
+                assert len(observed) == count + 1 and observed[-1]['model'] == model and observed[-1]['effort'] == effort
+                assert turn['phase'] == 'completed', outcomes
+                assert not current.get('failure') and not current.get('error'), outcomes
+                assert current.get('appliedConfigurationRevision') == revision + 1
+            messages = SessionHistoryStore(sessions_dir(workspace)/runtime.workers[sid]['runtime_id']).load_messages()
+            ids = [(message.get('metadata') or {}).get('amplifier_input', {}).get('id') for message in messages]
+            assert all(ids.count(identity) == 1 for identity in ('baseline-input', 'model-only', 'bundle-change'))
+            assert len(worker_processes) == 2 and len(verified) >= 2
+            assert not any(event['failure'] == 'execution_interrupted' for event in endings), endings
+            report.update(passed=True, completedTurns=outcomes, endings=endings,
+                nonemptyBindingVerified=True, inputsExactlyOnce=True, modelOnlyReusedProcess=True,
+                bundleChangedProcess=True)
+            return
         starts_before_save = len(worker_processes)
         calls_before_save = calls.read_text() if calls.exists() else None
         for revision, bundle, model, effort in [(0,bundles[1],'second','high'),(1,bundles[1],'first','low')]:
@@ -304,7 +347,9 @@ async def main():
         configure_protocol()
         await Worker().run()
     else:
-        await run(Path(sys.argv[1]), '--stale-regression' in sys.argv, '--connection-binding' in sys.argv)
+        lifecycle = '--lifecycle' in sys.argv
+        await run(Path(sys.argv[1]), '--stale-regression' in sys.argv,
+                  '--connection-binding' in sys.argv or lifecycle, lifecycle)
 
 
 if __name__ == '__main__':

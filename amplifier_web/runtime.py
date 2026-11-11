@@ -949,7 +949,10 @@ class RuntimeManager:
             for key in ('sessionId', 'rootSessionId'):
                 if payload.get(key) == row.get('runtime_id'):
                     payload[key] = sid
-            return normalize_event({**data, 'event': payload}, sid, row['inputId'])
+            event = normalize_event({**data, 'event': payload}, sid, row['inputId'])
+            if event and row.get('runtimeOwnerId'):
+                event[1]['runtimeOwnerId'] = row['runtimeOwnerId']
+            return event
 
         def receipt_event(data):
             event = terminal_event(data)
@@ -1269,6 +1272,9 @@ class RuntimeManager:
                         # Closing a process for maintenance is not a user Stop.
                         normalized = ('runtime.warmth', {'sessionId': sid, 'status': 'cold'})
                     if normalized:
+                        if row.get('runtimeOwnerId') and (normalized[0] in {'execution.event', 'runtime.generation'}
+                                or normalized[0] == 'runtime.status' and normalized[1].get('event') == 'input.delivered'):
+                            normalized[1]['runtimeOwnerId'] = row['runtimeOwnerId']
                         if normalized[0] == 'worker.updated' and not normalized[1].get('activityOnly'):
                             # Only lifecycle receipts on this process's pipe
                             # bind its native jobs/children. Progress and peer
@@ -1374,7 +1380,8 @@ class RuntimeManager:
         shutdown = row.get('stop_reason') == 'shutdown'
         await row["emit"]("runtime.ended", {"sessionId": sid, "status": 'interrupted' if shutdown else status,
             **({'runtimeOwnerId': row['runtimeOwnerId']} if row.get('runtimeOwnerId') else {}),
-            **({'reason': 'shutdown'} if shutdown else {}), "backgroundCallIds": sorted(row.get("backgroundCalls", ()))})
+            **({'reason': row['stop_reason']} if row.get('stop_reason') else {}),
+            "backgroundCallIds": sorted(row.get("backgroundCalls", ()))})
         # The reader can be cancelled while delivery waits for the service
         # lock. Only successful delivery suppresses the stop-path retry.
         row["executionEnded"] = True

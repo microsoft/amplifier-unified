@@ -3505,6 +3505,8 @@ class AppService:
                     turn['phase'] = 'running'
                     turn['retriedAt'] = time.time()
                     turn.pop('endedAt', None)
+                    turn.pop('runtimeOwnerId', None)
+                    turn.pop('generationId', None)
                     pending.append((self._retry_message, (copy.deepcopy(session), message['text'], args['inputId'], original_status, original_turn, known_undelivered)))
             elif action == "conversation.stop":
                 session = self._session(args.get("sessionId"))
@@ -4398,7 +4400,7 @@ class AppService:
                     current['status'] = original_status
                     self._activity(current, original_status, 'Delivery confirmed. Amplifier already received this message.')
                     turn = next(t for t in current['execution']['turns'] if t['id'] == input_id)
-                    for key in ('phase', 'endedAt', 'retriedAt'):
+                    for key in ('phase', 'endedAt', 'retriedAt', 'runtimeOwnerId', 'generationId'):
                         if key in original_turn:
                             turn[key] = original_turn[key]
                         else:
@@ -4877,17 +4879,19 @@ class AppService:
             elif kind == 'runtime.delivery' and 'peerAdmission' not in payload:
                 self._delivery(session, payload['inputId'], 'failed' if payload.get('delivery') == 'failed' else 'accepted')
             elif kind == "runtime.ended":
-                self.operations.interrupted(session["id"])
-                self.schedules.runtime_ended(session)
                 # A turn may finish before naming does; only the runtime host
                 # can confirm that no independent call can still be running.
-                if payload.get("sessionId") in {session["id"], session.get("runtimeSessionId")} and not payload.get("backgroundOnly"):
-                    settle_stream(session)
-                    interrupt_unfinished(session)
-                    from .execution import interrupt_owned_workers
+                ended_foreground = False
+                if (payload.get("sessionId") in {session["id"], session.get("runtimeSessionId")}
+                        and payload.get('rootSessionId', session['id']) == session['id']
+                        and not payload.get("backgroundOnly")):
+                    from .execution import interrupt_owned_workers, interrupt_runtime_execution
+                    ended_foreground = interrupt_runtime_execution(session, payload.get('runtimeOwnerId'))
+                    if ended_foreground:
+                        settle_stream(session)
+                        self.operations.interrupted(session["id"])
+                        self.schedules.runtime_ended(session)
                     interrupt_owned_workers(session, payload.get('runtimeOwnerId'))
-                    if payload.get('reason') == 'shutdown' and session['status'] in {'working', 'starting', 'ready', 'stopping'}:
-                        session['status'] = 'interrupted'
                 finish_background(session,payload.get("backgroundCallIds",[]),payload.get("status","interrupted"))
             elif kind == 'runtime.ownership':
                 if payload.get('status') == 'blocked':
@@ -4909,6 +4913,8 @@ class AppService:
                     self._task(self.collaboration.drain(session["id"]))
             elif kind == "runtime.status":
                 if payload.get('event') == 'input.delivered' and payload.get('inputId'):
+                    from .execution import bind_runtime_turn
+                    bind_runtime_turn(session, payload)
                     self._delivery(session, payload['inputId'], 'accepted')
                 # Provider requests/retries describe current work; only lifecycle
                 # events or accepted input can start work. Late/background notices
@@ -5028,6 +5034,9 @@ class AppService:
                 session["generations"] = session["generations"][-200:]
                 from .input_status import generation as observe_input_generation
                 observe_input_generation(session, payload)
+                if payload.get('event') == 'generation.started' and payload.get('sessionId') == session['id'] and payload.get('rootSessionId') == session['id']:
+                    from .execution import bind_runtime_turn
+                    bind_runtime_turn(session, payload)
                 from .response_completion import apply as apply_response_completion
                 apply_response_completion(session, payload)
                 root_generation = (payload.get('sessionId', session['id']) == session['id']
@@ -5171,7 +5180,8 @@ class AppService:
                 kind == 'runtime.status' and (payload.get('activityOnly') or
                     payload.get('preparationProgress') and payload.get('status') == 'starting')) or (
                 kind == 'execution.event' and payload.get('phase') in {'running', 'working', 'streaming'})
-            collaboration_changed = self.collaboration.observe(session, kind, payload)
+            collaboration_changed = (set() if kind == 'runtime.ended' and not ended_foreground
+                                     else self.collaboration.observe(session, kind, payload))
             if (kind == 'runtime.generation' and root_generation
                     and payload.get('event') == 'generation.failed'
                     and session.get('status') not in {'stopped', 'stopping'}):
@@ -5185,7 +5195,8 @@ class AppService:
                                    errorAt=failure['recordedAt'],
                                    error=failure['summary'] + ' ' + failure['guidance'])
             from .conversation_steering import observe as observe_steering
-            observe_steering(self, session, kind, payload)
+            if kind != 'runtime.ended' or ended_foreground:
+                observe_steering(self, session, kind, payload)
             if progress:
                 self._publish_progress(session_ids={session['id']},
                                        detail_only=kind in {'assistant.delta', 'execution.event'}, record_only=True,
