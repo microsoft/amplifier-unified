@@ -78,17 +78,16 @@ async def test_rejected_child_options_preserve_retained_history_before_effects(t
     assert list(tmp_path.rglob('*'))==original_paths
 
 
-# Issue 1581 investigation only: characterize current behavior, not a runtime fix.
-# These are synthetic provider spies through real Core/Foundation/Children. No
-# provider SDK, credentials, model inference or tool-delegate implementation is used.
+# Synthetic provider SDK boundary; real Core/Foundation/Children select and mount.
+# A finite loop observes the actual provider selector without model inference.
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     'case,connections,requested,expected_checked,expected_error',
     [
         ('default-cross-provider', [('openai', None), ('anthropic', None)],
-         'anthropic', 'provider-anthropic', True),
+         'anthropic', 'anthropic', False),
         ('default-same-provider', [('openai', None), ('anthropic', None)],
-         'openai', 'provider-openai', True),
+         'openai', 'openai', False),
         ('exact-alias', [('openai', 'openai'), ('anthropic', 'fable')],
          'fable', 'fable', False),
         ('family-to-alias', [('openai', 'openai'), ('anthropic', 'fable')],
@@ -110,14 +109,15 @@ async def test_rejected_child_options_preserve_retained_history_before_effects(t
          'anthropic', 'fable', False),
         ('missing-selected', [('openai', 'openai'), ('anthropic', 'fable')],
          'fable', 'fable', True),
+        ('failed-selected', [('openai', 'openai'), ('anthropic', 'fable')],
+         'fable', 'fable', True),
     ],
 )
-async def test_issue_1581_real_child_preexecution_identity(
+async def test_child_preferences_preserve_native_connection_identity(
         tmp_path, monkeypatch, case, connections, requested, expected_checked, expected_error):
     import copy
     from dataclasses import dataclass
     import importlib.util
-    import json
     import sys
     from types import SimpleNamespace
     from amplifier_core import AmplifierSession
@@ -128,7 +128,9 @@ async def test_issue_1581_real_child_preexecution_identity(
     from amplifier_web.host.model_selection import ProviderSelectionError, prepare_default_routing
     from amplifier_web.host.session import SelectedProvider, _apply_settings
     from amplifier_web.host.storage import SessionStore
-    from amplifier_web.provider_isolation import ProviderIsolation, require_available
+    from amplifier_web.provider_isolation import (
+        ProviderIsolation, ProviderUnavailable, UnavailableProvider, require_available,
+    )
 
     # Only external provider loading is replaced. Core owns real mount keys;
     # Foundation owns preference resolution; Unified owns availability + spawn.
@@ -221,23 +223,20 @@ async def mount(coordinator, config=None):
     coordinator = parent.coordinator
     mounted = coordinator.get('providers')
     assert set(mounted) == {instance or family for family, instance in connections}
-    # The root/new-chat selector uses the actual mounted connection key. Even
-    # the module-only declarations rejected by delegation are selectable here.
-    root_selectable = []
-    for instance in mounted:
-        require_available(coordinator, instance)
-        selected = SelectedProvider(mounted[instance], {'instance': instance, 'model': 'root-control'})
-        coordinator.get('orchestrator').root_provider = selected
-        assert coordinator.get('orchestrator')._select_provider(mounted) is selected
-        root_selectable.append(instance)
     coordinator.get('orchestrator').root_provider = SelectedProvider(
         mounted['openai'], {'instance': 'openai', 'model': 'gpt-parent', 'effort': 'high'})
     if case == 'missing-selected':
         await coordinator.unmount('providers', name='fable')
         mounted = coordinator.get('providers')
         assert 'fable' not in mounted
+    elif case == 'failed-selected':
+        failed = next(row for row in plan['providers'] if row.get('instance_id') == 'fable')
+        marker = UnavailableProvider(failed, isolation.record(failed, 'provider_mount_failed'))
+        await coordinator.mount('providers', marker, name='fable')
+        mounted = coordinator.get('providers')
     coordinator.register_capability('session.working_dir', str(tmp_path))
-    initial = copy.deepcopy(coordinator.config)
+    initial = copy.deepcopy((coordinator.config, prepared.mount_plan, prepared.bundle.to_mount_plan()))
+    defaults = {key: copy.deepcopy(provider.config) for key, provider in mounted.items()}
 
     def checked(instance):
         checks.append(instance)
@@ -246,15 +245,17 @@ async def mount(coordinator, config=None):
     coordinator.register_capability('provider.check_available', checked)
     registry = await install_children(parent, prepared, Runtime('openai-parent'),
                                       SessionStore(tmp_path / 'children'), None)
-    error = None
     model = 'gpt-5.5' if requested == 'openai' else 'claude-opus-5-5'
     try:
         if expected_error:
-            with pytest.raises(ProviderSelectionError) as failure:
+            failure_type = ProviderUnavailable if case == 'failed-selected' else ProviderSelectionError
+            with pytest.raises(failure_type) as failure:
                 await registry.spawn('self', 'do not infer', parent, sub_session_id='probe-child',
                     provider_preferences=[{'provider': requested, 'model': model}])
-            error = str(failure.value)
-            assert error == 'The selected provider instance is unavailable; select a connection explicitly.'
+            if case == 'failed-selected':
+                assert failure.value.failures[0]['instance_id'] == 'fable'
+            else:
+                assert str(failure.value) == 'The selected provider instance is unavailable; select a connection explicitly.'
             assert creations == ['openai-parent'] and not executions and not registry.rows
         else:
             result = await registry.spawn('self', 'do not infer', parent, sub_session_id='probe-child',
@@ -263,16 +264,11 @@ async def mount(coordinator, config=None):
             assert executions == [{'instance': expected_checked, 'model': model}]
             assert creations == ['openai-parent', 'probe-child']
         assert checks == [expected_checked]
-        assert coordinator.config == initial
+        assert (coordinator.config, prepared.mount_plan, prepared.bundle.to_mount_plan()) == initial
+        assert {key: provider.config for key, provider in mounted.items()} == defaults
         assert coordinator.get('orchestrator').root_provider.selection == {
             'instance': 'openai', 'model': 'gpt-parent', 'effort': 'high'}
-        assert all(not provider.calls for provider in mounted.values())
-        print('ISSUE1581 ' + json.dumps({
-            'case': case, 'connections': connections, 'requested': requested,
-            'mounted': list(mounted), 'availability_checks': checks, 'error': error,
-            'root_selectable_before_removal': root_selectable,
-            'created_sessions': creations, 'selector_executions': executions,
-            'model_inference_calls': 0, 'production_path': 'Children.spawn -> Foundation resolution -> require_available',
-        }, sort_keys=True))
+        assert all(not provider.calls for provider in mounted.values()
+                   if not isinstance(provider, UnavailableProvider))
     finally:
         await parent.cleanup()
