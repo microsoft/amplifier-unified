@@ -1,15 +1,122 @@
 """Private full backups and reversible app-owned reset operations."""
 import asyncio
 import copy
+import hashlib
 import json
+import os
 from pathlib import Path
-import shutil
 import sqlite3
+import stat
 import tarfile
 import time
 import uuid
 
 PARTS={'runtime':['runtime'],'cache':['foundation/cache','updates/releases','updates/active.json'],'settings':['config','routing','bundles'],'conversations':['sessions']}
+
+CONFIGURATION_FILES = ('configuration.json', 'effective-configuration.json')
+CONFIGURATION_LIMIT = 1024 * 1024
+
+
+def _read_reset_configuration(path, home):
+    """Bound private plan reads; never follow a redirected session directory."""
+    if os.name == 'nt':
+        from .windows_files import directory
+        with directory(path.parent, owned_root=home) as pinned:
+            return pinned.read_private(path.name, limit=CONFIGURATION_LIMIT)
+    from .staged_sources import owned_path
+    owned_path(path, home)
+    info = path.stat()
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise ValueError('Reset configuration must be a private regular file: ' + str(path.relative_to(home)))
+    with path.open('rb') as stream:
+        content = stream.read(CONFIGURATION_LIMIT + 1)
+    if len(content) > CONFIGURATION_LIMIT:
+        raise ValueError('Reset configuration exceeds 1 MiB: ' + str(path.relative_to(home)))
+    return content
+
+
+def _retiring_reference(value, roots):
+    """Recognize whole local path values, including resources, without rewriting them."""
+    if isinstance(value, dict):
+        return any(_retiring_reference(item, roots) for item in value.values())
+    if isinstance(value, list):
+        return any(_retiring_reference(item, roots) for item in value)
+    if not isinstance(value, str):
+        return False
+    if value.startswith('file:'):
+        from urllib.parse import parse_qs, urlsplit
+        from urllib.request import url2pathname
+        uri = urlsplit(value)
+        if uri.netloc not in ('', 'localhost'):
+            return False
+        value = url2pathname(uri.path)
+        subdirectory = parse_qs(uri.fragment).get('subdirectory', [])
+        if len(subdirectory) == 1:
+            value = str(Path(value) / subdirectory[0])
+    path = Path(os.path.normpath(value.split('#', 1)[0]))
+    if value.startswith('~/'):
+        path = path.expanduser()
+    return path.is_absolute() and any(path.is_relative_to(root) for root in roots)
+
+
+def prepare_reset_configurations(home, targets):
+    """Precompute legacy plan conversion before losing managed source provenance.
+
+    No writes, downloads, mounting, request changes or cache inventory. Callers
+    own quiescence and rollback. Non-module references cannot be inferred from
+    module provenance and must be resolved explicitly before retiring their paths.
+    """
+    home = Path(home)
+    sessions = home / 'sessions'
+    if not sessions.exists() and not sessions.is_symlink():
+        return []
+    from .staged_sources import owned_path
+    owned_path(sessions, home)
+    roots = tuple(home / name for name in targets)
+    changes = []
+    for directory in sorted(sessions.iterdir()):
+        if not directory.is_dir():
+            continue
+        for name in (*CONFIGURATION_FILES, 'pending-configuration.json'):
+            path = directory / name
+            if not path.exists() and not path.is_symlink():
+                continue
+            before = _read_reset_configuration(path, home)
+            plan = json.loads(before)
+            if not _retiring_reference(plan, roots):
+                continue
+            relative = str(path.relative_to(home))
+            if name == 'pending-configuration.json':
+                raise ValueError('Reset cannot retire sources used by pending configuration: ' + relative +
+                                 '. Resolve the original operation first; its request was not changed.')
+            from .host.components import declarations, portable_module_sources
+            converted = portable_module_sources(plan, home)
+            # Do not change managed sources which this reset is not retiring.
+            for old, new in zip(declarations(plan), declarations(converted), strict=True):
+                if 'source' in old and not _retiring_reference(old['source'], roots):
+                    new['source'] = old['source']
+            if _retiring_reference(converted, roots):
+                raise ValueError('Reset cannot preserve ' + relative +
+                                 ': a retiring source is missing, changed or unverified, or a non-module '
+                                 'resource still uses a retiring path. No cache was retired.')
+            after = json.dumps(converted, indent=2).encode('utf-8')
+            if len(after) > CONFIGURATION_LIMIT:
+                raise ValueError('Converted reset configuration exceeds 1 MiB: ' + relative)
+            changes.append((path, before, after))
+    return changes
+
+
+def stage_reset_configurations(home, targets, destination):
+    """Fresh-install CLI bridge: private prepared output, not a second journal."""
+    from .host.config import write_private
+    home, destination = Path(home), Path(destination)
+    changes = prepare_reset_configurations(home, targets)
+    entries = []
+    for path, before, after in changes:
+        relative = path.relative_to(home)
+        write_private(destination / relative, after, owned_root=home)
+        entries.append({'path': relative.as_posix(), 'before': hashlib.sha256(before).hexdigest()})
+    write_private(destination / 'prepared.json', json.dumps(entries), owned_root=home)
 
 
 def bulk_sessions(service, *, include_native=False):
@@ -264,41 +371,61 @@ async def _reset(manager,args,operation=None):
             for key in ("setup_manager", "global_setup_manager"):
                 setup=getattr(manager,key,None)
                 if setup:await setup.close();setattr(manager,key,None)
+            changes = (await _settled_thread(prepare_reset_configurations, service.data_dir, targets)
+                       if 'cache' in parts and 'conversations' not in parts else [])
             result=await backup(service, publishing_locked=True, operation_id=operation)
             async with service.lock:
                 sessions=bulk_sessions(service, include_native=True) if 'conversations' in parts else []
                 retained=service.data_dir/'backups'/('reset-'+operation)
-                for name in targets:
-                    path=service.data_dir/name
-                    if path.is_symlink():raise ValueError('Refusing to reset a linked app directory')
-                    if path.exists():
-                        target=retained/name;target.parent.mkdir(parents=True,exist_ok=True)
-                        shutil.move(str(path),str(target))
-                if 'conversations' in parts:
-                    for session in sessions:
-                        service.history.hide_session(session)
-                    service.forget_session_records(row['id'] for row in sessions)
-                    service.state.update(sessions=[],selectedSessionId=None,runtimeControl={},sessionConfiguration={},history=[])
-                    # Commands own idempotent effect receipts, including this
-                    # reset's queued identity. Reset chats, never replay rights.
-                if 'settings' in parts:
-                    from .updates import DEFAULT_CHECK_INTERVAL_HOURS
-                    service.state['settings']['updates']={'autoCheck':True,'autoInstall':False,'intervalHours':DEFAULT_CHECK_INTERVAL_HOURS}
-                    service._shared_preferences_stamp=None
-                    service._refresh_shared_preferences()
-                    service.state.update(setup={},bundles={},bundleDiscovery={},permissions={})
-                    service.state['notificationSettings']=manager.notifications.public()
-                    # Dormant owners have no mounted runtime to retire; their
-                    # next start reads the reset settings normally.
-                    for session in service.state['sessions']:
-                        if not session.get('historyManaged'):session['configurationPending']=True
-                if 'cache' in parts:
-                    service.state['updates'].update(release=None,pendingRelease=None,canRollback=False,items=[],available=0)
-                    service.update_manager.inventory=[]
-                service.state['updates'].update(phase='idle',pendingApp=None)
-                result.update(retained=str(retained),resetOperationId=operation,detail='Selected app data reset. Backup and original files are retained privately; your workspaces and CLI data were untouched.')
-                service.state['maintenance']=result
-                service._publish_full(reason='Explicit reset of selected application stores')
+                from .host.config import write_private
+                for path, before, _ in changes:
+                    if _read_reset_configuration(path, service.data_dir) != before:
+                        raise ValueError('Saved configuration changed during reset; no cache was retired.')
+                moves, written = [], []
+                try:
+                    for path, before, after in changes:
+                        # Record before writing: an atomic replace can succeed
+                        # before its writer reports an error.
+                        written.append((path, before))
+                        write_private(path, after, owned_root=service.data_dir)
+                    for name in targets:
+                        path=service.data_dir/name
+                        if path.is_symlink():raise ValueError('Refusing to reset a linked app directory')
+                        if path.exists():
+                            target=retained/name;target.parent.mkdir(parents=True,exist_ok=True)
+                            path.rename(target)
+                            moves.append((path, target))
+                    if 'conversations' in parts:
+                        for session in sessions:
+                            service.history.hide_session(session)
+                        service.forget_session_records(row['id'] for row in sessions)
+                        service.state.update(sessions=[],selectedSessionId=None,runtimeControl={},sessionConfiguration={},history=[])
+                        # Commands own idempotent effect receipts, including this
+                        # reset's queued identity. Reset chats, never replay rights.
+                    if 'settings' in parts:
+                        from .updates import DEFAULT_CHECK_INTERVAL_HOURS
+                        service.state['settings']['updates']={'autoCheck':True,'autoInstall':False,'intervalHours':DEFAULT_CHECK_INTERVAL_HOURS}
+                        service._shared_preferences_stamp=None
+                        service._refresh_shared_preferences()
+                        service.state.update(setup={},bundles={},bundleDiscovery={},permissions={})
+                        service.state['notificationSettings']=manager.notifications.public()
+                        # Dormant owners have no mounted runtime to retire; their
+                        # next start reads the reset settings normally.
+                        for session in service.state['sessions']:
+                            if not session.get('historyManaged'):session['configurationPending']=True
+                    if 'cache' in parts:
+                        service.state['updates'].update(release=None,pendingRelease=None,canRollback=False,items=[],available=0)
+                        service.update_manager.inventory=[]
+                    service.state['updates'].update(phase='idle',pendingApp=None)
+                    result.update(retained=str(retained),resetOperationId=operation,detail='Selected app data reset. Backup and original files are retained privately; your workspaces and CLI data were untouched.')
+                    service.state['maintenance']=result
+                    service._publish_full(reason='Explicit reset of selected application stores')
+                except BaseException:
+                    for original, saved in reversed(moves):
+                        saved.rename(original)
+                    for path, before in reversed(written):
+                        write_private(path, before, owned_root=service.data_dir)
+                    raise
         except BaseException:
             await service.discard_runtime(candidate)
             await manager.publish(updates={**service.state.get('updates',{}),'phase':'error','error':'Reset did not complete; retained originals are in backups.'})

@@ -6,6 +6,7 @@ from amplifier_web.updates import UpdateManager
 from amplifier_web.runtime import RuntimeManager
 from amplifier_web.runtime_retention import DEFAULT_RETENTION
 from test_service import Runtime
+from test_reset import legacy_saved_plan
 
 async def test_full_backup_and_selected_reset_are_private_and_reversible(tmp_path):
     service=AppService(tmp_path/'app',Runtime(),workspace=tmp_path)
@@ -124,3 +125,81 @@ async def test_reset_skips_unknown_workspace_settings_and_hides_native_chats(tmp
     assert identity('untouched-project','historical-root') in service.state['hiddenNativeSessions']
     assert not service.state['sessions']
     await service.close()
+
+
+@pytest.mark.parametrize("failure", [None, "conversion", "write", "move"])
+async def test_in_app_cache_reset_converts_plans_or_restores_exact_originals(
+        tmp_path, monkeypatch, legacy_saved_plan, failure):
+    import json
+    from pathlib import Path
+    from amplifier_web import recovery
+    from amplifier_web.host import config
+    service = AppService(tmp_path / "app", Runtime(), workspace=tmp_path)
+    manager = Management(service)
+    service.management = manager
+    service.update_manager = UpdateManager(service)
+    saved = legacy_saved_plan(service.data_dir)
+    sentinel = service.data_dir / "foundation/cache/unreferenced"
+    sentinel.mkdir(parents=True)
+    (sentinel / "damaged").write_text("discard on success")
+    if failure == "conversion":
+        saved.metadata.write_text("{}")
+    elif failure == "write":
+        write = config.write_private
+        failed = False
+        def fail_write(path, text, **kwargs):
+            nonlocal failed
+            write(path, text, **kwargs)
+            if path == saved.paths[1] and not failed:
+                failed = True
+                raise OSError("fixture after atomic write")
+        monkeypatch.setattr(config, "write_private", fail_write)
+    elif failure == "move":
+        rename = Path.rename
+        def fail_move(path, target):
+            if path == service.data_dir / "updates/releases":
+                raise OSError("fixture cache move failure")
+            return rename(path, target)
+        monkeypatch.setattr(Path, "rename", fail_move)
+    try:
+        args = {"parts": ["cache"], "apply": True, "confirmation": "RESET"}
+        if failure:
+            with pytest.raises((ValueError, OSError)):
+                await recovery.reset(manager, args)
+            assert all(path.read_bytes() == saved.before for path in saved.paths)
+            assert saved.module.exists()
+            assert (sentinel / "damaged").exists()
+        else:
+            await recovery.reset(manager, args)
+            for path in saved.paths:
+                assert json.loads(path.read_text())["tools"][0]["source"] == saved.portable
+            assert not saved.module.exists()
+            assert not sentinel.exists()
+            with tarfile.open(service.state["maintenance"]["backup"]) as archive:
+                for path in saved.paths:
+                    assert archive.extractfile(path.relative_to(service.data_dir).as_posix()).read() == saved.before
+    finally:
+        await service.close()
+
+
+@pytest.mark.parametrize("parts", [["runtime"], ["cache", "conversations"]])
+async def test_reset_does_not_convert_plans_when_not_retaining_them_across_cache_retirement(
+        tmp_path, legacy_saved_plan, parts):
+    from amplifier_web import recovery
+    service = AppService(tmp_path / "app", Runtime(), workspace=tmp_path)
+    manager = Management(service)
+    service.management = manager
+    service.update_manager = UpdateManager(service)
+    saved = legacy_saved_plan(service.data_dir)
+    saved.metadata.write_text("{}")
+    try:
+        await recovery.reset(manager, {"parts": parts, "apply": True, "confirmation": "RESET"})
+        if "conversations" in parts:
+            assert not any(path.exists() for path in saved.paths)
+            with tarfile.open(service.state["maintenance"]["backup"]) as archive:
+                assert archive.extractfile("sessions/legacy/configuration.json").read() == saved.before
+        else:
+            assert all(path.read_bytes() == saved.before for path in saved.paths)
+            assert saved.module.exists()
+    finally:
+        await service.close()

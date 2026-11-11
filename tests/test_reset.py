@@ -53,6 +53,11 @@ def fake_install(monkeypatch, *, fail=False, probe_fail=False):
             (prefix / "fresh").write_text("new install")
             if fail:
                 raise subprocess.CalledProcessError(1, args)
+        elif len(args) > 3 and "stage_reset_configurations" in str(args[3]):
+            from amplifier_web.recovery import stage_reset_configurations
+            assert args[0] == Path(os.environ["TEST_RESET_TOOLS"]) / "amplifier-unified/bin/python"
+            assert args[1:3] == ("-I", "-c")
+            stage_reset_configurations(args[4], json.loads(args[5]), args[6])
         return SimpleNamespace(returncode=0)
     def probe(*args):
         if probe_fail:
@@ -416,3 +421,224 @@ def test_release_failure_explains_rate_limit_and_tls_without_private_details(mon
     message = str(raised.value)
     assert 'rate limit' in message and 'TLS certificate verification failed' in message
     assert 'secret' not in message and 'private' not in message and 'proxy.invalid' not in message
+
+
+@pytest.fixture
+def legacy_saved_plan():
+    """Real local Git provenance; no download or provider use."""
+    def create(home, layout="updates/releases/old/foundation/cache/bundle"):
+        root = home / layout
+        module = root / "modules/fixture"
+        module.mkdir(parents=True)
+        code = module / "fixture.py"
+        code.write_text("VALUE = 1\n")
+        def git(*args):
+            return subprocess.check_output(["git", "-C", str(root), *args],
+                                           text=True, stderr=subprocess.DEVNULL).strip()
+        git("init", "-b", "main")
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+            "add", ".")
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+            "-c", "commit.gpgsign=false", "commit", "-m", "reset fixture")
+        url = "https://example.invalid/legacy-reset"
+        git("remote", "add", "origin", url)
+        revision = git("rev-parse", "HEAD")
+        metadata = root / ".amplifier_cache_meta.json"
+        metadata.write_text(json.dumps({"git_url": url, "ref": "main", "commit": revision}))
+        external = home.parent / "explicit-local"
+        plan = {
+            "session": {"orchestrator": {"module": "loop-live", "source": str(module)},
+                        "context": {"module": "context-fixture", "source": module.as_uri()}},
+            "tools": [{"module": "tool-fixture", "source": str(module), "enabled": False,
+                       "config": {"limit": 7, "path": str(external)}}],
+            "providers": [{"module": "provider-fixture", "id": "account",
+                           "source": "git+https://example.invalid/pinned@v1",
+                           "config": {"api_key": "synthetic-private-value"}}],
+            "agents": {"child": {"agents": {"deep": {"hooks": [
+                {"module": "hook-fixture", "source": str(module)}]}}}},
+            "spawn": {"tools": [{"module": "tool-spawn", "source": str(module)}]},
+        }
+        directory = home / "sessions/legacy"
+        directory.mkdir(parents=True)
+        before = (json.dumps(plan, indent=1) + "\n").encode()
+        paths = [directory / name for name in ("configuration.json", "effective-configuration.json")]
+        for path in paths:
+            path.write_bytes(before)
+        return SimpleNamespace(root=root, module=module, code=code, metadata=metadata,
+                               paths=paths, plan=plan, before=before, external=external,
+                               portable=f"git+{url}@{revision}#subdirectory=modules/fixture")
+    return create
+
+
+@pytest.mark.parametrize("layout", [
+    "foundation/cache/bundle", "updates/releases/old/foundation/cache/bundle",
+    "source-store/objects/repository/revision",
+])
+def test_reset_preparation_converts_only_retiring_module_declarations(tmp_path, legacy_saved_plan, layout):
+    from amplifier_web.recovery import prepare_reset_configurations
+    from amplifier_web.host.components import declarations
+    home = tmp_path / "app"
+    saved = legacy_saved_plan(home, layout)
+    # Irrelevant damaged caches are precisely what reset is meant to discard.
+    unrelated = home / "foundation/cache/unreferenced"
+    unrelated.mkdir(parents=True, exist_ok=True)
+    (unrelated / ".amplifier_cache_meta.json").write_text("damaged")
+    changes = prepare_reset_configurations(home, reset.REGENERABLE)
+    assert {path for path, _, _ in changes} == set(saved.paths)
+    for path, before, after in changes:
+        assert before == saved.before == path.read_bytes()
+        plan = json.loads(after)
+        assert [row["source"] for row in declarations(plan)] == [
+            saved.portable if row["source"].startswith((str(home), "file:"))
+            else row["source"] for row in declarations(saved.plan)]
+        assert plan["tools"][0]["enabled"] is False
+        assert plan["tools"][0]["config"]["path"] == str(saved.external)
+        assert plan["providers"] == saved.plan["providers"]
+    assert saved.module.exists()
+
+
+@pytest.mark.parametrize("problem", ["missing", "metadata", "dirty", "context"])
+def test_reset_preparation_refuses_unreconstructable_references_before_any_write(tmp_path, legacy_saved_plan, problem):
+    from amplifier_web.recovery import prepare_reset_configurations
+    saved = legacy_saved_plan(tmp_path / "app")
+    if problem == "missing":
+        saved.root.rename(tmp_path / "removed-source")
+    elif problem == "metadata":
+        saved.metadata.write_text("{}")
+    elif problem == "dirty":
+        saved.code.write_text("VALUE = 2\n")
+    else:
+        saved.plan["context"] = {"fixture:policy": str(saved.module / "policy.md")}
+        saved.paths[1].write_text(json.dumps(saved.plan))
+    originals = [path.read_bytes() for path in saved.paths]
+    with pytest.raises(ValueError, match="Reset cannot preserve"):
+        prepare_reset_configurations(tmp_path / "app", reset.REGENERABLE)
+    assert [path.read_bytes() for path in saved.paths] == originals
+    assert saved.module.exists() is (problem != "missing")
+
+
+def test_reset_preparation_preserves_external_and_nonretiring_source_paths(tmp_path, legacy_saved_plan):
+    from amplifier_web.recovery import PARTS, prepare_reset_configurations
+    home = tmp_path / "app"
+    saved = legacy_saved_plan(home)
+    sources = [str(saved.external), saved.external.as_uri(),
+               "file:" + str(saved.external),
+               str(home / "source-store/objects/unretired/missing"),
+               "git+https://example.invalid/pinned@" + "a" * 40]
+    saved.plan["tools"].extend({"module": f"tool-external-{i}", "source": source}
+                              for i, source in enumerate(sources))
+    for path in saved.paths:
+        path.write_text(json.dumps(saved.plan))
+    changes = prepare_reset_configurations(home, PARTS["cache"])
+    for _, _, after in changes:
+        plan = json.loads(after)
+        assert plan["tools"][0]["source"] == saved.portable
+        assert [row["source"] for row in plan["tools"][1:]] == sources
+
+
+@pytest.mark.parametrize("problem", ["oversized", "linked"])
+def test_reset_preparation_refuses_unsafe_plan_reads(tmp_path, legacy_saved_plan, problem):
+    from amplifier_web.recovery import CONFIGURATION_LIMIT, prepare_reset_configurations
+    home = tmp_path / "app"
+    saved = legacy_saved_plan(home)
+    path = saved.paths[0]
+    if problem == "oversized":
+        path.write_bytes(b" " * (CONFIGURATION_LIMIT + 1))
+    else:
+        external = tmp_path / "external-plan.json"
+        path.rename(external)
+        path.symlink_to(external)
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        prepare_reset_configurations(home, reset.REGENERABLE)
+    assert path.read_bytes() == before
+    assert saved.module.exists()
+
+
+def test_reset_preserves_pending_configuration_and_sealed_request_identity(tmp_path, legacy_saved_plan):
+    from amplifier_web.recovery import prepare_reset_configurations
+    home = tmp_path / "app"
+    saved = legacy_saved_plan(home)
+    # Host operation owner and native session IDs need not be identical.
+    owner = home / "sessions/owner"
+    owner.mkdir()
+    pending = owner / "pending-configuration.json"
+    pending.write_bytes(saved.before)
+    receipt = owner / "configuration-operations/sealed.json"
+    receipt.parent.mkdir()
+    receipt.write_bytes(b'{"requestHash":"untouched","effect":"saved_not_mounted"}\n')
+    before = receipt.read_bytes()
+    with pytest.raises(ValueError, match="pending configuration"):
+        prepare_reset_configurations(home, reset.REGENERABLE)
+    assert pending.read_bytes() == saved.before
+    assert receipt.read_bytes() == before
+    assert all(path.read_bytes() == saved.before for path in saved.paths)
+    assert saved.module.exists()
+
+
+@pytest.mark.parametrize("failure", [None, "conversion", "replace", "database"])
+def test_cli_reset_converts_legacy_plans_and_rolls_back_exact_bytes(repair_tree, monkeypatch, legacy_saved_plan, failure):
+    home, tool, bins = repair_tree
+    saved = legacy_saved_plan(home)
+    monkeypatch.setenv("TEST_RESET_TOOLS", str(tool))
+    calls = fake_install(monkeypatch)
+    if failure == "conversion":
+        saved.metadata.write_text("{}")
+    elif failure == "replace":
+        replace = Path.replace
+        def fail_replace(path, target):
+            if path.name == "effective-configuration.json" and "portable-configurations" in path.parts:
+                raise OSError("fixture replacement failure")
+            return replace(path, target)
+        monkeypatch.setattr(Path, "replace", fail_replace)
+    elif failure == "database":
+        def fail_database(*args):
+            raise sqlite3.DatabaseError("fixture database failure")
+        monkeypatch.setattr(reset, "reset_update_state", fail_database)
+    if failure:
+        with pytest.raises((ValueError, OSError, sqlite3.DatabaseError)):
+            reset.repair(home, "uv", tool, bins, "trusted.whl", {}, None, True)
+        assert all(path.read_bytes() == saved.before for path in saved.paths)
+        assert saved.module.exists()
+        assert (tool / "amplifier-unified/old").exists()
+    else:
+        backup = reset.repair(home, "uv", tool, bins, "trusted.whl", {}, None, True)
+        for path in saved.paths:
+            assert json.loads(path.read_text())["tools"][0]["source"] == saved.portable
+            assert (backup / path.relative_to(home)).read_bytes() == saved.before
+        assert not saved.module.exists()
+    assert any("stage_reset_configurations" in str(args) for args in calls)
+
+
+def test_cli_reset_preserves_a_plan_changed_after_preparation(repair_tree, monkeypatch, legacy_saved_plan):
+    home, tool, bins = repair_tree
+    saved = legacy_saved_plan(home)
+    monkeypatch.setenv("TEST_RESET_TOOLS", str(tool))
+    fake_install(monkeypatch)
+    command = reset.command
+    concurrent = b'{"tools":[],"instruction":"keep the newer edit"}\n'
+    def change_after_preparation(*args, **kwargs):
+        result = command(*args, **kwargs)
+        if len(args) > 3 and "stage_reset_configurations" in str(args[3]):
+            saved.paths[1].write_bytes(concurrent)
+        return result
+    monkeypatch.setattr(reset, "command", change_after_preparation)
+    with pytest.raises(ValueError, match="changed during reset"):
+        reset.repair(home, "uv", tool, bins, "trusted.whl", {}, None, True)
+    assert saved.paths[0].read_bytes() == saved.before
+    assert saved.paths[1].read_bytes() == concurrent
+    assert saved.module.exists()
+
+
+def test_cli_conversion_failure_does_not_suggest_network_repair(tmp_path, monkeypatch, legacy_saved_plan):
+    home = tmp_path / "app"
+    saved = legacy_saved_plan(home)
+    def fail(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, args)
+    monkeypatch.setattr(reset, "command", fail)
+    moves = []
+    with pytest.raises(RuntimeError, match="No cache was retired"):
+        reset.prepare_saved_configurations(tmp_path / "fresh", home, home / "reset-backups/id", {}, moves)
+    assert moves == []
+    assert all(path.read_bytes() == saved.before for path in saved.paths)
+    assert saved.module.exists()
