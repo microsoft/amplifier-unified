@@ -283,11 +283,15 @@ async def ensure(home, generation, session, *, progress=None):
         from amplifier_foundation.modules.preparation import source_signature
 
         contents = []
+        signatures = {}
         for path in sorted(local_inputs):
-            content = await asyncio.to_thread(
-                source_signature, path if path.is_dir() else path.parent
-            )
-            contents.append([str(path), content])
+            root = path if path.is_dir() else path.parent
+            # Sibling bundle files share the same content observation within
+            # this check. Keep every declared path in the identity, and rescan
+            # on the next check so local edits cannot reuse an obsolete wheel.
+            if root not in signatures:
+                signatures[root] = await asyncio.to_thread(source_signature, root)
+            contents.append([str(path), signatures[root]])
         key = hashlib.sha256((key + json.dumps(contents)).encode()).hexdigest()
     if edited is not None:
         key = hashlib.sha256(

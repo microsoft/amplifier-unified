@@ -319,6 +319,43 @@ async def test_actual_local_source_content_requalifies(profile_inputs, declarati
     assert set(h.scans) == {code}
 
 
+async def test_sibling_local_bundles_share_one_scan_per_check(profile_inputs):
+    h = profile_inputs
+    code = h.workspace.parent / "local-code"
+    code.mkdir()
+    bundles = [code / f"{name}.yaml" for name in ("one", "two", "three")]
+    for path in bundles:
+        path.write_text(f"bundle:\n  name: {path.stem}\n")
+    h.plan["includes"] = [{"bundle": str(path)} for path in bundles]
+    other = h.workspace.parent / "other-code"
+    other.mkdir()
+    payload = other / "implementation.py"
+    payload.write_text("VALUE = 1\n")
+    h.plan["tools"][0]["source"] = str(other)
+    child = h.child("siblings")
+
+    selected = await runtime_profiles.ensure(h.home, h.generation, child)
+    assert sorted(h.scans) == sorted([code, other])
+    h.scans.clear()
+    assert await runtime_profiles.ensure(h.home, h.generation, child) == selected
+    assert sorted(h.scans) == sorted([code, other])
+    assert len(h.calls) == 3
+
+    # A later sibling-file edit must invalidate the previously qualified setup.
+    bundles[-1].write_text("bundle:\n  name: changed\n")
+    h.scans.clear()
+    changed = await runtime_profiles.ensure(h.home, h.generation, child)
+    assert changed not in {selected, h.generation}
+    assert sorted(h.scans) == sorted([code, other])
+    assert len(h.calls) == 6
+
+    # An independent source root remains part of the qualification identity.
+    payload.write_text("VALUE = 2\n")
+    assert await runtime_profiles.ensure(h.home, h.generation, child) not in {
+        selected, changed, h.generation,
+    }
+
+
 async def test_real_module_outward_symlink_still_fails_closed(profile_inputs):
     h = profile_inputs
     code = h.workspace.parent / "unsafe-code"
