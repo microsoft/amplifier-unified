@@ -517,6 +517,20 @@ unbound command evidence is **unconfirmed**, not proof of rejection or no effect
 The current operation and sealed native evidence remain canonical. Read this
 status after an uncertain Resume; do not invoke the mutation to obtain its result.
 
+For passive first-failure observation, the same read accepts
+`diagnostic: "first_failure"` with an explicit `operationId`, `expectedRevision`
+and `includeRecovery: true`. Missing or stale revision context refuses rather than
+observing a replacement operation. Existing caller/Full/root/workspace checks
+are unchanged. The optional diagnostic reports each recovery action's first
+unproved canonical check and, separately, the app-only update-quiescence check.
+Codes are a closed vocabulary; unexpected read/validation failures report
+unavailable at the last reached check, never raw exceptions or private values.
+Later checks are not evaluated after a failure in that validation path.
+Only an already performed saved-plan comparison reports `match` or `mismatch`;
+`loadedComparison` is always `not_observed`. The read does not inspect a runtime,
+refresh retained presentation, start or mount a worker, rewrite any operation,
+or authorize reconciliation, resumption, input delivery or component activation.
+
 For an already executing Full native child, the exact operation read, reconcile
 and resume calls can reach the recovery owner even when that same settled pending
 operation blocks ordinary child execution. This route authenticates the current

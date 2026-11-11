@@ -13,7 +13,9 @@ def operation_snapshot(service, session):
     """Private observation, not authority to recover or clear this input fence."""
     from .configuration_authority import fingerprint
     from .configuration_recovery import evidence, latest_attempt
+    from .configuration_diagnostics import PredicateFailure, checkpoint, saved_comparison
     management, runtime = service.management, service.runtime
+    checkpoint("update_hold")
     pending = session.get('pendingConfiguration') or {}
     operation = pending.get('operationId')
     if (not operation or pending.get('phase') != 'error'
@@ -26,7 +28,8 @@ def operation_snapshot(service, session):
             or any(row.get('status') in {'queued', 'starting', 'running', 'working', 'stopping'}
                    or row.get('persistent') and row.get('status') == 'idle'
                    for row in session.get('workers', []))):
-        raise ValueError('Configuration hold is not quiescent.')
+        raise PredicateFailure("update_hold", 'Configuration hold is not quiescent.')
+    checkpoint("update_activity")
     workers = getattr(runtime, 'workers', None)
     observe = getattr(runtime, 'has_pending_operations', None)
     tasks = getattr(management, 'pending_config_tasks', None)
@@ -37,8 +40,10 @@ def operation_snapshot(service, session):
             or tasks is None or any(not task.done() for task in tasks.values())
             or lock is None or lock.locked()
             or not callable(getattr(runtime, 'stopped_boundary', None))):
-        raise ValueError('Configuration activity cannot be proven settled.')
+        raise PredicateFailure("update_activity", 'Configuration activity cannot be proven settled.')
+    checkpoint("record_unavailable")
     record = management.configuration_record(session['id'], operation)
+    checkpoint("update_binding")
     request, state = record['request'], record['state']
     target = management.configuration_target_binding(session)
     if (any(request.get(key) != value for key, value in target.items())
@@ -51,34 +56,42 @@ def operation_snapshot(service, session):
             or pending.get('payloadHash') != request['payloadHash']
             or fingerprint(request['config']) != request['payloadHash']
             or fingerprint(json.loads(management.queued_path(session['id']).read_text())) != request['payloadHash']):
-        raise ValueError('Configuration hold binding changed.')
+        raise PredicateFailure("update_binding", 'Configuration hold binding changed.')
+    checkpoint("update_attempts")
     attempts = record.get('attempts') or []
     if not attempts or len(attempts) > 32:
-        raise ValueError('Bounded terminal native evidence is required.')
+        raise PredicateFailure("update_attempts", 'Bounded terminal native evidence is required.')
     latest = latest_attempt(record)
     receipts = []
     native = session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']
     for number, attempt in enumerate(attempts, 1):
+        checkpoint("native_binding")
         if (attempt.get('sessionId') != session['id'] or attempt.get('operationId') != operation
                 or attempt.get('requestHash') != record['requestHash']
                 or attempt.get('payloadHash') != request['payloadHash']
                 or attempt.get('nativeSessionId') != native or attempt.get('number') != number
                 or attempt.get('action', 'configuration.apply') != 'configuration.apply'):
-            raise ValueError('Native effect binding changed.')
+            raise PredicateFailure("native_binding", 'Native effect binding changed.')
+        checkpoint("native_evidence_unavailable")
         receipt = evidence(attempt, home=service.data_dir)
         expected = state['effect'] if attempt == latest else 'none'
         if not receipt or receipt.get('terminal') is not True or receipt.get('effect') != expected:
-            raise ValueError('Native effect is not proven terminal.')
+            raise PredicateFailure("native_terminal", 'Native effect is not proven terminal.')
         receipts.append(receipt)
     saved_hash = None
     if state['effect'] == 'saved_not_mounted':
+        checkpoint("saved_plan")
         from .session_files import validate_id
         validate_id(native)
         saved_bytes = (service.data_dir / 'sessions' / native / 'configuration.json').read_bytes()
         saved = json.loads(saved_bytes)
-        if not management.configuration_readback_matches(request['config'], saved):
-            raise ValueError('The saved configuration evidence changed.')
+        checkpoint("saved_comparison")
+        matches = management.configuration_readback_matches(request['config'], saved)
+        saved_comparison(matches)
+        if not matches:
+            raise PredicateFailure("saved_comparison", 'The saved configuration evidence changed.')
         saved_hash = hashlib.sha256(saved_bytes).hexdigest()
+    checkpoint("update_snapshot")
     return fingerprint({'record': record, 'native': receipts, 'pending': pending,
                         'target': target, 'nativeSessionId': native,
                         'configurationRevision': service.state.get('configurationRevision', 0),
