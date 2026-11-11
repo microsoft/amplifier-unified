@@ -84,7 +84,8 @@ def parts(row, *, blocked=False, task=None, db=None, activity_fact=None):
                    row.get(key) if row.get(key) is not None else defaults.get(key)
                    for key in NAVIGATION_FIELDS],session['agentCreated'],
                   navigation_activity(row),activity_fact if activity_fact is not None else
-                  activity(row,False,blocked=blocked,task=task,db=db,error_reviewed=True))
+                  activity(row,False,blocked=blocked,task=task,db=db,
+                           error_reviewed=any(item.get('id')=='session:'+row['id'] for item in notices)))
     return (*tuple(encoded(value) for value in ((session,workspace),
         (session['role'],notices),Observations.count_facts(facts),navigation)),
         workspace_part(session, workspace, notices, navigation, row.get('nativeProject')),

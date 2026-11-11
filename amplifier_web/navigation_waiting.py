@@ -15,8 +15,7 @@ def dependency(task):
 ELIGIBLE = """json_extract(receipt,'$.commandAction')='coordination.send'
  AND json_extract(receipt,'$.protocol')=2
  AND json_extract(receipt,'$.subscription.notificationVersion')=2
- AND json_extract(receipt,'$.subscription.supported')=1
- AND json_extract(receipt,'$.cancellation') IS NULL"""
+ AND json_extract(receipt,'$.subscription.supported')=1"""
 KEYS = """json_extract(receipt,'$.senderSessionId'),
  json_extract(receipt,'$.subscription.taskId'),
  json_extract(receipt,'$.subscription.interruptionRevision'),
@@ -33,11 +32,13 @@ FACTS = {
     'response_revision': '$.response.outcomeRevision',
     'terminal_status': '$.terminalOutcome.status', 'terminal_outcome': '$.terminalOutcome.outcome',
     'terminal_revision': '$.terminalOutcome.outcomeRevision',
+    'cancellation_status': '$.cancellation.status',
 }
 COLUMNS = ('id', 'sender', 'task_id', 'interruption', 'epoch', 'generation',
            'input_id', 'target', 'title', *FACTS)
 OPEN_WAIT = """wait_open=1 AND wait_status IN ('waiting','backpressured')
  AND response_status IS NULL AND terminal_status IS NULL
+ AND cancellation_status IS NULL
  AND delivery IN ('queued','accepted','pending_steer','started','applied')"""
 
 
@@ -160,6 +161,58 @@ def save_task(db, sid, task):
         ON CONFLICT(id) DO UPDATE SET value=excluded.value WHERE value!=excluded.value''', (sid, value))
 
 
+def refresh_directory(db):
+    """One atomic presentation migration; only bounded directory/task metadata.
+
+    First upgrade visits stale derived rows in 128-row pages. No task runtime,
+    transcript or command body is hydrated; restart checks only the marker.
+    """
+    import json
+    db.execute('CREATE TABLE IF NOT EXISTS navigation_fact_versions(version INTEGER PRIMARY KEY)')
+    if db.execute('SELECT 1 FROM navigation_fact_versions WHERE version=2').fetchone():
+        return
+    db.execute('SAVEPOINT navigation_fact_refresh')
+    try:
+        after = ''
+        changed = False
+        while True:
+            rows = db.execute("""SELECT id,status,workspace,
+                json_extract(summary,'$._navigationInput'),
+                json_extract(summary,'$._navigationEndedGeneration'),
+                json_extract(summary,'$.interruptionRevision'),
+                base_activity_kind,base_activity_label
+                FROM history_local_rows WHERE id>? AND
+                base_activity_label IN ('Work blocked','Waiting for another chat')
+                ORDER BY id LIMIT 128""", (after,)).fetchall()
+            if not rows:
+                break
+            for sid, status, workspace, boundary, ended, interruption, kind, label in rows:
+                session = {'id':sid, 'status':status, 'workspace':workspace,
+                           '_navigationInput':json.loads(boundary) if boundary else None,
+                           '_navigationEndedGeneration':ended,
+                           'interruptionRevision':interruption or 0}
+                from .navigation_summary import activity
+                facts = activity(session, task=saved_task(db,sid), blocked=label=='Work blocked', db=db)
+                db.execute("""UPDATE history_local_rows SET base_activity_kind=?,base_activity_label=?,
+                    activity_kind=?,activity_label=?,
+                    summary=json_set(summary,'$._navigationWaiting',json(?)) WHERE id=?""",
+                    (facts['kind'],facts['label'],facts['kind'],facts['label'],
+                     json.dumps(facts.get('waiting'),separators=(',',':')),sid))
+                db.execute('DELETE FROM history_observation_rows WHERE id=?',(sid,))
+                changed = True
+            after = rows[-1][0]
+        if changed:
+            db.execute('UPDATE history_directory_layout SET revision=revision+1 WHERE version=1')
+            db.execute("""UPDATE history_observation_revisions SET revision=revision+1
+                WHERE collection IN ('navigation','root_navigation','workspace')""")
+        db.execute('INSERT INTO navigation_fact_versions VALUES(2)')
+        db.execute('RELEASE navigation_fact_refresh')
+    except BaseException:
+        db.execute('ROLLBACK TO navigation_fact_refresh')
+        db.execute('RELEASE navigation_fact_refresh')
+        raise
+
+
 def operation_refs(task):
     """Existing owner-authored references, bounded before cold persistence."""
     refs = task.get('operationIds')
@@ -175,6 +228,9 @@ def disposition(row):
     delivery = row['delivery']
     if delivery == 'unknown':
         return 'unknown', 'Dependency outcome unknown', 'attention'
+    cancellation = row['cancellation_status']
+    if cancellation and delivery in {'not_sent', 'suppressed', 'expired', 'held', 'cancelled'}:
+        return None  # Confirmed withdrawal, not an unknown/admitted effect.
     if delivery in {'rejected', 'not_sent', 'expired', 'failed'}:
         return 'failed', 'Dependency request failed', 'attention'
     status, outcome, qualified = row['response_status'], row['response_outcome'], row['response_qualified']
@@ -183,6 +239,8 @@ def disposition(row):
     if row['terminal_status'] == 'observed' and (
             status is None or (row['terminal_revision'] or 0) >= (row['response_revision'] or 0)):
         status, outcome, qualified = 'observed', row['terminal_outcome'], False
+    if cancellation and status not in {'sealed', 'observed'}:
+        return 'cancellation_requested', 'Dependency cancellation unconfirmed', 'attention'
     if status == 'unknown' or outcome == 'unknown':
         return 'unknown', 'Dependency outcome unknown', 'attention'
     if outcome in {'declined', 'cancelled'}:

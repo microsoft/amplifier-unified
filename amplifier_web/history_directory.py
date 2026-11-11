@@ -83,6 +83,8 @@ def initialize(db):
     from .navigation_waiting import initialize as waiting_initialize
     waiting_initialize(db)
     db.execute('CREATE TABLE IF NOT EXISTS history_navigation_tasks(id TEXT PRIMARY KEY,value TEXT NOT NULL)')
+    from .navigation_waiting import refresh_directory
+    refresh_directory(db)
 
 
 def ready(db):
@@ -135,7 +137,8 @@ def _scalars(row, state, ordinal, *, dormant_task_active=None, db=None):
     task = task_for(state, row)
     # Retain the non-error fallback as scalars. The exact error notice/read
     # fingerprint is joined at query time, including for dormant owners.
-    base = activity(row, False, error_reviewed=True, blocked=task_blocked(state, row['id']), task=task, db=db)
+    base = activity(row, False, error_reviewed=any(item[4] for item in notice_rows),
+                    blocked=task_blocked(state, row['id']), task=task, db=db)
     facts = activity(row, unread, error_reviewed=error_reviewed,
                      blocked=task_blocked(state, row['id']), task=task, db=db)
     flags = activity_flags(row)

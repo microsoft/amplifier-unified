@@ -59,7 +59,7 @@ def test_saved_preblock_wait_and_many_not_arbitrary_child(db):
 
 @pytest.mark.parametrize('field,value', [
     ('senderSessionId','other'), ('protocol',1), ('delivery','submitting'),
-    ('sourceGenerationId',None), ('sourceInputIds',[]), ('cancellation',{'requested':True}),
+    ('sourceGenerationId',None), ('sourceInputIds',[]),
 ])
 def test_inexact_settled_or_unknown_requests_are_not_live_waits(db, field, value):
     put(db, receipt(**{field:value}))
@@ -529,3 +529,96 @@ async def test_actual_request_return_keeps_blocked_owner_presentation_only(app):
     assert value['kind']=='waiting' and value['waiting']['phase']=='reported'
     assert app.collaboration.receipt('return-wait')==before
     assert source['task']['status']=='blocked'
+
+
+@pytest.mark.parametrize('unknown', [False, True])
+async def test_cancelled_actual_admission_retains_uncertainty_with_another_wait(app, unknown):
+    from test_collaborative_workspaces import send, settled
+    from test_request_cancellation import cancel
+    source,peer=app.state['sessions']
+    source['task']={'id':'objective','revision':1,'status':'active','continuationEpoch':1}
+    app.state.setdefault('runtimeControl',{})[source['id']]={'task.get':{'task':source['task']}}
+    app.runtime.fail=unknown
+    await send(app,'cancel-dependency',returnNotification=True)
+    await settled(app,'cancel-dependency','unknown' if unknown else 'accepted')
+    await cancel(app,'cancel-dependency','cancel-exact')
+    saved=deepcopy(app.collaboration.receipt('cancel-dependency'))
+    assert saved['cancellation']['status']=='requested'
+    other=deepcopy(saved)
+    other.update(requestId='pending-other',delivery='accepted')
+    other.pop('cancellation',None);other.pop('terminalOutcome',None)
+    other['subscription'].update(status='waiting',open=True)
+    app.collaboration.insert('pending-other','fixture-other',other)
+    source.update(status='idle',task=task())
+    value=activity(source,task=source['task'],db=app.db)
+    expected='unknown' if unknown else 'cancellation_requested'
+    assert value['kind']=='attention' and value['waiting']['phase']==expected
+    # Reopen an isolated copied DB: no live app or authority recovery side effect.
+    path=app.data_dir/'cancel-navigation.sqlite3'
+    cold=sqlite3.connect(path);app.db.commit();app.db.backup(cold);cold.close()
+    cold=sqlite3.connect(path)
+    assert project(cold,source,source['task'])['phase']==expected
+    assert json.loads(cold.execute('SELECT receipt FROM commands WHERE id=?',
+                                  ('cancel-dependency',)).fetchone()[0])==saved
+    cold.close()
+
+
+def test_confirmed_cancel_withdrawal_does_not_override_another_pending_wait(db):
+    row=receipt(delivery='cancelled',cancellation={'status':'withdrawn'},
+                terminalOutcome={'status':'observed','outcome':'cancelled'})
+    put(db,row)
+    assert project(db,session(),task()) is None
+    put(db,receipt('second'),'second')
+    assert activity(session(),task=task(),db=db)['kind']=='waiting'
+
+
+@pytest.mark.parametrize('status', ['error','failed'])
+def test_status_only_failure_survives_directory_and_reviewed_old_notice(tmp_path,status):
+    from test_history_directory_navigation import directory_fixture
+    from amplifier_web.history_directory_query import workspace_counts
+    state,directory=directory_fixture(tmp_path,count=0)
+    owner={**session(),'workspace':'/projects/alpha','workspaceId':'a',
+           'status':status,'sessionKind':'root'}
+    state['sessions']=[owner]
+    state['runtimeControl']={'manager':{'task.get':{'task':task()}}}
+    directory.db.execute('CREATE TABLE commands(id TEXT PRIMARY KEY,receipt TEXT)')
+    initialize(directory.db)
+    for with_wait in (False,True):
+        if with_wait:put(directory.db,receipt(workspace='/projects/alpha'))
+        directory.sync([owner],state)
+        counts=workspace_counts(directory,state)
+        assert counts['/projects/alpha']['activityCounts']['attention']==1
+        assert directory.db.execute("SELECT base_activity_label FROM history_local_rows WHERE id='manager'").fetchone()[0]=='Needs attention'
+        # Removing the resident overlay cannot erase the persisted failure.
+        cold={**state,'sessions':[],'runtimeControl':{}}
+        assert workspace_counts(directory,cold)['/projects/alpha']['activityCounts']['attention']==1
+
+
+def test_upgrade_refreshes_dormant_old_block_facts_without_runtime_hydration(tmp_path):
+    from test_history_directory_navigation import directory_fixture
+    from amplifier_web.navigation_waiting import save_task, refresh_directory
+    from amplifier_web.history_directory_query import workspace_counts
+    state,directory=directory_fixture(tmp_path,count=0);db=directory.db
+    db.execute('CREATE TABLE commands(id TEXT PRIMARY KEY,receipt TEXT)');initialize(db)
+    for i in range(2):
+        owner={**session(),'id':'manager' if i==0 else 'unbound',
+               'workspace':'/projects/alpha','workspaceId':'a','sessionKind':'root'}
+        owner['task']=task() if i==0 else {'status':'blocked'}
+        directory.sync([owner],state)
+        db.execute("UPDATE history_local_rows SET base_activity_kind='attention',base_activity_label='Work blocked',activity_kind='attention',activity_label='Work blocked' WHERE id=?",(owner['id'],))
+    put(db,receipt(workspace='/projects/alpha',response={'status':'staged','outcome':'success'}))
+    db.execute('DELETE FROM navigation_fact_versions')
+    before=db.execute("SELECT revision FROM history_observation_revisions WHERE collection='navigation'").fetchone()[0]
+    reads=[]
+    db.set_trace_callback(reads.append)
+    refresh_directory(db)
+    db.set_trace_callback(None)
+    facts=db.execute("SELECT id,base_activity_kind,base_activity_label FROM history_local_rows ORDER BY id").fetchall()
+    assert facts==[('manager','waiting','Dependency result reported'),('unbound','idle','Blocked — details unavailable')]
+    assert not any('state_records' in sql or 'FROM commands' in sql for sql in reads)
+    assert db.execute("SELECT revision FROM history_observation_revisions WHERE collection='navigation'").fetchone()[0]>before
+    counts=workspace_counts(directory,{**state,'sessions':[],'runtimeControl':{}})
+    assert counts['/projects/alpha']['activityCounts']['waiting']==1
+    assert counts['/projects/alpha']['activityCounts']['attention']==0
+    reads=[];db.set_trace_callback(reads.append);refresh_directory(db);db.set_trace_callback(None)
+    assert not any('history_local_rows' in sql for sql in reads)

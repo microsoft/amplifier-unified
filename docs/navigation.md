@@ -396,6 +396,11 @@ task history; keyed directory task facts are refreshed by the task observation o
 Recipient lifecycle publication visits only its indexed pending dependants so
 their displayed status can refresh; this work grows with actual dependants, not
 all retained chats or receipts.
+On upgrade, a versioned derived-fact refresh visits old blocked/waiting directory
+rows in 128-row pages and advances navigation revisions. It reads only directory
+metadata and bounded saved task facts, not transcripts or runtime task bodies.
+It is atomic and restart-idempotent; its initial cost grows with retained directory
+rows and is separate from routine indexed reads.
 The clock describes a dependency, not a running recipient or an eligible automatic
 callback. Staged success is **Dependency result reported**; a qualified success is
 **Dependency result ready**, while the blocked owner still owns its review. Neither
@@ -404,6 +409,10 @@ retain their distinct labels. Failed, declined or unknown results remain explici
 attention states; a dependency question/conflict is a decision. Required human
 questions, approvals, actual execution, current unreviewed errors, interruption and
 Stop/pause take precedence over dependency presentation.
+Requested cancellation does not confirm stopped execution: unknown or admitted
+effects remain visible until resolved. Confirmed withdrawal retires only that
+dependency. Status-only failures without an acknowledgeable error notice remain
+failures; reviewing an older error cannot clear a new occurrence.
 Missing identity/provenance is neutral **Blocked — details unavailable**, never a
 guessed target, failure or request for human intervention. It remains in saved
 conversations rather than Needs you. Target errors and unavailable targets remain
