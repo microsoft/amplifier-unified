@@ -317,3 +317,32 @@ async def test_passive_rejected_snapshot_is_not_rescanned_on_each_scalar(app, mo
         service._publish()
         assert shown(service, receiving, mid)['attribution']['peer']['available']
         assert calls == [2001, 2001]
+
+
+async def test_inline_explicit_reread_can_requalify_after_unrelated_worker_time_commit(app, monkeypatch):
+    service, source, receiving, mid = app
+    long_receiver(service, receiving)
+    receiving, _ = inline_receiver(service, receiving)
+    windows = service.history.windows
+    entered, release = threading.Event(), threading.Event()
+    actual = windows.peer_originals.cold
+    def held(*args):
+        result = actual(*args)
+        entered.set()
+        assert release.wait(3)
+        return result
+    service.db.execute('CREATE TABLE scalar_during_read(value INTEGER)')
+    service.db.commit()
+    monkeypatch.setattr(windows.peer_originals, 'cold', held)
+    with service.clients.bind('preview-client'):
+        task = asyncio.create_task(windows.read(receiving['id']))
+        try:
+            assert await asyncio.wait_for(asyncio.to_thread(entered.wait), 2)
+            service.db.execute('INSERT INTO scalar_during_read VALUES (1)')
+            service.db.commit()
+            release.set()
+            page = await task
+            assert page['items'][-1]['attribution']['peer']['available']
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)

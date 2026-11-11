@@ -300,7 +300,6 @@ class TranscriptWindows:
             fence = self._fence(session_id)
             use_native = native or session.get('historyManaged') is True
             cold = self._cold_source(session) if not use_native else None
-            database_epoch = self._database_epoch() if cold is not None else None
             committed = None
             if not use_native and cold is None:
                 if before is not None:
@@ -352,6 +351,7 @@ class TranscriptWindows:
             raise ValueError('Saved message window exceeds the display budget.')
         async with self.service.lock:
             current = self.service._session(session_id, hydrate=False)
+            database_epoch = self._database_epoch() if cold is not None else None
             if (_source(current) != source or self._fence(session_id) != fence
                     or cold is not None and self._cold_source(current) != cold
                     or committed is not None and self._committed_messages(current) is not committed):
@@ -372,6 +372,10 @@ class TranscriptWindows:
                 if cold is not None and proof.revision[1][0] == 'inline':
                     # Validate bytes at this explicit read; passive projections
                     # only reuse when no DB write could have changed the index.
+                    # The exact index was just recaptured and compared to the
+                    # validated source under this exclusion. An unrelated write
+                    # during the worker need not suppress that fresh equality.
+                    # External writes racing this final recapture still fence it.
                     page['_peerIndexEpoch'] = (database_epoch if database_epoch is not None
                         and database_epoch == self._database_epoch() else None)
                 size += len(json.dumps(proof.originals, ensure_ascii=False).encode())
