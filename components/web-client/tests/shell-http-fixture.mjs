@@ -71,14 +71,17 @@ export function createShellHttpFixture(readState){
 // and every later injected frame uses the same adapter as HTTP action receipts.
 export function installFixtureEvents(){
  const sources=new Set();
+ const observed={created:0,opened:0,frames:0,lastRevision:null};
+ const deliver=(source,state)=>{observed.frames++;observed.lastRevision=state.revision??null;source.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)}))};
+ window.fixtureEventState=()=>({...observed,sources:sources.size,ready:[...sources].map(source=>source.readyState)});
  window.EventSource=class extends EventTarget{
-  constructor(){super();this.readyState=0;sources.add(this);queueMicrotask(async()=>{
+  constructor(){super();this.readyState=0;sources.add(this);observed.created++;queueMicrotask(async()=>{
    const state=await fetch('/api/state').then(response=>response.json());
    if(this.readyState===2)return;
-   this.readyState=1;this.onopen?.();this.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)}));
+   this.readyState=1;observed.opened++;this.onopen?.();deliver(this,state);
   });}
   close(){this.readyState=2;sources.delete(this);}
  };
  window.emitState=window.emitFixtureState=state=>sources.forEach(source=>
-  source.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)})));
+  deliver(source,state));
 }
