@@ -32,7 +32,7 @@ async def test_dismiss_answer_reminder_keeps_dirty_exact_review_and_history_pin(
     sid, identity = source['sessionId'], source['questionId']
     answered = (await command(app, 'question.answer', {
         'sessionId': sid, 'id': identity, 'expectedRevision': 1, 'text': 'Saved choice'}))['result']
-    await command(app, 'canvas.select', {**source, 'presentation': 'inline'})
+    await command(app, 'canvas.select', {**source, 'presentation': 'inline', 'resetPreview': True})
     opened = await inline(app, source, 'dirty-answered-review')
     binding = target(opened)
     await command(app, 'canvas.views.dirty', {**binding, 'dirty': True})
