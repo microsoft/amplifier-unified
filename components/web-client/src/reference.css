@@ -1,0 +1,799 @@
+/* Neutral shared foundation. Gallery appearances supply palette, type and art
+   deltas; this file remains available as the non-gallery recovery identity. */
+#amp-one {
+  color-scheme: light dark;
+  --a-bg: light-dark(#f2f4f4, #151a1d);
+  --a-surface: light-dark(#ffffff, #202629);
+  --a-soft: light-dark(#e9edee, #292f33);
+  --a-ink: light-dark(#1d2528, #e9eff0);
+  --a-muted: light-dark(#566368, #aeb9bc);
+  --a-line: light-dark(#cbd3d5, #414c50);
+  --a-accent: light-dark(#48646d, #a4d5df);
+  --a-on-accent: light-dark(#ffffff, #10272d);
+  --a-tint: light-dark(#e2edef, #263a40);
+  --a-green: light-dark(#21644e, #8dd7b4);
+  --a-danger: light-dark(#a63f4c, #ffadb5);
+
+  --a-font-ui: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --a-font-heading: var(--a-font-ui);
+  --a-font-chat: var(--a-font-ui);
+  --a-font-code: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --a-font: var(--a-font-ui);
+
+  --a-background-art: none;
+  --a-navigation-art: none;
+  --a-conversation-art: none;
+  --a-canvas-art: none;
+  --a-chrome-bg: var(--a-bg);
+  --a-chrome-ink: var(--a-ink);
+  /* The host clamps the optional native-header decoration strip to 24px. */
+  --a-header-decoration-height: 0px;
+
+  --a-radius: var(--a-card-radius, 12px);
+  --a-panel-gap: 0px;
+  --a-panel-radius: 0px;
+  --a-panel-border-width: 0px;
+  --a-panel-line: var(--a-line);
+  --a-panel-shadow: none;
+  --a-navigation-pad: 16px;
+  --a-card-radius: 12px;
+  --a-control-radius: 8px;
+  --a-composer-radius: 14px;
+  --a-message-radius: 16px;
+  --a-message-gap: 24px;
+  --a-composer-pad: 12px;
+  --a-card-pad: 14px;
+  --a-card-line: var(--a-line);
+  --a-surface-shadow: none;
+
+  color: var(--a-ink);
+  background-color: var(--a-bg);
+  background-image: var(--a-background-art);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
+  font-family: var(--a-font-ui);
+  font-size: var(--a-text-base, 14px);
+  line-height: 1.5;
+  scrollbar-color: var(--a-line) var(--a-bg);
+}
+
+#amp-one[data-theme-scheme="light"] {
+  color-scheme: light;
+}
+
+#amp-one[data-theme-scheme="dark"] {
+  color-scheme: dark;
+}
+
+#amp-one :where(*, *::before, *::after) {
+  box-sizing: border-box;
+}
+
+#amp-one [hidden] {
+  display: none !important;
+}
+
+#amp-one .a-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+#amp-one :where(button, input, select, textarea) {
+  font: inherit;
+}
+
+#amp-one :where(button) {
+  color: inherit;
+  border: 0;
+  background-color: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+#amp-one :where(svg) {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+}
+
+#amp-one :where(button:not(:disabled), [role="button"]:not([aria-disabled="true"])) {
+  cursor: pointer;
+}
+
+#amp-one :where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="hidden"]), select, textarea) {
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--a-line);
+  border-radius: var(--a-control-radius);
+  color: var(--a-ink);
+  background-color: var(--a-surface);
+}
+
+#amp-one :where(input[type="checkbox"], input[type="radio"], input[type="range"]) {
+  accent-color: var(--a-accent);
+}
+
+#amp-one :where(.a-primary, .a-send) {
+  color: var(--a-on-accent);
+  background-color: var(--a-accent);
+}
+
+#amp-one :where(.a-user > .a-message-body) {
+  background-color: var(--a-tint);
+}
+
+#amp-one .a-attention-badge {
+  color: var(--a-on-accent);
+  background-color: var(--a-accent);
+}
+
+#amp-one :where(h1, h2, h3, h4, h5, h6, .a-brand) {
+  font-family: var(--a-font-heading);
+}
+
+#amp-one :where(pre, code, kbd, samp) {
+  font-family: var(--a-font-code);
+}
+
+#amp-one [data-part="header"] {
+  color: var(--a-chrome-ink);
+  background-color: var(--a-chrome-bg);
+}
+
+#amp-one :where([data-part="navigation"], [data-part="conversation"], [data-part="canvas"], [data-part="composer-surface"]) {
+  color: var(--a-ink);
+  background-color: var(--a-surface);
+}
+
+/* The viewport stays fixed while chat panes own bounded, independent scroll. */
+html,
+body,
+#root {
+  height: 100%;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+#amp-one.a-chat-shell {
+  width: 100%;
+  max-width: none;
+  height: 100dvh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#amp-one.a-chat-shell .a-layout {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#amp-one .a-nav-slot {
+  position: relative;
+  flex: 0 0 52px;
+  width: 52px;
+  min-width: 52px;
+  min-height: 0;
+  align-self: stretch;
+  z-index: 15;
+}
+
+#amp-one.a-chat-shell .a-layout[data-pane-layout] .a-nav-slot[data-docked="true"] {
+  flex: 0 0 var(--nav-width);
+  width: var(--nav-width);
+}
+
+#amp-one .a-nav-rail {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#amp-one .a-canvas-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  align-self: stretch;
+}
+
+#amp-one.a-chat-shell .a-layout[data-pane-layout]>.a-canvas-panel {
+  flex: 0 0 var(--canvas-width);
+  width: var(--canvas-width);
+  max-width: none;
+}
+
+#amp-one.a-chat-shell .a-layout[data-canvas-overlay="true"]>.a-canvas-panel {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  width: auto;
+  flex: none;
+}
+
+#amp-one.a-chat-shell .a-layout[data-pane-layout]>.a-canvas-panel[data-focused="true"] {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  width: auto;
+  max-width: none;
+  height: 100dvh;
+}
+
+#amp-one.a-chat-shell .a-conversation {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+#amp-one.a-chat-shell .a-layout[data-pane-layout] .a-conversation {
+  container-type: inline-size;
+  container-name: conversation;
+}
+
+#amp-one.a-chat-shell .a-layout[data-canvas-overlay="false"]:has(>.a-canvas-panel:not([hidden]):not([data-focused="true"])) .a-conversation {
+  min-width: var(--chat-min);
+}
+
+#amp-one.a-chat-shell .a-messages {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+#amp-one.a-chat-shell .a-messages > * {
+  min-width: 0;
+  max-width: 100%;
+  flex-shrink: 0;
+}
+
+#amp-one.a-chat-shell .a-composer {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+/* Shared modal primitives; settings and viewport-specific layouts layer on top. */
+#amp-one .a-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 24px;
+  background-color: color-mix(in srgb, var(--a-ink) 24%, transparent);
+}
+
+#amp-one .a-dialog {
+  position: relative;
+  width: min(620px, 100%);
+  min-width: 0;
+  max-width: 100%;
+  max-height: 90dvh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 26px;
+  border: 1px solid var(--a-line);
+  border-radius: var(--a-composer-radius, 16px);
+  color: var(--a-ink);
+  background-color: var(--a-surface);
+  box-shadow: var(--a-surface-shadow, none);
+}
+
+#amp-one .a-dialog.wide {
+  width: min(860px, 100%);
+}
+
+#amp-one .a-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+#amp-one .a-dialog label {
+  display: block;
+  margin: 16px 0 6px;
+  color: var(--a-muted);
+  font-size: var(--a-text-base, 14px);
+}
+
+#amp-one .a-dialog :where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"]), select, textarea) {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  padding: 10px 12px;
+  background-color: var(--a-soft);
+}
+
+#amp-one .a-dialog textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+
+#amp-one .a-dialog .a-css-editor {
+  min-height: 220px;
+  font: var(--a-text-base, 14px) / 1.6 var(--a-font-code);
+  tab-size: 2;
+}
+
+#amp-one .a-dialog p {
+  font-size: var(--a-text-base, 14px);
+  line-height: 1.65;
+}
+
+#amp-one .a-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  margin-top: 20px;
+}
+
+/* The native action, not an overlay or its label, owns the touch target. */
+@media (pointer: coarse) {
+  #amp-one .a-dialog-actions button {
+    min-height: 44px;
+  }
+}
+
+#amp-one .a-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+#amp-one .a-form-grid > * {
+  min-width: 0;
+}
+
+#amp-one .a-caption {
+  margin-top: 12px;
+  color: var(--a-muted);
+  font-size: var(--a-text-sm, 13px);
+  line-height: 1.5;
+}
+
+/* Inline menus anchor to their control; portaled composer menus supply measured coordinates. */
+#amp-one.a-chat-shell .a-model-control {
+  position: relative;
+  min-width: 0;
+}
+
+#amp-one.a-chat-shell .a-model-trigger {
+  max-width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: var(--a-control-radius);
+  text-align: left;
+  font-size: var(--a-text-base, 14px);
+}
+
+#amp-one.a-chat-shell .a-model-trigger > span {
+  min-width: 0;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#amp-one.a-chat-shell .a-model-trigger small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--a-text-xs, 12px);
+  line-height: 1.1;
+}
+
+#amp-one.a-chat-shell .a-model-trigger svg {
+  width: 13px;
+  height: 13px;
+}
+
+#amp-one.a-chat-shell .a-model-popover {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 0;
+  z-index: 20;
+  width: min(390px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  max-height: min(520px, 65dvh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 18px;
+  border: 1px solid var(--a-line);
+  border-radius: var(--a-card-radius);
+  color: var(--a-ink);
+  background-color: var(--a-surface);
+  box-shadow: var(--a-surface-shadow, none);
+  font-size: var(--a-text-base, 14px);
+}
+
+#amp-one.a-chat-shell .a-model-popover.a-compact-popover {
+  position: fixed;
+  bottom: auto;
+}
+
+#amp-one.a-chat-shell .a-model-popover .a-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#amp-one.a-chat-shell .a-model-popover p {
+  margin: 8px 0;
+}
+
+#amp-one.a-chat-shell .a-model-popover label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 14px 0 6px;
+  font-size: var(--a-text-base, 14px);
+}
+
+#amp-one.a-chat-shell .a-model-popover :where(select, input) {
+  width: 100%;
+  min-width: 0;
+}
+
+#amp-one.a-chat-shell .a-model-popover input[type="range"] {
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+#amp-one.a-chat-shell .a-effort-labels {
+  display: flex;
+  justify-content: space-between;
+  color: var(--a-muted);
+  font-size: var(--a-text-sm, 13px);
+}
+
+#amp-one.a-chat-shell .a-model-popover .a-dialog-actions {
+  gap: 8px;
+  margin-top: 18px;
+}
+
+/* Shared attachment cards; component CSS retains its larger touch targets. */
+#amp-one.a-chat-shell .a-composer .a-file-input {
+  display: none;
+}
+
+#amp-one.a-chat-shell .a-attachments {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  max-height: 110px;
+  overflow-x: auto;
+  padding: 3px 0 9px;
+}
+
+#amp-one.a-chat-shell .a-attachment {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: min(260px, 100%);
+  flex: 0 0 auto;
+  padding: 7px;
+  border: 1px solid var(--a-line);
+  border-radius: var(--a-card-radius);
+  background-color: var(--a-surface);
+}
+
+#amp-one.a-chat-shell .a-attachment img {
+  display: block;
+  width: 46px;
+  height: 46px;
+  flex: none;
+  border-radius: var(--a-control-radius);
+  object-fit: cover;
+}
+
+#amp-one.a-chat-shell .a-attachment > :where(.a-attachment-preview-name, .a-link, a:not([download])) {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: flex-start;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+#amp-one.a-chat-shell .a-attachment > a:not([download]) {
+  color: var(--a-ink);
+  text-decoration: none;
+}
+
+#amp-one.a-chat-shell .a-attachment small {
+  display: block;
+  color: var(--a-muted);
+  font-size: var(--a-text-xs, 12px);
+}
+
+#amp-one.a-chat-shell .a-attachment :is(a[download], .a-icon) {
+  flex-shrink: 0;
+}
+
+#amp-one.a-chat-shell .a-attachment .a-icon {
+  width: 25px;
+  height: 25px;
+}
+
+@media (max-width: 600px) {
+  #amp-one .a-overlay {
+    padding: 12px;
+  }
+
+  #amp-one .a-dialog {
+    max-height: calc(100dvh - 24px);
+    padding: 20px;
+  }
+
+  #amp-one .a-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Keep selection paint on the row wrapper so child controls cannot clip it. */
+#amp-one :where(.a-nav-chat:not(.a-nav-chat-rename), .a-workspace-row) {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  box-sizing: border-box;
+  padding-inline-start: 8px;
+  padding-inline-end: 4px;
+  border-radius: var(--a-control-radius);
+}
+
+#amp-one :where(.a-nav-chat-select, .a-workspace-select) {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+#amp-one :where(.a-nav-chat.is-selected, .a-nav-chat[aria-current="page"], .a-workspace-row.is-selected) {
+  box-shadow: inset 3px 0 var(--a-accent);
+}
+
+#amp-one .a-message-body {
+  min-width: 0;
+  max-width: 100%;
+  color: var(--a-ink);
+  font-family: var(--a-font-chat);
+  overflow-wrap: anywhere;
+}
+
+#amp-one :where(.a-message-actions, .a-message-attribution, .a-message-channel, .a-message-date) {
+  color: var(--a-muted);
+  font-family: var(--a-font-ui);
+}
+
+/* Delivery recovery remains host-owned when the appearance foundation changes. */
+.a-message-delivery{display:inline-flex;align-items:center;gap:.4rem;font-size:.8rem;color:var(--a-muted);flex-wrap:wrap}.a-message-delivery>svg{width:14px;height:14px;flex-shrink:0}.a-message-delivery .a-link{font-size:inherit}.a-inline-checkbox{display:flex;gap:.5rem;align-items:center;font-size:.85rem}.a-inline-checkbox input{width:auto}
+#amp-one .a-message-actions:has(.a-message-delivery){flex-wrap:wrap}.a-delivery-detail,.a-delivery-confirm{flex:0 0 100%;min-width:0;max-width:100%;box-sizing:border-box;overflow-wrap:break-word}.a-delivery-detail{margin:.35rem 0}.a-delivery-confirm{padding:.75rem;border:1px solid currentColor;border-radius:.75rem}
+#amp-one .a-delivery-content{margin:0;min-width:0;max-width:100%}
+#amp-one .a-delivery-confirm .a-dialog-actions{margin-top:.5rem}
+#amp-one .a-delivery-content button{max-width:100%;overflow-wrap:normal}
+#amp-one .a-delivery-detail,#amp-one .a-delivery-confirm{text-align:left;font-size:var(--a-text-sm,13px);color:var(--a-ink);line-height:1.5}
+#amp-one .a-delivery-confirm{border-color:var(--a-line);background:var(--a-surface)}
+#amp-one .a-message-actions .a-delivery-confirm .a-primary{background:var(--a-accent);color:var(--a-on-accent);padding:8px 12px;border-radius:var(--a-control-radius)}
+#amp-one .a-message-actions .a-delivery-confirm .a-soft{background:var(--a-surface);color:var(--a-ink);padding:8px 12px;border:1px solid var(--a-line);border-radius:var(--a-control-radius)}
+@media(pointer:coarse){#amp-one .a-delivery-content button,#amp-one .a-message-delivery button{min-height:44px}}
+
+.a-delivery-warning{min-width:0;max-width:100%;flex:1 1 100%;color:var(--a-muted);font-size:.8rem;text-align:left}
+.a-delivery-warning>summary{cursor:pointer;width:fit-content}.a-delivery-warning>summary[hidden]{display:none}
+.a-delivery-warning[open]>summary{margin-bottom:.4rem}
+
+#amp-one .a-markdown {
+  max-width: 100%;
+  color: var(--a-ink);
+  font-family: var(--a-font-chat);
+  font-size: var(--a-text-lg, 16px);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+#amp-one .a-markdown p {
+  margin: 0 0 0.8em;
+}
+
+#amp-one .a-markdown .task-list-item {
+  list-style: none;
+}
+
+#amp-one .a-markdown .task-list-item > input[type="checkbox"] {
+  margin-inline-end: 0.5em;
+}
+
+#amp-one .a-markdown :where(h1, h2, h3, h4, h5, h6) {
+  margin: 0.9em 0 0.45em;
+  font-family: var(--a-font-heading);
+  line-height: 1.3;
+}
+
+#amp-one .a-markdown a {
+  color: var(--a-accent);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+#amp-one .a-markdown code {
+  padding: 0.1em 0.3em;
+  border-radius: 4px;
+  color: inherit;
+  background-color: var(--a-soft);
+  font-family: var(--a-font-code);
+  font-size: 0.9em;
+  font-variant-ligatures: none;
+}
+
+#amp-one .a-markdown pre {
+  max-width: 100%;
+  overflow: auto;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--a-line);
+  border-radius: var(--a-card-radius);
+  color: var(--a-ink);
+  background-color: var(--a-soft);
+}
+
+#amp-one .a-markdown pre code {
+  display: block;
+  padding: 0;
+  background: transparent;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+#amp-one .a-markdown blockquote {
+  margin-inline: 0;
+  padding: 0.2em 0 0.2em 1em;
+  border-inline-start: 3px solid var(--a-accent);
+  color: var(--a-muted);
+}
+
+#amp-one .a-markdown hr {
+  border: 0;
+  border-block-start: 1px solid var(--a-line);
+}
+
+#amp-one .a-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+#amp-one .a-markdown table {
+  border-collapse: collapse;
+  max-width: 100%;
+}
+
+#amp-one .a-markdown :where(th, td) {
+  padding: 0.55em 0.75em;
+  border-block-end: 1px solid var(--a-line);
+  text-align: start;
+}
+
+#amp-one :where(a, button, input, select, textarea, summary, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [role="tab"], [role="textbox"], [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid var(--a-accent);
+  outline-offset: 2px;
+}
+
+#amp-one ::selection {
+  color: var(--a-on-accent);
+  background-color: var(--a-accent);
+}
+
+@media (forced-colors: active) {
+  #amp-one {
+    color-scheme: light dark;
+    --a-bg: Canvas !important;
+    --a-surface: Canvas !important;
+    --a-soft: Canvas !important;
+    --a-ink: CanvasText !important;
+    --a-muted: CanvasText !important;
+    --a-line: ButtonBorder !important;
+    --a-accent: Highlight !important;
+    --a-on-accent: HighlightText !important;
+    --a-tint: Canvas !important;
+    --a-green: CanvasText !important;
+    --a-danger: CanvasText !important;
+    --a-chrome-bg: Canvas !important;
+    --a-chrome-ink: CanvasText !important;
+    --a-background-art: none !important;
+    --a-navigation-art: none !important;
+    --a-conversation-art: none !important;
+    --a-canvas-art: none !important;
+    --a-panel-shadow: none !important;
+    --a-surface-shadow: none !important;
+    background-color: Canvas !important;
+    background-image: none !important;
+    scrollbar-color: auto;
+  }
+
+  #amp-one :where([data-part="header"], [data-part="navigation"], [data-part="conversation"], [data-part="canvas"], [data-part="composer-surface"], .a-nav-rail, .a-canvas-chrome) {
+    background-image: none !important;
+  }
+
+  #amp-one :where(.a-primary, .a-send) {
+    color: ButtonText !important;
+    background-color: ButtonFace !important;
+    border-color: ButtonBorder !important;
+    box-shadow: none !important;
+  }
+
+  #amp-one button.a-soft {
+    color: ButtonText !important;
+    background-color: ButtonFace !important;
+    border-color: ButtonBorder !important;
+    box-shadow: none !important;
+  }
+
+  #amp-one .a-attention-badge {
+    color: HighlightText !important;
+    background-color: Highlight !important;
+  }
+
+  #amp-one :where(.a-nav-chat.is-selected, .a-nav-chat[aria-current="page"], .a-workspace-row.is-selected) {
+    color: CanvasText !important;
+    background-color: Canvas !important;
+    box-shadow: inset 3px 0 Highlight !important;
+    outline: 1px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  #amp-one :where(a, button, input, select, textarea, summary, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [role="tab"], [role="textbox"], [tabindex]:not([tabindex="-1"])):focus-visible {
+    outline-color: Highlight !important;
+  }
+
+  #amp-one ::selection {
+    color: HighlightText;
+    background-color: Highlight;
+  }
+}

@@ -40,7 +40,8 @@ export function createActionFeedback(){
     if(value===null)button.removeAttribute(name);else button.setAttribute(name,value);
    }
    button.removeAttribute('data-action-pending');
-   if(button.tagName==='BUTTON'){
+   // Component-owned operations can remain pending after this request ends.
+   if(button.tagName==='BUTTON'&&button.getAttribute('data-operation-aria-disabled')!=='true'){
     if(record.disabled===null)button.removeAttribute('aria-disabled');else button.setAttribute('aria-disabled',record.disabled);
    }
   };

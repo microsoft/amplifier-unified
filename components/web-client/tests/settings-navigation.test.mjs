@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {settingsSections,advancedGroups,settingsLocation,settingsPatch,settingsUnread} from '../src/settings-navigation.js';
+import {readFileSync} from 'node:fs';
+import {settingsSections,advancedGroups,settingsLocation,settingsPatch,settingsUnread,settingsTitle,settingsParent} from '../src/settings-navigation.js';
 import {settingsTrail} from '../src/settings-mobile.js';
 
 test('every destination round-trips through the existing public view action',()=>{
@@ -12,7 +13,8 @@ test('every destination round-trips through the existing public view action',()=
   assert.equal(settingsLocation(patch).page,page);
   assert.equal(settingsLocation(patch).section.id,section.id);
  }
- assert.equal(seen.size,32);assert.ok(seen.has('storage'));assert.ok(seen.has('testing'));assert.ok(seen.has('model-capacity'));
+ assert.equal(seen.size,31);assert.ok(seen.has('storage'));assert.ok(seen.has('testing'));assert.ok(seen.has('model-capacity'));
+ assert.ok(!seen.has('browser-appearance'));assert.ok(!seen.has('custom-appearance'));
  assert.ok(seen.has('desktop'));assert.ok(!seen.has('publishing'));assert.ok(seen.has('workspaces'));
  assert.throws(()=>settingsPatch('not-a-page'),/Unknown settings page/);
 });
@@ -50,4 +52,20 @@ test('retired image settings fall back to AI connections without changing provid
   assert.deepEqual(view,before);
  }
  assert.equal(settingsLocation({settingsExpanded:['image-generation','providers']}).page,'providers');
+});
+
+test('appearance profiles stay on one settings page and retired appearance subpages are unavailable',()=>{
+ for(const file of ['settings-everyday.jsx','settings-experience.jsx']){
+  assert.doesNotMatch(readFileSync(new URL('../src/'+file,import.meta.url),'utf8'),/['"](?:browser-appearance|custom-appearance)['"]/,
+   'Bundled links and renderers must not send users to a retired appearance subpage.');
+ }
+ const navigation=settingsPatch('appearance'),trail=settingsTrail(navigation);
+ assert.equal(settingsLocation(navigation).page,'appearance');
+ assert.equal(settingsTitle('appearance'),'Appearance');
+ assert.equal(settingsParent('appearance'),null);
+ assert.deepEqual(trail.map(item=>item.key),['index','appearance']);
+ for(const page of ['browser-appearance','custom-appearance']){
+  assert.throws(()=>settingsPatch(page),/Unknown settings page/);
+  assert.equal(settingsLocation({settingsExpanded:[page]}).page,'ai-connections');
+ }
 });

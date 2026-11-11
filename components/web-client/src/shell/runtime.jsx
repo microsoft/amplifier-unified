@@ -31,7 +31,7 @@ function renderedStatuses(current,statuses){
 
 export function useShell(state,dispatch,clientId,displayState=state,connection={}){
  const [data,setData]=useState(null),[error,setError]=useState('');
- const [presentationEdits,setPresentationEdits]=useState([]),presentationQueue=useRef(Promise.resolve());
+ const presentationQueue=useRef(Promise.resolve());
  const latest=useRef({data:null,bootstrap:null,dispatch}),hosts=useRef(new Map()),inflight=useRef(null);
  const demand=useRef({id:0,key:null}),synced=useRef(0),diagnostics=useRef(null),alive=useRef(true),reconnectAfter=useRef(null);
  const [reconnectTick,setReconnectTick]=useState(0);
@@ -210,28 +210,24 @@ export function useShell(state,dispatch,clientId,displayState=state,connection={
  },[clientId,publish,refresh]);
  const statuses=useRef({}),statusCallbacks=useRef(new Map()),reportTimer=useRef(null);
  const savedComposition=recovery?defaultComposition:data?.effectiveComposition||defaultComposition;
- const composition=presentationEdits.length?{...savedComposition,presentation:{...savedComposition.presentation,...Object.assign({},...presentationEdits.map(edit=>edit.patch))}}:savedComposition;
+ const appearancePresentation=displayState?.appearance?.renderedPreferences;
+ const composition=appearancePresentation&&typeof appearancePresentation==='object'
+  ?{...savedComposition,presentation:appearancePresentation}:savedComposition;
  const recover=useCallback(async target=>{
   await dispatch('shell.recover',{clientId,target,expectedRevision:latest.current.data?.revision||0});
   await refresh('composition');
   if(recovery)location.href=location.pathname;
  },[clientId,dispatch,refresh]);
  const setPresentation=useCallback(patch=>{
-  const edit={patch:{...patch}};
-  setPresentationEdits(edits=>[...edits,edit]);
-  const execute=async()=>{
-   try{
-    if(!latest.current.data)await refresh();
-    const current=latest.current.data;
-    if(!current)throw Error('Shell settings are not available yet.');
-    const composition={...current.effectiveComposition,presentation:{...current.effectiveComposition.presentation,...patch}};
-    const prepared=await dispatch('shell.changes.prepare',{clientId,expectedRevision:current.revision,composition},{presentation:true});
-    await dispatch('shell.changes.apply',{clientId,expectedRevision:current.revision,changeId:prepared.result.id},{presentation:true});
-    await refresh('composition');
-   }finally{setPresentationEdits(edits=>edits.filter(item=>item!==edit))}
+  // Capture the matching preference owner when this control is used, before
+  // serialization can expose a newer rendered base.
+  const update=latest.current.connection.updatePresentation,admittedPatch={...patch};
+  const execute=()=>{
+   if(typeof update!=='function')throw Error('Appearance preference updates are unavailable.');
+   return update(admittedPatch);
   };
   const result=presentationQueue.current.then(execute,execute);presentationQueue.current=result.catch(()=>{});return result;
- },[clientId,dispatch,refresh]);
+ },[]);
  const report=useCallback((instances,message='')=>{
   const current=latest.current.data;if(!current||recovery)return;
   // Reporting bypasses the user's command queue: a slow validation request
