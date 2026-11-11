@@ -1,11 +1,14 @@
 # Web appearances
 
-**Accepted direction, November 9, 2026; implementation pending.** This is the
-web client's destination, not a claim about installed capabilities. The
-[interaction contract](appearance-contract.md) owns observable promises; the
-[design note](../ux/decisions/20261109-appearances.md) separates accepted choices
-from proposals and delivery work. [Themes](themes.md) describes the current API
-until client, service adapter, examples and skills change together.
+**Current direction: user-approved PR1916 rollback.** After the `.078` visual
+regression, restore the pre-cutover direction at
+`7cfb76cbbadbfdf19d6a142e2b6e910abe16ed07`. Reference and Global / This browser
+profiles are temporarily retired, not alternative active rendering paths.
+The [interaction contract](appearance-contract.md) owns observable promises;
+[Themes](themes.md) describes the restored complete-theme and format-1 API.
+The [November 9 design note](../ux/decisions/20261109-appearances.md) is retained
+as a superseded, deferred plan, not current authoring instructions or acceptance.
+Documentation alone does not establish installed or browser conformance.
 
 ## The experience
 
@@ -18,65 +21,63 @@ Appearances belong to the web client. Native and terminal clients retain their
 own presentation. A web appearance never changes agent execution, providers,
 tools, permissions, automation, conversation content or artifact identity.
 
-<a id="contract"></a>
+## Contract
+
+An Appearance may compose themes, supported layout and registered components,
+artifact viewers, information hierarchy and interaction feedback. These are
+separate published capabilities, not one atomic package API. Accessibility and
+personal preferences constrain every appearance; applying a theme must not
+silently change scheme, decorations, Reveal, permissions or automation.
+Required decisions and recovery remain discoverable.
+
+The host owns behavior, security, drafts, conversation data, artifact versions
+and action semantics. Inline previews, galleries and Canvas retain the same
+saved artifact identity and version; changing views does not regenerate work.
 
 ## One foundation, deliberate differences
 
-A neutral **Reference** foundation is always present. It supplies usable
-light/dark defaults, semantic typography and surface roles, component geometry,
-responsive layout, accessibility and common interaction presentation. It has no
-artwork or decorative motion and is available through advanced controls and
-recovery, not the ordinary gallery. The ordinary Amplifier appearance is another
-treatment over Reference, not the foundation itself.
-
-Every bundled appearance adds only intentional differences: palette, font roles,
-material, artwork and supported geometry. Common repairs belong in shared
-components. A compatible base correction reaches every appearance without
-copying the base into packages or editing every skin. Distinctive design stays;
-incidental drift can be simplified through actual before/after review.
+This heading retains the redesign's link target. Its Reference-delta proposal is
+deferred. The restored baseline supports complete themes and CSS skins, with the
+old built-in default when no legacy theme is available. Common functional repairs
+still belong in shared components; this does not require a Reference renderer or
+authorize rewriting saved custom CSS.
 
 ## Global or browser settings
 
-The package library remains shared/global within the installation's authorized
-library scope. Uploading, saving or sharing a package is independent of selecting
-it. A local selection does not create a private package or duplicate assets.
+The Global / This browser selector and complete profiles are temporarily retired.
+The restored model has an app-wide committed theme and client-targeted temporary
+preview, with independent shell presentation preferences. Library save/import/
+update does not apply a theme; apply and revert use the established theme owner.
+No cross-host preference synchronization is implied.
 
-One familiar **Global / This browser** selector chooses the complete set of
-appearance settings in use. Both choices show the same controls and layout,
-with no per-setting scopes or mixed inheritance. Global settings live in the
-service; the browser's complete settings and source choice live in its browser
-profile. On first use, This browser starts from Global; later switches preserve
-the independent sets. Global changes never replace a saved browser setting.
-Losing browser storage returns to Global without changing it. Global means this
-authenticated host owner's service, not cross-host account synchronization.
-Keep ordinary selection direct and mark it once; advanced appearance options
-belong at the bottom, not in a second settings experience.
+Preserve newer `shared-reference-v1`, browser-local profiles and format-2 saved
+libraries inert and undeleted. They do not seed or override the legacy path.
+If the old theme was removed by `.078`, use the safe old default; do not claim
+the personal theme was automatically migrated or recovered. See the
+[rollback boundary](appearance-contract.md#temporary-rollback-boundary).
 
 ## Portable and extensible
 
-ZIP remains the portable package envelope for small appearance treatments,
-supported images/fonts and attribution. A package declares the web appearance
-contract it needs, not a frozen copy of the application. Unsupported contents
-fail explicitly. This redesign replaces the shipped appearance formats and skins
-together: no legacy custom-CSS emulation or dual rendering path. This does not
-authorize deleting unrelated files or weakening package validation.
+Legacy portable CSS and version-1 ZIP styling packages are re-enabled. The ZIP
+contains a complete stylesheet, supported images/fonts and attribution; it does
+not install components, layout, permissions, automation or user preferences.
+Unsupported contents fail explicitly without a library mutation.
 
-The destination extends beyond CSS to allowlisted presentation profiles and,
-later, compatible shell/component composition. Selecting an appearance changes
-its look; adopting its suggested experience settings is a separate, explicit
-preview-and-apply action. Neither switches the active Global/browser profile.
-New surfaces reuse existing trust, revision, preview and recovery mechanisms.
-Importing a package never grants executable capabilities. Profile controls,
-supported fields and later component packaging remain unimplemented.
+A single package spanning all appearance surfaces, a unified experience gallery,
+cross-device synchronization, arbitrary transcript/composer replacement and
+suggested experience profiles remain future work. Any extension needs explicit
+ownership, capabilities, persistence, accessibility, failure recovery, preview
+and revert contracts. Importing a package never grants executable capabilities.
 
 <a id="user-and-agent-authoring"></a>
 
 ## Authoring and evidence
 
-People and agents use the same scoped operations: discover, inspect, propose,
-preview, verify, apply and retain a way back. Account writes and local-client
-writes identify their scope. Preview never publishes shared preferences. A saved
-choice, successful validation and observed browser activation are different facts.
+People and agents use the same operations: discover, inspect, propose, preview,
+verify, apply and retain a way back. Identify the intended client and distinguish
+client-local preview from app-wide apply. Preserve unaffected components and
+drafts with revision and dirty-edit guards. A saved library entry, successful
+validation and observed browser activation are different facts.
 
 The [appearance-authoring skill](../../skills/appearance-authoring/SKILL.md) ships
 with the released interface; [amplifier-shell](../../skills/amplifier-shell/SKILL.md)
@@ -87,6 +88,8 @@ narrow layout, reduced motion, forced colors and recovery.
 ## Shipped building blocks and remaining work
 
 [Themes](themes.md), [components](components.md) and the [shell API](README.md)
-describe current support, not completed Reference/profile synchronization. The
-[design note](../ux/decisions/20261109-appearances.md#delivery-and-checks) owns this
-redesign's implementation and LAN test-drive plan; human review precedes PR readiness.
+describe complete themes, preview/revert, client presentation, registered
+navigation modules, named contributions and Canvas renderers. The
+[design note's delivery plan](../ux/decisions/20261109-appearances.md#delivery-and-checks)
+is deferred with the redesign; it is not a new rollback test campaign or release
+gate. Source changes, qualification, publication and live adoption remain separate.

@@ -1,15 +1,31 @@
 # Web appearance foundation and preference scope
 
-**Accepted product direction, November 9, 2026; UX correction November 10.**
-The consumer-accessibility requirement remains accepted. The latest November 10
-product-owner correction replaces per-setting overrides and the browser subpage
-with one Global / This browser source switch and identical settings controls.
-Earlier subpage captures and the running review build are not accepted evidence
-for this new whole-profile direction.
+**Superseded for the current release; redesign deferred by the user-approved
+PR1916 rollback after the `.078` visual regression.** The active direction and
+promises return to the pre-cutover baseline
+`7cfb76cbbadbfdf19d6a142e2b6e910abe16ed07`: complete themes, legacy appearance
+actions and format-1 libraries. Reference and Global / This browser profiles
+are temporarily retired. The [rollback boundary](../../shell/appearance-contract.md#temporary-rollback-boundary)
+governs preservation of newer data and safe fallback, not the clean-break plan below.
+
+Everything below this status is a retained record of the November 9 direction
+and November 10 correction, **not active implementation instructions or a release
+gate**. “Accepted,” “current,” and imperative wording below describe that earlier
+proposal. Reintroduction requires an explicit new decision and evidence; this
+record alone does not authorize it. Consumer-accessibility principles remain
+active, but neither profile switching nor Reference is required during rollback.
+Saved `shared-reference-v1`, browser-local profiles and format-2 library data
+remain inert and undeleted. There is no automatic conversion or recovery claim:
+`.078` removed the old `theme` setting, so an absent legacy theme uses the safe
+old default rather than a reconstructed personal choice.
+
+Earlier subpage captures and the then-running review build were not accepted
+evidence for the whole-profile direction.
 Source baseline: Unified `d7b16b8d637c86370b11423c850cf8407be9b54c`.
 No runtime change, browser acceptance, DTU deployment or PR readiness is implied.
 [Vision](../../shell/appearances.md) and [contract](../../shell/appearance-contract.md)
-are the canonical product owners; this note explains choices and delivery.
+are the canonical product owners; this note retains the superseded choices and
+delivery plan.
 
 ## Decisions from the product owner
 

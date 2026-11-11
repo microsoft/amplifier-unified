@@ -121,9 +121,11 @@ the assessment says how much of it has actually been demonstrated.
 - A person visits **2 conversations**, returns to their work overview, and
   reconstructs **0 previously chosen filters or reading positions** in that client.
 - A person changes an everyday preference without learning its storage model or
-  making a second persistence choice. Where Global and browser settings are
-  offered, one source choice uses the same familiar controls and preserves the
-  independent sets without changing other browsers' settings.
+  making a second persistence choice. The bundled web client's Reference and
+  Global / This browser redesign is temporarily retired after the `.078` visual
+  regression. The [restored appearance direction](../shell/appearances.md) keeps
+  complete themes and independent presentation preferences; the profile redesign
+  is deferred, not an active implementation requirement.
 
 ## Current desktop consumers
 
@@ -148,6 +150,7 @@ new CLI onboarding. The bundled web client supplies one setup experience.
 
 | Date | Change | Basis |
 | --- | --- | --- |
+| PR1916 rollback | Restore pre-cutover web appearance direction; defer Reference and Global / This browser profiles without weakening consumer usability. | User-approved rollback; [appearance boundary](../shell/appearance-contract.md#temporary-rollback-boundary). |
 | 2026-11-10 | Make consumer-level usability and progressive disclosure explicit in principle 2. | Product-owner rejection of the appearance settings' repeated scope controls and excessive layout; design correction, not shipped acceptance. |
 | 2026-10-20 | Identify current Mac and planned Windows consumers; link shared desktop journeys. | Product-owner request for coordinated platform documentation. |
 | 2026-10-20 | Apply the accepted Home/sidebar UX amendment. | [Product-owner decision](../ux/decisions/20261020.md). |

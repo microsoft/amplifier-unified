@@ -225,23 +225,28 @@ dispatch arbitrary app actions. Parent messages are checked against the exact
 frame, bridge channel and definition revision. The bridge exposes only state,
 declared events and declared requests. Host approval is outside the iframe.
 
-The action allowlist is `appearance.preview`, `appearance.preview.cancel`,
-`appearance.preferences.update` and `appearance.preferences.undo`.
-Declare a request with `action` and an input `schema`. Preview uses `{name, css}`
-with an exact self-contained CSS delta over Reference; it is not a full-skin or
-palette-compiler input. Selection uses a library ID in a scoped preference patch
-with the current revision. Cancel-preview uses `{}`; undo uses the returned
-`undoId`. Discover the installed schemas and [appearance API](themes.md).
+The restored action allowlist is `theme.preview`, `theme.apply`, `theme.revert`.
+Declare a request with `action` and an input `schema`. Preview/apply inputs
+are preferably `{name, tokens}` for intentional palette changes. `tokens` is a
+nonempty map of host token names to six-digit hex colors, for example
+`{name: "Forest", tokens: {accent: "#3e7052", bg: "#eef3eb"}}`. The host retains
+the complete applied skin and materializes the exact CSS for review.
+For a new complete theme use `{name, definition}` with both version-1 palettes;
+for deeper changes `{name, css}` accepts a complete self-contained skin.
+Supply exactly one of definition, tokens or CSS. Revert uses `{}`.
+Discover the installed schemas and [theme API](themes.md). Reference and the
+Global / This browser profile actions are temporarily retired under the
+[rollback boundary](appearance-contract.md#temporary-rollback-boundary).
 The host validates both the declared schema and the actual action schema.
 Queued requests have no effect until resolved. The host's review controls
 show the exact payload, scope and approve/decline actions. They use the same
-appearance owner as ordinary controls and agent commands.
+theme owner as ordinary controls and agent commands.
 
-Preview is local to the chosen document. Preference changes explicitly name
-shared or browser scope, with normal CAS and generation fences. A browser-local
-accepted command still awaits storage acknowledgement; neither acceptance nor
-persistence proves observed rendering. Cancel-preview and conditional undo are
-distinct. `canvas.apps.resolve` lets an authorized agent use
+Preview is local to the chosen client; apply changes the app-wide committed skin.
+Revert ends a local preview first, otherwise undoes that client's last application
+only if no newer theme has replaced it. Approval rejects a request based on
+an outdated theme. Neither acceptance nor persistence proves observed rendering.
+`canvas.apps.resolve` lets an authorized agent use
 the same path, with an explicit `clientId` and current revisions. The sandbox
 cannot approve its own request. An agent should resolve only changes covered
 by the user's instruction.
@@ -306,11 +311,11 @@ before calculating its radius; redraw on reveal and respect reduced motion.
 Subscriptions are deduplicated and deferred while local writes are pending, but
 an author must still preserve unsaved local work when new shared state arrives.
 
-For authorized appearance selection, the agent (outside the sandbox) performs:
+For authorized theme application, the agent (outside the sandbox) performs:
 
 1. Inspect the surface and intended browser client.
-2. Queue the declared preference request using current revisions, the saved
-   library ID and explicit scope.
+2. Queue the declared apply request using current revisions and the intended
+   theme input; use small tokens only for an intentional palette edit.
 3. Inspect its exact request input and current revisions.
 4. Call `canvas.apps.resolve` with `id`, `clientId`, `requestId`, `approve: true`,
    `expectedRevision`, and `expectedStateRevision`.
