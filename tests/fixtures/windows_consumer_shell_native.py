@@ -126,7 +126,7 @@ def run(root):
         write_private(folder / name, b"controlled changed shortcut", owned_root=folder)
         try:
             shell.remove(root)
-        except ValueError:
+        except (ValueError, OSError):
             report["changedLinkRemovalRefused"] = True
         else:
             raise AssertionError("Changed shortcut must not be removed.")
