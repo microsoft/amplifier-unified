@@ -70,6 +70,16 @@ A package is ready to extract when it can state its input/output contract, data
 authority and independent fixture. Small size is not an objection. An extraction
 that still imports a sibling's private source has not completed its boundary.
 
+The native adapter's first shared application lifecycle package is
+[`amplifier-native-runtime`](../../components/native-runtime/README.md), authored
+in this public repository and independently buildable. Its release participant
+owns the existing stop/save/cleanup sequence; Foundation retains writer ownership
+and consumers retain registration/platform policy. This producer-first slice
+does not yet change Unified or ACP imports. Consumer adoption must select the
+accepted public package in each actual worker environment, remove the duplicated
+policy, and qualify its lifecycle behavior. It adds no history-loading contract
+or private-repository dependency.
+
 ## Dependency direction
 
 ```text

@@ -1,0 +1,36 @@
+[project]
+name = "amplifier-native-runtime"
+version = "0.1.0"
+description = "Shared application lifecycle policy for Amplifier native workers"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
+    "amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@main",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/amplifier_native_runtime"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.uv]
+# Native Core wheels are a transitive runtime dependency; never build them here.
+no-build-package = ["amplifier-core"]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.25"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

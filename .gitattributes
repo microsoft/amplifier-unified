@@ -8,6 +8,9 @@
 /AGENTS.md source-context=guidance
 /amplifier_*/** source-context=source
 /packages/** source-context=source
+/components/native-runtime/src/** source-context=source
+/components/native-runtime/tests/** source-context=tests
+/components/native-runtime/LICENSE source-context=documentation
 /examples/** source-context=source
 /scripts/** source-context=tooling
 /.github/** source-context=tooling
