@@ -36,11 +36,7 @@ def _read_reset_configuration(path, home):
 
 
 def _retiring_reference(value, roots):
-    """Recognize whole local path values, including resources, without rewriting them."""
-    if isinstance(value, dict):
-        return any(_retiring_reference(item, roots) for item in value.values())
-    if isinstance(value, list):
-        return any(_retiring_reference(item, roots) for item in value)
+    """Recognize one schema-owned local source/resource path without rewriting it."""
     if not isinstance(value, str):
         return False
     if value.startswith('file:'):
@@ -59,12 +55,30 @@ def _retiring_reference(value, roots):
     return path.is_absolute() and any(path.is_relative_to(root) for root in roots)
 
 
+def _reset_plan_references(plan):
+    """Only executable declarations and explicit context-file maps own paths here."""
+    if not isinstance(plan, dict):
+        return
+    from .host.components import agent_roster, declarations
+    yield from (row.get('source') for row in declarations(plan))
+
+    def resources(node):
+        context = node.get('context')
+        if isinstance(context, dict):
+            yield from context.values()
+        for child in agent_roster(node.get('agents', {})).values():
+            if isinstance(child, dict):
+                yield from resources(child)
+    yield from resources(plan)
+
+
 def prepare_reset_configurations(home, targets):
     """Precompute legacy plan conversion before losing managed source provenance.
 
     No writes, downloads, mounting, request changes or cache inventory. Callers
-    own quiescence and rollback. Non-module references cannot be inferred from
-    module provenance and must be resolved explicitly before retiring their paths.
+    own quiescence and rollback. Explicit context files cannot be reconstructed
+    from module provenance. Module config, prompt text and other opaque values
+    are not executable source declarations and remain their module's concern.
     """
     home = Path(home)
     sessions = home / 'sessions'
@@ -83,10 +97,13 @@ def prepare_reset_configurations(home, targets):
                 continue
             before = _read_reset_configuration(path, home)
             plan = json.loads(before)
-            if not _retiring_reference(plan, roots):
+            if not any(_retiring_reference(value, roots) for value in _reset_plan_references(plan)):
                 continue
             relative = str(path.relative_to(home))
             if name == 'pending-configuration.json':
+                # Success/cancellation owners unlink this queue file. Their
+                # retained configuration-operations records are history, not
+                # reset inputs. A remaining queue is not proof of completion.
                 raise ValueError('Reset cannot retire sources used by pending configuration: ' + relative +
                                  '. Resolve the original operation first; its request was not changed.')
             from .host.components import declarations, portable_module_sources
@@ -95,10 +112,10 @@ def prepare_reset_configurations(home, targets):
             for old, new in zip(declarations(plan), declarations(converted), strict=True):
                 if 'source' in old and not _retiring_reference(old['source'], roots):
                     new['source'] = old['source']
-            if _retiring_reference(converted, roots):
+            if any(_retiring_reference(value, roots) for value in _reset_plan_references(converted)):
                 raise ValueError('Reset cannot preserve ' + relative +
-                                 ': a retiring source is missing, changed or unverified, or a non-module '
-                                 'resource still uses a retiring path. No cache was retired.')
+                                 ': a retiring source is missing, changed or unverified, or an explicit '
+                                 'context resource still uses a retiring path. No cache was retired.')
             after = json.dumps(converted, indent=2).encode('utf-8')
             if len(after) > CONFIGURATION_LIMIT:
                 raise ValueError('Converted reset configuration exceeds 1 MiB: ' + relative)

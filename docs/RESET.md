@@ -76,11 +76,19 @@ the CLI's private repair report) names the saved plan that needs attention.
 Plans larger than 1 MiB or redirected private
 configuration paths also refuse conversion.
 
-Context/resource paths and other non-module values are not converted by guessing.
-If one still refers into a retiring directory, reset stops before cache moves.
-Pending configuration requests using those directories must be resolved through
-their original configuration operation first. Reset never rewrites a retained
-request or sealed receipt, clears its hold, or replays the change.
+Reset checks module declaration `source` fields, including nested agents and
+spawn tools, and explicit root/agent context-file maps. A context-file path still
+inside a retiring directory stops reset before cache moves: module provenance
+does not prove how to reconstruct that resource. Opaque module configuration
+(including `tool-skills.config.cache_dir`), prompts and log paths are preserved,
+not reinterpreted as executable sources or rewritten by the host.
+
+Pending configuration requests with those declared source/resource dependencies
+must be resolved through their original operation first. Successful application
+and cancellation remove the queue file; retained finished operation records are
+history and do not block reset. A remaining queue file is not proof of completion.
+Reset never rewrites a retained request or sealed receipt, clears its hold, or
+replays the change.
 
 All conversions are prepared before saved plans are changed. Original plan bytes
 are retained in the CLI recovery directory or the in-app private backup. If plan

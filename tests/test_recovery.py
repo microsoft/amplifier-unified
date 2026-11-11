@@ -172,7 +172,9 @@ async def test_in_app_cache_reset_converts_plans_or_restores_exact_originals(
         else:
             await recovery.reset(manager, args)
             for path in saved.paths:
-                assert json.loads(path.read_text())["tools"][0]["source"] == saved.portable
+                plan = json.loads(path.read_text())
+                assert plan["tools"][0]["source"] == saved.portable
+                assert plan["tools"][1]["config"] == saved.plan["tools"][1]["config"]
             assert not saved.module.exists()
             assert not sentinel.exists()
             with tarfile.open(service.state["maintenance"]["backup"]) as archive:

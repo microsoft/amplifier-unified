@@ -426,7 +426,7 @@ def test_release_failure_explains_rate_limit_and_tls_without_private_details(mon
 @pytest.fixture
 def legacy_saved_plan():
     """Real local Git provenance; no download or provider use."""
-    def create(home, layout="updates/releases/old/foundation/cache/bundle"):
+    def create(home, layout="updates/releases/8bfeb10c85fc46af957de342f093a689/foundation/cache/bundle"):
         root = home / layout
         module = root / "modules/fixture"
         module.mkdir(parents=True)
@@ -450,7 +450,11 @@ def legacy_saved_plan():
             "session": {"orchestrator": {"module": "loop-live", "source": str(module)},
                         "context": {"module": "context-fixture", "source": module.as_uri()}},
             "tools": [{"module": "tool-fixture", "source": str(module), "enabled": False,
-                       "config": {"limit": 7, "path": str(external)}}],
+                       "config": {"limit": 7, "path": str(external)}},
+                      # Incident shape: module-owned regenerable storage, not
+                      # another executable source chosen by the reset owner.
+                      {"module": "tool-skills", "source": str(module),
+                       "config": {"cache_dir": str(root.parent / "skills")}}],
             "providers": [{"module": "provider-fixture", "id": "account",
                            "source": "git+https://example.invalid/pinned@v1",
                            "config": {"api_key": "synthetic-private-value"}}],
@@ -497,7 +501,57 @@ def test_reset_preparation_converts_only_retiring_module_declarations(tmp_path, 
     assert saved.module.exists()
 
 
-@pytest.mark.parametrize("problem", ["missing", "metadata", "dirty", "context"])
+def test_reset_preserves_skills_cache_and_opaque_paths_without_treating_them_as_sources(
+        tmp_path, legacy_saved_plan):
+    from amplifier_web.host.components import declarations
+    from amplifier_web.recovery import PARTS, prepare_reset_configurations
+    home = tmp_path / "app"
+    saved = legacy_saved_plan(home)
+    cache = saved.plan["tools"][1]["config"]["cache_dir"]
+    assert cache == str(home / "updates/releases/8bfeb10c85fc46af957de342f093a689/foundation/cache/skills")
+    assert not Path(cache).exists()
+    opaque = {"cache_dir": cache, "log_path": str(saved.root / "logs"),
+              "nested": {"module": "not-a-declaration", "source": str(saved.root / "missing")}}
+    saved.plan["tools"][1]["config"] = opaque
+    saved.plan["instruction"] = str(saved.root / "prompt-looking-path")
+    saved.plan["agents"]["child"]["instruction"] = saved.plan["instruction"]
+    for path in saved.paths:
+        path.write_text(json.dumps(saved.plan))
+    changes = prepare_reset_configurations(home, PARTS["cache"])
+    assert len(changes) == 2
+    for path, before, after in changes:
+        plan = json.loads(after)
+        assert path.read_bytes() == before
+        assert plan["tools"][1] == {"module": "tool-skills", "source": saved.portable, "config": opaque}
+        assert plan["instruction"] == saved.plan["instruction"]
+        assert plan["agents"]["child"]["instruction"] == saved.plan["instruction"]
+        # With only opaque retiring paths remaining, there is no conversion.
+        path.write_bytes(after)
+    assert prepare_reset_configurations(home, PARTS["cache"]) == []
+    assert all(not row.get("source", "").startswith(str(home))
+               for row in declarations(json.loads(saved.paths[0].read_text())))
+
+
+@pytest.mark.parametrize("location", ["tool", "session", "spawn", "deep-agent"])
+def test_reset_refuses_missing_declared_source_despite_opaque_cache_values(
+        tmp_path, legacy_saved_plan, location):
+    from amplifier_web.recovery import PARTS, prepare_reset_configurations
+    home = tmp_path / "app"
+    saved = legacy_saved_plan(home)
+    row = {"tool": saved.plan["tools"][0],
+           "session": saved.plan["session"]["context"],
+           "spawn": saved.plan["spawn"]["tools"][0],
+           "deep-agent": saved.plan["agents"]["child"]["agents"]["deep"]["hooks"][0]}[location]
+    row["source"] = str(saved.root / "missing-module")
+    saved.paths[0].write_text(json.dumps(saved.plan))
+    before = [path.read_bytes() for path in saved.paths]
+    with pytest.raises(ValueError, match="Reset cannot preserve"):
+        prepare_reset_configurations(home, PARTS["cache"])
+    assert [path.read_bytes() for path in saved.paths] == before
+    assert saved.module.exists()
+
+
+@pytest.mark.parametrize("problem", ["missing", "metadata", "dirty", "context", "child-context"])
 def test_reset_preparation_refuses_unreconstructable_references_before_any_write(tmp_path, legacy_saved_plan, problem):
     from amplifier_web.recovery import prepare_reset_configurations
     saved = legacy_saved_plan(tmp_path / "app")
@@ -508,7 +562,9 @@ def test_reset_preparation_refuses_unreconstructable_references_before_any_write
     elif problem == "dirty":
         saved.code.write_text("VALUE = 2\n")
     else:
-        saved.plan["context"] = {"fixture:policy": str(saved.module / "policy.md")}
+        node = (saved.plan["agents"]["child"]["agents"]["deep"]
+                if problem == "child-context" else saved.plan)
+        node["context"] = {"fixture:policy": str(saved.module / "policy.md")}
         saved.paths[1].write_text(json.dumps(saved.plan))
     originals = [path.read_bytes() for path in saved.paths]
     with pytest.raises(ValueError, match="Reset cannot preserve"):
@@ -533,7 +589,7 @@ def test_reset_preparation_preserves_external_and_nonretiring_source_paths(tmp_p
     for _, _, after in changes:
         plan = json.loads(after)
         assert plan["tools"][0]["source"] == saved.portable
-        assert [row["source"] for row in plan["tools"][1:]] == sources
+        assert [row["source"] for row in plan["tools"][2:]] == sources
 
 
 @pytest.mark.parametrize("problem", ["oversized", "linked"])
@@ -576,6 +632,41 @@ def test_reset_preserves_pending_configuration_and_sealed_request_identity(tmp_p
     assert saved.module.exists()
 
 
+@pytest.mark.parametrize("phase", ["ready", "cancelled"])
+def test_reset_does_not_treat_retained_finished_requests_as_pending(tmp_path, legacy_saved_plan, phase):
+    from amplifier_web.recovery import PARTS, prepare_reset_configurations
+    home = tmp_path / "app"
+    saved = legacy_saved_plan(home)
+    # Management.command and finish_saved_cancellation unlink the queue file;
+    # the immutable request remains in its operation record for history.
+    receipt = home / "sessions/owner/configuration-operations/finished.json"
+    receipt.parent.mkdir(parents=True)
+    original = json.dumps({"state": {"phase": phase}, "request": {"config": saved.plan}}).encode()
+    receipt.write_bytes(original)
+    assert len(prepare_reset_configurations(home, PARTS["cache"])) == 2
+    assert receipt.read_bytes() == original
+
+
+def test_reset_pending_opaque_cache_path_is_not_an_executable_dependency(tmp_path, legacy_saved_plan):
+    from amplifier_web.host.components import declarations
+    from amplifier_web.recovery import PARTS, prepare_reset_configurations
+    home = tmp_path / "app"
+    saved = legacy_saved_plan(home)
+    for row in declarations(saved.plan):
+        row["source"] = saved.portable
+    pending = home / "sessions/owner/pending-configuration.json"
+    pending.parent.mkdir()
+    original = json.dumps(saved.plan).encode()
+    pending.write_bytes(original)
+    receipt = pending.parent / "configuration-operations/unknown.json"
+    receipt.parent.mkdir()
+    receipt.write_bytes(b'{"state":{"phase":"error","effect":"unknown"}}\n')
+    retained = receipt.read_bytes()
+    assert len(prepare_reset_configurations(home, PARTS["cache"])) == 2
+    assert pending.read_bytes() == original
+    assert receipt.read_bytes() == retained
+
+
 @pytest.mark.parametrize("failure", [None, "conversion", "replace", "database"])
 def test_cli_reset_converts_legacy_plans_and_rolls_back_exact_bytes(repair_tree, monkeypatch, legacy_saved_plan, failure):
     home, tool, bins = repair_tree
@@ -604,7 +695,9 @@ def test_cli_reset_converts_legacy_plans_and_rolls_back_exact_bytes(repair_tree,
     else:
         backup = reset.repair(home, "uv", tool, bins, "trusted.whl", {}, None, True)
         for path in saved.paths:
-            assert json.loads(path.read_text())["tools"][0]["source"] == saved.portable
+            plan = json.loads(path.read_text())
+            assert plan["tools"][0]["source"] == saved.portable
+            assert plan["tools"][1]["config"] == saved.plan["tools"][1]["config"]
             assert (backup / path.relative_to(home)).read_bytes() == saved.before
         assert not saved.module.exists()
     assert any("stage_reset_configurations" in str(args) for args in calls)
