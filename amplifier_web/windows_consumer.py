@@ -200,8 +200,10 @@ async def maintenance(root, operation):
                 # Prepare and retain every shell object BEFORE touching the
                 # Scheduler task. Conflicts leave all registrations unchanged.
                 with windows_consumer_shell.removal(root) as finish:
-                    uninstall(root / "app")
+                    # Registry transaction commit can detect a concurrent key
+                    # edit. Settle that conflict BEFORE removing the task.
                     finish()
+                    uninstall(root / "app")
             else:
                 uninstall(root / "app")
         await asyncio.to_thread(remove)

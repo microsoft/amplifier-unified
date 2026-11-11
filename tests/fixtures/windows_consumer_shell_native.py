@@ -61,25 +61,19 @@ def run(root):
             raise AssertionError("Registry create must refuse an existing registration.")
         if shell.registry(root) != registration:
             raise AssertionError("Registry collision overwrote existing values.")
-        # Preparing removal retains the entire file set and a native registry
-        # transaction. No task or entry effect has been committed. Real Win32
-        # sharing / transactional conflicts must block same-account mutation.
+        # Preparing removal retains the entire file set. Actual NTFS sharing
+        # must block same-account link writes/replacement before any effect.
         with shell.removal(root):
             import winreg
             key = shell.REGISTRY + shell.identity(root)
             last = list(links)[-1]
-            for operation in ("write-link", "replace-link", "change-key", "delete-key"):
+            for operation in ("write-link", "replace-link"):
                 try:
                     if operation == "write-link":
                         with (folder / last).open("wb") as changed:
                             changed.write(b"must never write")
-                    elif operation == "replace-link":
-                        write_private(folder / last, b"must never replace", owned_root=folder)
-                    elif operation == "change-key":
-                        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE) as changed:
-                            winreg.SetValueEx(changed, "DisplayVersion", 0, winreg.REG_SZ, "foreign")
                     else:
-                        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)
+                        write_private(folder / last, b"must never replace", owned_root=folder)
                 except OSError:
                     report[operation + "Refused"] = True
                 else:
@@ -87,6 +81,41 @@ def run(root):
         if shell.registry(root) != registration or any(not (folder / item).exists() for item in links):
             raise AssertionError("Abandoned preparation changed app entries.")
         report["abandonedPreparationUnchanged"] = True
+        # Nontransactional registry writers can win, aborting our transaction.
+        # The commit must refuse BEFORE links or a Scheduler task are touched.
+        for operation in ("change-key", "replace-key"):
+            interfered = False
+            try:
+                with shell.removal(root) as finish:
+                    if operation == "change-key":
+                        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE) as changed:
+                            winreg.SetValueEx(changed, "DisplayVersion", 0, winreg.REG_SZ, "fixture-racer")
+                    else:
+                        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)
+                        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE) as changed:
+                            for field, (value, kind) in registration.items():
+                                winreg.SetValueEx(changed, field, 0, kind, value)
+                            winreg.SetValueEx(changed, "DisplayVersion", 0, winreg.REG_SZ, "fixture-racer")
+                    interfered = True
+                    finish()
+            except OSError:
+                pass
+            else:
+                raise AssertionError("Conflicting registry removal must refuse.")
+            observed = shell.registry(root)
+            if any(not (folder / item).exists() for item in links) or observed is None:
+                raise AssertionError("A registry conflict removed app entries.")
+            if interfered:
+                expected = dict(registration)
+                expected["DisplayVersion"] = ("fixture-racer", winreg.REG_SZ)
+                if observed != expected:
+                    raise AssertionError("Conflicting registration was overwritten/deleted.")
+                # Restore only this exact fixture-authored negative-control value.
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE) as changed:
+                    winreg.SetValueEx(changed, "DisplayVersion", 0, *reversed(registration["DisplayVersion"]))
+            elif observed != registration:
+                raise AssertionError("A refused registry race changed the registration.")
+            report[operation + "ConflictSafe"] = True
         name = next(iter(links))
         with directory(folder, owned_root=folder) as owned:
             original = owned.read_private(name, limit=65536)

@@ -118,8 +118,8 @@ def _registry_values(handle):
 def registry_change(root, values, *, remove=False):
     """Prepare a conflict-detecting native registry transaction, then commit.
 
-    A staged delete holds the key against same-account edits/replacement while
-    the caller validates its other objects. No compare/close/path-delete gap.
+    A staged delete detects conflicting same-account edits/replacement on
+    commit. Commit MUST precede other removals; no compare/close/path-delete gap.
     Unsupported KTM/registry transactions refuse; never fall back to path writes.
     """
     import winreg
@@ -162,7 +162,10 @@ def registry_change(root, values, *, remove=False):
                 None, C.byref(handle), C.byref(disposition), transaction, None)
         if error:
             raise C.WinError(error)
-        with winreg.HKEYType(handle.value) as opened:
+        # PyHKEY cannot be constructed from a native handle. winreg accepts the
+        # integer handle directly; retain and close our original owner exactly.
+        opened = handle.value
+        try:
             if remove:
                 expected = {name: (value, winreg.REG_DWORD if type(value) is int else winreg.REG_SZ)
                             for name, value in values.items()}
@@ -185,6 +188,8 @@ def registry_change(root, values, *, remove=False):
                     raise C.WinError(C.get_last_error())
                 committed = True
             yield commit
+        finally:
+            winreg.CloseKey(opened)
     finally:
         try:
             if not committed and not ktm.RollbackTransaction(transaction):
@@ -269,7 +274,7 @@ def removal(root):
             removers.append(stack.enter_context(owned.removal_private(name, row["links"][name])))
         commit = stack.enter_context(registry_change(root, row["registry"], remove=True))
         def finish():
-            # Prepared conflicts refuse before task removal. Later genuine I/O
+            # Commit conflicts refuse before link/task removal. Later genuine I/O
             # failures can leave partial effects; they do not imply rollback.
             commit()
             for remove_link in removers:

@@ -69,7 +69,11 @@ def model(tmp_path, monkeypatch):
         assert remove and set(state["pins"]) == set(shell.LINKS)
         if state["registry"] != values:
             raise ValueError("Registry changed")
-        yield lambda: registry(root, values, remove=True)
+        def commit():
+            if state.get("commit_conflict"):
+                raise OSError("Registry transaction conflicted with a later edit")
+            registry(root, values, remove=True)
+        yield commit
     monkeypatch.setattr(shell, "registry_change", registry_change)
     return root, programs, state
 
@@ -125,7 +129,7 @@ def test_existing_or_partial_registration_does_not_replay(model):
     assert not state["calls"]
 
 
-@pytest.mark.parametrize("conflict", ["prechanged", "last-pin", "registry", None])
+@pytest.mark.parametrize("conflict", ["prechanged", "last-pin", "registry", "commit-conflict", None])
 def test_public_uninstall_prepares_all_objects_before_task_effect(model, monkeypatch, conflict):
     from amplifier_web import windows_consumer as consumer, windows_installation, windows_service
     root, programs, state = model
@@ -142,6 +146,8 @@ def test_public_uninstall_prepares_all_objects_before_task_effect(model, monkeyp
         state["before_pin"] = cross
     elif conflict == "registry":
         state["registry"] = {"foreign": "registration"}
+    elif conflict == "commit-conflict":
+        state["commit_conflict"] = True
     monkeypatch.setattr(consumer, "installation", lambda value: (value, {}))
     monkeypatch.setattr(consumer, "environment", lambda *a: {})
     monkeypatch.setattr(windows_installation, "owner_notice", lambda *a, **kw: True)
@@ -152,11 +158,12 @@ def test_public_uninstall_prepares_all_objects_before_task_effect(model, monkeyp
     monkeypatch.setattr(windows_service, "uninstall", uninstall)
     if conflict:
         registration = state["registry"].copy()
-        with pytest.raises(ValueError):
+        with pytest.raises((ValueError, OSError)):
             asyncio.run(consumer.maintenance(root, "uninstall"))
         assert not state["calls"] and state["registry"] == registration
         assert len(list(folder.iterdir())) == 4
     else:
         asyncio.run(consumer.maintenance(root, "uninstall"))
-        assert state["calls"][:2] == [("task-remove",), ("registry-remove",)]
+        assert state["calls"][0] == ("registry-remove",)
+        assert state["calls"][-1] == ("task-remove",)
     assert not state["pins"]
