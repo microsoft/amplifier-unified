@@ -195,21 +195,14 @@ def retry_decision(batch, key, *, now=None):
         return 'inspect'  # Changed inputs cannot prove an uncertain effect absent.
     if retry.get('inputKey') != key:
         return None
-    if retry.get('mode') in {'changed-inputs', 'inspect'}:
-        return retry['mode']
-    if retry.get('retryAt', 0) > (time.time() if now is None else now):
-        return 'backoff'
-    return None
+    # Saved legacy deadlines/counters are not evidence of a changed input.
+    # The same failure owner admits a deliberate Install; Check and ticks do not.
+    return 'changed-inputs' if retry else None
 
 
 def record_retry(batch, key, failure, previous=None):
-    reason = failure.get('reason') or failure.get('probe', {}).get('reason')
-    previous = previous or {}
-    count = previous.get('attempts', 0) + 1 if previous.get('inputKey') == key else 1
-    mode = ('inspect' if failure.get('status') == 'interrupted' else
-            'changed-inputs' if reason in DETERMINISTIC else 'backoff')
-    batch['retry'] = {'inputKey': key, 'mode': mode, 'attempts': count,
-                      'retryAt': time.time() + min(3600, 60 * 2 ** min(count - 1, 6))}
+    batch['retry'] = {'inputKey': key, 'mode':
+                      'inspect' if failure.get('status') == 'interrupted' else 'changed-inputs'}
 
 
 def pointer_witness(manager):
@@ -455,8 +448,6 @@ def current(state, evidence=None, *, manual_verified=None):
         failure = max(remaining, key=lambda row: row.get('at', 0), default=diagnostics.get('lastFailure') or {})
         reason = failure.get('reason') or failure.get('probe', {}).get('reason')
         component = failure.get('package') or failure.get('probe', {}).get('package') or failure.get('component')
-        if retry.get('mode') == 'backoff' and retry.get('retryAt', 0) > time.time() and phase != 'interrupted':
-            return result('retrying', 'Update will retry later', 'The current installation is kept. A transient failure is waiting for a bounded retry; details remain in history.')
         if reason in DETERMINISTIC:
             return result('protected', 'Component source needs review',
                           failure_guidance(failure) or 'A source or configuration conflict prevented this update. Current components remain active. Review source settings or share diagnostics; unchanged automatic attempts are paused.',

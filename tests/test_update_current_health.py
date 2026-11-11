@@ -106,8 +106,28 @@ def test_retry_witness_preserves_manual_and_unknown_boundaries():
     health.record_retry(batch,'A',{'status':'interrupted'})
     assert health.retry_decision(batch,'B')=='inspect'
     health.record_retry(batch,'A',{'status':'failed','errorType':'TimeoutError'})
-    assert health.retry_decision(batch,'A',now=0)=='backoff'
-    assert health.retry_decision(batch,'A',now=10**12) is None
+    assert health.retry_decision(batch,'A',now=0)=='changed-inputs'
+    assert health.retry_decision(batch,'A',now=10**12)=='changed-inputs'
+    assert batch['retry']=={'inputKey':'A','mode':'changed-inputs'}
+    legacy={'retry':{'mode':'backoff','inputKey':'A','attempts':100,'retryAt':1}}
+    assert health.retry_decision(legacy,'A',now=10**12)=='changed-inputs'
+    assert health.retry_decision(legacy,'B',now=10**12) is None
+
+
+def test_unknown_component_failure_keeps_app_ack_and_history_without_transient_claim():
+    failure={'kind':'ecosystem','status':'failed','phase':'ecosystem-runtime-resolve',
+             'at':200,'errorType':'CommandFailure','exitCode':1}
+    state={'phase':'error','error':'Component preparation failed.',
+           'application':{'status':'current','current':'0.80.1','runningRevision':'a'*40},
+           'applicationResult':{'phase':'restart-ack','revision':'a'*40,'version':'0.80.1','verifiedAt':100},
+           'diagnostics':{'lastFailure':failure,'activeFailures':{'component':{'latest':failure}},
+                          'batch':{'kind':'ecosystem','retry':{'mode':'backoff','retryAt':10**12}}}}
+    before=copy.deepcopy(state)
+    current=health.current(state,{})
+    assert current['status']=='action-required'
+    assert current['title']=='Update could not finish'
+    assert 'transient' not in current['detail'].lower()
+    assert state==before
 
 
 @pytest.mark.parametrize('phase,pending,status', [

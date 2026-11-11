@@ -433,7 +433,7 @@ def augmented_manifest(content, rows):
             # Preserve a concrete installed override rather than silently
             # replacing it with the app's default repository/branch.
             if row.get('provenance') in {'installed Git distribution', 'installed Foundation cache module'} and (
-                source.get('git') != row['url'] or (source.get('branch') or source.get('rev')) != row['ref']
+                source.get('git') != row['url'] or (source.get('branch') or source.get('rev') or source.get('tag')) != row['ref']
                 or source.get('subdirectory', '') != row.get('subdirectory', '')
             ):
                 sources[declared[name]] = {'git': row['url'], 'rev': row['ref'],

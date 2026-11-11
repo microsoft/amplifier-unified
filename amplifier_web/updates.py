@@ -1715,13 +1715,9 @@ class UpdateManager:
         sequence = state.get('sequence', {})
         install_intent = (sequence.get('install') if sequence.get('manualHandoff')
                           else settings.get('autoInstall', True) or sequence.get('install'))
-        batch = self.diagnostics.state.get('batch', {})
-        retry = batch.get('retry') or {}
-        retry_due = (state.get('phase') == 'error' and batch.get('kind') == 'ecosystem'
-                     and retry.get('mode') == 'backoff' and retry.get('retryAt', 0) <= time.time())
-        if not managed_preview and install_intent and state.get('available',0) and (state.get('phase') == 'available' or retry_due):
-            # The timer wakes the existing install owner, which rechecks source,
-            # intent and uncertain-operation guards before preparing anything.
+        if not managed_preview and install_intent and state.get('available',0) and state.get('phase') == 'available':
+            # A newly checked desired graph still goes through install's input
+            # admission. Elapsed time never replays a settled failed preparation.
             await self.install(automatic=True)
             return
         if self.independent_tool_results(state) and (state.get('phase') not in {'error', 'interrupted'} or any(
