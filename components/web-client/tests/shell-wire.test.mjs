@@ -10,8 +10,10 @@ test('equal refreshes retain identity and a changed field replaces only its bran
  assert.notEqual(next,old);assert.equal(next.items,old.items);assert.equal(next.view.scope,'b');
  assert.deepEqual(retainEqual({a:1},{b:undefined}),{b:undefined});
 });
-test('task blockers, decisions and real failures have distinct presentation',()=>{
- assert.equal(attentionTone(activityFor({id:'a',status:'idle',task:{status:'blocked'}},{})),'blocked');
+test('unresolved task details, decisions and real failures have distinct presentation',()=>{
+ const unresolved=activityFor({id:'a',status:'idle',task:{status:'blocked'}},{});
+ assert.equal(unresolved.label,'Blocked — details unavailable');
+ assert.equal(attentionTone(unresolved),null);
  assert.equal(attentionTone(activityFor({approvals:[{status:'pending'}]},{})),'decision');
  assert.equal(attentionTone(activityFor({status:'error'},{})),'error');
  assert.equal(attentionTone(activityFor({status:'working',task:{status:'blocked'}},{})),null);

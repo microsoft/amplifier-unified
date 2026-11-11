@@ -610,12 +610,16 @@ class TaskController:
             raise ValueError("Unknown task operation")
         if task["status"] == "active" and not self.coordinator.get_capability("live.continuation_guard_supported"):
             raise ValueError("This orchestrator needs durable task continuation guard support")
-        # Reports about this objective remain useful while its progress and
-        # constraints evolve. Ending/replacing/suspending the objective fences
-        # old automatic continuations, including a pause followed by resume.
-        task['continuationEpoch'] = (revision + 1 if operation != 'task.update'
-            or task.get('objective') != (previous or {}).get('objective')
-            else continuation_epoch(previous))
+        # An agent waiting for a dependency still needs that result, including
+        # after it resumes to handle a sibling result. Explicit human suspension
+        # and replacement/completion of the objective fence earlier returns.
+        dependency_transition = args.get('origin') == 'agent' and (
+            (operation == 'task.block' and task['blockProvenance']['dependency'])
+            or (operation == 'task.resume' and dependency_blocked(previous)))
+        same_objective = (operation == 'task.update'
+            and task.get('objective') == (previous or {}).get('objective'))
+        task['continuationEpoch'] = (continuation_epoch(previous)
+            if same_objective or dependency_transition else revision + 1)
         task.update(revision=revision + 1, updatedAt=time.time())
         # Retain full changed fields in the EXISTING canonical record. Never
         # derive the old original from a legacy record's latest objective.
@@ -760,7 +764,7 @@ def observe_task(service, session, observation):
     revision = returned.get("revision", 0)
     if revision < current_revision:
         return False, current_revision
-    from .navigation_waiting import wait_epoch
+    from .navigation_waiting import wait_epoch, operation_refs
     # Derived display metadata only; never write it into native task authority.
     # A cold bounded observation may already carry this exact projection.
     session["_navigationTask"] = {
@@ -768,6 +772,7 @@ def observe_task(service, session, observation):
         ("id", "revision", "status", "continuationEpoch", "blockProvenance")}
     session["_navigationTask"]["dependencyWaitEpoch"] = (
         wait_epoch(returned) if "changes" in returned else returned.get("dependencyWaitEpoch"))
+    session["_navigationTask"].update(operation_refs(returned))
     controls["task.get"] = {**previous, **{key: observation[key] for key in
         ("task", "history", "goal", "continuity", "continuationSupported") if key in observation}}
     session["task"] = observation["task"]

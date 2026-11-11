@@ -2,6 +2,13 @@
   "schemaVersion": 1,
   "scenarios": [
     {
+      "id": "action-spacing",
+      "command": ["node", "tests/action-spacing-browser.mjs"],
+      "env": {
+        "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/action-spacing"
+      }
+    },
+    {
       "id": "sidebar-controls",
       "command": [
         "node",

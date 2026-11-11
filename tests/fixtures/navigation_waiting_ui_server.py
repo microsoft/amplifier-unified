@@ -43,6 +43,7 @@ async def main(home):
 
     def configure(mode):
         owner.update(status='idle',questions=[],approvals=[],error=None)
+        owner['collaborationGeneration']['id']='fixture-generation'
         owner['collaborationGeneration']['inputIds']=['fixture-input']
         task={'id':'fixture-task','revision':2,'status':'blocked','continuationEpoch':2,
               'dependencyWaitEpoch':1,'objective':'Wait for the exact reports',
@@ -52,17 +53,25 @@ async def main(home):
         service.db.execute("DELETE FROM commands WHERE id LIKE 'fixture-wait-%'")
         for index, row in enumerate(rows[1:]):
             row['status']='working'
-            if index and mode!='many':
+            if index and mode not in {'many','mixed'}:
                 continue
             receipt={'commandAction':'coordination.send','requestId':f'fixture-wait-{index}',
                 'sourceGenerationId':owner['collaborationGeneration']['id'],
                 'sourceInputIds':list(owner['collaborationGeneration']['inputIds']),
-                'protocol':2,'senderSessionId':owner['id'],'target':{'sessionId':row['id'],'title':row['title']},
+                'protocol':2,'workspace':owner['workspace'],'senderSessionId':owner['id'],'target':{'sessionId':row['id'],'title':row['title']},
                 'delivery':'applied','subscription':{'taskId':task['id'],'taskContinuationEpoch':1,
                     'interruptionRevision':owner.get('interruptionRevision',0),'notificationVersion':2,
                     'supported':True,'open':True,'status':'waiting'}}
-            if mode=='ready':
+            if mode=='ready' or mode=='mixed' and not index:
                 receipt['response']={'status':'staged','outcome':'success'}
+            elif mode in {'returned','explicit-return'}:
+                receipt['response']={'status':'sealed','kind':'result','outcome':'success','qualified':True}
+                receipt['subscription'].update(status='suppressed',open=False)
+            elif mode in {'failed','unknown','declined','deferred','decision'}:
+                outcome='question' if mode=='decision' else mode
+                receipt['response']={'status':'sealed','kind':'result','outcome':outcome,'qualified':True}
+            elif mode=='backpressured':
+                receipt['subscription'].update(status='backpressured',open=True)
             service.db.execute('INSERT INTO commands VALUES(?,?,?)',
                 (receipt['requestId'],'fixture',json.dumps(receipt)))
         if mode=='paused':
@@ -78,6 +87,11 @@ async def main(home):
             rows[1].update(status='error',error='Synthetic worker failure')
         elif mode=='new-input':
             owner['collaborationGeneration']['inputIds'].append('new-human-input')
+        elif mode=='explicit-return':
+            task['operationIds']=['fixture-wait-0']
+            owner['collaborationGeneration']={'id':'new-generation','inputIds':['fresh-input'],'terminal':True}
+        elif mode=='unclassified':
+            task['blockProvenance']=None
         service._publish_changes(sessions={row['id'] for row in rows})
 
     def auth(request):
@@ -87,7 +101,9 @@ async def main(home):
     async def mode(request):
         auth(request)
         value=(await request.json())['mode']
-        if value not in {'one','many','paused','stopped','ready','question','recipient-error','new-input'}:
+        if value not in {'one','many','mixed','paused','stopped','ready','returned','explicit-return',
+                         'failed','unknown','declined','deferred','decision','backpressured',
+                         'unclassified','question','recipient-error','new-input'}:
             raise web.HTTPBadRequest()
         async with service.lock:
             configure(value)

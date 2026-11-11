@@ -89,7 +89,7 @@ function DeliveryWarning({message,session,delivery,localDelivery,dispatch,retry,
  if(delivery.status==='held')return <span className="a-message-delivery" role="status">{delivery.reason||'Message retained without sending.'}</span>;
  const sending=['sending','queued'].includes(delivery.status);
  const preparing=session.status==='starting'||session.activity?.phase==='runtime-setup';
- const content=<>
+ const content=<div className="a-dialog-actions a-delivery-content">
   <span className="a-message-delivery" role="status">{sending?<><LoaderCircle className="a-progress-spinner"/>{preparing?'Preparing chat…':'Sending…'}</>:<><AlertCircle/>{delivery.status==='failed'?'Not sent':'Delivery not confirmed'}
    {delivery.status==='failed'?<button type="button" className="a-link" data-action="conversation.send" disabled={pending||blocked} onClick={()=>session.messages?.some(row=>row.inputId===inputId)?resend():retry(message)}><RotateCcw/>Retry</button>:<button type="button" className="a-link" data-action="conversation.delivery" disabled={pending||!inputId} onClick={check}><RotateCcw/>{pending?'Checking…':'Check delivery'}</button>}
   </>}</span>
@@ -99,9 +99,9 @@ function DeliveryWarning({message,session,delivery,localDelivery,dispatch,retry,
   {error&&<p role="alert" className="a-delivery-detail">{error}</p>}
   {!sending&&report&&!['accepted','sending','held','queued_for_update'].includes(report.delivery)&&!confirm&&
    (originalSubmission||saved&&report.delivery!=='not_saved')&&<button type="button" className="a-link" data-action="conversation.retry" disabled={pending||blocked||working} onClick={()=>setConfirm(true)}>{originalSubmission?'Retry original submission':'Send again'}</button>}
-  {confirm&&<div className="a-delivery-confirm" role="alert"><p>The earlier attempt may have run even though delivery was not confirmed. Sending again could repeat that work. Your saved message and history will be kept.</p><button type="button" className="a-soft" disabled={pending} onClick={()=>setConfirm(false)}>Cancel</button><button type="button" className="a-primary" data-action="conversation.retry" disabled={pending||blocked||working} onClick={resend}>{pending?'Sending…':'Send this message again'}</button></div>}
+  {confirm&&<div className="a-delivery-confirm" role="alert"><p>The earlier attempt may have run even though delivery was not confirmed. Sending again could repeat that work. Your saved message and history will be kept.</p><div className="a-dialog-actions"><button type="button" className="a-soft" disabled={pending} onClick={()=>setConfirm(false)}>Cancel</button><button type="button" className="a-primary" data-action="conversation.retry" disabled={pending||blocked||working} onClick={resend}>{pending?'Sending…':'Send this message again'}</button></div></div>}
   {dismissible&&<button type="button" className="a-link" disabled={pending} onClick={()=>{if(!pending)setWarningDismissed(!dismissed)}}>{dismissed?'Show warning':'Dismiss warning'}</button>}
- </>;
+ </div>;
  return dismissible?<details className="a-delivery-warning" open={pending||!dismissed||expanded} onToggle={event=>{if(dismissed&&!pending)setExpanded(event.currentTarget.open)}}>
   <summary ref={summary} hidden={!dismissed} aria-disabled={pending||undefined} onClick={event=>{if(pending)event.preventDefault()}}>Delivery details</summary>
   {content}
