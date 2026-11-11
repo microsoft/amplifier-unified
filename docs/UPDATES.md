@@ -345,6 +345,20 @@ process exits retain it; a package appearing on disk cannot satisfy installation
 or permit another feature request. Updates shows **Installation needs
 verification** and disables additional installs while this outcome is unknown.
 
+A failed probe after immutable generation promotion can recover without a second
+installation or restart. For an ordinary app update (not a forced shutdown or
+optional-feature installation), the still-running host must prove its unchanged
+identity, previous interpreter, isolated package/import probe, full installed
+component graph and optional extras. Only then may it restore the exact prior
+launch pointer, under the same pointer-write lock used for promotion. The current
+promotion and bootstrap binding must still match; another promotion or a manual
+bootstrap replacement is not overwritten. With no previous generation, recovery
+returns to the verified bootstrap. The candidate and original failure receipts
+remain retained, the update remains failed, and ordinary drain settlement can
+release positively unsubmitted inputs once. A failed/cancelled recovery or
+unconfirmed state publication retains the work fence; pointer restoration alone
+is not installation success or permission to replay work.
+
 Successful replacement verification atomically converts the marker to the normal
 pending restart. If the process exits earlier, a healthy new host can reconcile a
 complete marker only by proving the exact app source/revision, extras, dependency
