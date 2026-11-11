@@ -488,7 +488,7 @@ async def test_saved_portable_plan_reaches_next_input_and_refuses_changed_connec
         # native preparation/mount/spawn remain outside this synthetic boundary.
         rendered = apply_runtime_plan(Bundle(name='retained-plan'), json.loads(saved_path.read_bytes()),
                                       config, workspace).to_mount_plan()
-        assert rendered['providers'] == [provider]
+        assert rendered['providers'] == [{**provider, 'instance_id': 'one'}]
         hook = next(row for row in rendered['hooks'] if row['module'] == 'hook-source-lifetime-fixture')
         assert hook['source'] == c.portable
         row = rendered['providers'][0]
