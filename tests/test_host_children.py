@@ -111,6 +111,11 @@ async def test_rejected_child_options_preserve_retained_history_before_effects(t
          'fable', 'fable', True),
         ('failed-selected', [('openai', 'openai'), ('anthropic', 'fable')],
          'fable', 'fable', True),
+        ('bare-failed-selected', [('openai', 'openai'), ('anthropic', None)],
+         'anthropic', 'anthropic', True),
+        ('glob-catalog', [('openai', 'openai'), ('anthropic', 'fable'),
+                          ('anthropic', 'secondary')],
+         'fable', 'fable', False),
     ],
 )
 async def test_child_preferences_preserve_native_connection_identity(
@@ -137,7 +142,7 @@ async def test_child_preferences_preserve_native_connection_identity(
     package = tmp_path / ('amplifier_module_provider_issue1581_' + case.replace('-', '_'))
     package.mkdir()
     (package / '__init__.py').write_text('''
-from amplifier_core import ProviderInfo
+from amplifier_core import ProviderInfo, ModelInfo
 __amplifier_module_type__ = "provider"
 class Spy:
     def __init__(self, config):
@@ -146,11 +151,14 @@ class Spy:
         self.priority = config.get("priority", 100)
         self.default_model = config.get("default_model", "metadata-only-model")
         self.calls = []
+        self.catalog_calls = 0
     def get_info(self):
         return ProviderInfo(id=self.name, display_name="Synthetic " + self.name,
                             defaults={"model": self.default_model})
     async def list_models(self):
-        return []
+        self.catalog_calls += 1
+        return [ModelInfo(id=model, display_name=model, context_window=8192,
+                          max_output_tokens=1024) for model in self.config.get("catalog", [])]
     def get_config_schema(self):
         return {"fields": []}
     async def complete(self, request, **kwargs):
@@ -171,6 +179,9 @@ async def mount(coordinator, config=None):
     for index, (family, instance) in enumerate(connections):
         row = {'module': 'provider-' + family, 'config': {
             'family': family, 'default_model': 'parent-default-' + family, 'priority': index}}
+        if case == 'glob-catalog':
+            row['config']['catalog'] = ['claude-opus-5-5' if instance == 'fable'
+                                        else 'claude-opus-9-9']
         if instance is not None:
             if case != 'id-only':
                 row['instance_id'] = instance
@@ -229,10 +240,10 @@ async def mount(coordinator, config=None):
         await coordinator.unmount('providers', name='fable')
         mounted = coordinator.get('providers')
         assert 'fable' not in mounted
-    elif case == 'failed-selected':
-        failed = next(row for row in plan['providers'] if row.get('instance_id') == 'fable')
+    elif case in {'failed-selected', 'bare-failed-selected'}:
+        failed = next(row for row in plan['providers'] if row['module'] == 'provider-anthropic')
         marker = UnavailableProvider(failed, isolation.record(failed, 'provider_mount_failed'))
-        await coordinator.mount('providers', marker, name='fable')
+        await coordinator.mount('providers', marker, name=expected_checked)
         mounted = coordinator.get('providers')
     coordinator.register_capability('session.working_dir', str(tmp_path))
     initial = copy.deepcopy((coordinator.config, prepared.mount_plan, prepared.bundle.to_mount_plan()))
@@ -246,20 +257,22 @@ async def mount(coordinator, config=None):
     registry = await install_children(parent, prepared, Runtime('openai-parent'),
                                       SessionStore(tmp_path / 'children'), None)
     model = 'gpt-5.5' if requested == 'openai' else 'claude-opus-5-5'
+    preference = {'provider': requested, 'model': 'claude-opus-*' if case == 'glob-catalog' else model}
     try:
         if expected_error:
-            failure_type = ProviderUnavailable if case == 'failed-selected' else ProviderSelectionError
+            failed_marker = case in {'failed-selected', 'bare-failed-selected'}
+            failure_type = ProviderUnavailable if failed_marker else ProviderSelectionError
             with pytest.raises(failure_type) as failure:
                 await registry.spawn('self', 'do not infer', parent, sub_session_id='probe-child',
-                    provider_preferences=[{'provider': requested, 'model': model}])
-            if case == 'failed-selected':
-                assert failure.value.failures[0]['instance_id'] == 'fable'
+                    provider_preferences=[preference])
+            if failed_marker:
+                assert failure.value.failures[0]['instance_id'] == expected_checked
             else:
                 assert str(failure.value) == 'The selected provider instance is unavailable; select a connection explicitly.'
             assert creations == ['openai-parent'] and not executions and not registry.rows
         else:
             result = await registry.spawn('self', 'do not infer', parent, sub_session_id='probe-child',
-                provider_preferences=[{'provider': requested, 'model': model}])
+                provider_preferences=[preference])
             assert result['output'] == 'selector observed; no inference'
             assert executions == [{'instance': expected_checked, 'model': model}]
             assert creations == ['openai-parent', 'probe-child']
@@ -270,5 +283,8 @@ async def mount(coordinator, config=None):
             'instance': 'openai', 'model': 'gpt-parent', 'effort': 'high'}
         assert all(not provider.calls for provider in mounted.values()
                    if not isinstance(provider, UnavailableProvider))
+        if case == 'glob-catalog':
+            assert {key: provider.catalog_calls for key, provider in mounted.items()} == {
+                'openai': 0, 'fable': 1, 'secondary': 0}
     finally:
         await parent.cleanup()
